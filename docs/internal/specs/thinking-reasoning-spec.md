@@ -1,8 +1,8 @@
 # Feature Specification: Thinking & Reasoning Effort
 
 - **Created:** 2026-09-27
-- **Status:** Draft — ready for `/grill-spec` (two grill rounds pending; house convention per `docs/internal/specs/slash-command-harmonization-spec.md`)
-- **Input:** founder interview output `docs/internal/specs/spec-thinking-reasoning.md` (Decisions Log D1–D21, T1–T3; Code Facts CF1–CF11) — that file is the source of record for *why*; this spec is the source of record for *how*. In this spec, an unqualified `D<n>` cites the interview's Decisions Log; ADR-local decisions are cited as "ADR-095 D<n>".
+- **Status:** Draft — grill round 1 complete (verdict BLOCK, `thinking-reasoning-spec-review.md`); founder answers D22-D28 recorded; fix round 1 applied (see the Revision log at the end). Round 2 of 2 is next.
+- **Input:** founder interview output `docs/internal/specs/spec-thinking-reasoning.md` (Decisions Log D1–D21, T1–T3; Code Facts CF1–CF11) — that file is the source of record for *why*; this spec is the source of record for *how*. In this spec, an unqualified `D<n>` cites the interview's Decisions Log (D22-D28 are the grill-round-1 founder answers); ADR-local decisions are cited as "ADR-095 D<n>".
 - **Technical design:** [ADR-095 — Thinking visibility gate and signed blocks](../architecture/ADR-095-thinking-visibility-gate-and-signed-blocks.md) (Status: Accepted, grill + founder interview + one correction complete, no open questions). This spec builds on it; it does not re-derive the design.
 - **Evidence baseline:** this spec's own first-hand code checks ran on `feat/thinking-reasoning` @ `2aa2bfb44` (worktree `thinking-reasoning`). The interview's CF1–CF11 were verified on `origin/release/v0.1.1` @ `73bdad862`; ADR-095's correction re-verified on `a5f02fc34`. Cites are `file::symbol`, never line numbers.
 - **Rules honoured throughout:** contract-first sequencing (T2 / Hard Constraint #8); greenfield — no migration, no shims (D17, founder ruling 2026-09-15); superseded code is deleted outright, never deprecated (D1); no emoji in stored data or UI chrome (root `CLAUDE.md`).
@@ -15,15 +15,29 @@ Per T2, **the whole feature's wire surface is ONE contract change** covering `co
 
 | # | Wire surface | Lands in | Shape (indicative) | Decisions |
 |---|---|---|---|---|
-| C1 | Per-login `show_thinking` toggle endpoint | `contracts/openapi.yaml` (new authenticated operation alongside the existing account endpoints, e.g. `/user-context`) + new request/response schemas in `contracts/components/schemas/` | Dedicated endpoint that flips the calling login's own `show_thinking` preference; **never serializes any user-config hash or token material** (ADR-095 D1); response returns the new state | D2, D19; ADR-095 D1 |
-| C2 | Live thinking frame | `contracts/asyncapi.yaml` (new WS frame type in the frame-type enum + `ThinkingFrame.yaml` in `contracts/components/schemas/`) | One frame carrying the redacted thinking-so-far (hold-back applied), elapsed duration, thinking-token count when the provider reports one, and the provider-summary flag; published unconditionally by producers, **filtered per connection at delivery** (ADR-095 D2) | D2, D4, D11, D18, D19; ADR-095 D2 |
-| C3 | Replay + REST thinking fields on the transcript entry | `Message.yaml` (the wire `TranscriptEntry`: "A single transcript entry (session.TranscriptEntry on the Go side)", read by `GET /sessions/{id}/messages`) + `ReplayMessageFrame.yaml` | Additive fields: redacted thinking text, elapsed duration, thinking-token count, provider-summary flag (D18's data-driven "summarized thinking" label). Serializers strip these fields for a requestor whose gate is off — the fields' *absence* is the gate at replay/REST | D2, D3, D11, D18, D19; ADR-095 D2 Boundaries 2–3 |
-| C4 | No-answer outcome marker | `Message.yaml` — the entry `type` enum gains a typed no-answer value | A round that produced thinking but no answer text persists a typed marker instead of reasoning-as-answer; the SPA renders the D20 notice from it | D20; ADR-095 D4 |
-| C5 | Effort-level field on model settings | `AgentModelParams.yaml` (the sampling-params object) + the agent create/update request schemas' model and fallback-candidate objects | `reasoning_effort` as a **plain string, not validated against a fixed enum at write time** (T1); each fallback candidate carries its own effort (D10). Same fields serve agent default model, per-chat model picker, `/effort`, and the recap model — all ride the agents/model-settings API today | D6, D8, D9, D10, T1 |
-| C6 | Catalog-derived effort variants | `getProvidersCatalog` response schema in `contracts/openapi.yaml` (additive per-model fields) | Per-model `reasoning` + `reasoning_options` passthrough from the registry catalog document (the gateway serves the cached catalog document; the upstream schema extension is owned by the catalog repo — Work Package WP-EXT). **No hardcoded interim list in Omnipus** (D7) | D6, D7, D9, T1 |
-| C7 | SSE: deliberately nothing | `contracts/asyncapi.yaml` | **No thinking event is added to SSE.** `POST /api/v1/chat` is legacy (no partitions, not the bus stream delegate, token pipe only) — SSE is a no-thinking surface by construction, which trivially satisfies the gate | D2; ADR-095 D2 Boundary 4 |
+| C1 | Per-login `show_thinking` toggle endpoint | `contracts/openapi.yaml` (new authenticated operations `GET /user-context/thinking` + `PUT /user-context/thinking`, operationIds `getUserThinkingPreference` / `putUserThinkingPreference`) + new request/response schemas in `contracts/components/schemas/` | GET returns the calling login's current preference; PUT takes `{show_thinking: bool}` and is **idempotent** (same value re-PUT succeeds — the SPA flips toggles optimistically and can race itself); both responses return the persisted state. **Never serializes any user-config hash or token material** (ADR-095 D1). Mutations are CSRF-protected by the same double-submit rule as every other authenticated mutation | D2, D19; ADR-095 D1 |
+| C2 | Live thinking frame | `contracts/asyncapi.yaml` (new WS frame type in the frame-type enum + `ThinkingFrame.yaml` in `contracts/components/schemas/`) | One frame carrying: `entry_id` (the transcript thinking row this frame belongs to — minted by the producer at capture start, so live rows and replayed rows are one row by construction), `text` = the **whole redacted text-so-far, hold-back applied — the client REPLACES its rendered text with each frame rather than appending** (the property the hold-back rule can actually guarantee), `elapsed_ms`, `thinking_tokens` when the provider reports one (absent otherwise), `provider_summary` flag (D18's "summarized thinking" label), `final` flag on a round's last frame. `text` capped at **65536 bytes** (maxLength; the `TokenFrame` text-cap precedent) — beyond the cap live updates stop (the stored row still replays in full). Producers **coalesce to at most one frame per 250 ms per round** (latest state wins) so a fast provider cannot flood the hub journal. Published unconditionally by producers, **filtered per connection at delivery** (ADR-095 D2) | D2, D4, D11, D18, D19; ADR-095 D2 |
+| C3 | Thinking as its own transcript entry type | `Message.yaml` — the entry `type` enum gains `"thinking"` (alongside `message`/`compaction`/`system`/`tool_call`/`turn_canceled`/`judge_verdict`), with fields `text` (redacted), `elapsed_ms`, `thinking_tokens` (absent when unreported), `provider_summary`, `turn_id` (binds the row to its round) and `reasoning_effort` (the effort the serving model ran at, when set); `ReplayMessageFrame.yaml` carries a thinking entry through replay | **The storage unit for thinking is one `type: "thinking"` transcript entry per round** — including tool-only rounds that produce no answer text (their thinking row exists on its own entry, not folded anywhere). Entry ID minted **at capture start** = the same ID the live C2 frame carries: live and replay are one row by construction. REST serializers strip thinking entries and fields for a requestor whose gate is off — the entry's *absence* is the gate at replay/REST. The entry `text` is captured from the provider's reasoning field — `Reasoning`, falling back to `ReasoningContent` when empty — and only after the accumulated text has passed the orphan tool-call markup strip (`pkg/agent/loop_truncation.go::stripOrphanToolCallMarkup`): capture reads the post-strip text, so markup never lands in a stored or displayed thinking row (MIN-006) | D2, D3, D11, D18, D19; ADR-095 D2 Boundaries 2-3 |
+| C4 | No-answer outcome marker + notice text | `Message.yaml` + `ReplayMessageFrame.yaml` (additive typed `outcome` field on the assistant entry, value `"no_answer"`, absent otherwise) + the live done-frame (additive `outcome` field, mirroring the existing additive `truncation_reason` precedent) | A round with thinking but no answer text persists an assistant entry whose `content` **is the D26 notice text** ("The model (Provider · Model) did not respond") — so every ordinary content consumer (messenger reply, parent agent, recap, SSE token pipe) delivers the same notice with **zero special handling** (D26: "same notice everywhere") — plus the typed `outcome: "no_answer"` marker so the SPA renders the approved console-strip style with Retry, and `turnWasReasoningOnly` keys on the marker instead of truncation inference. The recap path treats an `outcome: "no_answer"` recap result as a **failed recap attempt** (retry eligible), never reasoning-as-recap | D20, D26; ADR-095 D4 |
+| C5 | Effort-level fields, per surface | See the per-surface table below | `reasoning_effort` is a **plain string, not validated against a fixed enum at write time** (T1); every fallback candidate carries its own effort (D10) | D6, D8, D9, D10, D23, T1 |
+| C6 | Catalog-derived effort variants | `getProvidersCatalog` response schema in `contracts/openapi.yaml` (additive per-model fields on `CatalogModel`) | Per-model `reasoning` + `reasoning_options` — **Omnipus parses them through its typed catalog plumbing** (`pkg/providers/catalog/parse.go` DTO → `document.go::Model` → `served.go` envelope re-serialize; the upstream schema extension is owned by the catalog repo, which is **ours** — elicify-ai/omnipus-provider-catalog, D25). `ProvidersCatalog` `schema_version` stays `"2.0.0"` — the fields are additive under the existing version, no version bump. **No hardcoded interim list in Omnipus** (D7) | D6, D7, D9, D25, T1 |
+| C7 | Usage-totals thinking tokens | `ModelTokens.yaml` (additive `thinking` integer, present only when the provider reports one) | `in`/`out`/`cache_read`/`cache_write`/`total` gain the `thinking` sibling (US-7). `thinking` is **a subset of `out`** — providers report thinking tokens inside output totals (Anthropic `OutputTokensDetails.ThinkingTokens`, OpenAI `completion_tokens_details.reasoning_tokens` precedents), never added on top. Parse points: the Anthropic SDK adapter (the SDK already exposes the detail field) and the openai-compat adapter (whose usage parsing has no reasoning-token plumbing today — new work) | D11; ADR-095 Neutral |
 
-Explicit non-additions: no reasoning byte-count field on any ungated wire frame (ADR-095 D7 keeps the growth-only progress callbacks internal); no reasoning fields on channel/messenger wire surfaces (D1: web chat only); no effort field on `openapi.yaml`'s provider key-probe endpoints.
+**C5 per-surface effort field placement** (CRIT-001 — each wire surface carries its own field; nothing inferred across surfaces):
+
+| Effort belongs to | Schema that carries it | Notes |
+|---|---|---|
+| Agent primary model | `Agent.yaml` + `AgentCreateRequestMain.yaml` — flat `reasoning_effort` sibling of the existing flat `model`/`provider` strings | Effort is a property of the model choice (D23), and these schemas place `model`/`provider` flat today |
+| Agent fallback candidates (agent chain + recap chain) | `FallbackModel.yaml` — additive `reasoning_effort`; one shared schema serves both chains, one addition covers both | D10; schema verified shared today |
+| Recap model | `MemorySettings.yaml` — flat `recap_reasoning_effort` sibling of the existing flat `recap_model` string | Mirrors how `recap_model` sits today |
+| Instance/session default model | `DefaultModel.yaml` + `DefaultModelUpdateRequest.yaml` — additive `reasoning_effort`; covers onboarding's default-model save (the onboarding path writes the default model through the same PUT today) | The "settings' default model" CF9 surface |
+| Per-message effort (model picker, `/effort`) | The inbound chat frame's metadata map — typed `reasoning_effort` key next to the existing typed `model_name` key | D23: per-message like the model picker; no new per-chat server state |
+| Provider catalog | C6's per-model `reasoning_options` — the levels a model *offers*, never a stored choice | D7, D25 |
+
+**C5 resolution order on each turn** (one model serves the turn; one effort value applies): (1) the turn's inbound per-message `reasoning_effort` metadata, when present and not `"default"`; (2) otherwise the effort configured on whichever model actually serves the turn — the primary if it serves, else the serving fallback candidate's own effort (D10); (3) otherwise nothing is sent — the provider's default applies (D9), and for Anthropic that means **no thinking request at all** (D24). `"default"` is the explicit "send nothing" state.
+
+Explicit non-additions:
+no reasoning byte-count field on any ungated wire frame (ADR-095 D7 keeps the growth-only progress callbacks internal; **thinking text on `ToolCallProgress` is banned** — CRIT-003); no reasoning fields on channel/messenger wire surfaces (D1: web chat only); no effort field on `openapi.yaml`'s provider key-probe endpoints; **no thinking event on the legacy SSE chat stream** — `POST /api/v1/chat` is a no-thinking surface by construction (moved to Section 6's prohibitions per OBS-001; the Section 16 test asserting SSE silence stays).
 
 ---
 
@@ -38,9 +52,9 @@ GitNexus MCP tools were **not connected** in this session; per the plan-spec ski
 | Symbol (file) | Role | Verified fate under this feature |
 |---|---|---|
 | `pkg/agent/loop_run_turn_iterations.go` reasoning fallbacks | two sites substitute reasoning text into the visible answer when the answer is empty | **Deleted** (D20; ADR-095 D4) — both sites confirmed present |
-| `pkg/agent/session_end.go` reasoning fallback | same substitution at turn end | **Deleted** (D20) — confirmed present |
-| `pkg/agent/loop_run_turn_response.go` debug fields | logs `response.Reasoning` raw today | **Replaced** by length/boolean-only fields (D14; ADR-095 D8.6) |
-| `pkg/agent/loop_run_turn.go` thinking-level gate | sets a thinking level but the provider type-assertion always fails, so the value is dropped with a warning (CF5) | **Replaced** by real per-adapter effort plumbing (D7/#751) — `ThinkingLevel` field confirmed at `pkg/config/config.go` |
+| `pkg/agent/session_end.go::agentLoopRunRecap.persistResponse` | the **recap** persist path substitutes reasoning text when the recap result has no text — *not* the chat answer path (grill-round-1 correction: the chat-path substitutions live in `loop_run_turn_iterations.go`; this one governs what a recap run stores/delivers) | **Deleted** (D20); the recap path additionally treats an `outcome: "no_answer"` recap result as a failed recap attempt (retry eligible), never reasoning-as-recap (D26) — confirmed present |
+| `pkg/agent/loop_run_turn_response.go` debug fields | logs `response.Reasoning` raw today, and publishes reasoning text to the messenger path (`spawnReasoningPublish`) | Debug fields **replaced** by length/boolean-only fields (D14; ADR-095 D8.6); `spawnReasoningPublish` **deleted** with the messenger path (D1) — both confirmed present |
+| `pkg/agent/loop_run_turn.go` thinking-level gate | sets a thinking level but the provider type-assertion always fails, so the value is dropped with a warning (CF5) | **Deleted and replaced** by per-adapter effort plumbing keyed on `reasoning_effort` (C5) — the whole `thinking_level`/`ThinkingLevel`/`parseThinkingLevel` mechanism (`pkg/config/config.go::ModelConfig.ThinkingLevel`, `pkg/agent/thinking.go`) goes: superseded config is deleted outright, no alias kept (D1; MAJ-005) — field confirmed present |
 | `pkg/config/config.go::UserConfig` | per-login account row | **Extended**: gains the `show_thinking` boolean, one per row (ADR-095 D1); live-read, not restart-gated; not writable via generic config writes (`pkg/gateway/blocked_paths.go` keeps `gateway.users` blocked) |
 | `pkg/gateway/ws_session_hub.go::publishMeta` / `bind` / `journalEntry` | single-serialization hub; journal of seq-stamped frames; per-connection enqueue | **Extended**: thinking flag on frame meta and journal entries; per-connection skip at enqueue and journal-tail replay (ADR-095 D2 Boundary 1) |
 | `pkg/gateway/websocket.go::wsConn` | carries `userID` (resolved at auth time) and `isCLIToken` | **Gate identity input** — both fields confirmed present; unchanged |
@@ -57,11 +71,18 @@ GitNexus MCP tools were **not connected** in this session; per the plan-spec ski
 | `pkg/agent/attach_hydrate.go::HydrateAgentHistoryFromTranscript` | rebuilds provider-bound messages from transcript | **No change** — Content-only mapping locked by guard test; the redacted transcript copy is never mapped into a provider-bound request (ADR-095 D8.3) |
 | `pkg/agent/recall_conversation.go` | recall projection | **No change** — projects no reasoning field (grep-verified, zero references; ADR-095 D8.3) |
 | `pkg/agent/msg_normalize.go`, `pkg/agent/context_budget.go`, `pkg/utils/context.go` | merge/count reasoning today | **Extended**: preserve / count `ThinkingBlocks` byte-exactly (ADR-095 D8 adjacent consumers) |
-| `pkg/config/config_channels_instance.go::ReasoningChannelID` | per-channel reasoning publishing target (13 occurrences) | **Deleted** with the whole messenger publish path (D1) — `OMNIPUS_CHANNELS_*_REASONING_CHANNEL_ID` env bindings confirmed present today |
+| `pkg/config/config_channels_instance.go::ReasoningChannelID` | per-channel reasoning publishing target (26 verified occurrences in that file — count corrected from the interview's 13, MIN-001) | **Deleted** with the whole messenger publish path (D1) — `OMNIPUS_CHANNELS_*_REASONING_CHANNEL_ID` env bindings confirmed present today |
 | `pkg/agent/loop.go::handleReasoning` / `spawnReasoningPublish` | messenger reasoning publish path (incl. PR #933's fix) | **Deleted** (D1) |
-| `docs/connectors/{slack,google-chat,feishu}.md` | connector docs mentioning the reasoning channel | **Updated**: reasoning-channel text removed (D1, CF11) |
+| `docs/connectors/*.md` | 13 connector docs mention the reasoning channel (wecom, whatsapp_native, weixin, telegram, slack, qq, matrix, line, irc, google-chat, feishu, discord, dingtalk — count corrected from 3, MIN-001) | **Updated**: reasoning-channel text removed from all 13 (D1, CF11) |
+| `pkg/channels/base.go` channel interface | carries the reasoning-channel method every channel package implements (13 channel-package implementations + `pkg/channels/webchat_channel.go`) | Interface method **deleted** and all implementations with it (D1) — confirmed present |
+| `pkg/agent/loop.go::handleReasoning` / `spawnReasoningPublish` | messenger reasoning publish path (incl. PR #933's fix) | **Deleted** (D1) |
+| `config/config.example.json` / `pkg/gateway/config.json` | example + gateway config ship reasoning-channel keys | **Updated**: keys removed from both (D1) |
+| `pkg/providers/protocoltypes/progress.go::ToolCallProgress` | the per-chunk progress frame the streamers call with a reasoning **byte count only** — the type's own doc states the reasoning text is never carried here | **Unchanged, ban enforced**: thinking text on `ToolCallProgress` is a Section 6 prohibition with a proving test (CRIT-003) — type confirmed present with its doc comment |
+| `pkg/providers/protocoltypes` provider streaming callback | today `anthropic/provider.go` streaming counts `len(block.Thinking)` only and `openai_compat` counts bytes into `ToolCallProgress` while dropping the text (CRIT-003's confirmed gap: the text is parsed and thrown away) | **Extended**: a new gated accumulated-text reasoning callback, implemented by **both** adapters — anthropic streaming (`case "thinking"`) and openai_compat delta handling — feeding ONLY the turn's capture (redaction + hold-back -> the C2 frame path). Signatures still captured at response parse only (ADR-095 D7); the callback carries display text, never signatures | D5a, D5b; CRIT-003 |
+| `pkg/providers/catalog/parse.go` + `document.go::Model` + `served.go` | catalog DTO parse -> typed `Model` -> served envelope re-serialize; today no reasoning fields survive the typed round-trip | **Extended**: parses and serves `reasoning`/`reasoning_options` under `schema_version: "2.0.0"` (no version bump; D25 — the catalog repo is ours, MAJ-002) — all three symbols confirmed present |
+| `pkg/tools/delegate_status.go` | renders a per-round reasoning byte count ("progress: ... - N bytes of reasoning so far this round") | **Unchanged** — the byte count is internal telemetry (ADR-095 D7), a count is not thinking text, and the gate does not apply to internal agent-side tool output (MIN-002) — confirmed present |
 
-Frontend symbols (CF9 surfaces, all confirmed present on this branch except as noted): `src/components/chat/composer/ModelPicker.tsx`, `src/components/chat/ModelFooter.tsx`, `src/components/chat/ChatControls.tsx`, `src/components/settings/DefaultModelCard.tsx`, `src/components/agents/AgentProfile.tsx`, `src/components/agents/wizard/Step1Identity.tsx`, `src/components/agents/CreateAgentModal.tsx`, `src/components/agents/CreateAgentWizard.tsx`, `src/routes/onboarding.tsx`, `src/components/settings/MemorySection.tsx`, `src/components/ui/model-selector.tsx`, `src/hooks/useSlashMenu.ts`. **Correction to CF9:** `src/lib/onboarding/defaultModel.ts` does **not** exist on this branch — it was deleted upstream on 2026-09-16 as an unused helper (commit `af6a7f63e`), before this worktree was cut; the onboarding surface remains `src/routes/onboarding.tsx`. CF8's `@assistant-ui/react` 0.14.27 is confirmed in `package.json`.
+Frontend symbols (CF9 surfaces, all confirmed present on this branch except as noted): `src/components/chat/composer/ModelPicker.tsx`, `src/components/settings/DefaultModelCard.tsx`, `src/components/agents/AgentProfile.tsx`, `src/components/agents/wizard/Step1Identity.tsx`, `src/components/agents/wizard/Step3Tools.tsx` (the wizard's fallback-chain step — gains effort per fallback candidate, D28), `src/components/agents/CreateAgentModal.tsx`, `src/components/agents/CreateAgentWizard.tsx`, `src/routes/onboarding.tsx`, `src/components/settings/MemorySection.tsx`, `src/components/settings/ChatSection.tsx` (the D22 toggle's home, next to "Verbose chat"), `src/components/ui/model-selector.tsx`, `src/hooks/useSlashMenu.ts` + `pkg/commands/cmd_model.go::modelCommand` (the `/model` command definition — the D27 template `/effort` mirrors). **Correction to CF9:** `src/lib/onboarding/defaultModel.ts` does **not** exist on this branch — it was deleted upstream on 2026-09-16 as an unused helper (commit `af6a7f63e`), before this worktree was cut; the onboarding surface remains `src/routes/onboarding.tsx`. **D28 correction to CF9's effort scope:** `src/components/chat/ModelFooter.tsx` renders the active model's slug per turn, not a chooser — no effort control there; `src/components/chat/ChatControls.tsx` holds chat display toggles only — both **excluded** from effort work; `src/components/settings/RemoveProviderDialog.tsx` imports ModelSelector for a picker context where effort makes no sense — excluded. CF8's `@assistant-ui/react` 0.14.27 is confirmed in `package.json`.
 
 ### 2.3 Impact assessment (manual sweep — Inferred; GitNexus unavailable)
 
@@ -72,7 +93,7 @@ Frontend symbols (CF9 surfaces, all confirmed present on this branch except as n
 | `replay.go::streamReplay` signature | LOW | `websocket_replay.go` (the one production caller) | SPA attach flow |
 | REST session serializers | LOW | SPA session-detail/messages views | e2e suites reading those endpoints |
 | `UserConfig` (+`show_thinking`) | LOW | config persistence/reload; blocked-paths guard | login/logout flows (row-mutation precedent) |
-| D1 deletion (config + loop publish path) | MEDIUM (widest deletion) | 13 per-channel config fields, `loop.go` publish path, 3 connector docs | PR #933's fix (target deleted), env var plumbing |
+| D1 deletion (config + loop publish path) | MEDIUM (widest deletion) | 26 per-channel config fields, the channel-interface method + its 13 channel-package implementations, `loop.go` publish path, 13 connector docs, both shipped config files | PR #933's fix (target deleted), env var plumbing, `config.example.json` consumers |
 
 ### 2.4 Relevant execution flows
 
@@ -97,7 +118,7 @@ This feature spans four clusters — gateway/WS streaming, providers, agent loop
 
 ### US-1 — Per-login "show thinking" toggle, enforced by the server (Priority: P0)
 
-A logged-in user wants to decide for themselves whether AI thinking text is shown to them, without affecting what any other login sees. Today the product either drops thinking entirely or (in the reasoning-only case) shows raw reasoning as if it were the answer. The user flips their own "Show thinking" switch in their profile settings; the server then withholds thinking from every surface they can read — live chat, reloaded history, and the session reads — until they turn it back on. Turning it on later also reveals thinking from their older sessions, because thinking is stored regardless of the toggle's state when it was generated.
+A logged-in user wants to decide for themselves whether AI thinking text is shown to them, without affecting what any other login sees. Today the product either drops thinking entirely or (in the reasoning-only case) shows raw reasoning as if it were the answer. The user flips their own "Show thinking" switch in **Settings -> Chat**, next to "Verbose chat", under a label stating it applies to this login on every device (D22); the server then withholds thinking from every surface they can read — live chat, reloaded history, and the session reads — until they turn it back on. Turning it on later also reveals thinking from their older sessions, because thinking is stored regardless of the toggle's state when it was generated.
 
 **Why this priority**: the gate is the feature's privacy core (D2, D19); every other story delivers a surface the gate must control. It also fixes today's silent bypass in the reasoning-only case (D20's rationale).
 
@@ -105,16 +126,16 @@ A logged-in user wants to decide for themselves whether AI thinking text is show
 
 **Acceptance scenarios**:
 
-1. **Given** a login whose "Show thinking" is off (the default for every new and existing login), **When** a thinking-enabled model produces a turn in that login's chat, **Then** no thinking text, thinking rows, or thinking metadata for that turn reaches that login on any surface, and the assistant's answer still appears normally.
+1. **Given** a login whose "Show thinking" is off (the default for every new and existing login), **When** a thinking-enabled model produces a turn in that login's chat, **Then** no thinking text, thinking rows, or thinking metadata for that turn reaches that login on any **user-visible surface** (scope note, MIN-002: the internal delegation status tool's reasoning byte-count line is internal agent-side telemetry, not a login-visible surface — out of the gate's scope per ADR-095 D7), and the assistant's answer still appears normally.
 2. **Given** two logins viewing the same session, one with the toggle on and one off, **When** a thinking-enabled turn streams, **Then** the toggle-on login sees the live thinking row and the toggle-off login sees only the answer — same session, same turn.
 3. **Given** a login that has just turned the toggle on, **When** they open a session whose earlier turns contain stored thinking, **Then** those older turns now show their thinking rows too.
 4. **Given** a login that has just turned the toggle off, **When** they reload a session that previously showed thinking, **Then** the thinking rows are gone from their view and the answers remain.
-5. **Given** an authenticated session that is not a real account row (CLI token, developer bypass, environment token), **When** a thinking-enabled turn runs, **Then** no thinking is shown to that connection — the default for logins with no account row is toggle-off.
-6. **Given** any toggle change, **When** it is saved, **Then** an audit record notes the login and the new boolean value, and the change takes effect immediately without a gateway restart.
+5. **Given** an authenticated session that is not a real account row (CLI token, developer bypass, environment token — authentication paths that leave the caller's user identity empty, MIN-003), **When** a thinking-enabled turn runs, **Then** no thinking is shown to that connection — an empty identity is treated as toggle-off, the same fail-closed default as a lookup miss.
+6. **Given** any toggle change, **When** it is saved through the toggle endpoint, **Then** an audit row is recorded under the toggle's own audit event (indicatively `settings.show_thinking.changed`, following the repo's dotted lowercase audit-event convention in `pkg/audit/events.go` — exact name is backend-lead's under the audit event-name contract tests), carrying the login and the new boolean value and never a token or hash, and the change takes effect immediately without a gateway restart. The PUT is CSRF-protected like every other authenticated mutation, and re-PUTting the same value succeeds (idempotent, C1).
 
 ### US-2 — Live thinking row in the web chat (Priority: P0)
 
-A user with "Show thinking" on wants to watch the model think as it happens, without the chat being taken over by it. While the model thinks, a collapsed "Thinking…" row appears and fills; clicking it expands the thinking text; it collapses again on click. The row behaves like the existing tool-call rows, and shows elapsed time and a thinking-token count when the provider reports one (D4, D11).
+A user with "Show thinking" on wants to watch the model think as it happens, without the chat being taken over by it. While the model thinks, a collapsed **Reasoning** row appears and fills (labelled "Reasoning", not "Thinking…" — the label must not collide with the existing turn-level "Thinking…" indicator that shows while any turn is in flight, MAJ-015); clicking it expands the thinking text; it collapses again on click. The row is a disclosure, not an accordion: it reuses the repo's disclosure primitive (`src/components/ui/disclosure-row.tsx` — header button with `aria-expanded`, body present only when there is text to disclose) and behaves like the existing tool-call rows. It shows elapsed time and a thinking-token count when the provider reports one (D4, D11).
 
 **Why this priority**: this is the feature's visible payload; without it nothing else is user-visible. Collapsed-by-default keeps the chat calm (D4's rationale).
 
@@ -122,7 +143,7 @@ A user with "Show thinking" on wants to watch the model think as it happens, wit
 
 **Acceptance scenarios**:
 
-1. **Given** a toggle-on login and a thinking-enabled model, **When** the model streams its thinking, **Then** a collapsed "Thinking…" row appears in the chat and its content grows as thinking arrives.
+1. **Given** a toggle-on login and a thinking-enabled model, **When** the model streams its thinking, **Then** a collapsed Reasoning row appears in the chat and its content grows as thinking arrives (CRIT-003: the content exists because the provider adapters emit an accumulated-text reasoning callback consumed only by the turn's capture — nothing rides `ToolCallProgress`).
 2. **Given** a collapsed thinking row, **When** the user clicks it, **Then** the full thinking text is displayed; **When** they click again, it collapses back to the summary line.
 3. **Given** a thinking row produced by a provider that reports thinking tokens, **When** the row is displayed collapsed, **Then** it shows elapsed duration and the token count; for a provider that reports none, the token count is absent and the duration still shows.
 4. **Given** an Anthropic model that returns only a hidden signature with no thinking text, **When** the turn completes, **Then** no empty thinking row is rendered (metadata only, no row — D18's "summarized thinking" has nothing to show in that case).
@@ -164,7 +185,7 @@ Anthropic's protocol-routed models move to the adapter that supports thinking, l
 
 **Acceptance scenarios**:
 
-1. **Given** an Anthropic model that supports thinking summaries, **When** any user runs a turn regardless of toggle state, **Then** the provider request asks for the summary (so toggling on later can reveal it), and the toggle only decides whether this user sees the row (D18).
+1. **Given** an Anthropic model that supports thinking summaries **and effort set to a named level** (precondition per D24: at the "Default" effort state Omnipus sends no thinking request at all, so there is no summary to ask for — MAJ-017), **When** any user runs a turn regardless of toggle state, **Then** the provider request asks for the summary (so toggling on later can reveal it), and the toggle only decides whether this user sees the row (D18).
 2. **Given** a toggle-on login viewing an Anthropic turn's thinking row, **When** the row renders, **Then** it is labelled as summarized thinking, driven by the stored entry's provider-summary flag, not hardcoded per provider in the UI.
 3. **Given** a thinking-enabled Anthropic turn that uses tools, **When** the conversation continues after the tool result, **Then** the turn completes without a provider rejection about missing or altered thinking blocks.
 4. **Given** a thinking-enabled Anthropic tool-using conversation interrupted by a gateway restart, **When** the user sends the next message, **Then** the conversation continues correctly — the restart changes nothing about what is re-sent (D15's answer to the restart question).
@@ -173,7 +194,7 @@ Anthropic's protocol-routed models move to the adapter that supports thinking, l
 
 ### US-6 — Effort control on every model surface (Priority: P1)
 
-An operator wants to choose how hard a model reasons — as named levels on a slider, per model, everywhere a model is chosen (D6, D8). Every model-selector surface gains the slider: the agent's default model, the per-chat model picker, the `/effort` slash command, each fallback candidate in a chain, the recap model in Settings → Memory, the agent creation wizard and modal, onboarding's model step, and the settings' default model. Leaving it unset shows "Default" and sends nothing to the provider — the provider's own default applies (D9). A stored level the catalog no longer knows falls back to the provider's default with a visible note, never a block (T1).
+An operator wants to choose how hard a model reasons — as named levels on a slider, per model (D6, D8). **Effort is a per-message choice, exactly like the model picker** (D23): the picker or `/effort` selection rides the next outbound message and stays in force until changed again, with **no new per-chat server state** — the C5 inbound-metadata field carries it, the same way the per-message `model_name` already does. The effort control appears on: the per-chat model picker, the `/effort` slash command (D27: everywhere `/model` works — web, CLI, messengers — with thinking *display* still web-only), each fallback candidate in a chain (added to the agent wizard's fallback step per D28), the recap model in Settings → Memory, the agent creation wizard and modal, onboarding's model step, and the settings' default model. Per D28 the effort control is **not** added to: the per-message footer (`ModelFooter.tsx` renders the active model's slug, not a chooser), the chat controls bar (`ChatControls.tsx`), or the remove-provider dialog. Leaving it at "Default" shows the hint "choose a level to see thinking" where the model supports thinking (D24) and sends nothing to the provider — the provider's own default applies (D9). A stored level the catalog no longer knows falls back to the provider's default with a visible note, never a block (T1).
 
 **Why this priority**: effort is the "reasoning effort" half of the feature, but it is blocked on the external catalog change (WP-EXT) and adds no safety risk — hence P1 behind the visibility core.
 
@@ -183,12 +204,14 @@ An operator wants to choose how hard a model reasons — as named levels on a sl
 
 1. **Given** a model whose catalog row lists named reasoning levels, **When** any CF9 model surface renders the effort control, **Then** the slider offers exactly that model's catalog variants plus the unset "Default" state — and nothing else.
 2. **Given** a model with no reasoning variants in the catalog, **When** the effort control renders, **Then** it offers only "Default" (no positions to slide), and no level can be set for that model.
-3. **Given** effort left at "Default", **When** a turn runs, **Then** no effort value is sent to the provider (D9).
+3. **Given** effort left at "Default", **When** a turn runs, **Then** no effort value is sent to the provider (D9) — and on a thinking-capable Anthropic model that means no thinking request and no thinking rows (D24).
 4. **Given** a specific level set on the agent's default model, **When** a turn runs, **Then** the provider request carries that level.
 5. **Given** a fallback chain whose candidates carry different effort settings, **When** the primary model fails and a fallback serves the turn, **Then** the fallback's own effort is used — independent of the primary's (D10).
 6. **Given** a stored effort level that the current catalog no longer lists, **When** a turn runs, **Then** the provider's default applies and a visible note says so — the turn is not blocked (T1).
-7. **Given** the user types `/effort` in the chat composer, **When** the slash menu resolves the command, **Then** the effort control for the chat's current model opens (or the level picker is offered inline) — the same setting the model picker exposes.
-8. **Given** Anthropic's raw budget-based "adaptive" mode, **When** any surface renders, **Then** no adaptive/budget control exists — named levels only (D6).
+7. **Given** the user runs `/effort` **on any surface where `/model` works** (web composer, CLI, messenger channels — D27), **When** the command resolves, **Then** it behaves exactly like `/model` does on that surface: web opens the picker control for the chat's current model; CLI and messengers get the current-level and set-level reply text — while thinking *display* stays web-only regardless of where the level was set (D27).
+8. **Given** Anthropic's raw budget-based "adaptive" mode, **When** any surface renders, **Then** no adaptive/budget control exists — named levels only (D6; MIN-005: the banned control is a **raw token-budget input**, not the effort mapping — the named-level presentation that maps to Anthropic's adaptive thinking type is not a budget field).
+9. **Given** the per-message effort choice, **When** a later message omits it, **Then** the previously chosen level stays in force for the chat's outbound messages (the client re-sends the last chosen model and effort per message — no server-side per-chat state is created, D23).
+10. **Given** a model that supports thinking, **When** the effort control sits at "Default" on any surface that renders it, **Then** the hint "choose a level to see thinking" is shown (D24).
 
 ### US-7 — Thinking cost signals (Priority: P2)
 
@@ -206,7 +229,7 @@ An operator wants to see what thinking costs. The collapsed row shows elapsed du
 
 ### US-8 — No-answer turns get a gentle notice, never reasoning-as-answer (Priority: P0)
 
-Today, when a model returns thinking but no answer text, Omnipus silently shows the raw thinking as if it were the answer — a real bug that bypasses the visibility gate (D20's rationale, confirmed at `pkg/agent/loop_run_turn_iterations.go` and `pkg/agent/session_end.go`). After this story, the thinking goes only into the gated thinking row, and the answer position shows a gentle notice naming the provider and model — e.g. "The model (Provider · Model) did not respond" — with a Retry action, in the same flat console-strip visual style approved for the provider-messages feature (#711).
+Today, when a model returns thinking but no answer text, Omnipus silently shows the raw thinking as if it were the answer — a real bug that bypasses the visibility gate (D20's rationale, confirmed at `pkg/agent/loop_run_turn_iterations.go` and `pkg/agent/session_end.go::agentLoopRunRecap.persistResponse`). After this story, the thinking goes only into the gated thinking row, and the answer position carries **one and the same notice text everywhere** (D26): messengers receive it as an ordinary reply message, a parent (delegating) agent receives it as the turn's answer text, task runs count a reasoning-only try from the typed marker, the recap path treats it as a failed recap attempt, and the SPA renders it in the flat console-strip visual style approved for the provider-messages feature (#711) with a Retry action. The notice names the provider and model — e.g. "The model (Provider · Model) did not respond". Carriers: the notice text **is** the persisted assistant entry's content (C4), and the typed `outcome: "no_answer"` marker rides the entry, the live done-frame and `ReplayMessageFrame` — live and replay agree and every non-web consumer needs zero special handling (D26).
 
 **Why this priority**: it closes a live gate bypass; it is the D20 founder decision verbatim and ships with the capture work.
 
@@ -214,9 +237,12 @@ Today, when a model returns thinking but no answer text, Omnipus silently shows 
 
 **Acceptance scenarios**:
 
-1. **Given** a round that produced thinking but no answer text, **When** the turn ends, **Then** the thinking appears only in the (gated) thinking row and the answer position shows the no-answer notice naming the provider and model.
+1. **Given** a round that produced thinking but no answer text, **When** the turn ends, **Then** the thinking appears only in the (gated) thinking row, the assistant entry's content is the notice text (the same string on every surface, D26), and the typed `outcome: "no_answer"` marker rides the entry, the live done-frame and `ReplayMessageFrame` — live and replay render identically.
 2. **Given** the no-answer notice, **When** the user activates Retry, **Then** the same user message is sent again as a new turn.
 3. **Given** a toggle-off login and a no-answer round, **When** the turn ends, **Then** the user sees the notice but no thinking anywhere — the notice never substitutes thinking for the answer.
+4. **Given** a no-answer round on a messenger channel, **When** the connector delivers the reply, **Then** the messenger receives the notice text as an ordinary reply message (zero connector changes, D26).
+5. **Given** a delegated task whose turn ends reasoning-only, **When** the task run classifies the turn, **Then** it counts a reasoning-only try from the typed marker (not truncation inference) and follows the existing retry/counting rules (D26).
+6. **Given** a recap run whose result has thinking but no text, **When** the recap persists, **Then** it is treated as a failed recap attempt eligible for retry — never reasoning-as-recap (D26; the substitution at `pkg/agent/session_end.go::agentLoopRunRecap.persistResponse` is deleted).
 
 ### US-9 — The messenger reasoning channel is gone (Priority: P1)
 
@@ -247,7 +273,7 @@ Today the debug log carries raw reasoning text (CF6). After this story the log r
 
 ### US-11 — Provider catalog carries the effort data (external dependency) (Priority: P1 — external repo)
 
-The per-model reasoning metadata — whether a model reasons and which named levels it accepts — comes from the provider catalog, extended in its own repository and PR (elicify-ai/omnipus-provider-catalog#29, D7). Omnipus builds no interim hardcoded list.
+The per-model reasoning metadata — whether a model reasons and which named levels it accepts — comes from the provider catalog, extended in its own repository and PR (elicify-ai/omnipus-provider-catalog#29, D7). **That catalog repo is ours** (D25): #29 is a work package of this spec (WP-EXT, Section 23), Omnipus's C6 defines the `reasoning_options` field shape, and the catalog-repo PR conforms to it. Omnipus-side parser plumbing for the new fields (parse -> typed model -> served envelope round-trip) is a **separate Omnipus work package** (WP-G, MAJ-002), not part of WP-EXT. Omnipus builds no interim hardcoded list.
 
 **Why this priority**: a hard prerequisite for US-6's data, but not for the visibility core; tracked as its own work package (WP-EXT, Section 23).
 
@@ -285,8 +311,8 @@ Boundary conditions:
 
 ## 5. Edge Cases
 
-- A secret split across two streamed thinking pieces matches no pattern piecewise. Expected: the redaction scans the whole accumulated text, so the secret is masked in the stored and shown copy; live frames hold back a bounded tail so no matchable partial secret is displayed (ADR-095 D4).
-- Empty / signature-only thinking (Anthropic's newest models default to no visible summary). Expected: no thinking row at all — metadata without an empty row (ADR-095 D6).
+- A secret split across two streamed thinking pieces matches no pattern piecewise. Expected: the redaction scans the whole accumulated text, so the secret is masked in the stored and shown copy. **Hold-back rule (MAJ-006):** live frames emit only the text up to the start of the trailing run of token-ish characters — `A-Za-z0-9` plus `.`, `_`, `-`, `~`, `/`, `+`, `=` (the alphabet credential formats are drawn from; `sk-`/`Bearer`-style prefixes land inside such runs) — a credential is emitted only once delimiter-completed, at which point the whole-text scan has already masked it. A split-at-every-split-point prefix test proving a `sk-` secret never appears live is in the test plan.
+- Empty / signature-only thinking (Anthropic's newest models default to no visible summary). Expected: no thinking row at all — metadata without an empty row (ADR-095 D6). The growing thinking content renders `aria-live="off"` while filling (streaming text must not spam screen readers); the elapsed timer is `aria-hidden` (MIN-007).
 - A lookup miss (a login whose account row no longer exists) or a settings read error. Expected: toggle treated as off — fail closed (ADR-095 D2).
 - A real account literally named "cli". Expected: unaffected — the CLI-token detection keys on how the caller authenticated, not the username (ADR-095 D2).
 - A model whose catalog row carries no reasoning variants. Expected: the effort control offers "Default" only (US-6 scenario 2).
@@ -295,7 +321,9 @@ Boundary conditions:
 - Toggle off→on mid-turn. Expected: the in-flight turn's not-yet-persisted thinking-so-far is not retro-served live; persisted thinking is reachable via refetch — the SPA refetches after flipping (ADR-095 Neutral).
 - OpenRouter structured reasoning details (a carrier shape Omnipus v1 has no field for). Expected: bounded, tested gap — not fixed in v1 (#943, D21).
 - Pre-feature sessions with stored reasoning in the context file but no redacted transcript thinking. Expected: no migration; old sessions replay without thinking rows until new turns store them (D17).
-- A thinking turn routed through a messenger channel. Expected: the connector's reply carries the answer only; no thinking is published to any messenger (D1).
+- A thinking turn routed through a messenger channel. Expected: the connector's reply carries the answer only; no thinking is published to any messenger (D1). A no-answer round through a messenger delivers the D26 notice text as an ordinary reply (US-8 AS4).
+- Thinking text whose credential formats are not among the audit redactor's recognised patterns. Expected: **not masked** — the redaction promise is scoped to recognised credential formats; unrecognised formats are not caught (MAJ-013); the user-facing docs state this limit plainly (Section 13).
+- Live thinking text exceeding the 65536-byte frame cap. Expected: live updates stop once the cap is hit (the last in-cap frame stays), while the stored row keeps the full redacted text and replay serves it — a deliberate, bounded degradation (MAJ-007).
 
 ## 6. Explicit Non-Behaviors & Safeguards
 
@@ -306,13 +334,14 @@ Boundary conditions:
 - The system must not add a thinking event to the legacy SSE chat stream, because SSE is ruled a no-thinking surface by construction (ADR-095 D2 Boundary 4).
 - The system must not hardcode effort levels in Omnipus, because the catalog is the single source and an interim list would drift from it (D7).
 - The system must not validate a stored effort level against a fixed enum at write time, because the catalog can change under a stored value and a stale level must degrade to the provider default, not block (T1).
-- The system must not offer Anthropic's raw token-budget "adaptive" mode, because D6 confines v1 to named levels for one consistent slider idiom.
+- The system must not offer Anthropic's raw token-budget "adaptive" mode, because D6 confines v1 to named levels for one consistent slider idiom. (MIN-005: the banned control is a **raw token-budget input** — e.g. a free `budget_tokens` number field wired to the SDK's thinking-config budget parameter; the named-level effort mapping that decides Anthropic's thinking type and request fields is not a budget input and is not banned).
 - The system must not send the stored redacted thinking copy to a provider, because the redacted copy is not the byte-exact block some providers validate (D12 as amended by D15 / ADR-095 D8.3).
 - The system must not strip thinking from the LLM-context file on disk, because the founder ruled the context file is the store raw thinking round-trips through (D15).
 - The system must not implement the OpenRouter signed-block round-trip in v1, because it is tracked as #943 and tested only as a bounded gap (D21).
-- The system must not let thinking ride tool-result content or any ungated wire frame, because that would bypass the gate (ADR-095's proving-test list).
+- The system must not let thinking ride tool-result content or any ungated wire frame, because that would bypass the gate (ADR-095's proving-test list). **Thinking text on `ToolCallProgress` is explicitly banned** (CRIT-003): the per-chunk progress frame carries a reasoning byte count only (`pkg/providers/protocoltypes/progress.go::ToolCallProgress`'s own doc already states the text is never carried there); the new gated accumulated-text callback is the ONLY path thinking text may take from a provider adapter to the turn's capture, and a proving test asserts a thinking-text sentinel never reaches `ToolCallProgress` or `delegate_status` output.
 - The system must not build a Selection Toolbar, because #274's toolbar half is explicitly out of this feature's scope (interview §0).
 - The system must not migrate or clean up pre-existing reasoning data, because D17 keeps the greenfield no-upgrade-path ruling.
+- The system must not serve SSE any thinking event: the legacy `POST /api/v1/chat` token pipe is a no-thinking surface by construction (ADR-095 D2 Boundary 4; prohibition moved here from the Section 1 C-list per OBS-001 — it was never a contract change).
 - The system must not store or display emoji in thinking text handling beyond what the model itself produced in ordinary content — UI chrome and stored metadata stay emoji-free (root `CLAUDE.md` brand rule).
 
 ### Machine-verifiable constraints
@@ -320,16 +349,19 @@ Boundary conditions:
 **HTTP APIs**:
 
 - An unauthenticated request to the toggle endpoint MUST be refused with HTTP 401.
-- A toggle change MUST persist immediately, take effect on the next read without a gateway restart, and record an audit row carrying the login and the new boolean value — never a token or hash.
+- A toggle change MUST persist immediately, take effect on the next read without a gateway restart, and record an audit row under the toggle's own event (indicatively `settings.show_thinking.changed`, dotted lowercase per `pkg/audit/events.go` convention) carrying the login and the new boolean value — never a token or hash. The same value PUT twice MUST succeed identically (idempotency, C1).
 - The generic config-write path MUST continue to refuse writes to the users' config area (`gateway.users` stays a blocked path) — the toggle is writable only through its dedicated endpoint.
 - When a toggle-off principal reads session detail or session messages, the response bodies MUST contain zero thinking fields (the keys are absent, not null or empty) — verifiable byte-level on both REST read surfaces.
-- When thinking is stored, the transcript copy MUST match the audit redaction's credential patterns (secrets masked, emails kept) — a stored copy containing an unmasked credential pattern is a test failure.
+- When thinking is stored, the transcript copy MUST match the audit redaction's credential patterns for every format the audit redactor recognises (secrets masked, emails kept) — a stored copy containing an unmasked recognised-format credential pattern is a test failure. **Unrecognised formats are not masked** — the promise is scoped, and the user-facing docs say so (MAJ-013).
 
 **WebSocket delivery**:
 
 - A gated connection MUST observe zero thinking-frame bytes: no live delivery, no journal-tail replay delivery, no snapshot delivery — verifiable by byte inspection of that connection's received frames.
 - A gated connection's frame sequence MUST show deliberate sequence gaps where thinking frames were skipped; the connection MUST NOT be closed, unbound, or marked overflowed by the filtering.
+- Under sustained thinking-heavy traffic the hub's journal-pressure behaviour is unchanged: when any journal cap is hit the pre-existing pressure behaviour applies (oldest frames evicted; overflow handling), and a gated toggle-on connection may fall back to the gated snapshot path (ADR-095 D5's degradation) — accepted, visible degradation, not a crash (MAJ-007; journal caps verified at `pkg/gateway/ws_session_hub.go`: per-connection 2048 frames / 1 MiB, 32 MiB global).
 - Thinking frames MUST never arrive on any unsequenced side-channel (no unsequenced copy of a thinking frame may exist).
+- A thinking frame's `text` MUST NOT exceed 65536 bytes and producers MUST coalesce to at most one thinking frame per 250 ms per round — verifiable by measuring inter-frame spacing and frame sizes under a mock provider emitting reasoning chunks as fast as the mock can loop (MAJ-007).
+- The live hold-back rule MUST hold at every split point: for any prefix of a thinking stream, the concatenation of everything a toggle-on client received live is either a prefix of (whole-text redacted, hold-back applied) or already masked — a credential-shaped run may never appear unmasked in any live frame (MAJ-006).
 
 **Debug log**:
 
@@ -350,14 +382,14 @@ Boundary conditions:
 
 - **Data in**: upstream catalog sources' per-model reasoning metadata (D7, #29).
 - **Data out**: the catalog document's per-model `reasoning` / `reasoning_options` fields, served by Omnipus's catalog endpoint.
-- **Contract**: the catalog document schema (extended by #29); Omnipus serves the registry-built document and adds no model metadata of its own.
+- **Contract**: the catalog document schema (extended by #29 under Omnipus's C6 field shape — **the catalog repo is ours**, D25); Omnipus parses the new fields through its typed catalog plumbing (`pkg/providers/catalog/parse.go` -> `document.go::Model` -> `served.go` envelope) and adds no model metadata of its own (MAJ-002).
 - **On failure**: catalog unchanged/stale → effort controls render "Default" only (or the T1 note for a stale stored level); no chat, agent, or settings flow blocks.
 - **Development**: real catalog document in integration tests; no mock server needed — the document is static data.
 
 ### LLM providers (Anthropic / OpenAI-compatible / OpenRouter)
 
 - **Data in**: chat + tool context; thinking config (effort level; Anthropic summary request); signed-block round-trip on Anthropic tool turns.
-- **Data out**: streamed/complete responses; reasoning text (openai-compat) or summarized thinking blocks with signatures (Anthropic); thinking-token counts where reported.
+- **Data out**: streamed/complete responses; reasoning text via the new gated accumulated-text callback (openai-compat) or summarized thinking blocks with signatures (Anthropic); thinking-token counts where reported (C7's parse points). Nothing reasoning-related rides `ToolCallProgress` beyond the existing byte count (CRIT-003).
 - **Contract**: provider-native APIs behind Omnipus's provider protocol; the signed-block carrier and request pinning per ADR-095 D6/D7.
 - **On failure**: provider rejects thinking (unsupported/missing blocks) → the availability guard omits thinking and logs (Anthropic); reasoning text absent → no thinking row; the answer path is unaffected in every case.
 - **Development**: real providers in UAT (OpenRouter is the acceptance provider); unit/integration tests use recorded provider shapes.
@@ -397,11 +429,44 @@ Boundary conditions:
           • never: SSE, messenger channels, tool results
 ```
 
+#### Storage unit for thinking (CRIT-002, decided)
+
+**One `type: "thinking"` transcript entry per round** — including tool-only rounds that produce no answer text:
+
+- The turn's capture mints the thinking entry's ID **at capture start**, so the live C2 frame and the stored row share one identity: live and replay render the same row, not two.
+- The entry carries `turn_id` (the existing transcript turn-correlation field, `pkg/session/daypartition.go::TranscriptEntry`), so each thinking row binds to its round; multi-round turns keep one thinking row per round, in round order.
+- A tool-only round's thinking row exists on its own entry, never folded into another entry — the case the old inference-based classification missed; a BDD scenario and a test cover it.
+- The entry's `content` is the redacted text; the D11 metadata (duration, token count, summary flag) and the serving model's `reasoning_effort` ride the entry's typed fields (C3).
+
+**Every transcript reader and its handling of `type: "thinking"` entries** (verified inventory: `ReadTranscript` has **24 production call-site files**; test call sites share the same helpers and rules):
+
+| Reader (file) | Handling of a thinking entry |
+|---|---|
+| `pkg/agent/attach_hydrate.go` | **Skip** — the Content-only mapping is locked by guard test; the redacted copy never enters provider-bound requests (ADR-095 D8.3) |
+| `pkg/agent/behavior_scan.go` | **Skip** — behavior analysis reads answer content; a thinking entry is non-answer, same class as a `tool_call` entry today |
+| `pkg/agent/boot_sweep.go` | **Passthrough** — startup-sweep reads are order-preserving; entries persist untouched |
+| `pkg/agent/goal_loop.go`, `pkg/agent/goal_triggers.go` | **Naturally excluded** — goal evaluation reads message-type entries; a thinking entry is not a message |
+| `pkg/agent/judge_evidence_tiers.go` | **Exclude (explicit change)** — analysis text must never become judge evidence; the evidence-tier reader gets an explicit thinking-entry filter |
+| `pkg/agent/loop_inbound.go`, `pkg/agent/loop_wire.go`, `pkg/agent/loop.go` | **Passthrough** — order-preserving transcript iteration; entries persist untouched |
+| `pkg/agent/repair.go` | **Skip in repairability checks** — thinking entries are not answer content; they replay untouched |
+| `pkg/agent/session_end.go` | **Exclude from recap context assembly** — recap context is answer content; the reasoning substitution there is deleted anyway (D20/D26) |
+| `pkg/agent/steer_frames.go`, `pkg/agent/steer_reconstruct.go` | **Exclude from context assembly** — steering context is answer content; the redacted copy never enters provider-bound context |
+| `pkg/agent/task_run_loop.go::turnWasReasoningOnly` | **Keys on the assistant entry's `outcome: "no_answer"` marker** (C4) — thinking entries are not read for the classification |
+| `pkg/agent/verifier_adjudication.go`, `pkg/agent/verifier_provenance.go` | **Exclude from evidence (explicit change)** — same class as judge evidence; analysis text must not become verification evidence |
+| `pkg/gateway/rest_sessions.go` | **Gated strip (gate Boundary 3)** — thinking entries and fields stripped unless the requesting principal's toggle is on |
+| `pkg/gateway/rest_tasks.go` | **Gated strip** — task detail reads transcript; the same REST-serializer gate rule applies |
+| `pkg/gateway/websocket_replay.go` | **Gated** (gate Boundary 2) — thinking rows replay only to a toggle-on principal |
+| `pkg/session/unified_write.go` | **Persist in order** (the write path) — thinking entries persist in round order alongside every other entry |
+| `pkg/tools/delegate.go`, `handoff.go`, `inspect_session.go`, `delegate_status.go` | **Skip in tool output** — tools present session state as answers/actions, not display copy; thinking is display-only per D2/D19, so tool output skips them (safe default; the gate's web-display boundaries are hub/replay/REST) |
+| Any reader not listed | **Skip** — the safe default: a thinking entry is opaque non-answer content |
+
+The default rule is deliberate: the gate covers display surfaces (hub/replay/REST, ADR-095 D2); nothing consumes a thinking entry as answer text.
+
 Storage facts, all founder-ruled:
 
 - **Raw** thinking (openai-compat reasoning string; Anthropic thinking blocks with signatures and redacted-block data) persists in the LLM-context file exactly as today's wholesale marshal already does — no strip step anywhere (D15; ADR-095 D8). It is the store the provider round-trip reads from, so cross-turn re-send, restart and mid-turn rebuild behavior are unchanged from today's semantics for that file.
 - **Redacted** thinking (display copy) is stored with the transcript, captured once per round, redacted as a whole accumulated string on a copy, identical for live and replay by construction (D3; ADR-095 D4).
-- **Effort** is stored as a plain string per model setting — agent default model, per-chat (riding the same agent model-settings persistence the model picker uses today), each fallback candidate independently, recap model (D8, D10, T1). Unset means "send nothing" (D9).
+- **Effort** is stored as a plain string per model setting — agent default model, each fallback candidate independently, recap model, instance default model (C5's per-surface table). Per-message effort is **not server-stored per chat** (D23): the picker or `/effort` choice rides the next outbound message's metadata, exactly as the per-message `model_name` already does. Unset/"default" means "send nothing" (D9, D24).
 - **Toggle** is one boolean per login row in the gateway users config, live-read, restart-gate exempt, never writable through generic config writes (ADR-095 D1).
 - **Audit** gains one row per toggle change: login + boolean (ADR-095 D1).
 - **No migration**: pre-existing context files and logs untouched (D17).
@@ -410,26 +475,27 @@ Storage facts, all founder-ruled:
 
 | Surface | Reads/Writes | Gating |
 |---|---|---|
-| `show_thinking` toggle endpoint (new, authenticated) | flips the calling login's own preference; returns new state; audit row | self only; never exposes any other login's state or any hash |
+| `show_thinking` toggle endpoint (new, authenticated; `GET` + idempotent `PUT`) | returns current preference; PUT flips the calling login's own preference; returns persisted state; audit row | self only; never exposes any other login's state or any hash |
 | WS live stream | thinking frames, gated per connection | gate predicate per connection identity; fail closed |
 | WS attach/replay | transcript + journal tail with the requesting login's gate result | toggle off → thinking fields omitted, no thinking rows |
 | `GET /sessions/{id}` (detail) | serializer strips thinking fields for gated principals | toggle off → keys absent |
 | `GET /sessions/{id}/messages` | same serializer rule | toggle off → keys absent |
-| `GET /providers/catalog` | per-model `reasoning`/`reasoning_options` passthrough (C6) | not gated (public vendor metadata, like today's catalog document) |
+| `GET /providers/catalog` | per-model `reasoning`/`reasoning_options` parsed and re-served through Omnipus's typed catalog plumbing (C6, WP-G) | not gated (public vendor metadata, like today's catalog document) |
 | Agents / model-settings API | effort field on model params and fallback candidates (C5) | existing agent authorization unchanged |
-| SSE `POST /api/v1/chat` | **no thinking surface** (C7) | nothing to gate |
+| SSE `POST /api/v1/chat` | **no thinking surface** (Section 6 prohibition; OBS-001) | nothing to gate |
 | Messenger connectors | **no thinking delivery** (D1) | nothing to gate |
 
 ### 8.3 Effort data flow
 
 ```
-catalog repo #29 (upstream schema) ──► registry build ──► /providers/catalog (C6)
+catalog repo #29 (upstream schema; OUR repo, D25) ──► registry build ──► Omnipus typed parse/served (WP-G) ──► /providers/catalog (C6)
                                                               │
                                         every CF9 model surface reads its model's
                                         variants from here (D6/D7) ── slider
                                                               │
-        user sets level (slider or /effort) ──► model settings (agent default /
-        per-chat pick / fallback candidate / recap) ──► provider request carries
+        user sets level (slider or /effort) ──► stored per model setting (agent default /
+        fallback candidate / recap) or rides the message (per-message picker/effort,
+        D23 — no per-chat server state) ──► provider request carries
         the level (or nothing when "Default", D9); stale level → provider default
         + note (T1); each fallback uses its own candidate's level (D10)
 ```
@@ -440,15 +506,28 @@ catalog repo #29 (upstream schema) ──► registry build ──► /providers
 
 Every new or changed screen, with loading / empty / error / partial states. Visual language: dark-first, no emoji, flat treatment per the design system (Section 12).
 
-### 9.1 Settings → Profile: "Show thinking" toggle (new control)
+### 9.1 Settings → Chat: "Show thinking" toggle (new control)
 
-Reachable from the existing profile/account settings section (`src/components/settings/ProfileSection.tsx` — the user's own account screen). One labeled switch per login; helper text states it affects only this login and that turning it on reveals older sessions' thinking too (D2, D19).
+Reachable from Settings -> Chat (`src/components/settings/ChatSection.tsx` — the screen that already hosts "Verbose chat"), directly below that switch (D22). One labeled switch per login; helper text states it applies to this login on every device (not this browser), and that turning it on reveals older sessions' thinking too (D2, D19). The control reads its state with the C1 `GET` and saves with the C1 idempotent `PUT`; "stored in this browser" wording is wrong and is not used anywhere (MAJ-001).
 
-- **Loading**: the switch renders in its saved state once the profile loads; no skeleton dedicated to it (rides the section's existing loading state).
-- **Empty/unset**: toggle-off is the shipped default for every login — including logins created before this feature (no backfill needed; absence of the setting means off).
-- **Error**: save failure keeps the switch at its previous state and shows the section's standard error treatment; the server remains the source of truth.
+- **Loading**: the switch renders in its saved state once the settings section loads (C1 GET); no skeleton dedicated to it (rides the section's existing loading state).
+- **Empty/unset**: toggle-off is the shipped default for every login — including logins created before this feature (greenfield: absence of the setting means off; no backfill).
+- **Error**: save failure keeps the switch at its previous state and shows the section's standard error treatment; the server remains the source of truth (re-read on failure).
 - **Partial**: a flip that saves but whose refetch fails (the flip triggers a refetch of visible thinking — ADR-095 Neutral) leaves the switch correct and the list stale until the next refetch; the standard auto-save indicator covers it.
 
+### 9.2 Chat: collapsed Reasoning row (new, gated)
+
+Rendered inside the transcript between the user message and the answer, as a disclosure row (MAJ-015: `src/components/ui/disclosure-row.tsx` — header button with `aria-expanded`, body present only when there is text to disclose; "fills live" means the body content grows while collapsed, not that the disclosure must be open). Labelled **"Reasoning"**, not "Thinking…" — the existing turn-level "Thinking…" indicator (`src/components/chat/ChatScreen.tsx::ThinkingIndicator`, which opens with `THINKING_MESSAGES`) stays for the pre-thinking wait state; the Reasoning row replaces the indicator once the first thinking text arrives (MAJ-015). Shows an elapsed timer while streaming, then duration + token count when done (D11). Anthropic-originated rows are labelled "summarized thinking" from the entry's stored flag (D18).
+
+- **Loading/streaming**: collapsed row with live-growing content; expandable mid-stream; expand/collapse per click and per keyboard (Section 11).
+- **Empty**: no thinking content (e.g. signature-only Anthropic blocks) → no row at all (ADR-095 D6).
+- **Error**: a turn that failed mid-thinking renders what was stored (redacted-so-far) collapsed; no special error chrome beyond the turn's own.
+- **Partial**: a mid-turn attach shows thinking-so-far up to the last intermediate persist — the accepted projection-budget-class cost (ADR-095 D2 Boundary 1 item 4); the row completes as later frames arrive or on refetch.
+- **Gated off**: toggle-off logins never receive the row on any path — there is no collapsed placeholder for hidden thinking (the answer simply follows the user message).
+
+### 9.3 Chat: no-answer notice (new, gated-adjacent)
+
+The D26 notice in the flat console-strip visual language approved for #711 (Option C — flat text-line row, mono metadata, kind-colored dot): "The model (Provider · Model) did not respond", provider/model names drawn from the serving model row (MIN-009), with a Retry button re-using the chat's existing resend affordance (`src/components/chat/ChatScreen.tsx` retry/resend path). Rendered from the typed no-answer marker (C4). **Ownership (MAJ-010):** grill-round-1 verification found the treatment exists today only as a Storybook demo — commit `02eeba8c5` on `feat/provider-messages-visual-demo`, **not** an ancestor of `feat/provider-messages` and not a production component. This feature therefore builds the notice **inline** with the approved Option-C visual language (the tokens/classes are approved and named in Section 12); if #711's catalogued console-strip component lands first, this feature adopts it instead of a local build — one or the other, never both. 
 ### 9.2 Chat: collapsed "Thinking…" row (new, gated)
 
 Rendered inside the transcript between the user message and the answer, matching the existing tool-call row collapse pattern (D4). Shows a "Thinking…" label while streaming (with an elapsed timer), then duration + token count when done (D11). Anthropic-originated rows are labelled "summarized thinking" from the entry's stored flag (D18).
@@ -468,25 +547,27 @@ The D20 notice in the flat console-strip visual language approved for #711 (Opti
 - **Error**: n/a — it *is* the gentle error treatment; Retry re-sends the message (US-8).
 - **Partial**: if thinking accompanied the no-answer round, the gated thinking row sits above the notice; toggle-off logins see the notice alone.
 
-### 9.4 Effort slider on every CF9 model surface (changed controls)
+### 9.4 Effort control on the model surfaces (changed controls)
 
-One shared slider control (design-system Slider) over the model's catalog variants plus "Default", on: the agent's default model settings (`AgentProfile.tsx`), the chat composer model picker (`ModelPicker.tsx`), the chat footer model display (`ModelFooter.tsx`), chat controls (`ChatControls.tsx`), settings default model (`DefaultModelCard.tsx`), agent wizard identity step and modal (`wizard/Step1Identity.tsx`, `CreateAgentModal.tsx`, `CreateAgentWizard.tsx`), onboarding's model step (`src/routes/onboarding.tsx`), Settings → Memory recap model (`MemorySection.tsx`), the shared model-selector (`model-selector.tsx`), and the `/effort` slash command (`useSlashMenu.ts`).
+One shared effort control (design-system Slider) over the model's catalog variants plus "Default", on: the chat composer model picker (`ModelPicker.tsx`), the settings default model (`DefaultModelCard.tsx`), the agent's default model settings (`AgentProfile.tsx`), the agent wizard identity step and modal (`wizard/Step1Identity.tsx`, `CreateAgentModal.tsx`, `CreateAgentWizard.tsx`), the wizard's fallback-chain step (`wizard/Step3Tools.tsx` — each fallback candidate row carries its own control, D28), onboarding's model step (`src/routes/onboarding.tsx`), Settings → Memory recap model + its fallbacks (`MemorySection.tsx`), the shared model-selector (`model-selector.tsx`), and the `/effort` slash command (`useSlashMenu.ts`). Per D28, **not** on the per-message footer (`ModelFooter.tsx` — renders the active model's slug, not a chooser) nor the chat controls bar (`ChatControls.tsx`) nor the remove-provider dialog.
 
 - **Loading**: variants arrive from the catalog read; while loading, the control shows its current stored value (or "Default") and disables positions until variants land — never an invented list (D7).
-- **Empty (no variants)**: "Default" only, positions disabled (US-6 scenario 2).
+- **Empty (no variants)**: "Default" only, positions disabled (US-6 AS2).
 - **Error (catalog read fails)**: current value shown; positions unavailable; the T1 stale-level note displays if the stored value is not in the served catalog.
-- **Partial (stale level)**: stored level kept as-is, provider default applied, visible note (T1) — never a silent rewrite of the stored string.
+- **Partial (stale level)**: stored level kept as-is, provider default applied, visible note (T1) — never a silent rewrite of the stored string. Copy and placement (MIN-009): the note appears **adjacent to the control** (not a toast), reads: **"This level is no longer offered for {model}. The provider's default applies until you pick a new level."**, and the control's own display shows the stored string as-is in the slider's value display area (not on a slider position).
 - **Fallback candidates**: each candidate row in the chain editor carries its own independent control (D10).
-
+- **"Default" position (MAJ-018)**: position 0 of the slider, explicitly labelled "Default"; its meaning is stated in the control's description text: **"the provider decides — not a lower level than low"**. The catalog data arrives as an ordered ascending list (`reasoning_options` in ascending effort order — the C6/WP-G plumbing preserves catalog order and a catalog-side test asserts it), so the slider's level ordering is defined by data, not by guesswork.
+- **Slider accessibility (MAJ-018)**: the catalogued Slider primitive is extended to forward `aria-valuetext` (currently `src/components/ui/slider.tsx` passes only `aria-label`/`aria-labelledby`/`aria-describedby` to its thumb — verified); the effort control passes the level name (or "Default") as `aria-valuetext`, never a bare index. The primitive extension goes through the design-system manifest + lock scripts, and `npm run typecheck` gates it.
 ### 9.5 `/effort` slash command (new)
 
-Registered in the slash palette (`src/hooks/useSlashMenu.ts`); typing `/effort` surfaces the command with its description; activating it opens the current model's effort control inline in the composer's command UI (the same setting the model picker exposes — D8b).
+**One command, one behavior, registered like `/model`** (MAJ-011, D27): a backend command definition mirroring `pkg/commands/cmd_model.go::modelCommand` (`Definition{Name: "effort", Surfaces: [Web, CLI, Channel], Delivery: DeliveryClient}`), so `/effort` works everywhere `/model` works: on web the composer's slash palette (`useSlashMenu.ts`) lists it and activating it opens the current model's effort control; on CLI and messenger channels the handler replies with the current level and accepts a set-level argument — the same current-vs-set reply pattern `modelCommand`'s handler uses today. Thinking **display** stays web-only regardless of where the level is set (D27). The command definition lands in the same work package as the other command surface.
 
-- **Loading**: n/a (palette is local).
+- **Loading**: n/a (palette is local; CLI/channel handling is stateless).
 - **Empty**: a chat with no model resolves no variants — the command shows "Default" state only.
 - **Error**: same treatment as 9.4's error state.
 - **Partial**: n/a.
 
+### 9.6 Session views (changed implicitly)
 ### 9.6 Session views (changed implicitly)
 
 Session detail and message lists (`get_session`/`get_session_messages` consumers) simply render the new fields when present; toggle-off principals never receive the fields, so no client-side hiding exists anywhere. **Loading/empty/error/partial**: unchanged from today, plus thinking rows per 9.2 in replay.
@@ -495,11 +576,11 @@ Session detail and message lists (`get_session`/`get_session_messages` consumers
 
 ## 10. User Journey (end to end)
 
-1. **Two teammates, one session.** Alice (toggle on, set once in Settings → Profile) and Bob (toggle off, the default) both open the same investigation session.
+1. **Two teammates, one session.** Alice (toggle on, set once in Settings → Chat, next to "Verbose chat") and Bob (toggle off, the default) both open the same investigation session.
 2. **A thinking turn.** Alice asks the agent to analyze a dataset. Her chat shows a collapsed "Thinking…" row filling live — she clicks it open, sees the model reasoning through the approach, with a running elapsed time; Bob, watching the same session, sees only the eventual answer.
 3. **The answer lands with a tool use.** The row collapses to its summary line (duration, thinking-token count) and the agent's answer plus tool rows appear identically for both.
 4. **A reasoning-only round.** On one turn the model produces thinking but no answer text. Alice sees her gated thinking row and, in the answer position, "The model (Provider · Model) did not respond" with Retry — she clicks Retry and the message re-sends. Bob saw only the notice; no reasoning ever appeared as an answer for anyone.
-5. **Effort tuning.** Alice opens the composer's model picker, drags the effort slider up one named level for the current model, and re-asks — the reasoning is visibly more thorough; the thinking row's token count rises. Later she types `/effort` and sets it back to "Default" so the provider's own default applies.
+5. **Effort tuning.** Alice opens the composer's model picker, drags the effort slider up one named level for the current model, and re-asks — the reasoning is visibly more thorough; the thinking row's token count rises. Later she types `/effort` — it works the same in the web composer, on the CLI, and from a messenger (D27) — and sets it back to "Default" so the provider's own default applies.
 6. **Fallback with its own mind.** The model hits a rate limit; the chain's fallback (a different model, with its own independently-set effort) serves the next turn at *its* level. Nothing about the primary's setting leaks into it (D10).
 7. **Reload.** Alice reloads the page mid-session: the replayed rows are identical to what she saw live — same thinking text, same metadata (D3).
 8. **Changing her mind.** Alice toggles "Show thinking" off. On reload, every thinking row is gone from her view; Bob's view never changed. An audit row records her flip. Next week she flips it back on — every historical thinking row in her sessions reappears (D2).
@@ -509,9 +590,9 @@ Session detail and message lists (`get_session`/`get_session_messages` consumers
 
 ## 11. Accessibility & Keyboard
 
-- **Thinking row**: the collapsed row is a real disclosure control matching the existing tool-row pattern — focusable, `aria-expanded` reflecting state, toggled with Enter/Space, discoverable in the tab order exactly where it renders.
+- **Thinking row**: the collapsed row is a real disclosure control (`src/components/ui/disclosure-row.tsx`) — focusable, `aria-expanded` reflecting state, toggled with Enter/Space, discoverable in the tab order exactly where it renders. The growing content is `aria-live="off"` while filling; the elapsed timer is `aria-hidden` (MIN-007).
 - **Row label**: the "Thinking…" / "summarized thinking" label is text (not color or icon alone); duration and token counts are text in the collapsed summary.
-- **Effort slider**: full keyboard operation (arrow keys step levels, Home/End to bounds, per the design-system Slider's contract); `aria-valuetext` names the level ("high", or "Default" when unset — never a bare index); disabled/variant-less states are announced via the control's disabled + description text.
+- **Effort slider**: full keyboard operation (arrow keys step levels, Home/End to bounds, per the design-system Slider's contract); `aria-valuetext` names the level ("high", or "Default" when unset — never a bare index; the catalogued Slider primitive is extended to forward it, Section 12); disabled/variant-less states are announced via the control's disabled + description text. On narrow screens the slider falls back to a stacked layout (control above its value display) rather than shrinking hit targets below the design system's touch-target minimum (MIN-007).
 - **`/effort` command**: arrow-key navigation and Enter activation come from the existing slash-palette keyboard model (`useSlashMenu`'s menu nav); the command is listed with its text description so screen readers announce it like any slash item.
 - **Show-thinking switch**: a labeled switch (visible label "Show thinking"), state announced; the helper text about older sessions revealing is programmatically associated.
 - **No-answer notice**: rendered as a polite live region (status role) so it is announced when the turn ends without an answer; Retry is a real button with a visible label, not a link-styled span.
@@ -526,10 +607,10 @@ Every control below is a catalogued component; no new primitives are introduced 
 
 | Need | Catalogued component | Notes |
 |---|---|---|
-| Effort slider | `src/components/ui/slider.tsx` (primitive, catalogued) | one shared instance pattern across all CF9 surfaces; "Default" via `aria-valuetext`; disabled positions for variant-less models |
-| Show-thinking toggle | `src/components/ui/switch.tsx` (primitive, catalogued) | in `ProfileSection.tsx` with visible label; auto-save pattern per the section's existing `useAutoSave` usage |
-| Thinking-row collapse | existing tool-call row collapse pattern (the flat disclosure treatment D4 names) | not a new component; same expand/collapse affordance as tool rows |
-| No-answer notice | the #711 console-strip treatment (Option C, commit `02eeba8c5` on `feat/provider-messages`) | flat text-line row, mono metadata line, kind-colored dot, Technical-details-style disclosure when applicable; **landing-order note**: as of this branch the treatment exists on `feat/provider-messages`, not here — if that branch has not landed when this feature's frontend work starts, the notice implements the same treatment directly (same tokens/classes); no second error style is invented either way (D20) |
+| Effort slider | `src/components/ui/slider.tsx` (primitive, catalogued) | one shared instance pattern across all CF9 surfaces; "Default" as position 0 with description text "the provider decides — not a lower level than low"; the primitive is **extended** to forward `aria-valuetext` through its thumb (verified absent today — MAJ-018); disabled positions for variant-less models |
+| Show-thinking toggle | `src/components/ui/switch.tsx` (primitive, catalogued) | in `src/components/settings/ChatSection.tsx` next to "Verbose chat" (D22) with visible label; auto-save via the C1 idempotent PUT (MAJ-001) |
+| Thinking-row collapse | `src/components/ui/disclosure-row.tsx` (the catalogued DisclosureRow primitive, MAJ-015) | the Reasoning row's expand/collapse; header button with `aria-expanded`; body present only when there is text to disclose; label "Reasoning" — no "Thinking…" collision with the in-flight indicator |
+| No-answer notice | the approved Option-C console-strip visual language; adopt #711's catalogued console-strip component if it has landed | flat text-line row, mono metadata line, kind-colored dot, Technical-details-style disclosure when applicable. **Ownership (MAJ-010):** the only existing artifact is a Storybook demo — commit `02eeba8c5` on `feat/provider-messages-visual-demo`, **not** an ancestor of `feat/provider-messages` and not a production component. This feature builds the notice inline with the approved tokens/classes; if #711's component lands first, this feature adopts it — one or the other, never both (D20, D26) |
 | Status/semantic coloring | `src/design-system/status.ts` (foundations) | kind-colored dot on the notice; no new status kinds unless the design-system gate demands one |
 | Model surfaces | `src/components/ui/model-selector.tsx` (domain, catalogued) | the shared control the slider slots into on every surface |
 | Auto-save indicator | `src/components/ui/AutoSaveIndicator.tsx` (domain, catalogued) | toggle + slider saves ride the existing pattern |
@@ -540,12 +621,12 @@ Rules honoured: the `omnipus-design-system` skill gates any work under `src/comp
 
 ## 13. Security & User Promises
 
-**Verdict on `docs/security.md` / `docs/tools.md`: no changes required in either — this feature is purely a settings/visibility surface plus gateway delivery filtering, not a tool- or access-security surface.** Evidence: neither doc mentions reasoning or thinking (grep: zero matches, `docs/security.md`, `docs/tools.md`); both documents govern agent tool access (tool policies, Auto-approve, shell rules) — this feature adds no tool, no tool-policy entry, and no shell surface. The toggle endpoint is an ordinary authenticated account-settings endpoint like the existing `/user-context` surface.
+**Verdict on `docs/security.md` / `docs/tools.md` (corrected per MAJ-013): `docs/tools.md` needs no changes — verified, zero reasoning/thinking/tool-surface mentions — but `docs/security.md` DOES get an update.** Evidence: `docs/tools.md` governs agent tool access (tool policies, Auto-approve, shell rules) and this feature adds no tool, no tool-policy entry and no shell surface (grep: zero relevant matches). `docs/security.md`'s audit-redaction paragraph documents exactly what the redaction does not catch ("Anything else is not caught: ... a GitHub fine-grained token (`github_pat_…`) or a Google API key (`AIza…`)") — this feature extends audit redaction to the thinking display copy, so the doc gains: (1) a sentence stating the thinking display copy is redacted with the same recognised-format list and the same limits, (2) an at-rest note that raw provider reasoning and signatures persist in the agent's LLM-context file because the provider round-trip requires byte-exact blocks (D15; ADR-095), and that this file is not a client-readable surface. The user-docs work items: `docs/security.md` (the two sentences above), the toggle's docs in the settings help (`ChatSection`'s helper text is the in-product surface), `docs/using-omnipus-ui.md` or the settings docs for the toggle, and `docs/providers-and-models.md` for the effort control — **drafted by the implementing leads, audited by `docs-verifier`** (the gate for user-facing docs).
 
 The feature's security promises, stated as user promises:
 
-1. **No client can bypass the visibility gate.** Enforcement lives on the server at every delivery boundary; a toggle-off login receives zero thinking bytes on every surface (D2, ADR-095 D2, proven per Boundary in Section 15).
-2. **Secrets never persist in the display copy.** Stored thinking passes the audit credential-pattern redaction (credential shapes masked, emails kept — CF10/D3); a secret split across stream pieces is still masked (whole-string redaction, ADR-095 D4).
+1. **No client can bypass the visibility gate.** Enforcement lives on the server at every delivery boundary; a toggle-off login receives zero thinking bytes on every surface (D2, ADR-095 D2, proven per Boundary in Section 15). **Scope note (MAJ-012):** the gate covers the gateway's delivery boundaries — hub, replay/attach, REST serializers; operator-configured hooks (e.g. a webhook tool) run outside the gate, and this feature does not change that — noted as an accepted ADR risk below (Section 20).
+2. **Recognised credential formats never persist in the display copy.** Stored thinking passes the audit credential-pattern redaction — **the formats the audit redactor recognises** (`sk-…`, `key-…`, `Bearer …`, `ghp_…`/`gho_…`, Slack `xox…`, AWS `AKIA…`/`ASIA…`, Google `ya29.…`, JWTs, URL passwords; the list `docs/security.md` documents) are masked, email addresses are kept (CF10/D3), and operator-configured `RedactPatterns` **apply too** (`pkg/audit/audit.go::RedactPatterns` feeds the same redactor the thinking redaction uses — D3's "same as the audit log" means the operator's patterns count, MAJ-013). **Unrecognised formats are NOT masked** — an `AIza…` key or `github_pat_…` token in thinking text is stored and shown unmasked, and the docs say so (MAJ-013); a secret split across stream pieces is still masked (whole-string redaction + the hold-back rule, ADR-095 D4).
 3. **The debug log stops being a leak.** Raw reasoning and signatures leave the debug log from the ship date forward (D14, ADR-095 D8.6); a data-directory sweep is a proving test (Section 15).
 4. **Raw thinking on disk is bounded and deliberate.** The LLM-context file keeps raw thinking (with signatures) because the provider round-trip requires byte-exact blocks (D15) — that file is not a client-readable surface; the gate's promise is about client-visible surfaces, and the audit-style redaction covers everything the SPA can read. Pre-existing files are untouched (D17).
 5. **Toggle changes are audited.** Every flip writes an audit row with the login and the boolean — no token or hash material (ADR-095 D1).
@@ -562,22 +643,25 @@ Green tests are not delivery. Per surface, how a real user or agent reaches the 
 
 | Surface | Reachable how | Verified-reachable when |
 |---|---|---|
-| Show-thinking toggle | Settings → Profile section (`ProfileSection.tsx` is the existing per-login account screen) — every login sees and flips its own switch | a tester flips it in the running SPA and the audit log shows the row |
-| Live thinking row | a toggle-on login's chat with a thinking-enabled model — the row renders between the user message and the answer | a real streamed turn shows the row filling, expand/collapse works |
-| Replay thinking row | reloading a session with stored thinking (toggle on) | hard reload renders identical rows |
-| REST gating | any REST read of session detail/messages with the toggle off | curl with that login's credentials returns bodies with zero thinking keys |
-| Effort slider — agent default model | Agents → agent profile → model settings | slider renders that model's catalog variants |
-| Effort slider — per chat | chat composer model picker | slider renders; choice applies to the chat's subsequent turns |
-| Effort slider — chat footer / controls | chat footer model display; chat controls | both expose the same control |
-| Effort slider — settings default model | Settings → default model card | slider renders |
-| Effort slider — fallback candidates | agent profile fallback chain editor | each candidate row has its own control |
-| Effort slider — creation wizard/modal | agent wizard identity step; create-agent modal; wizard | slider renders during creation |
-| Effort slider — onboarding | onboarding model step (`onboarding.tsx`) | slider renders in the onboarding flow |
-| Effort slider — recap model | Settings → Memory (`MemorySection.tsx`) | slider renders for the recap model + its fallbacks |
-| `/effort` command | typing `/` in the composer, then `/effort` in the palette | command appears, activates, opens the effort control |
+| Show-thinking toggle | Settings → Chat (`src/components/settings/ChatSection.tsx`, next to "Verbose chat") — every login flips its own switch (D22) | a tester flips it in the running SPA and the audit log shows the row |
+| Live thinking row | a toggle-on login's chat with a thinking-enabled model — the Reasoning row renders between the user message and the answer | a real streamed turn shows the row filling, expand/collapse works |
+| Replay thinking row | reloading a session with stored thinking (toggle on) | hard reload renders identical rows (same entry, same metadata) |
+| REST gating | any REST read of session detail/messages with the toggle off | curl with that login's credentials returns bodies with zero thinking keys and no thinking entries |
+| Effort — per-chat picker | chat composer model picker (`ModelPicker.tsx`) | slider renders that model's catalog variants; choice applies to the chat's subsequent turns |
+| Effort — agent default model | Agents → agent profile → model settings (`AgentProfile.tsx`) | slider renders; level applies from the next turn |
+| Effort — settings default model | Settings → default model card (`DefaultModelCard.tsx`) | slider renders |
+| Effort — fallback candidates | the agent wizard's fallback step (`wizard/Step3Tools.tsx`) and agent profile chain editor — per-candidate controls (D28) | each candidate row has its own control; the serving fallback uses its own level (US-6 AS5) |
+| Effort — creation wizard/modal | agent wizard identity step + create-agent modal (`wizard/Step1Identity.tsx`, `CreateAgentModal.tsx`, `CreateAgentWizard.tsx`) | slider renders during creation |
+| Effort — onboarding | onboarding model step (`onboarding.tsx`) | slider renders in the onboarding flow |
+| Effort — recap model | Settings → Memory (`MemorySection.tsx`) | slider renders for the recap model + its fallbacks |
+| `/effort` command (web) | typing `/` in the composer, then `/effort` in the palette | command appears, activates, opens the effort control |
+| `/effort` command (CLI + messengers) | the same command on CLI and any messenger channel (D27) | the command replies with the current level and sets a new level; no thinking is displayed there (D27: display web-only) |
 | No-answer notice + Retry | a reasoning-only round in the web chat | notice renders with provider · model named; Retry re-sends |
+| No-answer notice (messenger) | a reasoning-only round on any connector | the connector delivers the notice text as an ordinary reply (D26) |
 | Catalog variants data | `GET /providers/catalog` consumed by every surface above | variants appear per model; variant-less models show Default-only |
 | Messenger absence | any connector conversation | answers arrive, no reasoning anywhere (negative reachability — the deleted channel must be gone) |
+
+Two-line delivery statement required at landing: *code correct and tested*, and *reachable by a user or agent* — every row above demonstrated in UAT (founder rule: reachability is the Definition of Done).
 
 Two-line delivery statement required at landing: *code correct and tested*, and *reachable by a user or agent* — every row above demonstrated in UAT (founder rule: reachability is the Definition of Done).
 
@@ -701,6 +785,25 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 - **When** she reconnects within the journal retention window
 - **Then** recently-delivered on-period thinking frames may be re-delivered to her (founder-accepted, D16) and no catch-up-time filtering exists
 
+#### Scenario: The toggle endpoint is a read plus an idempotent write
+
+**Traces to**: US-1, Acceptance Scenario 6; C1 (MAJ-001)
+**Category**: Happy Path
+
+- **Given** alice's current preference
+- **When** the endpoint is GET-read, PUT-flipped, and the same value PUT again
+- **Then** GET returns the persisted state, both PUTs succeed identically, the persisted state matches, and an unauthenticated call is refused with 401
+
+#### Scenario: Toggle flip mid-stream races safely (concurrency)
+
+**Traces to**: Section 4 boundary conditions; MIN-008
+**Category**: Edge Case
+
+- **Given** alice connected live while a thinking turn streams
+- **When** her toggle flips on->off mid-stream (a concurrent save during delivery)
+- **Then** delivery from the flip onward is hidden for her; already-delivered frames are not retroactively removed; her connection stays open; no deadlock or torn read occurs
+- **And** the off->on flip is the mirror case: not-yet-persisted thinking is not retro-served live; the persisted rows become reachable on refetch
+
 ### Group B — live row, storage, redaction (US-2, US-3)
 
 #### Scenario: Live row fills, expands, collapses
@@ -710,7 +813,7 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 
 - **Given** alice's toggle is on
 - **When** a thinking-enabled turn streams
-- **Then** a collapsed "Thinking…" row appears and grows with the thinking
+- **Then** a collapsed **Reasoning** row appears and grows with the thinking (no "Thinking…" label collision, MAJ-015)
 - **And** clicking it expands the full text and clicking again collapses it
 
 #### Scenario: Duration and token counts on the collapsed row
@@ -746,9 +849,9 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 **Traces to**: Section 5 edge cases; ADR-095's proving-test list
 **Category**: Edge Case
 
-- **Given** a secret whose characters arrive split across two streamed thinking pieces
-- **When** the accumulated text is redacted and displayed
-- **Then** the secret is masked (whole-string scan) and no matchable partial secret was displayed live
+- **Given** a secret whose characters arrive split across the stream at `<split-point>`
+- **When** the accumulated text is redacted and displayed live at every split point
+- **Then** the secret is masked (whole-string scan) and the concatenation of everything shown live is prefix-or-masked — a credential-shaped run never appears unmasked in any live frame (the hold-back rule, MAJ-006)
 
 #### Scenario: Emails are kept, matching audit redaction behavior
 
@@ -785,9 +888,9 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 **Traces to**: US-5, Acceptance Scenario 1; D18
 **Category**: Happy Path
 
-- **Given** an Anthropic model that supports thinking summaries
+- **Given** an Anthropic model that supports thinking summaries **and effort set to a named level** (D24: at "Default" no thinking request is sent at all)
 - **When** a turn runs for any user, whatever their toggle state
-- **Then** the provider request asks for the thinking summary
+- **Then** the OUTGOING provider request (captured at the HTTP boundary of a recorded-mock provider) asks for the thinking summary — the oracle is the wire request, not the mock's echo (MAJ-016)
 - **And** the toggle decides only whether this user sees the row
 
 #### Scenario: Anthropic rows are labelled "summarized thinking" from stored data
@@ -816,6 +919,7 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 - **Given** a thinking-enabled Anthropic tool-using conversation
 - **When** the gateway restarts and alice sends the next message
 - **Then** the conversation continues correctly with no provider error
+- **And** the rebuilt context is asserted to contain the thinking blocks (deterministic assertion on the rebuilt request — MAJ-016; a real-Anthropic end-to-end confirmation is a UAT row, not a unit/integration oracle)
 
 #### Scenario: Pre-feature sessions do not break thinking requests
 
@@ -918,6 +1022,25 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 - **When** she types `/effort` and activates the command
 - **Then** the effort control for the chat's current model opens with the same levels the model picker offers
 
+#### Scenario: The per-message effort choice rides the message (D23)
+
+**Traces to**: US-6, Acceptance Scenario 9; D23
+**Category**: Happy Path
+
+- **Given** a level chosen in the model picker or via `/effort` in a chat
+- **When** subsequent messages are sent from that chat
+- **Then** each outbound message carries the chosen level in its metadata (as `model_name` already does), and no per-chat effort row exists server-side
+- **And** effort resolution is: per-message value -> serving model's configured effort -> nothing (D9/D24)
+
+#### Scenario: Catalog fields survive Omnipus's typed catalog round-trip (MAJ-002)
+
+**Traces to**: US-11; C6; MAJ-002
+**Category**: Happy Path
+
+- **Given** a catalog document whose model rows carry `reasoning` and `reasoning_options` under `schema_version: "2.0.0"` (no version bump)
+- **When** the document is parsed, the typed models are built, and the served envelope is serialized
+- **Then** the served response carries the same fields with the same values and order — nothing is dropped by the typed plumbing (a round-trip equality test; before the fix the fields are dropped — proven by a RED run against the pre-plumbing code)
+
 #### Scenario: No adaptive/budget control exists anywhere
 
 **Traces to**: US-6, Acceptance Scenario 8; D6
@@ -935,6 +1058,38 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 - **Given** a provider that reports thinking tokens
 - **When** a thinking turn completes
 - **Then** the session's usage totals include the thinking-token count, visible to toggle-off viewers too (cost signals are not gated)
+
+#### Scenario: The notice text is identical on every surface (D26)
+
+**Traces to**: US-8, Acceptance Scenarios 1, 4-6; D26
+**Category**: Happy Path
+
+- **Given** a no-answer round
+- **When** the turn's outcome reaches every consumer
+- **Then** the messenger receives the notice text as an ordinary reply, the parent agent receives it as the answer text, the task run counts a reasoning-only try from the typed marker, and the recap path treats it as a failed recap attempt
+- **And** the SPA renders the same string with the approved styling and a Retry action
+
+#### Scenario: Thinking from a tool-only round survives reload (CRIT-002)
+
+**Traces to**: US-2/US-3; CRIT-002 storage unit
+**Category**: Edge Case
+
+- **Given** a round that produced thinking and tool calls but no answer text
+- **When** the session is reloaded after the turn
+- **Then** the round's thinking row renders from its own stored entry — persisted even with no assistant answer text to attach to
+
+#### Scenario: Thinking text never rides ToolCallProgress or tool output (CRIT-003)
+
+**Traces to**: Section 6 prohibition; CRIT-003
+**Category**: Error Path
+
+- **Given** a thinking-enabled turn with a mock provider whose thinking text carries a unique sentinel
+- **When** the turn runs and the transcript is swept
+- **Then** the sentinel appears only on the gated thinking path (C2 frames + the stored thinking entry)
+- **But** the sentinel never appears on any `ToolCallProgress` frame, in `delegate_status` output, or in any tool result (CRIT-003 ban; ADR-095's proving-test list)
+- **And** a no-answer round on a messenger delivers only the notice text — the messenger never receives thinking text (D26)
+
+### Group E — no-answer notice (US-8)
 
 ### Group E — no-answer notice (US-8)
 
@@ -965,9 +1120,9 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 **Traces to**: US-9, Acceptance Scenarios 1–2; D1; dispatch-required scenario
 **Category**: Edge Case
 
-- **When** the repository is swept after landing — source, configuration schemas, environment-variable bindings, and connector documentation
-- **Then** the reasoning-channel config key, its per-channel env var names, and the publish path return zero hits
-- **And** connector docs contain no reasoning-channel mention
+- **When** the repository is swept after landing — source, configuration schemas, the shipped config files (`config/config.example.json`, `pkg/gateway/config.json`), environment-variable bindings, all 13 connector docs, and this repo's own AS-IS architecture doc's channel-config rows
+- **Then** the reasoning-channel config key, its per-channel env var names, and the publish path return zero hits (sweep excludes only `docs/internal/specs/` and `docs/internal/_archive/`)
+including no reasoning-channel mention in any of the 13 connector docs (MAJ-008)
 
 #### Scenario: Normal messenger publishing is unaffected
 
@@ -1000,12 +1155,18 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 | Integration | hub per-connection filtering (live + journal tail), replay gate parameter, REST serializer gating, toggle endpoint persist/audit, provider capture paths, availability guard, context-file writers carrying blocks | validate the boundaries the gate lives on |
 | E2E | toggle → live row → reload parity → toggle-off hiding; effort set → provider request; `/effort`; no-answer notice + Retry; messenger negative check | validate the user-visible promises (Sections 10, 14) |
 
+### Gates (MIN-010)
+
+All Go test/build results are CI's authority — never a local `go test ./...` (repo rule; local Go runs are capped at one narrowly-scoped tagged test at a time).
+Frontend gates: `npm run typecheck` (the only meaningful TS gate — bare `tsc --noEmit` is a silent no-op here) and the design-system lock/manifest scripts; "
+`make lint-budgets` gates the size budgets. Local frontend runs are one `npx vitest run <file>` at a time.
+
 ### Test implementation order (write BEFORE feature code; RED first per the repo's feature-size flow)
 
 | Order | Test name (intent) | Level | Traces to BDD scenario | Description |
 |---|---|---|---|---|
 | 1 | redaction whole-string scan on accumulated copy | Unit | A secret split across two stream pieces… | split-secret masking; emails kept; credential patterns masked |
-| 2 | live-frame hold-back tail never exposes a matchable partial | Unit | same | bounded tail property |
+| 2 | live hold-back prefix property at every split point | Unit | A secret split… (rewritten) | for every split point of a `sk-` secret, the live-delivered concatenation is prefix-or-masked (MAJ-006) |
 | 3 | no-answer detection replaces substitution | Unit | Reasoning-only round shows notice… | thinking + empty answer → typed marker, answer untouched |
 | 4 | debug fields carry lengths/counts only | Unit | The debug log carries no reasoning text… | field shape |
 | 5 | effort unset/ stale/ set request shaping | Unit | Unset effort sends nothing… / A set level… / A stale stored level… | three-state request shaping; stale → default + note |
@@ -1014,9 +1175,9 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 | 8 | hub gate: live skip + journal-tail skip + connection-not-broken | Integration | Toggle Outline (off rows) / Gated connections are never broken… | per-connection filtering |
 | 9 | replay gate parameter | Integration | Toggle Outline (replay rows) | attach/replay withholding and replaying |
 | 10 | REST serializer gating (both reads) | Integration | Toggle Outline (REST rows) | zero thinking keys when off |
-| 11 | toggle endpoint: persist, audit, no-restart, 401 | Integration | Toggle changes are audited… / generic config writes refused | endpoint behavior |
+| 11 | toggle endpoint: GET, idempotent PUT, persist, audit, no-restart, 401 | Integration | The toggle endpoint is a read plus an idempotent write… / Toggle changes are audited… / generic config writes refused | endpoint behavior (MAJ-001) |
 | 12 | SSE non-implementation | Integration | (Section 6 — no thinking event) | the streamer must not implement the web add-on |
-| 13 | Anthropic capture + summary pin + availability guard | Integration | Anthropic always requests… / Pre-feature sessions… | adapter behavior |
+| 13 | Anthropic capture + summary pin + availability guard | Integration | Anthropic always requests… / Pre-feature sessions… | adapter behavior; the summary-pin oracle asserts the OUTGOING request; the pre-feature case asserts no thinking config is sent plus one named omission log field (MAJ-016) |
 | 14 | mid-turn rebuild restores blocks | Integration | Thinking-enabled Anthropic tool turn survives… | trim/recovery paths |
 | 15 | OpenRouter bounded-gap proving test | Integration | OpenRouter's structured-reasoning gap… | demonstrates and bounds #943 |
 | 16 | data-directory sweep (no reasoning/signature in logs) | Integration | The debug log carries no reasoning text… | test-OMNIPUS_HOME sweep |
@@ -1026,6 +1187,13 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 | 20 | `/effort` command | E2E | /effort opens the effort control | palette activation |
 | 21 | no-answer notice + Retry | E2E | Reasoning-only round… / Retry re-sends… | D20 |
 | 22 | usage totals include thinking tokens | E2E | Thinking tokens land in usage totals… | D11 |
+| 23 | catalog fields survive the typed round-trip | Integration | Catalog fields survive Omnipus's typed catalog round-trip… | RED against pre-plumbing code: fields dropped before, present after (MAJ-002) |
+| 24 | thinking-text sentinel never reaches ToolCallProgress / delegate_status | Integration | Thinking text never rides ToolCallProgress… | CRIT-003 proving test |
+| 25 | frame coalescing + 65536-byte cap under a fast mock provider | Integration | (Section 6 WS constraints) | <=1 frame per 250 ms per round; cap enforced (MAJ-007) |
+| 26 | thinking from a tool-only round persists and replays | Integration | Thinking from a tool-only round survives reload… | CRIT-002: one thinking entry per round, incl. tool-only rounds |
+| 27 | outcome marker rides entry + done-frame + ReplayMessageFrame | Integration | Reasoning-only round shows notice… | C4 carriers (MAJ-004) |
+| 28 | thinking never rides tool results | Integration | (MAJ-012) | a tool-result body carrying a sentinel never surfaces it to any gated surface (MAJ-012's proving test) |
+| 29 | slider aria-valuetext forwarded through the primitive | Unit (frontend) | (Section 11 a11y) | the catalogued Slider primitive forwards `aria-valuetext` to its thumb (MAJ-018) |
 
 ### Test datasets
 
@@ -1040,6 +1208,8 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 | 5 | empty thinking text | Empty | no row | Signature-only Anthropic blocks… | metadata only |
 | 6 | signature-only block | Empty-display | no row | same | Anthropic newest-model default |
 | 7 | very long thinking (multi-KB) | Very long | renders collapsed, expandable | Live row fills… | perf sanity, no numeric gate invented |
+| 8 | `AIza…` Google API key inline | Unrecognised format | **not masked** — stored and shown as-is; the docs state the limit (MAJ-013) | Section 13 promise 2 (scoped) | the audit redactor's own documented limits |
+| 9 | `github_pat_…` fine-grained token inline | Unrecognised format | **not masked** — same as row 8 | Section 13 promise 2 (scoped) | docs say so (MAJ-013) |
 
 #### Dataset: effort value handling
 
@@ -1051,6 +1221,7 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 | 4 | "minimal" | minimal | Single-variant | request carries "minimal" | Scenario Outline (effort) row 2 |
 | 5 | any | (none) | Variant-less | only "Default"; nothing sent | Scenario Outline (effort) row 3 |
 | 6 | "" (empty string) | low, medium, high | Empty-as-unset | treated as unset (sends nothing) | Unset effort sends nothing… |
+| 7 | "default" (explicit) | low, medium, high | Explicit default | treated as unset — sends nothing; hint shows where the model supports thinking (D24) | Unset effort sends nothing… |
 
 #### Dataset: gated boundary matrix
 
@@ -1059,7 +1230,7 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 | 1 | real login | on | each of: live, replay, REST detail, REST messages | thinking present | Scenario Outline (toggle on rows) |
 | 2 | real login | off | each of the four | thinking absent, keys/frames byte-absent, gaps not disconnects | Scenario Outline (toggle off rows) |
 | 3 | CLI token | n/a (no row) | live + REST | hidden (fail closed) | Logins without an account row… |
-| 4 | dev bypass | n/a | live + REST | hidden | same |
+| 4 | dev bypass (empty user identity, MIN-003) | n/a | live + REST | hidden | same |
 | 5 | env token | n/a | live + REST | hidden | same |
 | 6 | lookup miss (row deleted) | n/a | live + REST | hidden | A settings-read failure… |
 | 7 | any | read error | any | hidden | same |
@@ -1078,6 +1249,9 @@ The feature modifies existing behavior — regression protection is mandatory.
 | Generic config-write refusal on users area | gateway suites | Yes — blocked path preserved | Section 6 constraint |
 | Anthropic non-thinking turns via the switched adapter | #750's adapter-switch tests (T3) | Yes — joint with WP-E | the switch's own regression scope |
 | Hub delivery for non-thinking frames | hub suites | Yes — byte-identical guarantee unchanged for everything except thinking frames | ADR-095's narrowing is thinking-only |
+| Reasoning-only turn classification (`pkg/agent/task_run_loop.go::turnWasReasoningOnly`) | task-run suites | Yes — keys on the `outcome: "no_answer"` marker, not truncation inference | D26; inference deleted with the substitution sites |
+| Catalog serving without reasoning fields (pre-plumbing) | catalog suites | Yes — round-trip regression | MAJ-002: fields served when present, nothing else changes |
+| File/function size budgets | `make lint-budgets` | Yes — extract-first keeps ChatScreen and streamReplay net-neutral | MAJ-014; extract-first named in WP-C and WP-D |
 
 ---
 
@@ -1086,7 +1260,7 @@ The feature modifies existing behavior — regression protection is mandatory.
 - **FR-001**: System MUST store thinking unconditionally when produced, regardless of any toggle state (D2), as a redacted transcript copy plus the raw context-file persistence that already exists (D15).
 - **FR-002**: System MUST enforce per-login thinking visibility server-side at the live, replay/attach, and both REST read boundaries, failing closed for rowless logins and read errors (D2, D19; ADR-095 D2).
 - **FR-003**: System MUST default the per-login toggle to off for every login, existing and new (D2; ADR-095 D1).
-- **FR-004**: System MUST make a toggle change take effect without a restart, persist it, and write an audit row carrying only the login and the boolean (ADR-095 D1).
+- **FR-004**: System MUST make a toggle change take effect without a restart, persist it, and write an audit row under the toggle's own dotted-lowercase event (indicatively `settings.show_thinking.changed`, per the `pkg/audit/events.go` convention) carrying only the login and the boolean (ADR-095 D1; MIN-004). The toggle endpoint MUST provide a read (GET) and an idempotent write (PUT) returning the persisted state, CSRF-protected (MAJ-001).
 - **FR-005**: System MUST NOT expose any writable generic config path for the users' config area (ADR-095 D1).
 - **FR-006**: System MUST redact the stored display copy with the audit credential patterns, keeping emails, scanning the whole accumulated text (D3, CF10; ADR-095 D4).
 - **FR-007**: System MUST render live and reloaded thinking identically from the stored copy (D3).
@@ -1094,23 +1268,30 @@ The feature modifies existing behavior — regression protection is mandatory.
 - **FR-009**: System MUST NOT render a thinking row for signature-only or otherwise text-less thinking (ADR-095 D6).
 - **FR-010**: System MUST keep streamed OpenAI-compatible reasoning text instead of discarding it (D5a; CF1).
 - **FR-011**: System MUST route the Anthropic protocol to the thinking-capable adapter, landing together with #750's caching fix (D5b, T3; CF3).
-- **FR-012**: System MUST always request Anthropic's thinking summary where supported, independent of toggles, and carry the provider-summary flag on stored thinking so the UI labels it "summarized thinking" (D18).
+- **FR-012**: System MUST request Anthropic's thinking summary wherever a turn's effort is set to a named level and the model supports it, independent of toggles (D18 with the D24 precondition: at "Default" no thinking request is sent at all — MAJ-017), and carry the provider-summary flag on stored thinking so the UI labels it "summarized thinking".
 - **FR-013**: System MUST capture Anthropic thinking blocks with signatures at the adapter's parse point and round-trip them byte-exact and order-stable through turns, rebuilds, rewrites and restarts (D5b, D12-as-amended, D15; ADR-095 D6–D8).
 - **FR-014**: System MUST omit thinking (and log the omission) when a thinking-enabled Anthropic request would lack the preceding blocks (ADR-095 D8.5).
 - **FR-015**: System MUST never map transcript thinking content into a provider-bound message (ADR-095 D8.3).
 - **FR-016**: System MUST stop writing raw reasoning text or signatures to the debug log, recording lengths/counts only, from the ship date forward (D14; D17 for old logs).
 - **FR-017**: System MUST delete the messenger reasoning channel outright — config fields, env bindings, publish path, docs — with no shim (D1; CF11).
-- **FR-018**: System MUST replace the reasoning-only-answer fallback with a typed no-answer outcome and a gentle notice naming provider and model, with Retry, in the approved console-strip style (D20).
-- **FR-019**: System MUST offer effort as named levels on a slider on every model-selection surface listed in Section 14, sourced only from the catalog (D6, D7, D8; CF9).
+- **FR-018**: System MUST replace the reasoning-only-answer fallback with a typed no-answer outcome whose notice text is **identical on every surface** — the persisted assistant entry's content IS the notice (messengers receive it as an ordinary reply; the parent agent receives it as the answer text; task runs count a reasoning-only try from the typed marker; the recap path treats it as a failed recap attempt) — plus a gentle SPA rendering naming provider and model, with Retry, in the approved console-strip style (D20, D26; MAJ-004).
+- **FR-019**: System MUST offer effort as named levels on a slider on the model-selection surfaces listed in Section 14 (per D28: not the per-message footer, the chat controls bar, or the remove-provider dialog; per-message and `/effort` per D27), sourced only from the catalog (D6, D7, D8; CF9). The per-message choice rides the outbound message's metadata — no new per-chat server state (D23).
 - **FR-020**: System MUST treat unset effort as "send nothing", displayed as "Default" (D9).
 - **FR-021**: System MUST keep each fallback candidate's effort independent (D10).
-- **FR-022**: System MUST store effort as an unvalidated plain string and resolve a catalog-missing level to the provider default plus a visible note (T1).
-- **FR-023**: System MUST register the `/effort` slash command on the chat composer's command palette (D8b; CF9).
+- **FR-022**: System MUST store effort as an unvalidated plain string and resolve a catalog-missing level to the provider default plus a visible note (T1) — the note sits adjacent to the control and reads "This level is no longer offered for {model}. The provider's default applies until you pick a new level." (MIN-009).
+- **FR-023**: System MUST register `/effort` as one command with one behavior on every surface `/model` serves — web, CLI, messenger channels (D27; D8b; CF9) — mirroring `pkg/commands/cmd_model.go::modelCommand`; thinking display stays web-only.
 - **FR-024**: System MUST record thinking tokens in usage totals when the provider reports them, ungated (D11; ADR-095 Neutral).
 - **FR-025**: System MUST add no thinking surface to SSE or messenger channels, and no reasoning byte-count field to any ungated wire frame (ADR-095 D2 Boundary 4; D1; ADR-095 D7).
 - **FR-026**: System MUST land the feature's whole wire surface as one contract change before dependent code (T2; Hard Constraint #8).
-- **FR-027**: System SHOULD deliver the effort-variant data from the external catalog change (WP-EXT) and show Default-only for models it does not yet cover (D7, D9).
-- **FR-028**: System MAY mark a mid-turn attach's thinking-so-far as partial (up to the last intermediate persist) — the accepted projection-class cost (ADR-095 D2).
+- **FR-027**: System SHOULD deliver the effort-variant data from the catalog change (WP-EXT — **our repo**, D25) and show Default-only for models it does not yet cover (D7, D9).
+- **FR-029**: System MUST place the `reasoning_effort` field on the correct wire schema per surface — agent primary (`Agent.yaml`/`AgentCreateRequestMain.yaml`, flat sibling), fallback candidates (`FallbackModel.yaml`, one schema for agent + recap chains), recap model (`MemorySettings.yaml`, flat sibling), instance default model (`DefaultModel.yaml`/`DefaultModelUpdateRequest.yaml`), and per-message (inbound chat-frame metadata, typed key next to `model_name`) — with the C5 resolution order (CRIT-001).
+- **FR-030**: System MUST store thinking as one `type: "thinking"` transcript entry per round (including tool-only rounds), with the entry ID minted at capture start so live frames and the stored row share one identity, and `turn_id` binding the row to its round (CRIT-002); every transcript reader's handling is per the Section 8.1 table.
+- **FR-031**: System MUST carry live thinking text from the provider adapters to the turn's capture via a gated accumulated-text callback — the only such path — and MUST NOT carry thinking text on `ToolCallProgress` (CRIT-003; ADR-095 D7).
+- **FR-032**: System MUST cap thinking-frame text at 65536 bytes and coalesce to at most one frame per 250 ms per round (MAJ-007).
+- **FR-033**: System MUST apply the hold-back rule so the live concatenation is prefix-or-masked at every split point (MAJ-006).
+- **FR-034**: System MUST apply operator-configured `RedactPatterns` to the thinking redaction, and mask only formats the redactor recognises — unrecognised formats are not masked (MAJ-013).
+- **FR-035**: System MUST parse and serve the catalog document's per-model `reasoning`/`reasoning_options` through the typed catalog plumbing under `schema_version: "2.0.0"`, no version bump (MAJ-002; D25).
+- **FR-036**: System MUST record thinking tokens in `ModelTokens` as a subset of `out` (never added on top), parsed at the Anthropic SDK adapter and the openai-compat adapter (MAJ-003; C7).
 
 ## 18. Success Criteria
 
@@ -1124,6 +1305,9 @@ The feature modifies existing behavior — regression protection is mandatory.
 - **SC-008**: A reasoning-only round renders the notice with provider · model named and Retry re-sending, with zero reasoning text in any answer position, for toggle-on and toggle-off logins alike.
 - **SC-009**: `make verify-contracts` passes with the single contract change committed together with its regenerated artifacts, and CI's contract checks are green.
 - **SC-010**: Every row of Section 14's reachability table is demonstrated in UAT with screenshot or protocol-level evidence (the repo's Definition of Done).
+- **SC-011**: The catalog round-trip test (test 23) passes: fields present in the served catalog response exactly when present in the catalog document (MAJ-002).
+- **SC-012**: The notice text for a reasoning-only round is byte-identical across messenger reply, parent-agent answer, recap attempt, and SPA render (D26).
+- **SC-013**: `make lint-budgets` is green after the extract-first steps (ChatScreen additions extracted to components under `src/components/chat/`; `streamReplay` gains its gate via a helper with net lines <= 0) (MAJ-014).
 
 ---
 
@@ -1139,28 +1323,28 @@ The feature modifies existing behavior — regression protection is mandatory.
 | FR-006 | US-3 | A credential-shaped secret…; A secret split…; Emails are kept… | 1, 2 |
 | FR-007 | US-3 | Live and reloaded views are identical | 18 |
 | FR-008 | US-2, US-7 | Live row fills, expands, collapses; Duration and token counts… | 18, 22 |
-| FR-009 | US-2 | Signature-only Anthropic blocks produce no empty row | 2 (dataset row 6), 13 |
+| FR-009 | US-2 | Signature-only Anthropic blocks produce no empty row | 13 (dataset rows 5-6) |
 | FR-010 | US-4 | OpenAI-compatible streamed reasoning reaches the gated row | 13 (openai path), 18 |
-| FR-011 | US-5 | (adapter switch — proven via the Anthropic scenarios) | 13, 15 |
+| FR-011 | US-5 | (adapter switch — proven via the Anthropic scenarios) | 13, 14 |
 | FR-012 | US-5 | Anthropic always requests the summary…; Anthropic rows are labelled… | 13 |
 | FR-013 | US-5 | …survives a mid-turn context rebuild; …restart changes nothing; Every writer of the LLM-context file… | 6, 14, 15 |
 | FR-014 | US-5 | Pre-feature sessions do not break thinking requests | 13 |
 | FR-015 | US-5 | The redacted copy is never sent to a provider | 7 |
 | FR-016 | US-10 | The debug log carries no reasoning text or signature material | 4, 16 |
 | FR-017 | US-9 | The messenger reasoning channel leaves no trace; Normal messenger publishing is unaffected | 17 |
-| FR-018 | US-8 | Reasoning-only round shows notice…; Retry re-sends the message | 3, 21 |
+| FR-018 | US-8 | Reasoning-only round shows notice…; Retry re-sends…; The notice text is identical on every surface… | 3, 21, 27 |
 | FR-019 | US-6 | Scenario Outline (effort); /effort opens the effort control | 19, 20 |
 | FR-020 | US-6 | Unset effort sends nothing to the provider | 5, 19 |
 | FR-021 | US-6 | Each fallback uses its own effort | 5, 19 |
 | FR-022 | US-6 | A stale stored level degrades… | 5, 19 |
 | FR-023 | US-6 | /effort opens the effort control | 20 |
 | FR-024 | US-7 | Thinking tokens land in usage totals | 22 |
-| FR-025 | US-9, US-10, US-4 | OpenRouter's structured-reasoning gap… (no ungated fields); SSE non-implementation (test 12) | 12, 15 |
+| FR-025 | US-9, US-10, US-4 | OpenRouter's structured-reasoning gap… (no ungated fields); SSE non-implementation (test 12); Thinking text never rides ToolCallProgress… | 12, 15, 24 |
 | FR-026 | (all) | SC-009 / `make verify-contracts` | 8–17 (contract-first sequencing, Section 23) |
 | FR-027 | US-11, US-6 | Scenario Outline (effort) variant-less row | 19 |
 | FR-028 | US-2 | (Section 9.2 partial state; ADR-095 Neutral) | 18 (mid-attach check) |
 
-**Completeness check**: every FR-001…FR-028 appears above; every BDD scenario in Section 15 appears in at least one row (Group A scenarios → FR-002/003/004/005; Group B → FR-001/006/007/008/009; Group C → FR-010…015/025; Group D → FR-019…023/024/027; Group E → FR-018; Group F → FR-016/017/025). FR-011 and FR-026 trace through the work-package sequencing (Section 23) and their proving scenarios.
+**Completeness check**: every FR-001…FR-027 and FR-029…FR-036 appears above (FR-028 deleted — OBS-003; its content is an accepted cost in Section 20); every BDD scenario in Section 15 appears in at least one row (Group A → FR-002/003/004/005; Group B → FR-001/006/007/008/009/032/033; Group C → FR-010…015/025/030/031; Group D → FR-019…023/024/027/029/035/036; Group E → FR-018/030; Group F → FR-016/017/025/031/034). FR-011 and FR-026 trace through the work-package sequencing (Section 23) and their proving scenarios.
 
 ## 20. Ambiguity Warnings (residual risks the founder has already accepted — recorded, not open)
 
@@ -1172,8 +1356,13 @@ The feature modifies existing behavior — regression protection is mandatory.
 | 4 | Whole-string redaction re-scans the accumulated text per delta (O(n) per delta, bounded by the hold-back tail) | an agent might switch to per-piece redaction — that is the split-secret bug | **Accepted** (ADR-095 Negative consequences) — accepted for realistic thinking lengths |
 | 5 | Gated connections observe deliberate sequence gaps at thinking frames (BE-DESIGN.md's "byte-identical to every bound connection" narrowed, thinking frames only) | an agent might treat the gaps as a transport bug and "repair" them | **Accepted** (ADR-095 D2 records the narrowing) |
 | 6 | Each toggle flip persists config and takes the full config-reload path | an agent might defer or batch the reload | **Accepted** (ADR-095 D1, review F14) — existing Users-row mutation precedent |
+| 7 | Operator-configured hooks (e.g. webhook tools) run outside the visibility gate; raw thinking (with signatures) persists at rest in the agent's LLM-context file; the `ThinkingBlocks` carrier changes a shared provider-protocol type | an agent might "close" these by gating hook payloads, stripping the context file, or forking the shared type | **Accepted** (ADR-095 — carried per MAJ-012) — the gate's promise is over client-visible delivery, not hook payloads or on-disk provider context; the shared-type change is additive |
+| 8 | At the "Default" effort state, thinking-capable Anthropic models produce NO thinking request and therefore no thinking rows — the product default is no Anthropic thinking (D24) | an agent might send a default level "to be helpful" | **Accepted** (D24) — the D24 hint ("choose a level to see thinking") is the product answer |
+| 9 | Live hold-back emits text only up to the trailing token-ish run; a long token-ish run delays live display (bounded, never blocks storage) | an agent might shrink or drop the hold-back to make live text instant | **Accepted** (MAJ-006 rule) — correctness over instant display |
+| 10 | Under journal pressure, live thinking may degrade to the gated snapshot path; beyond the 65536-byte frame cap live updates stop (stored copy still replays) | an agent might raise the caps silently or drop gated delivery instead | **Accepted** (MAJ-007) — bounded, visible degradation |
+| 11 | A mid-turn attach shows thinking-so-far up to the last intermediate persist (the projection-class cost) | an agent might "complete" it with live frames of unknown count | **Accepted** (ADR-095 D2 Boundary 1 item 4; the deleted FR-028's content, OBS-003) — recorded here instead of a fake MAY requirement |
 
-No unresolved ambiguity remains: every question ADR-095's grill raised was answered by the founder (D15–D21), and this spec's two plan-stage fact corrections (CF9's deleted helper; #711's branch state) are recorded in Section 2.2 and Section 12 rather than left open.
+No unresolved ambiguity remains: every question ADR-095's grill raised was answered by the founder (D15–D21), the grill-round-1 founder answers are D22–D28, and this spec's fact corrections (CF9's deleted helper; the #711 Storybook-demo correction, MAJ-010) are recorded in Sections 2.2 and 12; the grill-round-1 fixes are itemised in the Revision log at the end of this file.
 
 ## 21. Evaluation Scenarios (Holdout — post-implementation only; NOT in the TDD plan or traceability)
 
@@ -1221,45 +1410,61 @@ No unresolved ambiguity remains: every question ADR-095's grill raised was answe
 
 ## 22. Assumptions
 
-- The external catalog change (WP-EXT) lands before WP-G/WP-H consume it; until then effort surfaces show Default-only (FR-027's graceful state) — this assumption is also the degradation path, so slippage degrades, it does not block.
-- The #711 console-strip treatment may land from `feat/provider-messages` before this feature's frontend work; either landing order satisfies D20 as long as exactly one visual language results (Section 12).
+- The catalog change (WP-EXT — our repo, D25) lands before WP-G/WP-H consume it; until then effort surfaces show Default-only (FR-027's graceful state) — this assumption is also the degradation path, so slippage degrades, it does not block. Omnipus-side parsing of the new fields (WP-G) is separate work (MAJ-002).
+- The #711 console-strip treatment exists today only as a Storybook demo (commit `02eeba8c5` on `feat/provider-messages-visual-demo`; MAJ-010) — this feature builds the notice inline with the approved Option-C visual language, or adopts #711's catalogued component if it lands first; exactly one visual language results either way (D20, D26).
 - The Anthropic adapter switch (WP-E) is reviewed as one change with #750 per T3; its blast radius (every Anthropic-protocol-routed model, incl. DeepSeek/Moonshot/Z.ai/MiniMax per #750) is that work package's review scope, not re-derived here.
 - `@assistant-ui/react` 0.14.27 ships the reasoning parts (CF8) but D4 pins the tool-row collapse pattern as the UI idiom; the library parts are not required by this spec.
 - Out of scope, confirmed: Selection Toolbar (#274's other half), OpenRouter signed-block round-trip (#943, D21), Anthropic adaptive budget mode (D6), any migration or backfill (D17), messenger thinking of any kind (D1).
 
 ## 23. Work Packages & Landing Order
 
-**WP-EXT — the provider-catalog repo change is its OWN work package.** Repository: `elicify-ai/omnipus-provider-catalog`, issue [#29](https://github.com/elicify-ai/omnipus-provider-catalog/issues/29) — separate repo, separate PR, external dependency (D7). Scope: catalog schema carries per-model `reasoning` / `reasoning_options` (and related fields) from models.dev + LiteLLM. **Blocks WP-G and WP-H's data** (not the visibility core). No hardcoded interim list in Omnipus (D7).
+**WP-EXT — the provider-catalog change (our repo, D25).** Repository: `elicify-ai/omnipus-provider-catalog`, issue [#29](https://github.com/elicify-ai/omnipus-provider-catalog/issues/29) — separate repo, separate PR (D7). Scope: catalog schema carries per-model `reasoning` / `reasoning_options` **conforming to Omnipus's C6 field shape** (WP-0 defines the shape; the catalog PR conforms — D25). **Blocks WP-G and WP-H's data** (not the visibility core). No hardcoded interim list in Omnipus (D7).
 
 ```
-WP-EXT (catalog repo #29 — separate repo/PR)
-        │
+WP-EXT (catalog repo #29 — OUR repo, D25; separate PR)
+        │ data only (field shape defined by WP-0's C6)
         ▼
-WP-0  T2 contract change (C1–C7, Section 1) — lands FIRST, one atomic commit
-        │
-        ├──► WP-A  D1 deletion (messenger reasoning channel) — PARALLEL, independent
-        │          (pkg/config/config_channels_instance.go, pkg/agent/loop.go publish
-        │           path incl. PR #933's fix, env bindings, docs/connectors/*.md)
-        │
-        ├──► WP-B  openai_compat streaming capture (D5a, CF1)
-        │          └─► WP-C  persistence + redaction + per-login gate + debug-log fix
-        │                  (D3/D2/D19/D14; hub, replay, REST, toggle endpoint, audit)
-        │                  └─► WP-D  frontend thinking row live+replay (D4, D11)
-        │                          + D20 no-answer notice (C4)
-        │
-        ├──► WP-E  Anthropic adapter switch + #750 caching fix (T3, one dedicated issue)
-        │          └─► WP-F  signature capture + round-trip (D5b/D6/D7/D8; CF4)
-        │
-        └──► WP-G  effort plumbing (D7–D10, T1; consumes WP-EXT + WP-0's C5/C6)
-                   └─► WP-H  effort UI on every CF9 surface + /effort (D6, D8; CF9)
-                           └─► D11 usage display rides WP-D's row + WP-G's counts
+WP-0  T2 contract change (C1-C7 + the C5 per-surface effort table, Section 1)
+      │   lands FIRST, one atomic commit
+      │
+      ├──► WP-B  openai_compat streaming capture (D5a, CF1) + reasoning-token
+      │          usage parsing (C7 parse point, MAJ-003)
+      │          └─► WP-C  persistence (type:"thinking" entry, CRIT-002) +
+      │                  redaction + hold-back + per-login gate + debug-log fix
+      │                  + D20/D26 backend (outcome marker, notice text, recap)
+      │                  (D2/D3/D19/D14; hub, replay, REST, toggle GET/PUT, audit)
+      │                  └─► WP-D  frontend Reasoning row + notice + toggle UI
+      │                          (D4, D11, D22, D26; MAJ-015 DisclosureRow,
+      │                           MAJ-018 slider a11y; EXTRACT-FIRST: ChatScreen
+      │                           additions land as components under
+      │                           src/components/chat/, MAJ-014)
+      │
+      ├──► WP-E  Anthropic adapter switch + #750 caching fix (T3, one issue)
+      │          └─► WP-F  signature capture + round-trip (D5b/D6/D7/D8)
+      │                  + reasoning-token usage parsing (C7's SDK parse point,
+      │                  MAJ-003) ──► feeds WP-G's D11 usage display
+      │
+      └──► WP-G  effort plumbing (D7-D10, T1) + Omnipus-side catalog parser
+                 plumbing (parse -> typed model -> served envelope, MAJ-002)
+                 └─► WP-H  effort UI on every D28 surface + /effort on
+                         web+CLI+channels (D23, D27, D28)
 
-WP-I   proving tests (Section 15/16: boundary matrix, sweeps, bounded-gap #943,
-       mid-turn rebuild, deletion zero-trace) — written RED per work package,
-       consolidated as the feature's proof pack
+WP-A  D1 deletion (messenger reasoning channel) — TOP-LEVEL SIBLING of WP-0,
+      contract-independent (needs no wire change): pkg/config/
+      config_channels_instance.go (26 fields), pkg/channels/base.go interface
+      method + 13 channel-package implementations, pkg/agent/loop.go publish
+      path (incl. PR #933's fix), env bindings, both shipped config files,
+      docs/connectors/*.md (13 docs) (MAJ-008)
+
+WP-I  proving tests (Section 15/16: boundary matrix, sweeps, bounded-gap #943,
+      mid-turn rebuild, deletion zero-trace, tool-only-round thinking row,
+      ToolCallProgress sentinel ban, catalog round-trip) — written RED per
+      work package, consolidated as the feature's proof pack
 ```
 
-Sequencing rules from the interview (§3) and T2/T3: WP-0 before every consumer; WP-A needs no contract and no adapter; WP-E is one reviewed change with #750 (its own dedicated issue, filed by team-lead); WP-F after WP-E; WP-G after WP-EXT + WP-0. Open items tracked outside this feature: #943 (bounded-gap test ships with WP-I; the fix does not), #274's Selection Toolbar (untouched).
+**Relationship to the interview's dependency graph (OBS-002):** this graph supersedes the interview section 3 dependency graph's struck D12/D13 nodes — those amendments predate this spec (D15), and nothing here implements a struck clause.
+
+Sequencing rules from the interviewSequencing rules from the interview (§3) and T2/T3: WP-0 before every consumer; WP-A is a top-level sibling — contract-independent, landable in parallel; WP-E is one reviewed change with #750 (its own dedicated issue, filed by team-lead); WP-F after WP-E; WP-G after WP-EXT's data + WP-0; WP-B/WP-F own the C7 token-parse points and feed WP-G's usage display. Open items tracked outside this feature: #943 (bounded-gap test ships with WP-I; the fix does not), #274's Selection Toolbar (untouched).
 
 ## 24. Clarifications
 
@@ -1267,5 +1472,60 @@ Sequencing rules from the interview (§3) and T2/T3: WP-0 before every consumer;
 
 - Q (from the inputs' own correction record): D12/D13 as first written? → A: amended by D15 before this spec was written; the spec builds on D15's ruling (raw thinking stays in the context file; restart changes nothing; the redacted copy never enters a provider request). The interview's struck clauses are not implemented by anything here.
 - Q: CF9's `src/lib/onboarding/defaultModel.ts`? → A: verified absent — deleted upstream 2026-09-16 as unused (commit `af6a7f63e`), before this worktree's cut; the onboarding surface remains `src/routes/onboarding.tsx`. Recorded as a CF9 correction in Section 2.2; no founder question needed (the surface is gone, so there is nothing to build there).
-- Q: where is the #711 console-strip component? → A: approved and built on `feat/provider-messages` (Option C, commit `02eeba8c5`); not yet on this branch. D20's requirement (same visual language, no second error style) is stated in Section 12 for either landing order.
+- Q: where is the #711 console-strip component? → A: **corrected in grill round 1 (MAJ-010):** the only existing artifact is a Storybook demo — commit `02eeba8c5` on `feat/provider-messages-visual-demo`, which is NOT an ancestor of `feat/provider-messages` and is not a production component. This feature builds the notice inline with the approved Option-C visual language (or adopts the catalogued component if #711 lands first). D20's requirement (same visual language, no second error style) stands for either landing order.
 - No further clarifications required from the founder: all seven ADR-095 grill questions are answered in D15–D21, and the ADR's Status records no open questions.
+- **2026-09-27 (fix round 1):** grill round 1 returned 3 CRITICAL + 18 MAJOR + 12 MINOR + 3 observation findings; the founder answered seven questions (D22–D28); every finding is addressed in this revision — the finding-by-finding record is the **Revision log — fix round 1** section at the end of this file. No finding required a new founder decision beyond D22–D28 (see Open questions for the founder, fix round 1).
+
+
+---
+
+## Open questions for the founder (fix round 1)
+
+**None.** Every grill-round-1 finding was resolvable from authorities the spec already answers to: the founder's D22–D28 answers (this fix round's brief), D1–D21 + T1–T3 (the interview), ADR-095's accepted design (including its D1–D8 and proving-test list), and repo hard rules (contract-first T2, greenfield D17, delete-superseded D1, budgets). The review's "Questions for the founder" list (Q1–Q7) maps one-to-one onto D22–D28, which are already recorded in `docs/internal/specs/spec-thinking-reasoning.md`. Nothing here needed a new decision, so nothing is escalated. Round 2 of the grill proceeds on this revision.
+
+---
+
+## Revision log — fix round 1
+
+Review input: `docs/internal/specs/thinking-reasoning-spec-review.md` (verdict BLOCK). One row per finding; citations are `file::symbol`, never line numbers.
+
+| ID | What changed (section) or why not |
+|---|---|
+| CRIT-001 | §1 C5 rewritten as a per-surface table: agent primary = flat `reasoning_effort` sibling on `Agent.yaml`/`AgentCreateRequestMain.yaml`; fallbacks = `FallbackModel.yaml` (one schema, agent + recap chains); recap = `MemorySettings.yaml` flat sibling; instance default = `DefaultModel.yaml` + `DefaultModelUpdateRequest.yaml`; per-message = typed inbound-frame metadata key next to `model_name` (D23). Resolution order specified; onboarding covered via the default-model PUT (`src/lib/api/providers.ts::putDefaultModel` path). New FR-029 |
+| CRIT-002 | §8.1 new "Storage unit for thinking" section: one `type: "thinking"` entry per round (incl. tool-only rounds), entry ID minted at capture start (= live frame's `entry_id`), `turn_id` binding; full 24-file `ReadTranscript` production-reader handling table (grep-verified count); Group B/F scenarios + test 26. New FR-030 |
+| CRIT-003 | §1 C2 `entry_id` + whole-text replace semantics; §2.2 new rows (both adapters' gap confirmed; new gated accumulated-text callback implemented by both, capture-only consumer); §6 explicit `ToolCallProgress` text ban + Group C scenario + test 24 sentinel proving test; signatures stay parse-time only (ADR-095 D7). New FR-031 |
+| MAJ-001 | C1 rewritten GET + idempotent PUT, operationIds, CSRF, persisted-state responses; §9.1 moved to Settings → Chat per D22 (ChatSection.tsx); Group A new endpoint scenario; test 11 extended. FR-004 extended |
+| MAJ-002 | §2.2 + §7 + C6: Omnipus parser plumbing named (`pkg/providers/catalog/parse.go`, `document.go::Model`, `served.go`), `schema_version` stays `"2.0.0"`, owned by WP-G; Group D round-trip scenario + test 23. New FR-035; SC-011 |
+| MAJ-003 | §1 new C7: `ModelTokens.yaml` gains `thinking`, subset-of-`out` semantics; parse points named (SDK `OutputTokensDetails.ThinkingTokens`; openai-compat usage parsing — new work, verified absent); assigned WP-B/WP-F; test 22 unchanged in intent, FR-036 new |
+| MAJ-004 | C4 rewritten: assistant entry content = D26 notice text + typed `outcome` field on entry/done-frame/ReplayMessageFrame (truncation_reason precedent); messenger/parent/task/recap/SSE handling specified (US-8 AS4–6); `turnWasReasoningOnly` keys on the marker (§2.2); test 27 |
+| MAJ-005 | §2.2: `thinking_level`/`ThinkingLevel`/`parseThinkingLevel`/`llmOpts["thinking_level"]` mechanism **deleted outright** (D1 rule), replaced by `reasoning_effort`; zero-trace check in the deletion sweep scope (US-9 AS2 extended to cover it) |
+| MAJ-006 | Hold-back rule specified (trailing token-ish run alphabet incl. `sk-`/`Bearer` prefixes); C2 = whole redacted text-so-far, client replaces; §6 property constraint; split-secret BDD rewritten as split-point property; test 2 rewritten; §20 row 9 accepted risk |
+| MAJ-007 | C2 bounds: 65536-byte maxLength + <=1 frame/250 ms/round coalescing; §6 constraints + journal-pressure degradation row (caps verified `pkg/gateway/ws_session_hub.go`); test 25; §20 row 10 |
+| MAJ-008 | §2.2/§2.3/Group F: full deletion inventory corrected (26 config occurrences, `pkg/channels/base.go` interface method + 13 implementations, `pkg/channels/webchat_channel.go`, both shipped config files, 13 connector docs; sweep excludes only `docs/internal/specs/` + `docs/internal/_archive/`) |
+| MAJ-009 | §23 redrawn per D25: WP-EXT ours (data only), WP-0 defines the C6 shape, WP-A top-level contract-independent sibling, WP-B/WP-F own C7 parse points feeding WP-G, WP-G owns the catalog parser plumbing; OBS-002 supersession note added |
+| MAJ-010 | §9.3/§12/§22/§24 corrected: `02eeba8c5` is a Storybook demo on `feat/provider-messages-visual-demo`, not an ancestor of `feat/provider-messages`, not a production component; this feature builds the notice inline (approved Option-C tokens/classes) or adopts #711's component if it lands first — never both |
+| MAJ-011 | §14 rebuilt with named mount points (Settings → Chat per D22; ModelFooter/ChatControls/RemoveProviderDialog excluded per D28; Step3Tools fallback step added; `/effort` web+CLI+channels rows); §9.5 one command/one behavior mirroring `pkg/commands/cmd_model.go::modelCommand` |
+| MAJ-012 | §20 row 7 carries the three ADR-095 risks (hooks outside the gate; raw thinking + signatures at rest; shared-type change); §13 promise 1 scoped (hooks out of scope); Group C new tool-result scenario + test 28 (the ADR's tool-result gate test restored); SC-003 unchanged, scope note in §13 |
+| MAJ-013 | §13 verdict corrected (docs/security.md DOES get the two sentences + at-rest note; docs/tools.md unchanged — verified zero mentions); promise 2 reworded (recognised formats masked incl. operator `RedactPatterns` via `pkg/audit/audit.go::RedactPatterns`; unrecognised NOT masked, docs say so); user-docs work items with docs-verifier ownership; dataset rows 8-9 |
+| MAJ-014 | §14/§23/§16/SC-013: extract-first named — ChatScreen additions land as components under `src/components/chat/` (grandfathered at 3607/actual 3604), `streamReplay` gate via helper with net lines <= 0 (grandfathered 283); `make lint-budgets` gates it |
+| MAJ-015 | Label "Reasoning" everywhere (no "Thinking…" collision with `ChatScreen.tsx::ThinkingIndicator`); DisclosureRow named as the reuse target (`src/components/ui/disclosure-row.tsx`); "fills live" defined as body-content growth, disclosure state orthogonal |
+| MAJ-016 | Oracles restated: summary-pin asserts the OUTGOING request; pre-feature case asserts no thinking config + one named omission log field; restart scenario gains a deterministic rebuilt-context assertion (real-Anthropic confirmation → UAT); D16 scenario made deterministic (asserted present); tool-result gate test added (test 28) |
+| MAJ-017 | US-5 AS1 + FR-012 carry the D24 precondition (effort at a named level); §20 row 8 records the product consequence (default = no Anthropic thinking; D24 hint is the answer) |
+| MAJ-018 | §9.4/§11/§12: slider primitive extended to forward `aria-valuetext` (verified absent at `src/components/ui/slider.tsx` today); "Default" = position 0, stated meaning "the provider decides — not a lower level than low"; catalog order defines level order (ascending, tested); test 29 |
+| MIN-001 | §2.2 counts/paths corrected (26; `pkg/channels/base.go`; `pkg/channels/webchat_channel.go`; 13 docs) |
+| MIN-002 | US-1 AS1 scoped to user-visible surfaces; delegate_status byte count explicitly in scope as internal telemetry (§2.2 row, ADR-095 D7) |
+| MIN-003 | US-1 AS5 + dataset 3 reworded: empty user identity (dev bypass / env token leave `wc.userID` unset — verified `pkg/gateway/websocket.go::authenticateWS` cookie path sets it, others do not) → fail-closed toggle-off |
+| MIN-004 | Audit event named (indicatively `settings.show_thinking.changed`, dotted-lowercase per `pkg/audit/events.go`; exact name backend-lead's under the event-name contract tests), fields login+boolean, CSRF + idempotent PUT stated (US-1 AS6, §6 constraint, FR-004) |
+| MIN-005 | §6/US-6 AS8: the banned control is a raw token-budget input (e.g. a free `budget_tokens` field); the named-level mapping (incl. Anthropic's adaptive thinking type) is not banned — two meanings of "adaptive" disambiguated |
+| MIN-006 | §1 C3 decision cell: entry `text` source specified — `Reasoning` with fallback to `ReasoningContent`, read from the post-strip text only (after `pkg/agent/loop_truncation.go::stripOrphanToolCallMarkup`), so orphan markup never lands in a stored or displayed thinking row |
+| MIN-007 | §5/§11: growing content `aria-live="off"`, timer `aria-hidden`, narrow-screen stacked slider fallback |
+| MIN-008 | Group A new concurrency scenario (toggle flip mid-stream races safely) with the §4 boundary semantics |
+| MIN-009 | §9.4: stale-note exact copy + adjacent placement; notice names drawn from the serving model row |
+| MIN-010 | §16 new "Gates" paragraph: CI authority, one-local-test rule, `npm run typecheck`, design-system lock scripts, `make lint-budgets` |
+| MIN-011 | §19 rows fixed: FR-009 → 13 (dataset 5-6); FR-011 → 13, 14; FR-025 → 12, 15, 24; FR-018 → 3, 21, 27; completeness paragraph updated |
+| MIN-012 | §9.1/§14: Profile-route references replaced by Settings → Chat per D22 (moots the /profile route question; route facts recorded in §2.2's frontend list as `src/routes/_app/profile.tsx` — the D22 home is ChatSection) |
+| OBS-001 | §1 C-list: SSE prohibition moved to §6 (kept pointer in non-additions + §8.2 row); the §16 SSE test stays |
+| OBS-002 | §23 note: this WP graph supersedes the interview §3 dependency graph's struck D12/D13 nodes |
+| OBS-003 | FR-028 deleted; its content recorded as §20 row 11 (accepted mid-turn-attach projection-class cost) — no fake MAY requirement |
+
+Completeness: 3 CRITICAL + 18 MAJOR + 12 MINOR + 3 observations = 36 findings, all addressed above; 0 disputed (every reviewer code claim verified first-hand in this worktree before relying on it); 0 new open questions (see the preceding section).
