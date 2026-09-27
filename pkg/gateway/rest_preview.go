@@ -67,25 +67,24 @@ func (a *restAPI) HandlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// FR-011: a preview request carrying service-worker metadata is refused
-	// before any serving — a registered service worker would outlive the
-	// preview tab and keep serving from (or fetching through) the preview
-	// origin after the registration is gone. This is the ONE code path for
-	// both modes: dispatched Mode 1 label requests and Mode 2 /preview/ path
-	// requests both enter here.
+	// ADR-094 Mode 1: the request arrived dispatched under a preview label
+	// Host — the preview-host mux (preview_host_dispatch.go) has already
+	// classified, rate-limited and labelled it. Serve by label; the /preview/
+	// path parsing below is the Mode 2 surface only. FR-011 does not apply
+	// here (FR-028: the service-worker guard is main-Host only).
+	if label := previewHostLabelFromContext(r.Context()); label != "" {
+		a.servePreviewByLabel(w, r, label, startedAt)
+		return
+	}
+
+	// FR-011 per FR-028: a main-Host /preview/ request carrying service-worker
+	// metadata is refused before any serving — a registered service worker
+	// would outlive the preview tab and keep fetching through the gateway
+	// origin. A Mode 1 label request never reaches this check.
 	if strings.EqualFold(r.Header.Get("Service-Worker"), "script") ||
 		strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "serviceworker") {
 		a.auditServeFailure(r, "preview.serviceworker_refused", "deny", "", "", http.StatusForbidden, startedAt)
 		writeDevProxyError(w, http.StatusForbidden, "service workers are not allowed for previews")
-		return
-	}
-
-	// ADR-094 Mode 1: the request arrived dispatched under a preview label
-	// Host — the preview-host mux (preview_host_dispatch.go) has already
-	// classified, rate-limited and labelled it. Serve by label; the /preview/
-	// path parsing below is the Mode 2 surface only.
-	if label := previewHostLabelFromContext(r.Context()); label != "" {
-		a.servePreviewByLabel(w, r, label, startedAt)
 		return
 	}
 
@@ -219,6 +218,11 @@ func (a *restAPI) serveStaticFile(
 		cfg = a.agentLoop.GetConfig()
 	}
 	mainOrigin := resolveMainOrigin(cfg)
+	// Mode 2 static CSP prefix, percent-encoded the same way the dev proxy
+	// builds it. Mode 1 ignores the value (previewMode1CSP). auditToken is
+	// the registration token on the Mode 2 path and empty on the label path;
+	// no branch here so serveStaticFile's complexity stays put.
+	previewPrefix := middleware.PreviewPathPrefix + url.PathEscape(agentID) + "/" + url.PathEscape(auditToken)
 
 	var absPath string
 	if relPath == "" || relPath == "." {
@@ -298,7 +302,7 @@ func (a *restAPI) serveStaticFile(
 			jsonErr(w, http.StatusInternalServerError, "could not read file")
 			return
 		}
-		setPreviewStaticHeaders(w, r, mainOrigin)
+		setPreviewStaticHeaders(w, r, mainOrigin, previewPrefix)
 		w.Header().Set("Content-Type", contentTypeForPath(absPath))
 		w.WriteHeader(http.StatusOK)
 		if r.Method != http.MethodHead {
@@ -323,7 +327,7 @@ func (a *restAPI) serveStaticFile(
 			slog.Debug("rest: serveStaticFile: file close error", "error", closeErr)
 		}
 	}()
-	setPreviewStaticHeaders(w, r, mainOrigin)
+	setPreviewStaticHeaders(w, r, mainOrigin, previewPrefix)
 	w.Header().Set("Content-Type", contentTypeForPath(absPath))
 	w.WriteHeader(http.StatusOK)
 	var bytesOut int64
@@ -394,25 +398,39 @@ func filterReservedCookiePairs(cookieHeader string) (filtered string, dropped bo
 }
 
 // gatewayOwnsBearer reports whether the gateway's own validator would accept
-// authz as a bearer credential (ADR-094 FR-012b): a user token or CLI token
+// authz as a bearer credential (ADR-094 FR-020): a user token or CLI token
 // via resolveBearerIdentity, or the legacy OMNIPUS_BEARER_TOKEN env token via
 // a constant-time compare (the same compare checkBearerAuth runs). A foreign
 // bearer — the previewed app's own API token — returns false and reaches the
 // app untouched.
+//
+// bcrypt runs only for a gateway token shape. The env compare is not bcrypt
+// and has no required shape, so it runs first. Then:
+//
+//   - id-tagged "omnipus_<id>_<body>" (config.TokenIDFromRaw): one indexed
+//     hash, via resolveBearerIdentity;
+//   - a dot in a non-id token (a JWT's three base64url segments, or any
+//     other dotted shape): false, with zero bcrypt compares;
+//   - a bare legacy token (no id, no dot): the bounded account scan.
+//
+// The CLI token minted today is "omnipus_" plus 64 hex and no second
+// underscore (rest_config.go::rotateGatewayToken) — no dot, so it is the
+// legacy shape, not the id-tagged one. A prefix-only filter would drop it.
 func gatewayOwnsBearer(cfg *config.Config, authz string) bool {
 	const prefix = "Bearer "
 	if !strings.HasPrefix(authz, prefix) {
 		return false
 	}
 	raw := strings.TrimPrefix(authz, prefix)
-	if _, _, matched := resolveBearerIdentity(cfg, raw); matched {
-		return true
-	}
 	if required := os.Getenv("OMNIPUS_BEARER_TOKEN"); required != "" &&
 		subtle.ConstantTimeCompare([]byte(raw), []byte(required)) == 1 {
 		return true
 	}
-	return false
+	if config.TokenIDFromRaw(raw) == "" && strings.Contains(raw, ".") {
+		return false
+	}
+	_, _, matched := resolveBearerIdentity(cfg, raw)
+	return matched
 }
 
 // proxyDevRequest forwards the request to the dev-server's loopback port.
@@ -459,10 +477,14 @@ func (a *restAPI) proxyDevRequest(
 	mode1 := previewHostLabelFromContext(r.Context()) != ""
 	prefix := middleware.PreviewPathPrefix + url.PathEscape(agentID) + "/" + url.PathEscape(token)
 	clientOrigin := &url.URL{Scheme: schemeFromRequest(r), Host: r.Host}
+	// The browser resolves a relative Location against the request URL.
+	// r.URL.Path is the decoded path; the percent-encoded prefix is only
+	// for the emitted Location and the CSP.
 	clientBase := &url.URL{
-		Scheme: clientOrigin.Scheme,
-		Host:   r.Host,
-		Path:   prefix + "/" + remaining,
+		Scheme:   clientOrigin.Scheme,
+		Host:     r.Host,
+		Path:     r.URL.Path,
+		RawQuery: r.URL.RawQuery,
 	}
 
 	origDirector := rp.Director
