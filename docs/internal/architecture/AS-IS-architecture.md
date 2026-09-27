@@ -222,7 +222,6 @@ type Channel interface {
     IsRunning() bool
     IsAllowed(senderID string) bool
     IsAllowedSender(sender bus.SenderInfo) bool
-    ReasoningChannelID() string
 }
 ```
 

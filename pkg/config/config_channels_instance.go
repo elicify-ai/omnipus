@@ -324,17 +324,16 @@ func validateIdentityKinds(cfg *Config) error {
 }
 
 type TelegramConfig struct {
-	Enabled            bool                `json:"enabled"                 yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_ENABLED"`
-	TokenRef           string              `json:"token_ref,omitempty"     yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_TOKEN_REF"`
-	BaseURL            string              `json:"base_url"                yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_BASE_URL"`
-	Proxy              string              `json:"proxy"                   yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_PROXY"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty" yaml:"-"`
-	Typing             TypingConfig        `json:"typing,omitempty"        yaml:"-"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"   yaml:"-"`
-	Streaming          StreamingConfig     `json:"streaming,omitempty"     yaml:"-"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_REASONING_CHANNEL_ID"`
-	UseMarkdownV2      bool                `json:"use_markdown_v2"         yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
+	Enabled       bool                `json:"enabled"                 yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_ENABLED"`
+	TokenRef      string              `json:"token_ref,omitempty"     yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_TOKEN_REF"`
+	BaseURL       string              `json:"base_url"                yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_BASE_URL"`
+	Proxy         string              `json:"proxy"                   yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_PROXY"`
+	AllowFrom     FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_ALLOW_FROM"`
+	GroupTrigger  GroupTriggerConfig  `json:"group_trigger,omitempty" yaml:"-"`
+	Typing        TypingConfig        `json:"typing,omitempty"        yaml:"-"`
+	Placeholder   PlaceholderConfig   `json:"placeholder,omitempty"   yaml:"-"`
+	Streaming     StreamingConfig     `json:"streaming,omitempty"     yaml:"-"`
+	UseMarkdownV2 bool                `json:"use_markdown_v2"         yaml:"-" env:"OMNIPUS_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
 }
 
 // --- Extraction helpers — convert ChannelInstanceConfig to the typed sub-config
@@ -344,37 +343,34 @@ type TelegramConfig struct {
 // type "telegram".
 func InstanceToTelegram(inst ChannelInstanceConfig) TelegramConfig {
 	return TelegramConfig{
-		Enabled:            inst.Enabled,
-		TokenRef:           inst.TokenRef,
-		BaseURL:            inst.BaseURL,
-		Proxy:              inst.Proxy,
-		AllowFrom:          inst.AllowFrom,
-		GroupTrigger:       inst.GroupTrigger,
-		Typing:             inst.Typing,
-		Placeholder:        inst.Placeholder,
-		Streaming:          inst.Streaming,
-		ReasoningChannelID: inst.ReasoningChannelID,
-		UseMarkdownV2:      inst.UseMarkdownV2,
+		Enabled:       inst.Enabled,
+		TokenRef:      inst.TokenRef,
+		BaseURL:       inst.BaseURL,
+		Proxy:         inst.Proxy,
+		AllowFrom:     inst.AllowFrom,
+		GroupTrigger:  inst.GroupTrigger,
+		Typing:        inst.Typing,
+		Placeholder:   inst.Placeholder,
+		Streaming:     inst.Streaming,
+		UseMarkdownV2: inst.UseMarkdownV2,
 	}
 }
 
 type WhatsAppConfig struct {
-	Enabled            bool                `json:"enabled"                 yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_ENABLED"`
-	SessionStorePath   string              `json:"session_store_path"      yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_SESSION_STORE_PATH"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_ALLOW_FROM"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_REASONING_CHANNEL_ID"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty" yaml:"-"`
+	Enabled          bool                `json:"enabled"                 yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_ENABLED"`
+	SessionStorePath string              `json:"session_store_path"      yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_SESSION_STORE_PATH"`
+	AllowFrom        FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_ALLOW_FROM"`
+	GroupTrigger     GroupTriggerConfig  `json:"group_trigger,omitempty" yaml:"-"`
 }
 
 // InstanceToWhatsApp returns the WhatsAppConfig for a ChannelInstanceConfig of
 // type "whatsapp".
 func InstanceToWhatsApp(inst ChannelInstanceConfig) WhatsAppConfig {
 	return WhatsAppConfig{
-		Enabled:            inst.Enabled,
-		SessionStorePath:   inst.SessionStorePath,
-		AllowFrom:          inst.AllowFrom,
-		ReasoningChannelID: inst.ReasoningChannelID,
-		GroupTrigger:       inst.GroupTrigger,
+		Enabled:          inst.Enabled,
+		SessionStorePath: inst.SessionStorePath,
+		AllowFrom:        inst.AllowFrom,
+		GroupTrigger:     inst.GroupTrigger,
 	}
 }
 
@@ -387,7 +383,6 @@ type FeishuConfig struct {
 	AllowFrom            FlexibleStringSlice `json:"allow_from"                       yaml:"-" env:"OMNIPUS_CHANNELS_FEISHU_ALLOW_FROM"`
 	GroupTrigger         GroupTriggerConfig  `json:"group_trigger,omitempty"          yaml:"-"`
 	Placeholder          PlaceholderConfig   `json:"placeholder,omitempty"            yaml:"-"`
-	ReasoningChannelID   string              `json:"reasoning_channel_id"             yaml:"-" env:"OMNIPUS_CHANNELS_FEISHU_REASONING_CHANNEL_ID"`
 	RandomReactionEmoji  FlexibleStringSlice `json:"random_reaction_emoji"            yaml:"-" env:"OMNIPUS_CHANNELS_FEISHU_RANDOM_REACTION_EMOJI"`
 	IsLark               bool                `json:"is_lark"                          yaml:"-" env:"OMNIPUS_CHANNELS_FEISHU_IS_LARK"`
 }
@@ -404,37 +399,34 @@ func InstanceToFeishu(inst ChannelInstanceConfig) FeishuConfig {
 		AllowFrom:            inst.AllowFrom,
 		GroupTrigger:         inst.GroupTrigger,
 		Placeholder:          inst.Placeholder,
-		ReasoningChannelID:   inst.ReasoningChannelID,
 		RandomReactionEmoji:  inst.RandomReactionEmoji,
 		IsLark:               inst.IsLark,
 	}
 }
 
 type DiscordConfig struct {
-	Enabled            bool                `json:"enabled"                 yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_ENABLED"`
-	TokenRef           string              `json:"token_ref,omitempty"     yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_TOKEN_REF"`
-	Proxy              string              `json:"proxy"                   yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_PROXY"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_ALLOW_FROM"`
-	MentionOnly        bool                `json:"mention_only"            yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_MENTION_ONLY"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty" yaml:"-"`
-	Typing             TypingConfig        `json:"typing,omitempty"        yaml:"-"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"   yaml:"-"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_REASONING_CHANNEL_ID"`
+	Enabled      bool                `json:"enabled"                 yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_ENABLED"`
+	TokenRef     string              `json:"token_ref,omitempty"     yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_TOKEN_REF"`
+	Proxy        string              `json:"proxy"                   yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_PROXY"`
+	AllowFrom    FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_ALLOW_FROM"`
+	MentionOnly  bool                `json:"mention_only"            yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_MENTION_ONLY"`
+	GroupTrigger GroupTriggerConfig  `json:"group_trigger,omitempty" yaml:"-"`
+	Typing       TypingConfig        `json:"typing,omitempty"        yaml:"-"`
+	Placeholder  PlaceholderConfig   `json:"placeholder,omitempty"   yaml:"-"`
 }
 
 // InstanceToDiscord returns the DiscordConfig for a ChannelInstanceConfig of
 // type "discord".
 func InstanceToDiscord(inst ChannelInstanceConfig) DiscordConfig {
 	return DiscordConfig{
-		Enabled:            inst.Enabled,
-		TokenRef:           inst.TokenRef,
-		Proxy:              inst.Proxy,
-		AllowFrom:          inst.AllowFrom,
-		MentionOnly:        inst.MentionOnly,
-		GroupTrigger:       inst.GroupTrigger,
-		Typing:             inst.Typing,
-		Placeholder:        inst.Placeholder,
-		ReasoningChannelID: inst.ReasoningChannelID,
+		Enabled:      inst.Enabled,
+		TokenRef:     inst.TokenRef,
+		Proxy:        inst.Proxy,
+		AllowFrom:    inst.AllowFrom,
+		MentionOnly:  inst.MentionOnly,
+		GroupTrigger: inst.GroupTrigger,
+		Typing:       inst.Typing,
+		Placeholder:  inst.Placeholder,
 	}
 }
 
@@ -447,7 +439,6 @@ type QQConfig struct {
 	MaxMessageLength     int                 `json:"max_message_length"       yaml:"-" env:"OMNIPUS_CHANNELS_QQ_MAX_MESSAGE_LENGTH"`
 	MaxBase64FileSizeMiB int64               `json:"max_base64_file_size_mib" yaml:"-" env:"OMNIPUS_CHANNELS_QQ_MAX_BASE64_FILE_SIZE_MIB"`
 	SendMarkdown         bool                `json:"send_markdown"            yaml:"-" env:"OMNIPUS_CHANNELS_QQ_SEND_MARKDOWN"`
-	ReasoningChannelID   string              `json:"reasoning_channel_id"     yaml:"-" env:"OMNIPUS_CHANNELS_QQ_REASONING_CHANNEL_ID"`
 }
 
 // InstanceToQQ returns the QQConfig for a ChannelInstanceConfig of type "qq".
@@ -461,55 +452,50 @@ func InstanceToQQ(inst ChannelInstanceConfig) QQConfig {
 		MaxMessageLength:     inst.MaxMessageLength,
 		MaxBase64FileSizeMiB: inst.MaxBase64FileSizeMiB,
 		SendMarkdown:         inst.SendMarkdown,
-		ReasoningChannelID:   inst.ReasoningChannelID,
 	}
 }
 
 type DingTalkConfig struct {
-	Enabled            bool                `json:"enabled"                     yaml:"-" env:"OMNIPUS_CHANNELS_DINGTALK_ENABLED"`
-	ClientID           string              `json:"client_id"                   yaml:"-" env:"OMNIPUS_CHANNELS_DINGTALK_CLIENT_ID"`
-	ClientSecretRef    string              `json:"client_secret_ref,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_DINGTALK_CLIENT_SECRET_REF"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"                  yaml:"-" env:"OMNIPUS_CHANNELS_DINGTALK_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"     yaml:"-"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"        yaml:"-" env:"OMNIPUS_CHANNELS_DINGTALK_REASONING_CHANNEL_ID"`
+	Enabled         bool                `json:"enabled"                     yaml:"-" env:"OMNIPUS_CHANNELS_DINGTALK_ENABLED"`
+	ClientID        string              `json:"client_id"                   yaml:"-" env:"OMNIPUS_CHANNELS_DINGTALK_CLIENT_ID"`
+	ClientSecretRef string              `json:"client_secret_ref,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_DINGTALK_CLIENT_SECRET_REF"`
+	AllowFrom       FlexibleStringSlice `json:"allow_from"                  yaml:"-" env:"OMNIPUS_CHANNELS_DINGTALK_ALLOW_FROM"`
+	GroupTrigger    GroupTriggerConfig  `json:"group_trigger,omitempty"     yaml:"-"`
 }
 
 // InstanceToDingTalk returns the DingTalkConfig for a ChannelInstanceConfig of
 // type "dingtalk".
 func InstanceToDingTalk(inst ChannelInstanceConfig) DingTalkConfig {
 	return DingTalkConfig{
-		Enabled:            inst.Enabled,
-		ClientID:           inst.ClientID,
-		ClientSecretRef:    inst.ClientSecretRef,
-		AllowFrom:          inst.AllowFrom,
-		GroupTrigger:       inst.GroupTrigger,
-		ReasoningChannelID: inst.ReasoningChannelID,
+		Enabled:         inst.Enabled,
+		ClientID:        inst.ClientID,
+		ClientSecretRef: inst.ClientSecretRef,
+		AllowFrom:       inst.AllowFrom,
+		GroupTrigger:    inst.GroupTrigger,
 	}
 }
 
 type SlackConfig struct {
-	Enabled            bool                `json:"enabled"                 yaml:"-" env:"OMNIPUS_CHANNELS_SLACK_ENABLED"`
-	BotTokenRef        string              `json:"bot_token_ref,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_SLACK_BOT_TOKEN_REF"`
-	AppTokenRef        string              `json:"app_token_ref,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_SLACK_APP_TOKEN_REF"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"OMNIPUS_CHANNELS_SLACK_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty" yaml:"-"`
-	Typing             TypingConfig        `json:"typing,omitempty"        yaml:"-"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"   yaml:"-"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    yaml:"-" env:"OMNIPUS_CHANNELS_SLACK_REASONING_CHANNEL_ID"`
+	Enabled      bool                `json:"enabled"                 yaml:"-" env:"OMNIPUS_CHANNELS_SLACK_ENABLED"`
+	BotTokenRef  string              `json:"bot_token_ref,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_SLACK_BOT_TOKEN_REF"`
+	AppTokenRef  string              `json:"app_token_ref,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_SLACK_APP_TOKEN_REF"`
+	AllowFrom    FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"OMNIPUS_CHANNELS_SLACK_ALLOW_FROM"`
+	GroupTrigger GroupTriggerConfig  `json:"group_trigger,omitempty" yaml:"-"`
+	Typing       TypingConfig        `json:"typing,omitempty"        yaml:"-"`
+	Placeholder  PlaceholderConfig   `json:"placeholder,omitempty"   yaml:"-"`
 }
 
 // InstanceToSlack returns the SlackConfig for a ChannelInstanceConfig of type
 // "slack".
 func InstanceToSlack(inst ChannelInstanceConfig) SlackConfig {
 	return SlackConfig{
-		Enabled:            inst.Enabled,
-		BotTokenRef:        inst.BotTokenRef,
-		AppTokenRef:        inst.AppTokenRef,
-		AllowFrom:          inst.AllowFrom,
-		GroupTrigger:       inst.GroupTrigger,
-		Typing:             inst.Typing,
-		Placeholder:        inst.Placeholder,
-		ReasoningChannelID: inst.ReasoningChannelID,
+		Enabled:      inst.Enabled,
+		BotTokenRef:  inst.BotTokenRef,
+		AppTokenRef:  inst.AppTokenRef,
+		AllowFrom:    inst.AllowFrom,
+		GroupTrigger: inst.GroupTrigger,
+		Typing:       inst.Typing,
+		Placeholder:  inst.Placeholder,
 	}
 }
 
@@ -524,7 +510,6 @@ type MatrixConfig struct {
 	AllowFrom           FlexibleStringSlice `json:"allow_from"                      yaml:"-"`
 	GroupTrigger        GroupTriggerConfig  `json:"group_trigger,omitempty"         yaml:"-"`
 	Placeholder         PlaceholderConfig   `json:"placeholder,omitempty"           yaml:"-"`
-	ReasoningChannelID  string              `json:"reasoning_channel_id"            yaml:"-"`
 	CryptoDatabasePath  string              `json:"crypto_database_path,omitempty"  yaml:"-"`
 	CryptoPassphraseRef string              `json:"crypto_passphrase_ref,omitempty" yaml:"-"`
 }
@@ -543,7 +528,6 @@ func InstanceToMatrix(inst ChannelInstanceConfig) MatrixConfig {
 		AllowFrom:           inst.AllowFrom,
 		GroupTrigger:        inst.GroupTrigger,
 		Placeholder:         inst.Placeholder,
-		ReasoningChannelID:  inst.ReasoningChannelID,
 		CryptoDatabasePath:  inst.CryptoDatabasePath,
 		CryptoPassphraseRef: inst.CryptoPassphraseRef,
 	}
@@ -560,7 +544,6 @@ type LINEConfig struct {
 	GroupTrigger          GroupTriggerConfig  `json:"group_trigger,omitempty"            yaml:"-"`
 	Typing                TypingConfig        `json:"typing,omitempty"                   yaml:"-"`
 	Placeholder           PlaceholderConfig   `json:"placeholder,omitempty"              yaml:"-"`
-	ReasoningChannelID    string              `json:"reasoning_channel_id"               yaml:"-"`
 }
 
 // InstanceToLINE returns the LINEConfig for a ChannelInstanceConfig of type
@@ -577,7 +560,6 @@ func InstanceToLINE(inst ChannelInstanceConfig) LINEConfig {
 		GroupTrigger:          inst.GroupTrigger,
 		Typing:                inst.Typing,
 		Placeholder:           inst.Placeholder,
-		ReasoningChannelID:    inst.ReasoningChannelID,
 	}
 }
 
@@ -588,7 +570,6 @@ type WeComConfig struct {
 	WebSocketURL        string              `json:"websocket_url,omitempty" yaml:"-" env:"WEBSOCKET_URL"`
 	SendThinkingMessage bool                `json:"send_thinking_message"   yaml:"-" env:"SEND_THINKING_MESSAGE"`
 	AllowFrom           FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"ALLOW_FROM"`
-	ReasoningChannelID  string              `json:"reasoning_channel_id"    yaml:"-" env:"REASONING_CHANNEL_ID"`
 }
 
 // InstanceToWeCom returns the WeComConfig for a ChannelInstanceConfig of type
@@ -601,33 +582,30 @@ func InstanceToWeCom(inst ChannelInstanceConfig) WeComConfig {
 		WebSocketURL:        inst.WebSocketURL,
 		SendThinkingMessage: inst.SendThinkingMessage,
 		AllowFrom:           inst.AllowFrom,
-		ReasoningChannelID:  inst.ReasoningChannelID,
 	}
 }
 
 type WeixinConfig struct {
-	Enabled            bool                `json:"enabled"              yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_ENABLED"`
-	TokenRef           string              `json:"token_ref,omitempty"  yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_TOKEN_REF"`
-	AccountID          string              `json:"account_id,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_ACCOUNT_ID"`
-	BaseURL            string              `json:"base_url"             yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_BASE_URL"`
-	CDNBaseURL         string              `json:"cdn_base_url"         yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_CDN_BASE_URL"`
-	Proxy              string              `json:"proxy"                yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_PROXY"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"           yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_ALLOW_FROM"`
-	ReasoningChannelID string              `json:"reasoning_channel_id" yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_REASONING_CHANNEL_ID"`
+	Enabled    bool                `json:"enabled"              yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_ENABLED"`
+	TokenRef   string              `json:"token_ref,omitempty"  yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_TOKEN_REF"`
+	AccountID  string              `json:"account_id,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_ACCOUNT_ID"`
+	BaseURL    string              `json:"base_url"             yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_BASE_URL"`
+	CDNBaseURL string              `json:"cdn_base_url"         yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_CDN_BASE_URL"`
+	Proxy      string              `json:"proxy"                yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_PROXY"`
+	AllowFrom  FlexibleStringSlice `json:"allow_from"           yaml:"-" env:"OMNIPUS_CHANNELS_WEIXIN_ALLOW_FROM"`
 }
 
 // InstanceToWeixin returns the WeixinConfig for a ChannelInstanceConfig of
 // type "weixin".
 func InstanceToWeixin(inst ChannelInstanceConfig) WeixinConfig {
 	return WeixinConfig{
-		Enabled:            inst.Enabled,
-		TokenRef:           inst.TokenRef,
-		AccountID:          inst.AccountID,
-		BaseURL:            inst.BaseURL,
-		CDNBaseURL:         inst.CDNBaseURL,
-		Proxy:              inst.Proxy,
-		AllowFrom:          inst.AllowFrom,
-		ReasoningChannelID: inst.ReasoningChannelID,
+		Enabled:    inst.Enabled,
+		TokenRef:   inst.TokenRef,
+		AccountID:  inst.AccountID,
+		BaseURL:    inst.BaseURL,
+		CDNBaseURL: inst.CDNBaseURL,
+		Proxy:      inst.Proxy,
+		AllowFrom:  inst.AllowFrom,
 	}
 }
 
@@ -647,7 +625,6 @@ type IRCConfig struct {
 	AllowFrom           FlexibleStringSlice `json:"allow_from"                      yaml:"-" env:"OMNIPUS_CHANNELS_IRC_ALLOW_FROM"`
 	GroupTrigger        GroupTriggerConfig  `json:"group_trigger,omitempty"         yaml:"-"`
 	Typing              TypingConfig        `json:"typing,omitempty"                yaml:"-"`
-	ReasoningChannelID  string              `json:"reasoning_channel_id"            yaml:"-"`
 }
 
 // InstanceToIRC returns the IRCConfig for a ChannelInstanceConfig of type
@@ -669,7 +646,6 @@ func InstanceToIRC(inst ChannelInstanceConfig) IRCConfig {
 		AllowFrom:           inst.AllowFrom,
 		GroupTrigger:        inst.GroupTrigger,
 		Typing:              inst.Typing,
-		ReasoningChannelID:  inst.ReasoningChannelID,
 	}
 }
 
@@ -687,7 +663,6 @@ type GoogleChatConfig struct {
 	GroupTrigger          GroupTriggerConfig  `json:"group_trigger,omitempty"            yaml:"-"`
 	Typing                TypingConfig        `json:"typing,omitempty"                   yaml:"-"`
 	Placeholder           PlaceholderConfig   `json:"placeholder,omitempty"              yaml:"-"`
-	ReasoningChannelID    string              `json:"reasoning_channel_id"               yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_REASONING_CHANNEL_ID"`
 }
 
 // InstanceToGoogleChat returns the GoogleChatConfig for a ChannelInstanceConfig
@@ -707,7 +682,6 @@ func InstanceToGoogleChat(inst ChannelInstanceConfig) GoogleChatConfig {
 		GroupTrigger:          inst.GroupTrigger,
 		Typing:                inst.Typing,
 		Placeholder:           inst.Placeholder,
-		ReasoningChannelID:    inst.ReasoningChannelID,
 	}
 }
 

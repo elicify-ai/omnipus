@@ -1050,12 +1050,11 @@ type ChannelInstanceConfig struct {
 	WorkspaceID string `json:"workspace_id,omitempty"`
 
 	// --- Common per-channel fields shared across multiple channel types ---
-	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	Typing             TypingConfig        `json:"typing,omitempty"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id,omitempty"`
-	Proxy              string              `json:"proxy,omitempty"`
+	AllowFrom    FlexibleStringSlice `json:"allow_from,omitempty"`
+	GroupTrigger GroupTriggerConfig  `json:"group_trigger,omitempty"`
+	Typing       TypingConfig        `json:"typing,omitempty"`
+	Placeholder  PlaceholderConfig   `json:"placeholder,omitempty"`
+	Proxy        string              `json:"proxy,omitempty"`
 	// token_ref is used by Telegram (bot token ref) and Weixin (account token ref).
 	TokenRef string `json:"token_ref,omitempty"`
 	// base_url is used by Telegram (API base URL) and Weixin (WeChat base URL).

@@ -31,8 +31,7 @@ The Telegram channel receives messages via long polling (30-second timeout) usin
         "throttle_seconds": 0,
         "min_growth_chars": 0
       },
-      "use_markdown_v2": false,
-      "reasoning_channel_id": ""
+      "use_markdown_v2": false
     }
   }
 }
@@ -54,7 +53,6 @@ The Telegram channel receives messages via long polling (30-second timeout) usin
 | `streaming.throttle_seconds` | int | No | Minimum seconds between streaming edits |
 | `streaming.min_growth_chars` | int | No | Minimum new characters required before issuing an edit |
 | `use_markdown_v2` | bool | No | Use Telegram MarkdownV2 formatting; default is HTML formatting |
-| `reasoning_channel_id` | string | No | Chat ID that receives reasoning/thought output from a secondary agent |
 
 ## Setup
 

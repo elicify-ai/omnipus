@@ -24,8 +24,7 @@ Omnipus connects to Discord as a bot using the [discordgo](https://github.com/bw
       "placeholder": {
         "enabled": false,
         "text": []
-      },
-      "reasoning_channel_id": ""
+      }
     }
   }
 }
@@ -40,7 +39,6 @@ Omnipus connects to Discord as a bot using the [discordgo](https://github.com/bw
 | `group_trigger` | object | No | Controls when the bot responds in guild channels. `mention_only: true` restricts responses to @-mentions; `prefixes` lists trigger prefixes. |
 | `typing` | object | No | `enabled: true` sends a typing indicator while the bot is processing. |
 | `placeholder` | object | No | `enabled: true` posts a placeholder message immediately; the bot edits it with the final reply. `text` is a list of placeholder strings (chosen randomly). |
-| `reasoning_channel_id` | string | No | Channel ID where extended reasoning traces are sent separately. |
 
 ## Setup
 

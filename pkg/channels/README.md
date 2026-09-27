@@ -87,7 +87,6 @@ type Channel interface {
     IsRunning() bool
     IsAllowed(senderID string) bool
     IsAllowedSender(sender bus.SenderInfo) bool
-    ReasoningChannelID() string
 }
 ```
 
@@ -137,11 +136,10 @@ base := channels.NewBaseChannel(
     cfg.Channels.Telegram.AllowFrom,              // Allow list (nil = allow all)
     channels.WithMaxMessageLength(4096),           // Platform character limit (runes)
     channels.WithGroupTrigger(cfg.Channels.Telegram.GroupTrigger),
-    channels.WithReasoningChannelID(cfg.Channels.Telegram.ReasoningChannelID),
 )
 ```
 
-Functional options (`pkg/channels/base.go:62-76`): `WithMaxMessageLength`, `WithGroupTrigger`, `WithReasoningChannelID`.
+Functional options (`pkg/channels/base.go`): `WithMaxMessageLength`, `WithGroupTrigger`.
 
 ### Key Methods
 
@@ -534,7 +532,6 @@ func NewMyChannel(cfg *config.Config, secrets credentials.SecretBundle, msgBus *
         myCfg.AllowFrom,
         channels.WithMaxMessageLength(4096),
         channels.WithGroupTrigger(myCfg.GroupTrigger),
-        channels.WithReasoningChannelID(myCfg.ReasoningChannelID),
     )
 
     return &MyChannel{
@@ -785,7 +782,6 @@ type Channel interface {
     IsRunning() bool
     IsAllowed(senderID string) bool
     IsAllowedSender(sender bus.SenderInfo) bool
-    ReasoningChannelID() string
 }
 
 // ===== Optional — discover at runtime via type assertion =====

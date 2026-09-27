@@ -82,7 +82,6 @@
         "YOUR_USER_ID"
       ],
       "use_markdown_v2": false,
-      "reasoning_channel_id": "",
       "streaming": {
         "enabled": true
       }
@@ -94,28 +93,24 @@
       "allow_from": [],
       "group_trigger": {
         "mention_only": false
-      },
-      "reasoning_channel_id": ""
+      }
     },
     "qq": {
       "enabled": false,
       "app_id": "YOUR_QQ_APP_ID",
       "app_secret": "YOUR_QQ_APP_SECRET",
-      "allow_from": [],
-      "reasoning_channel_id": ""
+      "allow_from": []
     },
     "maixcam": {
       "enabled": false,
       "host": "0.0.0.0",
       "port": 18790,
-      "allow_from": [],
-      "reasoning_channel_id": ""
+      "allow_from": []
     },
     "whatsapp": {
       "enabled": false,
       "session_store_path": "",
-      "allow_from": [],
-      "reasoning_channel_id": ""
+      "allow_from": []
     },
     "feishu": {
       "enabled": false,
@@ -132,7 +127,6 @@
           "Typing..."
         ]
       },
-      "reasoning_channel_id": "",
       "random_reaction_emoji": [],
       "is_lark": false
     },
@@ -140,15 +134,13 @@
       "enabled": false,
       "client_id": "YOUR_CLIENT_ID",
       "client_secret": "YOUR_CLIENT_SECRET",
-      "allow_from": [],
-      "reasoning_channel_id": ""
+      "allow_from": []
     },
     "slack": {
       "enabled": false,
       "bot_token": "xoxb-YOUR-BOT-TOKEN",
       "app_token": "xapp-YOUR-APP-TOKEN",
-      "allow_from": [],
-      "reasoning_channel_id": ""
+      "allow_from": []
     },
     "matrix": {
       "enabled": false,
@@ -169,7 +161,6 @@
           "Typing..."
         ]
       },
-      "reasoning_channel_id": "",
       "crypto_database_path": "",
       "crypto_passphrase": "YOUR_MATRIX_CRYPTO_PICKLE_KEY"
     },
@@ -178,8 +169,7 @@
       "channel_secret": "YOUR_LINE_CHANNEL_SECRET",
       "channel_access_token": "YOUR_LINE_CHANNEL_ACCESS_TOKEN",
       "webhook_path": "/webhook/line",
-      "allow_from": [],
-      "reasoning_channel_id": ""
+      "allow_from": []
     },
     "wecom": {
       "_comment": "WeCom AI Bot over WebSocket.",
@@ -188,8 +178,7 @@
       "secret": "YOUR_SECRET",
       "websocket_url": "wss://openws.work.weixin.qq.com",
       "send_thinking_message": true,
-      "allow_from": [],
-      "reasoning_channel_id": ""
+      "allow_from": []
     },
     "irc": {
       "enabled": false,
@@ -215,8 +204,7 @@
       },
       "typing": {
         "enabled": false
-      },
-      "reasoning_channel_id": ""
+      }
     }
   },
   "tools": {

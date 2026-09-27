@@ -56,7 +56,6 @@ func NewDingTalkChannel(
 	base := channels.NewBaseChannel("dingtalk", cfg, messageBus, cfg.AllowFrom,
 		channels.WithMaxMessageLength(20000),
 		channels.WithGroupTrigger(cfg.GroupTrigger),
-		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
 
 	return &DingTalkChannel{

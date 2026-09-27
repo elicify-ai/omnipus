@@ -132,7 +132,6 @@ func NewChannel(
 		cfg,
 		messageBus,
 		cfg.AllowFrom,
-		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
 
 	ch := &WeComChannel{

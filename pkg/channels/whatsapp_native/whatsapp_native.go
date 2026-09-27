@@ -173,7 +173,6 @@ func NewWhatsAppNativeChannel(
 	base := channels.NewBaseChannel("whatsapp_native", cfg, bus, cfg.AllowFrom,
 		channels.WithMaxMessageLength(65536),
 		channels.WithGroupTrigger(cfg.GroupTrigger),
-		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
 	if storePath == "" {
 		storePath = "whatsapp"

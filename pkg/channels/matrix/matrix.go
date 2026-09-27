@@ -250,7 +250,6 @@ func NewMatrixChannel(
 		cfg.AllowFrom,
 		channels.WithMaxMessageLength(65536),
 		channels.WithGroupTrigger(cfg.GroupTrigger),
-		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
 
 	return &MatrixChannel{

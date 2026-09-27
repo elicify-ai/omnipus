@@ -27,8 +27,7 @@
       "allow_from": null,
       "client_id": "",
       "enabled": false,
-      "group_trigger": {},
-      "reasoning_channel_id": ""
+      "group_trigger": {}
     },
     "discord": {
       "allow_from": null,
@@ -39,7 +38,6 @@
         "enabled": false
       },
       "proxy": "",
-      "reasoning_channel_id": "",
       "typing": {}
     },
     "feishu": {
@@ -51,8 +49,7 @@
       "placeholder": {
         "enabled": false
       },
-      "random_reaction_emoji": null,
-      "reasoning_channel_id": ""
+      "random_reaction_emoji": null
     },
     "irc": {
       "allow_from": null,
@@ -60,7 +57,6 @@
       "enabled": false,
       "group_trigger": {},
       "nick": "",
-      "reasoning_channel_id": "",
       "sasl_user": "",
       "server": "",
       "tls": false,
@@ -73,7 +69,6 @@
       "placeholder": {
         "enabled": false
       },
-      "reasoning_channel_id": "",
       "typing": {},
       "webhook_host": "",
       "webhook_path": "",
@@ -83,8 +78,7 @@
       "allow_from": null,
       "enabled": false,
       "host": "",
-      "port": 0,
-      "reasoning_channel_id": ""
+      "port": 0
     },
     "matrix": {
       "allow_from": null,
@@ -95,7 +89,6 @@
       "placeholder": {
         "enabled": false
       },
-      "reasoning_channel_id": "",
       "user_id": ""
     },
     "qq": {
@@ -105,7 +98,6 @@
       "group_trigger": {},
       "max_base64_file_size_mib": 0,
       "max_message_length": 0,
-      "reasoning_channel_id": "",
       "send_markdown": false
     },
     "slack": {
@@ -115,7 +107,6 @@
       "placeholder": {
         "enabled": false
       },
-      "reasoning_channel_id": "",
       "typing": {}
     },
     "telegram": {
@@ -127,7 +118,6 @@
         "enabled": false
       },
       "proxy": "",
-      "reasoning_channel_id": "",
       "streaming": {},
       "typing": {},
       "use_markdown_v2": false
@@ -136,7 +126,6 @@
       "allow_from": null,
       "bot_id": "",
       "enabled": false,
-      "reasoning_channel_id": "",
       "send_thinking_message": false
     },
     "weixin": {
@@ -144,15 +133,13 @@
       "base_url": "",
       "cdn_base_url": "",
       "enabled": false,
-      "proxy": "",
-      "reasoning_channel_id": ""
+      "proxy": ""
     },
     "whatsapp": {
       "allow_from": null,
       "bridge_url": "",
       "enabled": false,
       "group_trigger": {},
-      "reasoning_channel_id": "",
       "session_store_path": ""
     }
   },
