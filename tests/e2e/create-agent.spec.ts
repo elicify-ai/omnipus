@@ -1,31 +1,20 @@
 import { test, expect } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { E2E_MODEL } from './fixtures/e2e-model.js'
+import { selectCentralModel } from './fixtures/select-model.js'
 
 /**
  * Walk the create-agent wizard for each agent tier.
  */
 
-async function selectFirstModel(page: Page) {
-  // Main/Subagent use the searchable ModelSelector combobox.
-  const modelTrigger = page.getByTestId('wizard-model')
-  // Wait for the trigger to be the READY combobox, not merely visible.
-  //
-  // This spec spent weeks being misdiagnosed — first as OpenRouter latency,
-  // then as a provider-misconfiguration — because the model field used to be
-  // swapped for a non-interactive placeholder carrying this same test id
-  // while the provider catalog loaded (0.13s idle, measured 1.2-4.5s under a
-  // full shard). toBeVisible() passed on that placeholder, click() "succeeded"
-  // and did nothing, and the click was lost: when the catalog landed the real
-  // combobox replaced it with the popover still closed. The product bug is
-  // fixed (the trigger is now the real combobox in every state, with
-  // aria-busy while loading), and this assertion pins the READY state so a
-  // regression surfaces here as an honest timeout rather than a mystery.
-  await expect(modelTrigger).toHaveAttribute('role', 'combobox')
-  await expect(modelTrigger).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 })
-  await modelTrigger.click()
-  const firstOption = page.locator('[role="option"]').first()
-  await expect(firstOption).toBeVisible({ timeout: 15_000 })
-  await firstOption.click()
+async function selectCentralModelInWizard(page: Page) {
+  // Main/Subagent use the searchable ModelSelector combobox. The suite
+  // selects the CENTRAL e2e model (tests/e2e/e2e-model.json), never the
+  // first option — which model the wizard tests run on is the operator's
+  // one-line setting, and the shared helper asserts the trigger displays it
+  // after the pick. The full READY-combobox incident note lives in the
+  // helper (fixtures/select-model.ts::selectCentralModel).
+  await selectCentralModel(page, { triggerTestId: 'wizard-model' })
 }
 
 test.describe('create agent wizard', () => {
@@ -53,10 +42,13 @@ test.describe('create agent wizard', () => {
     const name = `E2E Test Agent ${Date.now()}`
     await page.getByTestId('wizard-name').fill(name)
     if (opts.type === 'subagent_3p') {
-      // External agents use a free-text model slug.
-      await page.getByTestId('wizard-model').fill('claude-sonnet-4-6')
+      // A well-formed external slug — the central e2e model
+      // (tests/e2e/e2e-model.json) — proves the free-text path accepts a
+      // properly-shaped slug, and the created subagent_3p agent is never
+      // used for a real chat turn in this file (wizard CRUD only).
+      await page.getByTestId('wizard-model').fill(E2E_MODEL)
     } else {
-      await selectFirstModel(page)
+      await selectCentralModelInWizard(page)
     }
     if (opts.type !== 'Main') {
       await page.getByTestId('wizard-description').fill('A test worker created by the E2E suite')
