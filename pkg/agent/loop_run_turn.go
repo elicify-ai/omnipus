@@ -1529,7 +1529,11 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 						logger.DebugCF("agent", "Streaming update error (client may have disconnected)", map[string]any{"error": err.Error()})
 					}
 				}
-			}, rt.onToolCallProgress)
+			}, rt.onToolCallProgress,
+				// WP-C will replace this placeholder with the real live
+				// reasoning-capture consumer of the new onReasoning callback;
+				// until then the gate stays off.
+				nil)
 			// Reconcile against the provider's final text. Two things
 			// need this: the few bytes the filter holds back mid-stream
 			// in case they start a marker split across SSE chunks, and

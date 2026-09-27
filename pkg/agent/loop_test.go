@@ -60,8 +60,6 @@ func (f *fakeChannel) IsAllowed(string) bool { return true }
 
 func (f *fakeChannel) IsAllowedSender(sender bus.SenderInfo) bool { return true }
 
-func (f *fakeChannel) ReasoningChannelID() string { return f.id }
-
 type fakeMediaChannel struct {
 	fakeChannel
 	sentMedia []bus.OutboundMediaMessage

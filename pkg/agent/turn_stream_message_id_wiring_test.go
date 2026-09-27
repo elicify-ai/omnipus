@@ -120,6 +120,7 @@ func (p *msgIDScriptedStreamProvider) ChatStream(
 	_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
 	onChunk func(accumulated string),
 	_ providers.OnToolCallProgress,
+	_ func(accumulated string),
 ) (*providers.LLMResponse, error) {
 	step, err := p.next()
 	if err != nil {

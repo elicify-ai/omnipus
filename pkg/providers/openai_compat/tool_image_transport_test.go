@@ -39,7 +39,7 @@ func TestToolImagesReachChatAndChatStreamTransportsInOrder(t *testing.T) {
 			p := mustNewProvider(t, "key", server.URL, "")
 			var err error
 			if streaming {
-				_, err = p.ChatStream(t.Context(), messages, nil, "model", nil, nil, nil)
+				_, err = p.ChatStream(t.Context(), messages, nil, "model", nil, nil, nil, nil)
 			} else {
 				_, err = p.Chat(t.Context(), messages, nil, "model", nil)
 			}

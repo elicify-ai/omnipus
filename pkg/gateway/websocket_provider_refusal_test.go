@@ -111,6 +111,7 @@ func (p *rateLimitedStreamingProvider) ChatStream(
 	_ map[string]any,
 	_ func(accumulated string),
 	_ providers.OnToolCallProgress,
+	_ func(accumulated string),
 ) (*providers.LLMResponse, error) {
 	p.calls.Add(1)
 	// No onChunk call: the provider refused before emitting a single token.

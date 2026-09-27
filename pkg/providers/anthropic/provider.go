@@ -142,6 +142,10 @@ func (p *Provider) Chat(
 // made the whole response a black box: no partial text, no tool-argument
 // progress, nothing to distinguish a model still working from one that had
 // hung. Delegated workers were killed on that ambiguity.
+//
+// onReasoning is accepted to satisfy providers.StreamingProvider but IGNORED
+// for now: real Anthropic thinking-text capture is its own work package
+// (WP-E/D5b) landing after this one.
 func (p *Provider) ChatStream(
 	ctx context.Context,
 	messages []Message,
@@ -150,6 +154,7 @@ func (p *Provider) ChatStream(
 	options map[string]any,
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
+	onReasoning func(accumulated string),
 ) (*LLMResponse, error) {
 	var opts []option.RequestOption
 	if p.tokenSource != nil {

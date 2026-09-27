@@ -75,7 +75,7 @@ func TestToolCallProgress_ReasoningOnlyStreamAdvancesTheTimestamp(t *testing.T) 
 	done := make(chan error, 1)
 	go func() {
 		_, streamErr := provider.ChatStream(t.Context(), []providers.Message{{Role: "user", Content: "hi"}},
-			nil, "test-model", nil, nil, ts.recordToolCallProgress)
+			nil, "test-model", nil, nil, ts.recordToolCallProgress, nil)
 		done <- streamErr
 	}()
 

@@ -68,7 +68,7 @@ func TestParseStreamResponse_ReasoningDeltasCountAsProgress(t *testing.T) {
 				t.Context(),
 				strings.NewReader(reasoningOnlyStream(chunks, tc.chunkJSON)),
 				func(acc string) { textCallbacks = append(textCallbacks, acc) },
-				func(p protocoltypes.ToolCallProgress) { progress = append(progress, p) }, nil)
+				func(p protocoltypes.ToolCallProgress) { progress = append(progress, p) }, nil, nil)
 			if err != nil {
 				t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 			}
@@ -119,7 +119,7 @@ func TestParseStreamResponse_ToolCallProgressCarriesReasoningTotal(t *testing.T)
 		t.Context(),
 		strings.NewReader(b.String()),
 		nil,
-		func(p protocoltypes.ToolCallProgress) { progress = append(progress, p) }, nil); err != nil {
+		func(p protocoltypes.ToolCallProgress) { progress = append(progress, p) }, nil, nil); err != nil {
 		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}
 
@@ -154,7 +154,7 @@ func TestParseStreamResponse_ContentOnlyStreamEmitsNoProgress(t *testing.T) {
 		t.Context(),
 		strings.NewReader(stream),
 		nil,
-		func(p protocoltypes.ToolCallProgress) { progress = append(progress, p) }, nil); err != nil {
+		func(p protocoltypes.ToolCallProgress) { progress = append(progress, p) }, nil, nil); err != nil {
 		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}
 	if len(progress) != 0 {

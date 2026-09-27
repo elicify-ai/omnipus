@@ -58,6 +58,7 @@ func (p *blockingStreamingProvider) ChatStream(
 	ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
 	onChunk func(accumulated string),
 	_ providers.OnToolCallProgress,
+	_ func(accumulated string),
 ) (*providers.LLMResponse, error) {
 	onChunk("Partial response before the cancel arrives...")
 	p.once.Do(func() { close(p.startedStreaming) })

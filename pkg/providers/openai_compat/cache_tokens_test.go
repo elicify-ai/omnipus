@@ -90,6 +90,7 @@ func TestChatStream_CachedTokensSeparatedFromPrompt(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
@@ -163,7 +164,7 @@ func TestChatStream_NoCachedTokens_PromptTokensUnchanged(t *testing.T) {
 	resp, err := p.ChatStream(
 		t.Context(),
 		[]Message{{Role: "user", Content: "No cache"}},
-		nil, "gpt-4o", nil, nil, nil,
+		nil, "gpt-4o", nil, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
