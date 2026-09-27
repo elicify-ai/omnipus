@@ -87,22 +87,46 @@ function activePanelId(): string | null {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Kill any dialog a previous test left pending BEFORE touching the panel
+  // state, and cancel it (resolve(false)) rather than proceed it —
+  // resolving `true` would complete the previous test's open-other
+  // transition and open the Browser panel as a reset side effect (the leak
+  // that made 'cancelling the discard prompt' pass alone but fail in the
+  // full file on GREEN). resolve(false) cancels: nothing proceeds. On the
+  // pre-GREEN tree the dialog never opens, so this branch is a no-op here —
+  // zero behavioural change vs the recorded baseline.
+  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(false)
   act(() => {
     useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1' })
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' } as never)
-    // Seed the panel open via whichever shape currently exists — the old
-    // `libraryPanel` slice today; the wave-1 `activePanel` slice once wired.
-    // Using setState with a loose cast keeps this file forward-compatible
-    // with either shape without pretending the new one already exists.
-    useUiStore.setState({ libraryPanel: { workspaceId: 'ws-1' } } as never)
+    // Reset EVERY panel-state key both store shapes have — the batch-3
+    // finding: `browserPanel`/`activePanel` leaked from the previous test
+    // (test 1's click replaces the panel, and later tests started from that
+    // state). No assertion weakened: the seeded open state below is what
+    // every test saw in its standalone run.
+    useUiStore.setState({
+      libraryPanel: null,
+      browserPanel: null,
+      activePanel: null,
+    } as never)
+    // Seed the Library open via whichever shape exists — the §8.1 single
+    // slice once wired, the retired `libraryPanel` slice on this pre-GREEN
+    // tree (what ChatControls reads today).
+    const s = useUiStore.getState() as unknown as { openPanel?: (id: string, ctx?: Record<string, unknown>) => void }
+    if (typeof s.openPanel === 'function') {
+      s.openPanel('library', { workspaceId: 'ws-1' })
+    } else {
+      useUiStore.setState({ libraryPanel: { workspaceId: 'ws-1' } } as never)
+    }
   })
   setLibraryEditorDirty(false)
-  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(true)
 })
 
 afterEach(() => {
+  // Cancel any dialog this test left pending — resolve(false), never true:
+  // the next test (or file) must not inherit a transition in flight.
   setLibraryEditorDirty(false)
-  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(true)
+  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(false)
 })
 
 describe('ChatControls — CRIT-001 leave guard on open-other (FR-013)', () => {
