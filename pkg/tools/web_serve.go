@@ -308,7 +308,7 @@ func (t *WebServeTool) Description() string {
 		"in-app login and root-absolute assets work there. When isolated_url is absent (https, an " +
 		"IP address, or any other hostname), open url. If the built-in browser panel refuses the " +
 		"label URL, open url instead: that happens on a port-mapped install, where the label carries " +
-		"the canonical port rather than the panel's listener port, and on a portless label URL.\n" +
+		"the canonical port rather than the panel's listener port.\n" +
 		"In Mode 2 (the url fallback) every asset must be relative (./ or ../) or live under the " +
 		"token prefix. A root-absolute asset such as /assets/app.js loads outside the preview and " +
 		"the page renders blank. For a bundler, set a relative base (Vite base: './') and reference " +
