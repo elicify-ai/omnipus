@@ -300,8 +300,22 @@ func (t *WebServeTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *WebServeTool) Category() ToolCategory { return CategoryWeb }
 
 func (t *WebServeTool) Description() string {
-	return "Serve a directory or run a dev server from the agent workspace and get back a " +
-		"/preview/<agent>/<token>/ URL.\n" +
+	return "Serve a directory or run a dev server from the agent workspace and get back preview URLs.\n" +
+		"The result always includes path and url: the Mode 2 fallback, on the gateway's own origin, " +
+		"shaped {origin}/preview/<agent>/<token>/. On an http://localhost origin (with or without a " +
+		"port) the result also includes isolated_url — Mode 1, preferred when it is present. That " +
+		"URL is the app's own origin, http://<label>.localhost[:port]/, so storage, cookies, forms, " +
+		"in-app login and root-absolute assets work there. When isolated_url is absent (https, an " +
+		"IP address, or any other hostname), open url. If the built-in browser panel refuses the " +
+		"label URL, open url instead: that happens on a port-mapped install, where the label carries " +
+		"the canonical port rather than the panel's listener port, and on a portless label URL.\n" +
+		"In Mode 2 (the url fallback) every asset must be relative (./ or ../) or live under the " +
+		"token prefix. A root-absolute asset such as /assets/app.js loads outside the preview and " +
+		"the page renders blank. For a bundler, set a relative base (Vite base: './') and reference " +
+		"assets relatively. Mode 1 does not need that — the app owns the origin.\n" +
+		"A blank preview is usually a content-security-policy block, and those show up only in the " +
+		"browser console. Open the preview in the built-in browser panel and read the console " +
+		"before changing the app.\n" +
 		"Static mode (no command): registers the directory as a static website. Re-serving the SAME " +
 		"directory renews the same URL; re-serving a DIFFERENT directory REPLACES the previous " +
 		"registration and invalidates any URL you already gave the user — tell the user the new URL " +
@@ -312,8 +326,8 @@ func (t *WebServeTool) Description() string {
 		"'yarn dev' (plus any operator-configured extensions). The command must start with exactly " +
 		"one of these; a path-prefixed binary (e.g. '/usr/bin/next dev') is always rejected.\n" +
 		"Both modes are refused (with an error, not a broken link) when gateway.preview_enabled is " +
-		"off, or when the gateway cannot resolve its own public URL (bound to a wildcard address " +
-		"with no gateway.public_url configured)."
+		"off, when the gateway cannot resolve its own public URL (bound to a wildcard address " +
+		"with no gateway.public_url configured), or when that origin is a wildcard or trailing-dot host."
 }
 
 func (t *WebServeTool) Parameters() map[string]any {
