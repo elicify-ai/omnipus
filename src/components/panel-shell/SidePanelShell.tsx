@@ -160,7 +160,7 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
   const handleExpand = async () => {
     setExpandBlocked(false)
     const registered = expandActionRef.current
-    const expandAction = registered?.id === activePanel?.id ? registered.action : undefined
+    const expandAction = registered !== null && registered.id === activePanel?.id ? registered.action : undefined
     const result = await shell.requestExpand(expandAction)
     if (result === 'blocked') setExpandBlocked(true)
   }
