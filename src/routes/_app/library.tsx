@@ -60,6 +60,7 @@ import { z } from 'zod'
 import { LibraryExplorer } from '@/components/library/LibraryExplorer'
 import { confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
 import { announceLibraryPopoutClosed, announceLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
+import { announcePanelTabPresence, type PanelPresenceAnnouncement } from '@/lib/panelTabPresence'
 
 const librarySearchSchema = z.object({
   workspace: z.string().min(1).optional(),
@@ -84,6 +85,7 @@ function LibraryRoute() {
   const { workspace, path, folder } = Route.useSearch()
   const navigate = useNavigate()
   const currentWorkspaceRef = useRef<string | undefined>(workspace)
+  const presenceAnnouncementRef = useRef<PanelPresenceAnnouncement | null>(null)
 
   // The unsaved-edits guard, extended to the one navigation LibraryExplorer's
   // own handlers cannot see: the browser's back/forward buttons. In-app
@@ -117,6 +119,15 @@ function LibraryRoute() {
     return () => window.removeEventListener('pagehide', handlePageHide)
   }, [])
 
+  useEffect(() => {
+    const announcement = announcePanelTabPresence({ panelId: 'library', workspaceId: workspace })
+    presenceAnnouncementRef.current = announcement
+    return () => {
+      if (presenceAnnouncementRef.current === announcement) presenceAnnouncementRef.current = null
+      announcement.stop()
+    }
+  }, [])
+
   return (
     <LibraryExplorer
       // No `key` here, deliberately. It used to be `key={workspace ?? 'root'}`
@@ -141,6 +152,7 @@ function LibraryRoute() {
       onWorkspaceChange={(id) => {
         currentWorkspaceRef.current = id ?? undefined
         announceLibraryWorkspaceChanged(id ?? undefined)
+        presenceAnnouncementRef.current?.update({ panelId: 'library', workspaceId: id ?? undefined })
       }}
       // onClose omitted: closing "the Library" from a standalone tab means
       // closing the tab itself, not returning to some other in-app view —

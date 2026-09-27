@@ -22,6 +22,7 @@ import { useVersionCheck } from '@/hooks/useVersionCheck'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { PANEL_TAKEOVER_PX } from '@/components/panel-shell/panelWidth'
 import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
+import { PanelTabPresenceBridge } from '@/components/panel-shell/PanelTabPresenceBridge'
 import { panels } from '@/components/panel-shell/registry'
 import { computeAppMetrics } from './appShellViewport'
 
@@ -183,6 +184,10 @@ export function AppShell() {
       >
         Skip to content
       </a>
+
+      {/* Keeps the cross-tab presence list live before any panel entry point
+          can open a duplicate docked surface (SP-18/SP-30). */}
+      <PanelTabPresenceBridge />
 
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />

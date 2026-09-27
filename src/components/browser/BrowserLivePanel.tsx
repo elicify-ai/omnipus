@@ -5,7 +5,7 @@ import { flushSync } from 'react-dom'
 import { useUiStore } from '@/store/ui'
 import { watchPopoutClosed } from '@/lib/browserLiveHandoff'
 import type { PanelContentProps } from '@/components/panel-shell/types'
-import { panelIdentityKey, resolvePanelOpen } from '@/lib/panelTabPresence'
+import { focusPanelTab, getPanelTabPresence, panelIdentityKey, resolvePanelOpen } from '@/lib/panelTabPresence'
 import { BrowserLiveView } from './BrowserLiveView'
 
 type OwnedPopout = {
@@ -98,7 +98,7 @@ export function BrowserLivePanel({ shellProps }: BrowserLivePanelProps = {}) {
     const outcome = resolvePanelOpen({
       identity,
       handles: browserPopoutHandles,
-      presence: [],
+      presence: getPanelTabPresence(),
       open: () => {
         try {
           return window.open('about:blank', '_blank')
@@ -117,7 +117,21 @@ export function BrowserLivePanel({ shellProps }: BrowserLivePanelProps = {}) {
       })
       return false
     }
-    if (outcome.kind === 'focused' || outcome.kind === 'affordance') {
+    if (outcome.kind === 'affordance') {
+      useUiStore.getState().addToast({
+        message: 'The Browser is already open in another tab — switch.',
+        variant: 'default',
+        duration: 10_000,
+        action: {
+          label: 'Switch',
+          onClick: () => {
+            focusPanelTab(identity)
+          },
+        },
+      })
+      return true
+    }
+    if (outcome.kind === 'focused') {
       return true
     }
 

@@ -47,7 +47,14 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useUiStore } from '@/store/ui'
 import { onLibraryPopoutClosed, onLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
-import { panelIdentityKey, resolvePanelOpen } from '@/lib/panelTabPresence'
+import {
+  focusPanelTab,
+  forgetPanelTabHandle,
+  getPanelTabPresence,
+  panelIdentityKey,
+  registerPanelTabHandle,
+  resolvePanelOpen,
+} from '@/lib/panelTabPresence'
 import { watchPopoutClosed } from '@/lib/browserLiveHandoff'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import type { PanelContentProps } from '@/components/panel-shell/types'
@@ -56,6 +63,7 @@ import { LibraryExplorer } from './LibraryExplorer'
 type OwnedLibraryPopout = {
   window: Window
   identityKey: string
+  workspaceId?: string
   stop: () => void
 }
 
@@ -101,9 +109,12 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
       if (!owned) return
       const nextKey = panelIdentityKey({ panelId: 'library', workspaceId })
       if (nextKey === owned.identityKey) return
+      forgetPanelTabHandle({ panelId: 'library', workspaceId: owned.workspaceId }, owned.window)
       libraryPopoutHandles.delete(owned.identityKey)
       libraryPopoutHandles.set(nextKey, owned.window)
+      registerPanelTabHandle({ panelId: 'library', workspaceId }, owned.window)
       owned.identityKey = nextKey
+      owned.workspaceId = workspaceId
     })
   }, [])
 
@@ -117,6 +128,7 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
       if (!owned) return
       ownedPopoutRef.current = null
       owned.stop()
+      forgetPanelTabHandle({ panelId: 'library', workspaceId: owned.workspaceId }, owned.window)
       libraryPopoutHandles.delete(owned.identityKey)
       const active = useUiStore.getState().activePanel
       if (active !== null && active.id !== 'library') return
@@ -209,7 +221,7 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     const outcome = resolvePanelOpen({
       identity,
       handles: libraryPopoutHandles,
-      presence: presenceRef.current,
+      presence: [...presenceRef.current, ...getPanelTabPresence()],
       open: () => window.open(`/#/library${qs ? `?${qs}` : ''}`, '_blank'),
     })
 
@@ -222,8 +234,15 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     }
     if (outcome.kind === 'affordance') {
       useUiStore.getState().addToast({
-        message: 'The Library is already open in another tab.',
+        message: 'The Library is already open in another tab — switch.',
         variant: 'default',
+        duration: 10_000,
+        action: {
+          label: 'Switch',
+          onClick: () => {
+            focusPanelTab(identity)
+          },
+        },
       })
       return true
     }
@@ -235,6 +254,7 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     if (!popup) return false
     try {
       popup.opener = null
+      registerPanelTabHandle(identity, popup)
     } catch {
       libraryPopoutHandles.delete(identityKey)
       popup.close()
@@ -247,12 +267,14 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     const owned: OwnedLibraryPopout = {
       window: popup,
       identityKey,
+      workspaceId,
       stop: () => {},
     }
     ownedPopoutRef.current = owned
     owned.stop = watchPopoutClosed(popup, () => {
       if (ownedPopoutRef.current !== owned) return
       ownedPopoutRef.current = null
+      forgetPanelTabHandle({ panelId: 'library', workspaceId: owned.workspaceId }, popup)
       libraryPopoutHandles.delete(owned.identityKey)
       presenceRef.current = []
       const known = lastKnownPopoutWorkspaceRef.current

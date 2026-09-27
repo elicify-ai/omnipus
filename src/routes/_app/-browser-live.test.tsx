@@ -22,6 +22,15 @@ const { mockBrowserLiveViewProps } = vi.hoisted(() => ({
   mockBrowserLiveViewProps: vi.fn(),
 }))
 
+const { mockAnnouncePanelTabPresence, mockStopPanelTabPresence } = vi.hoisted(() => ({
+  mockAnnouncePanelTabPresence: vi.fn(),
+  mockStopPanelTabPresence: vi.fn(),
+}))
+
+vi.mock('@/lib/panelTabPresence', () => ({
+  announcePanelTabPresence: mockAnnouncePanelTabPresence,
+}))
+
 vi.mock('@/components/browser/BrowserLiveView', () => ({
   BrowserLiveView: (props: { onClose?: () => void; fillContainer?: boolean; sessionId: string; agentId: string }) => {
     mockBrowserLiveViewProps(props)
@@ -49,6 +58,7 @@ const BrowserLiveRoute = (Route as unknown as { component: React.ComponentType }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockAnnouncePanelTabPresence.mockReturnValue({ update: vi.fn(), stop: mockStopPanelTabPresence })
   mockSearch = { session: 's1', agent: 'a1' }
   // The real onClose handler calls window.close() — jsdom's real
   // implementation actually tears down the window (poisoning `document` for
@@ -75,23 +85,23 @@ describe('BrowserLiveRoute — BUG 1: fillContainer wiring', () => {
 
 describe('BrowserLiveRoute — owner-controlled handover', () => {
   it('closes its own window without broadcasting a premature restore', () => {
-    const channel = vi.spyOn(globalThis, 'BroadcastChannel')
     render(<BrowserLiveRoute />)
     fireEvent.click(screen.getByRole('button', { name: 'mock-close' }))
     expect(window.close).toHaveBeenCalledExactlyOnceWith()
     expect(mockNavigate).toHaveBeenCalledExactlyOnceWith({ to: '/' })
-    expect(channel).not.toHaveBeenCalled()
-    channel.mockRestore()
+    expect(mockAnnouncePanelTabPresence).toHaveBeenCalledWith({
+      panelId: 'browser',
+      sessionId: 's1',
+      agentId: 'a1',
+    })
   })
-  it('does not broadcast restoration on reload/pagehide', () => {
-    const channel = vi.spyOn(globalThis, 'BroadcastChannel')
+  it('ends presence on route unmount without triggering owner restoration', () => {
     const mounted = render(<BrowserLiveRoute />)
     fireEvent(window, new Event('pagehide'))
-    expect(channel).not.toHaveBeenCalled()
     expect(window.close).not.toHaveBeenCalled()
-    mounted.unmount(); fireEvent(window, new Event('pagehide'))
-    expect(channel).not.toHaveBeenCalled()
-    channel.mockRestore()
+    mounted.unmount()
+    expect(mockStopPanelTabPresence).toHaveBeenCalledOnce()
+    expect(mockNavigate).not.toHaveBeenCalled()
   })
   it('does not mount a viewer without session and agent', () => {
     mockSearch = {}
