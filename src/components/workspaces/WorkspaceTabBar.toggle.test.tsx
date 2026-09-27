@@ -119,7 +119,15 @@ beforeEach(() => {
   mockNavigate.mockClear()
   mockPathname = '/workspaces/ws-1/chat'
   act(() => {
-    useUiStore.setState({ libraryPanel: null, browserPanel: null } as never)
+    // Reset the panel fields this pack reads (CHECK finding: `activePanel`
+    // leaked between tests — it was missing from the reset while tests 4/5
+    // click the Library entry, so a GREEN-side open would leak into the next
+    // test). No assertion weakened: every expectation is unchanged.
+    useUiStore.setState({
+      libraryPanel: null,
+      browserPanel: null,
+      activePanel: null,
+    } as never)
   })
 })
 
