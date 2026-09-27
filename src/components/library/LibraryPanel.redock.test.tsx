@@ -86,7 +86,7 @@ function makeShellProps(context: Record<string, unknown>): { shellProps: ShellEx
   return {
     shellProps: {
       context,
-      close: () => useUiStore.getState().closePanel(),
+      close: () => s81().closePanel(),
       expand: () => {},
       registerExpand: (action) => {
         registeredExpand = action
@@ -103,7 +103,7 @@ function invokeShellExpand(): boolean {
   let opened = false
   act(() => {
     opened = registeredExpand?.() ?? false
-    if (opened) useUiStore.getState().closePanel()
+    if (opened) s81().closePanel()
   })
   return opened
 }
