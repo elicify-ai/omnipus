@@ -846,7 +846,7 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		// pre-dequeue guard failure and stop retrying immediately instead of
 		// re-running the same restored turn from scratch.
 		al.steering.prependItemsScope(actualScope, consumedItems)
-		return "", fmt.Errorf("%w: %v", errContinuePostDequeueFailure, err)
+		return "", fmt.Errorf("%w: %w", errContinuePostDequeueFailure, err)
 	}
 	return resp, nil
 }

@@ -375,7 +375,14 @@ func TestAgentLoop_Continue_NilAgent_MustNotDiscardDequeuedMessages(t *testing.T
 // call ensureHooksInitialized at all — only Continue
 // (pkg/agent/steering.go) and ProcessDirectWithChannel (pkg/agent/loop.go)
 // do. This is independent of Bug 1 and Bug 2's fix state.
-func TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAbandonAndNotify(t *testing.T) {
+// setupPersistentContinueFailureFixture builds the config, agent loop and
+// continuation target TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAbandonAndNotify
+// needs — a broken-hook config that makes Continue fail permanently and
+// deterministically — and confirms the failure mechanism is real and
+// reachable via Continue's own call path before the test relies on it.
+// Extracted (structure only, no assertion changed) to keep the test function
+// itself under the repo's function-length budget.
+func setupPersistentContinueFailureFixture(t *testing.T) (*AgentLoop, *bus.MessageBus, bus.InboundMessage, *continuationTarget) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -421,51 +428,59 @@ func TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAband
 			"hook name) for this test's failure mechanism to be meaningful")
 	}
 
-	w := newSessionWorker(target.SessionKey, al, func() {})
+	return al, msgBus, msg, target
+}
 
-	// Harness fix (this was the actual cause of this test's stray RED — not
-	// the implementation, which backend-lead independently proved correct
-	// with a throwaway scratch test): enqueuing the steering message BEFORE
-	// starting the turn (the original fixture) let loop_run_turn.go's own
-	// pre-existing initial-steering-poll pick the message up and inject it
-	// directly into turn 1 itself — confirmed via the log line "Injected
-	// steering message into context content_len=39 iteration=1 ...
-	// turn_id=mia-turn-1" (39 = the exact byte length of the enqueued string
-	// below). By the time processTurn's POST-turn drain loop ran, the queue
-	// was already empty, so the retry/abandon-and-notify path this test
-	// exists to prove was never exercised.
-	//
-	// A first attempt at fixing this adapted lateSteeringProvider
-	// (steering_test.go)'s blocking-first-Chat-call gate, enqueuing while
-	// turn 1's own provider call was in flight — the same technique
-	// TestAgentLoop_Run_AutoContinuesLateSteeringMessage uses. That
-	// reproduces a DIFFERENT swallow, empirically confirmed by an actual
-	// run: runTurn's own inner mechanism ("Steering arrived after direct LLM
-	// response; continuing turn", loop_run_turn.go) sees the message the
-	// moment the blocked call is released and consumes it as iteration 2 of
-	// the SAME turn (turn_id unchanged, iterations_total=2) — never reaching
-	// processTurn's OUTER drain-tail loop at all, so Continue() was never
-	// even called. That is in fact the exact mechanism
-	// TestAgentLoop_Run_AutoContinuesLateSteeringMessage itself exercises
-	// (its own assertions never distinguish an in-turn continuation from a
-	// separate post-turn Continue() call) — it is not a technique that can
-	// prove THIS test's target behavior, which lives strictly inside
-	// processTurn's own `for !w.closeSteeringWhenDrained(...)` loop, reached
-	// only once runTurn has fully finished and decided not to re-loop.
-	//
-	// The correct synchronization point is therefore AFTER runTurn's
-	// iteration loop has made its last steering-continuation decision — which
-	// is exactly when EventKindTurnEnd fires (loop.go: a defer registered
-	// before turnLoop, so LIFO-last to run, right as runTurn is about to
-	// return). EventBus.SetSyncTap (eventbus.go) is an existing production
-	// hook, built for precisely this: it runs synchronously on the emitting
-	// goroutine and blocks Emit until the tap returns. Installing a tap that
-	// blocks on the first EventKindTurnEnd lets this test enqueue strictly
-	// after turn 1's own iteration logic is done (so the inner mechanism
-	// above can no longer see it) and strictly before processTurn's
-	// drain-tail loop gets to run (runTurn/processMessage has not yet
-	// returned to processTurn) — the ordering the design note needs,
-	// guaranteed by a real block, never a sleep.
+// runPersistentContinueFailureDrainTurn drives processTurn for
+// TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAbandonAndNotify
+// and returns the wall-clock time from dispatch to return. Extracted
+// (structure only, no assertion changed) to keep the test function itself
+// under the repo's function-length budget.
+//
+// Harness fix (this was the actual cause of this test's stray RED — not
+// the implementation, which backend-lead independently proved correct
+// with a throwaway scratch test): enqueuing the steering message BEFORE
+// starting the turn (the original fixture) let loop_run_turn.go's own
+// pre-existing initial-steering-poll pick the message up and inject it
+// directly into turn 1 itself — confirmed via the log line "Injected
+// steering message into context content_len=39 iteration=1 ...
+// turn_id=mia-turn-1" (39 = the exact byte length of the enqueued string
+// below). By the time processTurn's POST-turn drain loop ran, the queue
+// was already empty, so the retry/abandon-and-notify path this test
+// exists to prove was never exercised.
+//
+// A first attempt at fixing this adapted lateSteeringProvider
+// (steering_test.go)'s blocking-first-Chat-call gate, enqueuing while
+// turn 1's own provider call was in flight — the same technique
+// TestAgentLoop_Run_AutoContinuesLateSteeringMessage uses. That
+// reproduces a DIFFERENT swallow, empirically confirmed by an actual
+// run: runTurn's own inner mechanism ("Steering arrived after direct LLM
+// response; continuing turn", loop_run_turn.go) sees the message the
+// moment the blocked call is released and consumes it as iteration 2 of
+// the SAME turn (turn_id unchanged, iterations_total=2) — never reaching
+// processTurn's OUTER drain-tail loop at all, so Continue() was never
+// even called. That is in fact the exact mechanism
+// TestAgentLoop_Run_AutoContinuesLateSteeringMessage itself exercises
+// (its own assertions never distinguish an in-turn continuation from a
+// separate post-turn Continue() call) — it is not a technique that can
+// prove THIS test's target behavior, which lives strictly inside
+// processTurn's own `for !w.closeSteeringWhenDrained(...)` loop, reached
+// only once runTurn has fully finished and decided not to re-loop.
+//
+// The correct synchronization point is therefore AFTER runTurn's
+// iteration loop has made its last steering-continuation decision — which
+// is exactly when EventKindTurnEnd fires (loop.go: a defer registered
+// before turnLoop, so LIFO-last to run, right as runTurn is about to
+// return). EventBus.SetSyncTap (eventbus.go) is an existing production
+// hook, built for precisely this: it runs synchronously on the emitting
+// goroutine and blocks Emit until the tap returns. Installing a tap that
+// blocks on the first EventKindTurnEnd lets this test enqueue strictly
+// after turn 1's own iteration logic is done (so the inner mechanism
+// above can no longer see it) and strictly before processTurn's
+// drain-tail loop gets to run (runTurn/processMessage has not yet
+// returned to processTurn) — the ordering the design note needs,
+// guaranteed by a real block, never a sleep.
+func runPersistentContinueFailureDrainTurn(t *testing.T, al *AgentLoop, w *sessionWorker, msg bus.InboundMessage, target *continuationTarget) time.Duration {
 	turnEndReached := make(chan struct{})
 	releaseTurnEnd := make(chan struct{})
 	var tapOnce sync.Once
@@ -512,7 +527,13 @@ func TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAband
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for processTurn to return")
 	}
-	elapsed := time.Since(start)
+	return time.Since(start)
+}
+
+func TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAbandonAndNotify(t *testing.T) {
+	al, msgBus, msg, target := setupPersistentContinueFailureFixture(t)
+	w := newSessionWorker(target.SessionKey, al, func() {})
+	elapsed := runPersistentContinueFailureDrainTurn(t, al, w, msg, target)
 
 	// (i) Bounded: terminates within a generous ceiling (not infinite/hung),
 	// and is not the near-instant single failed check a zero-retry

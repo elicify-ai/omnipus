@@ -652,51 +652,9 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 			})
 
 		// Exit (a) (design note "Recommended design"): bounded retry, then
-		// fail loud. Post Bug-1/Bug-2 fixes, a same-session GetActiveTurnBySession
-		// collision here is an invariant violation, not an expected transient
-		// state — the realistic failure causes are ensureHooksInitialized,
-		// ensureMCPInitialized (possibly transient) or agentForSession
-		// returning nil (deterministic/permanent). Not classifying by cause:
-		// a uniform bounded retry is simpler to review and just as safe.
-		var continued string
-		var continueErr error
-		var attemptsMade int
-	retryLoop:
-		for attempt := 0; attempt < continueDrainMaxRetries; attempt++ {
-			attemptsMade = attempt + 1
-			continued, continueErr = al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
-			if continueErr == nil {
-				break
-			}
-			// Gate finding, CRITICAL: a POST-dequeue failure means Continue
-			// already ran runTurn's ordinary, tool-capable turn pipeline (the
-			// same one every other turn uses) against the dequeued
-			// message(s) before it errored — not a cheap pre-flight guard.
-			// Retrying that here at the outer drain-loop level would
-			// re-invoke the same tool-capable pipeline from scratch against
-			// identical restored content, risking re-firing a tool call that
-			// already succeeded inside the failed attempt — break out now
-			// and let abandonQueuedSteering below dequeue-and-report it
-			// straight away instead. The four PRE-dequeue causes (active-turn
-			// guard, hooks/MCP init, agentForSession==nil) never call runTurn
-			// at all, so they have no such risk and correctly keep the
-			// existing bounded-retry-with-backoff behavior.
-			if errors.Is(continueErr, errContinuePostDequeueFailure) {
-				break
-			}
-			if attempt < len(continueDrainBackoff) {
-				// Gate finding, MEDIUM: select on ctx.Done() so a Close()
-				// cancellation mid-retry does not force the drain loop to
-				// sit through the whole remaining backoff schedule before
-				// noticing — matches AgentLoop.Close()'s own 5s
-				// worker-cancellation budget instead of fighting it.
-				select {
-				case <-time.After(continueDrainBackoff[attempt]):
-				case <-ctx.Done():
-					break retryLoop
-				}
-			}
-		}
+		// fail loud. See continueDrainRetry's own doc comment for why a
+		// uniform bounded retry is simpler to review and just as safe here.
+		continued, attemptsMade, continueErr := w.continueDrainRetry(ctx, target)
 		if continueErr != nil {
 			w.abandonQueuedSteering(ctx, target, continueErr, attemptsMade)
 			return
@@ -712,6 +670,55 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		al.publishResponseIfNeeded(ctx, activeAgent, target.Channel, target.ChatID, finalResponse)
 		published = true
 	}
+}
+
+// continueDrainRetry is processTurn's drain-loop bounded-retry step (design
+// note "Recommended design", exit (a)): repeatedly calls al.Continue for one
+// drained steering item until it succeeds, exhausts continueDrainMaxRetries,
+// or hits a post-dequeue failure. Post Bug-1/Bug-2 fixes, a same-session
+// GetActiveTurnBySession collision here is an invariant violation, not an
+// expected transient state — the realistic failure causes are
+// ensureHooksInitialized, ensureMCPInitialized (possibly transient) or
+// agentForSession returning nil (deterministic/permanent). Not classifying by
+// cause: a uniform bounded retry is simpler to review and just as safe.
+//
+// Gate finding, CRITICAL: a POST-dequeue failure (errContinuePostDequeueFailure)
+// means Continue already ran runTurn's ordinary, tool-capable turn pipeline
+// (the same one every other turn uses) against the dequeued message(s)
+// before it errored — not a cheap pre-flight guard. Retrying that here would
+// re-invoke the same tool-capable pipeline from scratch against identical
+// restored content, risking re-firing a tool call that already succeeded
+// inside the failed attempt — this returns immediately instead, so the
+// caller's abandonQueuedSteering can dequeue-and-report it straight away.
+// The four PRE-dequeue causes (active-turn guard, hooks/MCP init,
+// agentForSession==nil) never call runTurn at all, so they have no such risk
+// and correctly keep the bounded-retry-with-backoff behavior below.
+func (w *sessionWorker) continueDrainRetry(ctx context.Context, target *continuationTarget) (continued string, attemptsMade int, continueErr error) {
+	al := w.parent
+retryLoop:
+	for attempt := 0; attempt < continueDrainMaxRetries; attempt++ {
+		attemptsMade = attempt + 1
+		continued, continueErr = al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+		if continueErr == nil {
+			break
+		}
+		if errors.Is(continueErr, errContinuePostDequeueFailure) {
+			break
+		}
+		if attempt < len(continueDrainBackoff) {
+			// Gate finding, MEDIUM: select on ctx.Done() so a Close()
+			// cancellation mid-retry does not force the drain loop to sit
+			// through the whole remaining backoff schedule before noticing —
+			// matches AgentLoop.Close()'s own 5s worker-cancellation budget
+			// instead of fighting it.
+			select {
+			case <-time.After(continueDrainBackoff[attempt]):
+			case <-ctx.Done():
+				break retryLoop
+			}
+		}
+	}
+	return continued, attemptsMade, continueErr
 }
 
 // abandonQueuedSteering is processTurn's drain-loop failure path (design note
