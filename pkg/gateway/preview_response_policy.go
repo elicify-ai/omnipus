@@ -125,8 +125,10 @@ func applyPreviewResponseCORS(h http.Header) {
 //     segments, including %2e, are removed BEFORE the prefix check — Go's
 //     ResolveReference leaves ".." in some relative merges, so the path is
 //     path.Clean'd as well. 502 only when that normalised path is not
-//     alias-origin + in-prefix (rows 6–7). An in-prefix "feat/../next"
-//     emits raw (rows 1, 10, 11);
+//     alias-origin + in-prefix (rows 6–7). An in-prefix value — dot-segment
+//     or not — emits its RESOLVED, normalised form in the raw value's own
+//     relative/absolute shape (rows 1, 10, 11): what is checked is what is
+//     emitted (DS-2's "Resolved origin/path" column);
 //  2. else a raw root-relative value (not protocol-relative "//") whose
 //     first segment is a gateway namespace → 502 (row 2; see
 //     previewReservedRootSegments);
@@ -170,7 +172,8 @@ func applyPreviewRedirectRule(
 	decodedPrefix := previewPrefixDecoded(prefix)
 	resolved := previewResolveLocation(clientBase, ref)
 	if previewURLOnAliasOrigin(resolved, clientOrigin) && previewNormalisedInPrefix(resolved, decodedPrefix) {
-		return // emit raw unchanged
+		previewEmitLocation(resp, resolved, ref.IsAbs())
+		return
 	}
 
 	if !previewRawRootRelative(raw, ref) {
@@ -189,10 +192,31 @@ func applyPreviewRedirectRule(
 	}
 	reResolved := previewResolveLocation(clientBase, reRef)
 	if previewURLOnAliasOrigin(reResolved, clientOrigin) && previewNormalisedInPrefix(reResolved, decodedPrefix) {
-		resp.Header.Set("Location", reRooted)
+		previewEmitLocation(resp, reResolved, false) // reRooted is root-relative by construction
 		return
 	}
 	previewRedirectRefused(resp)
+}
+
+// previewEmitLocation writes the RESOLVED, normalised Location the verdict
+// just cleared (DS-2's "Resolved origin/path" column: what is checked is
+// what is emitted — a raw in-prefix dot-segment value emits resolved, not
+// raw). The raw value's form is preserved: an absolute Location stays
+// absolute (rows 10–11), a relative one stays root-relative (rows 1, 5);
+// query and fragment survive. When normalisation left the path unchanged
+// the original wire encoding is kept byte-for-byte (EscapedPath honours the
+// parsed RawPath — a percent-encoded agent id emits as the gateway mints
+// it); only a dot-segment-resolved path is re-encoded.
+func previewEmitLocation(resp *http.Response, resolved *url.URL, absolute bool) {
+	out := *resolved
+	if cleaned := previewNormalisedPath(&out); cleaned != out.Path {
+		out.Path = cleaned
+		out.RawPath = "" // force re-encode: the parsed encoding names the raw dot-segment path
+	}
+	if !absolute {
+		out.Scheme, out.Host, out.User = "", "", nil
+	}
+	resp.Header.Set("Location", out.String())
 }
 
 // previewResolveLocation resolves ref against the request URL. A nil base
@@ -214,19 +238,29 @@ func previewPrefixDecoded(prefix string) string {
 	return decoded
 }
 
-// previewNormalisedInPrefix reports whether u's path, after dot-segment
-// removal, is the decoded prefix or under it. path.Clean (not filepath) so
-// a backslash stays a character — URL paths are slash-separated on every OS,
+// previewNormalisedPath returns u's path with dot segments removed — the ONE
+// normalisation both the prefix check and the emit use (previewEmitLocation),
+// so what is checked is what is emitted. path.Clean (not filepath) so a
+// backslash stays a character — URL paths are slash-separated on every OS,
 // and the backslash re-root case depends on that.
-func previewNormalisedInPrefix(u *url.URL, decodedPrefix string) bool {
+func previewNormalisedPath(u *url.URL) string {
 	if u == nil {
-		return false
+		return ""
 	}
 	p := path.Clean(u.Path)
 	if p == "." {
 		p = "/"
 	}
-	return previewPathInPrefix(p, decodedPrefix)
+	return p
+}
+
+// previewNormalisedInPrefix reports whether u's path, after dot-segment
+// removal, is the decoded prefix or under it.
+func previewNormalisedInPrefix(u *url.URL, decodedPrefix string) bool {
+	if u == nil {
+		return false
+	}
+	return previewPathInPrefix(previewNormalisedPath(u), decodedPrefix)
 }
 
 // previewRawRootRelative reports a root-relative Location: a path that
