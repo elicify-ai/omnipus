@@ -20,6 +20,7 @@ package gateway
 import (
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 )
 
@@ -32,15 +33,22 @@ const previewMode1CSP = "frame-ancestors 'none'"
 
 // setPreviewStaticHeaders applies the preview static-response header set —
 // the ONE code path for both modes' static serving: workspace security
-// headers, the preview response CORS policy (FR-012), and the CSP (FR-014:
-// Mode 1 overrides the workspace CSP with frame-ancestors 'none' only; Mode 2
-// keeps the workspace CSP).
-func setPreviewStaticHeaders(w http.ResponseWriter, r *http.Request, mainOrigin string) {
+// headers (referrer, nosniff), the preview response CORS policy (FR-012),
+// and the CSP (FR-014). Mode 1 replaces the workspace CSP with
+// frame-ancestors 'none' only. Mode 2 replaces it with the byte-stable
+// template (buildPreviewCSP) — the same header the dev proxy sets — so a
+// static page cannot fetch or form-POST the gateway origin. prefix is the
+// percent-encoded /preview/{agent}/{token} prefix (no trailing slash); Mode 1
+// ignores it.
+func setPreviewStaticHeaders(w http.ResponseWriter, r *http.Request, mainOrigin, prefix string) {
 	setWorkspaceSecurityHeaders(w, mainOrigin)
 	applyPreviewResponseCORS(w.Header())
 	if previewHostLabelFromContext(r.Context()) != "" {
 		w.Header().Set("Content-Security-Policy", previewMode1CSP)
+		return
 	}
+	w.Header().Set("Content-Security-Policy",
+		buildPreviewCSP(mainOrigin, wsOriginFor(mainOrigin), prefix))
 }
 
 // buildPreviewCSP renders the Mode 2 CSP template byte-stably: origin is the
@@ -77,9 +85,15 @@ func wsOriginFor(origin string) string {
 }
 
 // previewReservedRootSegments are the gateway's own first path segments. A
-// root-relative redirect target under one of them is a gateway namespace —
-// never the previewed app's — and is refused (DS-2 row 2) rather than
-// re-rooted under the preview prefix (row 5).
+// root-relative redirect whose first segment is one of them is refused
+// (DS-2 row 2, S-5.2: raw /api/v1/config is 502, not re-rooted).
+//
+// Ambiguity, left as the dataset reads it: ADR-094 §2.3 step 3 and the
+// FR-013 prose re-root every root-relative Location, which would emit
+// /api/v1/config (and /auth/callback) under the token prefix. DS-2 row 2
+// and S-5.2 require the 502. This list is what makes that row pass; it is
+// not widened or shrunk here. Shrinking it fails TestPreviewRedirectRule's
+// row 2, which is the pinned oracle.
 var previewReservedRootSegments = map[string]struct{}{
 	"api":             {},
 	"preview":         {},
@@ -105,19 +119,28 @@ func applyPreviewResponseCORS(h http.Header) {
 // Statuses: a redirect status is ruled; 304 is untouched (S-5.5); any other
 // status has a stray Location deleted (S-5.5).
 //
-// Location verdicts, in order:
+// Location verdicts, in order (FR-013 / ADR-094 §2.3):
 //
-//  1. dot-segments (decoded, incl. %2e) anywhere in the target path → 502
-//     (rows 6–7);
-//  2. alias-origin + in-prefix (resolved the way the browser resolves it)
-//     → emit raw unchanged (rows 1, 10, 11);
-//  3. root-relative raw → gateway-reserved first segment → 502 (row 2),
-//     else re-root under the prefix (row 5);
+//  1. resolve against the request URL (WHATWG via ResolveReference). Dot
+//     segments, including %2e, are removed BEFORE the prefix check — Go's
+//     ResolveReference leaves ".." in some relative merges, so the path is
+//     path.Clean'd as well. 502 only when that normalised path is not
+//     alias-origin + in-prefix (rows 6–7). An in-prefix "feat/../next"
+//     emits raw (rows 1, 10, 11);
+//  2. else a raw root-relative value (not protocol-relative "//") whose
+//     first segment is a gateway namespace → 502 (row 2; see
+//     previewReservedRootSegments);
+//  3. else re-root that root-relative value under the percent-encoded
+//     prefix and apply the same normalised check (row 5);
 //  4. everything else → 502 with no Location (rows 3, 4, 8, 9).
+//
+// The prefix is compared in decoded form. The value passed in is
+// percent-encoded (EntityID allows spaces and semicolons); url.URL.Path is
+// decoded, so comparing the escaped prefix against it 502s a legal target.
 func applyPreviewRedirectRule(
 	resp *http.Response,
 	clientOrigin *url.URL, // the origin the operator's browser is on
-	clientBase *url.URL, // the client document URL (origin + prefix + path)
+	clientBase *url.URL, // the request URL the browser resolves against
 	prefix string,
 ) {
 	switch resp.StatusCode {
@@ -144,36 +167,91 @@ func applyPreviewRedirectRule(
 		return
 	}
 
-	// 1. Dot segments — decoded, so %2e counts (rows 6–7).
-	if pathHasDotSegments(ref.Path) {
+	decodedPrefix := previewPrefixDecoded(prefix)
+	resolved := previewResolveLocation(clientBase, ref)
+	if previewURLOnAliasOrigin(resolved, clientOrigin) && previewNormalisedInPrefix(resolved, decodedPrefix) {
+		return // emit raw unchanged
+	}
+
+	if !previewRawRootRelative(raw, ref) {
 		previewRedirectRefused(resp)
 		return
 	}
-
-	// 2. Resolve the way the browser will: against the client document URL.
-	resolved := clientBase.ResolveReference(ref)
-	if previewURLOnAliasOrigin(resolved, clientOrigin) && previewPathInPrefix(resolved.Path, prefix) {
-		// Emit raw unchanged (rows 1, 10, 11).
+	if previewFirstSegmentReserved(ref.Path) {
+		previewRedirectRefused(resp)
 		return
 	}
-
-	// 3. Root-relative raw: reserved-root refuse, else re-root under the
-	// prefix (rows 2 and 5).
-	if !ref.IsAbs() && !strings.HasPrefix(raw, "//") && strings.HasPrefix(ref.Path, "/") {
-		first := ref.Path
-		if i := strings.IndexByte(first[1:], '/'); i >= 0 {
-			first = first[:i+1]
-		}
-		if _, reserved := previewReservedRootSegments[strings.ToLower(strings.Trim(first, "/"))]; reserved {
-			previewRedirectRefused(resp)
-			return
-		}
-		resp.Header.Set("Location", prefix+raw)
+	reRooted := prefix + raw
+	reRef, parseErr := url.Parse(reRooted)
+	if parseErr != nil {
+		previewRedirectRefused(resp)
 		return
 	}
-
-	// 4. Everything else: refuse.
+	reResolved := previewResolveLocation(clientBase, reRef)
+	if previewURLOnAliasOrigin(reResolved, clientOrigin) && previewNormalisedInPrefix(reResolved, decodedPrefix) {
+		resp.Header.Set("Location", reRooted)
+		return
+	}
 	previewRedirectRefused(resp)
+}
+
+// previewResolveLocation resolves ref against the request URL. A nil base
+// (no request URL) falls back to the reference itself.
+func previewResolveLocation(base, ref *url.URL) *url.URL {
+	if base == nil {
+		return ref
+	}
+	return base.ResolveReference(ref)
+}
+
+// previewPrefixDecoded returns prefix in the same decoded form as
+// url.URL.Path. The caller passes the percent-encoded prefix.
+func previewPrefixDecoded(prefix string) string {
+	decoded, err := url.PathUnescape(prefix)
+	if err != nil || decoded == "" {
+		return prefix
+	}
+	return decoded
+}
+
+// previewNormalisedInPrefix reports whether u's path, after dot-segment
+// removal, is the decoded prefix or under it. path.Clean (not filepath) so
+// a backslash stays a character — URL paths are slash-separated on every OS,
+// and the backslash re-root case depends on that.
+func previewNormalisedInPrefix(u *url.URL, decodedPrefix string) bool {
+	if u == nil {
+		return false
+	}
+	p := path.Clean(u.Path)
+	if p == "." {
+		p = "/"
+	}
+	return previewPathInPrefix(p, decodedPrefix)
+}
+
+// previewRawRootRelative reports a root-relative Location: a path that
+// starts with "/" and is neither an absolute URL nor protocol-relative
+// ("//host/..."). Protocol-relative values are excluded from re-rooting
+// (DS-2 row 3).
+func previewRawRootRelative(raw string, ref *url.URL) bool {
+	if ref == nil || ref.IsAbs() || strings.HasPrefix(raw, "//") {
+		return false
+	}
+	return strings.HasPrefix(ref.Path, "/")
+}
+
+// previewFirstSegmentReserved reports whether p's first segment is a
+// gateway namespace (DS-2 row 2). p is the decoded path.
+func previewFirstSegmentReserved(p string) bool {
+	if p == "" || p[0] != '/' {
+		return false
+	}
+	first := p[1:]
+	if i := strings.IndexByte(first, '/'); i >= 0 {
+		first = first[:i]
+	}
+	_, reserved := previewReservedRootSegments[strings.ToLower(first)]
+	return reserved
 }
 
 // previewRedirectRefused rewrites the proxied response to a 502 with no
@@ -223,15 +301,4 @@ func previewURLPort(u *url.URL) string {
 		return "443"
 	}
 	return "80"
-}
-
-// pathHasDotSegments reports whether the DECODED path contains "." or ".."
-// segments.
-func pathHasDotSegments(p string) bool {
-	for _, seg := range strings.Split(p, "/") {
-		if seg == "." || seg == ".." {
-			return true
-		}
-	}
-	return false
 }
