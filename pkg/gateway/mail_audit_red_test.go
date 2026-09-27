@@ -1,22 +1,26 @@
 package gateway
 
 // T32 - TestMailAuditEvents (spec section 7 row 32, MC-19, D33).
-// Round-2 fix-forward (D46): the round-1 characterization pins on the
-// count-only field shape (recipients_count/attachment_count/uid/uidvalidity/
-// expunged and the field-set-drift guards) are SUPERSEDED by MC-19's full
-// field set - a full-fields oracle that contradicted nothing but pinned the
-// very shape the founder ruled against. They are removed; the full-field
-// oracle now lives in mail_audit_full_fields_red_test.go. This file keeps
-// the spec-derived identity assertions: exactly one event per action, with
-// pair and Message-ID. The two send subtests now run against startSMTPSink
-// (the loopback plaintext exception, 89e16221f, makes a local sink speakable
-// - the round-1 BLOCKED fatals are stale and gone).
+// Round-2 fix-forward (D46) moved the full-field oracle to
+// mail_audit_full_fields_red_test.go; round 3 (CHECK fixes) RESTORES the
+// field pins the fix-forward dropped alongside it - uid/uidvalidity/
+// attachment_count/expunged per event, exactly where the current event
+// blocks in rest_mail_draft.go still emit them - and REPLACES the old
+// exact-field-set drift guards (which rejected the new required D46 fields
+// by construction) with closed-set guards written against the post-D46
+// baseline: D46 fields PLUS the pre-existing fields each event still
+// carries, so a FUTURE field addition/removal is still caught. This file
+// keeps the spec-derived identity assertions: exactly one event per action,
+// with pair and Message-ID. The two send subtests run against startSMTPSink
+// (the loopback plaintext exception, 89e16221f, makes a local sink speakable).
 
 import (
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -60,6 +64,41 @@ func draftRefPath(uv uint32, uid uint32) string {
 
 func utoa(u uint32) string { return strconv.FormatUint(uint64(u), 10) }
 
+// requireAuditFieldSet is the round-3 closed-set drift guard (CHECK finding
+// F4): the event's details must carry EXACTLY the known field set - a future
+// field addition or removal fails here, naming the drift. The wanted sets are
+// the post-D46 characterization baseline: the MC-19/D46 full fields PLUS the
+// pre-existing fields each event still carries, taken from the current
+// event-construction blocks (rest_mail_draft.go, rest_mail_send.go). A drift
+// guard's oracle IS "the field SET doesn't silently change", so deriving the
+// set from current-correct code is the intended and only way to write one
+// (characterization baseline); the VALUES inside those fields are spec-derived
+// (MC-19/FR-025) and pinned in mail_audit_full_fields_red_test.go and in the
+// per-subtest pins below.
+func requireAuditFieldSet(t *testing.T, details map[string]any, event string, want ...string) {
+	t.Helper()
+	got := make([]string, 0, len(details))
+	for k := range details {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	wantSorted := append([]string(nil), want...)
+	sort.Strings(wantSorted)
+	var unexpected, missing []string
+	for _, k := range got {
+		if !slices.Contains(wantSorted, k) {
+			unexpected = append(unexpected, k)
+		}
+	}
+	for _, k := range wantSorted {
+		if !slices.Contains(got, k) {
+			missing = append(missing, k)
+		}
+	}
+	require.Empty(t, unexpected, "%s: unexpected detail fields - field-set drift (closed-set guard)", event)
+	require.Empty(t, missing, "%s: missing detail fields - field-set drift (closed-set guard)", event)
+}
+
 func wireAuditor(l *audit.Logger) *audit.Logger { return l }
 
 // auditDebugLines dumps raw audit JSONL for failure diagnostics.
@@ -100,6 +139,20 @@ func TestMailAuditEvents(t *testing.T) {
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
 		require.Equal(t, "<audit-draft@example.test>", details["message_id"], "bracketed Message-ID of the edited draft")
+		// Restored round-1 pins (round-2 CHECK: the D46 fix-forward dropped
+		// real regression coverage along with the shape it legitimately had
+		// to drop). uid: the NEW copy's server-assigned uid — the value is
+		// server-assigned, so the pin is presence+sanity (characterization).
+		if uid, ok := details["uid"].(float64); !ok || uid < 1 {
+			t.Fatalf("uid = %v, want a nonzero uid reference (characterization: the event records the updated copy's uid)", details["uid"])
+		}
+		require.Equal(t, float64(uv), details["uidvalidity"], "same Drafts folder, same UIDVALIDITY")
+		require.Equal(t, float64(0), details["attachment_count"], "the update request carried no attachments")
+		// Closed-set drift guard at the post-D46 baseline (F4).
+		requireAuditFieldSet(t, details, "mail.panel.draft_updated",
+			"workspace_id", "agent_id", "message_id",
+			"uid", "uidvalidity", "attachment_count",
+			"recipients", "origin", "arg_hash", "folder", "attachments")
 	})
 
 	t.Run("draft discard emits mail.panel.draft_discarded", func(t *testing.T) {
@@ -122,9 +175,22 @@ func TestMailAuditEvents(t *testing.T) {
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
 		require.Equal(t, "<audit-draft@example.test>", details["message_id"])
-		// Superseded pins removed (round-2 fix-forward): uid/uidvalidity and
-		// expunged are fields MC-19 does not specify; the full-field oracle
-		// lives in mail_audit_full_fields_red_test.go.
+		// Restored round-1 pins (round-2 CHECK): the discard acts on the copy
+		// the ref addressed, in the same folder. expunged is pinned as the
+		// TRUTH-TELLING invariant, not a literal: the event must report
+		// exactly whether the server actually expunged the copy (true iff
+		// the server advertises UIDPLUS and UIDExpunge ran — the contract in
+		// pkg/email/view.go::DeleteDraftStatus; round-1's unvalidated
+		// `expunged == true` literal is false on this non-UIDPLUS fixture).
+		require.Equal(t, float64(1), details["uid"], "the uid of the copy the discard addressed")
+		require.Equal(t, float64(uv), details["uidvalidity"], "same Drafts folder, same UIDVALIDITY")
+		require.Equal(t, cl.Caps().Has(imap.CapUIDPlus), details["expunged"],
+			"expunged must tell the truth: true iff the server actually expunged the copy (UIDPLUS)")
+		// Closed-set drift guard at the post-D46 baseline (F4).
+		requireAuditFieldSet(t, details, "mail.panel.draft_discarded",
+			"workspace_id", "agent_id", "message_id",
+			"uid", "uidvalidity", "expunged",
+			"recipients", "origin", "arg_hash", "folder")
 	})
 
 	t.Run("draft send emits mail.panel.draft_sent", func(t *testing.T) {
@@ -146,6 +212,18 @@ func TestMailAuditEvents(t *testing.T) {
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
 		require.Equal(t, "<audit-draft@example.test>", details["message_id"])
+		// Restored pins for the fields the event carries that round 1 never
+		// pinned individually (round-2 CHECK): the fixture draft carries no
+		// attachments, and expunged pinned as the truth-telling invariant
+		// (same oracle as the discard pin above).
+		require.Equal(t, float64(0), details["attachment_count"], "the fixture draft carries no attachments")
+		require.Equal(t, cl.Caps().Has(imap.CapUIDPlus), details["expunged"],
+			"expunged must tell the truth: true iff the server actually expunged the draft copy (UIDPLUS)")
+		// Closed-set drift guard at the post-D46 baseline (F4).
+		requireAuditFieldSet(t, details, "mail.panel.draft_sent",
+			"workspace_id", "agent_id", "message_id",
+			"recipients_count", "attachment_count", "sent_saved", "draft_cleanup_warning", "expunged",
+			"recipients", "origin", "arg_hash", "folder", "attachments")
 	})
 
 	t.Run("manual send emits mail.panel.send", func(t *testing.T) {
@@ -163,7 +241,10 @@ func TestMailAuditEvents(t *testing.T) {
 		details := ev["details"].(map[string]any)
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
-		// Superseded count-only pins removed (round-2 fix-forward): the
-		// full-field oracle lives in mail_audit_full_fields_red_test.go.
+		// Closed-set drift guard at the post-D46 baseline (F4).
+		requireAuditFieldSet(t, details, "mail.panel.send",
+			"workspace_id", "agent_id", "message_id",
+			"recipients_count", "attachment_count", "sent_saved",
+			"recipients", "origin", "arg_hash", "folder", "attachments")
 	})
 }

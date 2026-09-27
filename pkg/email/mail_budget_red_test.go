@@ -221,6 +221,74 @@ func TestMailBudget_SingleflightOneDial(t *testing.T) {
 	require.True(t, func() bool { fnMu.Lock(); defer fnMu.Unlock(); return fnRan }())
 }
 
+// TestMailBudget_SingleflightKeyIncludesParams — round-3 CHECK finding F2:
+// the coalescing key carries the NORMALIZED PARAMS (mail_budget.go header:
+// "singleflight coalescing keyed by (account, operation, normalized
+// params)"). Two concurrent CallValue requests for the SAME account and
+// operation but DIFFERENT params must NOT coalesce: both fns run, and each
+// caller receives its OWN dial's value — a params-blind key would put two
+// different reads into one flight and serve one caller the other's data.
+//
+// Mutant this kills: flightKey dropping Params (key = account+operation) —
+// then the second request joins the first's flight, never runs its own fn,
+// and dies on the caller's context deadline (ErrMailBusy here).
+func TestMailBudget_SingleflightKeyIncludesParams(t *testing.T) {
+	dir := t.TempDir()
+	budget := NewMailBudget(dir)
+
+	var dials atomic.Int32
+	started := make(chan struct{})       // closed once by the first dial's fn
+	secondEntered := make(chan struct{}) // closed by the second dial's fn
+	var startedOnce sync.Once
+	// Test-end safety: unblocks the parked first dial even on the failure
+	// path, so a wrongly-coalescing key cannot deadlock the harness.
+	unblockFirst := make(chan struct{})
+	var unblockOnce sync.Once
+	t.Cleanup(func() { unblockOnce.Do(func() { close(unblockFirst) }) })
+
+	firstFn := func(context.Context) (any, error) {
+		dials.Add(1)
+		startedOnce.Do(func() { close(started) })
+		// The first dial parks until the second request has proven it runs
+		// its OWN dial — or the test ends.
+		select {
+		case <-secondEntered:
+		case <-unblockFirst:
+		}
+		return "first-dial", nil
+	}
+	secondFn := func(context.Context) (any, error) {
+		dials.Add(1)
+		close(secondEntered)
+		return "second-dial", nil
+	}
+
+	valCh := make(chan any, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		v, err := budget.CallValue(context.Background(),
+			mbOp(false, "read_inbox", map[string]any{"folder": "INBOX", "limit": float64(25)}), firstFn)
+		valCh <- v
+		errCh <- err
+	}()
+	<-started
+
+	ctxSecond, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	valSecond, errSecond := budget.CallValue(ctxSecond,
+		mbOp(false, "read_inbox", map[string]any{"folder": "ARCHIVE"}), secondFn)
+
+	require.NoError(t, errSecond,
+		"a different-params request must dial on its own, never join the first flight — "+
+			"ErrMailBusy here means the two requests wrongly coalesced (params dropped from the key)")
+	require.Equal(t, "second-dial", valSecond, "each caller must receive its OWN dial's value")
+	require.Equal(t, int32(2), dials.Load(),
+		"same account+operation, different params: two dials, never one shared flight")
+
+	require.NoError(t, <-errCh)
+	require.Equal(t, "first-dial", <-valCh)
+}
+
 // TestMailBudget_WatcherTryAcquireSkipsNonBlocking — the watcher's cycle
 // takes its slot from the SAME per-account budget but NON-BLOCKINGLY: with
 // both slots held by human/tool callers it returns ErrMailSkipped immediately
