@@ -87,7 +87,7 @@ func preserveProtectedAgentDefaults(m map[string]any, saved map[string]any) erro
 // U+017F 'ſ' ≡ 's') lands here exactly as it would on boot. Raw bytes, so an
 // invalid stored value (a string, a float) is compared as-is instead of
 // failing the decode.
-type protectedAgentDefaultsValues struct {
+type protectedAgentDefaultsValues struct { // not-wire-format: decode-only probe of config.json on disk; never crosses the gateway/SPA boundary.
 	Agents struct {
 		Defaults struct {
 			MaxToolIterations            json.RawMessage `json:"max_tool_iterations"`

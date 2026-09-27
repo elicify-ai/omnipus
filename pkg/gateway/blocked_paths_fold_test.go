@@ -122,15 +122,15 @@ func TestProtectedAgentDefaults_ValueCheck(t *testing.T) {
 	require.NoError(t, err)
 
 	sibling := base()
-	sibling["agents"].(map[string]any)["defaults"].(map[string]any)["max_tokens"] = 8192.0
+	foldTestDefaults(t, sibling)["max_tokens"] = 8192.0
 	assert.NoError(t, checkProtectedAgentDefaultsUnchanged(before, sibling), "a sibling change is allowed")
 
 	folded := base()
-	folded["agents"].(map[string]any)["defaults"].(map[string]any)["max_tool_iteration"+longS] = 1000.0
+	foldTestDefaults(t, folded)["max_tool_iteration"+longS] = 1000.0
 	assert.Error(t, checkProtectedAgentDefaultsUnchanged(before, folded), "a folded key that changes the global is refused")
 
 	marker := base()
-	marker["agents"].(map[string]any)["defaults"].(map[string]any)["max_tool_iteration"+longS+"_env_imported"] = false
+	foldTestDefaults(t, marker)["max_tool_iteration"+longS+"_env_imported"] = false
 	assert.Error(t, checkProtectedAgentDefaultsUnchanged(before, marker), "a folded key that changes the marker is refused")
 
 	// "agentſ" sorts after "agents", so it is decoded last and wins.
@@ -138,4 +138,13 @@ func TestProtectedAgentDefaults_ValueCheck(t *testing.T) {
 	foldedAgents["agent"+longS] = map[string]any{"defaults": map[string]any{"max_tool_iterations": 1.0}}
 	assert.Error(t, checkProtectedAgentDefaultsUnchanged(before, foldedAgents),
 		"a folded ancestor that wins the decode is refused")
+}
+
+func foldTestDefaults(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	agents, ok := m["agents"].(map[string]any)
+	require.True(t, ok)
+	defaults, ok := agents["defaults"].(map[string]any)
+	require.True(t, ok)
+	return defaults
 }

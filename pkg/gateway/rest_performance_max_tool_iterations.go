@@ -177,7 +177,7 @@ func savedGlobalMaxToolIterations(path string) (value int, missing bool, err err
 	if err != nil {
 		return 0, false, err
 	}
-	var typed struct {
+	var typed struct { // not-wire-format: decode-only probe of config.json on disk; never crosses the gateway/SPA boundary.
 		Agents struct {
 			Defaults struct {
 				MaxToolIterations int `json:"max_tool_iterations"`
@@ -187,7 +187,7 @@ func savedGlobalMaxToolIterations(path string) (value int, missing bool, err err
 	if err := json.Unmarshal(raw, &typed); err != nil {
 		return 0, false, err
 	}
-	var probe struct {
+	var probe struct { // not-wire-format: decode-only probe of config.json on disk; never crosses the gateway/SPA boundary.
 		Agents struct {
 			Defaults map[string]json.RawMessage `json:"defaults"`
 		} `json:"agents"`
