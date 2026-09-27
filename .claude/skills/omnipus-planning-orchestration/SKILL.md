@@ -11,7 +11,7 @@ separate-session squad leads. Loading is mandatory: preloaded at session start v
 not cite this skill is a review finding; the skills acknowledgement line (shared-skill
 rule 13) proves the load.
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-09-26
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (sections 5.6–5.9, 7.6, 7.7).
 
 ## Operating stance
@@ -130,6 +130,24 @@ silently deferring a gate (principle 3).
   branch awaiting a yes; the founder answers per branch in one reply. Urgent work may
   ask immediately without waiting for a batch.
 - While a failure is open, every status update carries a "who is on it" line.
+- Never hand the founder a URL or link that has not been verified reachable **and**
+  rendering in a browser at that moment — start the server, load the page, then report
+  the link (localhost:6006 was reported as ready before any server was started).
 - Reports up the chain: terse and technical, with evidence — files, commands with exit
   codes, certainty labels (shared-skill rule 14). Squad reports cap at ~40 lines plus
   the evidence table.
+
+## 6. Founder-facing demos — handover and dispatch hygiene
+
+- A founder-facing demo or prototype is handed over only after (a) its real-browser
+  interaction test has passed and (b) team-lead has re-checked it in a browser — the
+  build-side rules (interactive prototype, Playwright interaction test, static-snapshot
+  serving) live in `omnipus-frontend-rules` and are not restated here. "Renders without
+  errors" and screenshots are not "works".
+- Filling the plugin-reviewer dispatch template
+  (`.claude/templates/plugin-reviewer-dispatch.md`): fill the placeholders with a tool
+  that cannot misparse the text (e.g. Python `str.replace`), never `sed` with a
+  delimiter that can occur in the text — a `#` in an issue reference has broken a `sed`
+  fill and the reviewer ran without its rules. Verify the filled prompt contains the
+  discipline block (the `agent-discipline:shared-traits:start` marker) before
+  dispatching.

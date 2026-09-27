@@ -5,7 +5,7 @@ description: Load on failure dispatches only — when a developer (backend-lead 
 
 # Failure triage — Omnipus
 
-Last reviewed: 2026-09-25 — initial authoring, design §7.2 (dev-team-setup, agent-refresh rollout).
+Last reviewed: 2026-09-26 — initial authoring 2026-09-25 (design §7.2, agent-refresh rollout); 2026-09-26 CI-cluster root-user caveat (issue #894).
 
 ## Standing rules for this dispatch
 
@@ -98,6 +98,11 @@ integration branch, only the PR-check workflow and the code-scanning workflow ra
 cross-platform matrix, the build matrix and shellcheck fire on pull requests and `main`
 pushes only, and the scheduled workflows never run on branch pushes at all. Say in your
 report which checks never ran — do not treat the green as full coverage.
+
+The remote CI cluster's Go tiers run as root (issue #894): a permission-sensitive test
+that fails only there is an environment artefact, not a defect — GitHub Actions stays
+the authority for permission-sensitive tests until #894 is fixed, and no fixer is
+dispatched onto a root-only cluster red. Say so in your report instead.
 
 ### 8. One narrow local test only
 
