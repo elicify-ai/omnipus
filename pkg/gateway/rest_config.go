@@ -602,11 +602,13 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Block credential fields and providers (credentials must use /providers endpoint)
+	// Block credential fields and providers (credentials must use /providers
+	// endpoint). Keys are folded like encoding/json binds them (jsonFoldKey),
+	// so "providerſ" (U+017F ≡ 's') cannot slip past as a non-match.
 	for k := range updates {
-		kl := strings.ToLower(k)
-		if kl == "providers" || strings.Contains(kl, "api_key") || strings.Contains(kl, "secret") ||
-			strings.Contains(kl, "password") {
+		kf := jsonFoldKey(k)
+		if kf == jsonFoldKey("providers") || strings.Contains(kf, jsonFoldKey("api_key")) ||
+			strings.Contains(kf, jsonFoldKey("secret")) || strings.Contains(kf, jsonFoldKey("password")) {
 			jsonErr(w, http.StatusForbidden, fmt.Sprintf("credential field %q cannot be set via config endpoint", k))
 			return
 		}
@@ -630,6 +632,11 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	if key, refused := nonASCIIKeyNearBlockedPath(typedBody, blockedPaths); refused {
+		jsonErr(w, http.StatusForbidden, fmt.Sprintf(
+			"%q: a non-ASCII key is not allowed in a section that holds protected settings", key))
+		return
+	}
 
 	// Use safeUpdateConfigJSON to hold configMu during the read-modify-write cycle.
 	// Deep merge nested objects so partial updates don't wipe sibling keys
@@ -641,6 +648,12 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		// cannot be written here (blockedPaths), so they must survive such a
 		// write unchanged — see preserveProtectedAgentDefaults.
 		protected := snapshotProtectedAgentDefaults(m)
+		fingerprint, fpErr := protectedAgentDefaultsFingerprint(m)
+		if fpErr != nil {
+			// The on-disk config no longer decodes into config.Config;
+			// no baseline to compare against — refuse rather than guess.
+			return &requestRefusalError{msg: "config.json agents section does not decode: " + fpErr.Error()}
+		}
 		for k, v := range updates {
 			var parsed any
 			if err := json.Unmarshal(v, &parsed); err != nil {
@@ -657,7 +670,14 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			m[k] = parsed
 		}
-		return preserveProtectedAgentDefaults(m, protected)
+		if err := preserveProtectedAgentDefaults(m, protected); err != nil {
+			return err
+		}
+		// Defence in depth behind blockedPaths (#904 gate round 2, N1):
+		// decode the merged result the way config.json is loaded and refuse
+		// if either protected value would change, whatever key spelling
+		// carried it.
+		return checkProtectedAgentDefaultsUnchanged(fingerprint, m)
 	}); err != nil {
 		var refusal *requestRefusalError
 		if errors.As(err, &refusal) {
