@@ -384,6 +384,12 @@ type MailPart struct {
 	// and the draft keep paths refuse it (400) instead of silently
 	// transmitting or serving nothing.
 	DataUnavailable bool
+	// OmnipusDraftBody marks the draft's own body bookkeeping part (the
+	// X-Omnipus-Part: draft-body header renderMarkdownPart writes). It is the
+	// ONLY recognition signal — never the filename/content type, which a
+	// genuine user attachment may equally carry — so every downstream filter
+	// (draft carry paths, listings, audit) keys on it.
+	OmnipusDraftBody bool
 }
 
 // maxViewPartBytes is the gateway's memory guard for one inbound part: a
@@ -575,11 +581,12 @@ func viewFromRaw(raw []byte, slug string, uid uint32) *MailView {
 			view.MarkdownLossy = false
 		default:
 			p := MailPart{
-				PartIndex:   idx,
-				Filename:    sanitizeMailPartName(name),
-				ContentType: ct,
-				ContentID:   stripContentIDAngles(part.Header.Get("Content-ID")),
-				Disposition: disp,
+				PartIndex:        idx,
+				Filename:         sanitizeMailPartName(name),
+				ContentType:      ct,
+				ContentID:        stripContentIDAngles(part.Header.Get("Content-ID")),
+				Disposition:      disp,
+				OmnipusDraftBody: strings.TrimSpace(part.Header.Get(draftBodyPartHeader)) == draftBodyPartValue,
 			}
 			data, rerr := io.ReadAll(io.LimitReader(part.Body, maxViewPartBytes+1))
 			unavailReason := ""

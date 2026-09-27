@@ -217,6 +217,14 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 		out.Bcc = &bcc
 	}
 	for _, p := range v.Attachments {
+		if mailViewDraftBodyPart(p) {
+			// The draft's own body bookkeeping part (the X-Omnipus-Part:
+			// draft-body marker header — never the name/type pair) is Omnipus
+			// bookkeeping, not a user attachment: never listed, on any
+			// folder's read surface. A genuine user message.md is an ordinary
+			// attachment and stays listed.
+			continue
+		}
 		out.Attachments = append(out.Attachments, struct {
 			ContentType string `json:"content_type"`
 			Filename    string `json:"filename"`
