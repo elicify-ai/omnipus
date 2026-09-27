@@ -441,6 +441,19 @@ describe(SUITE, () => {
       expect(screen.queryByTestId('performance-max-tool-iterations-save-btn')).not.toBeInTheDocument()
     })
 
+    // #904 gate round 3 (code-reviewer): since a44d21353 a new global limit is
+    // checked against the value SAVED in config.json, while an agent's own
+    // limit is still checked against the running global. The notice says so
+    // and never claims the new change is checked against what is running.
+    it('the notice says a new tool-call limit is checked against the saved value, and agent profiles against the running one', async () => {
+      await refreshFailure()
+      const notice = await screen.findByTestId('performance-unapplied-notice', {}, WAIT)
+      expect(notice).toHaveTextContent(
+        'The fields below show the saved values. Until the restart or reload, Omnipus keeps running on the previous ones. A new tool-call limit set here is checked against the saved limit; an agent\u2019s own limit, set on its profile, is still checked against the running one.',
+      )
+      expect(notice).not.toHaveTextContent(/new change here is checked against what is running/)
+    })
+
     it('the next change is not judged against the stale in-memory global: the stale value is sent via the preview, not skipped as unchanged', async () => {
       await refreshFailure()
       await screen.findByTestId('performance-unapplied-notice', {}, WAIT)

@@ -825,7 +825,8 @@ export function PerformanceSection(): React.ReactElement {
             </p>
             <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
               The fields below show the saved values. Until the restart or reload, Omnipus keeps running on the
-              previous ones, and a new change here is checked against what is running.
+              previous ones. A new tool-call limit set here is checked against the saved limit; an agent{'\u2019'}s
+              own limit, set on its profile, is still checked against the running one.
             </p>
           </div>
         </Card>
