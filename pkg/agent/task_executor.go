@@ -2097,9 +2097,14 @@ func (al *AgentLoop) ExecuteBoardTask(agentID, taskID, sessionID, prompt string,
 	// HTTP request lifecycle and outlive the Run loop.
 	taskCtx := context.Background()
 
-	al.activeRequests.Add(1)
+	if !al.beginActiveRequest() {
+		if onComplete != nil {
+			onComplete("", context.Canceled)
+		}
+		return
+	}
 	go func() {
-		defer al.activeRequests.Done()
+		defer al.endActiveRequest()
 		defer func() {
 			if r := recover(); r != nil {
 				panicMsg := fmt.Sprintf("%v", r)

@@ -21,12 +21,9 @@ import (
 // dispatchUnroutableMessage is the single-shot dispatcher for a message with
 // no resolvable steering target: processMessage, ADR-051 error translation,
 // and the C8 terminal-frame guarantee, tracked in activeRequests (#265) so
-// shutdown drains it. Run launches it as
-//
-//	al.activeRequests.Add(1)
-//	go al.dispatchUnroutableMessage(runCtx, msg)
+// shutdown drains it.
 func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.InboundMessage) {
-	defer al.activeRequests.Done()
+	defer al.endActiveRequest()
 
 	var response string
 	var ag *AgentInstance
@@ -134,4 +131,11 @@ func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.I
 		al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
 		published = true
 	}
+}
+
+func (al *AgentLoop) launchUnroutableMessage(runCtx context.Context, msg bus.InboundMessage) {
+	if !al.beginActiveRequest() {
+		return
+	}
+	go al.dispatchUnroutableMessage(runCtx, msg)
 }
