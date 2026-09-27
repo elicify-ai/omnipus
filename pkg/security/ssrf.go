@@ -328,12 +328,33 @@ func (sc *SSRFChecker) isAllowedGatewayOrigin(rawURL string) bool {
 		return false // no exception configured — fail closed
 	}
 
-	host, portStr, ok := extractHostPort(rawURL)
-	if !ok {
-		return false // no explicit port in the URL — never a gateway-origin match
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port != gwPort {
+	host, portStr, hasExplicitPort := extractHostPort(rawURL)
+	if hasExplicitPort {
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port != gwPort {
+			return false
+		}
+	} else {
+		// fix3 (SL-F2): a PORTLESS URL's effective port is its scheme
+		// default (80 http / 443 https). The mint
+		// (pkg/gateway/middleware/preview_label.go::PreviewIsolatedURL)
+		// emits exactly this portless form for an implicit-80 canonical
+		// origin (spec DS-3 row 10), so the label class admits it when the
+		// wired gateway port IS the scheme default. Only the label class is
+		// ever admitted portless — the exact-host /preview/ exception below
+		// keeps requiring the literal host:port token (serve_web always
+		// emits an explicit port there), so its scope is unchanged, and a
+		// portless URL against any other wired port is still refused.
+		if !schemeIsHTTPish(rawURL) {
+			return false
+		}
+		if schemeDefaultPort(rawURL) != gwPort {
+			return false
+		}
+		host = strings.ToLower(extractHost(rawURL))
+		if label, _, isLabel := middleware.ParsePreviewLabelHost(host); isLabel && middleware.IsValidPreviewLabel(label) {
+			return true
+		}
 		return false
 	}
 
@@ -384,6 +405,23 @@ func schemeIsHTTPish(rawURL string) bool {
 	}
 	scheme := strings.ToLower(rawURL[:idx])
 	return scheme == "http" || scheme == "https"
+}
+
+// schemeDefaultPort reports rawURL's scheme-default (portless) effective
+// port: 443 for https, 80 for http, 0 for anything else. The portless twin
+// of schemeIsHTTPish's string-level scheme read (fix3, SL-F2).
+func schemeDefaultPort(rawURL string) int {
+	idx := strings.Index(rawURL, "://")
+	if idx == -1 {
+		return 0
+	}
+	switch strings.ToLower(rawURL[:idx]) {
+	case "https":
+		return 443
+	case "http":
+		return 80
+	}
+	return 0
 }
 
 // extractPath returns rawURL's path component (query string and fragment
