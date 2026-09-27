@@ -25,7 +25,12 @@ import {
 import { useUiStore } from '@/store/ui'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
-import { WebSearchGroup } from './WebSearchGroup'
+import {
+  WEB_SEARCH_ROW_GRID,
+  WebSearchGroup,
+  WebSearchRowRoles,
+  WebSearchNoFallbackChoice,
+} from './WebSearchGroup'
 
 export function IntegrationsSection() {
   const { addToast } = useUiStore()
@@ -83,42 +88,67 @@ export function IntegrationsSection() {
       })
   }
 
-  // Search rows: ADR-096 replaces the retired "Active" badge with Default /
-  // Fallback badges. Both badges derive from the response-level resolved
-  // roles (default_search / fallback_search), not from the row's own
-  // `active`/`fallback` flags — the response fields are what R5's healing
-  // has already applied (an ignored fallback reads fallback_search:null with
-  // a reason), so a row badge would lie exactly where healing kicked in.
-  // Readiness is reported honestly: "Ready" only when the tool's own test
-  // passes; a stored key whose resolved value is empty reads "Key not
-  // reaching search" — configured (the secret is in the vault) is not the
-  // badge test (FR-028). Roles are moved from the Default/Fallback stacks in
-  // WebSearchGroup, so there is no per-row "Set active" button here, and a
-  // key save carries api_key only — storing a key is separable from
-  // assigning a role (ADR-096 D18).
+  // Search rows: ADR-096 — ONE row per provider, drawn the way the spec
+  // draws it: each row carries its own default radio and fallback radio
+  // (the two radio groups remain one group each, semantically — only where
+  // they render changes). Role badges derive from the response-level
+  // resolved roles (default_search / fallback_search), not from the row's
+  // own `active`/`fallback` flags — the response fields are what R5's
+  // healing has already applied (an ignored fallback reads
+  // fallback_search:null with a reason), so a row flag would lie exactly
+  // where healing kicked in. Readiness is reported honestly: "Ready" only
+  // when the tool's own test passes; a stored key whose resolved value is
+  // empty reads "Key not reaching search" — configured (the secret is in
+  // the vault) is not the badge test (FR-028). There is no per-row "Set
+  // active" button. When default_search is on the wire, a key save carries
+  // api_key only — storing a key is separable from assigning a role (spec
+  // § Contract shape). A payload without that field is still the pre-role
+  // screen, whose save is "Save & activate".
+  const onSetDefault = (id: string) => requestChange(id, { kind: 'search', active: true })
+  const onSetFallback = (id: string) => requestChange(id, { kind: 'search', fallback: true })
+  const onSetNoFallback = () => {
+    // The contract clears the fallback "regardless of the addressed id"; the PUT still needs a real search id in
+    // its path, so anchor it to the default (or first row).
+    const anchor = data?.default_search ?? data?.search[0]?.id
+    if (anchor) requestChange(anchor, { kind: 'search', fallback: false })
+  }
   const renderSearchRow = (p: IntegrationProvider) => {
     const isExpanded = expanded === p.id
     const keyVal = apiKeys[p.id] ?? ''
-    const isDefault = data?.default_search === p.id
-    const isFallback = data?.fallback_search === p.id
+    const rolesOnWire = data?.default_search !== undefined
+    const isDefaultRow = data?.default_search === p.id
+    const isFallbackRow = data?.fallback_search === p.id
 
     return (
       <Card
         key={p.id}
         className="overflow-hidden"
+        data-testid={`search-row-${p.id}`}
       >
-        <div className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]">
-          <div className="flex-1 min-w-0">
+        <div className="px-[var(--space-3)] py-[var(--space-2-5)]">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-[var(--space-2-5)]">
+            <div className="min-w-0">
             <div className="flex items-center gap-[var(--space-2)] flex-wrap">
               <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{p.display_name}</span>
-              {isDefault && (
+              {isDefaultRow && (
                 <Badge data-testid={`badge-default-${p.id}`} variant="success" className="gap-[var(--space-1)]">
                   <Star size={10} weight="fill" /> Default
                 </Badge>
               )}
-              {isFallback && (
+              {isFallbackRow && (
                 <Badge data-testid={`badge-fallback-${p.id}`} variant="secondary" className="gap-[var(--space-1)]">
                   Fallback{p.fallback_automatic ? ' (automatic)' : ''}
+                </Badge>
+              )}
+              {/* Spec § Settings screen "Badge": "Active" goes away for search
+                  rows, replaced by "Default". The pre-role payload has no
+                  default_search, so the provider it marks `active` is that
+                  default. The word is "Default"; the testid stays `active-*`
+                  because the pre-ADR section test locks that marker. A
+                  role-bearing response never takes this branch. */}
+              {!rolesOnWire && p.active && (
+                <Badge data-testid={`active-${p.id}`} variant="success" className="gap-[var(--space-1)]">
+                  <Star size={10} weight="fill" /> Default
                 </Badge>
               )}
               {p.usable === true ? (
@@ -146,22 +176,32 @@ export function IntegrationsSection() {
                 )
               )}
             </div>
+            </div>
+
+            <WebSearchRowRoles
+              provider={p}
+              defaultSearch={data?.default_search}
+              fallbackSearch={data?.fallback_search}
+              saving={isSaving}
+              onSetDefault={onSetDefault}
+              onSetFallback={onSetFallback}
+            />
+            <div className="flex items-center gap-[var(--space-2)] shrink-0">
+              {p.requires_key && (
+                <Button
+                  size="sm"
+                  className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
+                  onClick={() => setExpanded(isExpanded ? null : p.id)}
+                  data-testid={`addkey-${p.id}`}
+                >
+                  {p.configured ? 'Edit key' : (
+                    <><Plus size={11} /> Add key</>
+                  )}
+                </Button>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center gap-[var(--space-2)] shrink-0">
-            {p.requires_key && (
-              <Button
-                size="sm"
-                className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
-                onClick={() => setExpanded(isExpanded ? null : p.id)}
-                data-testid={`addkey-${p.id}`}
-              >
-                {p.configured ? 'Edit key' : (
-                  <><Plus size={11} /> Add key</>
-                )}
-              </Button>
-            )}
-          </div>
         </div>
 
         {isExpanded && p.requires_key && (
@@ -200,12 +240,17 @@ export function IntegrationsSection() {
               <Button
                 size="sm"
                 onClick={() =>
-                  requestChange(p.id, { kind: p.kind, api_key: keyVal.trim() })
+                  requestChange(
+                    p.id,
+                    rolesOnWire
+                      ? { kind: p.kind, api_key: keyVal.trim() }
+                      : { kind: p.kind, api_key: keyVal.trim(), active: true },
+                  )
                 }
                 disabled={!keyVal.trim() || isSaving}
                 data-testid={`save-${p.id}`}
               >
-                Save key
+                {rolesOnWire ? 'Save key' : 'Save & activate'}
               </Button>
             </div>
           </div>
@@ -365,23 +410,22 @@ export function IntegrationsSection() {
             ) : (
               <>
                 <WebSearchGroup
-                  providers={data.search}
                   defaultSearch={data.default_search}
-                  fallbackSearch={data.fallback_search}
                   fallbackIgnoredReason={data.fallback_ignored_reason}
                   nativeSearchInEffect={data.native_search_in_effect}
-                  saving={isSaving}
-                  onSetDefault={(id) => requestChange(id, { kind: 'search', active: true })}
-                  onSetFallback={(id) => requestChange(id, { kind: 'search', fallback: true })}
-                  onSetNoFallback={() => {
-                    // The contract clears the fallback "regardless of the
-                    // addressed id"; the PUT still needs a real search id in
-                    // its path, so anchor it to the default (or first row).
-                    const anchor = data.default_search ?? data.search[0]?.id
-                    if (anchor) requestChange(anchor, { kind: 'search', fallback: false })
-                  }}
                 />
+                <div className={`${WEB_SEARCH_ROW_GRID} px-[var(--space-3)] py-[var(--space-1)]`}>
+                  <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Provider</span>
+                  <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Default</span>
+                  <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Fallback</span>
+                  <span aria-hidden="true" />
+                </div>
                 {data.search.map(renderSearchRow)}
+                <WebSearchNoFallbackChoice
+                  fallbackSearch={data.fallback_search}
+                  saving={isSaving}
+                  onSetNoFallback={onSetNoFallback}
+                />
               </>
             )}
           </section>
