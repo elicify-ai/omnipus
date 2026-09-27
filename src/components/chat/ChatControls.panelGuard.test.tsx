@@ -78,31 +78,59 @@ function renderControls() {
   )
 }
 
-/** The §8.1 shape this feature introduces — read defensively since it does
- *  not exist on the store yet (that is exactly what this file is red for). */
+/** The §8.1 single-slice view of the ui store. Read through the SLICE the
+ *  spec defines — never by branching on which shape production currently
+ *  has (batch-4 ruling: a shape-branching seed silently changes what the
+ *  pack tests). */
+type Section81Store = {
+  activePanel: { id: string; context?: Record<string, unknown> } | null
+  openPanel: (id: string, context?: Record<string, unknown>) => void
+  closePanel: () => void
+}
+const s81 = () => useUiStore.getState() as unknown as Section81Store
+
 function activePanelId(): string | null {
   const state = useUiStore.getState() as unknown as { activePanel?: { id: string } | null }
   return state.activePanel?.id ?? null
 }
 
+/** Fails every test with a STATED reason while the §8.1 slice is missing
+ *  (same gate as Sidebar.panelGuard). */
+function requireSection81Api() {
+  const s = useUiStore.getState() as unknown as Record<string, unknown>
+  if (typeof s.openPanel !== 'function' || typeof s.closePanel !== 'function' || !('activePanel' in s)) {
+    throw new Error(
+      'BLOCKED: ui store has no §8.1 single-slice API (activePanel / openPanel(id, context) / closePanel()) — ' +
+        'required by side-panel-shell-spec.md §8.1/SP-7 (ONE slice replacing the retired libraryPanel/browserPanel)',
+    )
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
+  // Kill any dialog a previous test left pending BEFORE touching the panel
+  // state, and cancel it (resolve(false)) rather than proceed it —
+  // resolving `true` would complete the previous test's open-other
+  // transition and open the Browser panel as a reset side effect (the leak
+  // that made 'cancelling the discard prompt' pass alone but fail in the
+  // full file on GREEN). resolve(false) cancels: nothing proceeds.
+  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(false)
+  // Batch-4 ruling 2: seed ONLY through the §8.1 single-slice API. On this
+  // pre-GREEN tree every test fails at the gate, naming the missing API.
+  requireSection81Api()
   act(() => {
     useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1' })
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' } as never)
-    // Seed the panel open via whichever shape currently exists — the old
-    // `libraryPanel` slice today; the wave-1 `activePanel` slice once wired.
-    // Using setState with a loose cast keeps this file forward-compatible
-    // with either shape without pretending the new one already exists.
-    useUiStore.setState({ libraryPanel: { workspaceId: 'ws-1' } } as never)
+    s81().openPanel('library', { workspaceId: 'ws-1' })
   })
   setLibraryEditorDirty(false)
-  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(true)
 })
 
 afterEach(() => {
+  // Cancel any dialog this test left pending — resolve(false), never true:
+  // the next test (or file) must not inherit a transition in flight.
   setLibraryEditorDirty(false)
-  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(true)
+  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(false)
 })
 
 describe('ChatControls — CRIT-001 leave guard on open-other (FR-013)', () => {
