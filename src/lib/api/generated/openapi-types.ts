@@ -973,13 +973,13 @@ export interface paths {
         };
         /**
          * Get agent concurrency settings
-         * @description Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use.
+         * @description Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use. pending_apply is present while saved settings are not in force yet (see PerformancePendingApply).
          */
         get: operations["getPerformanceSettings"];
         /**
          * Update agent concurrency settings
          * @description Updates max_parallel_agents. An explicit value is honored exactly as given — there is no ceiling, only a floor of 1; a value is never silently lowered. Set to 0 to restore the auto-detected default (available memory / ~3.5 MB per agent, floored at 2, physically bounded around 2000). Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
-         *     Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1–1000; out of range → 400). Only a LOWERING — a new value below the global currently in force — can rewrite agents (D20): a raise, or the current value, rewrites no agent and needs no confirmation; agents whose stored value is above the global keep it (capped and flagged). A lowering below some agents' own values lowers those agents too, but only with consent (D11): confirmed_lowering must equal — as a set keyed by agent_id, order-independent — the agents whose own value is above the new global at write time. Any difference (extra, missing or changed agent, confirmed_lowering absent while agents would be lowered, or a NON-EMPTY list on a raise — an empty or absent one on a raise is fine) is drift (D16): nothing is written and the response is 409 MaxToolIterationsLoweringConflict carrying the fresh preview. The same 409 is returned when an agent record changes (revision conflict) between the deciding check and its lowering write — the agents already lowered are rolled back first. A failure part-way through the writes rolls back the agents already lowered and leaves the global unchanged (500 ErrorResponse, code max_tool_iterations_lowering_failed, or max_tool_iterations_rollback_incomplete if a rollback also failed, with the original failure in details.cause). A failure to read the agent store while computing or checking the affected set is 500 code max_tool_iterations_agents_read_failed, nothing written. Setting the global also ends the retired environment-variable import for good (D6). A successful change reloads the agent registry so every agent's next turn uses the new limit; the response lists the lowered agents in max_tool_iterations_lowered_agents. If the save is committed but the in-memory refresh or that reload fails, the response is 500 code performance_reload_failed with a PerformanceReloadFailedError body: the settings ARE saved on disk and nothing is rolled back, but they are not in force yet. details.stage tells how far the apply got — refresh: the in-memory configuration was NOT swapped, so GET /performance still shows the OLD values until the next configuration reload or restart; reload: the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed, so agents' next turns keep the old limits until the next reload or restart. details.changed_fields lists the settings this request changed and details.lowered_agents the agents it lowered (GET /performance does not carry them).
+         *     Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1–1000; out of range → 400). Only a LOWERING — a new value below the global currently in force — can rewrite agents (D20): a raise, or the current value, rewrites no agent and needs no confirmation; agents whose stored value is above the global keep it (capped and flagged). A lowering below some agents' own values lowers those agents too, but only with consent (D11): confirmed_lowering must equal — as a set keyed by agent_id, order-independent — the agents whose own value is above the new global at write time. Any difference (extra, missing or changed agent, confirmed_lowering absent while agents would be lowered, or a NON-EMPTY list on a raise — an empty or absent one on a raise is fine) is drift (D16): nothing is written and the response is 409 MaxToolIterationsLoweringConflict carrying the fresh preview. The same 409 is returned when an agent record changes (revision conflict) between the deciding check and its lowering write — the agents already lowered are rolled back first. A failure part-way through the writes rolls back the agents already lowered and leaves the global unchanged (500 ErrorResponse, code max_tool_iterations_lowering_failed, or max_tool_iterations_rollback_incomplete if a rollback also failed, with the original failure in details.cause). A failure to read the agent store while computing or checking the affected set is 500 code max_tool_iterations_agents_read_failed, nothing written. Setting the global also ends the retired environment-variable import for good (D6). A successful change reloads the agent registry so every agent's next turn uses the new limit; the response lists the lowered agents in max_tool_iterations_lowered_agents. If the save is committed but the in-memory refresh or that reload fails, the response is 500 code performance_reload_failed with a PerformanceReloadFailedError body: the settings ARE saved on disk and nothing is rolled back, but they are not in force yet. details.stage tells how far the apply got — refresh: the in-memory configuration was NOT swapped, so GET /performance still shows the OLD values until the next configuration reload or restart; reload: the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed, so agents' next turns keep the old limits until the next reload or restart. details.changed_fields lists the settings this request changed and details.lowered_agents the agents it lowered (GET /performance does not carry them). A registry reload whose rebuild itself fails (not only one that cannot start or times out) is the reload stage too. After any performance_reload_failed answer, GET /performance (and every later PUT response) carries pending_apply until a later refresh AND registry reload both succeed; while it is set, a later PUT always reloads the agent registry, whatever fields it changes.
          */
         put: operations["updatePerformanceSettings"];
         post?: never;
@@ -9696,6 +9696,8 @@ export interface components {
             max_tool_iterations_saved_raw?: number;
             /** @description Agents whose own limit this request lowered to the new global (spec D11). Present only on a PUT response that lowered at least one agent; absent on GET and on every other PUT. */
             max_tool_iterations_lowered_agents?: components["schemas"]["MaxToolIterationAgentChange"][];
+            /** @description Present only while saved Performance settings are not in force yet (see PerformancePendingApply); absent when everything saved is applied. Returned on GET and on every successful PUT (a successful PUT clears it, so it is then absent). */
+            pending_apply?: components["schemas"]["PerformancePendingApply"];
         };
         /**
          * PerformanceSettingsUpdate
@@ -9846,6 +9848,25 @@ export interface components {
              */
             code: string;
             details: components["schemas"]["PerformanceReloadFailedDetails"];
+        };
+        /**
+         * PerformancePendingApply
+         * @description Server-side "saved but not applied yet" state of the Performance settings (issue #904). Set when a PUT /performance ends in a performance_reload_failed answer (its writes are committed on disk but not in force). It survives page reloads and new sessions — it lives in the gateway, not in the client — and is cleared only when a later refresh of the running configuration AND an agent registry reload both succeed: a later successful PUT /performance (which always reloads the agents while this state is set), or a successful manual or automatic configuration reload. A gateway restart applies everything on disk, so a restarted gateway never reports it.
+         */
+        PerformancePendingApply: {
+            /**
+             * @description How far the most recent failed apply got (same meaning as PerformanceReloadFailedDetails.stage). refresh — the running configuration was NOT refreshed: the other fields of this response still show the OLD values. reload — the running configuration shows the NEW values but the agents were not rebuilt: their next turns keep the old limits.
+             * @example reload
+             * @enum {string}
+             */
+            stage: "refresh" | "reload";
+            /**
+             * @description Every Performance setting saved but not yet in force — the union of the changed_fields of each failed PUT since the settings were last fully applied, in contract enum order.
+             * @example [
+             *       "max_tool_iterations"
+             *     ]
+             */
+            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "max_tool_iterations")[];
         };
         /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
         Provider: {
@@ -24005,6 +24026,7 @@ export type MaxToolIterationsConfirmedAgent = components["schemas"]["MaxToolIter
 export type MaxToolIterationsLoweringConflict = components["schemas"]["MaxToolIterationsLoweringConflict"];
 export type PerformanceReloadFailedDetails = components["schemas"]["PerformanceReloadFailedDetails"];
 export type PerformanceReloadFailedError = components["schemas"]["PerformanceReloadFailedError"];
+export type PerformancePendingApply = components["schemas"]["PerformancePendingApply"];
 export type Provider = components["schemas"]["Provider"];
 export type ProviderDependent = components["schemas"]["ProviderDependent"];
 export type ProviderDeleteRequest = components["schemas"]["ProviderDeleteRequest"];

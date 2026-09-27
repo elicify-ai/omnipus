@@ -112,3 +112,11 @@ properties:
       Agents whose own limit this request lowered to the new global (spec
       D11). Present only on a PUT response that lowered at least one agent;
       absent on GET and on every other PUT.
+  pending_apply:
+    $ref: './PerformancePendingApply.yaml'
+    x-go-type: PerformancePendingApply
+    description: >
+      Present only while saved Performance settings are not in force yet
+      (see PerformancePendingApply); absent when everything saved is applied.
+      Returned on GET and on every successful PUT (a successful PUT clears
+      it, so it is then absent).
