@@ -51,7 +51,10 @@ func TestCallProviderOnce_SingleCandidateRetriesWithFrame_F1(t *testing.T) {
 			case evt := <-subs.C:
 				if evt.Kind == EventKindProviderRetry {
 					retried++
-					p := evt.Payload.(LLMRetryPayload)
+					p, ok := evt.Payload.(LLMRetryPayload)
+					if !ok {
+						t.Fatalf("provider_retry payload is %T, want LLMRetryPayload", evt.Payload)
+					}
 					assert.Equal(t, 2, p.Attempt, "the retry event announces the call ABOUT to be made (C-8)")
 					assert.Equal(t, 3, p.MaxAttempts)
 					assert.Equal(t, "test-model", p.Model)

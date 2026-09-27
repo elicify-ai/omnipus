@@ -287,8 +287,8 @@ func TestMultiKeyWithModelFallback(t *testing.T) {
 		callCount++
 		calledModels = append(calledModels, provider+"/"+model)
 
-		switch {
-		case provider == "minimax":
+		switch provider {
+		case "minimax":
 			// minimax: success on its first call
 			return &LLMResponse{Content: "success from minimax"}, nil
 		default:

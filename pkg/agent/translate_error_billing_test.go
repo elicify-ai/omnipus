@@ -31,6 +31,7 @@
 package agent
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -61,8 +62,8 @@ func boundaryPair(t *testing.T, status int, header http.Header, body string) (*P
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 	err := common.HandleErrorResponse(resp, "https://api.example.com")
-	commonPE, ok := err.(*common.ProviderError)
-	if !ok {
+	var commonPE *common.ProviderError
+	if !errors.As(err, &commonPE) {
 		t.Fatalf("HandleErrorResponse returned %T (%v), want *common.ProviderError", err, err)
 	}
 	return &ProviderError{Status: commonPE.Status, Body: commonPE.Body, Err: commonPE}, err
@@ -114,7 +115,6 @@ func TestClassifierAgreement_D2(t *testing.T) {
 		{name: "404 media-404 echoing the model id", status: 404, body: `{"error":{"message":"Model gpt-4o-2024-08-06 not found for image request"}}`, wantUser: CodeUnknown, wantRouting: providers.FailoverUnknown},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			agentPE, commonErr := boundaryPair(t, tc.status, nil, tc.body)
 			gotUser := classifyByHTTPStatus(agentPE)
@@ -152,7 +152,6 @@ func TestQuotaBilling_UserSide_C5(t *testing.T) {
 		{name: "400 Anthropic credit balance is too low", status: 400, body: `{"type":"error","error":{"message":"Your credit balance is too low to access the Anthropic API"}}`},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			_, commonErr := boundaryPair(t, tc.status, nil, tc.body)
 			llm := TranslateTurnError(commonErr)
@@ -213,7 +212,6 @@ func TestModelRetired_TruePositives_C24(t *testing.T) {
 		{name: "404 model_not_found + phrase", status: 404, body: `{"error":{"code":"model_not_found","message":"This model has been decommissioned"}}`},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			_, commonErr := boundaryPair(t, tc.status, nil, tc.body)
 			llm := TranslateTurnError(commonErr)
@@ -270,7 +268,6 @@ func TestModelRetired_NearMisses_StayUnknown_C24(t *testing.T) {
 		{name: "410 decommissioned (D2 defers routing; user side stays unknown)", status: 410, body: `{"error":{"message":"This model has been decommissioned"}}`},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			_, commonErr := boundaryPair(t, tc.status, nil, tc.body)
 			llm := TranslateTurnError(commonErr)
@@ -329,7 +326,6 @@ func TestKeyFragment_NeverInMessage_C19(t *testing.T) {
 		{name: "billing body carrying a key fragment", status: 402, body: `{"error":{"message":"insufficient credits for key sk-proj-ZZZZ"}}`},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			_, commonErr := boundaryPair(t, tc.status, nil, tc.body)
 			llm := TranslateTurnError(commonErr)

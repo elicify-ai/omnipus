@@ -32,6 +32,7 @@
 package common
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -55,8 +56,8 @@ func mkErrResp(status int, header http.Header, body string) *http.Response {
 // providerErrorFrom unwraps the *ProviderError HandleErrorResponse returns.
 func providerErrorFrom(t *testing.T, err error) *ProviderError {
 	t.Helper()
-	pe, ok := err.(*ProviderError)
-	if !ok {
+	var pe *ProviderError
+	if !errors.As(err, &pe) {
 		t.Fatalf("HandleErrorResponse returned %T, want *ProviderError: %v", err, err)
 	}
 	return pe
@@ -161,12 +162,17 @@ func TestRetryAfterCapture_D1(t *testing.T) {
 					time.Now().UTC().Add(time.Duration(tc.want) * time.Second).UTC().Format(http.TimeFormat),
 				}}
 			}
-			pe := providerErrorFrom(t, HandleErrorResponse(mkErrResp(429, header, `{"error":{"message":"rate limited"}}`), "https://api.example.com"))
+			resp := mkErrResp(429, header, `{"error":{"message":"rate limited"}}`)
+			// bodyclose: HandleErrorResponse reads but does not close the
+			// response body — the caller owns the Close. (NopCloser here, so
+			// this is ownership hygiene, not a resource leak.)
+			defer resp.Body.Close()
+			pe := providerErrorFrom(t, HandleErrorResponse(resp, "https://api.example.com"))
 
 			// MIN-101 shape pin: RetryAfterSeconds is a plain int — no
 			// presence flag, no pointer. Compiles only for an int-assignable
 			// field; 0 == absent is the semantic this enables.
-			var _ int = pe.RetryAfterSeconds
+			var _ = pe.RetryAfterSeconds
 
 			if tc.bounded {
 				low, high := tc.want-tc.tolerance, tc.want+tc.tolerance
@@ -192,7 +198,9 @@ func TestRetryAfterCapture_NoResetHeaderParsing_C22(t *testing.T) {
 		"X-Ratelimit-Reset-Requests":   []string{"678"},
 		"X-Ratelimit-Remaining-Tokens": []string{"999"},
 	}
-	pe := providerErrorFrom(t, HandleErrorResponse(mkErrResp(429, header, `{"error":{"message":"too many requests"}}`), "https://api.example.com"))
+	resp := mkErrResp(429, header, `{"error":{"message":"too many requests"}}`)
+	defer resp.Body.Close()
+	pe := providerErrorFrom(t, HandleErrorResponse(resp, "https://api.example.com"))
 	if pe.RetryAfterSeconds != 0 {
 		t.Fatalf("C-22 violated: x-ratelimit-reset* parsed into RetryAfterSeconds = %d, want 0 (backoff schedule)", pe.RetryAfterSeconds)
 	}
@@ -270,7 +278,9 @@ func TestRequestIDCapture_Candidates_OB003(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pe := providerErrorFrom(t, HandleErrorResponse(mkErrResp(401, tc.header, `{"error":{"message":"bad key"}}`), "https://api.example.com"))
+			resp := mkErrResp(401, tc.header, `{"error":{"message":"bad key"}}`)
+			defer resp.Body.Close()
+			pe := providerErrorFrom(t, HandleErrorResponse(resp, "https://api.example.com"))
 			if pe.RequestID != tc.want {
 				t.Fatalf("RequestID = %q, want %q (request-id candidates, OBS-003)", pe.RequestID, tc.want)
 			}

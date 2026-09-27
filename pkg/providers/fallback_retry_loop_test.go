@@ -73,7 +73,12 @@ func mkResp(status int, header http.Header, body string) *http.Response {
 // hand — the parse layer owns them, §7.2.)
 func peFromBoundary(t *testing.T, status int, header http.Header, body string) error {
 	t.Helper()
-	err := common.HandleErrorResponse(mkResp(status, header, body), "https://api.example.com")
+	resp := mkResp(status, header, body)
+	// bodyclose: HandleErrorResponse reads but does not close the response
+	// body — the caller owns the Close. (NopCloser here, so this is
+	// ownership hygiene, not a resource leak.)
+	defer resp.Body.Close()
+	err := common.HandleErrorResponse(resp, "https://api.example.com")
 	if err == nil {
 		t.Fatalf("HandleErrorResponse returned nil for status %d", status)
 	}

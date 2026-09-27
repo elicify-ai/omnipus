@@ -104,7 +104,6 @@ func TestOperatorOnly_BillingAndRetiredAreOperatorOnly(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			code, cause := classifyOperatorOnlyTurnError(tc.err)
 			gotOpOnly := cause != operatorFixNone
