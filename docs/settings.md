@@ -86,13 +86,20 @@ Every change is recorded in the audit log as a `security_setting_change` event. 
 | You change the limit | What happens to agents with their own limit |
 |---|---|
 | **Lower**, for example from 200 to 50 | Every agent whose own limit is above 50 is lowered to 50, after you confirm the list in the dialog. Agents at or below 50 are not touched. After the save, a message names each agent that was lowered. |
-| **Raise**, for example from 50 to 200 | No agent's own limit changes. An agent you lowered to 50 stays at 50. Raising the limit again does not restore values an earlier lowering replaced. |
+| **Raise**, for example from 50 to 200 | No dialog opens, and no agent's own limit changes. An agent you lowered to 50 stays at 50. Raising the limit again does not restore values an earlier lowering replaced. |
 
 If an agent's own limit changes between the dialog opening and your confirmation, nothing is saved. The dialog shows **"The list of affected agents changed — review and confirm again."** with the new list, and you confirm again.
 
 ### When a save is not applied yet
 
-Rarely, the new limit is saved but the running agents cannot be reloaded with it. A warning then starts with **"Saved, but not applied yet"**. The value is on disk, and agents it lowered are already lowered. The new limit applies after the next reload or a gateway restart.
+Rarely, a save is written but not yet in force. A warning then starts with **"Saved, but not applied yet"**. It names only the settings that save changed (for this card, "the tool-iteration limit"), and the agents the save lowered are still listed under the field. It comes in two forms:
+
+| The warning reads | What happened |
+|---|---|
+| "Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload: …" | `config.json` holds the new value, but the running configuration could not be refreshed. The Performance tab keeps showing the value you saved, with this notice, until the gateway reloads or restarts. |
+| "Saved, but not applied yet: … the agent reload failed …" | The running configuration has the new value, but the agents could not be reloaded with it. Their next turns keep the old limit. |
+
+Either way nothing is rolled back: the value is in `config.json`, agents it lowered are already lowered, and the change is in the audit log. The new limit applies after the next reload or a gateway restart.
 
 ### A saved value outside 1 to 1000
 
@@ -109,7 +116,7 @@ The gateway log carries a warning at start-up, and the Performance tab shows a w
 
 Only Settings, Performance changes this limit, because it asks for your password and shows you which agents a lowering affects. Other ways in are refused:
 
-- The general configuration endpoint, `PUT /api/v1/config`, refuses a body that includes `agents.defaults.max_tool_iterations`, with "is a blocked path — use the dedicated endpoint".
+- The general configuration endpoint, `PUT /api/v1/config`, refuses a body that includes `agents.defaults.max_tool_iterations` with status 403 and "agents.defaults.max_tool_iterations is a blocked path — use the dedicated endpoint". Nothing in that body is saved. Other changes to `agents.defaults` through this endpoint keep the saved limit as it is.
 - The `set_config` tool that agents use to change configuration from a chat refuses the key and points to Settings, Performance. To limit one agent from a chat, ask for that agent's own value instead; see [agents](agents.md#how-to-lower-one-agents-tool-call-limit).
 
 ### If you are upgrading
