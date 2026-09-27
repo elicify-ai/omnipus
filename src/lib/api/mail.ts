@@ -36,6 +36,7 @@ import type {
   MailSendRequest,
   MailSendResponse,
   MailDraftUpdateRequest,
+  MailDraftSendRequest,
   MailHtmlPreviewTokenRequest,
   MailHtmlPreviewTokenResponse,
 } from './generated/openapi-types'

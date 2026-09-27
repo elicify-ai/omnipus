@@ -243,6 +243,15 @@ import type {
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox,
   MailboxConfigureRequest,
+  // Workspace Mail panel (email-mail-view-spec.md, contract-first #8):
+  MailFolder,
+  MailFolderList,
+  MailMessageSummary,
+  MailMessagePage,
+  MailMessage,
+  MailAttachment,
+  MailboxNewMailSummary,
+  MailSummaryList,
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectRequest,
   BrowserInspectResponse,
@@ -428,6 +437,15 @@ export type {
   // M11 per-(agent, workspace) email mailbox account:
   Mailbox,
   MailboxConfigureRequest,
+  // Workspace Mail panel (email-mail-view-spec.md, contract-first #8):
+  MailFolder,
+  MailFolderList,
+  MailMessageSummary,
+  MailMessagePage,
+  MailMessage,
+  MailAttachment,
+  MailboxNewMailSummary,
+  MailSummaryList,
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectRequest,
   BrowserInspectResponse,
