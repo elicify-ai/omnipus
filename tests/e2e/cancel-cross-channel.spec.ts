@@ -426,7 +426,7 @@ test(
 //
 // FAILURE HISTORY (CI run 36327766952, 2026-09-27): the prompt used to
 // instruct the model to pass `async: true`/`async: false` verbatim. The
-// central e2e model (deepseek/deepseek-v4.1-flash — the same model the release
+// central e2e model (tests/e2e/e2e-model.json — the same model the release
 // branch's picker-first-option onboarding resolves to, so the model did NOT
 // change vs release) sent the instructed retired key in T24b attempt 1, the
 // gateway rejected the whole call with "unexpected property \"async\""
