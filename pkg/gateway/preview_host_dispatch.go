@@ -152,19 +152,23 @@ const previewLabelRateLimitRefill = time.Second
 // and the main host unaffected — the bucket key is the label, and the
 // limiter runs only on the dispatch path).
 //
+// Admission is per label from a label's FIRST request (fix4): a label that
+// resolves through the preview registries draws ONLY its own bucket — never
+// the shared unknown-label budget — so a flood of junk labels cannot deny a
+// legitimate label's first request (FR-027's "one label's throttle leaves
+// others untouched"). Only labels that resolve to NO registration draw the
+// shared unknown-label budget, and they allocate no per-label state.
+//
 // Its state is BOUNDED (fix3, A6/SL-F1/CR4): the preview Host is
-// unauthenticated attacker input, so a label that has never resolved to a
-// registration never allocates a bucket — unseen labels admit through ONE
-// shared unknown-label bucket (the global unknown-label rate cap). A label
-// gets its own bucket only when a registry resolution calls promote, and
-// the map is bounded twice over: buckets idle beyond
-// previewLabelBucketIdleTTL are swept on every admission, and the map is
-// hard-capped at previewLabelBucketCap with least-recently-used eviction at
-// the cap.
+// unauthenticated attacker input, so the bucket map is bounded twice over —
+// buckets idle beyond previewLabelBucketIdleTTL are swept on every
+// admission, and the map is hard-capped at previewLabelBucketCap with
+// least-recently-used eviction at the cap. The unknown budget is one bucket:
+// constant memory.
 type previewLabelLimiter struct {
 	mu      sync.Mutex
 	buckets map[string]*previewLabelBucket
-	// unknown is the shared bucket every never-resolved label admits
+	// unknown is the shared budget every non-resolving label admits
 	// through. Lazily initialised (tests construct the bare struct).
 	unknown *previewLabelBucket
 }
@@ -174,6 +178,13 @@ type previewLabelBucket struct {
 	last   time.Time
 }
 
+// previewLabelLimiters is the package-DEFAULT limiter, not the dispatcher's:
+// the production restAPI is constructed with its own instance
+// (restAPI.labelLimiters, set at boot), and every preview chain harness does
+// the same, so two instances in one process can no longer throttle each
+// other through shared state (fix4). The package default is the zero-value
+// fallback for bare restAPI literals and the seam the round-3 RED pack
+// drives directly.
 var previewLabelLimiters = &previewLabelLimiter{
 	buckets: make(map[string]*previewLabelBucket),
 }
@@ -185,17 +196,20 @@ var previewLabelLimiters = &previewLabelLimiter{
 const previewLabelBucketIdleTTL = 5 * time.Minute
 
 // previewLabelBucketCap is the hard cap on the per-label bucket map. At the
-// cap, promote evicts least-recently-used buckets for a new label — real
-// deployments hold one bucket per live registration, so the cap binds only
-// when registrations churn past it.
+// cap, allocateLocked evicts least-recently-used buckets for a new label —
+// real deployments hold one bucket per live registration, so the cap binds
+// only when registrations churn past it.
 const previewLabelBucketCap = 256
 
-// allow consumes one token for label, refilling by elapsed time. A label
-// with its own bucket (promoted) admits against it. A label with no bucket —
-// never yet resolved — admits against the SHARED unknown-label bucket
-// instead and allocates nothing: unauthenticated clients can spray unique
+// admit decides one dispatched request's admission. A label with its own
+// bucket draws it. An unseen label routes by RESOLUTION (fix4): a label
+// that resolves through the preview registries gets its own full bucket and
+// admits — its first sight never draws the shared unknown-label budget
+// (FR-027: one label's throttle leaves others untouched), while a label
+// that resolves to no registration draws the shared unknown budget and
+// allocates no per-label state: unauthenticated clients can spray unique
 // grammar-valid labels, and none of them may grow process memory.
-func (l *previewLabelLimiter) allow(label string) bool {
+func (l *previewLabelLimiter) admit(label string, resolves bool) bool {
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -203,15 +217,61 @@ func (l *previewLabelLimiter) allow(label string) bool {
 	if b, ok := l.buckets[label]; ok {
 		return takeLocked(b, now)
 	}
-	if l.unknown == nil {
-		l.unknown = &previewLabelBucket{
-			tokens: previewLabelRateLimitBurst,
-			last:   now,
+	if !resolves {
+		if l.unknown == nil {
+			l.unknown = &previewLabelBucket{
+				tokens: previewLabelRateLimitBurst,
+				last:   now,
+			}
 		}
+		// The shared budget carries the same burst/refill as a per-label
+		// one, so a spray of distinct non-resolving labels shares ONE
+		// label-sized budget.
+		return takeLocked(l.unknown, now)
 	}
-	// The shared bucket carries the same burst/refill as a per-label one, so
-	// a spray of distinct unknown labels shares ONE label-sized budget.
-	return takeLocked(l.unknown, now)
+	l.allocateLocked(label, now)
+	return takeLocked(l.buckets[label], now)
+}
+
+// allow is the per-label admission primitive: an unseen label is treated as
+// resolving, so it gets its own bucket on first sight and admits. The
+// dispatcher routes through admit with the live registry resolution
+// instead; this primitive exists for the per-label property tests and any
+// caller that wants pure FR-027 per-label semantics with no unknown-label
+// concept.
+func (l *previewLabelLimiter) allow(label string) bool {
+	return l.admit(label, true)
+}
+
+// allowUnknown draws the shared unknown-label budget for one non-resolving
+// label. The empty label never occupies the bucket map (classification
+// never yields ""), so admit("", false) always reaches the unknown branch.
+func (l *previewLabelLimiter) allowUnknown() bool {
+	return l.admit("", false)
+}
+
+// allocateLocked inserts label's own full bucket, keeping the map bounded
+// twice over: idle buckets beyond the TTL are swept first, then
+// least-recently-used buckets are evicted while the map sits at the cap.
+// Caller holds mu.
+func (l *previewLabelLimiter) allocateLocked(label string, now time.Time) {
+	l.sweepLocked(now)
+	for len(l.buckets) >= previewLabelBucketCap {
+		oldestKey, oldestAt := "", now
+		for key, b := range l.buckets {
+			if b.last.Before(oldestAt) {
+				oldestKey, oldestAt = key, b.last
+			}
+		}
+		if oldestKey == "" {
+			break
+		}
+		delete(l.buckets, oldestKey)
+	}
+	l.buckets[label] = &previewLabelBucket{
+		tokens: previewLabelRateLimitBurst,
+		last:   now,
+	}
 }
 
 // takeLocked refills b by elapsed time and consumes one token, reporting
@@ -240,16 +300,17 @@ func (l *previewLabelLimiter) sweepLocked(now time.Time) {
 	}
 }
 
-// promote gives label its own per-label bucket after a successful registry
-// resolution (the dispatch middleware admits first, the registry resolves
-// second — promote runs on the resolution success paths only). The label's
-// budget then stops drawing on the shared unknown-label bucket: one label
-// being hammered no longer consumes every other label's burst, which is the
-// FR-027 per-label guarantee.
+// promote refreshes label's per-label bucket on a successful registry
+// resolution (the serve path calls it so an actively served label's bucket
+// stays LRU-fresh and the map holds one bucket per live registration). The
+// label's budget never draws on the shared unknown-label budget: one label
+// being hammered cannot consume any other label's burst, which is the
+// FR-027 per-label guarantee. Admission itself resolves first (admit), so
+// promote only maintains the bucket the label already owns.
 //
-// Bounded like allow: sweeps idle buckets first, then evicts
-// least-recently-used buckets while the map sits at the cap, so promoted
-// labels never grow the map without bound either.
+// Bounded like every insertion: idle buckets are swept and
+// least-recently-used buckets are evicted while the map sits at the cap, so
+// promoted labels never grow the map without bound either.
 func (l *previewLabelLimiter) promote(label string) {
 	now := time.Now()
 	l.mu.Lock()
@@ -258,23 +319,7 @@ func (l *previewLabelLimiter) promote(label string) {
 		b.last = now
 		return
 	}
-	l.sweepLocked(now)
-	for len(l.buckets) >= previewLabelBucketCap {
-		oldestKey, oldestAt := "", now
-		for key, b := range l.buckets {
-			if b.last.Before(oldestAt) {
-				oldestKey, oldestAt = key, b.last
-			}
-		}
-		if oldestKey == "" {
-			break
-		}
-		delete(l.buckets, oldestKey)
-	}
-	l.buckets[label] = &previewLabelBucket{
-		tokens: previewLabelRateLimitBurst,
-		last:   now,
-	}
+	l.allocateLocked(label, now)
 }
 
 // ---------------------------------------------------------------------------
@@ -302,12 +347,46 @@ func (a *restAPI) previewHostDispatchMW(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !previewLabelLimiters.allow(label) {
+		// Admission resolves FIRST for an unseen label (fix4): a label that
+		// resolves gets its own per-label bucket and never draws the shared
+		// unknown-label budget, so a junk-label flood cannot 429 a
+		// legitimate label's first request (FR-027). Only labels resolving
+		// to no registration consume the unknown budget. The resolution is
+		// the same dev-first registry read servePreviewByLabel serves
+		// with — an in-memory scan under the store locks, paid only until
+		// the label owns a bucket.
+		if !a.previewLabelLimiter().admit(label, a.previewLabelResolves(label)) {
 			writeDevProxyError(w, http.StatusTooManyRequests, "rate limited")
 			return
 		}
 		dispatched.ServeHTTP(w, r.WithContext(WithPreviewHostLabel(r.Context(), label)))
 	})
+}
+
+// previewLabelLimiter returns THIS gateway instance's preview per-label
+// limiter (fix4): admission state belongs to the restAPI/dispatcher, not to
+// package state, so two instances in one process — boot plus tests, or
+// parallel harnesses — never throttle each other through a shared map. Nil
+// (bare test literals) falls back to the package default
+// previewLabelLimiters, which stays the RED pack's direct seam.
+func (a *restAPI) previewLabelLimiter() *previewLabelLimiter {
+	if a.labelLimiters != nil {
+		return a.labelLimiters
+	}
+	return previewLabelLimiters
+}
+
+// previewLabelResolves reports whether the label currently resolves through
+// the SAME registries, in the SAME dev-first order, servePreviewByLabel
+// serves with (OneCodePath): admission routing must not disagree with the
+// serving lookup, or a resolving label could be unknown-capped (a 429 the
+// registry would have served) and a non-resolving one promoted. Both
+// lookups are in-memory scans under their registry locks.
+func (a *restAPI) previewLabelResolves(label string) bool {
+	if a.devServers != nil && a.devServers.LookupByLabel(label) != nil {
+		return true
+	}
+	return a.servedSubdirs != nil && a.servedSubdirs.LookupByLabel(label) != nil
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +408,7 @@ func (a *restAPI) servePreviewByLabel(w http.ResponseWriter, r *http.Request, la
 	// Dev registry first — a label may resolve directly to a dev server.
 	if a.devServers != nil {
 		if reg := a.devServers.LookupByLabel(label); reg != nil {
-			previewLabelLimiters.promote(label)
+			a.previewLabelLimiter().promote(label)
 			remaining := strings.TrimPrefix(r.URL.Path, "/")
 			a.proxyDevRequest(w, r, reg, remaining, reg.AgentID, reg.Token, startedAt)
 			return
@@ -340,7 +419,7 @@ func (a *restAPI) servePreviewByLabel(w http.ResponseWriter, r *http.Request, la
 	// bucket (fix3 A6: only labels that resolve allocate limiter state).
 	if a.servedSubdirs != nil {
 		if entry := a.servedSubdirs.LookupByLabel(label); entry != nil {
-			previewLabelLimiters.promote(label)
+			a.previewLabelLimiter().promote(label)
 			if a.devServers != nil {
 				if reg := a.devServers.LookupByAgent(entry.AgentID); reg != nil {
 					remaining := strings.TrimPrefix(r.URL.Path, "/")
