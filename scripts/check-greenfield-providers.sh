@@ -646,6 +646,51 @@ func migrateSomethingElseEntirely(x string) string { return x }
 GO
   expect "SC-009: an unlisted line in an exempted file still trips the gate" 1
 
+  # ── ADR-096 roles-migration exemption (ADR-067 §8c, founder 2026-09-27) ─────
+  # The exemption must be exact-line and never widen to the migration pattern:
+  # a NEW, unrelated migration marker must still turn the gate red, both inside
+  # the exempted file and anywhere else in pkg/config.
+
+  fixture
+  cat > "$tmp/case/pkg/config/web_search_roles.go" <<'GO'
+package config
+
+func MigrateWebSearchRoles(cfg *Config, cfgPath string, onSelfHeal SelfHealWriteHook) {
+	w["roles_migrated_at"] = web.RolesMigratedAt
+}
+GO
+  expect "ADR-096: the sanctioned roles-migration lines pass clean" 0
+
+  fixture
+  cat > "$tmp/case/pkg/config/web_search_roles.go" <<'GO'
+package config
+
+func MigrateWebSearchRoles(cfg *Config, cfgPath string, onSelfHeal SelfHealWriteHook) {
+	w["roles_migrated_at"] = web.RolesMigratedAt
+}
+
+var provider_migrated_at = ""
+GO
+  expect "ADR-096: a NEW unrelated migration marker in the exempted file is still red" 1
+
+  fixture
+  cat > "$tmp/case/pkg/config/providerstate.go" <<'GO'
+package config
+
+var provider_migrated_at = ""
+GO
+  expect "ADR-096: a NEW unrelated migration marker elsewhere in pkg/config is still red" 1
+
+  fixture
+  cat > "$tmp/case/pkg/config/web_search_roles.go" <<'GO'
+package config
+
+func init() {
+	w["roles_migrated_at"]  = web.RolesMigratedAt
+}
+GO
+  expect "ADR-096: a sanctioned line edited by one character is still red" 1
+
   fixture
   mkdir -p "$tmp/case/src/lib/generated"
   printf 'export const CATALOG = []\n' > "$tmp/case/src/lib/generated/providerCatalog.ts"

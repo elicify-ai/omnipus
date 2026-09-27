@@ -37,9 +37,11 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -119,9 +121,30 @@ type greenfieldHit struct {
 }
 
 func TestGreenfield_NoAliasMachinery(t *testing.T) {
+	hits := collectGreenfieldHits(t, greenfieldRoots)
+
+	if len(hits) == 0 {
+		return
+	}
+	sort.Slice(hits, func(i, j int) bool { return hits[i].pos < hits[j].pos })
+	for _, h := range hits {
+		t.Errorf("%s: %s %s — ADR-067 US-11.AC1: pkg/providers and pkg/config carry no alias, "+
+			"migration or deprecation machinery. A stored provider id is a catalog id or a "+
+			"custom row; anything else is ErrUnknownProvider with no hint (FR-011, FR-015). "+
+			"The only tokens kept are `aliases[]` and the `retired` status value, and only "+
+			"inside pkg/providers/catalog (A-3, FR-030), plus ADR-096's `roles_migrated_at` "+
+			"disk marker in exactly its two exempt pkg/config files.", h.pos, h.kind, h.text)
+	}
+}
+
+// collectGreenfieldHits runs the US-11.AC1 scan over the given trees and returns
+// every hit. Extracted from TestGreenfield_NoAliasMachinery (logic unchanged) so
+// the ADR-096 exemption can be proven end to end on a throwaway tree.
+func collectGreenfieldHits(t *testing.T, roots []string) []greenfieldHit {
+	t.Helper()
 	var hits []greenfieldHit
 
-	for _, root := range greenfieldRoots {
+	for _, root := range roots {
 		walkGreenfieldGoFiles(t, root, func(rel string, fset *token.FileSet, file *ast.File) {
 			// The encoding/json embed idiom — `type Alias Config` declared
 			// INSIDE a Marshal/UnmarshalJSON body to shed the method set — is
@@ -168,18 +191,42 @@ func TestGreenfield_NoAliasMachinery(t *testing.T) {
 			})
 		})
 	}
+	return hits
+}
 
-	if len(hits) == 0 {
-		return
+// TestGreenfield_RolesMarkerExemptionEndToEnd proves the ADR-096 exemption
+// (ADR-067 §8c) through the real scan, not only its predicate: markers are
+// planted in a throwaway tree named "config" — the same site key the real
+// pkg/config tree produces — and the guard must still flag every NEW, unrelated
+// migration marker while passing the one sanctioned marker in its exempt file.
+func TestGreenfield_RolesMarkerExemptionEndToEnd(t *testing.T) {
+	cases := []struct {
+		name     string
+		file     string
+		literal  string
+		wantHits int
+	}{
+		{"sanctioned marker in its exempt file passes", "web_search_roles.go", "roles_migrated_at", 0},
+		{"NEW unrelated marker in the exempt file is flagged", "web_search_roles.go", "provider_migrated_at", 1},
+		{"sanctioned marker in a non-exempt pkg/config file is flagged", "providerstate.go", "roles_migrated_at", 1},
+		{"sanctioned marker beside another banned token is flagged", "web_search_roles.go", "roles_migrated_at deprecated", 1},
 	}
-	sort.Slice(hits, func(i, j int) bool { return hits[i].pos < hits[j].pos })
-	for _, h := range hits {
-		t.Errorf("%s: %s %s — ADR-067 US-11.AC1: pkg/providers and pkg/config carry no alias, "+
-			"migration or deprecation machinery. A stored provider id is a catalog id or a "+
-			"custom row; anything else is ErrUnknownProvider with no hint (FR-011, FR-015). "+
-			"The only tokens kept are `aliases[]` and the `retired` status value, and only "+
-			"inside pkg/providers/catalog (A-3, FR-030), plus ADR-096's `roles_migrated_at` "+
-			"disk marker in exactly its two exempt pkg/config files.", h.pos, h.kind, h.text)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "config")
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			src := "package config\n\nvar k = " + strconv.Quote(tc.literal) + "\n"
+			if err := os.WriteFile(filepath.Join(root, tc.file), []byte(src), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			hits := collectGreenfieldHits(t, []string{root})
+			if len(hits) != tc.wantHits {
+				t.Fatalf("%s: literal %q in config/%s -> %d hits %v, want %d",
+					tc.name, tc.literal, tc.file, len(hits), hits, tc.wantHits)
+			}
+		})
 	}
 }
 
