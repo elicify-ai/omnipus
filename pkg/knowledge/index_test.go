@@ -792,12 +792,7 @@ func TestIndex_SegmentedNoteCollapsesToOneHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	count := 0
-	for _, h := range hits {
-		if h.Path == "huge.md" {
-			count++
-		}
-	}
+	_, count := hitsForPath(hits, "huge.md")
 	if count != 1 {
 		t.Fatalf("huge.md appears %d times in %v, want exactly 1 (FR-034a: segment hits collapse into one result, scored by the best segment)",
 			count, b2HitPaths(hits))
@@ -835,15 +830,7 @@ func TestIndex_SegmentedNoteCollapsesToOneHit(t *testing.T) {
 	// cross-query comparison was the release-run-36329099270 flake, not the
 	// collapse itself, which picks the max within one query and is what this
 	// assertion checks — still exactly, still to 1e-9.
-	collapsedSameSnapshot := collapseSegmentHits(raw)
-	countSameSnapshot := 0
-	var hugeSameSnapshot IndexHit
-	for _, h := range collapsedSameSnapshot {
-		if h.Path == "huge.md" {
-			countSameSnapshot++
-			hugeSameSnapshot = h
-		}
-	}
+	hugeSameSnapshot, countSameSnapshot := hitsForPath(collapseSegmentHits(raw), "huge.md")
 	if countSameSnapshot != 1 {
 		t.Fatalf("collapse of the raw segment hits produced huge.md %d times, want exactly 1 (FR-034a)",
 			countSameSnapshot)
@@ -860,14 +847,7 @@ func TestIndex_SegmentedNoteCollapsesToOneHit(t *testing.T) {
 		if searchErr != nil {
 			t.Fatalf("Search(%q): %v", marker, searchErr)
 		}
-		found := 0
-		var got IndexHit
-		for _, h := range markerHits {
-			if h.Path == "huge.md" {
-				found++
-				got = h
-			}
-		}
+		got, found := hitsForPath(markerHits, "huge.md")
 		if found != 1 {
 			t.Errorf("Search(%q) matched huge.md %d times, want exactly 1", marker, found)
 		}
@@ -893,6 +873,20 @@ func TestIndex_SegmentedNoteCollapsesToOneHit(t *testing.T) {
 	if hugeSameSnapshot.Score <= 0 {
 		t.Errorf("collapsed hit score = %v, want the best segment's positive score", hugeSameSnapshot.Score)
 	}
+}
+
+// hitsForPath returns the last hit for path in hits and how many hits carried
+// that path, so a caller can assert "exactly one result" and inspect it.
+func hitsForPath(hits []IndexHit, path string) (IndexHit, int) {
+	var last IndexHit
+	n := 0
+	for _, h := range hits {
+		if h.Path == path {
+			n++
+			last = h
+		}
+	}
+	return last, n
 }
 
 // b2LargeNoteChildEnv marks the re-executed child of the large-note test.
