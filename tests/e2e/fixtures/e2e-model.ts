@@ -60,5 +60,6 @@ const FILE_MODEL = loadCentralE2EModel()
 
 /** CI's explicit override (set from the same tests/e2e/e2e-model.json). */
 const ENV_OVERRIDE = process.env.OMNIPUS_E2E_MODEL?.trim() ?? ''
+if (ENV_OVERRIDE !== '' && ENV_OVERRIDE !== FILE_MODEL) console.error(`OMNIPUS_E2E_MODEL value "${ENV_OVERRIDE}" differs from tests/e2e/e2e-model.json value "${FILE_MODEL}"; the environment variable won.`)
 
 export const E2E_MODEL = ENV_OVERRIDE !== '' ? ENV_OVERRIDE : FILE_MODEL
