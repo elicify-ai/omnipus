@@ -25,7 +25,7 @@ import { FileTreeViewUI, FileListAliasDotUI, FileTreeDirectoryUI } from "./tools
 import { WebSearchResultUI, WebSearchCanonicalUI } from "./tools/WebSearchResult";
 import { WebFetchPreviewUI, WebFetchLegacyUI } from "./tools/WebFetchPreview";
 import { BrowserNavigateUI, BrowserNavigateUnderscoreUI } from "./tools/BrowserNavigate";
-import { WebServeUI } from "./tools/WebServeUI";
+import { WebServeUI, ServeWebUI } from "./tools/WebServeUI";
 import { ServeWorkspaceUI } from "./tools/ServeWorkspaceUI";
 import { RunInWorkspaceUI } from "./tools/RunInWorkspaceUI";
 import { SetGoalToolUI } from "./tools/SetGoalToolUI";
@@ -290,14 +290,10 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        *   web_search        → WebSearchResultUI         (legacy alias, old transcripts only)
        *   fetch_url         → WebFetchPreviewUI         (canonical, fetch a URL)
        *   web_fetch         → WebFetchLegacyUI          (legacy alias)
-       *   web_serve         → WebServeUI                (static or dev, kind field)
+       *   serve_web         → ServeWebUI                (canonical, pkg/tools/web_serve.go::ToolNameWebServe — static or dev, kind field)
+       *   web_serve         → WebServeUI                (legacy form, old transcripts only)
        *   serve_workspace   → ServeWorkspaceUI          (back-compat alias → WebServeUI)
        *   run_in_workspace  → RunInWorkspaceUI          (back-compat alias → WebServeUI)
-       *   NOTE: the backend canonical serve name, serve_web
-       *   (pkg/tools/web_serve.go::ToolNameWebServe), is NOT registered here
-       *   yet — a live/replayed serve_web call falls to the generic badge
-       *   (issue-#898 class of gap, reported 2026-09-26, out of this
-       *   change's approved scope).
        *   browser_navigate  → BrowserNavigateUnderscoreUI (underscore alias)
        *   browser.navigate  → BrowserNavigateUI         (registered dotted name)
        *   browser_click     → BrowserClickUnderscoreUI  (underscore alias)
@@ -333,6 +329,7 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <WebSearchResultUI />
       <WebFetchPreviewUI />
       <WebFetchLegacyUI />
+      <ServeWebUI />
       <WebServeUI />
       <ServeWorkspaceUI />
       <RunInWorkspaceUI />
