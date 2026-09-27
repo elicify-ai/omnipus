@@ -13,7 +13,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
@@ -258,10 +257,10 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if err := requireKey(cfg, row); err != nil {
 			return nil, "", err
 		}
-		return anthropicmessages.NewProviderWithTimeout(
+		return NewClaudeProviderWithTimeout(
 			cfg.APIKey(),
 			row.api,
-			cfg.RequestTimeout,
+			time.Duration(cfg.RequestTimeout)*time.Second,
 		), modelID, nil
 
 	case catalog.ProtocolBedrock:

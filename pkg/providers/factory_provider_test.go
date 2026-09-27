@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
-	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
@@ -72,16 +71,19 @@ func TestCreateProviderFromConfig_ProtocolDispatch(t *testing.T) {
 			wantURL:  "https://api.z.ai/api/paas/v4",
 		},
 		{
-			name:     "DS-3.2 registry protocol anthropic builds the Messages transport",
+			// WP-E #750: the Anthropic dispatch builds the SDK-backed adapter
+			// (ClaudeProvider); its base URL reports the row's endpoint minus
+			// the trailing /v1 the SDK re-adds in its request path.
+			name:     "DS-3.2 registry protocol anthropic builds the SDK-backed transport",
 			cfg:      config.ModelConfig{Provider: "minimax", Model: "MiniMax-M2.7"},
 			wantKind: anthropicKind,
-			wantURL:  "https://api.minimax.io/anthropic/v1",
+			wantURL:  "https://api.minimax.io/anthropic",
 		},
 		{
 			name:     "DS-3.3 explicit secondary protocol picks that row's endpoint",
 			cfg:      config.ModelConfig{Provider: "zai", Model: "glm-5.2", Protocol: "anthropic"},
 			wantKind: anthropicKind,
-			wantURL:  "https://api.z.ai/api/anthropic/v1",
+			wantURL:  "https://api.z.ai/api/anthropic",
 		},
 		{
 			name:    "DS-3.4 a protocol the row does not offer is an error",
@@ -121,7 +123,7 @@ func TestCreateProviderFromConfig_ProtocolDispatch(t *testing.T) {
 				Model: "claude-x", APIBase: "https://llm2.example",
 			},
 			wantKind: anthropicKind,
-			wantURL:  "https://llm2.example/v1",
+			wantURL:  "https://llm2.example",
 		},
 		{
 			name:     "ollama builds the local OpenAI-compatible transport",
@@ -173,12 +175,15 @@ func TestCreateProviderFromConfig_ProtocolDispatch(t *testing.T) {
 					t.Errorf("base URL = %q, want %q", got.APIBase(), tt.wantURL)
 				}
 			case anthropicKind:
-				got, ok := p.(*anthropicmessages.Provider)
+				// WP-E #750: the SDK-backed ClaudeProvider, not
+				// *anthropicmessages.Provider (which drops SystemParts and
+				// never emits cache_control).
+				got, ok := p.(*ClaudeProvider)
 				if !ok {
-					t.Fatalf("provider = %T, want *anthropicmessages.Provider", p)
+					t.Fatalf("provider = %T, want *ClaudeProvider (WP-E #750: the SDK-backed adapter)", p)
 				}
-				if got.APIBase() != tt.wantURL {
-					t.Errorf("base URL = %q, want %q", got.APIBase(), tt.wantURL)
+				if gotURL := got.delegate.BaseURL(); gotURL != tt.wantURL {
+					t.Errorf("base URL = %q, want %q", gotURL, tt.wantURL)
 				}
 			case cliKind:
 				if _, ok := p.(*CodexCliProvider); !ok {
@@ -239,12 +244,12 @@ func TestCreateProviderFromConfig_ProtocolChoice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("secondary protocol: %v", err)
 	}
-	got, ok := secondary.(*anthropicmessages.Provider)
+	got, ok := secondary.(*ClaudeProvider)
 	if !ok {
-		t.Fatalf("protocol: anthropic gave %T, want *anthropicmessages.Provider", secondary)
+		t.Fatalf("protocol: anthropic gave %T, want *ClaudeProvider (WP-E #750)", secondary)
 	}
-	if want := "https://api.z.ai/api/anthropic/v1"; got.APIBase() != want {
-		t.Errorf("base URL = %q, want the row's anthropic endpoint %q", got.APIBase(), want)
+	if want := "https://api.z.ai/api/anthropic"; got.delegate.BaseURL() != want {
+		t.Errorf("base URL = %q, want the row's anthropic endpoint %q", got.delegate.BaseURL(), want)
 	}
 }
 
