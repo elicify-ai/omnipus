@@ -72,9 +72,17 @@ func newPreviewTestAPI(t *testing.T) *restAPI {
 // Handler security-header tests
 // ---------------------------------------------------------------------------
 
-// TestServePreview_FrameAncestorsHeader verifies that HandlePreview
-// sets a CSP header with frame-ancestors pointing at the main origin.
-// Traces to: chat-served-iframe-preview-spec.md FR-007c
+// TestServePreview_FrameAncestorsHeader verifies that HandlePreview's static
+// Mode 2 response carries the ADR-094 FR-014 CSP template byte-identically —
+// including frame-ancestors 'none' (spec edge-case table: preview responses
+// in BOTH modes refuse embedding; embedding a preview inside the SPA is out
+// of scope per ADR-094 §4 Neutral 3, and the SPA renders /preview/ as a link,
+// never an iframe — src/components/chat/IframePreview.tsx). Supersedes the
+// pre-ADR-094 oracle (chat-served-iframe-preview-spec.md FR-007c), which
+// pinned frame-ancestors pointing at the main origin.
+// Traces to: adr-094-preview-isolation-spec.md FR-014; the template below is
+// the spec's, transcribed verbatim (the same static-tripwire oracle the
+// proxied path pins in TestPreviewCSPHeaderSet).
 func TestServePreview_FrameAncestorsHeader(t *testing.T) {
 	api := newPreviewTestAPI(t)
 
@@ -88,7 +96,7 @@ func TestServePreview_FrameAncestorsHeader(t *testing.T) {
 	token, _, err := ss.Register("agent-1", dir, time.Hour)
 	require.NoError(t, err)
 
-	// Wire a non-wildcard config so we get a real frame-ancestors value.
+	// Wire a non-wildcard config so the canonical origin is concrete.
 	api.agentLoop.GetConfig().Gateway.Host = "127.0.0.1"
 	api.agentLoop.GetConfig().Gateway.Port = 5000
 
@@ -100,10 +108,36 @@ func TestServePreview_FrameAncestorsHeader(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	csp := w.Header().Get("Content-Security-Policy")
 	assert.NotEmpty(t, csp, "CSP header must be present on /preview/ response")
-	assert.Contains(t, csp, "frame-ancestors",
-		"CSP must contain frame-ancestors directive (FR-007c)")
-	assert.NotContains(t, csp, "frame-ancestors 'none'",
-		"Old 'none' value must be removed (CR-01)")
+
+	// FR-014: the static Mode 2 header must equal the spec template. The
+	// recorder carries the header pre-wire, so the raw \n form is observable
+	// here; net/http's LF→space sanitization only happens when the response
+	// is actually transmitted (the proxied-path tripwire compares that
+	// sanitized wire form for the same reason).
+	//
+	// ${ORIGIN} = the canonical origin (this test's own Gateway config, no
+	// public_url); ${PREFIX} = the token prefix — this fixture's characters
+	// are all in the RFC 3986 unreserved set, so percent-encoding is identity.
+	const origin = "http://127.0.0.1:5000"
+	prefix := "/preview/agent-1/" + token
+	want := "default-src 'none';\n" +
+		"script-src " + origin + prefix + " 'unsafe-inline' 'unsafe-eval';\n" +
+		"style-src " + origin + prefix + ";\n" +
+		"img-src " + origin + prefix + " data:;\n" +
+		"font-src " + origin + prefix + " data:;\n" +
+		"media-src " + origin + prefix + ";\n" +
+		"connect-src " + origin + prefix + " ws://127.0.0.1:5000" + prefix + ";\n" +
+		"form-action " + origin + prefix + ";\n" +
+		"worker-src " + origin + prefix + " blob:;\n" +
+		"base-uri 'none';\n" +
+		"object-src 'none';\n" +
+		"frame-ancestors 'none';\n"
+	assert.Equal(t, want, csp,
+		"ADR-094 FR-014: the static Mode 2 CSP must be byte-identical to the spec template")
+	assert.Contains(t, csp, "frame-ancestors 'none'",
+		"ADR-094 FR-014 + edge-case table: frame-ancestors 'none' on preview responses in BOTH "+
+			"modes — the pre-ADR-094 oracle (frame-ancestors <main-origin>, CR-01) pinned the wrong "+
+			"behaviour and is superseded")
 }
 
 // TestDevPreview_FrameAncestorsHeader verifies that the dev proxy's ModifyResponse

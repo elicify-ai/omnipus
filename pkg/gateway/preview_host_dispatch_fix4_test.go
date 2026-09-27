@@ -56,6 +56,7 @@ func TestFix4Admission_UnknownDrainServesRegisteredLabel(t *testing.T) {
 	t.Run("registered_label_first_request_still_served", func(t *testing.T) {
 		h.upstreamHits.Store(0)
 		resp := h.piRedGuardGet(t, label+".localhost:"+h.port, "/", http.MethodGet, nil)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, http.StatusOK, resp.StatusCode,
 			"FR-027 (fix4): a registered label's first request must be served even with the "+
 				"unknown-label budget drained — got %d (the pre-fix4 routing 429s it: the "+
@@ -66,6 +67,7 @@ func TestFix4Admission_UnknownDrainServesRegisteredLabel(t *testing.T) {
 
 	t.Run("junk_label_still_capped_after_drain", func(t *testing.T) {
 		resp := h.piRedGuardGet(t, "f4-junk-label.localhost:"+h.port, "/", http.MethodGet, nil)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode,
 			"the drained unknown budget must still cap a non-resolving label — "+
 				"the junk-flood protection is the point of the unknown budget")

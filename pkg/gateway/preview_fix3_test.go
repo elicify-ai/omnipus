@@ -230,6 +230,7 @@ func TestPreviewFix3_StaticMode2CSP(t *testing.T) {
 	prefix := strings.TrimSuffix(mint["path"], "/")
 
 	resp := h.fix3Get(t, "", prefix+"/", nil)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	csp := resp.Header.Get("Content-Security-Policy")
 
 	want := fix3Mode2CSPTemplate("http://localhost:"+h.port, "ws://localhost:"+h.port, prefix)
@@ -256,6 +257,7 @@ func TestPreviewFix3_Mode1StaticCSPPin(t *testing.T) {
 	require.Len(t, parts, 2, "isolated_url must be <label>.localhost[:port]")
 
 	resp := h.fix3Get(t, u, "/", nil)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	csp := resp.Header.Get("Content-Security-Policy")
 	assert.Contains(t, csp, "frame-ancestors 'none'", "FR-014: Mode 1 frame-ancestors")
 	assert.NotContains(t, csp, "default-src", "FR-014: Mode 1 carries no source directives")
@@ -279,6 +281,7 @@ func TestPreviewFix3_RedirectInPrefixDotSegments(t *testing.T) {
 
 	h.fix3UpstreamEmit(t, http.StatusFound, prefix+"/feat/../next")
 	resp := h.fix3Get(t, "", prefix+"/page", nil)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	require.Equal(t, http.StatusFound, resp.StatusCode,
 		"A2 (DS-2 row 1): an in-prefix redirect keeps the upstream status")
@@ -301,6 +304,7 @@ func TestPreviewFix3_RedirectPercentEncodedAgent(t *testing.T) {
 
 	h.fix3UpstreamEmit(t, http.StatusFound, prefix+"/dashboard")
 	resp := h.fix3Get(t, "", "/preview/"+esc+"/"+token+"/page", nil)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	require.Equal(t, http.StatusFound, resp.StatusCode,
 		"A2 (DS-2 row 1): the escaped-prefix Location is in-prefix and emits")
@@ -319,6 +323,7 @@ func TestPreviewFix3_RedirectReservedRootPin(t *testing.T) {
 
 	h.fix3UpstreamEmit(t, http.StatusFound, "/api/v1/config")
 	resp := h.fix3Get(t, "", prefix+"/page", nil)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode,
 		"DS-2 row 2 (pin): a reserved-root root-relative redirect 502s")
@@ -341,6 +346,7 @@ func TestPreviewFix3_Mode1ServiceWorkerServed(t *testing.T) {
 	host := strings.TrimPrefix(strings.TrimSuffix(mint["isolated_url"], "/"), "http://")
 
 	resp := h.fix3Get(t, host, "/", map[string]string{"Service-Worker": "script"})
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	require.Equal(t, http.StatusOK, resp.StatusCode,
 		"RED (A3, FR-011 per FR-028): a Mode 1 label request must not be 403'd by the "+
 			"main-host service-worker guard — the app owns its host")
@@ -361,6 +367,7 @@ func TestPreviewFix3_Mode2ServiceWorkerStillRefused(t *testing.T) {
 		{"Sec-Fetch-Dest": "serviceworker"},
 	} {
 		resp := h.fix3Get(t, "", prefix+"/sw.js", hdrs)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.NotEqual(t, http.StatusOK, resp.StatusCode,
 			"FR-011 (pin): a main-host /preview/ service-worker request stays refused")
 	}

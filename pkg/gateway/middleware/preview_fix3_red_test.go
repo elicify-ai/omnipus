@@ -82,7 +82,7 @@ func TestFix3PlantedCookieError_IsGeneratedEnvelope(t *testing.T) {
 			nil)
 		require.NoError(t, err)
 		req.Header.Set("Cookie", "omnipus-session=real-session-value; omnipus-session=planted-by-preview")
-		req.Header.Set("X-CSRF-Token", "irrelevant-to-this-guard")
+		req.Header.Set("X-Csrf-Token", "irrelevant-to-this-guard") // canonical MIME form (canonicalheader); the guard keys on Cookie, not this header
 
 		resp, err := client.Do(req)
 		require.NoError(t, err)
