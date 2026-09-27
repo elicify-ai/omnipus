@@ -90,14 +90,16 @@ func mailAccountKeyOf(tp email.Transport) string {
 // gateMailDial runs one email-tool dial through the shared A8 mail-operation
 // budget when one is wired (SetMailBudget at registration, pkg/agent). The
 // params map is non-empty so identical concurrent reads coalesce, and
-// coalesced joiners receive the executor's data (CallValue); Retry stays
-// false — the tool path structurally cannot set it (pinned by
-// email_no_retry_param_test.go). Nil budget = ungated (unit tests).
-func gateMailDial(ctx context.Context, budget *email.MailBudget, agentID, op string, tp email.Transport, params map[string]any, dial func(context.Context) (any, error)) (any, error) {
+// coalesced joiners receive the executor's data (the generic email.CallValue):
+// the dial's result comes back AS T — no unchecked type assertion can hide a
+// shape drift as a silently empty tool result. Retry stays false — the tool
+// path structurally cannot set it (pinned by email_no_retry_param_test.go).
+// Nil budget = ungated (unit tests).
+func gateMailDial[T any](ctx context.Context, budget *email.MailBudget, agentID, op string, tp email.Transport, params map[string]any, dial func(context.Context) (T, error)) (T, error) {
 	if budget == nil {
 		return dial(ctx)
 	}
-	return budget.CallValue(ctx, email.MailBudgetRequest{
+	return email.CallValue(budget, ctx, email.MailBudgetRequest{
 		Account:     mailAccountKeyOf(tp),
 		AgentID:     agentID,
 		WorkspaceID: ToolWorkspaceID(ctx),
@@ -174,20 +176,18 @@ func (t *ReadInboxTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(err.Error())
 	}
 
-	rv, err := gateMailDial(ctx, t.budget, t.budgetAgentID, "read_inbox", tp, map[string]any{
+	msgs, err := gateMailDial(ctx, t.budget, t.budgetAgentID, "read_inbox", tp, map[string]any{
 		"limit": limit, "unseen_only": unseenOnly, "before_uid": beforeUID,
-	}, func(c context.Context) (any, error) {
-		m, dialErr := tp.ReadInbox(c, email.InboxOptions{
+	}, func(c context.Context) ([]email.Message, error) {
+		return tp.ReadInbox(c, email.InboxOptions{
 			Limit:      limit,
 			UnseenOnly: unseenOnly,
 			BeforeUID:  beforeUID,
 		})
-		return m, dialErr
 	})
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_inbox failed: %v", err))
 	}
-	msgs, _ := rv.([]email.Message)
 	return marshalMessages(msgs, "read_inbox")
 }
 
@@ -268,9 +268,9 @@ func (t *SearchEmailTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 	bodySearch, _ := args["body"].(bool)
 
-	rv, err := gateMailDial(ctx, t.budget, t.budgetAgentID, "search_email", tp, map[string]any{
+	result, err := gateMailDial(ctx, t.budget, t.budgetAgentID, "search_email", tp, map[string]any{
 		"query": query, "limit": limit, "before_uid": beforeUID, "body": bodySearch,
-	}, func(c context.Context) (any, error) {
+	}, func(c context.Context) (email.SearchResult, error) {
 		return tp.Search(c, query, email.SearchOptions{
 			Limit:     limit,
 			BeforeUID: beforeUID,
@@ -280,7 +280,6 @@ func (t *SearchEmailTool) Execute(ctx context.Context, args map[string]any) *Too
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("search_email failed: %v", err))
 	}
-	result, _ := rv.(email.SearchResult)
 	if result.Messages == nil {
 		result.Messages = []email.Message{}
 	}
@@ -344,15 +343,14 @@ func (t *ReadMessageTool) Execute(ctx context.Context, args map[string]any) *Too
 	if !ok {
 		return ErrorResult("read_message: uid is required and must be a positive integer")
 	}
-	rv, err := gateMailDial(ctx, t.budget, t.budgetAgentID, "read_message", tp, map[string]any{
+	msg, err := gateMailDial(ctx, t.budget, t.budgetAgentID, "read_message", tp, map[string]any{
 		"uid": uid,
-	}, func(c context.Context) (any, error) {
+	}, func(c context.Context) (*email.Message, error) {
 		return tp.ReadMessage(c, uid)
 	})
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_message failed: %v", err))
 	}
-	msg, _ := rv.(*email.Message)
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_message: marshal: %v", err))

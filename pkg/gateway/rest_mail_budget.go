@@ -13,6 +13,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -60,10 +61,25 @@ func (a *restAPI) mailBudgetErr(w http.ResponseWriter, err error) bool {
 		}
 		if bf.LastErrorClass != "" {
 			cls := gen.MailUnavailableErrorLastErrorClass(bf.LastErrorClass)
-			body.LastErrorClass = &cls
+			if cls.Valid() {
+				body.LastErrorClass = &cls
+			} else {
+				// The watcher state file is untrusted content (the summary
+				// endpoint renders it defensively too): an out-of-enum class
+				// would be hard-rejected by the SPA's generated Zod schema —
+				// breaking 503 handling entirely instead of degrading.
+				// Omit the field; make the drop visible.
+				slog.Warn("rest: mail budget 503 dropped out-of-enum last_error_class",
+					"last_error_class", bf.LastErrorClass)
+			}
 		}
 		if next, perr := time.Parse(time.RFC3339, bf.NextAttemptAt); perr == nil {
 			body.NextAttemptAt = &next
+		} else {
+			// Same untrusted-content discipline: an unparsable timestamp is
+			// omitted, never silently.
+			slog.Warn("rest: mail budget 503 dropped unparsable next_attempt_at",
+				"next_attempt_at", bf.NextAttemptAt, "error", perr)
 		}
 		writeJSON(w, http.StatusServiceUnavailable, body)
 		return true
@@ -81,16 +97,21 @@ func (a *restAPI) mailBudgetErr(w http.ResponseWriter, err error) bool {
 // mailBudgetWrap gates one panel dial through the shared budget and maps the
 // budget refusals to the contract's 503. Returns true when the response was
 // fully handled (refusal or dial error); false when the dial succeeded and
-// the caller should render v.
-func (a *restAPI) mailBudgetWrap(
+// the caller should render v. Generic in the dial's result type T: the caller
+// receives the value AS T — a shape drift is a compile error at the call
+// site, not an unchecked runtime assertion. A package-level function (not a
+// method) because Go methods cannot carry type parameters.
+func mailBudgetWrap[T any](
+	a *restAPI,
 	w http.ResponseWriter,
 	r *http.Request,
 	agentID, workspaceID string,
 	client *email.Client,
 	op string,
 	params map[string]any,
-	dial func(context.Context) (any, error),
-) (any, bool) {
+	dial func(context.Context) (T, error),
+) (T, bool) {
+	var zero T
 	budget := a.mailBudgetFor()
 	req := email.MailBudgetRequest{
 		Account:     client.AccountKey(),
@@ -100,9 +121,9 @@ func (a *restAPI) mailBudgetWrap(
 		Params:      params,
 		Retry:       mailRetryParam(r),
 	}
-	v, err := budget.CallValue(r.Context(), req, dial)
+	v, err := email.CallValue(budget, r.Context(), req, dial)
 	if a.mailBudgetErr(w, err) {
-		return nil, true
+		return zero, true
 	}
 	if err != nil {
 		// Not a budget refusal: an upstream dial failure (MC-8 502) or an
@@ -112,7 +133,7 @@ func (a *restAPI) mailBudgetWrap(
 		} else {
 			mailErr502(w, err)
 		}
-		return nil, true
+		return zero, true
 	}
 	return v, false
 }

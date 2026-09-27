@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -148,6 +149,14 @@ func (b *MailBudget) backoffRefusal(req MailBudgetRequest) *MailBackoffError {
 	if req.Retry {
 		return nil
 	}
+	if req.AgentID == "" || req.WorkspaceID == "" {
+		// Fail-open is the accepted stance for an absent/unreadable state
+		// file — but an empty pair never matches any state file the watcher
+		// writes, so the check would no-op invisibly. Make the
+		// misconfiguration observable; the fail-open behavior is unchanged.
+		slog.Warn("mail budget: empty agent_id or workspace_id — backoff check fail-open (no state file exists for the empty pair)",
+			"operation", req.Operation)
+	}
 	st, err := LoadWatcherState(b.stateDir, req.AgentID, req.WorkspaceID)
 	if err != nil {
 		// No state yet (the normal case) or an unreadable file: not in
@@ -169,38 +178,63 @@ func (b *MailBudget) backoffRefusal(req MailBudgetRequest) *MailBackoffError {
 // 2-per-account semaphore, queueing under ctx and failing ErrMailBusy on
 // deadline.
 func (b *MailBudget) Call(ctx context.Context, req MailBudgetRequest, fn func(context.Context) error) error {
-	_, err := b.call(ctx, req, func(c context.Context) (any, error) {
+	_, err := call(b, ctx, req, func(c context.Context) (any, error) {
 		return nil, fn(c)
 	})
 	return err
 }
 
-// CallValue is the data-bearing sibling of Call, for ops whose dial produces
-// a result the caller needs (the REST panel reads, the agent read tools). It
-// behaves identically to Call except the flight's fn returns a value, and
-// COALESCED JOINERS RECEIVE THE EXECUTOR'S VALUE — with an error-only fn the
-// joiner could never see the dial's data and would serve an empty response,
-// the silent-failure shape this method exists to prevent. Identical keys
-// (account+operation+params) dial the identical read, so sharing the value is
-// semantically exact.
+// CallValue is the data-bearing sibling of Call for ops whose dial produces a
+// result the caller needs (the RED pack drives it as the any-typed entry).
+// The TYPE-SAFE form for production call sites is the package-level generic
+// CallValue[T] below: a Go method cannot carry type parameters, so the
+// any-typed method is retained only because TestMailBudget_SingleflightKey
+// IncludesParams pins the method shape — typed callers should migrate to the
+// function.
 func (b *MailBudget) CallValue(ctx context.Context, req MailBudgetRequest, fn func(context.Context) (any, error)) (any, error) {
-	return b.call(ctx, req, fn)
+	return CallValue(b, ctx, req, fn)
 }
 
-// call is the shared core of Call and CallValue.
-func (b *MailBudget) call(ctx context.Context, req MailBudgetRequest, fn func(context.Context) (any, error)) (any, error) {
+// CallValue is the generic, type-safe form of the data-bearing budget entry:
+// on success it returns the dial's value AS T, so a result-shape drift is a
+// compile error at the call site, not a silently empty agent response. Go
+// methods cannot carry type parameters, hence the explicit budget argument.
+// It behaves identically to Call except the flight's fn returns a value, and
+// COALESCED JOINERS RECEIVE THE EXECUTOR'S VALUE — with an error-only fn the
+// joiner could never see the dial's data and would serve an empty response,
+// the silent-failure shape this entry exists to prevent. Identical keys
+// (account+operation+params) dial the identical read, so sharing the value is
+// semantically exact.
+func CallValue[T any](b *MailBudget, ctx context.Context, req MailBudgetRequest, fn func(context.Context) (T, error)) (T, error) {
+	return call(b, ctx, req, fn)
+}
+
+// call is the shared core of Call and both CallValue forms.
+func call[T any](b *MailBudget, ctx context.Context, req MailBudgetRequest, fn func(context.Context) (T, error)) (T, error) {
 	if bf := b.backoffRefusal(req); bf != nil {
-		return nil, bf
+		var zero T
+		return zero, bf
 	}
 	gate := b.gateFor(req.Account)
 	key := req.flightKey()
 	if key == "" {
 		// Paramless op: coalescing opt-out (file header). Straight to the
-		// semaphore.
-		return gate.runDialValue(ctx, fn)
+		// semaphore — unshared, so the caller's OWN context is the correct
+		// bound.
+		return runDialValue(gate, ctx, fn)
 	}
 	resCh := gate.flights.DoChan(key, func() (any, error) {
-		return gate.runDialValue(ctx, fn)
+		// The flight is SHARED: it must never be hostage to the first
+		// caller's cancellation — a tab close or an aborted fetch would
+		// spuriously fail every coalesced joiner whose own context is
+		// perfectly live. The dial runs on a detached context bounded by the
+		// package's existing no-caller-deadline fallback
+		// (transport.go::ctxOrCommandDeadline's rule): the first caller's
+		// deadline when it set one, else commandTimeout. Each caller keeps
+		// its own independent bail-out in the select below.
+		flightCtx, cancel := flightContext(ctx)
+		defer cancel()
+		return runDialValue(gate, flightCtx, fn)
 	})
 	select {
 	case res := <-resCh:
@@ -208,10 +242,42 @@ func (b *MailBudget) call(ctx context.Context, req MailBudgetRequest, fn func(co
 		// singleflight semantics; no Forget — a caller whose deadline
 		// expires simply stops waiting and leaves the flight to finish for
 		// the others).
-		return res.Val, res.Err
+		if res.Err != nil {
+			var zero T
+			return zero, res.Err
+		}
+		if res.Val == nil {
+			var zero T
+			return zero, nil
+		}
+		v, ok := res.Val.(T)
+		if !ok {
+			// The same flight key means the same operation, so a wrong
+			// result type is a caller bug — fail loudly here rather than
+			// serve a silently empty result downstream.
+			var zero T
+			return zero, fmt.Errorf("mail budget: coalesced flight returned %T, want %T", res.Val, zero)
+		}
+		return v, nil
 	case <-ctx.Done():
-		return nil, fmt.Errorf("%w: %v", ErrMailBusy, ctx.Err())
+		// Per-caller bail-out: ONLY this caller's own context ends its wait;
+		// the shared flight itself continues for the others.
+		var zero T
+		return zero, fmt.Errorf("%w: %v", ErrMailBusy, ctx.Err())
 	}
+}
+
+// flightContext detaches the shared flight from the first caller's
+// cancellation and bounds it by the package's existing no-caller-deadline
+// fallback (transport.go::ctxOrCommandDeadline): carry the first caller's
+// deadline when it set one, else commandTimeout — no new timeout value is
+// invented.
+func flightContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+	if dl, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(detached, dl)
+	}
+	return context.WithTimeout(detached, commandTimeout)
 }
 
 // TryCall is the watcher's non-blocking entry: it refuses like Call during
@@ -220,7 +286,11 @@ func (b *MailBudget) call(ctx context.Context, req MailBudgetRequest, fn func(co
 // queueing. It never coalesces (a cycle is not a refresh).
 func (b *MailBudget) TryCall(ctx context.Context, req MailBudgetRequest, fn func(context.Context) error) error {
 	if bf := b.backoffRefusal(req); bf != nil {
-		return fmt.Errorf("mail budget: %s skipped while account in backoff: %w", req.Operation, ErrMailSkipped)
+		// Multi-%w wrap: both stay extractable — ErrMailSkipped via errors.Is
+		// (the watcher's countable skip) and the typed *MailBackoffError via
+		// errors.As (LastErrorClass / NextAttemptAt preserved for a future
+		// TryCall caller).
+		return fmt.Errorf("mail budget: %s skipped while account in backoff: %w: %w", req.Operation, ErrMailSkipped, bf)
 	}
 	gate := b.gateFor(req.Account)
 	select {
@@ -235,13 +305,14 @@ func (b *MailBudget) TryCall(ctx context.Context, req MailBudgetRequest, fn func
 // runDialValue acquires one of the account's two slots, queueing under ctx,
 // and runs the data-bearing dial fn. Deadline exceeded while queued →
 // ErrMailBusy, never a dial.
-func (g *mailAccountGate) runDialValue(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
+func runDialValue[T any](g *mailAccountGate, ctx context.Context, fn func(context.Context) (T, error)) (T, error) {
+	var zero T
 	select {
 	case g.slots <- struct{}{}:
 		defer func() { <-g.slots }()
 		return fn(ctx)
 	case <-ctx.Done():
-		return nil, fmt.Errorf("%w: %v", ErrMailBusy, ctx.Err())
+		return zero, fmt.Errorf("%w: %v", ErrMailBusy, ctx.Err())
 	}
 }
 

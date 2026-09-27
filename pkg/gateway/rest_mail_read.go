@@ -30,17 +30,11 @@ func (a *restAPI) handleMailFolders(w http.ResponseWriter, r *http.Request, work
 	if client == nil {
 		return
 	}
-	v, handled := a.mailBudgetWrap(w, r, agentID, workspaceID, client, "listMailFolders",
-		map[string]any{"scope": "folders"}, func(c context.Context) (any, error) {
+	stats, handled := mailBudgetWrap(a, w, r, agentID, workspaceID, client, "listMailFolders",
+		map[string]any{"scope": "folders"}, func(c context.Context) ([]email.FolderStat, error) {
 			return client.FolderCounts(c)
 		})
 	if handled {
-		return
-	}
-	stats, ok := v.([]email.FolderStat)
-	if !ok {
-		slog.Error("rest: mail budget flight returned unexpected type", "op", "listMailFolders")
-		jsonErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	var out gen.MailFolderList
@@ -88,18 +82,12 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 		}
 		beforeUID = uint32(v)
 	}
-	v, handled := a.mailBudgetWrap(w, r, agentID, workspaceID, client, "listMailMessages",
-		map[string]any{"folder": folder, "limit": limit, "before_uid": beforeUID}, func(c context.Context) (any, error) {
+	pr, handled := mailBudgetWrap(a, w, r, agentID, workspaceID, client, "listMailMessages",
+		map[string]any{"folder": folder, "limit": limit, "before_uid": beforeUID}, func(c context.Context) (pageResult, error) {
 			rows, uv, truncated, err := client.ReadFolderPage(c, folder, limit, beforeUID)
 			return pageResult{rows: rows, uv: uv, truncated: truncated}, err
 		})
 	if handled {
-		return
-	}
-	pr, ok := v.(pageResult)
-	if !ok {
-		slog.Error("rest: mail budget flight returned unexpected type", "op", "listMailMessages")
-		jsonErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	rows, uv, truncated := pr.rows, pr.uv, pr.truncated
@@ -175,17 +163,11 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 	if client == nil {
 		return
 	}
-	rv, handled := a.mailBudgetWrap(w, r, agentID, workspaceID, client, "getMailMessage",
-		map[string]any{"folder": folder, "ref": ref}, func(c context.Context) (any, error) {
+	mv, handled := mailBudgetWrap(a, w, r, agentID, workspaceID, client, "getMailMessage",
+		map[string]any{"folder": folder, "ref": ref}, func(c context.Context) (*email.MailView, error) {
 			return client.ReadView(c, folder, ref)
 		})
 	if handled {
-		return
-	}
-	mv, ok := rv.(*email.MailView)
-	if !ok {
-		slog.Error("rest: mail budget flight returned unexpected type", "op", "getMailMessage")
-		jsonErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	v := mv
@@ -284,17 +266,11 @@ func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, w
 	if client == nil {
 		return
 	}
-	rv, handled := a.mailBudgetWrap(w, r, agentID, workspaceID, client, "getMailAttachment",
-		map[string]any{"folder": folder, "ref": ref, "idx": idx}, func(c context.Context) (any, error) {
+	mv, handled := mailBudgetWrap(a, w, r, agentID, workspaceID, client, "getMailAttachment",
+		map[string]any{"folder": folder, "ref": ref, "idx": idx}, func(c context.Context) (*email.MailView, error) {
 			return client.ReadView(c, folder, ref)
 		})
 	if handled {
-		return
-	}
-	mv, ok := rv.(*email.MailView)
-	if !ok {
-		slog.Error("rest: mail budget flight returned unexpected type", "op", "getMailAttachment")
-		jsonErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	v := mv

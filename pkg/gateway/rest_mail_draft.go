@@ -245,8 +245,10 @@ func (a *restAPI) handleMailDraftDiscard(w http.ResponseWriter, r *http.Request,
 		"message_id": bracketMessageID(cur.MessageID), "uid": uid, "uidvalidity": uv,
 		"expunged": expunged,
 		// MC-19/D46 full fields. A discard has no request args: the
-		// recipients are the draft's own stored addresses.
-		"recipients": cur.To,
+		// recipients are the draft's own stored addresses — the COMPLETE
+		// address list incl. Cc/Bcc (D46), via the shared helper every other
+		// MC-19 audit call site uses.
+		"recipients": mailAuditRecipients(cur.To, cur.Cc, cur.Bcc),
 		"origin":     mailDraftOrigin(cur.IsOmnipusDraft),
 		"arg_hash":   mailAuditArgHash(nil),
 		"folder":     client.DraftsFolderName(),
