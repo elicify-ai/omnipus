@@ -67,6 +67,7 @@ import {
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { ConfigurationSaveError } from '@/lib/api/configuration'
+import { isProviderUsable } from '@/lib/providerStatus'
 import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
@@ -200,9 +201,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     .filter((e) => e.agent_id === agentId)
     .slice(0, 5)
 
-  const connectedProviders = providers.filter((p) => p.status === 'connected')
-  const availableModels = connectedProviders.flatMap((p) => p.models ?? [])
-  const providerGroups = connectedProviders
+  // Usability, not key-connection (see providerStatus.ts): a subscription
+  // provider is signed_in, never connected, and its models must list too.
+  const usableProviders = providers.filter((p) => isProviderUsable(p.status))
+  const availableModels = usableProviders.flatMap((p) => p.models ?? [])
+  const providerGroups = usableProviders
     .filter((p) => (p.models ?? []).length > 0)
     .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, providerId: p.id, models: p.models ?? [] }))
 
@@ -213,7 +216,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // name — pre-C2 the editor was storing `display_name ?? name ?? id`
   // and emitting that to the wire, which silently downgraded
   // `provider` to a brand label and broke runtime resolution.
-  const { lookup: modelToProvider } = useModelToProvider(connectedProviders)
+  const { lookup: modelToProvider } = useModelToProvider(usableProviders)
 
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
@@ -1637,8 +1640,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   const providerMissing = entry.provider === ''
                   const providerLabel = providerMissing
                     ? '—'
-                    : (connectedProviders.find((p) => p.id === entry.provider)?.display_name
-                        ?? connectedProviders.find((p) => p.id === entry.provider)?.name
+                    : (usableProviders.find((p) => p.id === entry.provider)?.display_name
+                        ?? usableProviders.find((p) => p.id === entry.provider)?.name
                         ?? entry.provider)
                   return (
                     <span
@@ -1667,7 +1670,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-[var(--space-1)] pr-[var(--space-2-5)] py-0 text-[length:var(--type-caption-size)] focus-visible:border-[var(--color-accent)] rounded cursor-pointer"
                         >
                           <option value="" data-testid={`fallback-provider-option-empty-${entry.model}`}>—</option>
-                          {connectedProviders.map((p) => (
+                          {usableProviders.map((p) => (
                             <option
                               key={p.id}
                               value={p.id}

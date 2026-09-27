@@ -234,10 +234,16 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		if errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound) {
 			return requestedSkillDispatchFailureResult(targetAgentID, strings.TrimSpace(dt.requestedSkill), err)
 		}
+		if result := steeringUnavailableResult(err); result != nil {
+			return result
+		}
 		return ErrorResult(fmt.Sprintf("delegate: launch: %v", err)).WithError(err)
 	}
 	dispatch, err := dt.t.launcher.Dispatch(dt.ctx, launch.SessionID, launch.Generation)
 	if err != nil {
+		if result := steeringUnavailableResult(err); result != nil {
+			return result
+		}
 		return ErrorResult(fmt.Sprintf("delegate: dispatch: %v", err)).WithError(err)
 	}
 
@@ -267,6 +273,25 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 			dispatch.ConcurrencyLimit, dispatch.QueuePosition, launch.SessionID)
 	}
 	return NewToolResult(result)
+}
+
+// steeringUnavailableResult is ADR-093 D5. An inactive conversation is a
+// normal, recoverable outcome: the model is told that a new message in this
+// conversation resumes the request, and is never shown store machinery text.
+// A nil result means err is some other failure and the caller formats it.
+func steeringUnavailableResult(err error) *ToolResult {
+	if !steer.IsSteeringUnavailable(err) {
+		return nil
+	}
+	// Gate SFH#6: a revival-failed refusal gets the truthful variant sentence —
+	// the standard sentence points at "send a new message", the exact action
+	// that just failed. Same no-raw-text surface: the cause stays on the
+	// result's WithError side (machine-readable), not in the user-visible
+	// string.
+	if errors.Is(err, steer.ErrSteeringRevivalFailed) {
+		return ErrorResult(steer.SteeringRevivalFailedMessage).WithError(err)
+	}
+	return ErrorResult(steer.SteeringUnavailableMessage).WithError(err)
 }
 
 // validateRequest validates and resolves the delegation request arguments.
