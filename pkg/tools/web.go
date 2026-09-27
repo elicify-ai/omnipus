@@ -831,12 +831,16 @@ func (p *GLMSearchProvider) Search(
 		searchURL = "https://open.bigmodel.cn/api/paas/v4/web_search"
 	}
 
+	// effectiveContentSize returns (value, clamped); the legacy path ignores
+	// clamped — it never sends an agent depth — so the payload stays
+	// byte-identical.
+	contentSize, _ := p.effectiveContentSize("")
 	payload := map[string]any{
 		"search_query":  query,
 		"search_engine": p.searchEngine,
 		"search_intent": false,
 		"count":         count,
-		"content_size":  p.effectiveContentSize(""),
+		"content_size":  contentSize,
 	}
 	if recencyFilter := mapGLMRecencyFilter(rangeCode); recencyFilter != "" {
 		payload["search_recency_filter"] = recencyFilter

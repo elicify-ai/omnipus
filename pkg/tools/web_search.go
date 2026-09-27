@@ -1279,17 +1279,24 @@ func (p *TavilySearchProvider) searchCaps(ctx context.Context, req searchRequest
 	return "", fmt.Errorf("all api keys failed, last error: %w", lastErr)
 }
 
-// effectiveContentSize maps agent depth onto GLM's content_size; no agent
-// depth means the operator's setting ("" → "medium").
-func (p *GLMSearchProvider) effectiveContentSize(agentDepth string) string {
-	switch agentDepth {
-	case "low", "medium", "high":
-		return agentDepth
+// effectiveContentSize maps agent depth onto GLM's content_size through the
+// operator ceiling (ADR-096 D20): no agent depth means the ceiling ("" →
+// "medium", the spec's migration value); an agent depth is clamped when it
+// asks above the ceiling. Order medium < high; agent low is refused upstream
+// at pre-flight and never reaches here.
+func (p *GLMSearchProvider) effectiveContentSize(agentDepth string) (string, bool) {
+	ceiling := p.contentSize
+	if ceiling == "" {
+		ceiling = "medium"
 	}
-	if p.contentSize != "" {
-		return p.contentSize
+	if agentDepth == "" {
+		return ceiling, false
 	}
-	return "medium"
+	order := map[string]int{"low": 0, "medium": 1, "high": 2}
+	if order[agentDepth] > order[ceiling] {
+		return ceiling, true
+	}
+	return agentDepth, false
 }
 
 // honoursDepth: GLM exposes content_size (matrix), but agent depth low is
@@ -1318,12 +1325,13 @@ func (p *GLMSearchProvider) searchCaps(ctx context.Context, req searchRequest) (
 	if searchURL == "" {
 		searchURL = "https://open.bigmodel.cn/api/paas/v4/web_search"
 	}
+	contentSize, clamped := p.effectiveContentSize(req.depth)
 	payload := map[string]any{
 		"search_query":  req.query,
 		"search_engine": p.searchEngine,
 		"search_intent": false,
 		"count":         req.count,
-		"content_size":  p.effectiveContentSize(req.depth),
+		"content_size":  contentSize,
 	}
 	if recencyFilter := mapGLMRecencyFilter(req.rangeFilter); recencyFilter != "" {
 		payload["search_recency_filter"] = recencyFilter
@@ -1374,6 +1382,10 @@ func (p *GLMSearchProvider) searchCaps(ctx context.Context, req searchRequest) (
 			lines = append(lines, fmt.Sprintf("   %s", item.Content))
 		}
 	}
+	if clamped {
+		lines = append(lines, fmt.Sprintf(
+			"Note: requested depth %q was clamped to the operator ceiling %q.", req.depth, contentSize))
+	}
 	return strings.Join(lines, "\n"), nil
 }
 
@@ -1399,6 +1411,26 @@ func perplexityDepthToContextSize(depth string) string {
 	return ""
 }
 
+// effectiveContextSize maps agent depth through the operator's
+// search_context_size ceiling (ADR-096 D20). No operator value: the agent's
+// depth decides and an omitted depth sends nothing (D11 — a default would
+// change the bill on existing installs). A set ceiling is returned when the
+// agent asks above it, with clamped=true. Order low < medium < high.
+func (p *PerplexitySearchProvider) effectiveContextSize(agentDepth string) (string, bool) {
+	agentSize := perplexityDepthToContextSize(agentDepth)
+	if p.contextSize == "" {
+		return agentSize, false
+	}
+	if agentSize == "" {
+		return p.contextSize, false
+	}
+	order := map[string]int{"low": 0, "medium": 1, "high": 2}
+	if order[agentSize] > order[p.contextSize] {
+		return p.contextSize, true
+	}
+	return agentSize, false
+}
+
 // searchCaps mirrors the legacy Perplexity request with the ADR-096
 // additions; the legacy Search payload stays byte-identical.
 func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchRequest) (string, error) {
@@ -1411,6 +1443,9 @@ func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchReq
 	if len(keys) == 0 {
 		return "", errNoAPIKey()
 	}
+	// D20: when the agent's depth ask exceeds the operator ceiling, the
+	// result carries a clamp note naming both values.
+	var clampDepth, clampCeiling string
 	var lastErr error
 	for _, apiKey := range keys {
 		payload := map[string]any{
@@ -1424,10 +1459,11 @@ func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchReq
 		}
 
 		// search_context_size is sent ONLY when the operator set it or the
-		// agent passed depth (D-PPLX gating).
-		contextSize := p.contextSize
-		if agentSize := perplexityDepthToContextSize(req.depth); agentSize != "" {
-			contextSize = agentSize
+		// agent passed depth (D-PPLX gating); a set operator value is the
+		// ceiling (D20), clamping an agent ask above it.
+		contextSize, clamped := p.effectiveContextSize(req.depth)
+		if clamped {
+			clampDepth, clampCeiling = req.depth, contextSize
 		}
 		if contextSize != "" {
 			payload["web_search_options"] = map[string]any{"search_context_size": contextSize}
@@ -1507,6 +1543,9 @@ func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchReq
 			for _, c := range searchResp.Citations {
 				result += " " + c
 			}
+		}
+		if clampDepth != "" {
+			result += fmt.Sprintf("\nNote: requested depth %q was clamped to the operator ceiling %q.", clampDepth, clampCeiling)
 		}
 		return result, nil
 	}
