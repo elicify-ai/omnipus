@@ -50,7 +50,8 @@
 #   (b) docs/internal/architecture/ in origin/release/v0.1.1 (git
 #       ls-tree). That ref is resolved LOCALLY ONLY — this script never
 #       touches the network, so it can never hang on one. If the ref does
-#       not resolve (not fetched, no origin remote), a WARNING goes to
+#       not resolve (not fetched, no origin remote), or ls-tree itself
+#       fails (e.g. a missing/corrupt tree object), a WARNING goes to
 #       stderr and only the working tree is checked.
 # Slug extraction is IDENTICAL to the guard's (strip the ADR- prefix and
 # the leading ID token — a 3-digit legacy number or an 8-digit date — and
@@ -149,19 +150,35 @@ for f in "$ADR_DIR"/ADR-*.md; do
   fi
 done
 
-# (b) origin/release/v0.1.1 — local ref resolution only, never the network
+# (b) origin/release/v0.1.1 — local ref resolution only, never the network.
+# ls-tree's own failure (distinct from "ref does not resolve") is not
+# swallowed either: stderr to a temp file, exit status kept, WARNING with
+# the git error, then the same working-tree-only fallback as the
+# unresolvable-ref branch.
 if [ "$FOUND_COLLISION" -eq 0 ]; then
   if git -C "$REPO_ROOT" rev-parse --verify --quiet "$ADR_REF" >/dev/null 2>&1; then
-    while IFS= read -r rel; do
-      [ -z "$rel" ] && continue
-      base="$(basename "$rel")"
-      if ! collision "$base (in $ADR_REF)" "$(extract_adr_slug "$base")"; then
-        FOUND_COLLISION=1
-        break
-      fi
-    done <<EOF
-$(git -C "$REPO_ROOT" ls-tree -r --name-only "$ADR_REF" -- docs/internal/architecture/ 2>/dev/null)
+    if ! LS_TREE_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/new-adr-id-lstree.XXXXXX")"; then
+      echo "new-adr-id: WARNING — cannot create a temp file; collision check fell back to the working tree only" >&2
+    else
+      trap 'rm -f "$LS_TREE_ERR_FILE" 2>/dev/null' EXIT
+      LS_TREE_RC=0
+      LS_TREE_OUT="$(git -C "$REPO_ROOT" ls-tree -r --name-only "$ADR_REF" -- docs/internal/architecture/ 2>"$LS_TREE_ERR_FILE")" || LS_TREE_RC=$?
+      if [ "$LS_TREE_RC" -ne 0 ]; then
+        echo "new-adr-id: WARNING — ls-tree against $ADR_REF failed; collision check fell back to the working tree only ($(tr '\n' ' ' < "$LS_TREE_ERR_FILE"))" >&2
+      else
+        while IFS= read -r rel; do
+          [ -z "$rel" ] && continue
+          base="$(basename "$rel")"
+          if ! collision "$base (in $ADR_REF)" "$(extract_adr_slug "$base")"; then
+            FOUND_COLLISION=1
+            break
+          fi
+        done <<EOF
+$LS_TREE_OUT
 EOF
+      fi
+      rm -f "$LS_TREE_ERR_FILE"
+    fi
   else
     echo "new-adr-id: WARNING — $ADR_REF does not resolve locally; collision check fell back to the working tree only" >&2
   fi

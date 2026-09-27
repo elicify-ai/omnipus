@@ -43,8 +43,10 @@
 #
 #   FAIL-OPEN, NOT FAIL-CLOSED, WHEN THE BASE CANNOT BE RESOLVED: no
 #   local ref, no origin/<ref>, and the shallow fetch fails (no network,
-#   renamed ref, no origin remote at all). Scope cannot be determined, so
-#   nothing is checked — a WARNING is printed and the guard exits 0.
+#   renamed ref, no origin remote at all) — and, identically, when the
+#   base commit RESOLVES but the diff itself fails (no merge base under a
+#   shallow CI checkout): a WARNING naming the git error is printed,
+#   nothing is checked, the guard exits 0.
 #   Widening to "scan everything" instead would fail on the ~165 legacy
 #   ADRs this guard is explicitly never supposed to touch — a worse
 #   failure mode than staying silent this one run.
@@ -186,8 +188,30 @@ if [ -z "$BASE_COMMIT" ]; then
 fi
 
 # ─── Discover NEW (added) ADR files against the base commit ────────────────
+#
+# The diff's own failure is never swallowed into a false-clean pass:
+# stderr is captured to a temp file (never /dev/null) and the exit status
+# is kept, so a failing diff — e.g. a shallow CI checkout whose
+# base...HEAD has no merge base — surfaces as a WARNING naming the git
+# error, then falls open to exit 0 like the two base-resolution warnings
+# above.
 
-CHANGED_FILES="$(git diff --name-only --diff-filter=A "$BASE_COMMIT"... -- "$ADR_PATHSPEC" 2>/dev/null || true)"
+if ! DIFF_STDERR_FILE="$(mktemp "${TMPDIR:-/tmp}/check-adr-id-scheme-differr.XXXXXX")"; then
+  echo "check-adr-id-scheme: WARNING — cannot create a temp file to capture git diff stderr — nothing is checked this run (fail-open by design)" >&2
+  exit 0
+fi
+trap 'rm -f "$DIFF_STDERR_FILE"' EXIT
+
+DIFF_RC=0
+CHANGED_FILES="$(git diff --name-only --diff-filter=A "$BASE_COMMIT"... -- "$ADR_PATHSPEC" 2>"$DIFF_STDERR_FILE")" || DIFF_RC=$?
+
+if [ "$DIFF_RC" -ne 0 ]; then
+  DIFF_ERR_TEXT="$(tr '\n' ' ' < "$DIFF_STDERR_FILE")"
+  echo "check-adr-id-scheme: WARNING — git diff against $BASE_COMMIT failed (exit $DIFF_RC): ${DIFF_ERR_TEXT:-no error text} — the set of NEW ADR files cannot be determined, so nothing is checked this run. This never widens to scanning every existing ADR." >&2
+  echo "check-adr-id-scheme: OK — 0 findings (diff failed, fail-open by design)"
+  exit 0
+fi
+rm -f "$DIFF_STDERR_FILE"
 
 if [ -z "$CHANGED_FILES" ]; then
   echo "check-adr-id-scheme: OK — 0 new ADR files against $BASE_REF ($BASE_COMMIT)"

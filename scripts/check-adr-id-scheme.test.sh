@@ -25,6 +25,19 @@
 #   8. A MODIFIED (not added) legacy ADR — NOT flagged (--diff-filter=A).
 #   9. Unresolvable base ref — WARNING + exit 0, never "scan everything".
 #  10/11. REPO_ROOT not a directory / not a git repo — exit 2.
+#  16. Base ref resolves but the diff itself fails ("no merge base", as a
+#      shallow CI checkout produces) — WARNING naming the git error +
+#      exit 0; the false-clean "0 new ADR files" pass is gone.
+#  17/18. GITHUB_BASE_REF — the source GitHub Actions populates for PR
+#      runs, requiring no workflow wiring — drives both a finding case
+#      and a clean case (the CHECK_ADR_ID_SCHEME_BASE_REF override unset).
+#  19. A new date-scheme file duplicating a GRANDFATHERED file's slug
+#      (ADR-095 vs ADR-20260927, identical slug) — CAUGHT, both named.
+#  20. Missing specific-reason assertions: leading hyphen, trailing
+#      hyphen, non-date ID token, missing slug after the date.
+#  21. No base source at all (no override, no GITHUB_BASE_REF, no
+#      OMNIPUS_INTEGRATION_BRANCH, not a push event) — the first fail-open
+#      tier: "no comparison base" WARNING + exit 0.
 #
 # Generator cases (scripts/new-adr-id.sh):
 #  12. Fresh title → exactly one stdout line matching
@@ -37,6 +50,8 @@
 #  14. All-punctuation title (empty slug) — REFUSED, stdout empty.
 #  15. Long title truncates to ≤80; a truncation landing on a hyphen is
 #      re-trimmed (never a trailing-hyphen slug).
+#  22. A ref that resolves but whose ls-tree fails (missing tree object) —
+#      WARNING + working-tree-only fallback, still mints the ID (exit 0).
 #
 # Exit code: 0 if every assertion passed, 1 if any failed.
 
@@ -209,6 +224,7 @@ assert_exit_code "malformed-exit" 1 "$EXIT_CODE"
 assert_output_contains "malformed-uppercase-finding" "My_Feature" "$OUTPUT"
 assert_output_contains "malformed-uppercase-reason" "lowercase alnum" "$OUTPUT"
 assert_output_contains "malformed-double-hyphen-finding" "my--feature" "$OUTPUT"
+assert_output_contains "malformed-double-hyphen-reason" "contains a double hyphen" "$OUTPUT"
 assert_output_contains "malformed-long-slug-finding" "max 80" "$OUTPUT"
 
 # --- Test 8: MODIFIED (not added) legacy ADR — not flagged ------------------
@@ -253,6 +269,133 @@ mkdir -p "$NOTAREPO"
 OUTPUT=$(REPO_ROOT="$NOTAREPO" bash "$LINT_SCRIPT" 2>&1)
 EXIT_CODE=$?
 assert_exit_code "not-a-repo-exit" 2 "$EXIT_CODE"
+
+# --- Test 16 (FIX 1, silent-failure-hunter CRITICAL) -------------------------
+#
+# A shallow CI checkout can resolve BASE_COMMIT yet fail the base...HEAD
+# diff with "no merge base" (exit 128). This construction is a truly
+# disconnected history (an orphan branch — two independent roots), which
+# fails merge-base unconditionally, offline, deterministically. A shallow
+# fetch alone does NOT reproduce it: the fetched base commit is then HEAD
+# direct parent, so the merge base stays visible (verified, git 2.50.1).
+# The guard must warn visibly and still exit 0 (fail-open by design).
+
+echo ""
+echo "Test 16: base resolves but the diff itself fails — visible WARNING, still exit 0"
+REPO="$(new_repo_with_feature_branch)"
+git -C "$REPO" checkout --quiet --orphan feature2
+git -C "$REPO" rm -qrf . 2>/dev/null
+mkdir -p "$REPO/docs/internal/architecture"
+printf '# bad\n' > "$REPO/docs/internal/architecture/ADR-097-bad.md"
+git -C "$REPO" add -A
+git -C "$REPO" commit --quiet -m "orphan root adds a non-conforming ADR"
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
+EXIT_CODE=$?
+assert_exit_code "diff-fail-exit" 0 "$EXIT_CODE"
+assert_output_contains "diff-fail-warning" "WARNING" "$OUTPUT"
+assert_output_contains "diff-fail-git-error" "no merge base" "$OUTPUT"
+assert_output_not_contains "diff-fail-no-false-clean" "0 new ADR files" "$OUTPUT"
+
+# --- Test 17 (FIX 3, pr-test-analyzer CRITICAL) ------------------------------
+#
+# GITHUB_BASE_REF is the base-ref source GitHub Actions populates for PR
+# runs (no workflow wiring needed, per the guard header) — yet every
+# pre-existing case drove the guard through the OVERRIDE only.
+
+echo ""
+echo "Test 17: GITHUB_BASE_REF drives a finding without the override"
+REPO="$(new_repo_with_feature_branch)"
+printf '# ADR-097\n' > "$REPO/docs/internal/architecture/ADR-097-some-new-thing.md"
+git -C "$REPO" add -A
+git -C "$REPO" commit --quiet -m "add legacy-numbered ADR"
+OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF GITHUB_BASE_REF=main REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1)
+EXIT_CODE=$?
+assert_exit_code "github-base-finding-exit" 1 "$EXIT_CODE"
+assert_output_contains "github-base-finding-name" "ADR-097-some-new-thing.md" "$OUTPUT"
+assert_output_contains "github-base-finding-reason" "retired 3-digit" "$OUTPUT"
+
+# --- Test 18: GITHUB_BASE_REF drives the clean case (CI's real path) ---------
+
+echo ""
+echo "Test 18: GITHUB_BASE_REF resolves and reports a clean run"
+REPO="$(new_repo_with_feature_branch)"
+printf '# Fresh\n' > "$REPO/docs/internal/architecture/ADR-20260927-github-base-fresh.md"
+git -C "$REPO" add -A
+git -C "$REPO" commit --quiet -m "add correct new-scheme ADR"
+OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF GITHUB_BASE_REF=main REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1)
+EXIT_CODE=$?
+assert_exit_code "github-base-clean-exit" 0 "$EXIT_CODE"
+assert_output_contains "github-base-clean-resolved" "against main," "$OUTPUT"
+assert_output_not_contains "github-base-clean-no-tier1-warning" "no comparison base" "$OUTPUT"
+assert_output_not_contains "github-base-clean-no-finding" "github-base-fresh" "$OUTPUT"
+
+# --- Test 19 (FIX 4, pr-test-analyzer CRITICAL) ------------------------------
+#
+# Grandfathering exempts ADR-094/095/096 from being CHECKED, but they still
+# participate as collision counterparts: a new date-scheme file whose slug
+# equals a grandfathered file's slug must fail naming both. Mirrors the
+# manually-reproduced ADR-095 vs ADR-20260927 same-slug scenario; only the
+# GENERATOR side (test 13) covered collisions before this test.
+
+echo ""
+echo "Test 19: a new date-scheme file duplicating a grandfathered slug is caught"
+REPO="$(new_repo_with_feature_branch)"
+git -C "$REPO" checkout --quiet main
+printf '# ADR-095\n' > "$REPO/docs/internal/architecture/ADR-095-thinking-visibility-gate-and-signed-blocks.md"
+git -C "$REPO" add -A
+git -C "$REPO" commit --quiet -m "base: add grandfathered ADR-095"
+git -C "$REPO" checkout --quiet -b feature2 main
+printf '# dup of 095\n' > "$REPO/docs/internal/architecture/ADR-20260927-thinking-visibility-gate-and-signed-blocks.md"
+git -C "$REPO" add -A
+git -C "$REPO" commit --quiet -m "add date-scheme duplicate of a grandfathered slug"
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
+EXIT_CODE=$?
+assert_exit_code "grandfather-slug-dup-exit" 1 "$EXIT_CODE"
+assert_output_contains "grandfather-slug-dup-new" "ADR-20260927-thinking-visibility-gate-and-signed-blocks.md" "$OUTPUT"
+assert_output_contains "grandfather-slug-dup-old" "ADR-095-thinking-visibility-gate-and-signed-blocks.md" "$OUTPUT"
+assert_output_contains "grandfather-slug-dup-reason" "duplicate slug" "$OUTPUT"
+
+# --- Test 20 (FIX 5a, pr-test-analyzer) --------------------------------------
+#
+# shape_problem() promises a distinct reason for each malformed shape; only
+# 4 of the promised reasons had assertions. These four close the gap.
+
+echo ""
+echo "Test 20: leading/trailing hyphens and bad ID tokens get their specific reasons"
+REPO="$(new_repo_with_feature_branch)"
+printf '# L\n' > "$REPO/docs/internal/architecture/ADR-20260927--leading.md"
+printf '# T\n' > "$REPO/docs/internal/architecture/ADR-20260927-trailing-.md"
+printf '# N\n' > "$REPO/docs/internal/architecture/ADR-1234567-short-id.md"
+printf '# M\n' > "$REPO/docs/internal/architecture/ADR-20260927-.md"
+git -C "$REPO" add -A
+git -C "$REPO" commit --quiet -m "add hyphen/ID-token malformed ADRs"
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
+EXIT_CODE=$?
+assert_exit_code "hyphen-token-exit" 1 "$EXIT_CODE"
+assert_output_contains "leading-hyphen-reason" "starts with a hyphen" "$OUTPUT"
+assert_output_contains "trailing-hyphen-reason" "ends with a hyphen" "$OUTPUT"
+assert_output_contains "non-date-token-reason" "neither a grandfathered 3-digit number nor an 8-digit UTC date" "$OUTPUT"
+assert_output_contains "missing-slug-reason" "no slug after the 8-digit date" "$OUTPUT"
+
+# --- Test 21 (FIX 5c, pr-test-analyzer) --------------------------------------
+#
+# The FIRST fail-open tier was never exercised (only tier 2, an
+# unresolvable override ref). With no override, no GITHUB_BASE_REF, no
+# OMNIPUS_INTEGRATION_BRANCH and not a push event, the guard must print
+# the "no comparison base" warning and exit 0 — even with a
+# non-conforming ADR sitting on the branch.
+
+echo ""
+echo "Test 21: with no base source at all, the guard warns and exits 0"
+REPO="$(new_repo_with_feature_branch)"
+printf '# Bad\n' > "$REPO/docs/internal/architecture/ADR-097-never-checked.md"
+git -C "$REPO" add -A
+git -C "$REPO" commit --quiet -m "add ADR that must NOT be checked without a base"
+OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u GITHUB_EVENT_NAME REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1)
+EXIT_CODE=$?
+assert_exit_code "no-base-tier1-exit" 0 "$EXIT_CODE"
+assert_output_contains "no-base-tier1-warning" "no comparison base" "$OUTPUT"
+assert_output_not_contains "no-base-tier1-no-finding" "never-checked" "$OUTPUT"
 
 # ═══ Generator (scripts/new-adr-id.sh) cases ══════════════════════════════
 
@@ -338,6 +481,36 @@ case "$GEN_SLUG" in
     PASS=$((PASS + 1))
     ;;
 esac
+
+# --- Test 22 (FIX 2, silent-failure-hunter MEDIUM) ---------------------------
+#
+# A ref that RESOLVES via rev-parse but whose ls-tree fails (here: the
+# commit's root tree object deleted from loose storage — deterministic and
+# offline, verified git 2.50.1: rev-parse rc=0, ls-tree "fatal: not a tree
+# object" rc=128). The generator must warn visibly and fall back to the
+# working-tree-only collision check, still minting the ID (exit 0).
+
+echo ""
+echo "Test 22: a resolvable ref with a failing ls-tree warns and falls back"
+CORRUPT_REPO="$TMP_DIR/gen-repo-corrupt-tree"
+mkdir -p "$CORRUPT_REPO/docs/internal/architecture"
+git -C "$CORRUPT_REPO" init --quiet --initial-branch=main
+git -C "$CORRUPT_REPO" config user.email "test@example.invalid"
+git -C "$CORRUPT_REPO" config user.name "check-adr-id-scheme test"
+printf '# ADR-077\n' > "$CORRUPT_REPO/docs/internal/architecture/ADR-077-two-layers.md"
+git -C "$CORRUPT_REPO" add -A
+git -C "$CORRUPT_REPO" commit --quiet -m "base"
+git -C "$CORRUPT_REPO" update-ref refs/remotes/origin/release/v0.1.1 "$(git -C "$CORRUPT_REPO" rev-parse HEAD)"
+CORRUPT_TREE="$(git -C "$CORRUPT_REPO" rev-parse 'refs/remotes/origin/release/v0.1.1^{tree}')"
+rm -f "$CORRUPT_REPO/.git/objects/${CORRUPT_TREE:0:2}/${CORRUPT_TREE:2}"
+GEN_ERR3=$(REPO_ROOT="$CORRUPT_REPO" bash "$GEN_SCRIPT" "Some Fresh Title" 2>&1 1>/dev/null)
+GEN_EXIT5=$?
+assert_exit_code "gen-lstree-fail-exit-zero" 0 "$GEN_EXIT5"
+assert_output_contains "gen-lstree-fail-warning" "ls-tree against origin/release/v0.1.1 failed" "$GEN_ERR3"
+assert_output_contains "gen-lstree-fail-fallback" "fell back to the working tree only" "$GEN_ERR3"
+GEN_OUT5=$(REPO_ROOT="$CORRUPT_REPO" bash "$GEN_SCRIPT" "Some Fresh Title" 2>/dev/null)
+GEN_EXIT6=$?
+assert_exit_code "gen-lstree-fail-still-mints" 0 "$GEN_EXIT6"
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
