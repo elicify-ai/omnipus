@@ -59,6 +59,13 @@ type delegateSessionIDCtxKey struct{}
 // own turn context, so a child's OWN tool calls (message_parent, and any
 // future session-aware tool) can resolve their own durable identity without
 // conflating it with the shared transcript session id.
+//
+// GUARD: the "" no-op is silence, not a clean stamp — a turn's base ctx must
+// never already carry the delegate-session-id key from a DIFFERENT
+// turn/session, or an unstamped turn (id "") would silently INHERIT the base
+// ctx's id: a wrong delegate-session-id, not an absent one, and nothing
+// would error. Every production turn's base ctx is detached
+// (Background-derived) before turn-context construction stamps it.
 func WithDelegateSessionID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx

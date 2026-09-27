@@ -75,6 +75,22 @@ describe('BashOutputBlock — collapsed by default', () => {
   })
 })
 
+// replay-fidelity.spec.ts test (f) locates the toggle button itself
+// ([data-testid="bash-output-toggle"], which DisclosureRow forwards onto the
+// rendered <button>) and reads data-tool off THAT matched element — so
+// data-tool must sit on the toggle, not on the block's outer wrapper div.
+describe('BashOutputBlock — data-tool placement (replay-fidelity test (f) contract)', () => {
+  it('the toggle button itself carries data-tool="bash"', () => {
+    renderBlock() // toolName="bash"
+    expect(screen.getByTestId('bash-output-toggle')).toHaveAttribute('data-tool', 'bash')
+  })
+
+  it('data-tool forwards the actual toolName, not a hardcoded name (legacy alias case)', () => {
+    renderBlock({ toolName: 'workspace_shell' })
+    expect(screen.getByTestId('bash-output-toggle')).toHaveAttribute('data-tool', 'workspace_shell')
+  })
+})
+
 describe('BashOutputBlock — header command summary (one line, ~60 chars)', () => {
   it('short command shows verbatim', () => {
     renderBlock({ args: { command: 'git status' } })

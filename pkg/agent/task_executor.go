@@ -414,8 +414,19 @@ func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) 
 		State:          session.LifecycleQueued,
 		OwnerScopeKind: ownerKind,
 		OwnerScopeID:   ownerID,
-		WorkspaceID:    t.WorkspaceID,
-		AgentID:        t.AgentID,
+		// ADR-093 D3: a task root must carry Origin.Kind=task (with its task
+		// id) so standingRootExemptFromSweep (boot_sweep.go) never exempts
+		// it — D3's own text assumes this ("a task root always carries
+		// origin task with its task id"), and persistLocked already
+		// validates the invariant (lifecycle.go: a task-kind origin without
+		// a task id is rejected) but nothing minted it before this fix. A
+		// crashed task dispatch went unswept by boot_sweep, silently exempt
+		// under D3's "origin absent" clause — that gap is what this line
+		// closes; the hotfix-890-bootsweep-regression evidence is
+		// TestBootSweep_ReconcilesCrashedTaskDispatchSession.
+		Origin:      &session.Origin{Kind: session.OriginKindTask, TaskID: t.ID},
+		WorkspaceID: t.WorkspaceID,
+		AgentID:     t.AgentID,
 	}
 	if err := ls.Persist(rec); err != nil {
 		logger.ErrorCF("task_executor", "mintTaskLifecycleRecord: failed to persist durable session record",

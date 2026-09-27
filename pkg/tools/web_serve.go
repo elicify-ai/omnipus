@@ -733,8 +733,9 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 				exitCode = ee.ExitCode()
 			}
 		}
+		// The preview token grants access to the served app; never log it (#914).
 		slog.Info("web_serve: dev server exited",
-			"agent_id", agentID, "pid", bgPid, "token", token,
+			"agent_id", agentID, "pid", bgPid,
 			"exit_code", exitCode, "error", waitErr)
 		t.devReg.Unregister(token)
 	}()
@@ -913,7 +914,7 @@ func (t *WebServeTool) auditDevDeny(agentID, command, reason string) *ToolResult
 	if t.auditLogger == nil {
 		if t.devCfg.AuditFailClosed {
 			slog.Error("web_serve: auditLogger is nil; cannot record deny — failing closed",
-				"agent_id", agentID, "command", command, "audit_fail_closed", true)
+				"agent_id", agentID, "command", audit.RedactCredentials(command), "audit_fail_closed", true)
 			return &ToolResult{
 				IsError: true,
 				ForLLM:  "audit logger unavailable; command denied and audit trail broken — failing closed",
@@ -925,7 +926,7 @@ func (t *WebServeTool) auditDevDeny(agentID, command, reason string) *ToolResult
 		// loss on a configured-but-failing logger, not a deliberate disable.
 		auditDevNilOnce.Do(func() {
 			slog.Warn("web_serve: auditLogger is nil; deny will not be recorded",
-				"agent_id", agentID, "command", command)
+				"agent_id", agentID, "command", audit.RedactCredentials(command))
 		})
 		return nil
 	}
@@ -945,7 +946,7 @@ func (t *WebServeTool) auditDevDeny(agentID, command, reason string) *ToolResult
 	}
 	if t.devCfg.AuditFailClosed {
 		slog.Error("web_serve: audit write failed for command deny — failing closed",
-			"agent_id", agentID, "command", command, "error", logErr, "audit_fail_closed", true)
+			"agent_id", agentID, "command", audit.RedactCredentials(command), "error", logErr, "audit_fail_closed", true)
 		return &ToolResult{
 			IsError: true,
 			ForLLM:  "audit logger degraded; command denied and audit trail broken — failing closed",
@@ -956,7 +957,7 @@ func (t *WebServeTool) auditDevDeny(agentID, command, reason string) *ToolResult
 	// bump — every silently-dropped audit row increments audit_skipped_total.
 	audit.IncSkipped(ToolNameWebServe, audit.DecisionDeny)
 	slog.Error("web_serve: audit write failed for command deny",
-		"agent_id", agentID, "command", command, "error", logErr)
+		"agent_id", agentID, "command", audit.RedactCredentials(command), "error", logErr)
 	return nil
 }
 
@@ -979,7 +980,7 @@ func (t *WebServeTool) auditDevStart(ctx context.Context, agentID, command strin
 			// CRIT-BK-1: mirror the deny-path shape — refuse to spawn when the
 			// operator demands a compliance trail and no logger is wired.
 			slog.Error("web_serve: auditLogger is nil; cannot record dev-server start — failing closed",
-				"agent_id", agentID, "command", command, "audit_fail_closed", true)
+				"agent_id", agentID, "command", audit.RedactCredentials(command), "audit_fail_closed", true)
 			return &ToolResult{
 				IsError: true,
 				ForLLM:  "audit logger unavailable; dev server start denied — failing closed",
@@ -1008,7 +1009,7 @@ func (t *WebServeTool) auditDevStart(ctx context.Context, agentID, command strin
 	}
 	if t.devCfg.AuditFailClosed {
 		slog.Error("web_serve: audit logger degraded; refusing to run trusted-prompt feature",
-			"agent_id", agentID, "command", command, "error", logErr, "audit_fail_closed", true)
+			"agent_id", agentID, "command", audit.RedactCredentials(command), "error", logErr, "audit_fail_closed", true)
 		return &ToolResult{
 			IsError: true,
 			ForLLM:  "audit logger degraded; refusing to run trusted-prompt feature without compliance trail",
@@ -1018,6 +1019,6 @@ func (t *WebServeTool) auditDevStart(ctx context.Context, agentID, command strin
 	// B1.2(e): same counter bump on the allow-side write failure.
 	audit.IncSkipped(ToolNameWebServe, audit.DecisionAllow)
 	slog.Error("web_serve: audit write failed (continuing — audit_fail_closed=false)",
-		"agent_id", agentID, "command", command, "error", logErr)
+		"agent_id", agentID, "command", audit.RedactCredentials(command), "error", logErr)
 	return nil
 }

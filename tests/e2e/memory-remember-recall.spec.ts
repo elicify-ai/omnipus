@@ -371,7 +371,7 @@ test(
     // Budget: app load(15) + agent resolution(5) + workspace resolution(5)
     //         + turn1 remember(120) + disk wait(30)
     //         + turn2 recall(120) + chat assertion(15) = 310s → 360s with margin.
-    // glm-5.2 is slower than gemini-flash; the extra headroom matches T24b's budget.
+    // deepseek-v4.1-flash is slower than gemini-flash; the extra headroom matches T24b's budget.
     test.setTimeout(360_000);
 
     // ── Arrange ──────────────────────────────────────────────────────────────
@@ -441,7 +441,7 @@ test(
     //
     // SPEC BUG (fixed): the category instructed here used to be "test", which
     // is not one of the `remember` tool's three enum values (pkg/tools/memory.go:159
-    // — `key_decision` | `reference` | `lesson_learned`). glm-5.2 correctly
+    // — `key_decision` | `reference` | `lesson_learned`). deepseek-v4.1-flash correctly
     // refused to call the tool with an invalid category and asked a
     // clarifying question instead ("'test' isn't a valid option. Which of
     // those three would you like me to use?"), so no memory file was ever

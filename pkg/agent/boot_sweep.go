@@ -680,10 +680,6 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 		}
 		rec := records[i]
 
-		if standingRootExemptFromSweep(rec) {
-			continue
-		}
-
 		// Exemption (a): a parked needs_input session that is still
 		// reconstructable at boot is preserved as resumable (FR-119/R§8.6).
 		// The stored needs_input.reconstructable hint is NEVER the authority
@@ -719,6 +715,27 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 		// session's recorded semantics version predates the current build.
 		if action := pe.resolveGoalSemanticsAction(&rec); action == goalActionRebaseline {
 			result.RebaselinedGoals = append(result.RebaselinedGoals, rec.SessionID)
+			continue
+		}
+
+		// ADR-093 D3: a standing root (no SteeredBy edge, origin absent or
+		// one of the standing kinds) is never swept to failed(interrupted) —
+		// checked HERE, after exemptions (a)/(b) and the N-15 rebaseline,
+		// not at the top of the loop. Those three are independent
+		// reconciliation actions (each with its own BootSweepResult counter
+		// downstream code/observability relies on — the N-15 rebaseline in
+		// particular is an active repair, not a no-op) that must still run
+		// for a standing root exactly as for any other record; D3 only
+		// narrows the FINAL catch-all outcome below. Placing this check at
+		// the top swallowed every standing root before those exemptions
+		// could fire, silently zeroing PreservedNeedsInput,
+		// PreservedAwaitingCorrection and RebaselinedGoals for any record
+		// this clause also matched — reproduced 2026-09-26 (release run
+		// 36245049018): TestN15_GoalSemanticsRebaseline,
+		// TestBootSweep_NeedsInputReconstructable_Preserved,
+		// TestBoot_ParkedRecoverableWithoutCheckpoint and
+		// TestBootSweep_AwaitingCorrectionOwnerExempt all failed this way.
+		if standingRootExemptFromSweep(rec) {
 			continue
 		}
 
