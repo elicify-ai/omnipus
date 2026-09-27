@@ -491,6 +491,9 @@ type DuckDuckGoSearchProvider struct {
 	proxy       string
 	client      *http.Client
 	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
+	// emptyRun counts consecutive empty results (D20's consecutive-empty
+	// warning); reset to 0 by any non-empty result.
+	emptyRun int32
 }
 
 func (p *DuckDuckGoSearchProvider) Search(

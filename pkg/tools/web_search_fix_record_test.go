@@ -67,7 +67,7 @@ func TestFixK5_PerCallRecordDefaultSuccess(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"default":"tavily"`,
-		`"fallback":"ddg"`,
+		`"fallback":"duckduckgo"`,
 		`"served":"tavily"`,
 		`"role":"default"`,
 		`"depth":""`,
@@ -96,8 +96,8 @@ func TestFixK5_PerCallRecordHopNamesFallback(t *testing.T) {
 	for _, want := range []string{
 		`"message":"web search call"`,
 		`"default":"tavily"`,
-		`"fallback":"ddg"`,
-		`"served":"ddg"`,
+		`"fallback":"duckduckgo"`,
+		`"served":"duckduckgo"`,
 		`"role":"fallback"`,
 		`"hop":true`,
 	} {

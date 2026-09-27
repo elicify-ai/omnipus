@@ -18,11 +18,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"bytes"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // roleEntries is the per-call snapshot of the usable set the resolver and
@@ -613,6 +615,21 @@ func (t *WebSearchTool) parseDynamicArgs(args map[string]any) (searchRequest, *T
 	return req, nil
 }
 
+// searchCallRecord carries ADR-096 D20's per-call observability fields from
+// the executors back to executeDynamic, which emits exactly ONE structured
+// record per search call (spec test 50). The provider that answered and its
+// role, the class of the attempt that ended the call, and whether a hop,
+// refusal or skip occurred; the resolved default and fallback come from
+// roleEntries at emission time.
+type searchCallRecord struct {
+	servedID string
+	role     string
+	class    string
+	hop      bool
+	refusal  bool
+	skip     string
+}
+
 // executeDynamic is the new-path Execute: parse, resolve roles, run the
 // pre-flight refusals against the first runner, then the ladder.
 func (t *WebSearchTool) executeDynamic(ctx context.Context, args map[string]any) *ToolResult {
@@ -623,10 +640,36 @@ func (t *WebSearchTool) executeDynamic(ctx context.Context, args map[string]any)
 	cfg := t.roles()
 	entries := resolveRoles(cfg)
 	start := time.Now()
+	rec := &searchCallRecord{}
+	var res *ToolResult
 	if req.namedID != "" {
-		return t.executeChosen(ctx, cfg, entries, req, start)
+		res = t.executeChosen(ctx, cfg, entries, req, start, rec)
+	} else {
+		res = t.executeDefaultPath(ctx, cfg, entries, req, start, rec)
 	}
-	return t.executeDefaultPath(ctx, cfg, entries, req, start)
+	t.emitSearchCallRecord(entries, req, rec)
+	return res
+}
+
+// emitSearchCallRecord writes the D20 record for one finished search call.
+// "skip" carries the exact skip reason ("cannot honour include_domains",
+// "no time budget remaining"); "class" is the class of the attempt that
+// ended the call ("" on a clean success).
+func (t *WebSearchTool) emitSearchCallRecord(entries roleEntries, req searchRequest, rec *searchCallRecord) {
+	if rec == nil {
+		return
+	}
+	logger.InfoCF("tool", "web search call", map[string]any{
+		"default":  entries.defaultID,
+		"fallback": entries.fallbackID,
+		"served":   rec.servedID,
+		"role":     rec.role,
+		"depth":    req.depth,
+		"class":    rec.class,
+		"hop":      rec.hop,
+		"refusal":  rec.refusal,
+		"skip":     rec.skip,
+	})
 }
 
 // capabilityRefusal builds the pre-request refusal when the provider that
@@ -761,24 +804,30 @@ func (t *WebSearchTool) executeDefaultPath(
 	entries roleEntries,
 	req searchRequest,
 	start time.Time,
+	rec *searchCallRecord,
 ) *ToolResult {
 	defaultID := entries.defaultID
 	if !entries.usable[defaultID] {
-		return t.executeNotUsableDefault(ctx, cfg, entries, req, start)
+		return t.executeNotUsableDefault(ctx, cfg, entries, req, start, rec)
 	}
 	// Pre-flights: the first runner is the default.
 	if res := t.preflightCheck(entries, defaultID, "default", req); res != nil {
+		rec.refusal = true
 		return res
 	}
 	text, spErr := t.runProvider(ctx, start, defaultID, req)
 	if spErr == nil {
+		rec.servedID = defaultID
+		rec.role = "default"
 		return successText(text, defaultID, "default", t.excludeNote(entries, defaultID, req))
 	}
 	// Final classes never hop (spec "Which failures hop").
 	if !hopClass(spErr.class) {
+		rec.class = spErr.class
 		lines := []string{"search failed", t.failureLine(defaultID, "default", spErr.class, spErr.msg)}
 		if entries.fallbackID != "" {
 			if reason := entries.notCalledReason(cfg, entries.fallbackID); reason != "" {
+				rec.skip = reason
 				lines = append(lines, notCalledLine(entries.fallbackID, "fallback", reason))
 			}
 		}
@@ -786,6 +835,8 @@ func (t *WebSearchTool) executeDefaultPath(
 	}
 	// Hop-class failure.
 	if reason := t.fallbackEligibility(entries, req, start); reason != "" {
+		rec.class = spErr.class
+		rec.skip = reason
 		lines := []string{"search failed", t.failureLine(defaultID, "default", spErr.class, spErr.msg)}
 		if entries.fallbackID != "" {
 			lines = append(lines, notCalledLine(entries.fallbackID, "fallback", reason))
@@ -793,9 +844,11 @@ func (t *WebSearchTool) executeDefaultPath(
 		return ErrorResult(strings.Join(lines, "\n"))
 	}
 	if entries.fallbackID == "" || !entries.usable[entries.fallbackID] {
+		rec.class = spErr.class
 		lines := []string{"search failed", t.failureLine(defaultID, "default", spErr.class, spErr.msg)}
 		if entries.fallbackID != "" {
 			if reason := entries.notCalledReason(cfg, entries.fallbackID); reason != "" {
+				rec.skip = reason
 				lines = append(lines, notCalledLine(entries.fallbackID, "fallback", reason))
 			}
 		}
@@ -803,10 +856,14 @@ func (t *WebSearchTool) executeDefaultPath(
 	}
 	text2, spErr2 := t.runProvider(ctx, start, entries.fallbackID, req)
 	if spErr2 == nil {
+		rec.servedID = entries.fallbackID
+		rec.role = "fallback"
+		rec.hop = true
 		notes := t.excludeNote(entries, entries.fallbackID, req)
 		notes = append(notes, t.hopNote(defaultID, "default", spErr.class, spErr.msg))
 		return successText(text2, entries.fallbackID, "fallback", notes)
 	}
+	rec.class = spErr2.class
 	lines := []string{"search failed",
 		t.failureLine(defaultID, "default", spErr.class, spErr.msg),
 		t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}
@@ -822,12 +879,14 @@ func (t *WebSearchTool) executeNotUsableDefault(
 	entries roleEntries,
 	req searchRequest,
 	start time.Time,
+	rec *searchCallRecord,
 ) *ToolResult {
 	defaultID := entries.defaultID
 	reason := entries.notCalledReason(cfg, defaultID)
 	fb := entries.fallbackID
 	if fb == "" || !entries.usable[fb] {
 		// R7: nobody can run. List the default (and any R4b fallback).
+		rec.skip = reason
 		lines := []string{"search failed", notCalledLine(defaultID, "default", reason)}
 		if fb != "" && fb != defaultID {
 			lines = append(lines, notCalledLine(fb, "fallback", entries.notCalledReason(cfg, fb)))
@@ -839,14 +898,18 @@ func (t *WebSearchTool) executeNotUsableDefault(
 	// GLM (or depth/site-filter asks a provider cannot honour) is refused
 	// before any request fires.
 	if res := t.preflightCheck(entries, fb, "fallback", req); res != nil {
+		rec.refusal = true
 		return res
 	}
 	text, spErr := t.runProvider(ctx, start, fb, req)
 	if spErr == nil {
+		rec.servedID = fb
+		rec.role = "fallback"
 		notes := t.excludeNote(entries, entries.fallbackID, req)
 		notes = append(notes, fmt.Sprintf("Note: %s (default) was not called: %s.", defaultID, reason))
 		return successText(text, fb, "fallback", notes)
 	}
+	rec.class = spErr.class
 	lines := []string{"search failed",
 		notCalledLine(defaultID, "default", reason),
 		t.failureLine(fb, "fallback", spErr.class, spErr.msg)}
@@ -862,6 +925,7 @@ func (t *WebSearchTool) executeChosen(
 	entries roleEntries,
 	req searchRequest,
 	start time.Time,
+	rec *searchCallRecord,
 ) *ToolResult {
 	id := req.namedID
 	// A capability use never rides the default shortcut (US-4): include/
@@ -871,23 +935,27 @@ func (t *WebSearchTool) executeChosen(
 		req.depth != "" || id == config.SearchProviderPerplexity
 	// Unknown or unusable picks are refused honestly, no silent substitution.
 	if !slices.Contains(searchProviderCatalogueOrder, id) || !entries.usable[id] {
+		rec.refusal = true
 		return t.chosenRefusal(entries, id)
 	}
 	// Naming the default equals omitting the argument entirely (US-4) --
 	// plain calls only.
 	if id == entries.defaultID && !usesCap {
 		req.namedID = ""
-		return t.executeDefaultPath(ctx, cfg, entries, req, start)
+		return t.executeDefaultPath(ctx, cfg, entries, req, start, rec)
 	}
 	// Pre-flight: the chosen provider is about to be the first runner; the
 	// same capability refusals that guard the default path guard it here
 	// (K3): depth on a non-depth provider, GLM low, site filters.
 	if res := t.preflightCheck(entries, id, "chosen", req); res != nil {
+		rec.refusal = true
 		return res
 	}
 	// Usable pick: one named attempt.
 	text, spErr := t.runProvider(ctx, start, id, req)
 	if spErr == nil {
+		rec.servedID = id
+		rec.role = "chosen"
 		return successText(text, id, "chosen", t.excludeNote(entries, id, req))
 	}
 	// A capability use never hops (US-4); usesCap was computed on entry. A
@@ -1621,7 +1689,33 @@ func (p *DuckDuckGoSearchProvider) SearchWithCaps(ctx context.Context, req searc
 			msg:   fmt.Sprintf("duckduckgo api error (status %d): %s", resp.StatusCode, string(body)),
 		}
 	}
-	return p.extractResults(string(body), req.count, req.query)
+	return p.noteEmptyRun(p.extractResults(string(body), req.count, req.query))
+}
+
+// ddgEmptyWarnThreshold is how many consecutive empty DuckDuckGo results
+// trigger D20's consecutive-empty warning ("the cheap version of the
+// block-page fingerprint"). Lane decision: the spec fixes the warning, not
+// a number.
+const ddgEmptyWarnThreshold = 3
+
+// noteEmptyRun tracks consecutive empty results: an empty result is a
+// SUCCESS shape (it carries no failure class), so the warning is the only
+// signal an operator gets before the agent keeps trusting a blocked page.
+// Any non-empty result resets the count.
+func (p *DuckDuckGoSearchProvider) noteEmptyRun(text string, err error) (string, error) {
+	if err != nil {
+		return text, err
+	}
+	if strings.HasPrefix(text, "No results found or extraction failed") {
+		if n := atomic.AddInt32(&p.emptyRun, 1); n >= ddgEmptyWarnThreshold {
+			logger.WarnCF("tool", "duckduckgo returned no results repeatedly", map[string]any{
+				"consecutive_empty": n,
+			})
+		}
+		return text, nil
+	}
+	atomic.StoreInt32(&p.emptyRun, 0)
+	return text, nil
 }
 
 // honoursDepth/honoursSiteFilters: Brave supports neither (capability
