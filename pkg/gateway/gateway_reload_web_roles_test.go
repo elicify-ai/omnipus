@@ -56,8 +56,9 @@ func TestExecuteReload_DeferredWebSearchMigrationDecidesAfterInject(t *testing.T
 	// Boot with the ref absent from the vault. Migration must defer (D11
 	// ambiguous-install guard). ResolveBundle then refuses the enabled ref;
 	// that fatal is ADR-004, and it must not have written role keys on the way.
-	_, _, _, bootErr := bootCredentials(home, configPath)
+	bootCfg, _, _, bootErr := bootCredentials(home, configPath)
 	require.Error(t, bootErr, "an enabled Tavily ref missing from the vault is fatal at ResolveBundle")
+	require.Nil(t, bootCfg, "a fatal boot returns no config")
 	assertWebRoleKeysAbsent(t, configPath)
 
 	store := credentials.NewStore(filepath.Join(home, "credentials.json"))

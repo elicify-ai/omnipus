@@ -69,10 +69,11 @@ func TestBootCredentials_WebSearchMigrationFollowsInject(t *testing.T) {
 		before, err := os.ReadFile(configPath)
 		require.NoError(t, err)
 
-		_, _, _, bootErr := bootCredentials(home, configPath)
+		bootCfg, _, _, bootErr := bootCredentials(home, configPath)
 		// The missing enabled ref is fatal at ResolveBundle (ADR-004), which
 		// runs AFTER the migration. Defer must already have written nothing.
 		require.Error(t, bootErr)
+		require.Nil(t, bootCfg, "a fatal boot returns no config")
 
 		after, err := os.ReadFile(configPath)
 		require.NoError(t, err)
