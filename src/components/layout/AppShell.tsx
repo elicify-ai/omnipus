@@ -9,6 +9,7 @@ import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspace
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
 import { BrowserLivePanel } from '@/components/browser/BrowserLivePanel'
 import { LibraryPanel } from '@/components/library/LibraryPanel'
+import { MailPanelHost } from '@/components/workspaces/mail/MailPanelHost'
 import { SearchModal } from '@/components/search/SearchModal'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
@@ -293,6 +294,13 @@ export function AppShell() {
           why popping THIS one out does not close the docked copy (no
           exclusive control lock to hand over, unlike the live browser). */}
       <LibraryPanel />
+
+      {/* Mail panel (email-mail-view-spec.md US-3) — same docked-<aside>-
+          as-flex-sibling pattern as LibraryPanel above; renders null unless
+          the active panel is Mail (SP-8: one shared panel surface). When the
+          shell's wave-2 registry lands, mailPanelDefinition supplies the
+          same content to SidePanelShell. */}
+      <MailPanelHost />
 
       {/* God Mode corner dot (founder decision 2026-09-25) — rendered ONCE
           here at the SHELL ROOT, outside the ErrorBoundary, and — review

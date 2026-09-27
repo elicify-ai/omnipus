@@ -8,6 +8,7 @@ import {
   Files,
   Buildings,
   CaretDown,
+  Tray,
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import {
@@ -48,6 +49,10 @@ export const WORKSPACE_TABS = [
   // the workspace's Chat tab so the URL never dead-ends on a page with no
   // content of its own.
   { segment: 'media', label: 'Library', Icon: Files },
+  // Mail (email-mail-view-spec.md US-3): the workspace Mail panel. Like the
+  // Library entry above, this is a Link to a redirect-stub route — the route
+  // opens the Mail side panel (leave-gated) and lands back on Chat.
+  { segment: 'mail', label: 'Mail', Icon: Tray },
   { segment: 'team', label: 'Team', Icon: UsersThree },
   // NOTE: workspace settings is deliberately NOT a tab — settings is chrome,
   // not a view. It's reached by clicking the workspace NAME in the top bar
