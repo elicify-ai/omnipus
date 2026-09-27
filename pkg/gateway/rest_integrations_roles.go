@@ -112,6 +112,35 @@ func webRoleString(web map[string]any, key string) string {
 	return v
 }
 
+// searchProviderEnabled reports only the saved on/off posture. The fallback
+// save rule checks this before writing, while key/prerequisite usability is
+// judged after reload per FR-033.
+func searchProviderEnabled(web *config.WebToolsConfig, id string) bool {
+	if web == nil {
+		return false
+	}
+	switch id {
+	case config.SearchProviderPerplexity:
+		return web.Perplexity.Enabled
+	case config.SearchProviderBrave:
+		return web.Brave.Enabled
+	case config.SearchProviderTavily:
+		return web.Tavily.Enabled
+	case config.SearchProviderGLM:
+		return web.GLMSearch.Enabled
+	case config.SearchProviderBaidu:
+		return web.BaiduSearch.Enabled
+	case config.SearchProviderExa:
+		return web.Exa.Enabled
+	case config.SearchProviderSearXNG:
+		return web.SearXNG.Enabled
+	case config.SearchProviderDuckDuckGo:
+		return web.DuckDuckGo.Enabled
+	default:
+		return false
+	}
+}
+
 // integrationRoleSnapshot resolves the roles through the ONE resolver
 // (FR-035): the raw-file role strings (absent → "") ride on top of a fresh
 // load's provider sections, so R3's absent-state survives the defaults
@@ -366,25 +395,41 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 						fmt.Sprintf("%s is the current default and cannot also be the fallback", def.displayName))
 					return
 				}
-				// Save rejection: the fallback target must be usable NOW
-				// (enabled, and for keyed providers its key resolves).
+				// Save rejection: the fallback target must already be enabled.
+				// Its key/prerequisite usability is intentionally checked only
+				// after this request stores its key and reloads (FR-033).
 				fresh, err := config.LoadConfig(a.configPath())
 				if err != nil {
 					jsonErr(w, http.StatusInternalServerError, "could not read the current configuration")
 					return
 				}
-				if !fresh.Tools.Web.UsableSearchProvider(id) {
+				if !searchProviderEnabled(&fresh.Tools.Web, id) {
 					jsonErr(w, http.StatusBadRequest,
-						fmt.Sprintf("%s is not ready to serve as the fallback — switch it on (and store its API key for keyed providers) first", def.displayName))
+						fmt.Sprintf("%s is not enabled and cannot serve as the fallback — switch it on first", def.displayName))
 					return
 				}
 			}
 		}
 		write.setActive = body.Active != nil && *body.Active
 		if write.setActive && body.Fallback == nil {
-			// Materialization: a default-role save with no fallback field,
-			// while the file sits in the absent state and R3 would apply.
+			// A default-role save with no fallback field consults the file
+			// state once, for two rules:
+			//
+			//   - Save-rule "Same id as default and as fallback | Rejected",
+			//     across two requests: a provider may already hold the
+			//     fallback role from an earlier save, and active:true on it
+			//     would persist default==fallback. An explicit fallback:false
+			//     is allowed here because that request removes the old
+			//     fallback while assigning the default.
+			//   - Materialization: the file sits in the absent state and R3
+			//     would apply, so the save writes fallback_provider=
+			//     duckduckgo and the file leaves the absent state.
 			state := a.readIntegrationRolesFileState()
+			if state.rawFallback == id {
+				jsonErr(w, http.StatusBadRequest,
+					fmt.Sprintf("%s is the current fallback and cannot also be the default", def.displayName))
+				return
+			}
 			if _, present := state.web["fallback_provider"]; !present {
 				ddgUsable := false
 				if fresh, err := config.LoadConfig(a.configPath()); err == nil {
@@ -490,15 +535,26 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 	// FR-033 round-2 rule: a keyed default whose key still does not resolve
 	// AFTER the reload is rejected — judged from post-reload state. The
 	// persisted write stays; the response names the step that failed.
+	postReloadCfg := a.agentLoop.GetConfig()
 	if write.setActive && def.requiresKey {
-		if !a.agentLoop.GetConfig().Tools.Web.UsableSearchProvider(id) {
+		if !postReloadCfg.Tools.Web.UsableSearchProvider(id) {
 			jsonErr(w, http.StatusBadRequest,
 				fmt.Sprintf("%s was saved as the default but its API key does not resolve — store an API key for it, then save the default again", def.displayName))
 			return
 		}
 	}
+	if write.fallbackSet && write.fallbackOn && !postReloadCfg.Tools.Web.UsableSearchProvider(id) {
+		if def.requiresKey {
+			jsonErr(w, http.StatusBadRequest,
+				fmt.Sprintf("%s was saved as the fallback but its API key does not resolve — store an API key for it, then save the fallback again", def.displayName))
+		} else {
+			jsonErr(w, http.StatusBadRequest,
+				fmt.Sprintf("%s was saved as the fallback but its prerequisites are not available after reload", def.displayName))
+		}
+		return
+	}
 
-	a.writeIntegrationResponse(w, a.agentLoop.GetConfig())
+	a.writeIntegrationResponse(w, postReloadCfg)
 }
 
 // applyIntegrationRoles dispatches the raw-map mutation by kind: search rows
