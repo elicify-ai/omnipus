@@ -12246,6 +12246,8 @@ export interface components {
             body_markdown: string | null;
             /** @description True when body_markdown was derived rather than read from a stored text/markdown part — editing such a draft may lose formatting (D24; the panel states the loss plainly). */
             markdown_lossy: boolean;
+            /** @description Set when the OLD draft copy could not be removed after a successful update-APPEND of the new copy (MAJ-009/MC-28 — the panel warns of a possible duplicate draft). Same underlying mechanism as the send path's draft_cleanup_warning (MailSendResponse), triggered by update instead of send. Null when cleanup succeeded, and always null on the read paths (GET message, list messages) — only the update endpoint can set it. */
+            draft_cleanup_warning?: string | null;
         };
         /**
          * MailAttachment

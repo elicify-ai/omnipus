@@ -17939,6 +17939,9 @@ type MailMessage struct {
 	// Date Message date (RFC 3339).
 	Date time.Time `json:"date"`
 
+	// DraftCleanupWarning Set when the OLD draft copy could not be removed after a successful update-APPEND of the new copy (MAJ-009/MC-28 — the panel warns of a possible duplicate draft). Same underlying mechanism as the send path's draft_cleanup_warning (MailSendResponse), triggered by update instead of send. Null when cleanup succeeded, and always null on the read paths (GET message, list messages) — only the update endpoint can set it.
+	DraftCleanupWarning *string `json:"draft_cleanup_warning,omitempty"`
+
 	// Folder The folder slug the message lives in (MC-5).
 	Folder MailMessageFolder `json:"folder"`
 

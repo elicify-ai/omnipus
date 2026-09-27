@@ -1932,6 +1932,7 @@ type MailMessage = {
   attachments: Array<MailAttachment>;
   body_markdown: string | null;
   markdown_lossy: boolean;
+  draft_cleanup_warning?: (string | null) | undefined;
 };
 type MailAttachment = {
   part_index: number;
@@ -5901,6 +5902,7 @@ export const MailMessage: z.ZodType<MailMessage> = z.object({
   attachments: z.array(MailAttachment),
   body_markdown: z.string().nullable(),
   markdown_lossy: z.boolean(),
+  draft_cleanup_warning: z.string().nullish(),
 });
 export const MailboxNewMailSummary: z.ZodType<MailboxNewMailSummary> = z.object(
   {
