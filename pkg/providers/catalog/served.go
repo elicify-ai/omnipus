@@ -181,16 +181,21 @@ type providerRegionJSON struct {
 }
 
 type modelJSON struct {
-	ID                string     `json:"id"`
-	Name              string     `json:"name"`
-	ReleaseDate       string     `json:"release_date,omitempty"`
-	ContextWindow     int        `json:"context_window"`
-	MaxOutputTokens   int        `json:"max_output_tokens"`
-	InputModalities   []Modality `json:"input_modalities"`
-	ToolCall          bool       `json:"tool_call"`
-	Status            Status     `json:"status"`
-	Disputed          bool       `json:"disputed,omitempty"`
-	InferenceProfiles []string   `json:"inference_profiles,omitempty"`
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	ReleaseDate     string     `json:"release_date,omitempty"`
+	ContextWindow   int        `json:"context_window"`
+	MaxOutputTokens int        `json:"max_output_tokens"`
+	InputModalities []Modality `json:"input_modalities"`
+	ToolCall        bool       `json:"tool_call"`
+	// Reasoning mirrors the document's per-model reasoning fields in the
+	// served envelope; ReasoningOptions preserves the catalog's ascending
+	// effort order byte-exactly (C6/D25 — never re-sorted).
+	Reasoning         bool     `json:"reasoning"`
+	ReasoningOptions  []string `json:"reasoning_options,omitempty"`
+	Status            Status   `json:"status"`
+	Disputed          bool     `json:"disputed,omitempty"`
+	InferenceProfiles []string `json:"inference_profiles,omitempty"`
 }
 
 // buildServed serialises doc into the envelope with the given origin
@@ -261,6 +266,8 @@ func providerToJSON(p *Provider) providerJSON {
 			MaxOutputTokens:   m.MaxOutputTokens,
 			InputModalities:   m.InputModalities,
 			ToolCall:          m.ToolCall,
+			Reasoning:         m.Reasoning,
+			ReasoningOptions:  m.ReasoningOptions,
 			Status:            m.Status,
 			Disputed:          m.Disputed,
 			InferenceProfiles: m.InferenceProfiles,

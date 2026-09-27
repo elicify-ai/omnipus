@@ -59,15 +59,15 @@ func TestModelConfig_FieldsSurvivedConstruction(t *testing.T) {
 	t.Setenv(keyRef, "key0")
 
 	model := &ModelConfig{
-		Name:           "gpt-4",
-		Model:          "openai/gpt-4o",
-		APIBase:        "https://api.example.com",
-		Proxy:          "http://proxy:8080",
-		RPM:            60,
-		MaxTokensField: "max_completion_tokens",
-		RequestTimeout: 30,
-		ThinkingLevel:  "high",
-		APIKeyRef:      keyRef,
+		Name:            "gpt-4",
+		Model:           "openai/gpt-4o",
+		APIBase:         "https://api.example.com",
+		Proxy:           "http://proxy:8080",
+		RPM:             60,
+		MaxTokensField:  "max_completion_tokens",
+		RequestTimeout:  30,
+		ReasoningEffort: "high",
+		APIKeyRef:       keyRef,
 	}
 
 	if model.Name != "gpt-4" {
@@ -91,8 +91,8 @@ func TestModelConfig_FieldsSurvivedConstruction(t *testing.T) {
 	if model.RequestTimeout != 30 {
 		t.Errorf("expected request_timeout preserved, got %d", model.RequestTimeout)
 	}
-	if model.ThinkingLevel != "high" {
-		t.Errorf("expected thinking_level preserved, got %q", model.ThinkingLevel)
+	if model.ReasoningEffort != "high" {
+		t.Errorf("expected reasoning_effort preserved, got %q", model.ReasoningEffort)
 	}
 	if model.APIKeyRef != keyRef {
 		t.Errorf("expected api_key_ref preserved, got %q", model.APIKeyRef)

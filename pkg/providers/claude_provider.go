@@ -89,11 +89,9 @@ func (p *ClaudeProvider) GetDefaultModel() string {
 }
 
 // SupportsThinking implements providers.ThinkingCapable by forwarding to the
-// delegate. Without this forwarder the agent loop's
-// `activeProvider.(providers.ThinkingCapable)` assertion
-// (pkg/agent/loop_run_turn.go::prepareLLMRequest) fails for EVERY Anthropic
-// turn once the factory dispatches ClaudeProvider — thinking_level would be
-// silently dropped exactly the way ChatStream's absence once silently dropped
+// delegate. Without this forwarder the factory-dispatched ClaudeProvider
+// stops satisfying the optional interface, and every Anthropic turn loses
+// the capability exactly the way ChatStream's absence once silently dropped
 // streaming (see compliance.go's rule: assert the type the factory returns).
 func (p *ClaudeProvider) SupportsThinking() bool {
 	return p.delegate.SupportsThinking()

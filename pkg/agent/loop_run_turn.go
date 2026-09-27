@@ -984,16 +984,15 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 	if rq.useNativeSearch && !narrowingActive {
 		rq.ri.rf.rt.llmOpts["native_search"] = true
 	}
-	rq.ri.rf.rt.ts.agent.mu.RLock()
-	agentThinkingLevel := rq.ri.rf.rt.ts.agent.ThinkingLevel
-	rq.ri.rf.rt.ts.agent.mu.RUnlock()
-	if agentThinkingLevel != ThinkingOff {
-		if tc, ok := rq.ri.rf.rt.activeProvider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
-			rq.ri.rf.rt.llmOpts["thinking_level"] = string(agentThinkingLevel)
-		} else {
-			logger.WarnCF("agent", "thinking_level is set but current provider does not support it, ignoring",
-				map[string]any{"agent_id": rq.ri.rf.rt.ts.agent.ID, "thinking_level": string(agentThinkingLevel)})
-		}
+	// C5 effort resolution (reasoning_effort.go) — the deleted thinking-level
+	// gate's replacement. The value is a plain passthrough string resolved
+	// from the stored surfaces; the provider adapters map it to their own
+	// wire fields. Absence (ok=false) is the send-nothing signal (D9): no
+	// empty-string placeholder is ever set. WP-H's two higher-precedence
+	// override sources (web per-message, non-web session) check ahead of
+	// this call when they land.
+	if effort, ok := reasoningEffortForTurn(rq.ri.rf.rt.al.GetConfig(), rq.ri.rf.rt.ts.agent, rq.ri.activeModel); ok {
+		rq.ri.rf.rt.llmOpts["reasoning_effort"] = effort
 	}
 
 	rq.ri.rf.rt.llmModel = rq.ri.activeModel

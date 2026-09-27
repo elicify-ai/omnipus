@@ -34,7 +34,7 @@ The loop is a classic ReAct-style tool-using loop, implemented inline rather tha
 
 ### 1.3 Agent construction
 
-- `AgentInstance` (`pkg/agent/instance.go:25-64`) is the runtime agent. Fields: `ID`, `Name`, `Model`, `Fallbacks`, `Workspace`, `MaxIterations`, `MaxTokens`, `Temperature`, `ThinkingLevel`, `ContextWindow`, plus injected dependencies `Provider`, `Sessions`, `ContextBuilder`, `Tools`, optional `Router`/`LightProvider`. Constructed by `NewAgentInstance` at `pkg/agent/instance.go:67`.
+- `AgentInstance` (`pkg/agent/instance.go:25-64`) is the runtime agent. Fields: `ID`, `Name`, `Model`, `Fallbacks`, `Workspace`, `MaxIterations`, `MaxTokens`, `Temperature`, `ReasoningEffort`, `ContextWindow`, plus injected dependencies `Provider`, `Sessions`, `ContextBuilder`, `Tools`, optional `Router`/`LightProvider`. Constructed by `NewAgentInstance` at `pkg/agent/instance.go:67`.
 - `AgentRegistry` (`pkg/agent/registry.go:35`) holds all agents in a normalized-ID map. `GetAgent` (`:88`) and `ResolveRoute` (`:98`) are the lookup paths.
 - **Core / Custom differentiation is runtime-thin:** the same `AgentInstance` struct is used for both. The differences are:
   - Core agents (Jim, Ava, Mia, Ray, Max) are seeded with `Locked=true` and have their prompts compiled into the binary via the `prompts` map (`pkg/coreagent/core.go:24-150`, prompts at `:86`, seed at `:109-128`). They receive a seeded `system.*: allow` policy.

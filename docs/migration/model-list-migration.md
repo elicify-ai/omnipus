@@ -13,7 +13,7 @@ The v1 `providers` array is model-centric rather than vendor-centric:
 - **Load balancing** — duplicate `model_name` entries trigger automatic
   round-robin selection across their endpoints.
 - **Explicit per-model configuration** — each entry carries its own
-  `api_base`, `proxy`, `thinking_level`, `extra_body`, etc. rather than
+  `api_base`, `proxy`, `reasoning_effort`, `extra_body`, etc. rather than
   sharing a single provider block.
 - **Credential store integration** — API keys live in `credentials.json`
   (AES-256-GCM encrypted) and are referenced via `api_key_ref`, never stored
@@ -180,7 +180,7 @@ All fields map directly to JSON tags in `pkg/config/config.go:ModelConfig`.
 | RPM | `rpm` | int | No | Requests-per-minute cap for this entry; 0 = unlimited |
 | Max tokens field | `max_tokens_field` | string | No | Override the field name sent for token limits (e.g. `max_completion_tokens`) |
 | Request timeout | `request_timeout` | int | No | HTTP timeout in seconds; `0` uses the provider default (120 s) |
-| Thinking level | `thinking_level` | string | No | Extended thinking depth: `off`, `low`, `medium`, `high`, `xhigh`, or `adaptive` |
+| Reasoning effort | `reasoning_effort` | string | No | Effort level for the model's reasoning mode (C5): a plain string whose level names come from the model's catalog `reasoning_options`; unset/`default` sends nothing |
 | Extra body | `extra_body` | object | No | Additional key-value pairs injected verbatim into the request body |
 | Name | `name` | string | No | Display-only alias for `model_name`; no effect on routing |
 

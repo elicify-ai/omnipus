@@ -348,6 +348,11 @@ type turnState struct {
 	turnPromptTokens     int
 	turnCompletionTokens int
 	turnCacheWrite       int
+	// turnThinkingTokens carries the provider-reported reasoning ("thinking")
+	// token count accumulated across all LLM iterations in this turn, so the
+	// assistant transcript entry (and from it SessionStats.ByModel's
+	// Thinking) can carry the same breakdown (D11 usage display).
+	turnThinkingTokens int
 
 	// turnFailed is set to true when the turn ended via the engine's error/limit
 	// fallback rather than a real model response.  Three conditions trigger it:
@@ -1667,6 +1672,28 @@ func (ts *turnState) AddTurnIOStats(promptTokens, completionTokens int) {
 	defer ts.mu.Unlock()
 	ts.turnPromptTokens += promptTokens
 	ts.turnCompletionTokens += completionTokens
+}
+
+// AddTurnThinkingStats accumulates the provider-reported reasoning
+// ("thinking") token count from a single LLM iteration. It is a sibling of
+// AddTurnCacheStats and AddTurnIOStats and must be called alongside
+// AddTurnStats for every LLM call that reports usage.
+// B4: suppressed when the turn is marked abandoned.
+func (ts *turnState) AddTurnThinkingStats(thinkingTokens int) {
+	if ts.abandoned.Load() {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.turnThinkingTokens += thinkingTokens
+}
+
+// GetTurnThinkingStats returns the accumulated thinking-token split for
+// this turn.
+func (ts *turnState) GetTurnThinkingStats() (thinkingTokens int) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.turnThinkingTokens
 }
 
 // GetTurnIOStats returns the accumulated prompt/completion split for this turn.

@@ -577,6 +577,14 @@ type FallbackModel struct {
 	// "openai"). Distinct from any "provider/" prefix embedded in Model —
 	// Provider is the credential/endpoint selection key.
 	Provider string `json:"provider,omitempty"`
+	// ReasoningEffort is the effort level stored for THIS fallback candidate,
+	// independently of the primary and of every other candidate (D10;
+	// FallbackModel.yaml's per-entry reasoning_effort). A plain string, not
+	// validated against a fixed enum at write time (T1): level names come
+	// from the model's catalog reasoning_options — never hardcoded. Empty
+	// means "Default" (D9) — send nothing, the provider default applies. The
+	// literal token "default" is the same unset signal (C5).
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // FallbackModelSlice is the JSON wire shape for an agent's fallback chain.
@@ -1020,6 +1028,13 @@ type AgentDefaults struct {
 type DefaultModel struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	// ReasoningEffort is the effort level stored for the instance default
+	// model (DefaultModel.yaml's flat reasoning_effort). A plain string, not
+	// validated against a fixed enum at write time (T1): level names come
+	// from the model's catalog reasoning_options — never hardcoded. Empty
+	// means "Default" (D9) — send nothing, the provider default applies. The
+	// literal token "default" is the same unset signal (C5).
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // ChannelIdentity identifies whether an inbound connection acts on behalf of an
@@ -1351,8 +1366,15 @@ type ModelConfig struct {
 	// call that keeps streaming, however slowly, is never cut. Applies to the
 	// streaming providers only; non-streaming calls stay under RequestTimeout.
 	StreamStallTimeout int            `json:"stream_stall_timeout,omitempty"`
-	ThinkingLevel      string         `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
-	ExtraBody          map[string]any `json:"extra_body,omitempty"`     // Additional fields to inject into request body
+	ExtraBody          map[string]any `json:"extra_body,omitempty"` // Additional fields to inject into request body
+
+	// ReasoningEffort is the effort level stored for this model row — the
+	// stored surface C5 step (3) resolves for a serving candidate. A plain
+	// string, not validated against a fixed enum at write time (T1): level
+	// names come from the model's catalog reasoning_options — never
+	// hardcoded. Empty means "Default" (D9) — send nothing, the provider
+	// default applies. The literal token "default" is the same unset signal.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 
 	// APIKeyRef references a named credential in credentials.json (e.g. "ANTHROPIC_API_KEY").
 	// At runtime the system resolves the reference, decrypts the value, and injects it

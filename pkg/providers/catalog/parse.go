@@ -91,13 +91,19 @@ type providerRegionDTO struct {
 }
 
 type modelDTO struct {
-	ID                string   `json:"id"`
-	Name              string   `json:"name"`
-	ReleaseDate       string   `json:"release_date"`
-	ContextWindow     int      `json:"context_window"`
-	MaxOutputTokens   int      `json:"max_output_tokens"`
-	InputModalities   []string `json:"input_modalities"`
-	ToolCall          bool     `json:"tool_call"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	ReleaseDate     string   `json:"release_date"`
+	ContextWindow   int      `json:"context_window"`
+	MaxOutputTokens int      `json:"max_output_tokens"`
+	InputModalities []string `json:"input_modalities"`
+	ToolCall        bool     `json:"tool_call"`
+	// Reasoning marks a model that offers a reasoning/thinking mode;
+	// ReasoningOptions lists the effort levels it offers, IN ASCENDING
+	// EFFORT ORDER as the catalog publishes it — Omnipus preserves the
+	// catalog's order, never re-sorts (C6/D25; D7: no hardcoded list).
+	Reasoning         bool     `json:"reasoning"`
+	ReasoningOptions  []string `json:"reasoning_options"`
 	Status            string   `json:"status"`
 	Disputed          bool     `json:"disputed"`
 	InferenceProfiles []string `json:"inference_profiles"`
@@ -512,6 +518,8 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 		MaxOutputTokens:   dto.MaxOutputTokens,
 		InputModalities:   mods,
 		ToolCall:          dto.ToolCall,
+		Reasoning:         dto.Reasoning,
+		ReasoningOptions:  dto.ReasoningOptions,
 		Status:            status,
 		Disputed:          dto.Disputed,
 		InferenceProfiles: profiles,

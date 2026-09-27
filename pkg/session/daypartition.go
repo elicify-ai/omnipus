@@ -213,7 +213,12 @@ type ModelTokens struct {
 	Out        int `json:"out"`
 	CacheRead  int `json:"cache_read"`
 	CacheWrite int `json:"cache_write"`
-	Total      int `json:"total"`
+	// Thinking is the reasoning ("thinking") token count reported by the
+	// provider for this model. A SUBSET of Out — never added on top of
+	// Total (mirrors protocoltypes.UsageInfo.ThinkingTokens). Additive
+	// across turns; omitted when the provider reported none.
+	Thinking int `json:"thinking,omitempty"`
+	Total    int `json:"total"`
 }
 
 // SessionStats aggregates usage across all partitions.
@@ -286,6 +291,13 @@ type TranscriptEntry struct {
 
 	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+
+	// ThinkingTokens is the provider-reported reasoning ("thinking") token
+	// count for this assistant entry (a SUBSET of CompletionTokens — never
+	// added on top of Tokens/Total). 0 for non-assistant entries, for legacy
+	// entries written before this field existed, and whenever the provider
+	// reported none. Used to accumulate SessionStats.ByModel's Thinking.
+	ThinkingTokens int `json:"thinking_tokens,omitempty"`
 
 	// For compaction entries.
 	MessagesCompacted int `json:"messages_compacted,omitempty"`
