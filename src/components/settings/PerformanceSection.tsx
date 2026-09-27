@@ -41,7 +41,7 @@ import {
   getErrorMessage,
   type PerformanceSettingsUpdate,
 } from '@/lib/api'
-import type { MaxToolIterationAgentChange } from '@/lib/api/generated/openapi-types'
+import type { MaxToolIterationAgentChange, PerformanceSettings } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
@@ -140,6 +140,45 @@ function loweredSummaryText(agents: MaxToolIterationAgentChange[]): string {
   return `Lowered ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}: ${list}`
 }
 
+// Values a PUT saved to config.json whose in-memory refresh then failed
+// (performance_reload_failed with stage `refresh`, or a body that did not say
+// the stage): GET /performance keeps answering the OLD values until the
+// gateway reloads or restarts, so the inputs show these instead and the
+// tool-call limit is not compared against the stale in-memory global.
+type UnappliedValues = Pick<
+  PerformanceSettingsUpdate,
+  'max_parallel_agents' | 'tools_on_demand' | 'goal_max_rounds' | 'max_tool_iterations'
+>
+
+function savedValuesOf(body: PerformanceSettingsUpdate): UnappliedValues {
+  const out: UnappliedValues = {}
+  if (body.max_parallel_agents !== undefined) out.max_parallel_agents = body.max_parallel_agents
+  if (body.tools_on_demand !== undefined) out.tools_on_demand = body.tools_on_demand
+  if (body.goal_max_rounds !== undefined) out.goal_max_rounds = body.goal_max_rounds
+  if (body.max_tool_iterations !== undefined) out.max_tool_iterations = body.max_tool_iterations
+  return out
+}
+
+// configuredMaxParallel is the configured cap GET reports (0 = none set) —
+// see the input sync effect for why max_parallel_agents alone is not it.
+function configuredMaxParallel(data: PerformanceSettings): number {
+  return data.max_parallel_agents_configured === false ? 0 : (data.max_parallel_agents ?? 0)
+}
+
+// True once GET /performance reports every saved-but-unapplied value, i.e.
+// the gateway has reloaded its configuration since.
+function serverCaughtUp(u: UnappliedValues, data: PerformanceSettings): boolean {
+  return (
+    (u.max_parallel_agents === undefined || configuredMaxParallel(data) === u.max_parallel_agents) &&
+    (u.tools_on_demand === undefined || (data.tools_on_demand ?? true) === u.tools_on_demand) &&
+    (u.goal_max_rounds === undefined || data.goal_max_rounds === u.goal_max_rounds) &&
+    (u.max_tool_iterations === undefined || data.max_tool_iterations === u.max_tool_iterations)
+  )
+}
+
+const UNKNOWN_LOWERED_TEXT =
+  "Some agents' own tool-call limits may have been lowered, but the server's list could not be read — reload the page to see which."
+
 // The D11 confirm dialog's state. `retryBody` carries the other fields of a
 // PUT the server refused with a D16 drift 409, so confirming the fresh list
 // resends them too instead of silently dropping them.
@@ -181,6 +220,11 @@ export function PerformanceSection(): React.ReactElement {
   const [toolIterError, setToolIterError] = useState<string | null>(null)
   const [lowering, setLowering] = useState<LoweringDialogState | null>(null)
   const [loweredSummary, setLoweredSummary] = useState<string | null>(null)
+  // Saved-but-not-in-force values and the notice explaining them (see
+  // UnappliedValues). Cleared by the next successful save or once GET
+  // /performance catches up.
+  const [unapplied, setUnapplied] = useState<UnappliedValues | null>(null)
+  const [unappliedNotice, setUnappliedNotice] = useState<string | null>(null)
   // Bumped on every edit so a preview answer for a superseded value is dropped.
   const previewSeqRef = useRef(0)
   const toolIterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -231,6 +275,7 @@ export function PerformanceSection(): React.ReactElement {
   // Sync inputs with fetched values on first load.
   useEffect(() => {
     if (data && !dirty) {
+      // A saved-but-unapplied value wins over GET's stale in-memory one.
       // max_parallel_agents is NOT the configured value when nothing is
       // configured. The backend substitutes the resolved effective value
       // there, because 0 is an internal sentinel the schema forbids on the
@@ -239,31 +284,40 @@ export function PerformanceSection(): React.ReactElement {
       // would let an operator who saves without touching anything silently
       // turn a memory-bounded install into one with an explicit cap of 2000.
       // max_parallel_agents_configured is what distinguishes the two.
-      const configured =
-        data.max_parallel_agents_configured === false ? 0 : (data.max_parallel_agents ?? 0)
+      const configured = unapplied?.max_parallel_agents ?? configuredMaxParallel(data)
       setInputValue(configured === 0 ? '' : String(configured))
       // tools_on_demand defaults to true when absent from the response.
-      setToolsOnDemand(data.tools_on_demand ?? true)
+      setToolsOnDemand(unapplied?.tools_on_demand ?? data.tools_on_demand ?? true)
     }
-  }, [data, dirty])
+  }, [data, dirty, unapplied])
 
   // Sync the goal-round-budget input with the fetched value on first load —
   // a separate effect from the one above because it tracks its own dirty
   // flag (goalDirty), independent from max_parallel_agents/tools_on_demand.
   useEffect(() => {
     if (data && !goalDirty) {
-      setGoalMaxRoundsInput(String(data.goal_max_rounds ?? DEFAULT_GOAL_MAX_ROUNDS))
+      setGoalMaxRoundsInput(String(unapplied?.goal_max_rounds ?? data.goal_max_rounds ?? DEFAULT_GOAL_MAX_ROUNDS))
     }
-  }, [data, goalDirty])
+  }, [data, goalDirty, unapplied])
 
   // Sync the tool-iteration input with the server's in-force global. No
   // literal fallback: an older backend that omits the field shows an empty
   // input rather than a number the runtime may not be using (spec FR-004).
   useEffect(() => {
     if (data && !toolIterDirty) {
-      setToolIterInput(data.max_tool_iterations === undefined ? '' : String(data.max_tool_iterations))
+      const shown = unapplied?.max_tool_iterations ?? data.max_tool_iterations
+      setToolIterInput(shown === undefined ? '' : String(shown))
     }
-  }, [data, toolIterDirty])
+  }, [data, toolIterDirty, unapplied])
+
+  // The gateway reloaded since (GET now reports every saved value): the
+  // saved values are in force, so the notice goes.
+  useEffect(() => {
+    if (data && unapplied && serverCaughtUp(unapplied, data)) {
+      setUnapplied(null)
+      setUnappliedNotice(null)
+    }
+  }, [data, unapplied])
 
   // Clear a dirty flag ONLY for a control a committed PUT actually carried,
   // and only while the user has not re-edited that control since the body was
@@ -299,6 +353,10 @@ export function PerformanceSection(): React.ReactElement {
       updatePerformanceSettings(body, token),
     onSuccess: (result, variables) => {
       setSaveStatus('saved')
+      // A successful PUT re-read config.json into memory: whatever an earlier
+      // failed refresh left unapplied is in force now.
+      setUnapplied(null)
+      setUnappliedNotice(null)
       clearCommittedDirty(variables.body)
       reportLowered(result?.max_tool_iterations_lowered_agents)
       // The slot was emptied when the body was handed over (onConfirmed),
@@ -327,15 +385,24 @@ export function PerformanceSection(): React.ReactElement {
         })
         return
       }
-      // The write committed but the running agents were not reloaded yet:
-      // not a failed save. Clear the dirty state, say so plainly, name the
-      // agents it lowered (from the error body — GET /performance does not
-      // carry them) and re-read GET /performance for the values now on disk.
+      // The write committed but is not in force yet: not a failed save. Say
+      // so plainly and name the agents it lowered (from the error body — GET
+      // /performance does not carry them). Stage `reload`: GET already shows
+      // the new values, so re-read it. Stage `refresh` (or unknown): GET still
+      // shows the OLD values, so the saved ones stay on show (UnappliedValues)
+      // with a lasting notice, instead of the inputs snapping back to stale
+      // numbers that look current.
       if (isPerformanceReloadFailed(err)) {
         setSaveStatus('idle')
+        if (!err.inMemoryUpdated) {
+          const saved = savedValuesOf(variables.body)
+          setUnapplied((prev) => ({ ...prev, ...saved }))
+          setUnappliedNotice(err.userMessage)
+        }
         clearCommittedDirty(variables.body)
         addToast({ variant: 'warning', message: err.userMessage, duration: LOWERED_TOAST_DURATION_MS })
         reportLowered(err.loweredAgents)
+        if (err.loweredUnknown) setLoweredSummary(UNKNOWN_LOWERED_TEXT)
         void queryClient.invalidateQueries({ queryKey: ['performance-settings'] })
         return
       }
@@ -541,15 +608,19 @@ export function PerformanceSection(): React.ReactElement {
     // Unchanged from the value in force — nothing to save, unless the value
     // saved in config.json is missing or out of range (D13): then saving the
     // in-force number is exactly how the admin repairs the file.
-    const savedOk = (data?.max_tool_iterations_saved_state ?? 'ok') === 'ok'
-    if (parsed === data?.max_tool_iterations && savedOk) {
+    // After a failed refresh the saved value is the baseline; the in-memory
+    // global GET reports is stale, so a raise cannot be told from a lowering
+    // against it — the preview (the server's own answer) is asked instead.
+    const unappliedLimit = unapplied?.max_tool_iterations
+    const savedOk = unappliedLimit !== undefined || (data?.max_tool_iterations_saved_state ?? 'ok') === 'ok'
+    if (parsed === (unappliedLimit ?? data?.max_tool_iterations) && savedOk) {
       setSaveStatus('idle')
       setToolIterDirty(false)
       return
     }
     const seq = ++previewSeqRef.current
     setSaveStatus('saving')
-    const inForce = data?.max_tool_iterations
+    const inForce = unappliedLimit === undefined ? data?.max_tool_iterations : undefined
     if (inForce !== undefined && parsed >= inForce) {
       enqueuePending({ max_tool_iterations: parsed })
       openStepUp()
@@ -575,7 +646,7 @@ export function PerformanceSection(): React.ReactElement {
         )
       },
     )
-  }, [data?.max_tool_iterations, data?.max_tool_iterations_saved_state, enqueuePending, openStepUp])
+  }, [data?.max_tool_iterations, data?.max_tool_iterations_saved_state, unapplied?.max_tool_iterations, enqueuePending, openStepUp])
 
   function handleToolIterChange(value: string) {
     setToolIterInput(value)
@@ -739,6 +810,26 @@ export function PerformanceSection(): React.ReactElement {
         </div>
         <AutoSaveIndicator status={saveStatus} />
       </div>
+
+      {unappliedNotice && (
+        <Card
+          variant="inset"
+          role="status"
+          data-testid="performance-unapplied-notice"
+          className="p-[var(--space-2-5)] flex items-start gap-[var(--space-2)]"
+        >
+          <Warning size={14} className="text-[var(--color-warning)] mt-[var(--space-0-5)] shrink-0" aria-hidden />
+          <div className="flex-1 min-w-0">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] leading-relaxed">
+              {unappliedNotice}
+            </p>
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
+              The fields below show the saved values. Until the restart or reload, Omnipus keeps running on the
+              previous ones, and a new change here is checked against what is running.
+            </p>
+          </div>
+        </Card>
+      )}
 
       {/* Live concurrency card — shown above the input */}
       <Card variant="inset" className="p-[var(--space-2-5)] flex items-start gap-[var(--space-2)]">
