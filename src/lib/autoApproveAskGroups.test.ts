@@ -89,6 +89,20 @@ describe('AUTO_APPROVE_ASK_GROUPS — covers every one of the 28 ADR-092 always-
     }
   })
 
+  // #920 founder decision D3 (2026-09-27): under Auto-approve, reading,
+  // listing and searching run outside the workspace without a prompt; only
+  // writing keeps the workspace rule. The request_mount line must say
+  // "writing files outside", never the bare "files outside" that implied
+  // every out-of-workspace file access asks.
+  it('labels the request_mount group as mounting or WRITING outside the workspace, not any file access', () => {
+    expect(AUTO_APPROVE_ASK_GROUP_BY_TOOL['request_mount']).toBe(
+      'Mounting a folder, or writing files outside your workspace',
+    )
+    expect(AUTO_APPROVE_ASK_GROUPS.map((g) => g.label)).not.toContain(
+      'Mounting a folder, or files outside your workspace',
+    )
+  })
+
   it('carries no tool that is NOT in the reference list (no invented/stale entries)', () => {
     const grouped = new Set(AUTO_APPROVE_ASK_GROUPS.flatMap((g) => g.tools))
     for (const tool of grouped) {

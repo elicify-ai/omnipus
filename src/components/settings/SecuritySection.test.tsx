@@ -375,8 +375,9 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
   // Founder correction (2026-09-24, later same day): the summary sentence's
   // own "and the sandbox" clause is also gone — under the new design Auto
   // runs with no sandbox at all, so claiming tools "stay inside ... the
-  // sandbox" is false whenever no sandbox is enforcing. The sentence now
-  // says only "they stay inside your workspace."
+  // sandbox" is false whenever no sandbox is enforcing. The sentence then
+  // said only "they stay inside your workspace." — itself replaced for #920
+  // (founder decision D3, 2026-09-27; see the assertion below).
   it('shows a short always-visible summary — not the old long paragraph, and the new no-sandbox caveat, not the old "not available on Windows" line', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
     renderSection()
@@ -394,7 +395,7 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     // false for reads and must be gone.
     expect(
       screen.getByText(
-        /reading, listing and searching run anywhere except omnipus.s protected files, and writing runs without a prompt only inside your workspace and its mounted folders\./i,
+        /reading, listing and searching run anywhere except omnipus.s protected files, and writing runs without a prompt only inside your workspace and the folders mounted into it\./i,
       ),
     ).toBeInTheDocument()
     expect(screen.queryByText(/they stay inside your workspace/i)).not.toBeInTheDocument()
@@ -507,13 +508,13 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     expect(dialog).toHaveTextContent(/always asks when set to ask/i)
     expect(dialog).not.toHaveTextContent(/still asks every time/i)
     // Founder correction (2026-09-24): the dialog's own summary clause
-    // must use the same wording as the card — "stay inside your
-    // workspace", with no "and the sandbox" (false once Auto runs with no
-    // sandbox enforcing).
+    // must use the same wording as the card, with no "and the sandbox"
+    // (false once Auto runs with no sandbox enforcing).
     // #920 D3 (2026-09-27): reads are no longer workspace-bound under Auto —
-    // the dialog must say so, in the same words as the card.
+    // the dialog must say so, in the same words as the card. The wording
+    // avoids "mounted folder" so the no-inline-list guard above still holds.
     expect(dialog).toHaveTextContent(
-      /reading, listing and searching run anywhere except omnipus.s protected files, and writing runs without a prompt only inside your workspace and its mounted folders\./i,
+      /reading, listing and searching run anywhere except omnipus.s protected files, and writing runs without a prompt only inside your workspace and the folders mounted into it\./i,
     )
     expect(dialog).not.toHaveTextContent(/they stay inside your workspace/i)
     expect(dialog).not.toHaveTextContent(/workspace and the sandbox/i)

@@ -227,7 +227,7 @@ export function AutoApproveControl() {
       .gate((token) => saveAsync({ next, token }), {
         title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
         body: next
-          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace. See “Always asks when set to Ask” on this card for the short list of things that never skip the prompt once set to Ask. Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and commands an operator rule allows.'
+          ? 'Tools set to “ask” will run without a prompt when it’s safe — reading, listing and searching run anywhere except Omnipus’s protected files, and writing runs without a prompt only inside your workspace and the folders mounted into it. See “Always asks when set to Ask” on this card for the short list of things that never skip the prompt once set to Ask. Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and commands an operator rule allows.'
           : 'Every tool set to “ask” will prompt every time again, with no auto-approval.',
         confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
       })
@@ -259,6 +259,10 @@ export function AutoApproveControl() {
 
   const enabled = sandboxConfig?.auto_approve === true
 
+  // #920 founder decision D3 (2026-09-27): the summary no longer says tools
+  // "stay inside your workspace" — under Auto, read_file, list_directory and
+  // grep run outside it too; only writing keeps the workspace rule.
+  //
   // Founder feedback (2026-09-24): "a huge blob of text, not well written".
   // Redesign — one short summary sentence, a collapsed group list
   // (AutoApproveAskList), and a small muted platform caveat, instead of one
@@ -270,8 +274,9 @@ export function AutoApproveControl() {
         <div>
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Auto-approve</p>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-            Tools set to &ldquo;Ask&rdquo; run without a prompt when it&rsquo;s safe: they stay inside your
-            workspace.
+            Tools set to &ldquo;Ask&rdquo; run without a prompt when it&rsquo;s safe: reading, listing and
+            searching run anywhere except Omnipus&rsquo;s protected files, and writing runs without a prompt
+            only inside your workspace and the folders mounted into it.
           </p>
         </div>
         <Switch
