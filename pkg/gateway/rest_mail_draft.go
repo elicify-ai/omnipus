@@ -139,22 +139,15 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 			jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names no such part")
 			return
 		}
-		if mailViewDraftBodyPart(*p) {
-			// The draft's own body bookkeeping part (renderMarkdownPart) is
-			// never a user attachment: skipped silently and unconditionally,
-			// even when a caller names its index (the audit path's
-			// recognition precedent, mailAuditDraftBodyPart).
-			continue
-		}
-		if p.DataUnavailable {
-			jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names an unavailable part")
+		att, err := mailCarryAttachment(*p)
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		ct := p.ContentType
-		if ct == "" {
-			ct = "application/octet-stream"
+		if att == nil {
+			continue
 		}
-		in.Attachments = append(in.Attachments, email.Attachment{Name: p.Filename, ContentType: ct, Data: p.Data})
+		in.Attachments = append(in.Attachments, *att)
 	}
 	for _, at := range derefAttSlice(req.Attachments) {
 		ct := at.ContentType
@@ -321,6 +314,31 @@ func mailDraftStaleness(cur *email.MailView, bodyUID, bodyUV int) (int, string, 
 	return 0, "", ""
 }
 
+// mailCarryAttachment converts one draft view part into the attachment one
+// carry path carries forward — the single availability check shared by the
+// draft update's explicit keep loop and the send path's default carry-all and
+// explicit keep loops. It returns (nil, nil) for the draft's own body
+// bookkeeping part (mailViewDraftBodyPart — the X-Omnipus-Part: draft-body
+// marker header, never the name/type pair): skipped silently, never a
+// rejection, even when a keep list names its own stable index. It returns a
+// non-nil error for a DataUnavailable part: the caller answers 400 with the
+// static message, PRE-DIAL, so a listed-but-unavailable part is never
+// transmitted as an empty attachment — on the default carry-all path exactly
+// as on the explicit keep path.
+func mailCarryAttachment(p email.MailPart) (*email.Attachment, error) {
+	if mailViewDraftBodyPart(p) {
+		return nil, nil
+	}
+	if p.DataUnavailable {
+		return nil, errors.New("keep_attachment_parts names an unavailable part")
+	}
+	ct := p.ContentType
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	return &email.Attachment{Name: p.Filename, ContentType: ct, Data: p.Data}, nil
+}
+
 func (a *restAPI) handleMailDraftSend(w http.ResponseWriter, r *http.Request, workspaceID, agentID, ref string) {
 	// MC-20: the closure is INVOKED - the limiter wraps the method guard.
 	withRateLimit(mailMutationLimiter, func(w http.ResponseWriter, r *http.Request) {
@@ -412,17 +430,20 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 	keepParts := derefInts(req.KeepAttachmentParts)
 	if req.KeepAttachmentParts == nil {
 		// Contract default: carry ALL — the draft's own body bookkeeping part
-		// (the message.md marker) is not an attachment and is skipped
-		// silently and unconditionally.
+		// (the marker header) is not an attachment and is skipped silently
+		// and unconditionally; an unavailable part refuses the whole send
+		// exactly like the explicit keep path (pre-dial 400), never an empty
+		// attachment on the wire.
 		for _, p := range cur.Attachments {
-			if mailViewDraftBodyPart(p) {
+			att, err := mailCarryAttachment(p)
+			if err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if att == nil {
 				continue
 			}
-			ct := p.ContentType
-			if ct == "" {
-				ct = "application/octet-stream"
-			}
-			in.Attachments = append(in.Attachments, email.Attachment{Name: p.Filename, ContentType: ct, Data: p.Data})
+			in.Attachments = append(in.Attachments, *att)
 		}
 	} else {
 		for _, idx := range keepParts {
@@ -434,18 +455,15 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 				jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names no such part")
 				return
 			}
-			if mailViewDraftBodyPart(*p) {
-				continue
-			}
-			if p.DataUnavailable {
-				jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names an unavailable part")
+			att, err := mailCarryAttachment(*p)
+			if err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			ct := p.ContentType
-			if ct == "" {
-				ct = "application/octet-stream"
+			if att == nil {
+				continue
 			}
-			in.Attachments = append(in.Attachments, email.Attachment{Name: p.Filename, ContentType: ct, Data: p.Data})
+			in.Attachments = append(in.Attachments, *att)
 		}
 	}
 	// MC-32 (same trio as the manual send): carried-over parts count toward
@@ -513,7 +531,7 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		"origin":      mailDraftOrigin(cur.IsOmnipusDraft),
 		"arg_hash":    mailAuditArgHash(req),
 		"folder":      client.DraftsFolderName(),
-		"attachments": mailAuditAttachments(mailAuditDraftBodyPart(in.Attachments)),
+		"attachments": mailAuditAttachments(in.Attachments),
 	})
 	jsonOK(w, resp)
 }

@@ -52,33 +52,18 @@ func mailAuditAttachments(atts []email.Attachment) []map[string]any {
 	return out
 }
 
-// mailAuditDraftBodyPart filters out the draft's own body markdown part from
-// a carried-part list. An Omnipus draft renders its Markdown as an extra
-// text/markdown part named "message.md" (pkg/email/compose.go::
-// renderMarkdownPart), which the view parser therefore lists among the
-// draft's parts — but D33's per-attachment audit records describe the
-// message's ATTACHMENTS, and the body part is not one. Only the draft paths
-// filter: a manual send's attachments come from the request, where a file
-// genuinely named message.md is a real attachment.
-func mailAuditDraftBodyPart(atts []email.Attachment) []email.Attachment {
-	out := atts[:0:0]
-	for _, at := range atts {
-		if at.Name == "message.md" && at.ContentType == "text/markdown" {
-			continue
-		}
-		out = append(out, at)
-	}
-	return out
-}
-
 // mailViewDraftBodyPart reports whether a view part (email.MailPart) is the
-// draft's own body bookkeeping part — the same two-field recognition pair as
-// mailAuditDraftBodyPart above, applied to the view walk's part type. Such a
-// part is Omnipus bookkeeping (renderMarkdownPart), never a user attachment:
-// the draft carry paths skip it silently and unconditionally, and the draft
-// update response's attachment listing never lists it.
+// draft's own body bookkeeping part — recognized by the dedicated
+// X-Omnipus-Part: draft-body marker header ONLY (renderMarkdownPart writes
+// it), never by the filename/content type, which a genuine user attachment
+// may equally carry. Such a part is Omnipus bookkeeping, never a user
+// attachment: the draft carry paths skip it silently and unconditionally,
+// and the attachment listings never list it. The audit path needs no filter
+// of its own: every audited carried list is built through the same
+// header-keyed skip, so a carried list never contains the bookkeeping part
+// while a genuine user message.md stays in it.
 func mailViewDraftBodyPart(p email.MailPart) bool {
-	return p.Filename == "message.md" && p.ContentType == "text/markdown"
+	return p.OmnipusDraftBody
 }
 
 // mailAuditRecipients concatenates the recipient lists into one address list

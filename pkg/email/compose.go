@@ -47,6 +47,14 @@ const (
 	// agentDraftHeader marks a locally composed draft (FR-029).
 	agentDraftHeader = "X-Omnipus-Draft"
 
+	// draftBodyPartHeader/draftBodyPartValue mark the draft's own body
+	// bookkeeping part (renderMarkdownPart) on the wire. Every bookkeeping-part
+	// filter recognizes the part by this header ONLY — never by the
+	// message.md/text-markdown name/type pair, which a genuine user attachment
+	// may equally carry.
+	draftBodyPartHeader = "X-Omnipus-Part"
+	draftBodyPartValue  = "draft-body"
+
 	// fallbackMessageIDDomain is used when the From address has no domain.
 	fallbackMessageIDDomain = "omnipus.invalid"
 )
@@ -690,12 +698,16 @@ func renderAlternative(plain, htmlPart, boundary string) string {
 
 // renderMarkdownPart renders the draft-only text/markdown part carrying the
 // original Markdown (FR-034: the approval panel re-renders what the agent
-// wrote, not the sanitized HTML).
+// wrote, not the sanitized HTML). The part carries the dedicated
+// X-Omnipus-Part: draft-body marker header — the ONLY thing every
+// bookkeeping-part filter matches on, so a genuine user attachment named
+// message.md is never mistaken for Omnipus bookkeeping.
 func renderMarkdownPart(boundary, md string) string {
 	var b strings.Builder
 	b.WriteString("--" + boundary + "\r\n")
 	b.WriteString("Content-Type: text/markdown; charset=UTF-8\r\n")
 	b.WriteString("Content-Disposition: attachment; filename=\"message.md\"\r\n")
+	b.WriteString(draftBodyPartHeader + ": " + draftBodyPartValue + "\r\n")
 	b.WriteString("Content-Transfer-Encoding: " + textEncoding([]byte(md)) + "\r\n\r\n")
 	b.WriteString(writeTextPayload([]byte(md)))
 	b.WriteString("\r\n")
