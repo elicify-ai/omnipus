@@ -511,6 +511,7 @@ assert_output_contains "gen-lstree-fail-fallback" "fell back to the working tree
 GEN_OUT5=$(REPO_ROOT="$CORRUPT_REPO" bash "$GEN_SCRIPT" "Some Fresh Title" 2>/dev/null)
 GEN_EXIT6=$?
 assert_exit_code "gen-lstree-fail-still-mints" 0 "$GEN_EXIT6"
+assert_output_contains "gen-lstree-fail-still-mints-id" "-some-fresh-title" "$GEN_OUT5"
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
