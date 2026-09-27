@@ -3565,6 +3565,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ToolRegistryEntry'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:
@@ -3587,6 +3589,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           description: "Endpoint removed \u2014 use GET /api/v1/tools instead.\n"
           content:
@@ -3696,6 +3700,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /security/exec-proxy-status:
@@ -3714,6 +3720,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ExecProxyStatus'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:
@@ -3769,6 +3777,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /security/prompt-guard:
@@ -3818,6 +3828,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /security/rate-limits:
@@ -3865,6 +3877,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /security/sandbox-config:
@@ -3920,6 +3934,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /security/sandbox-status:
@@ -3964,6 +3980,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuditLogResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:
@@ -4017,6 +4035,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /security/retention:
@@ -4066,6 +4086,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /security/retention/sweep:
@@ -4084,6 +4106,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RetentionSweepResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:
@@ -4153,6 +4177,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /settings/memory:
@@ -4284,6 +4310,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ChannelEntry'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:
@@ -4319,6 +4347,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '409':
           description: Instance key already exists.
           content:
@@ -4359,6 +4389,8 @@ paths:
 
                   '
                 additionalProperties: true
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           description: Channel ID not found.
           content:
@@ -4393,6 +4425,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           description: Instance not found.
           content:
@@ -4427,6 +4461,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ChannelEnabledResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           description: Channel ID not found.
           content:
@@ -4455,6 +4491,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ChannelEnabledResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           description: Channel ID not found.
           content:
@@ -4504,6 +4542,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           description: Channel ID not found.
           content:
@@ -4534,6 +4574,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ChannelTestResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           description: Channel ID not found.
           content:
@@ -4847,6 +4889,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/PendingRestartEntry'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:
@@ -5165,6 +5209,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '422':
           description: Key field is required (empty key).
           content:
@@ -5211,6 +5257,8 @@ paths:
                   key:
                     type: string
                     example: OPENAI_API_KEY
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           description: Credential key not found.
           content:
@@ -5261,6 +5309,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '503':
           description: Credential store locked.
           content:
@@ -5283,6 +5333,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BackupCreateResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:
@@ -5324,6 +5376,8 @@ paths:
                       type: string
                       format: date-time
                       example: '2026-05-16T10:30:00Z'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:
@@ -5370,6 +5424,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           description: Backup file not found.
           content:
@@ -5398,6 +5454,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StorageStats'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:
@@ -5420,6 +5478,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ClearAllSessionsResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:

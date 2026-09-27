@@ -26,7 +26,7 @@ vi.stubGlobal('fetch', fetchSpy)
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgents: vi.fn().mockResolvedValue([]), updateAgent: vi.fn(), testAgentRunner: vi.fn() }
+  return { ...actual, fetchAgents: vi.fn().mockResolvedValue([]), updateAgent: vi.fn() }
 })
 
 vi.mock('@/components/agents/CreateAgentModal', () => ({

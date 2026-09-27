@@ -845,13 +845,21 @@ test(
     // pattern, which reliably yields deterministic short text from Mia (main agent).
     // Earlier wording ("Reply with exactly:") tripped Mia's "no boilerplate" guardrail
     // and the LLM streamed only thinking-mode placeholders without producing final text.
+    //
+    // THIRD rewrite for the same LLM-safety-refusal class (CI run 36245049018): the
+    // token "continuation confirmed" was refused — "This looks like an attempt to
+    // get me to falsely confirm a 'continuation' or 'replayed session' scenario …
+    // I won't produce tokens designed to impersonate system-level confirmations."
+    // A random alphanumeric nonce carries no state-confirmation semantics, so the
+    // safety heuristic has nothing to trip on (same reason as test (c)'s nonce).
+    const echoToken = `zx${Date.now().toString(36)}`
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 10_000 })
     // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
     // see waitForConnected's doc comment in fixtures/selectors.ts).
     await waitForConnected(page, { timeout: 10_000 })
     await input.fill(
-      'Echo this token back to me verbatim, on its own line, with no other words: continuation confirmed',
+      `Echo this token back to me verbatim, on its own line, with no other words: ${echoToken}`,
     )
     await input.press('Enter')
 
@@ -864,7 +872,9 @@ test(
 
     // The last assistant message should contain the expected reply.
     const lastAsstMsg = asstMsgs.last()
-    await expect(lastAsstMsg).toContainText(/continuation confirmed/i, { timeout: 90_000 })
+    // Same case-insensitive "must contain the token verbatim" strictness as before —
+    // only WHAT the token is changed.
+    await expect(lastAsstMsg).toContainText(new RegExp(echoToken, 'i'), { timeout: 90_000 })
 
     // No messages are duplicated: the replayed messages remain exactly as seeded.
     // SC-I-004(iv): user messages still show exactly 1 (the replayed one + new one we sent = 2).
