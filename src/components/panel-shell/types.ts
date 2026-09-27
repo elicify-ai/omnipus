@@ -61,6 +61,17 @@ export interface PanelContentProps {
   close: () => void
   /** Ask the shell to expand this panel to its full-page route (SP-12). */
   expand: () => void
+  /**
+   * Register the panel-specific Expand implementation. Library uses this to
+   * carry its current selection; Browser uses it for its ownership handoff.
+   * Returning false means the popup was blocked and the shell must stay open.
+   */
+  registerExpand: (action: (() => boolean) | null) => void
+  /**
+   * Subscribe to settled divider widths. Browser uses the notification to
+   * start its existing remote-viewport handover only after resize settles.
+   */
+  onWidthSettle: (listener: ((px: number) => void) | null) => void
 }
 
 /** What the store holds for the at-most-one open panel (§8.1, verbatim). */

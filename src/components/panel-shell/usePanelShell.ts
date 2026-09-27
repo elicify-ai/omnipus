@@ -13,16 +13,8 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import type { PanelDefinition, PanelContext, PanelId } from './types'
-import {
-  usePanelShellStore,
-  PANEL_WIDTH_UNSET,
-} from './panelShellStore'
-import {
-  readPanelWidth,
-  writePanelWidth,
-  deletePanelWidth,
-  panelWidthScope,
-} from './panelWidthMemory'
+import { usePanelShellStore, PANEL_WIDTH_UNSET } from './panelShellStore'
+import { readPanelWidth, writePanelWidth, deletePanelWidth, panelWidthScope } from './panelWidthMemory'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
 /** DOM hook the shell looks up to return focus on close (MIN-002). */
 export const PANEL_TRIGGER_ATTR = 'data-panel-trigger'
@@ -72,10 +64,13 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
   }, [])
 
   /** Store-level close + focus return. Guard already passed. */
-  const finishClose = useCallback((id: PanelId) => {
-    usePanelShellStore.getState().closePanel() // also clears historyPushed
-    restoreFocusToTrigger(id)
-  }, [restoreFocusToTrigger])
+  const finishClose = useCallback(
+    (id: PanelId) => {
+      usePanelShellStore.getState().closePanel() // also clears historyPushed
+      restoreFocusToTrigger(id)
+    },
+    [restoreFocusToTrigger],
+  )
 
   /**
    * Guard, then close. `repushOnCancel` is true when a history entry for
@@ -83,17 +78,20 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
    * cancel must re-push it so the history stack never disagrees with the
    * shell state.
    */
-  const guardThenClose = useCallback(async (repushOnCancel: boolean): Promise<void> => {
-    const { activePanel } = usePanelShellStore.getState()
-    if (activePanel === null) return
-    const def = panelsRef.current.find((p) => p.id === activePanel.id)
-    if (await runGuard(def)) {
-      finishClose(activePanel.id)
-    } else if (repushOnCancel) {
-      usePanelShellStore.getState().setHistoryPushed(true)
-      window.history.pushState({ sidePanel: activePanel.id }, '')
-    }
-  }, [runGuard, finishClose])
+  const guardThenClose = useCallback(
+    async (repushOnCancel: boolean): Promise<void> => {
+      const { activePanel } = usePanelShellStore.getState()
+      if (activePanel === null) return
+      const def = panelsRef.current.find((p) => p.id === activePanel.id)
+      if (await runGuard(def)) {
+        finishClose(activePanel.id)
+      } else if (repushOnCancel) {
+        usePanelShellStore.getState().setHistoryPushed(true)
+        window.history.pushState({ sidePanel: activePanel.id }, '')
+      }
+    },
+    [runGuard, finishClose],
+  )
 
   /**
    * The one close door — Escape, the header ✕, and SP-26's swipe all come
@@ -117,34 +115,36 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
    * panel's guard first — CRIT-001: the outgoing panel stays mounted until
    * the guard resolves, so its own dialog can host the confirm.
    */
-  const requestOpen = useCallback((id: PanelId, context: PanelContext = {}): void => {
-    const store = usePanelShellStore.getState()
-    if (store.guardPending) return
-    const outgoing = store.activePanel
-    const go = (): void => {
-      const s = usePanelShellStore.getState()
-      const prev = s.activePanel
-      const switched = prev?.id !== id
-      // Same panel, new scope (e.g. the demo's workspace switcher): the
-      // width bucket changed, so the width is re-read from memory (SP-13).
-      const scopeChanged =
-        prev !== null && prev.id === id &&
-        panelWidthScope(id, prev.context) !== panelWidthScope(id, context)
-      s.openPanel(id, context)
-      if (switched || scopeChanged) {
-        s.setPanelWidth(readPanelWidth(username, id, context) ?? PANEL_WIDTH_UNSET)
+  const requestOpen = useCallback(
+    (id: PanelId, context: PanelContext = {}): void => {
+      const store = usePanelShellStore.getState()
+      if (store.guardPending) return
+      const outgoing = store.activePanel
+      const go = (): void => {
+        const s = usePanelShellStore.getState()
+        const prev = s.activePanel
+        const switched = prev?.id !== id
+        // Same panel, new scope (e.g. the demo's workspace switcher): the
+        // width bucket changed, so the width is re-read from memory (SP-13).
+        const scopeChanged =
+          prev !== null && prev.id === id && panelWidthScope(id, prev.context) !== panelWidthScope(id, context)
+        s.openPanel(id, context)
+        if (switched || scopeChanged) {
+          s.setPanelWidth(readPanelWidth(username, id, context) ?? PANEL_WIDTH_UNSET)
+        }
+        // Takeover push happens in the takeover effect in the shell hook-up.
       }
-      // Takeover push happens in the takeover effect in the shell hook-up.
-    }
-    if (outgoing !== null && outgoing.id !== id) {
-      const outDef = panelsRef.current.find((p) => p.id === outgoing.id)
-      void (async () => {
-        if (await runGuard(outDef)) go()
-      })()
-      return
-    }
-    go()
-  }, [runGuard, username])
+      if (outgoing !== null && outgoing.id !== id) {
+        const outDef = panelsRef.current.find((p) => p.id === outgoing.id)
+        void (async () => {
+          if (await runGuard(outDef)) go()
+        })()
+        return
+      }
+      go()
+    },
+    [runGuard, username],
+  )
 
   /**
    * SP-26's header Back: when the takeover pushed a history entry, Back is
@@ -159,17 +159,44 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
     requestClose()
   }, [requestClose])
 
-  /** SP-12 expand: open the panel's full-page target in a new tab.
-   *  Returns false when the popup was blocked so the shell can fail visibly. */
-  const requestExpand = useCallback((): boolean => {
-    const { activePanel } = usePanelShellStore.getState()
-    if (activePanel === null) return false
-    const def = panelsRef.current.find((p) => p.id === activePanel.id)
-    if (def === undefined) return false
-    const url = def.expandTarget(activePanel.context)
-    const win = window.open(url, '_blank')
-    return win !== null && !win.closed
-  }, [])
+  /**
+   * SP-12 expand: guard first, then run the panel-specific pop-out action (or
+   * the registry target fallback), and close the source only after a popup
+   * successfully opens. A declined guard is not a popup failure.
+   */
+  const requestExpand = useCallback(
+    async (expandAction?: () => boolean): Promise<'opened' | 'cancelled' | 'blocked'> => {
+      const { activePanel, guardPending } = usePanelShellStore.getState()
+      if (activePanel === null || guardPending) return 'cancelled'
+      const def = panelsRef.current.find((p) => p.id === activePanel.id)
+      if (def === undefined) return 'cancelled'
+      // Panels without a leave guard (Browser in wave 1) reach window.open
+      // in the original click stack. Guarded panels await their decision.
+      if (def.beforeLeave !== undefined && !(await runGuard(def))) return 'cancelled'
+
+      let opened = false
+      try {
+        if (expandAction !== undefined) {
+          opened = expandAction()
+        } else {
+          const url = def.expandTarget(activePanel.context)
+          const win = window.open(url, '_blank')
+          opened = win !== null && !win.closed
+          if (opened && win) win.opener = null
+        }
+      } catch {
+        return 'blocked'
+      }
+      if (!opened) return 'blocked'
+
+      const current = usePanelShellStore.getState().activePanel
+      if (current?.id === activePanel.id && current.context === activePanel.context) {
+        finishClose(activePanel.id)
+      }
+      return 'opened'
+    },
+    [finishClose, runGuard],
+  )
 
   /**
    * US-5's tab-strip toggle: a second click on the ACTIVE panel's trigger
