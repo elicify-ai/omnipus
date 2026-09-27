@@ -31,6 +31,16 @@ export const PANEL_WIDTH_UNSET = -1
 export type PanelId = 'library' | 'browser' | 'mail' | 'tasks' | 'team' | 'calendar'
 
 /**
+ * The ids with a shell REGISTRATION in wave 1 (MAJ-012, §10). The chat route's
+ * `validateSearch` accepts exactly these as `?panel=` values; every other
+ * PanelId (`mail`, `tasks`, `team`, `calendar`) is unregistered yet and is
+ * dropped exactly like an unknown id (US-7 AS-4, §12 dataset row 7). Static
+ * values (not derived from `PanelId`) because the schema needs RUNTIME
+ * membership; the `satisfies` keeps the list from drifting off the union.
+ */
+export const WAVE_1_PANEL_IDS = ['library', 'browser'] as const satisfies readonly PanelId[]
+
+/**
  * What a panel needs to render its content (§8.1: "context carries what the
  * panel needs"). Wave-0 panels use a subset; wave-1 wires the real ids.
  */
