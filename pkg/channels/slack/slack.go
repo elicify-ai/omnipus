@@ -64,7 +64,6 @@ func NewSlackChannel(
 	base := channels.NewBaseChannel("slack", cfg, messageBus, cfg.AllowFrom,
 		channels.WithMaxMessageLength(40000),
 		channels.WithGroupTrigger(cfg.GroupTrigger),
-		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
 
 	return &SlackChannel{

@@ -92,7 +92,6 @@ func NewQQChannel(
 	base := channels.NewBaseChannel("qq", cfg, messageBus, cfg.AllowFrom,
 		channels.WithMaxMessageLength(cfg.MaxMessageLength),
 		channels.WithGroupTrigger(cfg.GroupTrigger),
-		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
 
 	return &QQChannel{
@@ -170,12 +169,6 @@ func (c *QQChannel) Start(ctx context.Context) error {
 	// start dedup janitor goroutine
 	go c.dedupJanitor()
 
-	// Pre-register reasoning_channel_id as group chat if configured,
-	// so outbound-only destinations are routed correctly.
-	if c.config.ReasoningChannelID != "" {
-		c.chatType.Store(c.config.ReasoningChannelID, "group")
-	}
-
 	c.SetRunning(true)
 	logger.InfoC("qq", "QQ bot started successfully")
 
@@ -198,7 +191,7 @@ func (c *QQChannel) Stop(ctx context.Context) error {
 
 // getChatKind returns the chat type for a given chatID ("group" or "direct").
 // Unknown chatIDs default to "group" and log a warning, since QQ group IDs are
-// more common as outbound-only destinations (e.g. reasoning_channel_id).
+// more common as outbound-only destinations.
 func (c *QQChannel) getChatKind(chatID string) string {
 	if v, ok := c.chatType.Load(chatID); ok {
 		if k, ok := v.(string); ok {

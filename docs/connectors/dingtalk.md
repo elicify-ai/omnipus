@@ -17,8 +17,7 @@ DingTalk (钉钉) is Alibaba's enterprise communication platform. Omnipus connec
       "group_trigger": {
         "mention_only": false,
         "prefixes": []
-      },
-      "reasoning_channel_id": ""
+      }
     }
   }
 }
@@ -31,7 +30,6 @@ DingTalk (钉钉) is Alibaba's enterprise communication platform. Omnipus connec
 | `client_secret_ref` | string | Yes | Key name in the Omnipus credential store holding the Client Secret. |
 | `allow_from` | array | No | User ID allowlist. Empty means all users are accepted. |
 | `group_trigger` | object | No | Controls when the bot responds in group chats. `mention_only: true` restricts responses to @-mentions; `prefixes` lists trigger prefixes. |
-| `reasoning_channel_id` | string | No | Channel or chat ID where extended reasoning traces are sent (separate from the main reply). |
 
 ## Setup
 

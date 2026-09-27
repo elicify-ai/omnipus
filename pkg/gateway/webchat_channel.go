@@ -53,7 +53,6 @@ func (c *webchatChannel) Stop(_ context.Context) error          { return nil }
 func (c *webchatChannel) IsRunning() bool                       { return true }
 func (c *webchatChannel) IsAllowed(_ string) bool               { return true }
 func (c *webchatChannel) IsAllowedSender(_ bus.SenderInfo) bool { return true }
-func (c *webchatChannel) ReasoningChannelID() string            { return "" }
 
 // Send delivers an outbound message to the WebSocket client.
 // If the response was already delivered via streaming (wsStreamer), this is a no-op.

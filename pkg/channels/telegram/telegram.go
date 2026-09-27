@@ -112,7 +112,6 @@ func NewTelegramChannel(
 		telegramCfg.AllowFrom,
 		channels.WithMaxMessageLength(4000),
 		channels.WithGroupTrigger(telegramCfg.GroupTrigger),
-		channels.WithReasoningChannelID(telegramCfg.ReasoningChannelID),
 	)
 
 	return &TelegramChannel{

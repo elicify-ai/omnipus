@@ -20,8 +20,7 @@ Omnipus connects to QQ via the official QQ Bot Open Platform API using a persist
       },
       "max_message_length": 0,
       "max_base64_file_size_mib": 0,
-      "send_markdown": false,
-      "reasoning_channel_id": ""
+      "send_markdown": false
     }
   }
 }
@@ -38,7 +37,6 @@ Omnipus connects to QQ via the official QQ Bot Open Platform API using a persist
 | `max_message_length` | int | No | Maximum outbound message length in characters; `0` uses the channel default |
 | `max_base64_file_size_mib` | int | No | Maximum local file size (MiB) to send as base64 inline media; `0` uses the channel default |
 | `send_markdown` | bool | No | Send outbound text using QQ markdown message format instead of plain text |
-| `reasoning_channel_id` | string | No | Group ID that receives reasoning/thought output from a secondary agent |
 
 ## Setup
 

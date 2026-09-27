@@ -14,7 +14,6 @@ This replaces the legacy `wecom`, `wecom_app`, and `wecom_aibot` split with one 
 - Incoming text, voice, image, file, video, and mixed messages
 - Outbound text and media replies (`image`, `file`, `voice`, `video`)
 - QR-based onboarding via Web UI or CLI
-- Shared allowlist and `reasoning_channel_id` routing
 
 ---
 
@@ -48,8 +47,7 @@ If you already have a `bot_id` and secret from the WeCom AI Bot platform:
       "secret_ref": "wecom_secret",
       "websocket_url": "wss://openws.work.weixin.qq.com",
       "send_thinking_message": true,
-      "allow_from": [],
-      "reasoning_channel_id": ""
+      "allow_from": []
     }
   }
 }
@@ -67,7 +65,6 @@ If you already have a `bot_id` and secret from the WeCom AI Bot platform:
 | `websocket_url` | string | `wss://openws.work.weixin.qq.com` | WeCom WebSocket endpoint. |
 | `send_thinking_message` | bool | `true` | Send a `Processing...` message before the streamed reply begins. |
 | `allow_from` | []string | `[]` | Sender allowlist. Empty means allow all senders. |
-| `reasoning_channel_id` | string | `""` | Optional chat ID to route reasoning/thinking output to a separate conversation. |
 
 ### Environment Variables
 
@@ -81,7 +78,6 @@ Fields can be overridden via environment variables. The parent block uses the pr
 | `OMNIPUS_CHANNELS_WECOM_WEBSOCKET_URL` | `websocket_url` |
 | `OMNIPUS_CHANNELS_WECOM_SEND_THINKING_MESSAGE` | `send_thinking_message` |
 | `OMNIPUS_CHANNELS_WECOM_ALLOW_FROM` | `allow_from` |
-| `OMNIPUS_CHANNELS_WECOM_REASONING_CHANNEL_ID` | `reasoning_channel_id` |
 
 ---
 
