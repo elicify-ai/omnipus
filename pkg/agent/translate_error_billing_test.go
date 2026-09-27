@@ -9,10 +9,11 @@
  *   - C-5 (both classifiers): 402, structured insufficient_quota, or a C-5
  *     phrase — 4xx only, never 5xx. Row 28 (SC-3/B-1) asserts the user-side
  * placement and the routing reason AGREE on every D2 row.
- *   - §6 templates (D3): quota_billing "{provider} says your account is out
- *     of credit."; model_retired "This model is no longer offered by
- *     {provider}. Pick a new model in the agent's settings."; auth
- *     "{provider} rejected the API key. Check the key in Settings → Providers."
+ *   - §6 templates (D3): quota_billing = the out-of-credit sentence; auth =
+ *     the rejected-key sentence; model_retired = the retirement sentence
+ *     (§6/D11): it names the retirement and ends with the pick-a-new-model
+ *     hint. The exact wording is catalogue data — these tests read every
+ *     expected sentence from the catalogue, never from a pasted literal.
  *     {provider} is the FAILING ATTEMPT's provider name (C-16).
  *   - C-24/MAJ-109 (MR-1/MR-2/MR-3): model_retired fires on 404 + explicit
  *     retirement phrase, or model_not_found + phrase; never on near-misses
