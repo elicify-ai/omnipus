@@ -81,8 +81,12 @@ func TestFixK1_LateKeyDefaultAnswersNotAutoDDG(t *testing.T) {
 	f := newRolesSearchFixture(t,
 		func(cfg *config.WebToolsConfig) {
 			cfg.Tavily = config.TavilyConfig{Enabled: true, APIKeyRef: k1RefMissingTavily}
-			// FallbackProvider stays "": the auto-DuckDuckGo of R3/R6 while
-			// Tavily is unusable.
+			// The operator's explicit DuckDuckGo fallback (R4) answers while
+			// Tavily is unusable (R6). K6, gate round 1: with an ABSENT
+			// fallback the auto-DuckDuckGo arm needs a usable default (R3's
+			// third conjunct), so an unusable default would be R7
+			// nobody-runs — not the scenario this test is about.
+			cfg.FallbackProvider = config.SearchProviderDuckDuckGo
 		},
 		func(opts *WebSearchToolOptions) {
 			opts.TavilyAPIKeys = nil
