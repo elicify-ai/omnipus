@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
 // omnipusGracefulShutdown is the only teardown that runs when the gateway
@@ -45,4 +47,29 @@ func TestGracefulShutdown_WithoutACredentialStoreIsSafe(t *testing.T) {
 	require.NotPanics(t, func() {
 		omnipusGracefulShutdown(&services{}, al, nil, cfg)
 	})
+}
+
+func TestGracefulShutdown_FlushesPendingMediaRegistry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	cfg := seededBootConfig(t)
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	store := newTestFileMediaStore(t)
+
+	source := filepath.Join(home, "upload.txt")
+	require.NoError(t, os.WriteFile(source, []byte("upload"), 0o600))
+	ref, err := store.Store(source, media.MediaMeta{
+		Filename:      "upload.txt",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "shutdown-test")
+	require.NoError(t, err)
+
+	omnipusGracefulShutdown(&services{MediaStore: store}, al, nil, cfg)
+
+	reloaded := media.NewFileMediaStore()
+	require.NoError(t, reloaded.LoadRegistry())
+	resolved, err := reloaded.Resolve(ref)
+	require.NoError(t, err, "a ref stored immediately before shutdown must survive restart")
+	require.Equal(t, source, resolved)
 }

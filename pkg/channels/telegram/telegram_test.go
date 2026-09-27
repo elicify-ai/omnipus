@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 )
 
 const testToken = "1234567890:aaaabbbbaaaabbbbaaaabbbbaaaabbbbccc"
@@ -153,7 +154,7 @@ func TestSendMedia_ImageFallbacksToDocumentOnInvalidDimensions(t *testing.T) {
 	}
 	ch := newTestChannelWithConstructor(t, caller, constructor)
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	tmpDir := t.TempDir()
@@ -196,7 +197,7 @@ func TestSendMedia_ImageNonDimensionErrorDoesNotFallback(t *testing.T) {
 	}
 	ch := newTestChannelWithConstructor(t, caller, constructor)
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	tmpDir := t.TempDir()
@@ -239,7 +240,7 @@ func TestSendMedia_PartialFailureReturnsError(t *testing.T) {
 	}
 	ch := newTestChannelWithConstructor(t, caller, constructor)
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	tmpDir := t.TempDir()
@@ -287,7 +288,7 @@ func TestSendMedia_MidLoopSendFailureAfterPartialSuccessIsPermanent(t *testing.T
 	}
 	ch := newTestChannel(t, caller)
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	tmpDir := t.TempDir()
@@ -339,7 +340,7 @@ func TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning(t *testing.T) {
 			return nil, errors.New("unreachable: t.Fatal halts the test goroutine")
 		},
 	})
-	ch.SetMediaStore(media.NewFileMediaStore())
+	ch.SetMediaStore(mediatest.NewFileMediaStore(t))
 
 	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",

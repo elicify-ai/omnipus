@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 )
 
 func TestHandleC2CMessage_IncludesAccountIDMetadata(t *testing.T) {
@@ -66,7 +67,7 @@ func TestHandleC2CMessage_IncludesAccountIDMetadata(t *testing.T) {
 
 func TestHandleC2CMessage_AttachmentOnlyPublishesMedia(t *testing.T) {
 	messageBus := bus.NewMessageBus()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	localPath := writeTempFile(t, t.TempDir(), "image.png", []byte("fake-image"))
 
 	ch := &QQChannel{
@@ -123,7 +124,7 @@ func TestHandleC2CMessage_AttachmentOnlyPublishesMedia(t *testing.T) {
 
 func TestHandleGroupATMessage_AttachmentOnlyPublishesMedia(t *testing.T) {
 	messageBus := bus.NewMessageBus()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	localPath := writeTempFile(t, t.TempDir(), "report.pdf", []byte("fake-pdf"))
 
 	ch := &QQChannel{
@@ -174,7 +175,7 @@ func TestHandleGroupATMessage_AttachmentOnlyPublishesMedia(t *testing.T) {
 
 func TestSendMedia_UploadsLocalFileAsBase64(t *testing.T) {
 	messageBus := bus.NewMessageBus()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	tmpFile, err := os.CreateTemp(t.TempDir(), "qq-media-*.png")
 	if err != nil {
@@ -280,7 +281,7 @@ func assertAudioWAVUploadType(t *testing.T, duration time.Duration, wantFileType
 	t.Helper()
 
 	messageBus := bus.NewMessageBus()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	localPath := writeWAVFile(t, t.TempDir(), "voice.wav", duration)
 	ref, err := store.Store(localPath, media.MediaMeta{
@@ -360,7 +361,7 @@ func TestSendMedia_RemoteAudioFallsBackToFileUpload(t *testing.T) {
 
 func TestSendMedia_LocalAudioWithUnknownDurationFallsBackToFileUpload(t *testing.T) {
 	messageBus := bus.NewMessageBus()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	localPath := writeTempFile(t, t.TempDir(), "voice.mp3", []byte("not-a-real-mp3"))
 	ref, err := store.Store(localPath, media.MediaMeta{
@@ -467,7 +468,7 @@ func TestSendMedia_UsesRemoteURLUploadForC2C(t *testing.T) {
 
 func TestSendMedia_LocalFileUploadIncludesStoredFilename(t *testing.T) {
 	messageBus := bus.NewMessageBus()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	localPath := writeTempFile(t, t.TempDir(), "report.pdf", []byte("fake-pdf"))
 	ref, err := store.Store(localPath, media.MediaMeta{
@@ -544,7 +545,7 @@ func TestSendMedia_ReturnsSendFailedWithoutMediaStore(t *testing.T) {
 
 func TestSendMedia_ReturnsSendFailedWhenLocalFileExceedsBase64MiBLimit(t *testing.T) {
 	messageBus := bus.NewMessageBus()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	tmpFile, err := os.CreateTemp(t.TempDir(), "qq-media-too-large-*.bin")
 	if err != nil {
@@ -627,7 +628,7 @@ func buildTwoPartMediaMessage(t *testing.T, store *media.FileMediaStore, chatID 
 // The fix must classify this permanent (channels.ErrSendFailed) instead.
 func TestSendMedia_MidLoopUploadFailureAfterPartialSuccessIsPermanent(t *testing.T) {
 	messageBus := bus.NewMessageBus()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	api := &fakeQQAPI{
 		transportResp: mustJSON(t, dto.Message{FileInfo: []byte("uploaded-file-info")}),
@@ -671,7 +672,7 @@ func TestSendMedia_MidLoopUploadFailureAfterPartialSuccessIsPermanent(t *testing
 // fix this also returned a bare channels.ErrTemporary unconditionally.
 func TestSendMedia_MidLoopPostFailureAfterPartialSuccessIsPermanent(t *testing.T) {
 	messageBus := bus.NewMessageBus()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	api := &fakeQQAPI{
 		transportResp: mustJSON(t, dto.Message{FileInfo: []byte("uploaded-file-info")}),
@@ -716,7 +717,7 @@ func TestSendMedia_MidLoopPostFailureAfterPartialSuccessIsPermanent(t *testing.T
 // anything.
 func TestSendMedia_UploadFailureWithNothingSentIsTemporary(t *testing.T) {
 	messageBus := bus.NewMessageBus()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	localPath := writeTempFile(t, t.TempDir(), "a.png", []byte("fake-image-data"))
 	ref, err := store.Store(localPath, media.MediaMeta{
@@ -784,7 +785,7 @@ func TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning(t *testing.T) {
 		ctx:         context.Background(),
 	}
 	ch.SetRunning(true)
-	ch.SetMediaStore(media.NewFileMediaStore())
+	ch.SetMediaStore(mediatest.NewFileMediaStore(t))
 	ch.chatType.Store("group-1", "group")
 
 	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
