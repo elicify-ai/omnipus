@@ -618,17 +618,8 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	}
 
 	// Validate command against Tier 3 allow-list BEFORE any other work.
-	if err := validateTier3Command(command, t.devCfg.Tier3Commands); err != nil {
-		agentID := t.agentID
-		if agentID == "" {
-			agentID = ToolAgentID(ctx)
-		}
-		if auditResult := t.auditDevDeny(agentID, command, err.Error()); auditResult != nil {
-			// AuditFailClosed=true and the audit write could not be recorded;
-			// surface the audit-failure error rather than the normal deny.
-			return auditResult
-		}
-		return ErrorResult(fmt.Sprintf("web_serve: command not permitted: %v", err))
+	if deny := t.checkTier3AllowList(ctx, command); deny != nil {
+		return deny
 	}
 
 	// Resolve the workspace subdirectory via ResolvePath (ADR-046 mandatory
@@ -778,14 +769,43 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	}
 	_ = probeConn.Close()
 
+	// ADR-094 FR-022: the dev result carries the same dual-URL contract as
+	// the static one — isolated_url on Mode 1 only (S-1.1), absent on Mode 2
+	// (S-1.2). One mint helper, both paths, so the two kinds cannot drift.
+	return mintDevResult(origin, agentID, token, command, exposePort, startedAt, originClass, mode1Base)
+}
+
+// checkTier3AllowList validates the requested dev command against the Tier 3
+// allow-list BEFORE any other dev-mode work and, on refusal, records the
+// audit-deny event (fail-closed when AuditFailClosed is set). A non-nil return
+// is the result to surface — the audit-failure error rather than the normal
+// deny when the audit write itself could not be recorded; nil means permitted.
+func (t *WebServeTool) checkTier3AllowList(ctx context.Context, command string) *ToolResult {
+	if err := validateTier3Command(command, t.devCfg.Tier3Commands); err != nil {
+		agentID := t.agentID
+		if agentID == "" {
+			agentID = ToolAgentID(ctx)
+		}
+		if auditResult := t.auditDevDeny(agentID, command, err.Error()); auditResult != nil {
+			// AuditFailClosed=true and the audit write could not be recorded;
+			// surface the audit-failure error rather than the normal deny.
+			return auditResult
+		}
+		return ErrorResult(fmt.Sprintf("web_serve: command not permitted: %v", err))
+	}
+	return nil
+}
+
+// mintDevResult builds the dev-mode tool-result JSON: the token URL under the
+// canonical gateway origin (US-3 AS-3 — the SAME origin CORS/CSP/WS CheckOrigin
+// use, resolved live from cfg but boot-stable because gateway.public_url is
+// restart-gated; sandbox.BuildDevURL is not used here — see its package doc
+// comment, unused in production, kept as reference + test fixture) with the
+// ADR-094 FR-022 dual-URL contract — isolated_url on Mode 1 only (S-1.1),
+// absent on Mode 2 (S-1.2). One mint helper, both paths, so the two kinds
+// cannot drift.
+func mintDevResult(origin, agentID, token, command string, exposePort int32, startedAt time.Time, originClass middleware.PreviewOriginClass, mode1Base string) *ToolResult {
 	path := fmt.Sprintf("/preview/%s/%s/", agentID, token)
-	// US-3 AS-3: host MUST equal the canonical gateway origin — the SAME
-	// origin CORS/CSP/WS CheckOrigin use (middleware.CanonicalGatewayOrigin),
-	// resolved live from cfg but boot-stable because gateway.public_url is
-	// restart-gated; origin was already resolved (and fail-closed-checked
-	// for emptiness) above, before the port reservation/spawn. sandbox.
-	// BuildDevURL is not used here — see its package doc comment (unused in
-	// production, kept as reference + test fixture).
 	url := origin + path
 
 	deadline := startedAt.Add(sandbox.HardTimeout).UTC().Format(time.RFC3339)
@@ -796,9 +816,6 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 		exposePort,
 	)
 
-	// ADR-094 FR-022: the dev result carries the same dual-URL contract as
-	// the static one — isolated_url on Mode 1 only (S-1.1), absent on Mode 2
-	// (S-1.2). One mint helper, both paths, so the two kinds cannot drift.
 	resultJSON := fmt.Sprintf(
 		`{"kind":"dev","path":%q,"url":%q,"expires_at":%q,"command":%q,"port":%d,"_summary":%q`,
 		path, url, deadline, command, exposePort, summary,
