@@ -29,6 +29,7 @@ import { WebServeUI } from "./tools/WebServeUI";
 import { ServeWorkspaceUI } from "./tools/ServeWorkspaceUI";
 import { RunInWorkspaceUI } from "./tools/RunInWorkspaceUI";
 import { SetGoalToolUI } from "./tools/SetGoalToolUI";
+import { DraftLinkUI, CreateEmailDraftUI } from "./tools/DraftLink";
 import {
   BrowserClickUI, BrowserClickUnderscoreUI,
   BrowserTypeUI, BrowserTypeUnderscoreUI,
@@ -348,6 +349,8 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <BrowserEvaluateUI />
       <BrowserEvaluateUnderscoreUI />
       <SetGoalToolUI />
+      <DraftLinkUI />
+      <CreateEmailDraftUI />
       <MemoryObserverLifecycle />
       <WsLifecycle />
       {children}
