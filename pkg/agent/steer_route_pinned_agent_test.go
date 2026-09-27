@@ -175,3 +175,53 @@ func TestResolveMessageRoute_OrdinarySession_KeepsDropdownRouting(t *testing.T) 
 		t.Errorf("resolved agent = %q, want %q", got, "jim")
 	}
 }
+
+func TestResolveMessageRoute_OrdinaryRecordedSession_KeepsDropdownRouting(t *testing.T) {
+	al, ls := steerRouteFixture(t)
+
+	// Control for the not-steered branch WITH a record: an ordinary session
+	// that HAS a durable lifecycle record but no SteeredBy edge. The record's
+	// own AgentID must never act as a route pin — the pin is for steered
+	// children only (pinnedSteeredAgentID's contract: SteeredBy == nil keeps
+	// today's dropdown routing). The shape mirrors mintTaskLifecycleRecord
+	// (task_executor.go), the production writer of non-steered records: Origin
+	// task + TaskID, AgentID set, SteeredBy nil. This case is what kills the
+	// M2 mutant (dropping the SteeredBy == nil condition): the no-record
+	// control above exits at rec == nil and never reaches the SteeredBy
+	// branch, so M2 survived CHECK with the original three tests.
+	persistLifecycle(t, ls, &session.LifecycleRecord{
+		SessionID: "session_ordinary_recorded_root", Generation: 1,
+		State:          session.LifecycleQueued,
+		WorkspaceID:    "ws",
+		AgentID:        "worker",
+		OwnerScopeKind: session.OwnerScopeHuman,
+		Origin:         &session.Origin{Kind: session.OriginKindTask, TaskID: "task_ordinary_recorded"},
+	})
+
+	msg := bus.InboundMessage{
+		Channel:   "webchat",
+		SessionID: "session_ordinary_recorded_root",
+		ChatID:    "webchat:tester",
+		Content:   "hello root",
+		Metadata:  map[string]string{"agent_id": "jim"},
+	}
+
+	route, agent, err := al.resolveMessageRoute(msg)
+	if err != nil {
+		t.Fatalf("resolveMessageRoute: %v", err)
+	}
+	if route.AgentID != "jim" {
+		t.Errorf("route.AgentID = %q, want %q (a record without SteeredBy is not a pin; dropdown routing on a non-steered recorded session must not change)", route.AgentID, "jim")
+	}
+	wantKey := "agent:jim:session:session_ordinary_recorded_root"
+	if route.SessionKey != wantKey {
+		t.Errorf("route.SessionKey = %q, want %q", route.SessionKey, wantKey)
+	}
+	if agent == nil || agent.ID != "jim" {
+		got := ""
+		if agent != nil {
+			got = agent.ID
+		}
+		t.Errorf("resolved agent = %q, want %q", got, "jim")
+	}
+}
