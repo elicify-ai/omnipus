@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
@@ -81,10 +82,18 @@ type restAPI struct {
 	// cache TTL rather than one per HTTP call. Zero value is ready; see
 	// copilotProbeGuard (rest_signin_copilot.go).
 	copilotProbe copilotProbeGuard
-	homePath     string              // ~/.omnipus — root of the data directory
-	configMu     sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
-	taskStore    *task.Store         // unified task persistence
-	taskExecutor *agent.TaskExecutor // task execution engine
+	homePath     string // ~/.omnipus — root of the data directory
+	// mailBudget is the restAPI's handle on the shared A8 mail-operation
+	// budget (spec §2.3/A8): the four dialing Mail panel GETs gate their
+	// IMAP dials through it (rest_mail_budget.go). Nil is allowed —
+	// mailBudgetFor then resolves the process-wide instance lazily
+	// (email.SharedMailBudget, keyed by the state dir), so a directly
+	// constructed restAPI (the unit-test literal) shares the same gate.
+	mailBudget     *email.MailBudget
+	mailBudgetOnce sync.Once
+	configMu       sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
+	taskStore      *task.Store         // unified task persistence
+	taskExecutor   *agent.TaskExecutor // task execution engine
 	// liveTaskActivity (founder decision 2026-09-14) is the read seam
 	// Task.last_activity_at is stamped from: the live progress stamp of a
 	// running task's turn (advancing on streamed reasoning as well as

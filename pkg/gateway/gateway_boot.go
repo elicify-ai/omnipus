@@ -407,7 +407,11 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
 			return buildMailboxes(stg.agentLoop.GetConfig(), stg.credStore)
 		})
-		stg.runningServices.MailWatch = heartbeat.NewMailWatchService(email.NewMailboxWatcherSet(provider, stg.homePath), 0)
+		// A8 mail-operation budget: the watcher set gates its cycles through
+		// the SAME shared per-account gate the REST panel and the agent tools
+		// use — one instance per state dir (SharedMailBudget), installed for
+		// the tools by gateway.go::initializeAgentLoop before NewAgentLoop.
+		stg.runningServices.MailWatch = heartbeat.NewMailWatchService(email.NewMailboxWatcherSet(provider, stg.homePath, email.SharedMailBudget(stg.homePath)), 0)
 		stg.runningServices.MailWatch.Start()
 		fmt.Println("✓ New-mail watcher owned by: MailWatchService (badge state only)")
 	}
@@ -1189,6 +1193,7 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		// M3: "unknown" is not "fresh install" — see the field's doc comment.
 		onboardingStateUnknown: stg.onboardingStateUnknown,
 		homePath:               stg.homePath,
+		mailBudget:             email.SharedMailBudget(stg.homePath), // A8: the shared per-account gate
 		taskStore:              stg.tStore,
 		taskExecutor:           stg.tExecutor,
 		liveTaskActivity:       stg.tExecutor, // founder decision 2026-09-14: Task.last_activity_at

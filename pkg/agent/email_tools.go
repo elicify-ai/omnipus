@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/email"
@@ -46,6 +47,19 @@ import (
 // operator could not see or set the permission at all: there was no row.
 // Registering always restores that control without loosening anything, since a
 // denied tool never reaches the model (tools.FilterToolsByPolicy).
+// sharedMailBudget holds the process-wide A8 mail-operation budget the email
+// tools gate their dials through. The gateway installs it BEFORE NewAgentLoop
+// (pkg/gateway/gateway.go::initializeAgentLoop — the same "must run before
+// NewAgentLoop" site as SetWindowCatalog) so it is already present when
+// registerSharedTools registers the email tools at instance construction; a
+// nil pointer means the tools dial ungated (unit tests).
+var sharedMailBudget atomic.Pointer[email.MailBudget]
+
+// SetSharedMailBudget installs the process-wide shared mail budget. One
+// writer per process (gateway boot); the watcher set and the REST handlers
+// resolve the SAME instance themselves via email.SharedMailBudget(stateDir).
+func SetSharedMailBudget(b *email.MailBudget) { sharedMailBudget.Store(b) }
+
 func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *AgentInstance) {
 	if cfg == nil || agent == nil {
 		return
@@ -112,6 +126,20 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 		if origin := middleware.CanonicalGatewayOrigin(cfg); origin != "" {
 			if setter, ok := t.(interface{ SetChatLinkOrigin(origin string) }); ok {
 				setter.SetChatLinkOrigin(origin)
+			}
+		}
+		// A8 mail-operation budget: injected the same way — an optional
+		// setter at registration, so EmailToolset's construction signature
+		// stays transports-only (the RED suite constructs the toolset from
+		// transports alone). The tools gate their dialing reads through this
+		// shared gate (2-per-account cap + backoff refusal, NO retry bypass
+		// — the tool surface structurally cannot set retry, pinned by
+		// pkg/tools/email_no_retry_param_test.go).
+		if b := sharedMailBudget.Load(); b != nil {
+			if setter, ok := t.(interface {
+				SetMailBudget(b *email.MailBudget, agentID string)
+			}); ok {
+				setter.SetMailBudget(b, agentID)
 			}
 		}
 		// registerSharedTools re-runs during config reload and fast agent

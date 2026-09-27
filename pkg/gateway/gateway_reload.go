@@ -727,7 +727,9 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
 			return buildMailboxes(rs.al.GetConfig(), credStore)
 		})
-		rs.runningServices.MailWatch = heartbeat.NewMailWatchService(email.NewMailboxWatcherSet(provider, rs.homePath), 0)
+		// Same shared A8 budget instance as boot (keyed by the state dir):
+		// reload swaps the watcher set, never the gate.
+		rs.runningServices.MailWatch = heartbeat.NewMailWatchService(email.NewMailboxWatcherSet(provider, rs.homePath, email.SharedMailBudget(rs.homePath)), 0)
 		rs.runningServices.MailWatch.Start()
 		fmt.Println("  ✓ New-mail watcher restarted (MailWatchService)")
 	}

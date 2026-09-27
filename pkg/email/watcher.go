@@ -35,6 +35,13 @@ type WatcherConfig struct {
 	Transport Transport
 	// StateDir is the directory the state file lives under (the data dir).
 	StateDir string
+	// Budget, when set, gates the cycle's dial through the shared mail
+	// operation budget (A8): a TryCall skip (no free slot, or account in
+	// backoff) is NOT a cycle failure — the cycle returns without recording
+	// anything, so the watcher's own success/failure bookkeeping and
+	// NextAttemptAt logic are untouched. Nil = ungated (the RED unit tests
+	// drive Watcher directly without a budget).
+	Budget *MailBudget
 	// Now, when set, overrides the clock (tests).
 	Now func() time.Time
 }
@@ -166,11 +173,34 @@ type MailboxStatuser interface {
 
 // Cycle runs one watcher pass for the mailbox: probe unseen/uidnext/
 // uidvalidity, update the state file. It never mutates flags, never creates
-// tasks, never starts an agent turn (D20/D27/FR-023).
+// tasks, never starts an agent turn (D20/D27/FR-023). When a budget is
+// wired, the dial goes through Budget.TryCall (non-blocking): a skip —
+// backoff or both slots busy — is not a cycle failure, so the cycle returns
+// without recording anything; only the dial itself is gated, and the
+// watcher's own success/failure bookkeeping is unchanged.
 func (w *Watcher) Cycle(ctx context.Context) error {
+	err := w.runCycle(ctx)
+	if err == nil {
+		return nil
+	}
+	if w.cfg.Budget != nil && errors.Is(err, ErrMailSkipped) {
+		// The dial never happened — do NOT recordFailure (a budget skip must
+		// not advance backoff); log and let the next tick try again.
+		slog.Info("email watcher: cycle skipped by mail budget",
+			"agent_id", w.cfg.AgentID, "workspace_id", w.cfg.WorkspaceID,
+			"reason", err.Error())
+		return nil
+	}
+	w.recordFailure(classifyMailError(err), err.Error())
+	return err
+}
+
+// runCycle is the raw cycle body: probe → recordSuccess, with the probe
+// error returned to Cycle for the recordFailure tail. The budget skip is
+// detected via the ErrMailSkipped sentinel inside Cycle.
+func (w *Watcher) runCycle(ctx context.Context) error {
 	unseen, uidnext, uidvalidity, err := w.probe(ctx)
 	if err != nil {
-		w.recordFailure(classifyMailError(err), err.Error())
 		return err
 	}
 	w.recordSuccess(unseen, uidnext, uidvalidity)

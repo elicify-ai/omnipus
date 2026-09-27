@@ -282,6 +282,14 @@ func NewClient(acct Account) (*Client, error) {
 // Address returns the mailbox's own email address (the SMTP/IMAP username).
 func (c *Client) Address() string { return c.acct.Username }
 
+// AccountKey is the per-account budget key ("host|username"): the SAME
+// derivation on every path (REST handler, agent tool, watcher cycle), so all
+// three share one 2-per-account gate and one coalescing map. Implements the
+// AccountKeyer capability.
+func (c *Client) AccountKey() string {
+	return c.acct.IMAPHost + "|" + c.acct.Username
+}
+
 // clampLimit normalises a caller-supplied limit: <=0 becomes the default, and
 // anything above the max is clamped down. Enforced here (not just in the JSON
 // schema) so an out-of-range request cannot trigger an unbounded fetch.

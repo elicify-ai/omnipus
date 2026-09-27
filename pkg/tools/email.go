@@ -77,12 +77,52 @@ func (m EmailTransports) workspaceIDs() []string {
 	return ids
 }
 
+// mailAccountKeyOf derives the per-account budget key from a transport: the
+// production *email.Client implements email.AccountKeyer ("host|username");
+// a test stub yields "" and shares one synthetic gate.
+func mailAccountKeyOf(tp email.Transport) string {
+	if ak, ok := tp.(email.AccountKeyer); ok {
+		return ak.AccountKey()
+	}
+	return ""
+}
+
+// gateMailDial runs one email-tool dial through the shared A8 mail-operation
+// budget when one is wired (SetMailBudget at registration, pkg/agent). The
+// params map is non-empty so identical concurrent reads coalesce, and
+// coalesced joiners receive the executor's data (CallValue); Retry stays
+// false — the tool path structurally cannot set it (pinned by
+// email_no_retry_param_test.go). Nil budget = ungated (unit tests).
+func gateMailDial(ctx context.Context, budget *email.MailBudget, agentID, op string, tp email.Transport, params map[string]any, dial func(context.Context) (any, error)) (any, error) {
+	if budget == nil {
+		return dial(ctx)
+	}
+	return budget.CallValue(ctx, email.MailBudgetRequest{
+		Account:     mailAccountKeyOf(tp),
+		AgentID:     agentID,
+		WorkspaceID: ToolWorkspaceID(ctx),
+		Operation:   op,
+		Params:      params,
+	}, dial)
+}
+
 // --- read_inbox ---
 
 // ReadInboxTool lists recent inbox messages (envelope only).
 type ReadInboxTool struct {
 	BaseTool
 	tps EmailTransports
+	// budget + budgetAgentID are wired at registration (SetMailBudget) —
+	// the construction signature stays transports-only.
+	budget        *email.MailBudget
+	budgetAgentID string
+}
+
+// SetMailBudget wires the shared A8 mail-operation budget and the owning
+// agent's id (the backoff check keys the watcher state by both).
+func (t *ReadInboxTool) SetMailBudget(b *email.MailBudget, agentID string) {
+	t.budget = b
+	t.budgetAgentID = agentID
 }
 
 // NewReadInboxTool constructs the read_inbox tool over the agent's
@@ -134,14 +174,20 @@ func (t *ReadInboxTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(err.Error())
 	}
 
-	msgs, err := tp.ReadInbox(ctx, email.InboxOptions{
-		Limit:      limit,
-		UnseenOnly: unseenOnly,
-		BeforeUID:  beforeUID,
+	rv, err := gateMailDial(ctx, t.budget, t.budgetAgentID, "read_inbox", tp, map[string]any{
+		"limit": limit, "unseen_only": unseenOnly, "before_uid": beforeUID,
+	}, func(c context.Context) (any, error) {
+		m, dialErr := tp.ReadInbox(c, email.InboxOptions{
+			Limit:      limit,
+			UnseenOnly: unseenOnly,
+			BeforeUID:  beforeUID,
+		})
+		return m, dialErr
 	})
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_inbox failed: %v", err))
 	}
+	msgs, _ := rv.([]email.Message)
 	return marshalMessages(msgs, "read_inbox")
 }
 
@@ -151,6 +197,17 @@ func (t *ReadInboxTool) Execute(ctx context.Context, args map[string]any) *ToolR
 type SearchEmailTool struct {
 	BaseTool
 	tps EmailTransports
+	// budget + budgetAgentID are wired at registration (SetMailBudget) —
+	// the construction signature stays transports-only.
+	budget        *email.MailBudget
+	budgetAgentID string
+}
+
+// SetMailBudget wires the shared A8 mail-operation budget and the owning
+// agent's id.
+func (t *SearchEmailTool) SetMailBudget(b *email.MailBudget, agentID string) {
+	t.budget = b
+	t.budgetAgentID = agentID
 }
 
 // NewSearchEmailTool constructs the search_email tool over the agent's
@@ -211,14 +268,19 @@ func (t *SearchEmailTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 	bodySearch, _ := args["body"].(bool)
 
-	result, err := tp.Search(ctx, query, email.SearchOptions{
-		Limit:     limit,
-		BeforeUID: beforeUID,
-		Body:      bodySearch,
+	rv, err := gateMailDial(ctx, t.budget, t.budgetAgentID, "search_email", tp, map[string]any{
+		"query": query, "limit": limit, "before_uid": beforeUID, "body": bodySearch,
+	}, func(c context.Context) (any, error) {
+		return tp.Search(c, query, email.SearchOptions{
+			Limit:     limit,
+			BeforeUID: beforeUID,
+			Body:      bodySearch,
+		})
 	})
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("search_email failed: %v", err))
 	}
+	result, _ := rv.(email.SearchResult)
 	if result.Messages == nil {
 		result.Messages = []email.Message{}
 	}
@@ -231,10 +293,21 @@ func (t *SearchEmailTool) Execute(ctx context.Context, args map[string]any) *Too
 
 // --- read_message ---
 
-// ReadMessageTool fetches a single message (with body) by UID.
+// ReadMessageTool fetches a single message (by UID).
 type ReadMessageTool struct {
 	BaseTool
 	tps EmailTransports
+	// budget + budgetAgentID are wired at registration (SetMailBudget) —
+	// the construction signature stays transports-only.
+	budget        *email.MailBudget
+	budgetAgentID string
+}
+
+// SetMailBudget wires the shared A8 mail-operation budget and the owning
+// agent's id.
+func (t *ReadMessageTool) SetMailBudget(b *email.MailBudget, agentID string) {
+	t.budget = b
+	t.budgetAgentID = agentID
 }
 
 // NewReadMessageTool constructs the read_message tool over the agent's
@@ -271,10 +344,15 @@ func (t *ReadMessageTool) Execute(ctx context.Context, args map[string]any) *Too
 	if !ok {
 		return ErrorResult("read_message: uid is required and must be a positive integer")
 	}
-	msg, err := tp.ReadMessage(ctx, uid)
+	rv, err := gateMailDial(ctx, t.budget, t.budgetAgentID, "read_message", tp, map[string]any{
+		"uid": uid,
+	}, func(c context.Context) (any, error) {
+		return tp.ReadMessage(c, uid)
+	})
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_message failed: %v", err))
 	}
+	msg, _ := rv.(*email.Message)
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_message: marshal: %v", err))

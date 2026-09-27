@@ -12,13 +12,15 @@ import (
 type MailboxWatcherSet struct {
 	provider MailboxProvider
 	stateDir string
+	budget   *MailBudget
 }
 
 // NewMailboxWatcherSet builds the set over a live mailbox provider. The
 // provider is consulted on every cycle, so mailboxes added, changed or
-// removed at runtime are picked up without a restart.
-func NewMailboxWatcherSet(provider MailboxProvider, stateDir string) *MailboxWatcherSet {
-	return &MailboxWatcherSet{provider: provider, stateDir: stateDir}
+// removed at runtime are picked up without a restart. The budget (A8) may be
+// nil — a nil budget means ungated cycles, which only tests use.
+func NewMailboxWatcherSet(provider MailboxProvider, stateDir string, budget *MailBudget) *MailboxWatcherSet {
+	return &MailboxWatcherSet{provider: provider, stateDir: stateDir, budget: budget}
 }
 
 // CycleAll runs one cycle for every provided mailbox, skipping a mailbox that
@@ -40,6 +42,7 @@ func (s *MailboxWatcherSet) CycleAll(ctx context.Context) {
 			WorkspaceID: mb.WorkspaceID,
 			Transport:   mb.Transport,
 			StateDir:    s.stateDir,
+			Budget:      s.budget,
 		})
 		if err != nil {
 			slog.Warn("email watcher: bad mailbox config", "agent_id", mb.AgentID, "error", err)

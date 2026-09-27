@@ -5,6 +5,7 @@ package gateway
 // wire type comes from pkg/api/generated.
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,14 +17,30 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/email"
 )
 
+// pageResult bundles ReadFolderPage's multi-value result so a coalesced
+// budget flight can share it as one value.
+type pageResult struct {
+	rows      []email.MailRow
+	uv        uint32
+	truncated bool
+}
+
 func (a *restAPI) handleMailFolders(w http.ResponseWriter, r *http.Request, workspaceID, agentID string) {
 	client := a.mailPairClient(w, agentID, workspaceID)
 	if client == nil {
 		return
 	}
-	stats, err := client.FolderCounts(r.Context())
-	if err != nil {
-		mailErr502(w, err)
+	v, handled := a.mailBudgetWrap(w, r, agentID, workspaceID, client, "listMailFolders",
+		map[string]any{"scope": "folders"}, func(c context.Context) (any, error) {
+			return client.FolderCounts(c)
+		})
+	if handled {
+		return
+	}
+	stats, ok := v.([]email.FolderStat)
+	if !ok {
+		slog.Error("rest: mail budget flight returned unexpected type", "op", "listMailFolders")
+		jsonErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	var out gen.MailFolderList
@@ -71,15 +88,21 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 		}
 		beforeUID = uint32(v)
 	}
-	rows, uv, truncated, err := client.ReadFolderPage(r.Context(), folder, limit, beforeUID)
-	if err != nil {
-		if errors.Is(err, email.ErrMailRefInvalid) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
-			mailErr502(w, err)
-		}
+	v, handled := a.mailBudgetWrap(w, r, agentID, workspaceID, client, "listMailMessages",
+		map[string]any{"folder": folder, "limit": limit, "before_uid": beforeUID}, func(c context.Context) (any, error) {
+			rows, uv, truncated, err := client.ReadFolderPage(c, folder, limit, beforeUID)
+			return pageResult{rows: rows, uv: uv, truncated: truncated}, err
+		})
+	if handled {
 		return
 	}
+	pr, ok := v.(pageResult)
+	if !ok {
+		slog.Error("rest: mail budget flight returned unexpected type", "op", "listMailMessages")
+		jsonErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	rows, uv, truncated := pr.rows, pr.uv, pr.truncated
 	var out gen.MailMessagePage
 	out.Truncated = truncated
 	if truncated && len(rows) > 0 {
@@ -152,15 +175,20 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 	if client == nil {
 		return
 	}
-	v, err := client.ReadView(r.Context(), folder, ref)
-	if err != nil {
-		if errors.Is(err, email.ErrMailRefInvalid) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
-			mailErr502(w, err)
-		}
+	rv, handled := a.mailBudgetWrap(w, r, agentID, workspaceID, client, "getMailMessage",
+		map[string]any{"folder": folder, "ref": ref}, func(c context.Context) (any, error) {
+			return client.ReadView(c, folder, ref)
+		})
+	if handled {
 		return
 	}
+	mv, ok := rv.(*email.MailView)
+	if !ok {
+		slog.Error("rest: mail budget flight returned unexpected type", "op", "getMailMessage")
+		jsonErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	v := mv
 	out := gen.MailMessage{
 		Cc:             v.Cc,
 		Date:           v.Date,
@@ -256,15 +284,20 @@ func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, w
 	if client == nil {
 		return
 	}
-	v, err := client.ReadView(r.Context(), folder, ref)
-	if err != nil {
-		if errors.Is(err, email.ErrMailRefInvalid) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
-			mailErr502(w, err)
-		}
+	rv, handled := a.mailBudgetWrap(w, r, agentID, workspaceID, client, "getMailAttachment",
+		map[string]any{"folder": folder, "ref": ref, "idx": idx}, func(c context.Context) (any, error) {
+			return client.ReadView(c, folder, ref)
+		})
+	if handled {
 		return
 	}
+	mv, ok := rv.(*email.MailView)
+	if !ok {
+		slog.Error("rest: mail budget flight returned unexpected type", "op", "getMailAttachment")
+		jsonErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	v := mv
 	var part *email.MailPart
 	for i := range v.Attachments {
 		if v.Attachments[i].PartIndex == idx {

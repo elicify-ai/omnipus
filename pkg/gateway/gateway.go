@@ -51,6 +51,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/health"
 	"github.com/elicify-ai/omnipus/pkg/heartbeat"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -734,6 +735,13 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 		catalogLogAdapter{},
 	)
 	agent.SetWindowCatalog(rc.providerCatalog)
+	// A8 mail-operation budget: install the shared per-account gate BEFORE
+	// NewAgentLoop builds every agent instance and its registerSharedTools
+	// registers the email tools — the tools capture it at registration, the
+	// same "must run before NewAgentLoop" ordering rule as SetWindowCatalog
+	// above. Keyed by the data dir, so this is the SAME instance the watcher
+	// set (gateway_boot/reload) and the REST handlers resolve.
+	agent.SetSharedMailBudget(email.SharedMailBudget(rc.homePath))
 	// ADR-067 FR-012: the provider FACTORY dispatches on the protocol this
 	// same document carries, so it must read the same instance — otherwise
 	// the gateway would resolve windows from the pulled document while
