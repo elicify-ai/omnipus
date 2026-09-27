@@ -162,9 +162,31 @@ var (
 
 // ClassifyError classifies an error into a FailoverError with reason.
 // Returns nil if the error is not classifiable (unknown errors should not trigger fallback).
+//
+// Identity (C-16/MAJ-110): the returned FailoverError carries the caller's
+// candidate provider/model when they are pinned, and — when a candidate field
+// is empty (a legacy config with no pinned provider name) — the identity from
+// a FailoverError already in err's own chain, because that is the attempt that
+// actually failed. Without this harvest, the rebuilt FailoverError's empty
+// Provider shadows the wrapped error's real identity in every errors.As walk
+// (first match wins), and consumers like
+// pkg/agent/task_run_loop.go::taskOperatorFixReason lose the provider name the
+// operator-fix sentence must name.
 func ClassifyError(err error, provider, model string) *FailoverError {
 	if err == nil {
 		return nil
+	}
+
+	// Harvest the attempt's own identity for any candidate field the caller
+	// left empty. Never overwrites a pinned candidate identity.
+	var innerFE *FailoverError
+	if errors.As(err, &innerFE) {
+		if provider == "" {
+			provider = innerFE.Provider
+		}
+		if model == "" {
+			model = innerFE.Model
+		}
 	}
 
 	// Context cancellation: user abort, never fallback.
