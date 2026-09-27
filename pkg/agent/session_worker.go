@@ -22,7 +22,24 @@ const (
 	// workerInboxCap is the buffered capacity of a session worker's inbox.
 	// A depth of 8 covers rapid-fire follow-ups without blocking the dispatcher.
 	workerInboxCap = 8
+
+	// continueDrainMaxRetries bounds processTurn's drain-loop retry of a
+	// failing al.Continue call before giving up and abandoning the queued
+	// steering messages (design note "Recommended design"). The mixed
+	// failure causes (a transient init hiccup vs. a permanent nil-agent
+	// cause vs. an active-turn guard that should never legitimately trip
+	// post-fix) are deliberately NOT classified by type — a uniform bounded
+	// retry is simpler to review and just as safe, since the retry budget
+	// itself, not the cause, bounds worst-case cost.
+	continueDrainMaxRetries = 3
 )
+
+// continueDrainBackoff is the delay schedule between successive
+// continueDrainMaxRetries attempts of al.Continue inside processTurn's drain
+// loop — short and escalating, sub-2-second total worst case. This blocks
+// only this session's own worker goroutine and touches no shared resource or
+// lock other sessions depend on.
+var continueDrainBackoff = []time.Duration{100 * time.Millisecond, 300 * time.Millisecond, 700 * time.Millisecond}
 
 // workerIdleTimeout is the duration after which a worker self-exits when no
 // messages have arrived. Declared as a var (not const) so tests can override
@@ -576,12 +593,35 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 			}
 			return
 		}
-		logger.WarnCF("agent.worker", "Failed to build steering continuation target",
+		// Exit (c) (design note addendum): a genuine (non-ErrNoContinuationTarget)
+		// routing failure. buildContinuationTarget's only fallible step is
+		// resolveMessageRoute(msg) — the steering queue's real key
+		// (route.SessionKey) can only be produced by a SUCCESSFUL call to the
+		// exact function that just failed, and w.scope is NOT a safe
+		// substitute (it can carry a ":"+msg.SessionID suffix the queue's
+		// real key never has, silently checking/touching the wrong bucket).
+		// So this branch deliberately does NOT check or touch the steering
+		// queue at all — only a generic, visible notice is published. w.inTurn
+		// needs no special handling here: this is before the drain loop
+		// starts, and the function-level defer above already clears it
+		// unconditionally on every return.
+		logger.ErrorCF("agent.worker", "Failed to build steering continuation target — any queued follow-up for this session cannot be safely identified and was left untouched",
 			map[string]any{
-				"scope":   w.scope,
+				"scope":   w.scope, // operator triage only — NOT used to touch the queue
 				"channel": msg.Channel,
+				"chat_id": msg.ChatID,
 				"error":   targetErr.Error(),
 			})
+		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if pubErr := al.bus.PublishOutbound(notifyCtx, bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "A problem occurred while checking for further pending instructions in this conversation. If you sent a follow-up message, please resend it.",
+		}); pubErr != nil {
+			logger.WarnCF("agent.worker", "Failed to publish continuation-target-failure notice",
+				map[string]any{"scope": w.scope, "error": pubErr.Error()})
+		}
+		notifyCancel()
 		return
 	}
 	if target == nil {
@@ -611,15 +651,12 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
 			})
 
-		continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+		// Exit (a) (design note "Recommended design"): bounded retry, then
+		// fail loud. See continueDrainRetry's own doc comment for why a
+		// uniform bounded retry is simpler to review and just as safe here.
+		continued, attemptsMade, continueErr := w.continueDrainRetry(ctx, target)
 		if continueErr != nil {
-			logger.WarnCF("agent.worker", "Failed to continue queued steering",
-				map[string]any{
-					"scope":   w.scope,
-					"channel": target.Channel,
-					"chat_id": target.ChatID,
-					"error":   continueErr.Error(),
-				})
+			w.abandonQueuedSteering(ctx, target, continueErr, attemptsMade)
 			return
 		}
 		if continued == "" {
@@ -633,4 +670,140 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		al.publishResponseIfNeeded(ctx, activeAgent, target.Channel, target.ChatID, finalResponse)
 		published = true
 	}
+}
+
+// continueDrainRetry is processTurn's drain-loop bounded-retry step (design
+// note "Recommended design", exit (a)): repeatedly calls al.Continue for one
+// drained steering item until it succeeds, exhausts continueDrainMaxRetries,
+// or hits a post-dequeue failure. Post Bug-1/Bug-2 fixes, a same-session
+// GetActiveTurnBySession collision here is an invariant violation, not an
+// expected transient state — the realistic failure causes are
+// ensureHooksInitialized, ensureMCPInitialized (possibly transient) or
+// agentForSession returning nil (deterministic/permanent). Not classifying by
+// cause: a uniform bounded retry is simpler to review and just as safe.
+//
+// Gate finding, CRITICAL: a POST-dequeue failure (errContinuePostDequeueFailure)
+// means Continue already ran runTurn's ordinary, tool-capable turn pipeline
+// (the same one every other turn uses) against the dequeued message(s)
+// before it errored — not a cheap pre-flight guard. Retrying that here would
+// re-invoke the same tool-capable pipeline from scratch against identical
+// restored content, risking re-firing a tool call that already succeeded
+// inside the failed attempt — this returns immediately instead, so the
+// caller's abandonQueuedSteering can dequeue-and-report it straight away.
+// The four PRE-dequeue causes (active-turn guard, hooks/MCP init,
+// agentForSession==nil) never call runTurn at all, so they have no such risk
+// and correctly keep the bounded-retry-with-backoff behavior below.
+func (w *sessionWorker) continueDrainRetry(ctx context.Context, target *continuationTarget) (continued string, attemptsMade int, continueErr error) {
+	al := w.parent
+retryLoop:
+	for attempt := 0; attempt < continueDrainMaxRetries; attempt++ {
+		attemptsMade = attempt + 1
+		continued, continueErr = al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+		if continueErr == nil {
+			break
+		}
+		if errors.Is(continueErr, errContinuePostDequeueFailure) {
+			break
+		}
+		if attempt < len(continueDrainBackoff) {
+			// Gate finding, MEDIUM: select on ctx.Done() so a Close()
+			// cancellation mid-retry does not force the drain loop to sit
+			// through the whole remaining backoff schedule before noticing —
+			// matches AgentLoop.Close()'s own 5s worker-cancellation budget
+			// instead of fighting it.
+			select {
+			case <-time.After(continueDrainBackoff[attempt]):
+			case <-ctx.Done():
+				break retryLoop
+			}
+		}
+	}
+	return continued, attemptsMade, continueErr
+}
+
+// abandonQueuedSteering is processTurn's drain-loop failure path (design note
+// addendum exit (a)): called once al.Continue has exhausted its bounded
+// retry budget (continueDrainMaxRetries) and a queued steering message still
+// cannot be delivered. It is the first and only consumption attempt against
+// the steering queue for this failure — Continue's own reorder fix (Bug 2)
+// guarantees a failed Continue call never touches the queue, so nothing was
+// consumed during the retries themselves.
+//
+// Three things happen, in order: (1) the queue is dequeued and discarded —
+// "dequeued-and-reported", never left silently stuck; (2) w.inTurn is
+// explicitly cleared under w.steerMu — load-bearing, not cosmetic: without
+// this the NEXT message for this session would hit trySteerIntoLiveTurn,
+// see inTurn still true, and re-enqueue into the very queue just abandoned,
+// which nothing will ever drain again; (3) a distinct, user-visible failure
+// notice is published — never blended into finalResponse, which carries the
+// turn's own separate answer.
+//
+// The dequeue-then-publish section is wrapped in its own recover so that even
+// a panic in this narrow window degrades to "still in the queue, recoverable
+// later" rather than "vaporized" — mirroring consumeDequeuedSteering's own
+// wake-failure branch (pkg/agent/steering.go), which restores an unconsumed
+// suffix via steeringQueue.prependItemsScope on a partial failure.
+func (w *sessionWorker) abandonQueuedSteering(ctx context.Context, target *continuationTarget, lastErr error, attempts int) {
+	al := w.parent
+	queueDepthBefore := al.pendingSteeringCountForScope(target.SessionKey)
+
+	var abandonedItems []steeringQueueItem
+	var abandonedScope string
+	defer func() {
+		if r := recover(); r != nil {
+			if len(abandonedItems) > 0 {
+				al.steering.prependItemsScope(abandonedScope, abandonedItems)
+			}
+			logger.ErrorCF("agent.worker", "Panic while abandoning queued steering — restored to queue",
+				map[string]any{
+					"scope":       w.scope,
+					"session_key": target.SessionKey,
+					"panic":       r,
+					"stack":       string(debug.Stack()),
+				})
+			panic(r)
+		}
+	}()
+
+	// Gate finding, Important: dequeue via the item-preserving primitive, not
+	// dequeueSteeringMessagesForScopeWithFallback's flattened
+	// (msgs, correlationIDs) — reconstructing a steeringQueueItem from those
+	// alone drops the wake field a wake-bearing item (steer_audience.go's
+	// EnqueueSteeringWake) legitimately carries, so a panic in this narrow
+	// window would restore it minus the pointer writeSteeringConsumedMarker's
+	// consume-ack bookkeeping depends on.
+	abandonedScope, abandonedItems, _, _ = al.dequeueSteeringItemsForScopeWithFallback(target.SessionKey)
+
+	// Load-bearing (see doc comment above): the next message for this
+	// session must go to the inbox as a fresh turn, not be steered into a
+	// queue nobody will ever drain again.
+	w.steerMu.Lock()
+	w.inTurn.Store(false)
+	w.steerMu.Unlock()
+
+	logger.ErrorCF("agent.worker", "Persistent Continue failure — abandoning queued steering and notifying user",
+		map[string]any{
+			"scope":       w.scope,
+			"session_key": target.SessionKey,
+			"queue_depth": queueDepthBefore,
+			"attempts":    attempts,
+			"error":       lastErr.Error(),
+		})
+
+	// Gate finding, HIGH: this publish gets its OWN short-timeout context —
+	// matching the 3 other publish call sites in this file (dispatchSessionWorker's
+	// capacity-rejection notice, processTurn's exit-(c) notice) — instead of
+	// the ambient worker ctx, which AgentLoop.Close() cancels only on its own
+	// schedule (never per-call) and could otherwise block this indefinitely
+	// on a stalled/full outbound bus.
+	//
+	// Same mechanism the drain loop's own success path uses two lines below
+	// in processTurn (publishResponseIfNeeded, not a bespoke bus call) — but a
+	// SECOND, distinct message, never blended into finalResponse, since the
+	// turn's own real answer and "your follow-up may not have gone through"
+	// are two different things the user should be able to tell apart.
+	notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer notifyCancel()
+	al.publishResponseIfNeeded(notifyCtx, nil, target.Channel, target.ChatID,
+		"Your follow-up message could not be processed and was not delivered — please resend it.")
 }
