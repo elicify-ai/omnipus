@@ -336,10 +336,15 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
       }
 
-      // Send a message and wait for reply.
+      // Send a message and wait for reply. Dismiss first: a retry attempt's
+      // fresh page rehydrates any approval the failed attempt left pending
+      // (session_state frame on every WS connect), and that dialog's focus
+      // trap hijacks the composer's Enter press (activates the focused Deny
+      // button), so the message is never sent. Same guard as Bug-5-b's turns.
+      await dismissStaleDialogOverlay(page)
       await input.fill('Bug-5 replay order test message one')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 })
+      await expectAssistantMessagesWithApprovalDrain(page, 1, 90_000)
 
       // Capture the text of the first assistant message.
       const firstMessageText = await assistantMessages(page).first().textContent()
