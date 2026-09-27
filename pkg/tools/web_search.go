@@ -232,7 +232,14 @@ type searchRequest struct {
 
 // ExaSearchProvider calls the Exa search API (ADR-096 D2/AC-1).
 type ExaSearchProvider struct {
-	apiKey      string
+	apiKey string
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key is read from it at CALL time — the
+	// same live config the usability test reads. The construction snapshot
+	// (apiKey) stays the fallback for the legacy path and direct
+	// constructions. An empty effective key is "not usable: no API key"
+	// (D16), never a hop.
+	keySource   func() string
 	baseURL     string
 	client      *http.Client
 	ingestBound int64
@@ -253,13 +260,27 @@ func newExaProvider(opts WebSearchToolOptions, ingestBound int64) (*ExaSearchPro
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP client for Exa: %w", err)
 	}
-	return &ExaSearchProvider{
+	provider := &ExaSearchProvider{
 		apiKey:      opts.ExaAPIKey,
 		baseURL:     baseURL,
 		client:      client,
 		ingestBound: ingestBound,
 		maxResults:  10,
-	}, nil
+	}
+	// K1: on the dynamic path the key is read at call time through the same
+	// live config the usability test reads (D4a / AC-16). The snapshot above
+	// stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		provider.keySource = func() string {
+			c := roles()
+			if c == nil {
+				return ""
+			}
+			return c.Exa.APIKey()
+		}
+	}
+	return provider, nil
 }
 
 // Failure classes (spec 292–317). Hop classes move to the fallback; final
@@ -1088,6 +1109,12 @@ func (p *ExaSearchProvider) SearchWithCaps(ctx context.Context, req searchReques
 }
 
 func (p *ExaSearchProvider) search(ctx context.Context, req searchRequest) (string, error) {
+	// K1: the key is read at call time (D4a); an empty effective key is
+	// "not usable" (D16), never a hop.
+	apiKey := p.currentKey()
+	if apiKey == "" {
+		return "", errNoAPIKey()
+	}
 	payload := map[string]any{
 		"query":      req.query,
 		"numResults": req.count,
@@ -1108,9 +1135,7 @@ func (p *ExaSearchProvider) search(ctx context.Context, req searchRequest) (stri
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", userAgent)
-	if p.apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+p.apiKey)
-	}
+	request.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := p.client.Do(request)
 	if err != nil {
@@ -1163,13 +1188,12 @@ func (p *TavilySearchProvider) searchCaps(ctx context.Context, req searchRequest
 	if searchURL == "" {
 		searchURL = "https://api.tavily.com/search"
 	}
+	keys := p.currentKeys()
+	if len(keys) == 0 {
+		return "", errNoAPIKey()
+	}
 	var lastErr error
-	iter := p.keyPool.NewIterator()
-	for {
-		apiKey, ok := iter.Next()
-		if !ok {
-			break
-		}
+	for _, apiKey := range keys {
 		depth, clamped := p.effectiveDepth(req.depth)
 		payload := map[string]any{
 			"api_key":        apiKey,
@@ -1284,6 +1308,12 @@ func (p *GLMSearchProvider) SearchWithCaps(ctx context.Context, req searchReques
 // searchCaps mirrors the legacy GLM request with content_size from the
 // agent's depth (D-GLM row).
 func (p *GLMSearchProvider) searchCaps(ctx context.Context, req searchRequest) (string, error) {
+	// K1: the key is read at call time (D4a); an empty effective key is
+	// "not usable" (D16), never a hop.
+	apiKey := p.currentKey()
+	if apiKey == "" {
+		return "", errNoAPIKey()
+	}
 	searchURL := p.baseURL
 	if searchURL == "" {
 		searchURL = "https://open.bigmodel.cn/api/paas/v4/web_search"
@@ -1307,7 +1337,7 @@ func (p *GLMSearchProvider) searchCaps(ctx context.Context, req searchRequest) (
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+p.apiKey)
+	request.Header.Set("Authorization", "Bearer "+apiKey)
 	resp, err := p.client.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
@@ -1377,13 +1407,12 @@ func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchReq
 		searchURL = "https://api.perplexity.ai/chat/completions"
 	}
 
+	keys := p.currentKeys()
+	if len(keys) == 0 {
+		return "", errNoAPIKey()
+	}
 	var lastErr error
-	iter := p.keyPool.NewIterator()
-	for {
-		apiKey, ok := iter.Next()
-		if !ok {
-			break
-		}
+	for _, apiKey := range keys {
 		payload := map[string]any{
 			"model":       "sonar",
 			"temperature": 0.0,
@@ -1542,13 +1571,12 @@ func (p *BraveSearchProvider) SearchWithCaps(ctx context.Context, req searchRequ
 		searchURL += "&freshness=" + url.QueryEscape(freshness)
 	}
 
+	keys := p.currentKeys()
+	if len(keys) == 0 {
+		return "", errNoAPIKey()
+	}
 	var lastErr error
-	iter := p.keyPool.NewIterator()
-	for {
-		apiKey, ok := iter.Next()
-		if !ok {
-			break
-		}
+	for _, apiKey := range keys {
 		request, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 		if err != nil {
 			return "", fmt.Errorf("failed to create request: %w", err)
@@ -1630,5 +1658,11 @@ func (p *BaiduSearchProvider) honoursSiteFilters() bool { return false }
 
 // SearchWithCaps delegates to the legacy search (base-URL aware already).
 func (p *BaiduSearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
+	// K1: the key is read at call time (D4a); an empty effective key is
+	// "not usable" (D16), never a hop. The legacy Search re-reads the same
+	// currentKey() when it builds its header.
+	if p.currentKey() == "" {
+		return "", errNoAPIKey()
+	}
 	return p.Search(ctx, req.query, req.count, req.rangeFilter)
 }

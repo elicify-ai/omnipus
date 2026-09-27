@@ -206,7 +206,17 @@ func mapBaiduRecencyFilter(rangeCode string) string {
 }
 
 type BraveSearchProvider struct {
-	keyPool     *APIKeyPool
+	keyPool *APIKeyPool
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key set is read from it at CALL time —
+	// the same live config the usability test reads. The construction
+	// snapshot (keyPool) stays the fallback for the legacy path and direct
+	// constructions. An empty effective key set is "not usable: no API key"
+	// (D16), never a hop.
+	keySource func() []string
+	// rotation carries the cross-call round-robin over the effective key
+	// list — the same behaviour APIKeyPool.NewIterator gave the snapshot.
+	rotation    uint32
 	baseURL     string // ADR-096: "" → default at search time
 	proxy       string
 	client      *http.Client
@@ -310,7 +320,17 @@ func (p *BraveSearchProvider) Search(
 }
 
 type TavilySearchProvider struct {
-	keyPool     *APIKeyPool
+	keyPool *APIKeyPool
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key set is read from it at CALL time —
+	// the same live config the usability test reads. The construction
+	// snapshot (keyPool) stays the fallback for the legacy path and direct
+	// constructions. An empty effective key set is "not usable: no API key"
+	// (D16), never a hop.
+	keySource func() []string
+	// rotation carries the cross-call round-robin over the effective key
+	// list — the same behaviour APIKeyPool.NewIterator gave the snapshot.
+	rotation    uint32
 	baseURL     string
 	proxy       string
 	client      *http.Client
@@ -572,12 +592,22 @@ func stripTags(content string) string {
 }
 
 type PerplexitySearchProvider struct {
-	keyPool     *APIKeyPool
+	keyPool *APIKeyPool
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key set is read from it at CALL time —
+	// the same live config the usability test reads. The construction
+	// snapshot (keyPool) stays the fallback to the legacy path and direct
+	// constructions. An empty effective key set is "not usable: no API key"
+	// (D16), never a hop.
+	keySource func() []string
+	// rotation carries the cross-call round-robin over the effective key
+	// list — the same behaviour APIKeyPool.NewIterator gave the snapshot.
+	rotation    uint32
 	baseURL     string // ADR-096: "" → default at search time
 	proxy       string
 	client      *http.Client
 	ingestBound int64  // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
-	contextSize string // ADR-096: operator-set search_context_size; "" → never sent
+	contextSize string // ADR-096 D20: operator ceiling clamping agent depth; "" → agent depth only
 }
 
 func (p *PerplexitySearchProvider) Search(
@@ -774,13 +804,20 @@ func (p *SearXNGSearchProvider) Search(
 }
 
 type GLMSearchProvider struct {
-	apiKey       string
+	apiKey string
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key is read from it at CALL time — the
+	// same live config the usability test reads. The construction snapshot
+	// (apiKey) stays the fallback for the legacy path and direct
+	// constructions. An empty effective key is "not usable: no API key"
+	// (D16), never a hop.
+	keySource    func() string
 	baseURL      string
 	searchEngine string
 	proxy        string
 	client       *http.Client
 	ingestBound  int64  // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
-	contentSize  string // ADR-096: "" → "medium"
+	contentSize  string // ADR-096: operator-set content_size, D20's ceiling on agent depth; "" → "medium"
 }
 
 func (p *GLMSearchProvider) Search(
@@ -867,7 +904,14 @@ func (p *GLMSearchProvider) Search(
 }
 
 type BaiduSearchProvider struct {
-	apiKey      string
+	apiKey string
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key is read from it at CALL time — the
+	// same live config the usability test reads. The construction snapshot
+	// (apiKey) stays the fallback for the legacy path and direct
+	// constructions. An empty effective key is "not usable: no API key"
+	// (D16), never a hop.
+	keySource   func() string
 	baseURL     string
 	proxy       string
 	client      *http.Client
@@ -910,7 +954,10 @@ func (p *BaiduSearchProvider) Search(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	// K1: currentKey() reads the live resolver on the dynamic path; on the
+	// legacy path (keySource nil) it returns the construction snapshot, so
+	// legacy behaviour is unchanged.
+	req.Header.Set("Authorization", "Bearer "+p.currentKey())
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -1116,6 +1163,19 @@ func newPerplexitySearchProvider(opts WebSearchToolOptions, ingestBound int64) (
 		client:      client,
 		ingestBound: ingestBound,
 	}
+	// K1: on the dynamic path the key set is read at call time through the
+	// same live config the usability test reads (D4a / AC-16). The snapshot
+	// pool stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		provider.keySource = func() []string {
+			c := roles()
+			if c == nil {
+				return nil
+			}
+			return singleKeyList(c.Perplexity.APIKey())
+		}
+	}
 	if opts.PerplexityMaxResults > 0 {
 		return provider, min(opts.PerplexityMaxResults, 10), nil
 	}
@@ -1136,6 +1196,20 @@ func newBraveSearchProvider(opts WebSearchToolOptions, ingestBound int64) (Searc
 		proxy:       opts.Proxy,
 		client:      client,
 		ingestBound: ingestBound,
+	}
+	// K1: on the dynamic path the key set is read at call time through the
+	// same live config the usability test proves (D4a / AC-16). The snapshot
+	// pool stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		keySource := func() []string {
+			c := roles()
+			if c == nil {
+				return nil
+			}
+			return singleKeyList(c.Brave.APIKey())
+		}
+		provider.keySource = keySource
 	}
 	if opts.BraveMaxResults > 0 {
 		return provider, min(opts.BraveMaxResults, 10), nil
@@ -1179,6 +1253,19 @@ func newTavilySearchProvider(opts WebSearchToolOptions, ingestBound int64) (Sear
 		client:      client,
 		ingestBound: ingestBound,
 	}
+	// K1: on the dynamic path the key set is read at call time through the
+	// same live config the usability test reads (D4a / AC-16). The snapshot
+	// pool stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		provider.keySource = func() []string {
+			c := roles()
+			if c == nil {
+				return nil
+			}
+			return singleKeyList(c.Tavily.APIKey())
+		}
+	}
 	if opts.TavilyMaxResults > 0 {
 		return provider, min(opts.TavilyMaxResults, 10), nil
 	}
@@ -1215,6 +1302,19 @@ func newBaiduSearchProvider(opts WebSearchToolOptions, ingestBound int64) (Searc
 		client:      client,
 		ingestBound: ingestBound,
 	}
+	// K1: on the dynamic path the key is read at call time through the same
+	// live config the usability test reads (D4a / AC-16). The snapshot above
+	// stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		provider.keySource = func() string {
+			c := roles()
+			if c == nil {
+				return ""
+			}
+			return c.BaiduSearch.APIKey()
+		}
+	}
 	if opts.BaiduSearchMaxResults > 0 {
 		return provider, min(opts.BaiduSearchMaxResults, 10), nil
 	}
@@ -1241,6 +1341,19 @@ func newGLMSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchP
 		client:       client,
 		ingestBound:  ingestBound,
 		contentSize:  opts.GLMContentSize,
+	}
+	// K1: on the dynamic path the key is read at call time through the same
+	// live config the usability test reads (D4a / AC-16). The snapshot above
+	// stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		provider.keySource = func() string {
+			c := roles()
+			if c == nil {
+				return ""
+			}
+			return c.GLMSearch.APIKey()
+		}
 	}
 	if opts.GLMSearchMaxResults > 0 {
 		return provider, min(opts.GLMSearchMaxResults, 10), nil
