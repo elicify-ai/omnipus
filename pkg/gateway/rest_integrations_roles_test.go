@@ -825,7 +825,7 @@ func TestIntegrationRolesGET_FallbackSearchNullContract(t *testing.T) {
 	t.Run("decided + stored absent + no automatic fallback -> present, null", func(t *testing.T) {
 		api, user, _ := newRolesTestAPI(t)
 		fixture := rolesFixtureWeb()
-		delete(fixture, "fallback_provider") // stored value absent
+		delete(fixture, "fallback_provider")       // stored value absent
 		fixture["default_provider"] = "duckduckgo" // R3 auto-DDG needs default != ddg
 		writeRolesWebConfig(t, api, fixture)
 
@@ -888,4 +888,43 @@ func TestIntegrationPut_FallbackSearchNullContract(t *testing.T) {
 		require.True(t, present, "decided: the key must be present (body=%s)", m)
 		assert.Equal(t, `"tavily"`, string(raw), "the saved fallback id")
 	})
+}
+
+// TestIntegrationPut_SavedKeyLiveThroughRealInject closes the last instrument
+// gap the dispatcher named: no earlier test proved a key saved via PUT is
+// readable through the tool's APIKey() WITHOUT the test setting the env var
+// itself. Here the fake reload stands in only for executeReload's
+// scaffolding (tool-policy coverage validation, service restarts); the
+// inject step is the REAL credentials.InjectFromConfig — the exact call
+// executeReload makes on the production reload path (gateway_reload.go
+// "Re-inject provider credentials", symmetric with boot) — and the test
+// pins the env lane empty first, so anything APIKey() returns afterwards
+// came through the store→env bridge and nothing else.
+func TestIntegrationPut_SavedKeyLiveThroughRealInject(t *testing.T) {
+	api, user, cfg := newRolesTestAPI(t)
+	t.Setenv("TAVILY_API_KEY", "")
+
+	api.agentLoop.SetReloadFunc(func() error {
+		fresh, err := config.LoadConfig(api.configPath())
+		if err != nil {
+			return err
+		}
+		// The REAL production inject — os.Setenv from the encrypted store.
+		if errs := credentials.InjectFromConfig(fresh, api.credStore); len(errs) > 0 {
+			return errors.Join(errs...)
+		}
+		cfg.Tools = fresh.Tools
+		cfg.Providers = fresh.Providers
+		cfg.Agents = fresh.Agents
+		return nil
+	})
+
+	w := putRoles(t, api, user, "tavily", `{"kind":"search","api_key":"k-live","active":true}`)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	// The saved key is live: readable through the tool's APIKey() on the
+	// swapped-in config, without this test ever setting TAVILY_API_KEY.
+	got := api.agentLoop.GetConfig().Tools.Web.Tavily.APIKey()
+	require.Equal(t, "k-live", got,
+		"a key saved via PUT must be readable through APIKey() after the reload's real inject")
 }

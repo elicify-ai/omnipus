@@ -364,7 +364,7 @@ func (a *restAPI) activeVoiceProviderID(cfg *config.Config) string {
 
 func (a *restAPI) handleIntegrationProvidersList(w http.ResponseWriter, r *http.Request) {
 	cfg := a.agentLoop.GetConfig()
-	jsonOK(w, a.buildIntegrationResponse(cfg))
+	a.writeIntegrationResponse(w, cfg)
 }
 
 // handleIntegrationProviderUpdate — moved to rest_integrations_roles.go

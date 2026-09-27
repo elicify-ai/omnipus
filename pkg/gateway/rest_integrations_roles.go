@@ -171,7 +171,11 @@ func (a *restAPI) nativeSearchInEffect(cfg *config.Config) bool {
 // resolved fallback), plus the top-level role fields. Voice rows keep
 // today's shape: active only — usable/fallback/fallback_automatic are
 // "Search rows only" per the contract.
-func (a *restAPI) buildIntegrationResponse(cfg *config.Config) gen.IntegrationProvidersResponse {
+//
+// The bool return is the decided-gate (file marker), so the response writer
+// can apply the contract's null-vs-absent rule for fallback_search without
+// re-reading the state.
+func (a *restAPI) buildIntegrationResponse(cfg *config.Config) (gen.IntegrationProvidersResponse, bool) {
 	state := a.readIntegrationRolesFileState()
 	snapshot, decided := a.integrationRoleSnapshot(state)
 	activeVoice := a.activeVoiceProviderID(cfg)
@@ -223,7 +227,44 @@ func (a *restAPI) buildIntegrationResponse(cfg *config.Config) gen.IntegrationPr
 	}
 	inEffect := a.nativeSearchInEffect(cfg)
 	resp.NativeSearchInEffect = &inEffect
-	return resp
+	return resp, decided
+}
+
+// writeIntegrationResponse writes the integration catalog response,
+// applying the one wire rule the generated struct cannot express: with the
+// roles decided and no fallback, the contract demands the key PRESENT with
+// JSON null — "No fallback" is an explicit selectable state, and a stored
+// absent value with no automatic fallback is the same state — while Go's
+// omitempty on the generated *string can only emit the absent key.
+// Undecided keeps the key absent ("Absent when the roles are not yet
+// decided"). This is a documented, minimal post-marshal step; the
+// generated wire struct stays untouched (Hard Constraint #8).
+func (a *restAPI) writeIntegrationResponse(w http.ResponseWriter, cfg *config.Config) {
+	resp, decided := a.buildIntegrationResponse(cfg)
+	if !decided || resp.FallbackSearch != nil {
+		jsonOK(w, resp)
+		return
+	}
+	// Decided + no fallback: remarshal with the key present as null.
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "could not serialize the integration catalog")
+		return
+	}
+	var m map[string]json.RawMessage
+	if uerr := json.Unmarshal(raw, &m); uerr != nil {
+		jsonErr(w, http.StatusInternalServerError, "could not serialize the integration catalog")
+		return
+	}
+	m["fallback_search"] = json.RawMessage("null")
+	raw, err = json.Marshal(m)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "could not serialize the integration catalog")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +498,7 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 		}
 	}
 
-	jsonOK(w, a.buildIntegrationResponse(a.agentLoop.GetConfig()))
+	a.writeIntegrationResponse(w, a.agentLoop.GetConfig())
 }
 
 // applyIntegrationRoles dispatches the raw-map mutation by kind: search rows
