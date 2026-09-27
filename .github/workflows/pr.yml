@@ -19,8 +19,10 @@ on:
   workflow_dispatch:
 
 # Six playwright e2e shards (llm-chat, llm-agents, llm-light, llm-hot-reload,
-# llm-verifier-eval, llm-conformance) call a real paid LLM (openrouter/deepseek/deepseek-v4.1-flash),
-# so every push to a PR branch spends money. Cancel the superseded run on each new
+# llm-verifier-eval, llm-conformance) call a real paid LLM (the model is
+# centralized in tests/e2e/e2e-model.json and read into $OMNIPUS_E2E_MODEL by
+# the playwright job's "Read central e2e model" step), so every push to a PR
+# branch spends money. Cancel the superseded run on each new
 # push instead of letting it burn through the full 17-job/9-shard fan-out. For a
 # release-branch/main push (no `pull_request` context), `github.event.pull_request.number`
 # is empty so the group falls back to `github.ref` (e.g. refs/heads/release/v0.1.1) —
@@ -2697,6 +2699,18 @@ jobs:
           echo "::add-mask::$KEY"
           echo "OPENROUTER_API_KEY_CI=$KEY" >> "$GITHUB_ENV"
 
+      - name: Read central e2e model
+        # One committed source of truth for the real-LLM model id. Every model
+        # literal in live config is banned (scripts/check-no-hardcoded-e2e-model.sh),
+        # so the seeding and onboarding steps below interpolate $OMNIPUS_E2E_MODEL.
+        run: |
+          m=$(jq -r '.model // empty' tests/e2e/e2e-model.json)
+          if [ -z "$m" ]; then
+            echo "::error::tests/e2e/e2e-model.json: .model is missing or empty" >&2
+            exit 1
+          fi
+          echo "OMNIPUS_E2E_MODEL=$m" >> "$GITHUB_ENV"
+
       - name: Seed gateway config
         # providers is a flat array of ModelConfig entries (see pkg/config/config.go).
         # Each row's `provider` (catalog id) is EXPLICIT and REQUIRED — the old
@@ -2720,7 +2734,11 @@ jobs:
         # override it (an existing "allow" policy is never downgraded by the migrator).
         run: |
           set -euo pipefail
-          cat > /tmp/omnipus-e2e/config.json <<'EOF'
+          : "${OMNIPUS_E2E_MODEL:?OMNIPUS_E2E_MODEL is not set — the 'Read central e2e model' step must run first}"
+          # Unquoted heredoc (interpolating $OMNIPUS_E2E_MODEL) — the same idiom as
+          # the sandbox-uat.yml and runci.sh config seeds; this JSON body carries no
+          # other shell-significant characters.
+          cat > /tmp/omnipus-e2e/config.json <<EOF
           {
             "version": 1,
             "gateway": {
@@ -2737,7 +2755,7 @@ jobs:
               "defaults": {
                 "default_model": {
                   "provider": "openrouter",
-                  "model": "deepseek/deepseek-v4.1-flash"
+                  "model": "${OMNIPUS_E2E_MODEL}"
                 },
                 "auto_recap_enabled": true
               }
@@ -2745,7 +2763,7 @@ jobs:
             "providers": [
               {
                 "provider": "openrouter",
-                "model": "deepseek/deepseek-v4.1-flash",
+                "model": "${OMNIPUS_E2E_MODEL}",
                 "api_base": "https://openrouter.ai/api/v1",
                 "api_key_ref": "OPENROUTER_API_KEY"
               }
@@ -2822,8 +2840,8 @@ jobs:
           # Capture status and body instead, and print the body on failure. The
           # key is registered with add-mask, so it stays masked in whatever the
           # server echoes back.
-          body=$(jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
-            '{provider:{id:"openrouter",auth_method:"api_key",api_key:$key,model:"deepseek/deepseek-v4.1-flash"},admin:{username:"admin",password:"admin123"}}' \
+          body=$(jq -n --arg key "${OPENROUTER_API_KEY_CI}" --arg model "$OMNIPUS_E2E_MODEL" \
+            '{provider:{id:"openrouter",auth_method:"api_key",api_key:$key,model:$model},admin:{username:"admin",password:"admin123"}}' \
             | curl -s -o /tmp/onboard-body.txt -w '%{http_code}' \
                 -X POST http://localhost:6060/api/v1/onboarding/complete \
                 -H 'Content-Type: application/json' \

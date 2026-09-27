@@ -365,3 +365,64 @@ func TestBootFailureDetailSurvivesAMissingLog(t *testing.T) {
 		t.Error("bootFailureDetail() on a home with no panic log returned an empty string; want a stated reason")
 	}
 }
+
+// ── Central e2e model resolution ──────────────────────────────────────────────
+
+// TestCentralE2EModelReadsTheSingleSourceFile pins the ONE committed source of
+// truth for the real-LLM e2e model id: tests/e2e/e2e-model.json. The returned
+// slug must be provider-prefixed (openrouter/<vendor>/<model>) because the
+// runner's OpenRouter call layer strips exactly that prefix (callJudge), and
+// the workflows' AGENT_MODEL/JUDGE_MODEL convention carries it too.
+func TestCentralE2EModelReadsTheSingleSourceFile(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "tests", "e2e")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir tests/e2e: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(`{"model":"vendor/test-model"}`), 0o600); err != nil {
+		t.Fatalf("write e2e-model.json: %v", err)
+	}
+	t.Chdir(root)
+
+	got, err := centralE2EModel()
+	if err != nil {
+		t.Fatalf("centralE2EModel() error = %v", err)
+	}
+	if got != "openrouter/vendor/test-model" {
+		t.Fatalf("centralE2EModel() = %q, want %q (the runner needs the openrouter/ prefix; callJudge strips it)", got, "openrouter/vendor/test-model")
+	}
+}
+
+// TestCentralE2EModelFailsClosedOnMissingFile: with no flag and no env override,
+// an absent source file must stop the runner loudly instead of silently billing
+// a stale fallback literal.
+func TestCentralE2EModelFailsClosedOnMissingFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	_, err := centralE2EModel()
+	if err == nil {
+		t.Fatal("centralE2EModel() with no tests/e2e/e2e-model.json returned nil error; want a loud failure (no hardcoded fallback exists anymore)")
+	}
+	if !strings.Contains(err.Error(), "AGENT_MODEL") {
+		t.Fatalf("error should name the AGENT_MODEL/JUDGE_MODEL override so the fix is actionable, got: %v", err)
+	}
+}
+
+// TestCentralE2EModelRejectsAnEmptyModelField: an empty "model" value would
+// resolve to the bare slug "openrouter/" — a config corruption that must not
+// silently pass through.
+func TestCentralE2EModelRejectsAnEmptyModelField(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "tests", "e2e")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir tests/e2e: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(`{"model":""}`), 0o600); err != nil {
+		t.Fatalf("write e2e-model.json: %v", err)
+	}
+	t.Chdir(root)
+
+	if _, err := centralE2EModel(); err == nil {
+		t.Fatal("centralE2EModel() with an empty model field returned nil error; want a failure")
+	}
+}
