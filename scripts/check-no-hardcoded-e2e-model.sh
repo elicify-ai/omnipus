@@ -13,21 +13,22 @@
 #
 # Banned literals (old ids that must never return, plus the current id):
 #   z-ai/glm-5.2, z-ai/glm-5.3-flash, z-ai/glm-5-turbo,
+#   deepseek/deepseek-v4.1-flash,
 #   google/gemini-2.0-flash-001, google/gemini-2.5-flash,
-#   openai/gpt-4o, anthropic/claude-sonnet-4.6, claude-sonnet-4-6,
-#   deepseek/deepseek-v4.1-flash
+#   openai/gpt-4o, anthropic/claude-sonnet-4.6, claude-sonnet-4-6
 #
 # Scanned — exactly the surfaces this centralization covers, where a model id
 # would be CONSUMED as the e2e/evals model choice:
-#   .github/workflows/  deploy/  evals/
+#   .github/workflows/  deploy/  evals/  tests/e2e/**  .github/*.md
+#
+#   tests/e2e/** is scanned across every file type present there (.ts, .tsx,
+#   .js, .json, .md, .yml, .go, ... — any text file; binaries are skipped),
+#   EXCLUDING exactly tests/e2e/e2e-model.json — the ONE allowed literal —
+#   and the transient Playwright/dependency dirs (node_modules, test-results,
+#   playwright-report) that can appear under tests/e2e at runtime. A comment
+#   is a literal on a scanned surface; it fails like code.
 #
 # Deliberately NOT scanned (and why):
-#   tests/e2e/**             — sibling qa-lead branch scope; this branch merges
-#                              with it before landing, and that tree still
-#                              carries historical spec prose + fixture
-#                              literals. qa-lead can tighten this after the
-#                              merge lands.
-#   tests/e2e/e2e-model.json — the ONE allowed literal (outside the scan set).
 #   docs/** (incl. ADR-054-* and docs/internal/_archive/**)
 #                            — illustrative prose only, not live config
 #                              (same rationale as the ADR/_archive exemptions
@@ -51,10 +52,11 @@ cd "$REPO_ROOT" || { echo "check-no-hardcoded-e2e-model: cannot cd to $REPO_ROOT
 
 # Refuse to report a green verdict for a tree this script never scanned (the
 # exact false-green trap docs/internal/false-green-patterns.md warns about;
-# mirrors check-no-goal-confirm-gate.sh's existence-check pattern).
-for d in .github/workflows deploy evals; do
-  if [ ! -d "$d" ]; then
-    echo "check-no-hardcoded-e2e-model: expected directory '$d' not found under $REPO_ROOT" >&2
+# mirrors check-no-goal-confirm-gate.sh's existence-check pattern). Dirs AND
+# files are checked — .github/SECRETS.md is a required file, not a dir.
+for p in .github/workflows deploy evals tests/e2e .github/SECRETS.md; do
+  if [ ! -e "$p" ]; then
+    echo "check-no-hardcoded-e2e-model: expected path '$p' not found under $REPO_ROOT" >&2
     echo "  (wrong cwd, a renamed package, or a partial checkout — refusing to report a green" >&2
     echo "  verdict for a tree this script never actually scanned)" >&2
     exit 2
@@ -63,10 +65,22 @@ done
 
 PATTERN='z-ai/glm-5\.2|z-ai/glm-5\.3-flash|z-ai/glm-5-turbo|google/gemini-2\.5-flash|google/gemini-2\.0-flash-001|openai/gpt-4o|anthropic/claude-sonnet-4\.6|claude-sonnet-4-6|deepseek/deepseek-v4\.1-flash'
 
-violations=$(grep -rnE "$PATTERN" \
-  --include='*.yml' --include='*.yaml' --include='*.sh' --include='*.go' --include='*.ts' --include='*.tsx' --include='*.json' --include='*.md' \
-  .github/workflows/ deploy/ evals/ 2>/dev/null \
-  || true)
+violations="$(
+  grep -rnE "$PATTERN" \
+    --include='*.yml' --include='*.yaml' --include='*.sh' --include='*.go' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.json' --include='*.md' \
+    .github/workflows/ deploy/ evals/ 2>/dev/null
+  # tests/e2e/**: every text file type (binaries skipped via -I), excluding
+  # exactly tests/e2e/e2e-model.json (the single committed source of truth)
+  # and the transient node_modules/test-results/playwright-report dirs.
+  grep -rnEI "$PATTERN" \
+    --exclude-dir=node_modules --exclude-dir=test-results --exclude-dir=playwright-report \
+    tests/e2e/ 2>/dev/null | grep -v '^tests/e2e/e2e-model\.json:'
+  # .github/*.md (top level): SECRETS.md and any other doc that could
+  # describe the e2e/evals model. -H forces the filename prefix even when the
+  # glob resolves to a single file (a lone .github/SECRETS.md would otherwise
+  # print line content with no file name).
+  grep -HnE "$PATTERN" .github/*.md 2>/dev/null
+)"
 
 if [ -n "$violations" ]; then
   {
