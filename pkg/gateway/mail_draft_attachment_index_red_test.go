@@ -222,14 +222,26 @@ func TestMailDraftAttachment_PartIndexIsTheStableMIMEPartIndex(t *testing.T) {
 		// the {partIndex} path parameter of the download endpoint. Keep-all
 		// edit; every listed attachment's reported index must equal the
 		// index the download route of the NEW copy actually serves it at.
+		//
+		// The keep list names every attachment by the index the download
+		// route of the copy BEING EDITED serves it at — probed below, never
+		// hard-coded: the contract makes keep_attachment_parts and the
+		// download route one numbering scheme, so the probed values are the
+		// contract-correct keep values.
 		env := newMailRedEnv(t)
 		imapPort, cl := startPlainIMAP(t)
 		smtpPort, _ := listenCount(t)
 		pointMailboxAt(t, env, imapPort, smtpPort)
 		idxAppendForeignDraft(t, cl, "keepall")
 		uv := draftUIDValidity(t, cl)
+		ref := draftRefPath(uv, 1)
+		keep := []int{
+			idxProbeStablePartIndex(t, env, ref, idxAlphaData, "alpha-report.txt"),
+			idxProbeStablePartIndex(t, env, ref, idxBetaData, "beta-sheet.csv"),
+			idxProbeStablePartIndex(t, env, ref, idxGammaData, "gamma-notes.txt"),
+		}
 
-		rec := idxPut(t, env, uv, 1, []int{0, 1, 2}, "keep all edit", "kept everything body")
+		rec := idxPut(t, env, uv, 1, keep, "keep all edit", "kept everything body")
 		require.Less(t, rec.Code, 300, "keep-all edit must succeed; body: "+rec.Body.String())
 		msg := idxDecodeMessage(t, rec.Body.String())
 		require.Len(t, msg.Attachments, 3, "all three attachments carried; listing: "+idxListing(msg))

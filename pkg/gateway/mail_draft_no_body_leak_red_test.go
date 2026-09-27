@@ -29,6 +29,16 @@ package gateway
 // Recognition precedent reused as the oracle's match condition:
 // pkg/gateway/rest_mail_audit_fields.go::mailAuditDraftBodyPart
 // (at.Name == "message.md" && at.ContentType == "text/markdown").
+//
+// Round-5 note (contract 1aef5e376): keep_attachment_parts values are each
+// attachment's STABLE part index — the same value the download route's
+// {partIndex} expects and the listing's part_index reports — never a listing
+// position. Every keep list in this file is derived per that contract: from
+// the download route (the contract-designated addressing authority —
+// leakFreshDraftKeep, via the index pack's idxProbeStablePartIndex), from
+// the response listing's own part_index fields (allPartIndexes,
+// realAttachmentKeepIndex), or from the appended fixture's raw MIME leaf
+// walk (draftBodyMarkerStableIndex). No keep value is hard-coded.
 
 import (
 	"encoding/json"
@@ -58,11 +68,17 @@ const (
 
 // appendLeakDraft appends a byte-for-byte realistic agent draft — real
 // email.Compose output (Draft: true, one genuine text/plain attachment) — to
-// the fixture Drafts folder, exactly what a panel edit would act on.
-// email.Compose with Draft: true renders exactly two listed parts for this
-// input: the body bookkeeping part (message.md, listed first) and the real
-// attachment (listed second), so a fresh copy's keep-everything list is [0, 1].
-func appendLeakDraft(t *testing.T, cl *imapclient.Client) {
+// the fixture Drafts folder, exactly what a panel edit would act on. Returns
+// the raw wire bytes so callers can derive part indexes from the fixture's
+// own MIME shape.
+//
+// email.Compose with Draft: true renders a fixed walk-order LEAF sequence for
+// this input: the multipart/alternative text/plain + text/html body leaves
+// (0 and 1), the message.md body bookkeeping leaf (2), then the user
+// attachments (3..). Under the contract (part_index = the download route's
+// {partIndex}) the fixed attachment listing shows only the real attachment —
+// at its stable leaf index — never the bookkeeping leaf.
+func appendLeakDraft(t *testing.T, cl *imapclient.Client) string {
 	t.Helper()
 	out, err := email.Compose(email.ComposeInput{
 		From:      "mailbox@test.local",
@@ -77,13 +93,17 @@ func appendLeakDraft(t *testing.T, cl *imapclient.Client) {
 	})
 	require.NoError(t, err)
 	appendRaw(t, cl, "Drafts", out.Transmitted, []imap.Flag{imap.FlagDraft})
+	return string(out.Transmitted)
 }
 
 // editLeakDraft issues one panel edit (PUT) on the draft copy the ref names,
-// carrying forward exactly the keep list given (positions into the current
-// listing — the handler's indexing), with a fresh subject and body. Returns
-// the decoded MailMessage response: the new copy's uid and the attachment
-// listing the panel sees after the edit.
+// carrying forward exactly the keep list given (stable part indexes — the
+// values the contract makes identical between keep_attachment_parts and the
+// download route's {partIndex}), with a fresh subject and body. The update
+// path has NO default carry-all: a nil list omits the field and keeps
+// NOTHING, so every edit names its parts explicitly. Returns the decoded
+// MailMessage response: the new copy's uid and the attachment listing the
+// panel sees after the edit.
 func editLeakDraft(t *testing.T, env *mailRedEnv, uv, uid uint32, keep []int, subject, body string) gen.MailMessage {
 	t.Helper()
 	keepJSON := make([]string, 0, len(keep))
@@ -132,7 +152,8 @@ func draftBodyMarkerParts(raw string) []string {
 
 // sendLeakDraft POSTs the panel send for the copy the ref names. keepList nil
 // omits keep_attachment_parts entirely (the contract's default carry-ALL);
-// a non-nil list is sent verbatim. Returns the decoded MailSendResponse and
+// a non-nil list (stable part indexes, same scheme as editLeakDraft) is sent
+// verbatim. Returns the decoded MailSendResponse and
 // requires the send to have succeeded (a 200 with sent_saved=true) — a send
 // that did not happen can prove nothing.
 func sendLeakDraft(t *testing.T, env *mailRedEnv, uv, uid uint32, keepList []int) gen.MailSendResponse {
@@ -197,14 +218,87 @@ func listsRealAttachment(msg gen.MailMessage) bool {
 	return false
 }
 
-// allPositions returns 0..n-1 — the keep-everything index list for a listing
-// of n entries.
-func allPositions(n int) []int {
-	out := make([]int, 0, n)
-	for i := 0; i < n; i++ {
-		out = append(out, i)
+// allPartIndexes returns every entry's own part_index from one attachment
+// listing — the keep-everything list under the round-5 contract: keep
+// values ARE the listing's part_index fields (the download route's
+// {partIndex}), never listing positions.
+func allPartIndexes(msg gen.MailMessage) []int {
+	out := make([]int, 0, len(msg.Attachments))
+	for _, at := range msg.Attachments {
+		out = append(out, at.PartIndex)
 	}
 	return out
+}
+
+// leakFreshDraftKeep derives the keep list for the FIRST edit of a fresh
+// draft copy — the panel's keep-everything input when no listing exists yet
+// (the PUT update response is the only listing surface, and it describes the
+// copy AFTER the edit). The contract's addressing authority is the download
+// route, so the fresh copy's real attachment is located there by its unique
+// bytes — reusing the index pack's probe (idxProbeStablePartIndex,
+// mail_draft_attachment_index_red_test.go) — and its stable part index
+// becomes the keep value. Note the update path has NO default carry-all:
+// an omitted keep_attachment_parts keeps NOTHING, so the first edit must
+// name the part explicitly.
+func leakFreshDraftKeep(t *testing.T, env *mailRedEnv, uv uint32) []int {
+	t.Helper()
+	return []int{idxProbeStablePartIndex(t, env, draftRefPath(uv, 1), leakAttachData, leakAttachName)}
+}
+
+// realAttachmentKeepIndex derives the real user attachment's keep value from
+// a listing: the part_index the listing reports for the fixture's notes.txt
+// entry, matched by NAME — never a position. A listing without the real
+// attachment is an instrument failure (the derivations below would be
+// meaningless) and Fatals; it can never silently pass.
+func realAttachmentKeepIndex(t *testing.T, msg gen.MailMessage) int {
+	t.Helper()
+	for _, at := range msg.Attachments {
+		if at.Filename == leakAttachName {
+			return at.PartIndex
+		}
+	}
+	t.Fatalf("instrument: the listing carries no %q entry; the keep-value derivation has nothing to derive from - listing: %s",
+		leakAttachName, listingString(msg))
+	return -1
+}
+
+// draftBodyMarkerStableIndex derives the draft-body marker's stable part
+// index from the appended fixture's own raw MIME — its position in the
+// walk-order leaf sequence — never from any implementation surface. The
+// fixed listing no longer shows the marker, so no response can supply this
+// value; the leaf walk of the bytes this test authored is the independent
+// source. The walk-order scheme this relies on is the same one the index
+// pack cross-validates against the download route
+// (mail_draft_attachment_index_red_test.go: the Compose draft whose
+// attachment probes at stable index 3, after leaves 0,1 body and leaf 2
+// message.md), and every edit of a Compose draft re-renders the same leaf
+// order (alternative leaves 0/1, marker leaf 2, carried attachments 3..), so
+// the value derived from the appended copy names the marker in every later
+// copy too. A fixture without the marker leaf is an instrument failure and
+// Fatals — it can never silently return a wrong index.
+func draftBodyMarkerStableIndex(t *testing.T, rawDraft string) int {
+	t.Helper()
+	r, err := gomail.CreateReader(strings.NewReader(rawDraft))
+	require.NoError(t, err, "instrument: the appended fixture must parse as MIME")
+	leaf := -1
+	for {
+		p, perr := r.NextPart()
+		if perr != nil || p == nil {
+			break
+		}
+		leaf++
+		ct, ctParams, _ := mime.ParseMediaType(p.Header.Get("Content-Type"))
+		_, dispParams, _ := mime.ParseMediaType(p.Header.Get("Content-Disposition"))
+		name := dispParams["filename"]
+		if name == "" {
+			name = ctParams["name"]
+		}
+		if ct == "text/markdown" && name == "message.md" {
+			return leaf
+		}
+	}
+	t.Fatalf("instrument: the fixture draft carries no message.md/text-markdown leaf; the marker's stable index cannot be derived from the raw MIME")
+	return -1
 }
 
 func TestMailDraftPanelSend_NeverLeaksDraftBodyPart(t *testing.T) {
@@ -212,8 +306,13 @@ func TestMailDraftPanelSend_NeverLeaksDraftBodyPart(t *testing.T) {
 	// bookkeeping, never a user attachment (dispatch item 1; the audit path
 	// already excludes it via mailAuditDraftBodyPart). Every subtest edits at
 	// least twice (the accumulation shape) before sending, keeping everything
-	// the listing shows — the panel's natural flow.
-	t.Run("two keep-all edits then default-carry-all send transmit zero marker parts", func(t *testing.T) {
+	// the contract lets a panel address: the first edit keeps every
+	// attachment of the fresh copy (located on the download route — the
+	// contract's addressing authority — because no listing exists before it:
+	// the PUT update response is the only listing surface and it describes
+	// the copy AFTER the edit), later edits keep everything the listing
+	// shows by each entry's own part_index field.
+	t.Run("keep-all edits then default-carry-all send transmit zero marker parts", func(t *testing.T) {
 		env := newMailRedEnv(t)
 		imapPort, cl := startPlainIMAP(t)
 		sink := startSMTPSink(t)
@@ -221,8 +320,8 @@ func TestMailDraftPanelSend_NeverLeaksDraftBodyPart(t *testing.T) {
 		appendLeakDraft(t, cl)
 		uv := draftUIDValidity(t, cl)
 
-		m1 := editLeakDraft(t, env, uv, 1, []int{0, 1}, "edit one", leakEdit1Body)
-		m2 := editLeakDraft(t, env, uv, uint32(m1.Uid), allPositions(len(m1.Attachments)), "edit two", leakEdit2Body)
+		m1 := editLeakDraft(t, env, uv, 1, leakFreshDraftKeep(t, env, uv), "edit one", leakEdit1Body)
+		m2 := editLeakDraft(t, env, uv, uint32(m1.Uid), allPartIndexes(m1), "edit two", leakEdit2Body)
 
 		resp := sendLeakDraft(t, env, uv, uint32(m2.Uid), nil)
 		n, bodies := sink.acceptedBodies()
@@ -239,18 +338,27 @@ func TestMailDraftPanelSend_NeverLeaksDraftBodyPart(t *testing.T) {
 		imapPort, cl := startPlainIMAP(t)
 		sink := startSMTPSink(t)
 		pointMailboxAt(t, env, imapPort, portOfAddr(t, sink.addr))
-		appendLeakDraft(t, cl)
+		rawDraft := appendLeakDraft(t, cl)
 		uv := draftUIDValidity(t, cl)
 
-		m1 := editLeakDraft(t, env, uv, 1, []int{0, 1}, "edit one", leakEdit1Body)
-		m2 := editLeakDraft(t, env, uv, uint32(m1.Uid), allPositions(len(m1.Attachments)), "edit two", leakEdit2Body)
+		m1 := editLeakDraft(t, env, uv, 1, leakFreshDraftKeep(t, env, uv), "edit one", leakEdit1Body)
+		m2 := editLeakDraft(t, env, uv, uint32(m1.Uid), allPartIndexes(m1), "edit two", leakEdit2Body)
 
-		// The panel keeps everything the listing shows, by index: every
-		// position of the last response's attachment listing. Under the bug
-		// the listing itself carries marker entries, so this explicit-list
-		// send must still transmit zero marker parts (and keep the real
-		// attachment) once fixed.
-		resp := sendLeakDraft(t, env, uv, uint32(m2.Uid), allPositions(len(m2.Attachments)))
+		// The keep list names EVERY part the panel can address: everything
+		// the listing shows (each entry's own part_index — the contract's
+		// keep values) PLUS the marker's own stable index, derived from the
+		// appended fixture's raw MIME leaf walk (the listing never shows the
+		// marker, so no response can supply its index — see
+		// draftBodyMarkerStableIndex). The oracle: even a keep list that
+		// NAMES the draft-body marker's own stable index must be ACCEPTED
+		// and still transmit zero marker parts (the marker is skipped
+		// silently, never a rejection — it is Omnipus bookkeeping, not a
+		// user attachment).
+		markerIdx := draftBodyMarkerStableIndex(t, rawDraft)
+		keep := append(allPartIndexes(m2), markerIdx)
+		require.NotContains(t, allPartIndexes(m2), markerIdx,
+			"instrument: the derived marker index collides with a listed attachment's index, so the keep list would not actually name the marker")
+		resp := sendLeakDraft(t, env, uv, uint32(m2.Uid), keep)
 		n, bodies := sink.acceptedBodies()
 		require.Equal(t, 1, n, "exactly one DATA body may be transmitted")
 		require.Len(t, bodies, 1)
@@ -261,10 +369,11 @@ func TestMailDraftPanelSend_NeverLeaksDraftBodyPart(t *testing.T) {
 	})
 
 	t.Run("explicit keep list naming only the real attachment keeps it and only it", func(t *testing.T) {
-		// The last position of the current listing is the real attachment
-		// (marker entries, where the bug lists them, sit at earlier
-		// positions). Honoring the explicit list must carry exactly that
-		// part — and never a marker part (kills an over-stripping fix).
+		// The keep value is the real attachment's own part_index from the
+		// listing (matched by NAME, never a position — see
+		// realAttachmentKeepIndex). Honoring the explicit list must carry
+		// exactly that part — and never a marker part (kills an
+		// over-stripping fix).
 		env := newMailRedEnv(t)
 		imapPort, cl := startPlainIMAP(t)
 		sink := startSMTPSink(t)
@@ -272,11 +381,11 @@ func TestMailDraftPanelSend_NeverLeaksDraftBodyPart(t *testing.T) {
 		appendLeakDraft(t, cl)
 		uv := draftUIDValidity(t, cl)
 
-		m1 := editLeakDraft(t, env, uv, 1, []int{0, 1}, "edit one", leakEdit1Body)
-		m2 := editLeakDraft(t, env, uv, uint32(m1.Uid), allPositions(len(m1.Attachments)), "edit two", leakEdit2Body)
-		last := len(m2.Attachments) - 1
+		m1 := editLeakDraft(t, env, uv, 1, leakFreshDraftKeep(t, env, uv), "edit one", leakEdit1Body)
+		m2 := editLeakDraft(t, env, uv, uint32(m1.Uid), allPartIndexes(m1), "edit two", leakEdit2Body)
+		keepIdx := realAttachmentKeepIndex(t, m2)
 
-		resp := sendLeakDraft(t, env, uv, uint32(m2.Uid), []int{last})
+		resp := sendLeakDraft(t, env, uv, uint32(m2.Uid), []int{keepIdx})
 		n, bodies := sink.acceptedBodies()
 		require.Equal(t, 1, n, "exactly one DATA body may be transmitted")
 		require.Len(t, bodies, 1)
@@ -300,8 +409,8 @@ func TestMailDraftRead_NeverListsDraftBodyPart(t *testing.T) {
 	appendLeakDraft(t, cl)
 	uv := draftUIDValidity(t, cl)
 
-	m1 := editLeakDraft(t, env, uv, 1, []int{0, 1}, "edit one", leakEdit1Body)
-	m2 := editLeakDraft(t, env, uv, uint32(m1.Uid), allPositions(len(m1.Attachments)), "edit two", leakEdit2Body)
+	m1 := editLeakDraft(t, env, uv, 1, leakFreshDraftKeep(t, env, uv), "edit one", leakEdit1Body)
+	m2 := editLeakDraft(t, env, uv, uint32(m1.Uid), allPartIndexes(m1), "edit two", leakEdit2Body)
 
 	for name, m := range map[string]gen.MailMessage{"edit one response": m1, "edit two response": m2} {
 		require.False(t, containsMarkerListing(m),
