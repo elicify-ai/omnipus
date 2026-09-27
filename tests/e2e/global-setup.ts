@@ -283,6 +283,24 @@ async function globalSetup(): Promise<void> {
         '(see ADR-044 / preview-on-main-listener-spec.md S8/S9).',
       );
     }
+
+    // Persist the login-minted admin BEARER next to the storageState. This is
+    // the ONE bearer in the suite that never rotates: HandleLogin APPENDS the
+    // token to the admin account's bearer set (SEC-1 / UAT #399 — eviction
+    // only past config.MaxUserTokens), while the omnipus-session cookie rides
+    // the SINGLE-SLOT session_token_hash that every further login overwrites.
+    // Specs that must authenticate to POST /reload — the health server accepts
+    // ONLY a Gateway.Users/CLIToken bearer (issues #276/#640; no cookie, no
+    // bypass) — read this file instead of minting their own login, which would
+    // rotate the shared session cookie out from under every later spec in the
+    // shard (scripts/check-e2e-login-crosstalk.sh; the 2026-09-27 ui-heavy
+    // incident was exactly that). The token deliberately does NOT go into the
+    // storageState's localStorage — ADR-044 removed the JS-readable-token
+    // surface and the SPA must never see it; a plain file the browser never
+    // reads keeps that guarantee while giving server-side callers a stable
+    // credential.
+    const bearerFile = path.join(path.dirname(AUTH_FILE), 'admin-reload-bearer.txt');
+    fs.writeFileSync(bearerFile, json.token, { mode: 0o600 });
   } finally {
     await ctx.dispose();
   }
