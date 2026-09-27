@@ -230,7 +230,9 @@ func piRedMintGuardLabel(t *testing.T, h *piRedGuardHarness) string {
 	isoRaw, has := parsed["isolated_url"]
 	require.True(t, has,
 		"RED (FR-001/FR-022): no isolated_url mint exists yet — the Mode 1 surface cannot be driven")
-	u := strings.TrimPrefix(isoRaw.(string), "http://")
+	labelURL, ok := isoRaw.(string)
+	require.True(t, ok, "isolated_url must be a string (FR-001/FR-022)")
+	u := strings.TrimPrefix(labelURL, "http://")
 	u = strings.TrimSuffix(u, "/")
 	parts := strings.SplitN(u, ".", 2)
 	require.Len(t, parts, 2)
@@ -256,6 +258,7 @@ func TestPreviewCSPHeaderSet(t *testing.T) {
 			"Content-Security-Policy": "default-src *; script-src http://evil.example 'unsafe-inline'",
 		})
 		resp := h.piRedGuardGet(t, "", prefix+"/app.js", http.MethodGet, nil)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		want := piRedMode2CSPTemplate(origin, "ws://localhost:"+h.port, prefix)
 		// The template is byte-stable AT THE SOURCE; on the wire net/http
 		// sanitizes header values (LF -> space, trailing trim), so the wire-
@@ -275,6 +278,7 @@ func TestPreviewCSPHeaderSet(t *testing.T) {
 		h2 := piRedNewGuardHarness(t)
 		label := piRedMintGuardLabel(t, h2)
 		resp := h2.piRedGuardGet(t, label+".localhost:"+h2.port, "/", http.MethodGet, nil)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		csp := resp.Header.Get("Content-Security-Policy")
 		assert.Contains(t, csp, "frame-ancestors 'none'",
 			"RED (FR-014): Mode 1 responses carry frame-ancestors 'none'")
@@ -296,6 +300,7 @@ func TestPreviewCSPHeaderSet(t *testing.T) {
 		h.upstreamHits.Store(0)
 		label := piRedMintGuardLabel(t, h)
 		resp := h.piRedGuardGet(t, label+".localhost:"+h.port, "/", http.MethodGet, nil)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, int32(1), h.upstreamHits.Load(),
 			"the label-host request must reach the dev upstream (fixture binding)")
 		csp := resp.Header.Get("Content-Security-Policy")
@@ -322,6 +327,7 @@ func TestPreviewCORSPreflightPin(t *testing.T) {
 				"Origin":                        "http://crossorigin.example",
 				"Access-Control-Request-Method": "GET",
 			})
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.Equal(t, "GET, HEAD, OPTIONS", resp.Header.Get("Access-Control-Allow-Methods"),
 			"RED (FR-012, DS-7 row 4): the preflight answers exactly GET, HEAD, OPTIONS — "+
 				"no CORS answer exists under the prefix today")
@@ -336,6 +342,7 @@ func TestPreviewCORSPreflightPin(t *testing.T) {
 			"Access-Control-Allow-Credentials": "true",
 		})
 		resp := h.piRedGuardGet(t, "", prefix+"/app.js", http.MethodGet, nil)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.Equal(t, "*", resp.Header.Get("Access-Control-Allow-Origin"),
 			"RED (FR-012): every successful response under the token prefix carries ACAO:* — "+
 				"the upstream's ACAO must be deleted before the override")
@@ -368,6 +375,7 @@ func TestPreviewNavigationGuard(t *testing.T) {
 			"Cookie":         "omnipus-session=" + h.session,
 		}
 		resp := h.piRedGuardGet(t, "", "/api/v1/agents", http.MethodGet, hdrs)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, int32(0), h.spies["agents"].Load(),
 			"RED (FR-010, S-2.13): a main-Host document navigation to /api/v1 reached the API "+
 				"handler (status %d) — no Fetch-Metadata guard exists before the handler yet",
@@ -377,6 +385,7 @@ func TestPreviewNavigationGuard(t *testing.T) {
 	t.Run("exempt_library_download_get_reachable", func(t *testing.T) {
 		// FR-010 exemption 1, GET-only: /api/v1/library/{workspaceId}/download.
 		resp := h.piRedGuardGet(t, "", "/api/v1/library/ws-123/download", http.MethodGet, doc)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		_ = resp
 		assert.GreaterOrEqual(t, h.spies["library"].Load(), int32(1),
 			"FR-010 (pin): the library download route stays reachable for a document navigation")
@@ -384,14 +393,16 @@ func TestPreviewNavigationGuard(t *testing.T) {
 
 	t.Run("exempt_media_workspace_get_reachable", func(t *testing.T) {
 		// FR-010 exemption 2: /api/v1/media/workspace/...
-		h.piRedGuardGet(t, "", "/api/v1/media/workspace/w1/img.png", http.MethodGet, doc)
+		piRedResp := h.piRedGuardGet(t, "", "/api/v1/media/workspace/w1/img.png", http.MethodGet, doc)
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		assert.GreaterOrEqual(t, h.spies["media-ws"].Load(), int32(1),
 			"FR-010 (pin): the workspace media route stays reachable for a document navigation")
 	})
 
 	t.Run("exempt_media_get_reachable", func(t *testing.T) {
 		// FR-010 exemption 3: /api/v1/media/...
-		h.piRedGuardGet(t, "", "/api/v1/media/att-1", http.MethodGet, doc)
+		piRedResp := h.piRedGuardGet(t, "", "/api/v1/media/att-1", http.MethodGet, doc)
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		assert.GreaterOrEqual(t, h.spies["media"].Load(), int32(1),
 			"FR-010 (pin): the media route stays reachable for a document navigation")
 	})
@@ -413,7 +424,8 @@ func TestPreviewNavigationGuard(t *testing.T) {
 		// fix, backend-lead GREEN 2026-09-27: oracle corrected, intent unchanged —
 		// a guard that lets the POST through still fails this assertion.)
 		before := h.spies["library"].Load()
-		h.piRedGuardGet(t, "", "/api/v1/library/ws-123/download", http.MethodPost, hdrs)
+		piRedResp := h.piRedGuardGet(t, "", "/api/v1/library/ws-123/download", http.MethodPost, hdrs)
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		require.Equal(t, before, h.spies["library"].Load(),
 			"RED (FR-010, Q3): the exemption is GET-only — a document-navigation POST to an "+
 				"exempted address must be rejected before the handler; today the handler ran")
@@ -422,7 +434,8 @@ func TestPreviewNavigationGuard(t *testing.T) {
 	t.Run("uploads_not_exempt", func(t *testing.T) {
 		// FR-010: /api/v1/uploads/{session_id}/{filename} is deliberately NOT
 		// exempt — no SPA navigation targets it.
-		h.piRedGuardGet(t, "", "/api/v1/uploads/s1/f.txt", http.MethodGet, doc)
+		piRedResp := h.piRedGuardGet(t, "", "/api/v1/uploads/s1/f.txt", http.MethodGet, doc)
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		require.Equal(t, int32(0), h.spies["uploads"].Load(),
 			"RED (FR-010): a document navigation to the uploads route must be rejected before "+
 				"the handler — today the handler ran")
@@ -430,8 +443,9 @@ func TestPreviewNavigationGuard(t *testing.T) {
 
 	t.Run("preview_service_worker_script_refused", func(t *testing.T) {
 		h.upstreamHits.Store(0)
-		h.piRedGuardGet(t, "", prefix+"/sw.js", http.MethodGet,
+		piRedResp := h.piRedGuardGet(t, "", prefix+"/sw.js", http.MethodGet,
 			map[string]string{"Service-Worker": "script"})
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		require.Equal(t, int32(0), h.upstreamHits.Load(),
 			"RED (FR-011): a /preview/ request carrying Service-Worker: script must be refused "+
 				"— today it reaches the dev upstream, and a service worker would outlive the page")
@@ -439,8 +453,9 @@ func TestPreviewNavigationGuard(t *testing.T) {
 
 	t.Run("preview_sec_fetch_serviceworker_refused", func(t *testing.T) {
 		h.upstreamHits.Store(0)
-		h.piRedGuardGet(t, "", prefix+"/sw.js", http.MethodGet,
+		piRedResp := h.piRedGuardGet(t, "", prefix+"/sw.js", http.MethodGet,
 			map[string]string{"Sec-Fetch-Dest": "serviceworker"})
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		require.Equal(t, int32(0), h.upstreamHits.Load(),
 			"RED (FR-011): a /preview/ request carrying Sec-Fetch-Dest: serviceworker must be "+
 				"refused — today it reaches the dev upstream")

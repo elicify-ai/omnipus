@@ -158,7 +158,9 @@ func TestServeWebResult_IsolatedURL(t *testing.T) {
 		isoRaw, has := parsed["isolated_url"]
 		require.True(t, has,
 			"RED (DS-3 row 8): port-mapped Mode 1 mint carries no isolated_url")
-		u, err := url.Parse(isoRaw.(string))
+		isoURL, ok := isoRaw.(string)
+		require.True(t, ok, "isolated_url must be a string (DS-3 row 8)")
+		u, err := url.Parse(isoURL)
 		require.NoError(t, err)
 		assert.Equal(t, "8080", u.Port(),
 			"the mint is canonical-port (8080), never the listener port")
@@ -171,7 +173,8 @@ func TestServeWebResult_IsolatedURL(t *testing.T) {
 		isoRaw, has := parsed["isolated_url"]
 		require.True(t, has,
 			"RED (DS-3 row 9): case-normalized Mode 1 mint carries no isolated_url")
-		isoURL := isoRaw.(string)
+		isoURL, ok := isoRaw.(string)
+		require.True(t, ok, "isolated_url must be a string (DS-3 row 9)")
 		assert.Equal(t, strings.ToLower(isoURL), isoURL,
 			"the minted label URL must be lower-case throughout (FR-005)")
 		assert.Contains(t, isoURL, ".localhost:5000/",
@@ -183,9 +186,10 @@ func TestServeWebResult_IsolatedURL(t *testing.T) {
 		// isolated_url.
 		parsed := piRedExecuteStatic(t, "http://localhost")
 		isoRaw, has := parsed["isolated_url"]
-		require.True(t, has,
-			"RED (DS-3 row 10): implicit-80 Mode 1 mint carries no isolated_url")
-		u, err := url.Parse(isoRaw.(string))
+		require.True(t, has, "RED (DS-3 row 10): implicit-80 Mode 1 mint carries no isolated_url")
+		isoURL, ok := isoRaw.(string)
+		require.True(t, ok, "isolated_url must be a string (DS-3 row 10)")
+		u, err := url.Parse(isoURL)
 		require.NoError(t, err)
 		assert.Empty(t, u.Port(),
 			"implicit-80 mint is portless: http://<label>.localhost/")
@@ -298,7 +302,9 @@ func TestPreviewLabelGrammar(t *testing.T) {
 		"RED (FR-005, S-1.1): no isolated_url mint exists yet — the label grammar "+
 			"cannot be exercised without it")
 
-	u, err := url.Parse(isoRaw.(string))
+	isoURL, ok := isoRaw.(string)
+	require.True(t, ok, "isolated_url must be a string (FR-001/FR-022)")
+	u, err := url.Parse(isoURL)
 	require.NoError(t, err)
 	hostParts := strings.SplitN(u.Hostname(), ".", 2)
 	require.Len(t, hostParts, 2, "isolated_url host must be <label>.localhost")

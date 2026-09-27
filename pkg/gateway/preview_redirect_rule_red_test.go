@@ -160,6 +160,7 @@ func TestPreviewRedirectRule(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h.piRedUpstreamEmit(t, http.StatusFound, rawLoc)
 			resp := h.piRedProxyGet(t, "page")
+			t.Cleanup(func() { _ = resp.Body.Close() })
 			require.Equal(t, http.StatusFound, resp.StatusCode,
 				"DS-2: an in-prefix emit keeps the upstream redirect status")
 			assert.Equal(t, wantLoc, resp.Header.Get("Location"),
@@ -171,6 +172,7 @@ func TestPreviewRedirectRule(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h.piRedUpstreamEmit(t, http.StatusFound, rawLoc)
 			resp := h.piRedProxyGet(t, "page")
+			defer func() { _ = resp.Body.Close() }()
 			require.Equal(t, http.StatusBadGateway, resp.StatusCode,
 				"RED (FR-013, DS-2): %s — today the upstream %d passes through with the Location intact", redMsg, http.StatusFound)
 			assert.Empty(t, resp.Header.Get("Location"),
@@ -198,6 +200,7 @@ func TestPreviewRedirectRule(t *testing.T) {
 	t.Run("row5_root_relative_reroot", func(t *testing.T) {
 		h.piRedUpstreamEmit(t, http.StatusFound, "/next")
 		resp := h.piRedProxyGet(t, "page")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, http.StatusFound, resp.StatusCode,
 			"DS-2 row 5: the re-rooted redirect keeps the upstream status")
 		assert.Equal(t, prefix+"/next", resp.Header.Get("Location"),
@@ -212,6 +215,7 @@ func TestPreviewRedirectRule(t *testing.T) {
 	t.Run("non_redirect_status_deletes_location", func(t *testing.T) {
 		h.piRedUpstreamEmit(t, http.StatusOK, prefix+"/elsewhere")
 		resp := h.piRedProxyGet(t, "page")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Empty(t, resp.Header.Get("Location"),
 			"RED (FR-013, S-5.5): a stray Location on a non-redirect status must be deleted — "+
@@ -221,6 +225,7 @@ func TestPreviewRedirectRule(t *testing.T) {
 	t.Run("status_304_untouched", func(t *testing.T) {
 		h.piRedUpstreamEmit(t, http.StatusNotModified, prefix+"/conditional")
 		resp := h.piRedProxyGet(t, "page")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, http.StatusNotModified, resp.StatusCode)
 		assert.Equal(t, prefix+"/conditional", resp.Header.Get("Location"),
 			"DS-2 / S-5.5 (pin): a 304's Location is untouched — not 502'd, not deleted")

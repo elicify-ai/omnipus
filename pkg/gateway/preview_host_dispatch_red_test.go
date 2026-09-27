@@ -304,6 +304,7 @@ func TestPreviewHostDispatch_REDAPIReachableToday(t *testing.T) {
 
 	host := piRedLabelHost("pi-red-notional") + ":" + h.port
 	resp := piRedDo(t, h, http.MethodGet, host, "/api/v1/agents", true)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	body := piRedBody(t, resp)
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode,
@@ -335,6 +336,7 @@ func TestPreviewHostDispatch_NoGatewayHandler(t *testing.T) {
 
 		for _, path := range []string{"/api/v1/agents", "/auth/session"} {
 			resp := piRedDo(t, h, http.MethodGet, host, path, true)
+			t.Cleanup(func() { _ = resp.Body.Close() })
 			body := piRedBody(t, resp)
 			assert.Equal(t, http.StatusNotFound, resp.StatusCode,
 				"static mode: %s under a live label Host must be a file-server 404", path)
@@ -354,6 +356,7 @@ func TestPreviewHostDispatch_NoGatewayHandler(t *testing.T) {
 
 		// The upstream app is reachable through the label host.
 		resp := piRedDo(t, h, http.MethodGet, host, "/index.html", false)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		body := piRedBody(t, resp)
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"dev mode: the label host must serve the spawned upstream app")
@@ -363,6 +366,7 @@ func TestPreviewHostDispatch_NoGatewayHandler(t *testing.T) {
 		// Gateway handlers stay unreachable under the label host.
 		for _, path := range []string{"/api/v1/agents", "/auth/session"} {
 			gwResp := piRedDo(t, h, http.MethodGet, host, path, true)
+			t.Cleanup(func() { _ = gwResp.Body.Close() })
 			gwBody := piRedBody(t, gwResp)
 			assert.NotContains(t, gwBody, "authenticated",
 				"dev mode: %s under a label Host must never surface gateway auth content", path)
@@ -393,6 +397,7 @@ func TestPreviewHostDispatch_Ordering(t *testing.T) {
 		// exemption is scoped by dispatch to the preview mux, not by the
 		// /preview/ path prefix).
 		resp := piRedDo(t, h, http.MethodPost, host, "/index.html", true)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		body := piRedBody(t, resp)
 
 		assert.NotEqual(t, http.StatusForbidden, resp.StatusCode,
@@ -409,6 +414,7 @@ func TestPreviewHostDispatch_Ordering(t *testing.T) {
 
 		// Before the flip the label host serves the registration.
 		resp := piRedDo(t, h, http.MethodGet, host, "/index.html", false)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, http.StatusOK, resp.StatusCode,
 			"RED (FR-022): no live label exists yet — the dual-URL mint is missing")
 
@@ -417,6 +423,7 @@ func TestPreviewHostDispatch_Ordering(t *testing.T) {
 		h.api.agentLoop.GetConfig().Gateway.PreviewEnabled = boolPtr(false)
 
 		resp2 := piRedDo(t, h, http.MethodGet, host, "/index.html", false)
+		t.Cleanup(func() { _ = resp2.Body.Close() })
 		assert.Equal(t, http.StatusNotFound, resp2.StatusCode,
 			"S-2.7: after the hot-flip the label host must 404 with no restart")
 	})
@@ -442,6 +449,7 @@ func TestPreviewHostMux_LowerCaseLookup(t *testing.T) {
 		piRedLabelHost(strings.ToUpper(label[:1])+label[1:]) + ":" + h.port, // Title-cased
 	} {
 		resp := piRedDo(t, h, http.MethodGet, host, "/index.html", false)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"RED (S-2.9/F-2): Host %q must route to the same registration as %q — the mux's "+
 				"lower-casing (and the label dispatch itself) is not implemented",
@@ -453,6 +461,7 @@ func TestPreviewHostMux_LowerCaseLookup(t *testing.T) {
 	for _, bad := range []string{"has_underscore", "-lead", strings.Repeat("a", 64)} {
 		host := piRedLabelHost(bad) + ":" + h.port
 		resp := piRedDo(t, h, http.MethodGet, host, "/index.html", false)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.NotEqual(t, http.StatusOK, resp.StatusCode,
 			"DS-1: grammar-invalid label host %q must not serve a registration", host)
 		assert.Equal(t, int32(0), h.apiSpyHits.Load()+h.authSpyHits.Load(),
@@ -475,6 +484,7 @@ func TestPreviewSSRF_EmptyRegistry404(t *testing.T) {
 
 	host := piRedLabelHost("pi-red-notional") + ":" + h.port
 	resp := piRedDo(t, h, http.MethodGet, host, "/api/v1/agents", true)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	piRedBody(t, resp)
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode,
@@ -502,6 +512,7 @@ func TestCanonicalOriginFallThrough(t *testing.T) {
 		// DS-3 row 11: Host <label>.localhost:9999 vs canonical listener port.
 		host := piRedLabelHost(label) + ":9999"
 		resp := piRedDo(t, h, http.MethodGet, host, "/index.html", false)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.NotEqual(t, http.StatusOK, resp.StatusCode,
 			"DS-3 row 11: a wrong-port label Host must not reach the registration")
 	})
@@ -510,6 +521,7 @@ func TestCanonicalOriginFallThrough(t *testing.T) {
 		// DS-3 row 12: portless Host vs explicit-port canonical origin.
 		host := piRedLabelHost(label)
 		resp := piRedDo(t, h, http.MethodGet, host, "/index.html", false)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.NotEqual(t, http.StatusOK, resp.StatusCode,
 			"DS-3 row 12: a portless label Host must not reach the registration")
 	})
@@ -519,6 +531,7 @@ func TestCanonicalOriginFallThrough(t *testing.T) {
 		// is dispatched to the preview-host mux.
 		host := piRedLabelHost(label) + ":9999"
 		resp := piRedDo(t, h, http.MethodPost, host, "/api/v1/agents", true)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		body := piRedBody(t, resp)
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 			"S-2.11: a state-changing request with a fall-through Host and no X-Csrf-Token "+

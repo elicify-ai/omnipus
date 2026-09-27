@@ -250,7 +250,8 @@ func TestPreviewCredentialFilter(t *testing.T) {
 
 	t.Run("row1_mixed_reserved_and_app_cookies", func(t *testing.T) {
 		cookieIn := "omnipus-session=s1; myapp_session=y; csrf=c1; __Host-csrf=h1; CSRF=lower-mismatch"
-		h.piRedProxyGet(t, h.devToken, cookieIn, "")
+		piRedResp := h.piRedProxyGet(t, h.devToken, cookieIn, "")
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		cookieOut, _ := h.seen.piRedSeen()
 
 		require.Equal(t, "myapp_session=y; CSRF=lower-mismatch", cookieOut,
@@ -261,7 +262,8 @@ func TestPreviewCredentialFilter(t *testing.T) {
 
 	t.Run("row2_app_only_unchanged", func(t *testing.T) {
 		cookieIn := "myapp_session=y"
-		h.piRedProxyGet(t, h.devToken, cookieIn, "")
+		piRedResp := h.piRedProxyGet(t, h.devToken, cookieIn, "")
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		cookieOut, _ := h.seen.piRedSeen()
 		assert.Equal(t, cookieIn, cookieOut,
 			"RED (FR-020, DS-4 row 2): the app's own cookie must forward unchanged — today the "+
@@ -269,7 +271,8 @@ func TestPreviewCredentialFilter(t *testing.T) {
 	})
 
 	t.Run("row3_reserved_only_header_omitted", func(t *testing.T) {
-		h.piRedProxyGet(t, h.devToken, "omnipus-session=s1", "")
+		piRedResp := h.piRedProxyGet(t, h.devToken, "omnipus-session=s1", "")
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		cookieOut, _ := h.seen.piRedSeen()
 		require.Empty(t, cookieOut,
 			"DS-4 row 3 (pin across the change): with only reserved pairs the Cookie header is "+
@@ -278,7 +281,8 @@ func TestPreviewCredentialFilter(t *testing.T) {
 
 	t.Run("row4_duplicate_app_cookies_forward", func(t *testing.T) {
 		cookieIn := "myapp_session=a; myapp_session=b"
-		h.piRedProxyGet(t, h.devToken, cookieIn, "")
+		piRedResp := h.piRedProxyGet(t, h.devToken, cookieIn, "")
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		cookieOut, _ := h.seen.piRedSeen()
 		assert.Equal(t, cookieIn, cookieOut,
 			"RED (FR-020, DS-4 row 4): duplicates of non-reserved names forward unchanged — today "+
@@ -288,6 +292,7 @@ func TestPreviewCredentialFilter(t *testing.T) {
 	t.Run("row8_upstream_reserved_setcookie_neutralized", func(t *testing.T) {
 		h.setRespCookies([]string{"omnipus-session=upstream-val"})
 		resp := h.piRedProxyGet(t, h.devToken, "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		sc := resp.Header.Values("Set-Cookie")
 		assert.NotContains(t, sc, "omnipus-session=upstream-val",
 			"DS-4 row 8 (pin): upstream Set-Cookie for a reserved name stays neutralized (anti-fixation)")
@@ -296,6 +301,7 @@ func TestPreviewCredentialFilter(t *testing.T) {
 	t.Run("row9_upstream_app_setcookie_forwards", func(t *testing.T) {
 		h.setRespCookies([]string{"myapp_session=appval"})
 		resp := h.piRedProxyGet(t, h.devToken, "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		sc := resp.Header.Values("Set-Cookie")
 		assert.Contains(t, sc, "myapp_session=appval",
 			"DS-4 row 9 (pin): the app's own Set-Cookie forwards (its login sticks)")
@@ -317,7 +323,8 @@ func TestPreviewCredentialFilter_BearerMatrix(t *testing.T) {
 
 	t.Run("row5_id_tagged_deleted", func(t *testing.T) {
 		cfg.Gateway.Users[0].Tokens = []config.TokenEntry{row5Entry}
-		h.piRedProxyGet(t, h.devToken, "", "Bearer "+row5Raw)
+		piRedResp := h.piRedProxyGet(t, h.devToken, "", "Bearer "+row5Raw)
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		_, authOut := h.seen.piRedSeen()
 		require.Empty(t, authOut,
 			"RED (FR-020, DS-4 row 5, A-3/MAJ-003): a Bearer the gateway's own validator accepts "+
@@ -326,7 +333,8 @@ func TestPreviewCredentialFilter_BearerMatrix(t *testing.T) {
 
 	t.Run("row6_foreign_bearer_forwarded", func(t *testing.T) {
 		cfg.Gateway.Users[0].Tokens = []config.TokenEntry{row5Entry}
-		h.piRedProxyGet(t, h.devToken, "", "Bearer some-other-token")
+		piRedResp := h.piRedProxyGet(t, h.devToken, "", "Bearer some-other-token")
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		_, authOut := h.seen.piRedSeen()
 		assert.Equal(t, "Bearer some-other-token", authOut,
 			"RED (FR-020, DS-4 row 6): a Bearer the gateway validator does NOT accept forwards "+
@@ -334,7 +342,8 @@ func TestPreviewCredentialFilter_BearerMatrix(t *testing.T) {
 	})
 
 	t.Run("row7_basic_auth_forwarded", func(t *testing.T) {
-		h.piRedProxyGet(t, h.devToken, "", "Basic dXNlcjpwYXNz")
+		piRedResp := h.piRedProxyGet(t, h.devToken, "", "Basic dXNlcjpwYXNz")
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		_, authOut := h.seen.piRedSeen()
 		assert.Equal(t, "Basic dXNlcjpwYXNz", authOut,
 			"RED (FR-020, DS-4 row 7): non-Bearer Authorization forwards unchanged — today the "+
@@ -344,7 +353,8 @@ func TestPreviewCredentialFilter_BearerMatrix(t *testing.T) {
 	t.Run("row10_jwt_forwarded", func(t *testing.T) {
 		cfg.Gateway.Users[0].Tokens = []config.TokenEntry{row5Entry}
 		jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhIn0.c2ln"
-		h.piRedProxyGet(t, h.devToken, "", "Bearer "+jwt)
+		piRedResp := h.piRedProxyGet(t, h.devToken, "", "Bearer "+jwt)
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		_, authOut := h.seen.piRedSeen()
 		// Forwarding half is the RED row today: the Director deletes the
 		// ENTIRE Authorization header. The ZERO-bcrypt-compare half needs a
@@ -359,7 +369,8 @@ func TestPreviewCredentialFilter_BearerMatrix(t *testing.T) {
 
 	t.Run("row11_legacy_user_token_deleted", func(t *testing.T) {
 		cfg.Gateway.Users[0].Tokens = []config.TokenEntry{row11Entry}
-		h.piRedProxyGet(t, h.devToken, "", "Bearer "+row11Raw)
+		piRedResp := h.piRedProxyGet(t, h.devToken, "", "Bearer "+row11Raw)
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		_, authOut := h.seen.piRedSeen()
 		require.Empty(t, authOut,
 			"DS-4 row 11 (pin across the change): a legacy user token (no id prefix) the validator "+
@@ -368,7 +379,8 @@ func TestPreviewCredentialFilter_BearerMatrix(t *testing.T) {
 
 	t.Run("row12_env_token_deleted", func(t *testing.T) {
 		t.Setenv("OMNIPUS_BEARER_TOKEN", "pi-red-env-token-value")
-		h.piRedProxyGet(t, h.devToken, "", "Bearer pi-red-env-token-value")
+		piRedResp := h.piRedProxyGet(t, h.devToken, "", "Bearer pi-red-env-token-value")
+		t.Cleanup(func() { _ = piRedResp.Body.Close() })
 		_, authOut := h.seen.piRedSeen()
 		require.Empty(t, authOut,
 			"DS-4 row 12 (pin across the change): the legacy env token is deleted today (strip-all) "+

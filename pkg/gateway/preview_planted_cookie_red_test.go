@@ -240,6 +240,7 @@ func TestPreviewPlantedCookieClearSet(t *testing.T) {
 
 	t.Run("depth3_api_v1_agents", func(t *testing.T) {
 		resp := h.piRedDoPlanted(t, http.MethodPost, "/api/v1/agents", plant, "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		// 2 x 2 x (3+1) - 1 = 15 lines.
 		n := piRedAssertClearSet(t, resp, "omnipus-session", "/api/v1/agents", false)
 		require.Equal(t, 15, n,
@@ -249,6 +250,7 @@ func TestPreviewPlantedCookieClearSet(t *testing.T) {
 
 	t.Run("depth1_agents", func(t *testing.T) {
 		resp := h.piRedDoPlanted(t, http.MethodPost, "/agents", plant, "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		// 2 x 2 x (1+1) - 1 = 7 lines.
 		n := piRedAssertClearSet(t, resp, "omnipus-session", "/agents", false)
 		require.Equal(t, 7, n, "FR-015 bound at depth 1")
@@ -256,6 +258,7 @@ func TestPreviewPlantedCookieClearSet(t *testing.T) {
 
 	t.Run("depth0_root", func(t *testing.T) {
 		resp := h.piRedDoPlanted(t, http.MethodPost, "/", plant, "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		// 2 x 2 x (0+1) - 1 = 3 lines (Domain at / and //, host-only at //).
 		n := piRedAssertClearSet(t, resp, "omnipus-session", "/", false)
 		require.Equal(t, 3, n, "FR-015 bound at the root path")
@@ -267,6 +270,7 @@ func TestPreviewPlantedCookieClearSet(t *testing.T) {
 		// without Secure).
 		resp := h.piRedDoPlanted(t, http.MethodPost, "/api/v1/agents",
 			"__Host-csrf=one; __Host-csrf=two", "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		piRedAssertClearSet(t, resp, "__Host-csrf", "/api/v1/agents", true)
 		n := 0
 		for _, raw := range resp.Header.Values("Set-Cookie") {
@@ -293,6 +297,7 @@ func TestPreviewPlantedCookieDetection(t *testing.T) {
 	t.Run("row1_get_dup_session_401_with_clear_lines", func(t *testing.T) {
 		resp := h.piRedDoPlanted(t, http.MethodGet, "/api/v1/agents",
 			"omnipus-session=real; omnipus-session=planted", "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		// DS-5 row 1: GET -> 401 with clear lines. The 401 itself is pinned
 		// (the credential read is marked failed both today and post-GREEN);
 		// the RED is the missing clear set.
@@ -310,6 +315,7 @@ func TestPreviewPlantedCookieDetection(t *testing.T) {
 		// preview — please retry" (Q4), plus the clear lines.
 		resp := h.piRedDoPlanted(t, http.MethodPost, "/api/v1/agents",
 			"omnipus-session=real; omnipus-session=planted", "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		body := piRedBody(t, resp)
 
 		var parsed map[string]any
@@ -329,6 +335,7 @@ func TestPreviewPlantedCookieDetection(t *testing.T) {
 		// the detector runs BEFORE CSRFMiddleware (round-2 MAJ-002).
 		resp := h.piRedDoPlanted(t, http.MethodPost, "/api/v1/agents",
 			"csrf=one; csrf=two", "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		body := piRedBody(t, resp)
 
 		var parsed map[string]any
@@ -345,6 +352,7 @@ func TestPreviewPlantedCookieDetection(t *testing.T) {
 		// (host_csrf_secure_on).
 		resp := h.piRedDoPlanted(t, http.MethodPost, "/api/v1/agents",
 			"__Host-csrf=one; __Host-csrf=two", "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		var parsed map[string]any
 		require.NoError(t, json.Unmarshal([]byte(piRedBody(t, resp)), &parsed))
 		require.Equal(t, "planted_cookie_cleared", parsed["code"],
@@ -358,6 +366,7 @@ func TestPreviewPlantedCookieDetection(t *testing.T) {
 		// change (holds today: nothing intercepts anything).
 		resp := h.piRedDoPlanted(t, http.MethodGet, "/api/v1/agents",
 			"omnipus-session="+h.sessionTok+"; myapp_session=a; myapp_session=b", "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, http.StatusOK, resp.StatusCode,
 			"DS-5 row 5 (pin): non-reserved duplicates are not intercepted; the genuine session works")
 		assert.NotContains(t, piRedBody(t, resp), "planted_cookie_cleared",
@@ -369,6 +378,7 @@ func TestPreviewPlantedCookieDetection(t *testing.T) {
 		// shape — never intercepted. PIN across the change.
 		resp := h.piRedDoPlanted(t, http.MethodGet, "/api/v1/agents",
 			"omnipus-session="+h.sessionTok, "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, http.StatusOK, resp.StatusCode,
 			"DS-5 row 6 (pin): a single occurrence is never intercepted")
 		assert.NotContains(t, piRedBody(t, resp), "planted_cookie_cleared",
@@ -418,7 +428,9 @@ func TestPreviewPlantedCookiePreviewHostScope(t *testing.T) {
 		"RED (FR-001/FR-022): no isolated_url mint exists yet — the MIN-007 preview-Host scope "+
 			"row cannot drive a real label host until the dual-URL contract lands")
 
-	host := strings.TrimPrefix(isoRaw.(string), "http://")
+	labelURL, ok := isoRaw.(string)
+	require.True(t, ok, "isolated_url must be a string (FR-001/FR-022)")
+	host := strings.TrimPrefix(labelURL, "http://")
 	host = strings.TrimSuffix(host, "/")
 
 	req, err := http.NewRequest(http.MethodPost, h.srv.URL+"/api/v1/agents", nil)

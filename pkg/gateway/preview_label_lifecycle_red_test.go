@@ -80,7 +80,8 @@ func piRedLifeMint(t *testing.T, h *piRedPlantedHarness, agentID, dir string) st
 	require.True(t, has,
 		"RED (FR-001/FR-022): no isolated_url mint exists yet — the label lifecycle cannot "+
 			"be exercised pre-GREEN")
-	labelURL := isoRaw.(string)
+	labelURL, ok := isoRaw.(string)
+	require.True(t, ok, "isolated_url must be a string (FR-001/FR-022)")
 	host := strings.TrimPrefix(labelURL, "http://")
 	host = strings.TrimSuffix(host, "/")
 	parts := strings.SplitN(host, ".", 2)
@@ -188,7 +189,9 @@ func TestPreviewLabelLifecycle(t *testing.T) {
 			isoRaw, has := parsed["isolated_url"]
 			require.True(t, has,
 				"RED (FR-029 dev variant): the dev mint carries no isolated_url")
-			return isoRaw.(string)
+			labelURL, ok := isoRaw.(string)
+			require.True(t, ok, "the dev mint's isolated_url must be a string (FR-001 dev variant)")
+			return labelURL
 		}
 		first := devMint(18044)
 		second := devMint(18045)
