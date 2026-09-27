@@ -218,6 +218,11 @@ func (a *restAPI) serveStaticFile(
 		cfg = a.agentLoop.GetConfig()
 	}
 	mainOrigin := resolveMainOrigin(cfg)
+	// The CSP's mode is decided ONCE, explicitly (fix6 TDA-3): the dispatched
+	// label in the request context is the Mode 1 signal the host dispatcher
+	// set; everything else is Mode 2. The header setter takes the decision as
+	// a parameter and never reads the context itself.
+	mode1 := previewHostLabelFromContext(r.Context()) != ""
 	// Mode 2 static CSP prefix, percent-encoded the same way the dev proxy
 	// builds it. Mode 1 ignores the value (previewMode1CSP). auditToken is
 	// the registration token on the Mode 2 path and empty on the label path;
@@ -302,7 +307,7 @@ func (a *restAPI) serveStaticFile(
 			jsonErr(w, http.StatusInternalServerError, "could not read file")
 			return
 		}
-		setPreviewStaticHeaders(w, r, mainOrigin, previewPrefix)
+		setPreviewStaticHeaders(w, mode1, mainOrigin, previewPrefix)
 		w.Header().Set("Content-Type", contentTypeForPath(absPath))
 		w.WriteHeader(http.StatusOK)
 		if r.Method != http.MethodHead {
@@ -327,7 +332,7 @@ func (a *restAPI) serveStaticFile(
 			slog.Debug("rest: serveStaticFile: file close error", "error", closeErr)
 		}
 	}()
-	setPreviewStaticHeaders(w, r, mainOrigin, previewPrefix)
+	setPreviewStaticHeaders(w, mode1, mainOrigin, previewPrefix)
 	w.Header().Set("Content-Type", contentTypeForPath(absPath))
 	w.WriteHeader(http.StatusOK)
 	var bytesOut int64

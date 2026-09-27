@@ -18,10 +18,13 @@
 package middleware
 
 import (
-	"fmt"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
+
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // navigationExemptLibraryDownload matches FR-010's first exemption,
@@ -48,8 +51,15 @@ func NavigationGuard() func(http.Handler) http.Handler {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Content-Type-Options", "nosniff")
 				w.WriteHeader(http.StatusForbidden)
-				_, _ = fmt.Fprintf(w, `{"error":%q}`,
-					"navigation to this gateway address is not allowed")
+				// The GENERATED ErrorResponse envelope (Hard Constraint #8;
+				// fix6 SF-5 — the same conversion fix3 A7 did for the
+				// planted-cookie path). No code: the guard has no machine
+				// discriminant, so Code stays nil and omits the key.
+				if err := json.NewEncoder(w).Encode(gen.ErrorResponse{
+					Error: "navigation to this gateway address is not allowed",
+				}); err != nil {
+					slog.Debug("navigation guard: write error response failed", "error", err)
+				}
 				return
 			}
 			next.ServeHTTP(w, r)

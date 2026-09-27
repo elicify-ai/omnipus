@@ -1424,7 +1424,7 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, bool, error
 	// of CSRF's generic one (DS-5), and its context marker makes
 	// ResolveUserFromCookie fail closed on the GET branch (401, not a
 	// half-authenticated request).
-	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(middleware.PlantedCookieGuard()); stg.err != nil {
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(middleware.PlantedCookieGuard(middleware.WithPlantedCookieAuditLog(stg.api.agentLoop.AuditLogger()))); stg.err != nil {
 		return nil, true, fmt.Errorf("wrapping HTTP handler with planted-cookie guard: %w", stg.err)
 	}
 	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(middleware.NavigationGuard()); stg.err != nil {

@@ -216,14 +216,23 @@ func ClassifyPreviewOrigin(origin string) (PreviewOriginClass, string) {
 // implicit-80 origin (FR-001/S-1.1, DS-3 row 10). The label is derived from
 // the token (PreviewLabelForToken), so the URL is lower-case throughout
 // (FR-005) and shares the token's lifecycle (FR-008/FR-029).
+//
+// Returns "" (refusal) when mode1Base does not parse to an absolute URL with
+// a scheme. mode1Base comes from ClassifyPreviewOrigin, which only ever
+// returns a parseable base, so the refusal is defense in depth for a future
+// caller passing an arbitrary string: the caller treats "" as "no
+// isolated_url" (the Mode 2 shape) and the tool result carries no key, rather
+// than minting a silently WRONG URL — the portless-label form a previous
+// fallback emitted here can never dispatch (previewPortAgrees refuses it) and
+// would leave the user on the SPA at the preview's address with no error
+// anywhere (gate wave-2 SF-4).
 func PreviewIsolatedURL(mode1Base, token string) string {
 	u, err := url.Parse(mode1Base)
 	if err != nil || u.Scheme == "" {
-		// mode1Base comes from ClassifyPreviewOrigin, which only ever returns
-		// a parseable base; this branch is defense in depth for a future
-		// caller passing an arbitrary string — degrade to the bare-label form
-		// rather than mint a malformed URL.
-		return "http://" + PreviewLabelForToken(token) + "." + PreviewLabelHostSuffix + "/"
+		// Refuse, never degrade (fix6 SF-4): a refusal is visible to the
+		// caller as an absent isolated_url; the portless-label fallback minted
+		// a URL that never dispatches and failed silently in the browser.
+		return ""
 	}
 	host := PreviewLabelForToken(token) + "." + PreviewLabelHostSuffix
 	if port := u.Port(); port != "" {

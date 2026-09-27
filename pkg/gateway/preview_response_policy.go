@@ -18,6 +18,7 @@
 package gateway
 
 import (
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -34,16 +35,19 @@ const previewMode1CSP = "frame-ancestors 'none'"
 // setPreviewStaticHeaders applies the preview static-response header set —
 // the ONE code path for both modes' static serving: workspace security
 // headers (referrer, nosniff), the preview response CORS policy (FR-012),
-// and the CSP (FR-014). Mode 1 replaces the workspace CSP with
-// frame-ancestors 'none' only. Mode 2 replaces it with the byte-stable
-// template (buildPreviewCSP) — the same header the dev proxy sets — so a
-// static page cannot fetch or form-POST the gateway origin. prefix is the
-// percent-encoded /preview/{agent}/{token} prefix (no trailing slash); Mode 1
-// ignores it.
-func setPreviewStaticHeaders(w http.ResponseWriter, r *http.Request, mainOrigin, prefix string) {
+// and the CSP (FR-014). The CSP's mode is an EXPLICIT parameter (fix6 TDA-3)
+// — never inferred from the request context — so a future static-serving call
+// site must decide the mode and cannot silently render Mode 1 pages under the
+// Mode 2 CSP (default-src 'none') or vice versa. Mode 1 (mode1=true) replaces
+// the workspace CSP with frame-ancestors 'none' only. Mode 2 (mode1=false)
+// replaces it with the byte-stable template (buildPreviewCSP) — the same
+// header the dev proxy sets — so a static page cannot fetch or form-POST the
+// gateway origin. prefix is the percent-encoded /preview/{agent}/{token}
+// prefix (no trailing slash); Mode 1 ignores it.
+func setPreviewStaticHeaders(w http.ResponseWriter, mode1 bool, mainOrigin, prefix string) {
 	setWorkspaceSecurityHeaders(w, mainOrigin)
 	applyPreviewResponseCORS(w.Header())
-	if previewHostLabelFromContext(r.Context()) != "" {
+	if mode1 {
 		w.Header().Set("Content-Security-Policy", previewMode1CSP)
 		return
 	}
@@ -165,7 +169,7 @@ func applyPreviewRedirectRule(
 	}
 	ref, err := url.Parse(raw)
 	if err != nil {
-		previewRedirectRefused(resp)
+		previewRedirectRefused(resp, raw, "unparseable_location")
 		return
 	}
 
@@ -177,17 +181,17 @@ func applyPreviewRedirectRule(
 	}
 
 	if !previewRawRootRelative(raw, ref) {
-		previewRedirectRefused(resp)
+		previewRedirectRefused(resp, raw, "not_root_relative")
 		return
 	}
 	if previewFirstSegmentReserved(ref.Path) {
-		previewRedirectRefused(resp)
+		previewRedirectRefused(resp, raw, "reserved_root_segment")
 		return
 	}
 	reRooted := prefix + raw
 	reRef, parseErr := url.Parse(reRooted)
 	if parseErr != nil {
-		previewRedirectRefused(resp)
+		previewRedirectRefused(resp, reRooted, "unparseable_reroot")
 		return
 	}
 	reResolved := previewResolveLocation(clientBase, reRef)
@@ -195,7 +199,7 @@ func applyPreviewRedirectRule(
 		previewEmitLocation(resp, reResolved, false) // reRooted is root-relative by construction
 		return
 	}
-	previewRedirectRefused(resp)
+	previewRedirectRefused(resp, reRooted, "outside_allowed_prefix")
 }
 
 // previewEmitLocation writes the RESOLVED, normalised Location the verdict
@@ -289,10 +293,34 @@ func previewFirstSegmentReserved(p string) bool {
 }
 
 // previewRedirectRefused rewrites the proxied response to a 502 with no
-// Location (DS-2's Verdict column: 502, Location empty).
-func previewRedirectRefused(resp *http.Response) {
+// Location (DS-2's Verdict column: 502, Location empty). fix6 SF-2: the
+// refusal is recorded server-side — slog.Warn with the refusal reason and
+// the REDACTED redirect target. The raw Location never reaches the log:
+// query and fragment are stripped (a redirect target may carry secrets in
+// its query — an OAuth code, a reset token), control characters are
+// neutralised and token-bearing path segments are redacted via
+// redactRequestPath (a re-rooted target carries the /preview/<agent>/<token>
+// prefix — the token is a live credential).
+func previewRedirectRefused(resp *http.Response, rawLocation, reason string) {
+	slog.Warn("preview: redirect refused (502)",
+		"reason", reason,
+		"target", previewRedactedLocation(rawLocation))
 	resp.StatusCode = http.StatusBadGateway
 	resp.Header.Del("Location")
+}
+
+// previewRedactedLocation returns a raw Location value in a form safe to
+// log: query and fragment stripped, capped at 256 characters, then
+// redactRequestPath (control-character neutralisation plus token-bearing
+// segment redaction). fix6 SF-2.
+func previewRedactedLocation(raw string) string {
+	if i := strings.IndexAny(raw, "?#"); i >= 0 {
+		raw = raw[:i]
+	}
+	if len(raw) > 256 {
+		raw = raw[:256]
+	}
+	return redactRequestPath(raw)
 }
 
 // previewPathInPrefix reports whether p is the prefix or under it.
