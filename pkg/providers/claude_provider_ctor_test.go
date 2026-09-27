@@ -62,7 +62,7 @@ func TestNewClaudeProviderWithTimeout(t *testing.T) {
 
 		start := time.Now()
 		_, err := cp.ChatStream(ctx, []Message{{Role: "user", Content: "hi"}},
-			nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil)
+			nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil, nil)
 		if err == nil {
 			t.Fatal("a fully silent stream must be aborted")
 		}
@@ -80,7 +80,7 @@ func TestNewClaudeProviderWithTimeout(t *testing.T) {
 
 		start := time.Now()
 		resp, err := cp.ChatStream(context.Background(), []Message{{Role: "user", Content: "hi"}},
-			nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil)
+			nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("a stream that keeps delivering must not be cut: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestNewClaudeProviderWithTimeout(t *testing.T) {
 		defer cancel()
 
 		_, err := cp.ChatStream(ctx, []Message{{Role: "user", Content: "hi"}},
-			nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil)
+			nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil, nil)
 		if err == nil {
 			t.Fatal("the 1.5s context must end the call")
 		}
