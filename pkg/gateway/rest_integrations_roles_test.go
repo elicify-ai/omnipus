@@ -756,6 +756,10 @@ func TestIntegrationPut_ReloadFailure_KeepsWritesReports500(t *testing.T) {
 // stays, naming the step that failed.
 func TestIntegrationPut_DefaultKeyUnresolvedAfterReload_400KeepsWrites(t *testing.T) {
 	api, user, cfg := newRolesTestAPI(t)
+	// The env lane is pinned empty: only the stored body key exists, and the
+	// post-reload judgment must reject on it. (This dev machine exports a
+	// real TAVILY_API_KEY, which would otherwise satisfy the judgment.)
+	t.Setenv("TAVILY_API_KEY", "")
 	// Reload runs (config swap) but the key never resolves — no injection.
 	wireRolesReload(t, cfg, api, nil, nil)
 
