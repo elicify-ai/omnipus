@@ -21,12 +21,14 @@ package gateway
 // nothing here re-implements the rule.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -135,8 +137,16 @@ func maxToolIterationsAffectedSet(store maxToolIterationsAgentStore, defaults *c
 	return maxToolIterationsLoweringSet(store, value)
 }
 
-// liveAgentDefaults returns the in-memory agents.defaults, or nil when no
-// config is loaded.
+// liveAgentDefaults returns the agents.defaults the D11/D16 decisions
+// (preview, pre-check, deciding check, audit old value) run against: the
+// in-memory copy with the global tool-iteration limit taken from config.json
+// as SAVED — the value PUT /performance's own write builds on. After a
+// refresh-stage performance_reload_failed the in-memory config still holds
+// the old global while config.json holds the new one; deciding raise-vs-lower
+// from the stale copy could call a lowering a raise and lower no agent
+// without consent (D11). Falls back to the in-memory value (WARN) only when
+// config.json cannot be read or parsed — the write itself then fails too.
+// nil when no config is loaded.
 func (a *restAPI) liveAgentDefaults() *config.AgentDefaults {
 	if a.agentLoop == nil {
 		return nil
@@ -145,7 +155,49 @@ func (a *restAPI) liveAgentDefaults() *config.AgentDefaults {
 	if cfg == nil {
 		return nil
 	}
-	return &cfg.Agents.Defaults
+	d := cfg.Agents.Defaults
+	value, missing, err := savedGlobalMaxToolIterations(a.configPath())
+	if err != nil {
+		logsafeWarn("rest: tool-iteration limit: could not read the saved global from config.json; "+
+			"using the in-memory value", "error_type", fmt.Sprintf("%T", err))
+		return &d
+	}
+	d.MaxToolIterations = value
+	d.MaxToolIterationsKeyMissing = missing
+	return &d
+}
+
+// savedGlobalMaxToolIterations reads agents.defaults.max_tool_iterations from
+// config.json the way config loading does (pkg/config/max_tool_iterations.go
+// ::applyMaxToolIterationsOnLoad): the value is bound by encoding/json, and
+// the key counts as missing when agents.defaults has no exact
+// "max_tool_iterations" member or it is null.
+func savedGlobalMaxToolIterations(path string) (value int, missing bool, err error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false, err
+	}
+	var typed struct {
+		Agents struct {
+			Defaults struct {
+				MaxToolIterations int `json:"max_tool_iterations"`
+			} `json:"defaults"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(raw, &typed); err != nil {
+		return 0, false, err
+	}
+	var probe struct {
+		Agents struct {
+			Defaults map[string]json.RawMessage `json:"defaults"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return 0, false, err
+	}
+	v, ok := probe.Agents.Defaults["max_tool_iterations"]
+	missing = !ok || bytes.Equal(bytes.TrimSpace(v), []byte("null"))
+	return typed.Agents.Defaults.MaxToolIterations, missing, nil
 }
 
 // agentsReadFailure is the 500 for a failed agent-store read on the lowering

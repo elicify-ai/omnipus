@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
@@ -151,4 +152,49 @@ func TestPerformancePut_ReloadFailed_CauseTextNotLoggedOrReturned(t *testing.T) 
 		// separately; only the presence of the stage value matters here.
 		assert.Contains(t, l, "refresh", "the log line names the stage: %s", l)
 	}
+}
+
+// After a refresh-stage failure config.json holds the new global while the
+// in-memory config still holds the old one. The next preview / PUT must
+// decide raise-vs-lower and the affected set from the SAVED global (the
+// value the write builds on), not the stale in-memory copy: here the saved
+// global is 500 (in memory still 300), so 400 is a LOWERING that must list
+// agent a (own 450) and require consent — the stale copy would call it a
+// raise and leave a at 450 without asking (D11).
+func TestPerformancePut_AfterRefreshFailure_DecidesFromSavedGlobal(t *testing.T) {
+	api := newMTIAPI(t, "300", mtiAgent{id: "a", own: 450})
+	// The lowering path reads agents through limitAgentStore; move the
+	// record there so the entity store the refresh reads holds only an
+	// unparseable record (breakInMemoryRefresh) and every refresh fails.
+	limitHome := t.TempDir()
+	rec, err := agentstore.New(api.homePath).Get("a")
+	require.NoError(t, err)
+	require.NoError(t, agentstore.New(limitHome).Create("a", rec))
+	api.limitAgentStore = agentstore.New(limitHome)
+	require.NoError(t, os.Remove(filepath.Join(api.homePath, "entities", "agents", "a.json")))
+	breakInMemoryRefresh(t, api)
+
+	w := mtiPutPerf(t, api, `{"max_tool_iterations":500}`)
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, gen.PerformanceReloadFailedDetailsStageRefresh, decodeReloadFailed(t, w.Body.Bytes()).Details.Stage)
+	require.EqualValues(t, 500, mtiDiskGlobal(t, api))
+	require.EqualValues(t, 300, mtiGetPerf(t, api)["max_tool_iterations"], "instrument: memory is stale")
+
+	p := mtiPreviewViaMux(t, api, "?value=400", true)
+	require.Equal(t, http.StatusOK, p.Code, "body: %s", p.Body.String())
+	mtiAssertAgentChanges(t, mtiDecode(t, p.Body.Bytes())["agents"], []mtiLowering{{id: "a", name: "Agent a", oldV: 450, newV: 400}})
+
+	w = mtiPutPerf(t, api, `{"max_tool_iterations":400}`)
+	require.Equal(t, http.StatusConflict, w.Code, "an unconfirmed lowering is drift; body: %s", w.Body.String())
+	assert.EqualValues(t, 500, mtiDiskGlobal(t, api), "nothing written on drift")
+
+	w = mtiPutPerf(t, api, `{"max_tool_iterations":400,"confirmed_lowering":[{"agent_id":"a","old_value":450}]}`)
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+	got := decodeReloadFailed(t, w.Body.Bytes())
+	require.Len(t, got.Details.LoweredAgents, 1)
+	assert.Equal(t, 450, got.Details.LoweredAgents[0].OldValue)
+	assert.Equal(t, 400, got.Details.LoweredAgents[0].NewValue)
+	lowered, err := agentstore.New(limitHome).Get("a")
+	require.NoError(t, err)
+	assert.Equal(t, 400, lowered.MaxToolIterations)
 }
