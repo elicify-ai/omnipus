@@ -23,10 +23,13 @@ package middleware
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // plantedReservedCookieNames are the cookie names whose duplication triggers
@@ -211,13 +214,22 @@ const (
 )
 
 // writePlantedCookieCleared answers a state-changing request whose Cookie
-// header carried a duplicated reserved name: HTTP 403 with the standard JSON
-// error envelope carrying code planted_cookie_cleared, plus the clear-set
-// headers already stamped on w by the caller.
+// header carried a duplicated reserved name: HTTP 403 with the GENERATED
+// ErrorResponse envelope (Hard Constraint #8, fix3 A7) — required `error`
+// carrying the verbatim human message, `code` carrying the machine-readable
+// planted_cookie_cleared the SPA toast chain keys on
+// (src/lib/api/http.ts::raisePlantedCookieToast reads err.code, then the
+// body's `message` falling back to `error` for the toast text) — plus the
+// clear-set headers already stamped on w by the caller.
 func writePlantedCookieCleared(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusForbidden)
-	_, _ = fmt.Fprintf(w, `{"code":%q,"message":%q}`,
-		plantedCookieClearedCode, plantedCookieClearedMessage)
+	code := plantedCookieClearedCode
+	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{
+		Error: plantedCookieClearedMessage,
+		Code:  &code,
+	}); err != nil {
+		slog.Debug("planted-cookie: write error response failed", "error", err)
+	}
 }

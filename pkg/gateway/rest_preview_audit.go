@@ -199,6 +199,95 @@ func markFirstUpstreamFailure(token, remoteIP string) (firstInWindow bool, suppr
 	return false, 0
 }
 
+// labelUnknownWindow is the per-remote-IP suppression window for
+// preview.label_unknown audit emission (fix3, SL-F1): a spray of unique
+// grammar-valid labels (any local process, and plausibly any web page via
+// no-cors requests to http://<random>.localhost) would otherwise write an
+// unsuppressed Warn entry into the HMAC-chained audit chain per miss. The
+// 60s window mirrors upstreamFailureWindow: a genuinely new unknown-host
+// pattern still produces a fresh entry for operator triage.
+const labelUnknownWindow = 60 * time.Second
+
+// labelUnknownState tracks remote IPs that recently emitted a
+// preview.label_unknown audit entry. Sibling to firstUpstreamFailureTokens —
+// same locking discipline, same 4096-entry soft cap, same reset-on-cap-hit
+// semantics. Keyed by canonical remote IP only, NEVER by the label: the
+// label is attacker-controlled (unique per spray request) and FR-026 forbids
+// recording it anywhere.
+var (
+	labelUnknownMu    sync.Mutex
+	labelUnknownState = make(map[string]*upstreamFailureState)
+)
+
+// markFirstLabelUnknown decides whether a preview.label_unknown audit entry
+// may be emitted for remoteIP. Mirrors markFirstUpstreamFailure exactly:
+// the first miss in the window (or after it elapsed) admits; misses within
+// the window are suppressed and counted.
+func markFirstLabelUnknown(remoteIP string) (firstInWindow bool, suppressedCount int) {
+	if remoteIP == "" {
+		return true, 0
+	}
+	now := time.Now()
+	labelUnknownMu.Lock()
+	defer labelUnknownMu.Unlock()
+
+	// Soft memory cap mirroring firstUpstreamFailureTokens.
+	const maxEntries = 4096
+	if len(labelUnknownState) >= maxEntries {
+		slog.Warn("preview-audit: labelUnknownState cap hit — resetting; preview.label_unknown may re-emit",
+			"cap", maxEntries)
+		labelUnknownState = make(map[string]*upstreamFailureState, maxEntries)
+	}
+
+	state, seen := labelUnknownState[remoteIP]
+	if !seen {
+		labelUnknownState[remoteIP] = &upstreamFailureState{firstSeenAt: now}
+		return true, 0
+	}
+	if now.Sub(state.firstSeenAt) >= labelUnknownWindow {
+		prevSuppressed := state.suppressedCount
+		state.firstSeenAt = now
+		state.suppressedCount = 0
+		return true, prevSuppressed
+	}
+	state.suppressedCount++
+	return false, 0
+}
+
+// trustXFFFromRequest reports whether this request's X-Forwarded-For may be
+// trusted (gateway.trust_xff): the config snapshot from the request context
+// first, then the live config. Factored from emitPreviewAuditEntry so the
+// label_unknown suppression path canonicalises the remote IP by the same
+// rule the audit entry itself uses.
+func (a *restAPI) trustXFFFromRequest(r *http.Request) bool {
+	if auditCfg := configFromContext(r.Context()); auditCfg != nil {
+		return auditCfg.Gateway.TrustXFF
+	} else if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
+		return liveCfg.Gateway.TrustXFF
+	}
+	return false
+}
+
+// maybeAuditLabelUnknown emits the preview.label_unknown audit entry for an
+// unknown dispatched label — at most once per labelUnknownWindow per remote
+// IP (fix3, SL-F1). When the window closes with suppressed misses since, one
+// Warn surfaces the count so operators keep the attack-rate breadcrumb. The
+// HTTP response is unchanged: every unknown-label request still 404s.
+func (a *restAPI) maybeAuditLabelUnknown(r *http.Request, startedAt time.Time) {
+	remoteIP := canonicalRemoteIP(r, a.trustXFFFromRequest(r))
+	first, suppressed := markFirstLabelUnknown(remoteIP)
+	if !first {
+		return
+	}
+	if suppressed > 0 {
+		slog.Warn("preview.label_unknown: suppression window closed; previous misses were suppressed",
+			"remote_ip", remoteIP,
+			"suppressed_count", suppressed,
+		)
+	}
+	a.auditServeFailure(r, "preview.label_unknown", "deny", "", "", http.StatusNotFound, startedAt)
+}
+
 // emitPreviewAuditEntry writes a preview-listener audit entry (/preview/,
 // /serve/, /dev/) to the gateway's audit logger. The schema follows
 // FR-024:
@@ -253,15 +342,9 @@ func (a *restAPI) emitPreviewAuditEntry(
 	sanitisedPath := redactRequestPath(r.URL.Path)
 	// F-14: only trust X-Forwarded-For when cfg.Gateway.TrustXFF is set.
 	// On plain-HTTP deployments without a trusted proxy, clients can spoof the
-	// audit IP by sending this header. Pull config from context (set by
-	// configSnapshotMiddleware); fall back to live config if not yet wired.
-	var trustXFF bool
-	if auditCfg := configFromContext(r.Context()); auditCfg != nil {
-		trustXFF = auditCfg.Gateway.TrustXFF
-	} else if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
-		trustXFF = liveCfg.Gateway.TrustXFF
-	}
-	remoteIP := canonicalRemoteIP(r, trustXFF)
+	// audit IP by sending this header. Pulled into trustXFFFromRequest (fix3)
+	// so the label_unknown suppression path canonicalises by the same rule.
+	remoteIP := canonicalRemoteIP(r, a.trustXFFFromRequest(r))
 
 	details := map[string]any{
 		"token_prefix":   tokenPrefix,
