@@ -1,17 +1,22 @@
 /**
  * IntegrationsSection.adr096.test.tsx — ADR-096 Settings screen, section level.
  *
- * Verifies, through the real IntegrationsSection: search rows wear Default /
- * Fallback badges instead of the retired "Active" badge (FR-028 / settings
- * table "Badge"), a configured-but-unusable provider reads "key not reaching
- * search" (FR-028), storing a key on a search row is separable from assigning
- * a role (ADR-096 D18 — the PUT carries api_key and no role field), and each
- * radio selection maps to exactly one contract-shaped PUT
- * (IntegrationProviderUpdateRequest). Step-up gate and data loading are the
- * existing suites' subject; mocked at the process edge only (REST client).
+ * Verifies, through the real IntegrationsSection, the screen the ADR-096 spec
+ * draws (§ "Settings screen"): ONE row per provider (the provider name renders
+ * exactly once — the old screen repeated every name across two radio stacks),
+ * the default + fallback radios live inside the provider's row, the default
+ * row's fallback radio is disabled with its reason visible, "No fallback" is a
+ * visible distinct choice, search rows wear Default / Fallback badges instead
+ * of the retired "Active" badge (FR-028 / settings table "Badge"), a
+ * configured-but-unusable provider reads "key not reaching search" (FR-028),
+ * storing a key on a search row is separable from assigning a role (ADR-096
+ * D18 — the PUT carries api_key and no role field), and each radio selection
+ * maps to exactly one contract-shaped PUT (IntegrationProviderUpdateRequest).
+ * Step-up gate and data loading are the existing suites' subject; mocked at
+ * the process edge only (REST client).
  *
- * Expected values derive from the spec's save-rule table and the generated
- * contract, not from observed output.
+ * Expected values derive from the spec's Settings-screen table and save-rule
+ * table and the generated contract, not from observed output.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -97,7 +102,58 @@ beforeEach(() => {
   vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
 })
 
-describe('IntegrationsSection — ADR-096 search roles', () => {
+describe('IntegrationsSection — ADR-096 one row per provider', () => {
+  it('renders each search provider name exactly once — the row is the only place the name appears', async () => {
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('search-row-brave')).toBeInTheDocument()
+    })
+    for (const name of ['Brave', 'Tavily', 'DuckDuckGo', 'SearXNG']) {
+      expect(screen.getAllByText(name)).toHaveLength(1)
+    }
+  })
+
+  it('puts both role radios inside the provider row, and the "No fallback" choice after the rows', async () => {
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('default-radio-brave')).toBeInTheDocument()
+      expect(screen.getByTestId('fallback-radio-brave')).toBeInTheDocument()
+    })
+    const row = screen.getByTestId('search-row-brave')
+    expect(row.contains(screen.getByTestId('default-radio-brave'))).toBe(true)
+    expect(row.contains(screen.getByTestId('fallback-radio-brave'))).toBe(true)
+    // The "No fallback" choice lives outside every provider row.
+    expect(screen.getByTestId('search-row-brave').contains(screen.getByTestId('no-fallback-choice'))).toBe(false)
+    expect(screen.getByTestId('no-fallback-choice')).toHaveTextContent('No fallback')
+  })
+
+  it('disables the fallback radio on the default row and shows its reason inside that row', async () => {
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('fallback-radio-tavily')).toBeDisabled()
+    })
+    expect(screen.getByTestId('fallback-disabled-reason-tavily')).toHaveTextContent(
+      'A provider cannot fall back to itself.',
+    )
+    expect(screen.getByTestId('search-row-tavily').contains(screen.getByTestId('fallback-disabled-reason-tavily'))).toBe(true)
+    expect(screen.getByTestId('fallback-radio-brave')).toBeEnabled()
+  })
+
+  it('checks the radios the resolved roles name — and nothing else', async () => {
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('default-radio-tavily')).toHaveAttribute('data-state', 'checked')
+      expect(screen.getByTestId('fallback-radio-duckduckgo')).toHaveAttribute('data-state', 'checked')
+    })
+    expect(screen.getByTestId('default-radio-brave')).toHaveAttribute('data-state', 'unchecked')
+    expect(screen.getByTestId('fallback-radio-brave')).toHaveAttribute('data-state', 'unchecked')
+    // SearXNG is offered as no new choice (D10).
+    expect(screen.queryByTestId('default-radio-searxng')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('fallback-radio-searxng')).not.toBeInTheDocument()
+  })
+})
+
+describe('IntegrationsSection — ADR-096 badges and readiness', () => {
   it('shows Default and Fallback badges on search rows from the role fields, and no Active badge', async () => {
     renderSection()
     await waitFor(() => {
@@ -109,6 +165,18 @@ describe('IntegrationsSection — ADR-096 search roles', () => {
     // decisive assertion is that the default row is marked Default, not Active.
     expect(screen.queryByTestId('active-tavily')).not.toBeInTheDocument()
     expect(screen.queryByTestId('active-duckduckgo')).not.toBeInTheDocument()
+  })
+
+  it('labels the R3 automatic fallback on the row and on its badge', async () => {
+    vi.mocked(api.fetchIntegrationProviders).mockResolvedValueOnce({
+      ...RESPONSE,
+      search: RESPONSE.search.map((p) => (p.id === 'duckduckgo' ? { ...p, fallback_automatic: true } : p)),
+    } as never)
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('automatic-fallback-duckduckgo')).toBeInTheDocument()
+      expect(screen.getByTestId('badge-fallback-duckduckgo')).toHaveTextContent('Fallback (automatic)')
+    })
   })
 
   it('keeps the Active badge and behaviour on voice rows untouched', async () => {
@@ -150,12 +218,12 @@ describe('IntegrationsSection — ADR-096 search roles', () => {
       expect(screen.getByTestId('key-not-reaching-tavily')).toBeInTheDocument()
     })
   })
+})
 
+describe('IntegrationsSection — ADR-096 save rules', () => {
   it('stores a key on a search row without assigning any role (D18 separability)', async () => {
     vi.mocked(api.configureIntegrationProvider).mockResolvedValue(RESPONSE as never)
     renderSection()
-    // The row is the only place 'addkey-<id>' exists; 'Brave' as text now
-    // matches the two radio stacks too, so a unique row anchor is required.
     await waitFor(() => screen.getByTestId('addkey-brave'))
 
     fireEvent.click(screen.getByTestId('addkey-brave'))
@@ -176,9 +244,9 @@ describe('IntegrationsSection — ADR-096 search roles', () => {
   it('selecting a default radio PUTs active:true for that id, through the gate', async () => {
     vi.mocked(api.configureIntegrationProvider).mockResolvedValue(RESPONSE as never)
     renderSection()
-    await waitFor(() => screen.getByTestId('default-option-brave'))
+    await waitFor(() => screen.getByTestId('default-radio-brave'))
 
-    fireEvent.click(screen.getByTestId('default-option-brave'))
+    fireEvent.click(screen.getByTestId('default-radio-brave'))
     await confirmGate()
 
     await waitFor(() => {
@@ -194,9 +262,9 @@ describe('IntegrationsSection — ADR-096 search roles', () => {
   it('selecting a fallback radio PUTs fallback:true for that id', async () => {
     vi.mocked(api.configureIntegrationProvider).mockResolvedValue(RESPONSE as never)
     renderSection()
-    await waitFor(() => screen.getByTestId('fallback-option-brave'))
+    await waitFor(() => screen.getByTestId('fallback-radio-brave'))
 
-    fireEvent.click(screen.getByTestId('fallback-option-brave'))
+    fireEvent.click(screen.getByTestId('fallback-radio-brave'))
     await confirmGate()
 
     await waitFor(() => {
@@ -212,9 +280,9 @@ describe('IntegrationsSection — ADR-096 search roles', () => {
   it('choosing "No fallback" PUTs fallback:false with no active field', async () => {
     vi.mocked(api.configureIntegrationProvider).mockResolvedValue(RESPONSE as never)
     renderSection()
-    await waitFor(() => screen.getByTestId('fallback-option-none'))
+    await waitFor(() => screen.getByTestId('fallback-radio-none'))
 
-    fireEvent.click(screen.getByTestId('fallback-option-none'))
+    fireEvent.click(screen.getByTestId('fallback-radio-none'))
     await confirmGate()
 
     await waitFor(() => {
@@ -230,22 +298,22 @@ describe('IntegrationsSection — ADR-096 search roles', () => {
 
   it('clicking the already-selected default fires no gated save', async () => {
     renderSection()
-    await waitFor(() => screen.getByTestId('default-option-tavily'))
+    await waitFor(() => screen.getByTestId('default-radio-tavily'))
 
-    fireEvent.click(screen.getByTestId('default-option-tavily'))
+    fireEvent.click(screen.getByTestId('default-radio-tavily'))
     await waitFor(() => {
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
     expect(api.configureIntegrationProvider).not.toHaveBeenCalled()
   })
 
-  it('the not-yet-loaded state (query pending) renders no role stacks — distinct from an explicit none', async () => {
+  it('the not-yet-loaded state (query pending) renders no role radios — distinct from an explicit none', async () => {
     vi.mocked(api.fetchIntegrationProviders).mockReturnValue(new Promise(() => {}) as never)
     renderSection()
-    // Skeleton state: the group has no data yet, so no fallback stack exists.
+    // Skeleton state: the section has no data yet, so no radio exists.
     await waitFor(() => {
-      expect(screen.queryByTestId('fallback-stack')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('default-radio-brave')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('fallback-radio-none')).not.toBeInTheDocument()
     })
-    expect(screen.queryByTestId('fallback-option-none')).not.toBeInTheDocument()
   })
 })
