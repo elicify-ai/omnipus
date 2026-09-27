@@ -21,6 +21,7 @@ import { useUiStore } from '@/store/ui'
 import { useQuery } from '@tanstack/react-query'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
+import { PANEL_TAKEOVER_PX } from '@/components/panel-shell/panelWidth'
 import { computeAppMetrics } from './appShellViewport'
 
 // US-4: Application shell — sidebar + main content area
@@ -40,15 +41,14 @@ export function AppShell() {
   // See the app-state-fetch-error-banner below for the fetch-failure case.
   const devModeBypass = appState?.dev_mode_bypass === true
 
-  // Live browser panel open state — used below to inert the chat region when
-  // it's collapsed to zero width by the panel's docked takeover on phones.
-  const browserPanel = useUiStore((s) => s.browserPanel)
-  // Library panel (library-spec.md D-4) — same docked-takeover-on-phone
-  // shape as browserPanel above, so it needs the same inert treatment.
-  const libraryPanel = useUiStore((s) => s.libraryPanel)
-  // Tailwind's `sm:` breakpoint (640px) can gate CSS, but not a non-CSS HTML
-  // attribute like `inert` — that needs an actual JS media-query signal.
-  const isPhoneViewport = useMediaQuery('(max-width: 639px)')
+  // Side-panel shell (side-panel-shell-spec.md §8.1): one panel at a time.
+  // Used below to inert the chat region when the phone takeover (<680px,
+  // SP-25) collapses it to full-screen over the chat.
+  const activePanel = useUiStore((s) => s.activePanel)
+  // Takeover threshold — SP-25 sets it at 680px, and the wave-0 shell ships
+  // the constant (panelWidth.ts::PANEL_TAKEOVER_PX). The old query was the
+  // Tailwind `sm:` breakpoint (639px); the spec's threshold replaces it.
+  const isPhoneViewport = useMediaQuery(`(max-width: ${PANEL_TAKEOVER_PX - 1}px)`)
 
   // #264: seed the notification center from REST on mount; the `notification`
   // WS frame keeps it live thereafter (see chatStore.handleFrame).
@@ -187,7 +187,7 @@ export function AppShell() {
       <div
         data-testid="app-main-content"
         className="flex flex-1 flex-col min-w-0 overflow-hidden"
-        inert={(Boolean(browserPanel) || Boolean(libraryPanel)) && isPhoneViewport}
+        inert={Boolean(activePanel) && isPhoneViewport}
       >
         {/* OmnipusRuntimeProvider: AssistantUI context + WebSocket connection for entire app */}
         <OmnipusRuntimeProvider>

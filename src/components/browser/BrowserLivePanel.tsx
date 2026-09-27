@@ -9,8 +9,8 @@ import { BrowserLiveView } from './BrowserLiveView'
 type OwnedPopout = { window: Window; sessionId: string; agentId: string; stop: () => void }
 
 export function BrowserLivePanel() {
-  const browserPanel = useUiStore((s) => s.browserPanel)
-  const closeBrowserPanel = useUiStore((s) => s.closeBrowserPanel)
+  const activePanel = useUiStore((s) => s.activePanel)
+  const closePanel = useUiStore((s) => s.closePanel)
   const ownedPopout = useRef<OwnedPopout | null>(null)
 
   useEffect(() => {
@@ -18,12 +18,12 @@ export function BrowserLivePanel() {
     // viewer before an effect redirects it to the already-owned popout.
     const unsubscribe = useUiStore.subscribe((state) => {
       const owned = ownedPopout.current
-      if (!state.browserPanel || !owned) return
+      if (!state.activePanel || state.activePanel.id !== 'browser' || !owned) return
       if (owned.window.closed) {
         ownedPopout.current = null
         owned.stop()
       } else {
-        state.closeBrowserPanel()
+        state.closePanel()
         owned.window.focus()
       }
     })
@@ -37,6 +37,14 @@ export function BrowserLivePanel() {
   }, [])
 
   const popoutRoute = window.location.hash.split('?')[0] === '#/browser-live' || window.location.pathname === '/browser-live'
+  // Narrow to the Browser's own context shape: sessionId/agentId are always
+  // supplied by every openPanel('browser', …) call site; a context missing
+  // them would render nothing attachable, so it is treated as closed.
+  const browserCtx = activePanel?.id === 'browser' ? activePanel.context : null
+  const browserPanel =
+    browserCtx && browserCtx.sessionId && browserCtx.agentId
+      ? { sessionId: browserCtx.sessionId, agentId: browserCtx.agentId }
+      : null
   if (!browserPanel || popoutRoute || (ownedPopout.current && !ownedPopout.current.window.closed)) return null
 
   const handlePopOut = () => {
@@ -60,12 +68,12 @@ export function BrowserLivePanel() {
       ownedPopout.current = owned
       // Commit unmount and its synchronous socket/peer cleanup BEFORE the
       // child navigates to a route that can create its own live viewer.
-      flushSync(closeBrowserPanel)
+      flushSync(closePanel)
       owned.stop = watchPopoutClosed(popup, () => {
         if (ownedPopout.current !== owned) return
         ownedPopout.current = null
-        if (useUiStore.getState().browserPanel === null) {
-          useUiStore.getState().openBrowserPanel(owned.sessionId, owned.agentId)
+        if (useUiStore.getState().activePanel === null) {
+          useUiStore.getState().openPanel('browser', { sessionId: owned.sessionId, agentId: owned.agentId })
         }
       })
       const params = new URLSearchParams({ session: owned.sessionId, agent: owned.agentId })
@@ -75,7 +83,7 @@ export function BrowserLivePanel() {
       owned.stop()
       ownedPopout.current = null
       popup.close()
-      useUiStore.getState().openBrowserPanel(owned.sessionId, owned.agentId)
+      useUiStore.getState().openPanel('browser', { sessionId: owned.sessionId, agentId: owned.agentId })
       useUiStore.getState().addToast({ message: 'The popout could not open. The browser remains here.', variant: 'error' })
     }
   }
@@ -90,7 +98,7 @@ export function BrowserLivePanel() {
         key={`${browserPanel.sessionId}:${browserPanel.agentId}`}
         sessionId={browserPanel.sessionId}
         agentId={browserPanel.agentId}
-        onClose={closeBrowserPanel}
+        onClose={closePanel}
         canAnnotate
         fillContainer
         onPopOut={handlePopOut}

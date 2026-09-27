@@ -13,7 +13,7 @@
 //
 // C4 UPDATE (library-b-c-design-2026-09-07.md "fullscreen carries the
 // selection"): popping out NOW closes this docked panel — `handlePopOut`
-// calls `closeLibraryPanel()`. This REVERSES the note that used to stand
+// calls `closePanel()`. This REVERSES the note that used to stand
 // here ("popping out does NOT close the docked panel... keeping both open is
 // strictly more useful than forcing a hand-over"). That reasoning is still
 // correct as far as it goes — the Library has no BrowserLivePanel-style
@@ -55,11 +55,12 @@
 import { useEffect, useRef } from 'react'
 import { useUiStore } from '@/store/ui'
 import { onLibraryPopoutClosed, onLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
+import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { LibraryExplorer } from './LibraryExplorer'
 
 export function LibraryPanel() {
-  const libraryPanel = useUiStore((s) => s.libraryPanel)
-  const closeLibraryPanel = useUiStore((s) => s.closeLibraryPanel)
+  const activePanel = useUiStore((s) => s.activePanel)
+  const closePanel = useUiStore((s) => s.closePanel)
   // `set: false` until the FIRST continuous broadcast arrives, so a
   // `popout-closed` that beats every `workspace-changed` message (e.g. the
   // pop-out closed before this listener ever mounted) correctly falls back
@@ -83,16 +84,24 @@ export function LibraryPanel() {
     })
   }, [])
 
-  // Re-target (or re-open) the docked panel to wherever the pop-out was last
-  // viewing, once it closes — see the module doc above for why this is now
-  // unconditional rather than gated on "nothing currently docked".
+  // Re-dock when the pop-out closes (side-panel-shell-spec.md MAJ-006): only
+  // into an EMPTY slot — an already-open panel (Library or Browser) is never
+  // clobbered by the handoff — and through the leave gate. (The §8.3 handle
+  // registry adds the opener-only half of this rule in the shell wiring.)
   useEffect(() => {
     return onLibraryPopoutClosed((workspaceId) => {
+      if (useUiStore.getState().activePanel !== null) return
       const known = lastKnownPopoutWorkspaceRef.current
-      useUiStore.getState().openLibraryPanel(known.set ? known.workspaceId : workspaceId)
+      leaveGateThen(() => {
+        // Re-check the slot inside the gate continuation: the user's Discard
+        // decision may have taken minutes; the slot must still be empty.
+        if (useUiStore.getState().activePanel !== null) return
+        useUiStore.getState().openPanel('library', { workspaceId: known.set ? known.workspaceId : workspaceId })
+      })
     })
   }, [])
 
+  const libraryPanel = activePanel?.id === 'library' ? activePanel.context : null
   if (!libraryPanel) return null
 
   // Arrow function expression (not a `function` declaration) so TypeScript's
@@ -129,7 +138,7 @@ export function LibraryPanel() {
     // place — see the module doc's "C4 UPDATE" note for why this reverses
     // the prior "never close on pop-out" decision without reintroducing a
     // control lock.
-    closeLibraryPanel()
+    closePanel()
   }
 
   return (
@@ -146,7 +155,7 @@ export function LibraryPanel() {
         // the previous target.
         key={libraryPanel.workspaceId ?? 'root'}
         initialWorkspaceId={libraryPanel.workspaceId}
-        onClose={closeLibraryPanel}
+        onClose={closePanel}
         onPopOut={handlePopOut}
         onWorkspaceChange={(id) => {
           currentWorkspaceRef.current = id ?? undefined

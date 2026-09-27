@@ -43,7 +43,7 @@ export const WORKSPACE_TABS = [
   // (routes/_app/workspaces.$workspaceId.media.tsx) is now a redirect stub:
   // clicking this tab (or hitting a bookmarked /workspaces/{id}/media URL
   // directly) opens the Library panel scoped to this workspace — the same
-  // `useUiStore.getState().openLibraryPanel(workspaceId)` call
+  // store call (the strip's Library entry becomes a store toggle in wave 1)
   // ChatControls.tsx's "Open library" button makes — then redirects back to
   // the workspace's Chat tab so the URL never dead-ends on a page with no
   // content of its own.

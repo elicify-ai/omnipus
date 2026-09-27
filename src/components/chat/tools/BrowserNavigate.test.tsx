@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 
-// BrowserNavigate.test.tsx
+// Wave 1 (side-panel-shell-spec.md §8.1/§3.1): store plumbing translated from the
+// retired browserPanel/libraryPanel slices to the single activePanel slice —
+// scenarios and assertions otherwise unchanged.
+
 // Tests for the displayUrl and parseResult helper functions in BrowserNavigate.tsx,
 // tested indirectly through the BrowserNavigateBlock component since helpers are not exported.
 // Traces to: vivid-roaming-planet.md line 173
@@ -361,12 +364,12 @@ import { useUiStore } from '@/store/ui'
 
 describe('BrowserNavigateBlock — "Watch live" launcher', () => {
   beforeEach(() => {
-    useUiStore.getState().closeBrowserPanel()
+    useUiStore.getState().closePanel()
     useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
   })
 
   afterEach(() => {
-    useUiStore.getState().closeBrowserPanel()
+    useUiStore.getState().closePanel()
     useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
   })
 
@@ -400,7 +403,7 @@ describe('BrowserNavigateBlock — "Watch live" launcher', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Watch live' }))
 
-    expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess-1', agentId: 'agent-1' })
+    expect(useUiStore.getState().activePanel).toEqual({ id: 'browser', context: { sessionId: 'sess-1', agentId: 'agent-1' } })
   })
 
   it('shows an error toast and does not open the panel when there is no active session', () => {
@@ -414,7 +417,7 @@ describe('BrowserNavigateBlock — "Watch live" launcher', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Watch live' }))
 
-    expect(useUiStore.getState().browserPanel).toBeNull()
+    expect(useUiStore.getState().activePanel).toBeNull()
     expect(useUiStore.getState().toasts.some((t) => t.message === 'No active session to watch.')).toBe(
       true
     )
@@ -431,12 +434,12 @@ describe('BrowserNavigateBlock — "Watch live" launcher', () => {
 
 describe('BrowserNavigateBlock — flat text-line status dot', () => {
   beforeEach(() => {
-    useUiStore.getState().closeBrowserPanel()
+    useUiStore.getState().closePanel()
     useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
   })
 
   afterEach(() => {
-    useUiStore.getState().closeBrowserPanel()
+    useUiStore.getState().closePanel()
     useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
   })
 

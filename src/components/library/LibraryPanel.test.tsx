@@ -1,3 +1,6 @@
+// Wave 1 (side-panel-shell-spec.md §8.1/§3.1): the retired libraryPanel slice was
+// translated to the single activePanel slice below, and the re-dock-on-popout-close
+// scenarios follow MAJ-006 (empty-slot only) — see the marked test.
 // LibraryPanel.test.tsx — docked <aside> + pop-out/re-dock handoff coverage
 // (library-spec.md D-4). LibraryExplorer itself is mocked — its own behaviour
 // is covered by LibraryExplorer.test.tsx. This file exercises ONLY what
@@ -63,7 +66,7 @@ import { LibraryPanel } from './LibraryPanel'
 
 beforeEach(() => {
   mockLibraryExplorerProps.mockClear()
-  useUiStore.setState({ libraryPanel: null, toasts: [] })
+  useUiStore.setState({ activePanel: null, toasts: [] })
   mockLiveWorkspaceId = undefined
   mockLiveSelection = { path: null, folder: '' }
 })
@@ -78,7 +81,7 @@ describe('LibraryPanel (always-docked)', () => {
   it('renders LibraryExplorer inside a docked <aside> at the virtual root when opened with no workspace — never a Sheet dialog', () => {
     render(<LibraryPanel />)
     act(() => {
-      useUiStore.getState().openLibraryPanel()
+      useUiStore.getState().openPanel('library', {})
     })
 
     const docked = screen.getByTestId('library-panel-docked')
@@ -93,7 +96,7 @@ describe('LibraryPanel (always-docked)', () => {
   it('opens scoped to a workspace when the chat/header-bar entry point passes a workspaceId (D-3)', () => {
     render(<LibraryPanel />)
     act(() => {
-      useUiStore.getState().openLibraryPanel('ws-42')
+      useUiStore.getState().openPanel('library', { workspaceId: 'ws-42' })
     })
 
     expect(screen.getByTestId('library-panel-docked')).toBeInTheDocument()
@@ -102,14 +105,14 @@ describe('LibraryPanel (always-docked)', () => {
     )
   })
 
-  it('closes via the panel close callback (onClose -> closeLibraryPanel)', () => {
+  it('closes via the panel close callback (onClose -> closePanel)', () => {
     render(<LibraryPanel />)
     act(() => {
-      useUiStore.getState().openLibraryPanel('ws-1')
+      useUiStore.getState().openPanel('library', { workspaceId: 'ws-1' })
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'mock-close' }))
-    expect(useUiStore.getState().libraryPanel).toBeNull()
+    expect(useUiStore.getState().activePanel).toBeNull()
     expect(screen.queryByTestId('library-panel-docked')).not.toBeInTheDocument()
   })
 
@@ -119,7 +122,7 @@ describe('LibraryPanel (always-docked)', () => {
 
       render(<LibraryPanel />)
       act(() => {
-        useUiStore.getState().openLibraryPanel('ws-1')
+        useUiStore.getState().openPanel('library', { workspaceId: 'ws-1' })
       })
 
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
@@ -129,7 +132,7 @@ describe('LibraryPanel (always-docked)', () => {
       // C4: the slide-out closes now that the fullscreen tab shows the same
       // place — see LibraryPanel.tsx's module doc "C4 UPDATE" note for why
       // this reverses the panel's old "never close on pop-out" behaviour.
-      expect(useUiStore.getState().libraryPanel).toBeNull()
+      expect(useUiStore.getState().activePanel).toBeNull()
       expect(screen.queryByTestId('library-panel-docked')).not.toBeInTheDocument()
 
       openSpy.mockRestore()
@@ -140,7 +143,7 @@ describe('LibraryPanel (always-docked)', () => {
 
       render(<LibraryPanel />)
       act(() => {
-        useUiStore.getState().openLibraryPanel()
+        useUiStore.getState().openPanel('library', {})
       })
 
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
@@ -156,7 +159,7 @@ describe('LibraryPanel (always-docked)', () => {
 
       render(<LibraryPanel />)
       act(() => {
-        useUiStore.getState().openLibraryPanel('ws-1')
+        useUiStore.getState().openPanel('library', { workspaceId: 'ws-1' })
       })
 
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
@@ -178,7 +181,7 @@ describe('LibraryPanel (always-docked)', () => {
 
       render(<LibraryPanel />)
       act(() => {
-        useUiStore.getState().openLibraryPanel('ws-1')
+        useUiStore.getState().openPanel('library', { workspaceId: 'ws-1' })
       })
 
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
@@ -201,7 +204,7 @@ describe('LibraryPanel (always-docked)', () => {
 
       render(<LibraryPanel />)
       act(() => {
-        useUiStore.getState().openLibraryPanel()
+        useUiStore.getState().openPanel('library', {})
       })
 
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
@@ -215,7 +218,7 @@ describe('LibraryPanel (always-docked)', () => {
   describe('re-docking / re-targeting on pop-out close', () => {
     it('re-opens the docked panel for the workspace a pop-out announces closing, when nothing is currently docked', async () => {
       render(<LibraryPanel />)
-      expect(useUiStore.getState().libraryPanel).toBeNull()
+      expect(useUiStore.getState().activePanel).toBeNull()
       expect(screen.queryByTestId('library-panel-docked')).not.toBeInTheDocument()
 
       act(() => {
@@ -223,7 +226,7 @@ describe('LibraryPanel (always-docked)', () => {
       })
 
       await waitFor(() => {
-        expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-99' })
+        expect(useUiStore.getState().activePanel).toEqual({ id: 'library', context: { workspaceId: 'ws-99' } })
       })
       expect(screen.getByTestId('library-panel-docked')).toBeInTheDocument()
     })
@@ -236,20 +239,26 @@ describe('LibraryPanel (always-docked)', () => {
     // panel") was itself the root cause of the bug this fix wave was asked
     // to root-cause — it made the re-dock a no-op in exactly the scenario
     // that matters, regardless of whether the message-passing chain worked.
-    it('re-targets an already-docked panel to the workspace a pop-out announces closing', async () => {
+    // Wave 1 REVERSES the unconditional re-target (side-panel-shell-spec.md
+    // MAJ-006 + MAJ-208: a pop-out's close re-docks ONLY into an EMPTY slot —
+    // the §8.3 handle registry adds the opener-only half in the shell
+    // wiring). An already-open panel — Library OR Browser, SP-7's single
+    // slot — is never clobbered by the handoff. (The Dana UAT fix above
+    // still holds for the empty-slot case: the continuously-known workspace
+    // is what re-docks.)
+    it('does NOT clobber an already-open panel when a pop-out announces closing', async () => {
       render(<LibraryPanel />)
       act(() => {
-        useUiStore.getState().openLibraryPanel('ws-current')
+        useUiStore.getState().openPanel('library', { workspaceId: 'ws-current' })
       })
-      expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-current' })
+      expect(useUiStore.getState().activePanel).toEqual({ id: 'library', context: { workspaceId: 'ws-current' } })
 
       act(() => {
         announceLibraryPopoutClosed('ws-other')
       })
 
-      await waitFor(() => {
-        expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-other' })
-      })
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(useUiStore.getState().activePanel).toEqual({ id: 'library', context: { workspaceId: 'ws-current' } })
     })
 
     // Verifies the actual root-cause fix rather than just the guard removal:
@@ -259,11 +268,8 @@ describe('LibraryPanel (always-docked)', () => {
     // `popout-closed` message itself happens to carry. This matters because
     // `pagehide` + BroadcastChannel is not a reliable delivery moment; the
     // continuous stream is the real source of truth.
-    it('applies the CONTINUOUSLY-known workspace at close time, even when popout-closed itself carries a different/stale value', async () => {
+    it('applies the CONTINUOUSLY-known workspace at close time, even when popout-closed itself carries a different/stale value (empty slot — MAJ-006)', async () => {
       render(<LibraryPanel />)
-      act(() => {
-        useUiStore.getState().openLibraryPanel('ws-current')
-      })
 
       act(() => {
         announceLibraryWorkspaceChanged('ws-99')
@@ -275,30 +281,24 @@ describe('LibraryPanel (always-docked)', () => {
       })
 
       await waitFor(() => {
-        expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-99' })
+        expect(useUiStore.getState().activePanel).toEqual({ id: 'library', context: { workspaceId: 'ws-99' } })
       })
     })
 
-    it('falls back to the popout-closed payload when no continuous workspace-changed broadcast was ever received', async () => {
+    it('falls back to the popout-closed payload when no continuous workspace-changed broadcast was ever received (empty slot — MAJ-006)', async () => {
       render(<LibraryPanel />)
-      act(() => {
-        useUiStore.getState().openLibraryPanel('ws-current')
-      })
 
       act(() => {
         announceLibraryPopoutClosed('ws-42')
       })
 
       await waitFor(() => {
-        expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-42' })
+        expect(useUiStore.getState().activePanel).toEqual({ id: 'library', context: { workspaceId: 'ws-42' } })
       })
     })
 
-    it('re-targets to the virtual root (undefined) when the pop-out closed there', async () => {
+    it('re-targets to the virtual root (undefined) when the pop-out closed there (empty slot — MAJ-006)', async () => {
       render(<LibraryPanel />)
-      act(() => {
-        useUiStore.getState().openLibraryPanel('ws-current')
-      })
 
       act(() => {
         announceLibraryWorkspaceChanged(undefined)
@@ -308,7 +308,7 @@ describe('LibraryPanel (always-docked)', () => {
       })
 
       await waitFor(() => {
-        expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: undefined })
+        expect(useUiStore.getState().activePanel).toEqual({ id: 'library', context: { workspaceId: undefined } })
       })
     })
 
@@ -320,7 +320,7 @@ describe('LibraryPanel (always-docked)', () => {
         announceLibraryPopoutClosed('ws-after-unmount')
       })
       await new Promise((resolve) => setTimeout(resolve, 10))
-      expect(useUiStore.getState().libraryPanel).toBeNull()
+      expect(useUiStore.getState().activePanel).toBeNull()
     })
   })
 })
