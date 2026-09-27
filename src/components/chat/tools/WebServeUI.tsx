@@ -22,7 +22,8 @@
  *
  * The toolName passed to makeWebServeUI selects which tool name the component
  * registers under, allowing the same component factory to cover:
- *   web_serve        (canonical)
+ *   serve_web        (canonical — pkg/tools/web_serve.go::ToolNameWebServe)
+ *   web_serve        (legacy form, old transcripts only)
  *   serve_workspace  (back-compat replay alias)
  *   run_in_workspace (back-compat replay alias)
  */
@@ -323,6 +324,10 @@ export function makeWebServeUI(toolName: string) {
   })
 }
 
-// ── Canonical registration ────────────────────────────────────────────────────
+// ── Registrations ─────────────────────────────────────────────────────────────
 
+/** Canonical backend name (pkg/tools/web_serve.go::ToolNameWebServe). */
+export const ServeWebUI = makeWebServeUI('serve_web')
+
+/** Legacy form — kept so pre-rename transcripts replay correctly. */
 export const WebServeUI = makeWebServeUI('web_serve')
