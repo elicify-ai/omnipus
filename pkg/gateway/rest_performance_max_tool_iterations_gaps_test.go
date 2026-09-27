@@ -517,9 +517,13 @@ func TestEnvImport_NotOnRefresh_AdminSaveWins(t *testing.T) {
 	assert.EqualValues(t, 150, mtiDecode(t, w.Body.Bytes())["max_tool_iterations"])
 	assert.EqualValues(t, 150, mtiDiskGlobal(t, api), "the admin's save stays on disk")
 	assert.EqualValues(t, 150, mtiGetPerf(t, api)["max_tool_iterations"], "the admin's save stays in force")
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "max_tool_iterations_env_imported", "no import ran on the refresh")
+	// No import ran on the refresh: the env value (80) reached neither disk
+	// nor memory (the three 150 assertions above). The marker is not a proxy
+	// for an import here — the admin's PUT itself writes it with the global
+	// (D6, review-gate fix 5f10339b1; TestGateFix_PerformancePUT_WritesImportMarker),
+	// so the retired env var can never overwrite this save on a later boot.
+	assert.Equal(t, true, mtiDiskDefaults(t, api)["max_tool_iterations_env_imported"],
+		"the admin save ends the one-time env import (D6)")
 }
 
 // ---------------------------------------------------------------------------
