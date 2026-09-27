@@ -369,14 +369,13 @@ func filterReservedCookiePairs(cookieHeader string) (filtered string, dropped bo
 			dropped = true
 			continue
 		}
-		name := p
-		if i := strings.IndexByte(p, '='); i >= 0 {
-			name = p[:i]
-		} else {
+		i := strings.IndexByte(p, '=')
+		if i < 0 {
 			// A pair with no "=" is not a valid cookie pair — drop it.
 			dropped = true
 			continue
 		}
+		name := p[:i]
 		if _, reserved := reservedGatewayCookieNames[strings.TrimSpace(name)]; reserved {
 			dropped = true
 			continue
