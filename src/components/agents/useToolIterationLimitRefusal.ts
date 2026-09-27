@@ -10,7 +10,15 @@
 //     field explains why its own value did not;
 //   - editing the limit again clears the refusal, so the next value — even
 //     the same number after the global was raised — is sent normally; a
-//     refusal belongs to one agent and never follows the form to another.
+//     refusal (and the set of refusal texts the indicator suppresses) belongs
+//     to one agent and never follows the form to another.
+//
+// A refusal is recognised ONLY by the server's structured `field:
+// "max_tool_iterations"` on a 400 (ErrorResponse.field, set on every per-agent
+// limit refusal — create and update, bound and D10). There is no message-text
+// fallback: a 400 without the field (an older backend) is not pinned on the
+// limit field and stays on the ordinary autosave indicator, where it is still
+// shown in full — never hidden.
 
 import { useCallback, useRef, useState } from 'react'
 import { isApiError } from '@/lib/api'
@@ -23,9 +31,11 @@ interface Refusal {
 
 type LimitDraft = { max_tool_iterations?: number | null }
 
+const EMPTY: ReadonlySet<string> = new Set()
+
 export function isToolIterationLimitRefusal(err: unknown): boolean {
   if (!isApiError(err) || err.status !== 400) return false
-  return err.field === 'max_tool_iterations' || /\bmax_tool_iterations\b/.test(err.userMessage)
+  return err.field === 'max_tool_iterations'
 }
 
 export interface ToolIterationLimitRefusal {
@@ -52,10 +62,24 @@ export interface ToolIterationLimitRefusal {
 
 export function useToolIterationLimitRefusal(agentId: string | null): ToolIterationLimitRefusal {
   const [state, setRefusal] = useState<Refusal | null>(null)
-  const [refusalMessages, setRefusalMessages] = useState<ReadonlySet<string>>(() => new Set())
+  // The refusal texts seen for the CURRENT agent only (the indicator hides
+  // them because the field explains them).
+  const [refusalMessages, setRefusalMessages] = useState<ReadonlySet<string>>(EMPTY)
   const ref = useRef<Refusal | null>(null)
   const agentRef = useRef(agentId)
-  agentRef.current = agentId
+  // A different agent drops the refusal and the text set outright — neither
+  // follows the form to another agent, nor comes back on returning to this
+  // one (state adjusted during render, React's documented pattern).
+  const [shownFor, setShownFor] = useState(agentId)
+  if (shownFor !== agentId) {
+    setShownFor(agentId)
+    setRefusal(null)
+    setRefusalMessages(EMPTY)
+  }
+  if (agentRef.current !== agentId) {
+    agentRef.current = agentId
+    ref.current = null
+  }
   const current = useCallback(
     () => (ref.current && ref.current.agentId === agentRef.current ? ref.current : null),
     [],
@@ -63,6 +87,8 @@ export function useToolIterationLimitRefusal(agentId: string | null): ToolIterat
   const refusal = state && state.agentId === agentId ? state : null
 
   const record = useCallback((next: Refusal | null) => {
+    // A refusal answering a save started for another agent is stale.
+    if (next && next.agentId !== agentRef.current) return
     ref.current = next
     setRefusal(next)
     if (next) setRefusalMessages((prev) => (prev.has(next.message) ? prev : new Set(prev).add(next.message)))
@@ -78,13 +104,14 @@ export function useToolIterationLimitRefusal(agentId: string | null): ToolIterat
   }, [current])
 
   const save = useCallback(async <T extends LimitDraft>(draft: T, send: (data: T) => Promise<boolean>) => {
+    const owner = agentRef.current
     const withoutLimit = { ...draft, max_tool_iterations: undefined }
     const data = withoutRefused(draft)
     try {
       await send(data)
     } catch (err) {
       if (data.max_tool_iterations === undefined || !isToolIterationLimitRefusal(err)) throw err
-      record({ agentId: agentRef.current, value: data.max_tool_iterations, message: isApiError(err) ? err.userMessage : String(err) })
+      record({ agentId: owner, value: data.max_tool_iterations, message: isApiError(err) ? err.userMessage : String(err) })
       if (!(await send(withoutLimit))) throw err
     }
   }, [record, withoutRefused])

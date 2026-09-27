@@ -365,10 +365,10 @@ describe('PerformanceSection — global max tool iterations (#904)', () => {
     expect(api.fetchMaxToolIterationsLoweringPreview).not.toHaveBeenCalled()
   })
 
-  it('a reload failure after a committed save says "Saved, but not applied yet", clears the edit, names the lowered agents from the error body and re-reads GET', async () => {
+  it('a stage-reload failure after a committed save says "Saved, but not applied yet", clears the edit, names the lowered agents from the error body and re-reads GET', async () => {
     vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockResolvedValue({ value: 200, agents: [AGENT_A] })
     vi.mocked(api.updatePerformanceSettings).mockRejectedValue(
-      new api.PerformanceReloadFailedError('agent registry reload failed', '{}', null, [AGENT_A]),
+      new api.PerformanceReloadFailedError('agent registry reload failed', '{}', null, { stage: 'reload', loweredAgents: [AGENT_A] }),
     )
     renderSection()
     await typeLimit('200')
@@ -393,6 +393,82 @@ describe('PerformanceSection — global max tool iterations (#904)', () => {
     await waitFor(() => expect(screen.getByLabelText(LABEL)).toHaveValue(200))
     expect(screen.queryByTestId('performance-max-tool-iterations-save-btn')).not.toBeInTheDocument()
     expect(screen.queryByText(/Failed to save the tool-call limit/)).not.toBeInTheDocument()
+  })
+
+  describe('a stage-refresh reload failure (config.json written, in-memory config NOT swapped)', () => {
+    const REFRESH_TEXT = 'performance settings saved but the reload failed; the new tool-iteration limit applies after the next reload or restart'
+
+    // Lower 300 → 200 (no agents affected); the PUT answers performance_reload_failed
+    // stage refresh, and every GET afterwards still reports the OLD in-memory 300.
+    async function refreshFailure(extra: Partial<api.PerformanceReloadFailure> = {}) {
+      vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockResolvedValue({ value: 200, agents: [] })
+      vi.mocked(api.updatePerformanceSettings).mockRejectedValueOnce(
+        new api.PerformanceReloadFailedError(REFRESH_TEXT, '{}', null, { stage: 'refresh', changedFields: ['max_tool_iterations'], ...extra }),
+      )
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+      render(
+        <QueryClientProvider client={client}>
+          <PerformanceSection />
+        </QueryClientProvider>,
+      )
+      await typeLimit('200')
+      fireEvent.click(await screen.findByRole('button', { name: STEP_UP_CONFIRM }, WAIT))
+      await waitFor(() => expect(api.updatePerformanceSettings).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(api.fetchPerformanceSettings).toHaveBeenCalledTimes(2))
+      return client
+    }
+
+    it('keeps the saved value on show, not the stale GET value, with a lasting "saved to the settings file" notice', async () => {
+      await refreshFailure()
+      const notice = await screen.findByTestId('performance-unapplied-notice', {}, WAIT)
+      expect(notice).toHaveAttribute('role', 'status')
+      expect(notice).toHaveTextContent(
+        `Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload: ${REFRESH_TEXT}`,
+      )
+      expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'warning' }))
+      expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
+      // GET said 300; the field keeps the saved 200 and is not dirty.
+      await new Promise((r) => setTimeout(r, 50))
+      expect(screen.getByLabelText(LABEL)).toHaveValue(200)
+      expect(screen.queryByTestId('performance-max-tool-iterations-save-btn')).not.toBeInTheDocument()
+    })
+
+    it('the next change is not judged against the stale in-memory global: the stale value is sent via the preview, not skipped as unchanged', async () => {
+      await refreshFailure()
+      await screen.findByTestId('performance-unapplied-notice', {}, WAIT)
+      vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockClear()
+      vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockResolvedValue({ value: 300, agents: [] })
+      vi.mocked(api.updatePerformanceSettings).mockResolvedValueOnce({ ...SETTINGS, max_tool_iterations: 300 })
+      // 300 is what GET (stale) reports, but config.json holds 200: a real change.
+      fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '300' } })
+      await waitFor(() => expect(api.fetchMaxToolIterationsLoweringPreview).toHaveBeenCalledWith(300), WAIT)
+      fireEvent.click(await screen.findByRole('button', { name: STEP_UP_CONFIRM }, WAIT))
+      await waitFor(() => expect(api.updatePerformanceSettings).toHaveBeenCalledTimes(2))
+      expect(vi.mocked(api.updatePerformanceSettings).mock.calls[1][0]).toMatchObject({ max_tool_iterations: 300 })
+      // A successful save put config.json in force: the notice goes.
+      await waitFor(() => expect(screen.queryByTestId('performance-unapplied-notice')).not.toBeInTheDocument())
+    })
+
+    it('the notice goes once GET reports the saved value (the gateway reloaded)', async () => {
+      const client = await refreshFailure()
+      await screen.findByTestId('performance-unapplied-notice', {}, WAIT)
+      // Still stale on a plain re-read: the notice stays.
+      await client.invalidateQueries({ queryKey: ['performance-settings'] })
+      await waitFor(() => expect(api.fetchPerformanceSettings).toHaveBeenCalledTimes(3))
+      expect(screen.getByTestId('performance-unapplied-notice')).toBeInTheDocument()
+      // The gateway reloaded: GET now reports the saved 200.
+      vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({ ...SETTINGS, max_tool_iterations: 200 })
+      await client.invalidateQueries({ queryKey: ['performance-settings'] })
+      await waitFor(() => expect(screen.queryByTestId('performance-unapplied-notice')).not.toBeInTheDocument())
+      expect(screen.getByLabelText(LABEL)).toHaveValue(200)
+    })
+
+    it('a lowered list the client could not read is shown to the user, not only logged', async () => {
+      await refreshFailure({ loweredUnknown: true })
+      const summary = await screen.findByTestId('performance-max-tool-iterations-lowered-summary', {}, WAIT)
+      expect(summary).toHaveAttribute('role', 'status')
+      expect(summary).toHaveTextContent(/may have been lowered.*reload the page to see which/)
+    })
   })
 
   describe('cancelling the lowering dialog after a D16 drift keeps the other fields honest', () => {

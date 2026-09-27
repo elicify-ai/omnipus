@@ -32,9 +32,9 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function putError(): Promise<unknown> {
+async function putError(body: Parameters<typeof updatePerformanceSettings>[0] = { max_tool_iterations: 150 }): Promise<unknown> {
   try {
-    await updatePerformanceSettings({ max_tool_iterations: 150 })
+    await updatePerformanceSettings(body)
   } catch (err) {
     return err
   }
@@ -44,11 +44,11 @@ async function putError(): Promise<unknown> {
 describe('updatePerformanceSettings — 500 mapping after the review gate', () => {
   const ALPHA = { agent_id: 'a1', agent_name: 'Alpha', old_value: 250, new_value: 200 }
 
-  it('500 performance_reload_failed becomes PerformanceReloadFailedError: "Saved, but not applied yet: <server text>" carrying details.lowered_agents', async () => {
+  it('500 performance_reload_failed (stage reload) becomes PerformanceReloadFailedError: "Saved, but not applied yet: <server text>" carrying details.lowered_agents', async () => {
     fetchMock.mockResolvedValue(jsonResponse(500, {
       error: 'agent registry reload failed',
       code: 'performance_reload_failed',
-      details: { lowered_agents: [ALPHA] },
+      details: { stage: 'reload', changed_fields: ['max_tool_iterations'], lowered_agents: [ALPHA] },
     }))
     const err = await putError()
     expect(isPerformanceReloadFailed(err)).toBe(true)
@@ -59,13 +59,74 @@ describe('updatePerformanceSettings — 500 mapping after the review gate', () =
     expect(e.code).toBe(PERFORMANCE_RELOAD_FAILED_CODE)
     expect(e.userMessage).toBe('Saved, but not applied yet: agent registry reload failed')
     expect(e.loweredAgents).toEqual([ALPHA])
+    expect(e.stage).toBe('reload')
+    expect(e.inMemoryUpdated).toBe(true)
+    expect(e.changedFields).toEqual(['max_tool_iterations'])
+    expect(e.loweredUnknown).toBe(false)
   })
 
-  it('performance_reload_failed with no details lowered nobody: loweredAgents is empty', async () => {
+  it('stage refresh says the values are in the settings file and apply after a restart or reload, with the server text', async () => {
+    const text = 'performance settings saved but the reload failed; the new tool-iteration limit applies after the next reload or restart'
+    fetchMock.mockResolvedValue(jsonResponse(500, {
+      error: text,
+      code: 'performance_reload_failed',
+      details: { stage: 'refresh', changed_fields: ['max_tool_iterations'], lowered_agents: [] },
+    }))
+    const e = (await putError()) as PerformanceReloadFailedError
+    expect(isPerformanceReloadFailed(e)).toBe(true)
+    expect(e.stage).toBe('refresh')
+    expect(e.inMemoryUpdated).toBe(false)
+    expect(e.userMessage).toBe(`Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload: ${text}`)
+  })
+
+  it('an EMPTY message still reads "saved, not applied" and names only the changed fields', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(500, {
+      error: '',
+      code: 'performance_reload_failed',
+      details: { stage: 'refresh', changed_fields: ['goal_max_rounds'], lowered_agents: [] },
+    }))
+    const e = (await putError({ goal_max_rounds: 7 })) as PerformanceReloadFailedError
+    expect(isPerformanceReloadFailed(e)).toBe(true)
+    expect(e.userMessage).toBe('Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload: the new goal tries will be used after a restart or reload')
+    expect(e.userMessage).not.toMatch(/tool-call/)
+  })
+
+  it('a malformed body (no details, empty message) is still a committed save with an unknown stage', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fetchMock.mockResolvedValue(jsonResponse(500, { error: '', code: 'performance_reload_failed' }))
+    const e = (await putError()) as PerformanceReloadFailedError
+    expect(isPerformanceReloadFailed(e)).toBe(true)
+    expect(e.stage).toBeNull()
+    expect(e.inMemoryUpdated).toBe(false)
+    expect(e.userMessage).toBe('Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload.')
+  })
+
+  it('an unknown stage value is not trusted: stage is null', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fetchMock.mockResolvedValue(jsonResponse(500, {
+      error: 'x',
+      code: 'performance_reload_failed',
+      details: { stage: 'applied', changed_fields: [], lowered_agents: [] },
+    }))
+    const e = (await putError()) as PerformanceReloadFailedError
+    expect(e.stage).toBeNull()
+  })
+
+  it('a missing lowered list on a request that confirmed a lowering is flagged unknown, not silently empty', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fetchMock.mockResolvedValue(jsonResponse(500, { error: 'reload failed', code: 'performance_reload_failed' }))
+    const e = (await putError({ max_tool_iterations: 150, confirmed_lowering: [{ agent_id: 'a1', old_value: 250 }] })) as PerformanceReloadFailedError
+    expect(e.loweredAgents).toEqual([])
+    expect(e.loweredUnknown).toBe(true)
+  })
+
+  it('performance_reload_failed with no details on a request that confirmed no lowering: loweredAgents is empty and not unknown', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     fetchMock.mockResolvedValue(jsonResponse(500, { error: 'reload failed', code: 'performance_reload_failed' }))
     const err = (await putError()) as PerformanceReloadFailedError
     expect(isPerformanceReloadFailed(err)).toBe(true)
     expect(err.loweredAgents).toEqual([])
+    expect(err.loweredUnknown).toBe(false)
   })
 
   it('a malformed details.lowered_agents is reported, not guessed at', async () => {
@@ -78,7 +139,8 @@ describe('updatePerformanceSettings — 500 mapping after the review gate', () =
     const err = (await putError()) as PerformanceReloadFailedError
     expect(isPerformanceReloadFailed(err)).toBe(true)
     expect(err.loweredAgents).toEqual([])
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('details.lowered_agents'), expect.anything())
+    expect(err.loweredUnknown).toBe(true)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('performance_reload_failed'), expect.anything())
   })
 
   it('an agent read/list failure during a lowering (a max_tool_iterations_* 500) shows the server message', async () => {
