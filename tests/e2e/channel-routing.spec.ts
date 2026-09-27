@@ -75,6 +75,10 @@ const AGENT_REQUIRED = {
   // generated AgentSchema rejects the payload and the panel shows
   // "Couldn't load agent list." false = healthy (has a usable model).
   needs_model: false,
+  // Required by Agent.yaml since #904 (tool-iteration limit): omitting either
+  // makes AgentSchema reject GET /agents. "global" + false = rides the global.
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   revision: STUB_REVISION,
 }
 const STUB_AGENTS = [
