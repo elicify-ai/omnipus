@@ -20,6 +20,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { ResizeSeparator } from '@/components/ui/resize-separator'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
 import { usePanelShell, usePanelShellHistory } from './usePanelShell'
+import { usePanelUrlHistory } from './usePanelUrlHistory'
 import { useSwipeToClose } from './useSwipeToClose'
 import { usePanelShellStore, PANEL_WIDTH_UNSET } from './panelShellStore'
 import { PANEL_MIN_PX, clampPanelWidth, panelDefaultWidth, panelWidthCeiling, isPhoneTakeover } from './panelWidth'
@@ -50,6 +51,7 @@ export function SidePanelShell({
 }: SidePanelShellProps) {
   const shell = usePanelShell(panels, username)
   const activePanel = shell.activePanel
+  usePanelUrlHistory(activePanel)
   const storedWidth = usePanelShellStore((s) => s.panelWidth)
   const rowRef = useRef<HTMLDivElement>(null)
   const [rowWidth, setRowWidth] = useState(0)
@@ -258,4 +260,3 @@ export function SidePanelShell({
       </div>
   )
 }
-
