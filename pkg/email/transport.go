@@ -29,6 +29,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -1020,15 +1021,38 @@ func dialSMTPRaw(ctx context.Context, addr string) (net.Conn, error) {
 	}
 	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", addr)
 	if err != nil {
-		if cerr := ctx.Err(); cerr != nil {
-			return nil, cerr
-		}
-		return nil, fmt.Errorf("dial: %w", err)
+		return nil, classifyDialErr(ctx, err)
 	}
 	if err := conn.SetDeadline(ctxOrCommandDeadline(ctx)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
 	return conn, nil
+}
+
+// classifyDialErr maps a failed dial to the error the caller with a context
+// deadline expects. The dialer's fixed dialTimeout and the caller's context
+// deadline are independent clocks: the dial can fail deadline-flavored —
+// wrapping os.ErrDeadlineExceeded, or as a net.Error whose Timeout() is true
+// (e.g. the network stack's ETIMEDOUT) — at a moment when ctx.Err() has not
+// yet transitioned to non-nil. In that window the raw error used to escape
+// even though the caller had set a deadline, so callers matching on
+// context.DeadlineExceeded saw a raw timeout instead (MC-21: the flaky
+// blackhole dial test). A deadline-flavored dial failure IS the deadline
+// firing as far as the caller is concerned: normalize it to
+// context.DeadlineExceeded regardless of ctx.Err()'s state. Genuinely
+// unrelated failures (connection refused, no such host) keep the same
+// "dial: " wrapper as before — the classifier never hides a real connection
+// error.
+func classifyDialErr(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
+	var neterr net.Error
+	if errors.Is(err, os.ErrDeadlineExceeded) ||
+		(errors.As(err, &neterr) && neterr.Timeout()) {
+		return fmt.Errorf("dial: %w", context.DeadlineExceeded)
+	}
+	return fmt.Errorf("dial: %w", err)
 }
 
 // buildEmailBody constructs an RFC 5322-compliant message. A body that parses
