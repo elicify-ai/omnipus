@@ -793,11 +793,9 @@ func TestIndex_SegmentedNoteCollapsesToOneHit(t *testing.T) {
 		t.Fatal(err)
 	}
 	count := 0
-	var huge IndexHit
 	for _, h := range hits {
 		if h.Path == "huge.md" {
 			count++
-			huge = h
 		}
 	}
 	if count != 1 {
@@ -828,9 +826,31 @@ func TestIndex_SegmentedNoteCollapsesToOneHit(t *testing.T) {
 	if !(bestRaw > worstRaw) {
 		t.Fatalf("every segment of huge.md scored %v — the fixture cannot distinguish 'best segment' from 'any segment'", bestRaw)
 	}
-	if math.Abs(huge.Score-bestRaw) > 1e-9 {
+	// The oracle runs INSIDE one query result: collapse the same `raw` snapshot
+	// the best-segment scores were measured from. Comparing across two query
+	// executions is not sound — bleve's BM25 avgFieldLength is
+	// FieldCardinality/docCount, and scorch's background merges keep changing
+	// that sum after Sync returns, scaling every score (measured: a merge step
+	// that halves avgFieldLength exactly doubles every segment score). That
+	// cross-query comparison was the release-run-36329099270 flake, not the
+	// collapse itself, which picks the max within one query and is what this
+	// assertion checks — still exactly, still to 1e-9.
+	collapsedSameSnapshot := collapseSegmentHits(raw)
+	countSameSnapshot := 0
+	var hugeSameSnapshot IndexHit
+	for _, h := range collapsedSameSnapshot {
+		if h.Path == "huge.md" {
+			countSameSnapshot++
+			hugeSameSnapshot = h
+		}
+	}
+	if countSameSnapshot != 1 {
+		t.Fatalf("collapse of the raw segment hits produced huge.md %d times, want exactly 1 (FR-034a)",
+			countSameSnapshot)
+	}
+	if math.Abs(hugeSameSnapshot.Score-bestRaw) > 1e-9 {
 		t.Errorf("collapsed score = %v, want the BEST segment's score %v (worst was %v, sum %v)",
-			huge.Score, bestRaw, worstRaw, sumRaw)
+			hugeSameSnapshot.Score, bestRaw, worstRaw, sumRaw)
 	}
 
 	// Terms at the very start and the very end must both be findable: a note is
@@ -870,8 +890,8 @@ func TestIndex_SegmentedNoteCollapsesToOneHit(t *testing.T) {
 
 	// The huge note's own score must be the BEST of its segments, not a sum and
 	// not the last one seen.
-	if huge.Score <= 0 {
-		t.Errorf("collapsed hit score = %v, want the best segment's positive score", huge.Score)
+	if hugeSameSnapshot.Score <= 0 {
+		t.Errorf("collapsed hit score = %v, want the best segment's positive score", hugeSameSnapshot.Score)
 	}
 }
 
