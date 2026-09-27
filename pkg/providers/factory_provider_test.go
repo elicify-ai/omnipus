@@ -123,7 +123,7 @@ func TestCreateProviderFromConfig_ProtocolDispatch(t *testing.T) {
 				Model: "claude-x", APIBase: "https://llm2.example",
 			},
 			wantKind: anthropicKind,
-			wantURL:  "https://llm2.example/v1",
+			wantURL:  "https://llm2.example",
 		},
 		{
 			name:     "ollama builds the local OpenAI-compatible transport",
