@@ -321,7 +321,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		for key, value := range *req.Headers {
 			credKey := mcpHeaderCredKey(req.Name, key)
 			if _, err := a.storeCredential(credKey, value); err != nil {
-				slog.Error("rest: add mcp server: store header credential", "server", req.Name, "header", key, "error", err)
+				logsafeError("rest: add mcp server: store header credential", "server", req.Name, "header", key, "error", err)
 				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store header credential %q: %v", key, err))
 				return
 			}
@@ -407,7 +407,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			// server's deterministic keys.
 			for headerName, credKey := range headerRefs {
 				if delErr := a.removeStoredCredential(credKey); delErr != nil {
-					slog.Warn("rest: add mcp server: name-collision race — failed to roll back header credential",
+					logsafeWarn("rest: add mcp server: name-collision race — failed to roll back header credential",
 						"server", req.Name, "header", headerName, "cred_key", credKey, "error", delErr)
 				}
 			}
@@ -536,7 +536,9 @@ func (a *restAPI) routeEnvCredentialsThroughStore(serverID string, current *conf
 // the surrounding config write fails. On error, the snapshots accumulated so
 // far are returned together with the error so the caller can roll back.
 func (a *restAPI) replaceMCPServerHeaderCredentials(serverID string, current *config.MCPServerConfig, newHeaders map[string]string) ([]credValueSnapshot, error) {
-	oldNames := make(map[string]struct{}, len(current.Headers)+len(current.HeaderRefs))
+	// No summed capacity hint: len+len can overflow (CodeQL
+	// go/allocation-size-overflow); the map grows fine unsized.
+	oldNames := make(map[string]struct{})
 	for name := range current.Headers {
 		oldNames[name] = struct{}{}
 	}
@@ -664,7 +666,7 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 	// Issue #638: same cleanup for the ref-backed header secrets.
 	for headerName, credKey := range removedHeaderRefs {
 		if err := a.removeStoredCredential(credKey); err != nil {
-			slog.Warn("rest: delete mcp server: failed to delete header credential",
+			logsafeWarn("rest: delete mcp server: failed to delete header credential",
 				"server", id, "header", headerName, "cred_key", credKey, "error", err)
 		}
 	}
