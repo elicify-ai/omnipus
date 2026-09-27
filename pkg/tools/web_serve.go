@@ -281,8 +281,10 @@ func previewOriginRefusedResult(origin string) *ToolResult {
 // execution paths (ADR-094 FR-001/FR-022): on a Mode 1 canonical origin it
 // returns http://<label>.localhost[:port]/ for the freshly minted token; on
 // a Mode 2 origin it returns "" and the result carries NO isolated_url key.
-// class must not be PreviewOriginRefuse — the callers refuse before any
-// registration side effect.
+// "" also covers the PreviewIsolatedURL refusal (fix6 SF-4): an unparseable
+// mode1Base mints NO URL — the result carries no key — never a silently wrong
+// portless-label URL. class must not be PreviewOriginRefuse — the callers
+// refuse before any registration side effect.
 func previewIsolatedURLFor(class middleware.PreviewOriginClass, mode1Base, token string) string {
 	if class != middleware.PreviewOriginMode1 {
 		return ""

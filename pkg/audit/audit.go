@@ -164,18 +164,27 @@ var validEventNames = map[EventName]struct{}{
 	// an operator most needs to find, so the wrong name is worst here.
 	// Found by event_literal_emitters_test.go, which scans emitters rather
 	// than constants.
-	"csrf_mismatch":              {},
-	"egress_ssrf_blocked":        {},
-	"sandbox_restrict_failed":    {},
-	"git_evidence_sandbox_block": {},
-	"path.access_denied":         {},
-	EventStartup:                 {},
-	EventShutdown:                {},
-	EventBootAbort:               {},
-	EventProcessKillFailed:       {},
-	EventChannelPairing:          {},
-	EventCliValidate:             {},
-	EventExecutorSmokeTest:       {},
+	"csrf_mismatch": {},
+	// "auth.planted_cookie_detected" is emitted by
+	// pkg/gateway/middleware/planted_cookie.go's PlantedCookieGuard when the
+	// raw Cookie header carries a duplicated reserved name (ADR-094 FR-015;
+	// fix6 SF-1). The constant lives in the middleware package, which imports
+	// pkg/audit - registering a constant here would invert the dependency.
+	// Details carry {names (reserved cookie NAMES only), path (redacted via
+	// pathredact), method, state_changing}; never cookie values, never the
+	// raw Cookie header.
+	"auth.planted_cookie_detected": {},
+	"egress_ssrf_blocked":          {},
+	"sandbox_restrict_failed":      {},
+	"git_evidence_sandbox_block":   {},
+	"path.access_denied":           {},
+	EventStartup:                   {},
+	EventShutdown:                  {},
+	EventBootAbort:                 {},
+	EventProcessKillFailed:         {},
+	EventChannelPairing:            {},
+	EventCliValidate:               {},
+	EventExecutorSmokeTest:         {},
 	// First-run onboarding authority events (pkg/gateway/rest_onboarding.go).
 	EventOnboardingAdminCreated: {},
 	EventOnboardingRefused:      {}, EventPlatformSignIn: {}, // omnipus.ai sign-in (pkg/gateway/rest_platform_auth.go).

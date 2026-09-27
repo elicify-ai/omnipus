@@ -30,6 +30,8 @@ import (
 	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/gateway/pathredact"
 )
 
 // plantedReservedCookieNames are the cookie names whose duplication triggers
@@ -174,19 +176,74 @@ func appendPlantedClearSet(h http.Header, name, reqPath string, requestSecure bo
 	}
 }
 
+// plantedCookieDetectedEvent is the audit event name emitted when the
+// detector finds duplicated reserved cookie names on the raw Cookie header
+// (fix6 SF-1). The detection was previously invisible server-side - the
+// client toast was the only evidence. The record carries cookie NAMES only
+// (the fixed reserved set: omnipus-session / csrf / __Host-csrf) and the
+// REDACTED request path; never cookie values, never the raw Cookie header.
+const plantedCookieDetectedEvent = "auth.planted_cookie_detected"
+
+// plantedCookieGuardOptions carries the guard's optional wiring.
+type plantedCookieGuardOptions struct {
+	auditLog *audit.Logger
+}
+
+// PlantedCookieGuardOption configures PlantedCookieGuard. The variadic form
+// keeps every existing PlantedCookieGuard() call site - including qa-owned
+// pin tests that call it bare - compiling unchanged.
+type PlantedCookieGuardOption func(*plantedCookieGuardOptions)
+
+// WithPlantedCookieAuditLog sets the audit logger detections are recorded
+// with. May be nil (or the option omitted): audit recording is best-effort
+// and its failure never changes detection handling - the origin.go
+// RequireMatchingOriginOnStateChanging precedent.
+func WithPlantedCookieAuditLog(auditLog *audit.Logger) PlantedCookieGuardOption {
+	return func(o *plantedCookieGuardOptions) { o.auditLog = auditLog }
+}
+
 // PlantedCookieGuard is the ADR-094 FR-015 middleware: detect duplicated
 // reserved cookie names on the RAW Cookie header, mark the credential read
 // failed, emit the clear set, and refuse state-changing requests with the
 // typed planted_cookie_cleared error. It must wrap OUTSIDE CSRFMiddleware so
 // a planted csrf duplicate is answered by THIS envelope, not CSRF's generic
 // mismatch (DS-5 row 3).
-func PlantedCookieGuard() func(http.Handler) http.Handler {
+func PlantedCookieGuard(opts ...PlantedCookieGuardOption) func(http.Handler) http.Handler {
+	var o plantedCookieGuardOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			dup := plantedReservedDuplicates(r)
 			if len(dup) == 0 {
 				next.ServeHTTP(w, r)
 				return
+			}
+			// (fix6 SF-1) The detection was previously invisible server-side
+			// (gate wave-2): a slog.Warn so an operator tailing at Warn+ sees
+			// it live, plus a best-effort audit entry under
+			// plantedCookieDetectedEvent so the record survives in the
+			// HMAC-chained audit log. Cookie NAMES only and the REDACTED path;
+			// never cookie values, never the raw Cookie header.
+			stateChanging := isStateChangingMethod(r.Method)
+			redactedPath := pathredact.RequestPath(r.URL.Path)
+			slog.Warn("planted-cookie guard: duplicated reserved cookie names detected",
+				"names", dup, "path", redactedPath, "method", r.Method, "state_changing", stateChanging)
+			if o.auditLog != nil {
+				if logErr := o.auditLog.Log(&audit.Entry{
+					Timestamp: time.Now().UTC(),
+					Event:     plantedCookieDetectedEvent,
+					Decision:  audit.DecisionDeny,
+					Details: map[string]any{
+						"names":          dup,
+						"path":           redactedPath,
+						"method":         r.Method,
+						"state_changing": stateChanging,
+					},
+				}); logErr != nil {
+					slog.Warn("planted-cookie guard: audit log write failed", "error", logErr)
+				}
 			}
 			// FR-015 step 2: every downstream credential read treats this
 			// request as unauthenticated — a GET then fails the session read
