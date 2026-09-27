@@ -355,5 +355,47 @@ describe('PerformanceSection — raise (D20) and reload failure (8-reviewer gate
     const shown = () => [...addToast.mock.calls.map((c) => String((c[0] as { message?: string })?.message ?? '')), document.body.textContent ?? '']
     await waitFor(() => expect(shown().some((t) => /saved,? but not (yet )?applied/i.test(t))).toBe(true))
     expect(shown().some((t) => /server (is )?unavailable/i.test(t))).toBe(false)
+    // CHECK round 2, finding C: the TEXT alone does not tell "saved, not
+    // applied" from a failed save (the generic error path would toast the same
+    // userMessage). What distinguishes them (spec edge case "Reload fails after
+    // the global is written": the value IS saved) is the treatment: a warning,
+    // never an error toast, and no save error pinned on the limit field.
+    const toasts = addToast.mock.calls.map((c) => c[0] as { variant?: string; message?: string })
+    const savedNotApplied = toasts.filter((t) => /saved,? but not (yet )?applied/i.test(t.message ?? ''))
+    expect(savedNotApplied, 'exactly one "saved, not applied" toast').toHaveLength(1)
+    expect(savedNotApplied[0].variant, 'a committed save is a warning, not an error').toBe('warning')
+    expect(toasts.filter((t) => t.variant === 'error'), 'no error toast for a committed save').toEqual([])
+    expect(screen.queryAllByRole('alert').filter((a) => /saved,? but not (yet )?applied|failed/i.test(a.textContent ?? '')),
+      'no save error pinned on the field').toEqual([])
+  })
+
+  // Gate round 2 (typed reload-failure details, backend-lead feature/904-fix2-be):
+  // details.stage "refresh" means config.json holds the new value but the
+  // gateway's in-memory config was NOT swapped, so GET /performance still
+  // answers the OLD value until the next reload. The screen must keep showing
+  // the value the operator saved (it IS saved) — never snap back to the stale
+  // in-memory 200 as if the save had not happened. RED until frontend-lead
+  // consumes details.stage.
+  it('stage "refresh": the saved value stays shown even though GET /performance still answers the old value', async () => {
+    putHandlers = [() => ({
+      status: 500,
+      body: {
+        error: 'performance settings saved but the reload failed',
+        code: 'performance_reload_failed',
+        details: { stage: 'refresh', changed_fields: ['max_tool_iterations'] },
+      },
+    })]
+    perfGet = () => settings() // stale in-memory answer: still 200
+    renderSection()
+    await typeLimit('300')
+    await passReAuth()
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect((puts()[0].body as Record<string, unknown>).max_tool_iterations, 'instrument: 300 was the saved value').toBe(300)
+    const shown = () => [...addToast.mock.calls.map((c) => String((c[0] as { message?: string })?.message ?? '')), document.body.textContent ?? '']
+    await waitFor(() => expect(shown().some((t) => /saved,? but not (yet )?applied/i.test(t))).toBe(true))
+    // Let any refetch the failure triggers settle before reading the field
+    // (a fix may refetch or not; either way the field must end at 300).
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)) })
+    expect((screen.getByLabelText(LABEL) as HTMLInputElement).value).toBe('300')
   })
 })

@@ -506,24 +506,82 @@ func TestMaxToolIterationsEnums_GoConstantsMatchContract(t *testing.T) {
 // config refresh that follows a REST write (D6: copy once, then ignore).
 // ---------------------------------------------------------------------------
 
-// The file has no import marker and the retired env var is present while
-// the admin saves 150 in Settings. The refresh after that write must not
-// import the env value over the admin's save.
+// mtiAllLogText returns everything both log paths captured (slog + the
+// pkg/logger file sink), at every level.
+func mtiAllLogText(c *mtiLogCapture) string {
+	c.mu.Lock()
+	all := c.buf.String()
+	c.mu.Unlock()
+	if raw, err := os.ReadFile(c.file); err == nil {
+		all += "\n" + string(raw)
+	}
+	return all
+}
+
+// mtiEnvImportLine is the fixed prefix of the INFO line the one-time import
+// logs when it copies the retired env var into config.json (D6/D17 "copied
+// once" notice). Its presence is the observable sign an import ran.
+const mtiEnvImportLine = "copied " + envMaxToolIterations + " into config.json"
+
+// D6 "copy once, then ignore": the env import is a BOOT action. The property
+// under test is "an env var still set does not overwrite the admin's saved
+// value on a refresh load". The oracle is the saved value and the absence of
+// an import — never the absence of the marker: PUT /performance writes the
+// marker itself (D6, TestGateFix_PerformancePUT_WritesImportMarker).
+//
+// newMTIAPI's own load is this config path's boot load, taken with the env
+// var UNSET, so every later load in the test is a refresh.
 func TestEnvImport_NotOnRefresh_AdminSaveWins(t *testing.T) {
-	api := newMTIAPI(t, "200")
-	t.Setenv(envMaxToolIterations, "80")
-	w := mtiPutPerf(t, api, `{"max_tool_iterations":150}`)
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	assert.EqualValues(t, 150, mtiDecode(t, w.Body.Bytes())["max_tool_iterations"])
-	assert.EqualValues(t, 150, mtiDiskGlobal(t, api), "the admin's save stays on disk")
-	assert.EqualValues(t, 150, mtiGetPerf(t, api)["max_tool_iterations"], "the admin's save stays in force")
-	// No import ran on the refresh: the env value (80) reached neither disk
-	// nor memory (the three 150 assertions above). The marker is not a proxy
-	// for an import here — the admin's PUT itself writes it with the global
-	// (D6, review-gate fix 5f10339b1; TestGateFix_PerformancePUT_WritesImportMarker),
-	// so the retired env var can never overwrite this save on a later boot.
-	assert.Equal(t, true, mtiDiskDefaults(t, api)["max_tool_iterations_env_imported"],
-		"the admin save ends the one-time env import (D6)")
+	t.Run("instrument: a boot load with the env var set does import and log it", func(t *testing.T) {
+		logs := captureMTILogs(t)
+		dir := t.TempDir()
+		p := filepath.Join(dir, "config.json")
+		cfgJSON := `{"version":` + fmt.Sprint(config.CurrentVersion) +
+			`,"agents":{"defaults":{"workspace":` + mtiJSON(t, dir) + `,"max_tool_iterations":200}},"providers":[]}`
+		require.NoError(t, os.WriteFile(p, []byte(cfgJSON), 0o600))
+		t.Setenv(envMaxToolIterations, "80")
+		cfg, err := config.LoadConfig(p)
+		require.NoError(t, err)
+		require.Equal(t, 80, cfg.Agents.Defaults.MaxToolIterations,
+			"instrument: a boot load imports the env value (D5), so the refresh legs below can see an import")
+		require.Contains(t, mtiAllLogText(logs), mtiEnvImportLine,
+			"instrument: the log capture sees the import notice")
+	})
+
+	t.Run("admin saves 150 in Settings while the env var is set: 150 stays", func(t *testing.T) {
+		logs := captureMTILogs(t)
+		api := newMTIAPI(t, "200")
+		t.Setenv(envMaxToolIterations, "80")
+		w := mtiPutPerf(t, api, `{"max_tool_iterations":150}`)
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.EqualValues(t, 150, mtiDecode(t, w.Body.Bytes())["max_tool_iterations"])
+		assert.EqualValues(t, 150, mtiDiskGlobal(t, api), "the admin's save stays on disk")
+		assert.EqualValues(t, 150, mtiGetPerf(t, api)["max_tool_iterations"], "the admin's save stays in force")
+		assert.NotContains(t, mtiAllLogText(logs), mtiEnvImportLine, "no env import ran on the refresh")
+		// The admin's PUT itself writes the marker with the global (D6,
+		// TestGateFix_PerformancePUT_WritesImportMarker), so the retired env
+		// var can never overwrite this save on a later boot.
+		assert.Equal(t, true, mtiDiskDefaults(t, api)["max_tool_iterations_env_imported"],
+			"the admin save ends the one-time env import (D6)")
+	})
+
+	// The leg that can see an import: a Settings write of ANOTHER field
+	// refreshes the config without touching the global or writing the
+	// marker, so only the boot-only rule keeps the env value out. The saved
+	// admin value (200) must stay on disk and in force, and nothing may be
+	// imported (no marker written, no import notice).
+	t.Run("a refresh after a sibling write does not import over the saved value", func(t *testing.T) {
+		logs := captureMTILogs(t)
+		api := newMTIAPI(t, "200")
+		t.Setenv(envMaxToolIterations, "80")
+		w := mtiPutPerf(t, api, `{"goal_max_rounds":7}`)
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.EqualValues(t, 200, mtiDiskGlobal(t, api), "the saved global is not overwritten by the env value 80")
+		assert.EqualValues(t, 200, mtiGetPerf(t, api)["max_tool_iterations"], "the saved global stays in force")
+		_, marker := mtiDiskDefaults(t, api)["max_tool_iterations_env_imported"]
+		assert.False(t, marker, "no import ran, so nothing wrote the import marker")
+		assert.NotContains(t, mtiAllLogText(logs), mtiEnvImportLine, "no env import ran on the refresh")
+	})
 }
 
 // ---------------------------------------------------------------------------

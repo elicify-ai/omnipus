@@ -158,8 +158,15 @@ test.describe('#904 tool iteration limit', () => {
     await expect(input).toHaveValue('200', { timeout: 15_000 });
 
     await input.fill('300');
-    await page.waitForTimeout(1_500);
-    await expect(page.getByTestId('max-tool-iterations-lowering-list')).toHaveCount(0);
-    expect(seen.puts).toBe(0);
+    // Positive signal instead of a fixed sleep (CHECK round 2, finding D): a
+    // raise goes straight to the step-up gate (D20 + US-1 AS-4) — the password
+    // dialog in local mode, a confirmation (alertdialog) in platform mode.
+    // Once the gate is up, the point where a lowering dialog would have
+    // appeared has passed.
+    const stepUp = page.getByTestId('reauth-password-input').or(page.getByRole('alertdialog'));
+    await expect(stepUp.first(), 'a raise must reach the step-up gate').toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('max-tool-iterations-lowering-list'), 'no lowering dialog on a raise (D20)').toHaveCount(0);
+    expect(seen.previews.filter((u) => u.includes('value=300')), 'a raise is never previewed (D20)').toEqual([]);
+    expect(seen.puts, 'nothing is written before the step-up gate is passed').toBe(0);
   });
 });

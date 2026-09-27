@@ -30,6 +30,9 @@ const FILES: { path: string; known: string }[] = [
   { path: 'components/settings/MaxToolIterationsLoweringDialog.tsx', known: 'export function MaxToolIterationsLoweringDialog' },
   { path: 'components/settings/PerformanceSection.tsx', known: 'export function PerformanceSection' },
   { path: 'hooks/useGlobalToolIterationLimit.ts', known: 'export function useGlobalToolIterationLimit' },
+  // Gate round 2: the refusal hook and the API layer that carries the limit.
+  { path: 'components/agents/useToolIterationLimitRefusal.ts', known: 'export function useToolIterationLimitRefusal' },
+  { path: 'lib/api/config.ts', known: 'export function fetchPerformanceSettings' },
 ]
 
 const BANNED: { name: string; re: RegExp }[] = [
