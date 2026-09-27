@@ -913,11 +913,29 @@ _e2e_run_shard() {
   # `provider` now fails ModelConfig.Validate ("provider is required") instead of being
   # guessed. agents.defaults.default_model is the (provider, model) pair — the retired
   # model_name alias is gone (ADR-068 CRIT-001).
-  E2E_MODEL="$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json)"
-  if [ -z "$E2E_MODEL" ]; then
-    echo "[$name] tests/e2e/e2e-model.json: .model is missing, empty, or whitespace-only — the checkout at $(git -C . rev-parse --short HEAD 2>/dev/null || echo '?') predates the central e2e model file" >&2
+  # --- e2e model read (fail-closed) >>>
+  # Split diagnostics (silent-failure-hunter LOW re-review finding, 2026-09-27): a
+  # PRESENT file with an empty/whitespace-only .model is a different failure from a
+  # MISSING file, and the old single message ("predates the central e2e model file")
+  # named the wrong repair for the former — it pointed at the checkout's age instead
+  # of at tests/e2e/e2e-model.json. jq's stderr is surfaced so "No such file or
+  # directory" vs a JSON parse error is visible in the gate log.
+  #   jq fails (file missing / unreadable / invalid JSON) → checkout predates the central file
+  #   jq succeeds but the trimmed .model is empty          → present-but-empty: edit tests/e2e/e2e-model.json
+  local e2e_jq_rc=0 e2e_jq_err_file e2e_jq_msg
+  e2e_jq_err_file="$(mktemp "${TMPDIR:-/tmp}/runci-e2e-model-jq.XXXXXX")" || { echo "[$name] tests/e2e/e2e-model.json: mktemp failed — cannot read the e2e model id fail-closed" >&2; return 1; }
+  E2E_MODEL="$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json 2>"$e2e_jq_err_file")" || e2e_jq_rc=$?
+  e2e_jq_msg="$(tr '\n' ' ' <"$e2e_jq_err_file")"
+  rm -f "$e2e_jq_err_file"
+  if [ "$e2e_jq_rc" -ne 0 ]; then
+    echo "[$name] tests/e2e/e2e-model.json: missing or unreadable/invalid JSON (jq exit $e2e_jq_rc: $e2e_jq_msg) — the checkout at $(git -C . rev-parse --short HEAD 2>/dev/null || echo '?') predates the central e2e model file" >&2
     return 1
   fi
+  if [ -z "$E2E_MODEL" ]; then
+    echo "[$name] tests/e2e/e2e-model.json: present but .model is empty or whitespace-only — edit that file to set the e2e model id" >&2
+    return 1
+  fi
+  # <<< e2e model read (fail-closed)
   cat > "$home/config.json" <<EOF
 {
   "version": 1,
