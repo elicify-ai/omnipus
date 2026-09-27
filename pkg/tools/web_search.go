@@ -52,26 +52,6 @@ type capabilitySearchProvider interface {
 	honoursSiteFilters() bool
 }
 
-// providerCaps is the static capability matrix row for one provider id.
-type providerCaps struct {
-	honoursDepth bool
-	honoursSite  bool
-}
-
-// capabilityMatrix is the spec's static matrix (spec 458–467). Baidu,
-// SearXNG, DuckDuckGo, Brave honour neither; Exa honours site filters only;
-// GLM honours depth (except agent low) but not site filters.
-var capabilityMatrix = map[string]providerCaps{
-	"duckduckgo": {},
-	"brave":      {},
-	"tavily":     {honoursDepth: true, honoursSite: true},
-	"perplexity": {honoursDepth: true, honoursSite: true},
-	"glm":        {honoursDepth: true},
-	"baidu":      {},
-	"exa":        {honoursSite: true},
-	"searxng":    {},
-}
-
 // searchProviderCatalogueOrder lists every ADR-096 provider id in the
 // operator-facing priority order the legacy chain uses (Perplexity > Brave >
 // SearXNG > Tavily > DuckDuckGo > Baidu > GLM), with Exa appended. Lists in
@@ -338,7 +318,7 @@ func (t *WebSearchTool) runProvider(
 	start time.Time,
 	id string,
 	req searchRequest,
-) (string, error) {
+) (string, *searchProviderError) {
 	p, ok := t.dynamic[id]
 	if !ok {
 		return "", &searchProviderError{class: classNetwork, msg: id + ": provider not constructed"}
@@ -407,7 +387,7 @@ func validSearchHostname(raw string) (string, error) {
 			return "", fmt.Errorf("%q has an empty label", raw)
 		}
 		for _, r := range label {
-			if !('a' <= r && r <= 'z' || '0' <= r && r <= '9' || r == '-') {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
 				return "", fmt.Errorf("%q has invalid characters", raw)
 			}
 		}
@@ -689,11 +669,10 @@ func (t *WebSearchTool) executeDefaultPath(
 	if res := t.preflightCheck(entries, defaultID, "default", req); res != nil {
 		return res
 	}
-	text, perr := t.runProvider(ctx, start, defaultID, req)
-	if perr == nil {
+	text, spErr := t.runProvider(ctx, start, defaultID, req)
+	if spErr == nil {
 		return successText(text, defaultID, "default", t.excludeNote(entries, defaultID, req))
 	}
-	spErr := perr.(*searchProviderError)
 	// Final classes never hop (spec "Which failures hop").
 	if !hopClass(spErr.class) {
 		lines := []string{"search failed", t.failureLine(defaultID, "default", spErr.class, spErr.msg)}
@@ -721,13 +700,12 @@ func (t *WebSearchTool) executeDefaultPath(
 		}
 		return ErrorResult(strings.Join(lines, "\n"))
 	}
-	text2, perr2 := t.runProvider(ctx, start, entries.fallbackID, req)
-	if perr2 == nil {
+	text2, spErr2 := t.runProvider(ctx, start, entries.fallbackID, req)
+	if spErr2 == nil {
 		notes := t.excludeNote(entries, entries.fallbackID, req)
 		notes = append(notes, t.hopNote(defaultID, "default", spErr.class, spErr.msg))
 		return successText(text2, entries.fallbackID, "fallback", notes)
 	}
-	spErr2 := perr2.(*searchProviderError)
 	lines := []string{"search failed",
 		t.failureLine(defaultID, "default", spErr.class, spErr.msg),
 		t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}
@@ -756,13 +734,12 @@ func (t *WebSearchTool) executeNotUsableDefault(
 		return ErrorResult(strings.Join(lines, "\n"))
 	}
 	// R6: the fallback runs; the default is named in a note or an error line.
-	text, perr := t.runProvider(ctx, start, fb, req)
-	if perr == nil {
+	text, spErr := t.runProvider(ctx, start, fb, req)
+	if spErr == nil {
 		notes := t.excludeNote(entries, entries.fallbackID, req)
 		notes = append(notes, fmt.Sprintf("Note: %s (default) was not called: %s.", defaultID, reason))
 		return successText(text, fb, "fallback", notes)
 	}
-	spErr := perr.(*searchProviderError)
 	lines := []string{"search failed",
 		notCalledLine(defaultID, "default", reason),
 		t.failureLine(fb, "fallback", spErr.class, spErr.msg)}
@@ -796,19 +773,17 @@ func (t *WebSearchTool) executeChosen(
 		return t.executeDefaultPath(ctx, cfg, entries, req, start)
 	}
 	// Usable pick: one named attempt.
-	text, perr := t.runProvider(ctx, start, id, req)
-	if perr == nil {
+	text, spErr := t.runProvider(ctx, start, id, req)
+	if spErr == nil {
 		return successText(text, id, "chosen", t.excludeNote(entries, id, req))
 	}
-	spErr := perr.(*searchProviderError)
 	// A capability use never hops (US-4); usesCap was computed on entry.
 	if hopClass(spErr.class) && !usesCap && entries.usable[entries.fallbackID] {
-		text2, perr2 := t.runProvider(ctx, start, entries.fallbackID, req)
-		if perr2 == nil {
+		text2, spErr2 := t.runProvider(ctx, start, entries.fallbackID, req)
+		if spErr2 == nil {
 			return successText(text2, entries.fallbackID, "fallback",
 				[]string{t.hopNote(id, "chosen", spErr.class, spErr.msg)})
 		}
-		spErr2 := perr2.(*searchProviderError)
 		return ErrorResult(strings.Join([]string{"search failed",
 			t.failureLine(id, "chosen", spErr.class, spErr.msg),
 			t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}, "\n"))
@@ -826,15 +801,17 @@ func (t *WebSearchTool) executeChosen(
 // chosenRefusal is US-4's honest refusal for a named provider that is not
 // usable now: "search failed / - <id>: not usable / Usable providers: ...".
 func (t *WebSearchTool) chosenRefusal(entries roleEntries, id string) *ToolResult {
-	lines := []string{"search failed", "- " + id + ": not usable"}
 	var usableIds []string
 	for _, cand := range searchProviderCatalogueOrder {
 		if entries.usable[cand] {
 			usableIds = append(usableIds, cand)
 		}
 	}
-	lines = append(lines, "Usable providers: "+strings.Join(usableIds, ", "))
-	return ErrorResult(strings.Join(lines, "\n"))
+	return ErrorResult(strings.Join([]string{
+		"search failed",
+		"- " + id + ": not usable",
+		"Usable providers: " + strings.Join(usableIds, ", "),
+	}, "\n"))
 }
 
 // usableOthers lists usable ids other than one, catalogue order.
@@ -957,7 +934,7 @@ func (t *WebSearchTool) excludeArg() map[string]any {
 func (t *WebSearchTool) providerArg(usableList []string, lean bool) map[string]any {
 	desc := "Which provider to use."
 	if !lean {
-		var lines []string
+		lines := make([]string, 0, len(usableList))
 		for _, id := range usableList {
 			lines = append(lines, t.goodForLine(id))
 		}
@@ -1385,7 +1362,7 @@ func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchReq
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("Perplexity API error (status %d): %s", resp.StatusCode, string(body))
+			lastErr = fmt.Errorf("perplexity API error (status %d): %s", resp.StatusCode, string(body))
 			if resp.StatusCode == http.StatusTooManyRequests ||
 				resp.StatusCode == http.StatusUnauthorized ||
 				resp.StatusCode == http.StatusForbidden ||

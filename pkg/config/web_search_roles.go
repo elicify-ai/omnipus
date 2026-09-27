@@ -237,7 +237,7 @@ func MigrateWebSearchRoles(cfg *Config, cfgPath string, onSelfHeal SelfHealWrite
 		return
 	}
 	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
+	if err = json.Unmarshal(raw, &m); err != nil {
 		logger.WarnF("web-search roles migration could not parse config.json; retrying next boot", map[string]any{
 			"path":  cfgPath,
 			"error": err.Error(),
