@@ -74,7 +74,12 @@ func sendSMTPS(ctx context.Context, addr, username, password, from string, rcpts
 	}
 	defer cl.Close()
 
-	auth := smtp.PlainAuth("", from, password, tlsCfg.ServerName)
+	// AUTH identity is the configured username (the parameter's promise, and
+	// what the STARTTLS path in transport.go already does); from stays the
+	// envelope sender in smtpSendEnvelope. The sole caller passes the same
+	// value for both, so this is behavior-neutral today — it only removes the
+	// latent identity confusion if a future caller passes them differently.
+	auth := smtp.PlainAuth("", username, password, tlsCfg.ServerName)
 	if stepErr := smtpStep(ctx, cl.Auth(auth), "auth"); stepErr != nil {
 		return stepErr
 	}
