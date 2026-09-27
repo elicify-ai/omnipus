@@ -1268,7 +1268,7 @@ func TestParseStreamResponse_TextOnly(t *testing.T) {
 	var chunks []string
 	resp, err := parseStreamResponse(t.Context(), reader, func(acc string) {
 		chunks = append(chunks, acc)
-	}, nil, nil)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}
@@ -1345,7 +1345,7 @@ func TestParseStreamResponse_ToolCallDeltas(t *testing.T) {
 	}
 	reader := buildSSEStream(payloads, true)
 
-	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil)
+	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}
@@ -1417,7 +1417,7 @@ func TestParseStreamResponse_MultipleToolCalls(t *testing.T) {
 	}
 	reader := buildSSEStream(payloads, true)
 
-	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil)
+	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}
@@ -1446,7 +1446,7 @@ func TestParseStreamResponse_MalformedChunkSkipped(t *testing.T) {
 	}
 	reader := buildSSEStream(payloads, true)
 
-	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil)
+	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}
@@ -1476,7 +1476,7 @@ func TestParseStreamResponse_ContextCancellation(t *testing.T) {
 		pw.Close()
 	}()
 
-	resp, err := parseStreamResponse(ctx, pr, nil, nil, nil)
+	resp, err := parseStreamResponse(ctx, pr, nil, nil, nil, nil)
 	// Race between context cancel and pipe EOF — both outcomes are valid:
 	// - context.Canceled if ctx check fires before EOF
 	// - nil error with partial content if EOF arrives first
@@ -1500,7 +1500,7 @@ func TestParseStreamResponse_EmptyStream(t *testing.T) {
 	// Then empty content, no error, finish_reason "stop"
 	reader := buildSSEStream(nil, true)
 
-	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil)
+	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}
@@ -1525,7 +1525,7 @@ func TestParseStreamResponse_FinishReasonUnknown(t *testing.T) {
 	// Do NOT add [DONE] and do NOT provide a finish_reason.
 	reader := buildSSEStream(payloads, false)
 
-	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil)
+	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}
@@ -1576,7 +1576,7 @@ func TestParseStreamResponse_UsageInFinalChunk(t *testing.T) {
 	}
 	reader := buildSSEStream(payloads, true)
 
-	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil)
+	resp, err := parseStreamResponse(t.Context(), reader, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}

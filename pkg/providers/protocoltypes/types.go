@@ -65,6 +65,11 @@ type UsageInfo struct {
 	// CacheWriteTokens holds tokens written into a new cache entry this call.
 	// Populated when the provider reports them (Anthropic only); 0 otherwise.
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// ThinkingTokens holds the reasoning ("thinking") token count when the
+	// provider reports one (OpenAI-compatible:
+	// completion_tokens_details.reasoning_tokens); 0 otherwise — never a
+	// guessed default. A SUBSET of CompletionTokens, never added on top of it.
+	ThinkingTokens int `json:"thinking_tokens,omitempty"`
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.

@@ -77,6 +77,7 @@ func TestChatStream_ThinkingCountsAsProgress(t *testing.T) {
 		map[string]any{"max_tokens": 1024},
 		func(string) {},
 		func(ev protocoltypes.ToolCallProgress) { progress = append(progress, ev) },
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("ChatStream() error = %v", err)

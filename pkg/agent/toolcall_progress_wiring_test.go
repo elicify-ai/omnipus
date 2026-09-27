@@ -67,6 +67,7 @@ func (p *progressCapturingStreamProvider) ChatStream(
 	_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, opts map[string]any,
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
+	_ func(accumulated string),
 ) (*providers.LLMResponse, error) {
 	p.mu.Lock()
 	p.gotOptions = append(p.gotOptions, opts)

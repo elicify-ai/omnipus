@@ -390,6 +390,9 @@ type OpenAINonStreamUsage struct {
 	PromptTokensDetails *struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details,omitempty"`
 }
 
 // ToUsageInfo converts a non-streaming usage chunk to UsageInfo.
@@ -402,6 +405,12 @@ func (u *OpenAINonStreamUsage) ToUsageInfo() *UsageInfo {
 	cachedTokens := 0
 	if u.PromptTokensDetails != nil {
 		cachedTokens = u.PromptTokensDetails.CachedTokens
+	}
+	// ThinkingTokens stays 0 — never a guessed default — when the provider
+	// does not report completion_tokens_details.reasoning_tokens.
+	thinkingTokens := 0
+	if u.CompletionTokensDetails != nil {
+		thinkingTokens = u.CompletionTokensDetails.ReasoningTokens
 	}
 	promptUncached := u.PromptTokens - cachedTokens
 	if promptUncached < 0 {
@@ -416,6 +425,7 @@ func (u *OpenAINonStreamUsage) ToUsageInfo() *UsageInfo {
 		CompletionTokens: u.CompletionTokens,
 		CacheReadTokens:  cachedTokens,
 		TotalTokens:      total,
+		ThinkingTokens:   thinkingTokens,
 	}
 }
 

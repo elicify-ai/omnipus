@@ -92,6 +92,7 @@ func TestChatStream_EmitsProgressForToolCallArguments(t *testing.T) {
 		nil,
 		func(string) { textCallbacks++ },
 		func(pr protocoltypes.ToolCallProgress) { progress = append(progress, pr) },
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
@@ -172,6 +173,7 @@ func TestChatStream_PanickingProgressHandlerDoesNotKillTheStream(t *testing.T) {
 			calls++
 			panic("consumer handler is broken")
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("a panicking progress handler broke the stream: %v", err)
@@ -200,6 +202,7 @@ func TestChatStream_NilProgressCallbackIsSafe(t *testing.T) {
 		[]Message{{Role: "user", Content: "hi"}},
 		nil,
 		"claude-sonnet-4.6",
+		nil,
 		nil,
 		nil,
 		nil,

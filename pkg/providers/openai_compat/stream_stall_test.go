@@ -88,7 +88,7 @@ func TestChatStream_SlowButStreamingReasoningIsNotAborted(t *testing.T) {
 
 	start := time.Now()
 	resp, err := p.ChatStream(context.Background(), []Message{{Role: "user", Content: "hi"}},
-		nil, "test-model", nil, nil, nil)
+		nil, "test-model", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("a slow-but-streaming call must not be aborted; took %s; err=%v", time.Since(start), err)
 	}
@@ -107,7 +107,7 @@ func TestChatStream_KeepAliveCommentsCountAsActivity(t *testing.T) {
 	p := stallTestProvider(t, srv.URL, 500*time.Millisecond)
 
 	resp, err := p.ChatStream(context.Background(), []Message{{Role: "user", Content: "hi"}},
-		nil, "test-model", nil, nil, nil)
+		nil, "test-model", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("a keep-alive-only stream must not be aborted as silent: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestChatStream_TotallySilentStreamIsAbortedAsAStall(t *testing.T) {
 
 	start := time.Now()
 	_, err := p.ChatStream(context.Background(), []Message{{Role: "user", Content: "hi"}},
-		nil, "test-model", nil, nil, nil)
+		nil, "test-model", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("a fully silent stream must be aborted")
 	}
@@ -153,7 +153,7 @@ func TestParseStreamResponse_BodyClosedClassificationDependsOnFired(t *testing.T
 	bodyClosed := errors.New("http: read on closed response body")
 
 	t.Run("no watch: historical streaming read error", func(t *testing.T) {
-		_, err := parseStreamResponse(context.Background(), &errReader{err: bodyClosed}, nil, nil, nil)
+		_, err := parseStreamResponse(context.Background(), &errReader{err: bodyClosed}, nil, nil, nil, nil)
 		if err == nil {
 			t.Fatal("expected an error")
 		}
@@ -177,7 +177,7 @@ func TestParseStreamResponse_BodyClosedClassificationDependsOnFired(t *testing.T
 			t.Fatal("monitor did not fire")
 		}
 		err := func() error {
-			_, err := parseStreamResponse(context.Background(), &errReader{err: bodyClosed}, nil, nil, watch)
+			_, err := parseStreamResponse(context.Background(), &errReader{err: bodyClosed}, nil, nil, nil, watch)
 			return err
 		}()
 		if !errors.Is(err, common.ErrStreamStalled) {

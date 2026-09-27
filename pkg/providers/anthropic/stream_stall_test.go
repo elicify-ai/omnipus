@@ -74,7 +74,7 @@ func TestChatStream_PingOnlyStreamIsNotAborted(t *testing.T) {
 
 	start := time.Now()
 	resp, err := p.ChatStream(context.Background(), []Message{{Role: "user", Content: "hi"}},
-		nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil)
+		nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("a ping-only stream must not be aborted as silent (ran %s): %v", time.Since(start), err)
 	}
@@ -94,7 +94,7 @@ func TestChatStream_SilentAnthropicStreamIsAbortedAsAStall(t *testing.T) {
 
 	start := time.Now()
 	_, err := p.ChatStream(context.Background(), []Message{{Role: "user", Content: "hi"}},
-		nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil)
+		nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil, nil)
 	if err == nil {
 		t.Fatal("a fully silent stream must be aborted")
 	}

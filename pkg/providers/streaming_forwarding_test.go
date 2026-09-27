@@ -100,6 +100,7 @@ func TestHTTPProvider_ChatStream_ForwardsOnProgress(t *testing.T) {
 		[]Message{{Role: "user", Content: "hi"}},
 		nil, "gpt-4o", nil, nil,
 		func(pr protocoltypes.ToolCallProgress) { events = append(events, pr) },
+		nil,
 	); err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
 	}
@@ -128,6 +129,7 @@ func TestClaudeProvider_ChatStream_ForwardsOnProgress(t *testing.T) {
 		[]Message{{Role: "user", Content: "hi"}},
 		nil, "claude-sonnet-4.6", nil, nil,
 		func(pr protocoltypes.ToolCallProgress) { events = append(events, pr) },
+		nil,
 	); err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
 	}
@@ -160,6 +162,7 @@ func TestOpenAICompatProvider_ChatStream_ForwardsOnProgress(t *testing.T) {
 		[]Message{{Role: "user", Content: "hi"}},
 		nil, "gpt-4o", nil, nil,
 		func(protocoltypes.ToolCallProgress) { events++ },
+		nil,
 	); err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
 	}

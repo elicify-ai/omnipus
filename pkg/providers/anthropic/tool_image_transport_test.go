@@ -38,7 +38,7 @@ func TestToolImagesReachAnthropicChatAndChatStreamTransportsInOrder(t *testing.T
 			p := NewProviderWithClient(createAnthropicTestClient(server.URL, "token"))
 			var err error
 			if streaming {
-				_, err = p.ChatStream(t.Context(), messages, nil, "model", nil, nil, nil)
+				_, err = p.ChatStream(t.Context(), messages, nil, "model", nil, nil, nil, nil)
 			} else {
 				_, err = p.Chat(t.Context(), messages, nil, "model", nil)
 			}

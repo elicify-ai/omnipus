@@ -41,6 +41,9 @@ type StatefulProvider interface {
 
 // StreamingProvider is an optional interface for providers that support token streaming.
 // onChunk receives the accumulated text so far (not individual deltas).
+// onReasoning receives the accumulated reasoning display text so far (not
+// individual deltas) on each reasoning-bearing delta — display text only, no
+// signature or ciphertext data.
 // The returned LLMResponse is the same complete response for compatibility with tool-call handling.
 //
 // onProgress is a PER-CALL parameter, deliberately not a setter on the
@@ -55,8 +58,10 @@ type StatefulProvider interface {
 // none. Passing it down the call stack keeps it bound to the one request that
 // asked for it.
 //
-// Both callbacks may be nil; a nil onProgress means the caller does not want
-// tool-argument progress and costs the provider nothing.
+// All three callbacks may be nil; a nil onProgress means the caller does not
+// want tool-argument progress and costs the provider nothing. A nil
+// onReasoning means the caller does not want live reasoning text and costs
+// the provider nothing.
 type StreamingProvider interface {
 	ChatStream(
 		ctx context.Context,
@@ -66,6 +71,7 @@ type StreamingProvider interface {
 		options map[string]any,
 		onChunk func(accumulated string),
 		onProgress OnToolCallProgress,
+		onReasoning func(accumulated string),
 	) (*LLMResponse, error)
 }
 

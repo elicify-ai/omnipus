@@ -62,6 +62,7 @@ func (s *streamingMockProvider) ChatStream(
 	_ map[string]any,
 	onChunk func(accumulated string),
 	_ providers.OnToolCallProgress,
+	_ func(accumulated string),
 ) (*providers.LLMResponse, error) {
 	onChunk("ok")
 	return &providers.LLMResponse{Content: "ok", ToolCalls: []providers.ToolCall{}}, nil
