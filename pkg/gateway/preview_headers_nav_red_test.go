@@ -349,6 +349,40 @@ func TestPreviewCORSPreflightPin(t *testing.T) {
 		assert.Empty(t, resp.Header.Get("Access-Control-Allow-Credentials"),
 			"FR-012: no ACAC — reads only, no allow-credentials")
 	})
+
+	// Wave-2 PTA-4 (fix round 5): the preflight's stated property —
+	// Access-Control-Allow-Origin is emitted ONLY for the main origin (the
+	// SPA probe); a foreign origin learns the method list but gets NO read
+	// permission. The reflect-only-main-origin block in
+	// handleServePreviewPreflight is what this pins.
+	t.Run("foreign_origin_preflight_has_no_acao", func(t *testing.T) {
+		resp := h.piRedGuardGet(t, "", prefix+"/x", http.MethodOptions,
+			map[string]string{
+				"Origin":                        "http://crossorigin.example",
+				"Access-Control-Request-Method": "GET",
+			})
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		assert.Empty(t, resp.Header.Get("Access-Control-Allow-Origin"),
+			"FR-012/FR-007a (handleServePreviewPreflight's stated property): a foreign-origin "+
+				"preflight must answer 204 with the method list and NO Access-Control-Allow-Origin — "+
+				"reflecting any origin would grant the very cross-origin read the label class is refused")
+	})
+
+	// Positive control for the pin above: the MAIN origin's preflight DOES
+	// get ACAO reflected — without this row a mutant that stops emitting ACAO
+	// entirely would pass the foreign-origin assertion.
+	t.Run("main_origin_preflight_reflects_acao_control", func(t *testing.T) {
+		mainOrigin := "http://localhost:" + h.port
+		resp := h.piRedGuardGet(t, "", prefix+"/x", http.MethodOptions,
+			map[string]string{
+				"Origin":                        mainOrigin,
+				"Access-Control-Request-Method": "GET",
+			})
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		assert.Equal(t, mainOrigin, resp.Header.Get("Access-Control-Allow-Origin"),
+			"FR-012 control: the main origin's preflight is the ONE reflection the handler grants — "+
+				"fixture binding for foreign_origin_preflight_has_no_acao")
+	})
 }
 
 // ---------------------------------------------------------------------------
