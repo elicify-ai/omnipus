@@ -25,7 +25,7 @@ import (
 // record lands cancelled but the mirror is skipped, so meta.json status stays
 // active. GREEN after the fix: the mirror lands interrupted.
 func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t) //nolint:dogsled // only the tool + lifecycle store matter here
+	tool, lc, _, _ := newADR053TestTool(t)
 	us, err := session.NewUnifiedStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("unified store: %v", err)
@@ -44,14 +44,14 @@ func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T
 	// Seed the stranded queued child the cancel backstop drops
 	// (delegate_run.go::droppedQueuedResult — a production
 	// transitionLifecycle caller).
-	if err := lc.Persist(&session.LifecycleRecord{
+	if perr := lc.Persist(&session.LifecycleRecord{
 		SessionID: childID, Generation: 1, State: session.LifecycleQueued,
 		OwnerScopeKind: session.OwnerScopeHuman,
 		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
 		AgentID:        "worker-1",
 		CreatedAt:      time.Now().UTC().Add(-time.Hour),
-	}); err != nil {
-		t.Fatalf("seed lifecycle record: %v", err)
+	}); perr != nil {
+		t.Fatalf("seed lifecycle record: %v", perr)
 	}
 
 	// Act: the production queued-drop transition path.
@@ -85,7 +85,7 @@ func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T
 // ("no chat-transcript meta") is preserved; it just must not be the production
 // shape anymore.
 func TestDelegateChildTransition_UnwiredUnifiedStore_StillTransitions(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t) //nolint:dogsled
+	tool, lc, _, _ := newADR053TestTool(t)
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-947-unwired", Generation: 1, State: session.LifecycleQueued,
 		OwnerScopeKind: session.OwnerScopeHuman,
