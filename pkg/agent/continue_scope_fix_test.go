@@ -413,12 +413,6 @@ func TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAband
 		t.Fatal("buildContinuationTarget returned a nil target for an ordinary chat message")
 	}
 
-	if _, err := al.EnqueueSteeringMessage(target.SessionKey, testDefaultAgentID, providers.Message{
-		Role: "user", Content: "late append that can never be delivered",
-	}, ""); err != nil {
-		t.Fatalf("EnqueueSteeringMessage unexpected error: %v", err)
-	}
-
 	// Precondition: confirm the permanent failure is real and reachable via
 	// Continue's own call path before relying on it for the drain loop.
 	if _, err := al.Continue(context.Background(), "precondition-probe-scope", "test", "chat-probe", ""); err == nil {
@@ -428,8 +422,95 @@ func TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAband
 
 	w := newSessionWorker(target.SessionKey, al, func() {})
 
+	// Harness fix (this was the actual cause of this test's stray RED — not
+	// the implementation, which backend-lead independently proved correct
+	// with a throwaway scratch test): enqueuing the steering message BEFORE
+	// starting the turn (the original fixture) let loop_run_turn.go's own
+	// pre-existing initial-steering-poll pick the message up and inject it
+	// directly into turn 1 itself — confirmed via the log line "Injected
+	// steering message into context content_len=39 iteration=1 ...
+	// turn_id=mia-turn-1" (39 = the exact byte length of the enqueued string
+	// below). By the time processTurn's POST-turn drain loop ran, the queue
+	// was already empty, so the retry/abandon-and-notify path this test
+	// exists to prove was never exercised.
+	//
+	// A first attempt at fixing this adapted lateSteeringProvider
+	// (steering_test.go)'s blocking-first-Chat-call gate, enqueuing while
+	// turn 1's own provider call was in flight — the same technique
+	// TestAgentLoop_Run_AutoContinuesLateSteeringMessage uses. That
+	// reproduces a DIFFERENT swallow, empirically confirmed by an actual
+	// run: runTurn's own inner mechanism ("Steering arrived after direct LLM
+	// response; continuing turn", loop_run_turn.go) sees the message the
+	// moment the blocked call is released and consumes it as iteration 2 of
+	// the SAME turn (turn_id unchanged, iterations_total=2) — never reaching
+	// processTurn's OUTER drain-tail loop at all, so Continue() was never
+	// even called. That is in fact the exact mechanism
+	// TestAgentLoop_Run_AutoContinuesLateSteeringMessage itself exercises
+	// (its own assertions never distinguish an in-turn continuation from a
+	// separate post-turn Continue() call) — it is not a technique that can
+	// prove THIS test's target behavior, which lives strictly inside
+	// processTurn's own `for !w.closeSteeringWhenDrained(...)` loop, reached
+	// only once runTurn has fully finished and decided not to re-loop.
+	//
+	// The correct synchronization point is therefore AFTER runTurn's
+	// iteration loop has made its last steering-continuation decision — which
+	// is exactly when EventKindTurnEnd fires (loop.go: a defer registered
+	// before turnLoop, so LIFO-last to run, right as runTurn is about to
+	// return). EventBus.SetSyncTap (eventbus.go) is an existing production
+	// hook, built for precisely this: it runs synchronously on the emitting
+	// goroutine and blocks Emit until the tap returns. Installing a tap that
+	// blocks on the first EventKindTurnEnd lets this test enqueue strictly
+	// after turn 1's own iteration logic is done (so the inner mechanism
+	// above can no longer see it) and strictly before processTurn's
+	// drain-tail loop gets to run (runTurn/processMessage has not yet
+	// returned to processTurn) — the ordering the design note needs,
+	// guaranteed by a real block, never a sleep.
+	turnEndReached := make(chan struct{})
+	releaseTurnEnd := make(chan struct{})
+	var tapOnce sync.Once
+	al.eventBus.SetSyncTap(func(evt Event) {
+		if evt.Kind != EventKindTurnEnd {
+			return
+		}
+		tapOnce.Do(func() {
+			close(turnEndReached)
+			<-releaseTurnEnd
+		})
+	})
+	defer al.eventBus.SetSyncTap(nil)
+
 	start := time.Now()
-	w.processTurn(context.Background(), msg)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.processTurn(context.Background(), msg)
+	}()
+
+	select {
+	case <-turnEndReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for turn 1's own runTurn call to finish (EventKindTurnEnd never observed)")
+	}
+
+	// Enqueue strictly after turn 1's own iteration loop is done (no more
+	// chances for runTurn's inner steering-continuation mechanism to see it)
+	// and strictly before processTurn's own POST-turn drain loop runs
+	// (runTurn is still blocked inside the tap, so processMessage has not
+	// returned to processTurn yet) — guaranteed by the sync-tap block above,
+	// never by a sleep.
+	if _, err := al.EnqueueSteeringMessage(target.SessionKey, testDefaultAgentID, providers.Message{
+		Role: "user", Content: "late append that can never be delivered",
+	}, ""); err != nil {
+		t.Fatalf("EnqueueSteeringMessage unexpected error: %v", err)
+	}
+
+	close(releaseTurnEnd)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for processTurn to return")
+	}
 	elapsed := time.Since(start)
 
 	// (i) Bounded: terminates within a generous ceiling (not infinite/hung),
@@ -523,4 +604,3 @@ func TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAband
 	default:
 	}
 }
-
