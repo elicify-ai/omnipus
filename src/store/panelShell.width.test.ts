@@ -42,7 +42,6 @@ import {
   deletePanelWidth,
   prunePanelWidths,
 } from '@/components/panel-shell/panelWidthMemory'
-import type { PanelContext } from '@/components/panel-shell/types'
 
 // --- spec-derived constants (side-panel-shell-spec.md §5/§7 Geometry) ------
 // chat column floor 360px; panel floor 320px; takeover below 680px (SP-25).

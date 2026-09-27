@@ -194,7 +194,7 @@ describe('US-8 AS-1: the takeover chat column is INERT (RED — wave-0 hides it 
 
 describe('SP-26 swipe-to-close recognizer (§12 #21) — characterisation, green on wave-0 code', () => {
   it('a swipe >= 96px from the left edge zone closes the panel', async () => {
-    vi.useFakeTimers({ toFake: ['performance.now'] })
+    vi.useFakeTimers({ toFake: ['performance'] })
     renderShell()
     takeover()
     await act(async () => {
@@ -206,7 +206,7 @@ describe('SP-26 swipe-to-close recognizer (§12 #21) — characterisation, green
   })
 
   it('a short slow swipe (<96px, <0.4px/ms) does NOT close', async () => {
-    vi.useFakeTimers({ toFake: ['performance.now'] })
+    vi.useFakeTimers({ toFake: ['performance'] })
     renderShell()
     takeover()
     await act(async () => {
@@ -220,7 +220,7 @@ describe('SP-26 swipe-to-close recognizer (§12 #21) — characterisation, green
   })
 
   it('a Flick (60px in 100ms = 0.6px/ms >= 0.4 after >=48px) closes (velocity rule)', async () => {
-    vi.useFakeTimers({ toFake: ['performance.now'] })
+    vi.useFakeTimers({ toFake: ['performance'] })
     renderShell()
     takeover()
     await act(async () => {
@@ -236,7 +236,7 @@ describe('SP-26 swipe-to-close recognizer (§12 #21) — characterisation, green
   })
 
   it('a touch STARTING outside the 24px edge zone never closes (SP-26 edge zone)', async () => {
-    vi.useFakeTimers({ toFake: ['performance.now'] })
+    vi.useFakeTimers({ toFake: ['performance'] })
     renderShell()
     takeover()
     await act(async () => {
@@ -246,7 +246,7 @@ describe('SP-26 swipe-to-close recognizer (§12 #21) — characterisation, green
   })
 
   it('a VERTICAL drag does not close (direction lock)', async () => {
-    vi.useFakeTimers({ toFake: ['performance.now'] })
+    vi.useFakeTimers({ toFake: ['performance'] })
     renderShell()
     takeover()
     await act(async () => {
@@ -258,7 +258,7 @@ describe('SP-26 swipe-to-close recognizer (§12 #21) — characterisation, green
 
 describe('SP-26 scroller non-conflict (RED — recognizer ignores scroll position)', () => {
   it('a swipe over horizontally-scrollable content is a SCROLL — the panel does NOT close', async () => {
-    vi.useFakeTimers({ toFake: ['performance.now'] })
+    vi.useFakeTimers({ toFake: ['performance'] })
     renderShell()
     takeover()
     const scroller = screen.getByTestId('probe-scroller')
@@ -271,7 +271,7 @@ describe('SP-26 scroller non-conflict (RED — recognizer ignores scroll positio
   })
 
   it('RED — a scroller ALREADY AT ITS LEFT END hands the gesture to the recognizer (SP-26): the swipe CLOSES', async () => {
-    vi.useFakeTimers({ toFake: ['performance.now'] })
+    vi.useFakeTimers({ toFake: ['performance'] })
     renderShell()
     takeover()
     const scroller = screen.getByTestId('probe-scroller')
