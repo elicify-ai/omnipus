@@ -31,7 +31,13 @@ type roleEntries struct {
 	defaultID    string
 	fallbackID   string // "" = no fallback
 	fallbackAuto bool   // true when the fallback is the R3 auto-DuckDuckGo
-	usable       map[string]bool
+	// ignoredSameAsDefault is the R5 wire signal: the stored fallback named
+	// the default, so resolution healed the interpretation without a write.
+	// Only set when a default is actually stored — the both-fields-empty
+	// (undecided) state also satisfies fallbackRaw == defaultID and must not
+	// read as "ignored".
+	ignoredSameAsDefault bool
+	usable               map[string]bool
 }
 
 // searchProviderError pairs a failure class with the provider's message.
@@ -142,6 +148,9 @@ func resolveRoles(cfg *config.WebToolsConfig) roleEntries {
 		// R2: an explicit "none" means no fallback, even if DDG is usable.
 	case fallbackRaw == defaultID:
 		// R5: fallback equal to the default is no fallback at all.
+		if defaultID != "" {
+			entries.ignoredSameAsDefault = true
+		}
 	case fallbackRaw == "":
 		// R3/R6: absent → auto-DuckDuckGo when DDG is usable and not the
 		// default, regardless of the default's own usability (lane decision
@@ -163,6 +172,42 @@ func resolveRoles(cfg *config.WebToolsConfig) roleEntries {
 	}
 
 	return entries
+}
+
+// SearchRoleSnapshot is the exported, gateway-facing form of the resolved
+// web-search roles: who is the default, who is the resolved fallback, and
+// which ids are usable. ADR-096 (FR-035: one resolver — the gateway must not
+// grow a second implementation of R1-R9, so it calls this instead).
+type SearchRoleSnapshot struct {
+	// DefaultID is the stored default exactly as the config carries it —
+	// possibly unusable (FR-028: the payload's default_search keeps the
+	// stored id while the row's active flag stays off).
+	DefaultID string
+	// FallbackID is the resolved fallback: the stored id when usable (R4),
+	// the auto-DuckDuckGo when the stored value is absent and R3 applies,
+	// "" for explicit none (R2), R5, R4b-unknown, and the undecided state.
+	FallbackID string
+	// FallbackAutomatic is true only when FallbackID came from the R3
+	// absent-value rule rather than an operator choice.
+	FallbackAutomatic bool
+	// IgnoredSameAsDefault is the R5 signal (fallback_ignored_reason).
+	IgnoredSameAsDefault bool
+	// Usable is one usability verdict per catalog id.
+	Usable map[string]bool
+}
+
+// ResolveSearchRoleSnapshot resolves the web-search roles for cfg through the
+// same resolver the runtime ladder uses (pkg/tools/web_search.go::resolveRoles)
+// — the single authority on R1-R9.
+func ResolveSearchRoleSnapshot(cfg *config.WebToolsConfig) SearchRoleSnapshot {
+	e := resolveRoles(cfg)
+	return SearchRoleSnapshot{
+		DefaultID:            e.defaultID,
+		FallbackID:           e.fallbackID,
+		FallbackAutomatic:    e.fallbackAuto,
+		IgnoredSameAsDefault: e.ignoredSameAsDefault,
+		Usable:               e.usable,
+	}
 }
 
 // notCalledReason returns the spec reason for a role that was never called,

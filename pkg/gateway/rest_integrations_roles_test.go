@@ -245,7 +245,6 @@ func TestIntegrationRolesGET_DecidedRoles(t *testing.T) {
 
 	require.NotNil(t, resp.DefaultSearch, "default_search must be present when roles are decided")
 	assert.Equal(t, "tavily", *resp.DefaultSearch)
-	require.NotNil(t, resp.FallbackSearch, "explicit none resolves to null/absent, not a provider")
 	assert.Nil(t, resp.FallbackSearch, "fallback_provider=none means NO resolved fallback")
 	require.NotNil(t, resp.ActiveSearch, "active_search mirrors default_search for old clients")
 	assert.Equal(t, "tavily", *resp.ActiveSearch)
@@ -436,7 +435,7 @@ func TestIntegrationRolesGET_NativeSearchInEffect(t *testing.T) {
 		api, user, cfg := newRolesTestAPI(t)
 		cfg.Tools.Web.PreferNative = preferNative
 		cfg.Providers = []*config.ModelConfig{{
-			Name:     "native-host-row",
+			Name:     "gpt-test-native",
 			Provider: "test-openai-host",
 			Protocol: "openai-compatible",
 			APIBase:  apiBase,
