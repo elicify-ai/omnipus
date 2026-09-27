@@ -5,6 +5,7 @@ import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchProviders } from '@/lib/api'
+import { isProviderUsable } from '@/lib/providerStatus'
 import { cn } from '@/lib/utils'
 
 /**
@@ -41,9 +42,14 @@ export function ModelPicker({
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
   const { data: providers = [] } = useQuery({ queryKey: ['providers'], queryFn: fetchProviders })
-  const connectedProviders = providers.filter((p) => p.status === 'connected')
-  const availableModels = connectedProviders.flatMap((p) => p.models ?? [])
-  const providerGroups = connectedProviders
+  // Subscription providers (openai-chatgpt et al.) are `signed_in`, never
+  // `connected` (ADR-068 FR-034) — filter on USABILITY (connected OR
+  // signed_in, via the one predicate in providerStatus.ts), not on a key
+  // being connected, or every subscription provider's models silently
+  // vanish from the picker.
+  const usableProviders = providers.filter((p) => isProviderUsable(p.status))
+  const availableModels = usableProviders.flatMap((p) => p.models ?? [])
+  const providerGroups = usableProviders
     .filter((p) => (p.models ?? []).length > 0)
     .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
 

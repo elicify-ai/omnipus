@@ -774,8 +774,7 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	if reasoningContent == "" {
 		reasoningContent = rr.rq.ri.rf.response.ReasoningContent
 	}
-	go rr.rq.ri.rf.rt.al.handleReasoning(
-		rr.rq.ri.rf.rt.turnCtx,
+	rr.rq.ri.rf.rt.spawnReasoningPublish(
 		reasoningContent,
 		rr.rq.ri.rf.rt.ts.channel,
 		rr.rq.ri.rf.rt.al.targetReasoningChannelID(rr.rq.ri.rf.rt.ts.channel),
@@ -806,6 +805,56 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	}
 	logger.DebugCF("agent", "LLM response", llmResponseFields)
 	return agentLoopRunTurnResponseNext
+}
+
+// reasoningPublishCanceledOnEntry reports whether ctx is already canceled,
+// logging when it is — the one path in handleReasoning (loop.go) that
+// silently drops the reasoning trace, so it must at least explain why.
+// Extracted into this sibling file rather than inlined in loop.go, which is
+// pinned at its exact grandfathered line count (scripts/budgets/files.txt)
+// and may only shrink.
+func reasoningPublishCanceledOnEntry(ctx context.Context, channelName string) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	logger.DebugCF("agent", "Reasoning publish skipped (context already canceled on entry)", map[string]any{
+		"channel": channelName,
+		"error":   ctx.Err().Error(),
+	})
+	return true
+}
+
+// reasoningPublishScheduledHook is a test-only synchronization seam. When
+// non-nil, it runs synchronously on the reasoning-publish goroutine started
+// by spawnReasoningPublish below, immediately after the goroutine starts and
+// before any publish work happens. A test uses it to pin that goroutine at a
+// chosen point in time relative to when the turn itself ends and cancels
+// turnCtx — an ordering otherwise reproducible only by chance under load.
+// Always nil in production; never set outside a test.
+var reasoningPublishScheduledHook func()
+
+// spawnReasoningPublish launches the best-effort reasoning-trace publish for
+// this turn on its own goroutine. Nothing in runTurn waits for it — it is
+// fire-and-forget — and runTurn cancels its own turnCtx via defer
+// (loop.go::runTurn, "defer rz.rc.turnCancel()") as soon as it returns. If
+// the Go scheduler does not run this goroutine until after that
+// cancellation (plausible under load — reproduced deterministically in
+// loop_reasoning_turn_cancel_test.go), handing it turnCtx directly would
+// make handleReasoning observe an already-canceled context on entry and
+// return without publishing: the reasoning trace silently dropped, with no
+// error surfaced anywhere. context.WithoutCancel detaches the goroutine from
+// turnCtx's cancellation (and from its own turn timeout) while
+// handleReasoning's own bounded 5s publish timeout remains the sole
+// lifetime bound, so the goroutine can never leak and the publish attempt
+// is never skipped merely because the turn ended first.
+func (rt *agentLoopRunTurn) spawnReasoningPublish(reasoningContent, channel, channelID string) {
+	detachedCtx := context.WithoutCancel(rt.turnCtx)
+	go func() {
+		if reasoningPublishScheduledHook != nil {
+			reasoningPublishScheduledHook()
+		}
+		rt.al.handleReasoning(detachedCtx, reasoningContent, channel, channelID)
+	}()
 }
 
 // recordToolCalls normalizes and records tool calls before execution begins.

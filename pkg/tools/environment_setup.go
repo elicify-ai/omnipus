@@ -494,8 +494,12 @@ const environmentSetupAuditDenyPreviewBytes = 512
 
 // auditDenyPreview bounds s for a deny-path audit entry: at or under the
 // bound verbatim, larger inputs truncated with an omitted-bytes count so the
-// record identifies the request without embedding the payload.
+// record identifies the request without embedding the payload. Credentials
+// are redacted FIRST (#914): truncating first could cut a key at the bound,
+// leaving a fragment too short for the logger's patterns to recognise. The
+// omitted-bytes count is therefore relative to the redacted text.
 func auditDenyPreview(s string) string {
+	s = audit.RedactCredentials(s)
 	if len(s) <= environmentSetupAuditDenyPreviewBytes {
 		return s
 	}
@@ -583,7 +587,7 @@ func (t *EnvironmentSetupTool) emitRunAudit(ctx context.Context, command, purpos
 	}
 	if t.auditFailClosed {
 		slog.Error("environment_setup: audit logger degraded; refusing to execute (audit_fail_closed=true)",
-			"agent_id", agentID, "command", command, "error", logErr)
+			"agent_id", agentID, "command", audit.RedactCredentials(command), "error", logErr)
 		return &ToolResult{
 			IsError: true,
 			ForLLM:  "audit log write failed; refusing to execute (audit_fail_closed=true)",

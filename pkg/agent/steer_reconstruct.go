@@ -119,6 +119,16 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		// ROOT, inherited from the edge, never the child's own id (which
 		// newTurnState defaulted it to above).
 		ts.routingSessionID = session.RoutingSessionID(rec.SteeredBy.RootSessionID)
+		// Delegate-session-id carrier (ADR-053/ADR-057 identity split):
+		// stamp the session's OWN LifecycleRecord.SessionID onto the turn's
+		// options — registerTurnContext turns it into
+		// tools.WithDelegateSessionID, and message_parent loads its record
+		// by it. An ordinary-root revival (rec.SteeredBy == nil) never
+		// enters this branch — ADR-093 D3's standing-root test — so its
+		// field stays "" and the carrier's empty-id no-op guard leaves
+		// those turns unstamped (message_parent's structural refusal keeps
+		// firing for them).
+		ts.opts.SteeredSessionID = rec.SessionID
 	}
 	return ts, nil
 }

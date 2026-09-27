@@ -198,6 +198,12 @@ export function BashOutputBlock({
   )
 
   return (
+    // data-tool sits on the DisclosureRow toggle itself — replay-fidelity
+    // test (f) locates the element by its data-testid="bash-output-toggle"
+    // (forwarded onto the rendered <button>) and reads data-tool off THAT
+    // matched element; on the outer wrapper div the attribute was never
+    // visible to it. Matches GenericToolCall.tsx/ToolCallBadge.tsx's
+    // data-tool convention.
     <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header row — a single toggle button; there is no sibling action on
           this row (unlike BrowserTool/BrowserNavigate's "Watch live"), so
@@ -209,6 +215,7 @@ export function BashOutputBlock({
           onExpandedChange={setExpanded}
           expandable
           data-testid="bash-output-toggle"
+          data-tool={toolName}
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">{label}</span>

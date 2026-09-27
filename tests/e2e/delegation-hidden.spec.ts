@@ -262,8 +262,9 @@ test(
     );
     await input.press('Enter');
 
-    // IN-FLIGHT ANCHOR: the delegate chip renders the instant the parent
-    // emits the call — while the child's span is still open. It is the
+    // IN-FLIGHT ANCHOR: the delegated event line renders the moment the
+    // child's span lands (subagent_start arrives ~immediately after the
+    // parent emits the call) — while the span is still open. It is the
     // earliest reliably-mountable moment for the Activity bar: subagent_start
     // puts an agent item in `running`, satisfying ActivityBar.tsx's
     // shouldMount (= hasOpenAgentChildren || panelOpen || hasFailedRecent,
@@ -272,8 +273,30 @@ test(
     // 36026415761: attempt 1 lost the old post-settings panel-open race at
     // 28.9s, retry #1 won it at 27.2s; that coin flip is what this
     // reordering removes.
-    const delegateChip = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]');
-    await expect(delegateChip.first()).toBeVisible({ timeout: 60_000 });
+    //
+    // UPDATE 2026-09-27: fe1e2406a (delegation-chat-surface spec D2) hid the
+    // delegate tool-call badge from the default non-verbose thread, so the
+    // old `[data-testid="tool-call-badge"][data-tool="delegate"]` anchor was
+    // a dead locator. The grey event line IS the default-thread delegation
+    // surface now — and it is the line's OWN birth that proves "the call
+    // happened" while the delegation is still in flight. Birth-kind list +
+    // label filter, for the reasons subagent.spec.ts test (a) states in full.
+    const delegateLine = page
+      .locator(
+        '[data-testid="delegation-event-line"][data-event-kind="delegated"], [data-testid="delegation-event-line"][data-event-kind="started"]',
+      )
+      .filter({ hasText: label });
+    await expect(delegateLine.first()).toBeVisible({ timeout: 60_000 });
+
+    // And the other half of this file's charter, pinned directly now that
+    // fe1e2406a made it the actual policy: in the DEFAULT (verbose-off)
+    // thread the delegate tool-call badge is HIDDEN — zero badges, even while
+    // this test's own delegation is demonstrably in flight (the line above
+    // proves it is). Visibility here is computed per render from the same
+    // records the line derives from (shouldRenderToolCall's `delegate` case
+    // returns false when verbose chat is off), so a single count is exact,
+    // not a race.
+    await expect(page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]')).toHaveCount(0);
 
     // Open the panel WHILE the delegation is in flight; panelOpen (React
     // state on this unchanged ChatScreen mount) then keeps the bar mounted
@@ -346,12 +369,14 @@ test(
     // verbose chat would slip past the earlier assertion alone.
     await expect(collapsedBlocks).toHaveCount(0);
 
-    // And: the delegate tool-call chip — the parent thread's ONLY
-    // delegation surface now (toolVisibility.ts's shouldRenderToolCall,
-    // `delegate` case; ADR-091 D7/AC-7) — is still there. Its own
-    // visibility was never gated by verbose chat to begin with (the
-    // `delegate`/`run` case returns `true` unconditionally, isError
-    // included), so the toggle must not have disturbed it either.
+    // And: the delegate tool-call badge — the VERBOSE-chat delegation surface
+    // (shouldRenderToolCall's `delegate` case returns true only under verbose
+    // chat since fe1e2406a, delegation-chat-surface spec D2/AC-9) — is there
+    // exactly once, because this test made exactly one delegate call. This is
+    // the mirror of the default-half's count(0) above: together they pin the
+    // toggle actually flipping the badge surface OFF→ON; the grey event line
+    // renders in BOTH halves (independent of the toggle), which is why the
+    // line carries the default-view guarantee on its own.
     await expect(
       page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]'),
     ).toHaveCount(1);
