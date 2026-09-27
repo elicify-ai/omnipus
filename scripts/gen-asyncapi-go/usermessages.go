@@ -66,12 +66,12 @@ const (
 // templates (provider-messages spec §6). Both generators hard-fail on any
 // other slot, so a template can never silently render a raw "{oops}".
 var providerMessageSlots = map[string]bool{
-	"{provider}":         true,
-	"{model}":            true,
-	"{attempt}":          true,
-	"{max}":              true,
-	"{countdown}":        true,
-	"{answered_model}":   true,
+	"{provider}":          true,
+	"{model}":             true,
+	"{attempt}":           true,
+	"{max}":               true,
+	"{countdown}":         true,
+	"{answered_model}":    true,
 	"{unavailable_model}": true,
 }
 

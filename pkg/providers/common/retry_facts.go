@@ -28,6 +28,7 @@ package common
 // not a provider request id).
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -82,10 +83,14 @@ func WrapHTMLResponseErrorWithFacts(
 	retryAfterSeconds int, requestID string,
 ) error {
 	err := WrapHTMLResponseError(statusCode, body, contentType, apiBase)
-	if pe, ok := err.(*ProviderError); ok {
-		pe.RetryAfterSeconds = retryAfterSeconds
-		pe.RequestID = requestID
-		return pe
+	var pe *ProviderError
+	if !errors.As(err, &pe) {
+		// Unreachable today (WrapHTMLResponseError returns &ProviderError
+		// directly); the errors.As form is what errorlint requires and keeps
+		// the facts attached if the wrapper shape ever changes.
+		return err
 	}
-	return err
+	pe.RetryAfterSeconds = retryAfterSeconds
+	pe.RequestID = requestID
+	return pe
 }

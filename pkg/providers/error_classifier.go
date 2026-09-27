@@ -254,7 +254,7 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// drives errors through the real HandleErrorResponse boundary), with the
 	// rendered message's "status=NNN" text as the lossy fallback for errors
 	// that never crossed an HTTP boundary.
-	status := 0
+	var status int
 	body := msg
 	var cpe *common.ProviderError
 	if errors.As(err, &cpe) && cpe.Status > 0 {

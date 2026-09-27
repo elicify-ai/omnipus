@@ -140,7 +140,12 @@ func (ct *CooldownTracker) CooldownRemaining(provider string) time.Duration {
 	// and the read. Internal availability checks read CooldownEnd directly
 	// and are unaffected.
 	if remaining > 0 {
-		remaining = ((remaining + time.Second - 1) / time.Second) * time.Second
+		// Whole-second ceil (durationcheck-clean): add just under a second,
+		// then truncate onto the second grid. floor((ns+999999999)/1e9)*1e9
+		// == ceil(ns/1e9) seconds — the same value the Duration-division
+		// idiom produced, without a Duration×Duration multiplication.
+		remaining += time.Second - 1
+		remaining -= remaining % time.Second
 	}
 	return remaining
 }
