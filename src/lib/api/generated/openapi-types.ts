@@ -12403,7 +12403,7 @@ export interface components {
             uid: number;
             /** @description New files added in the panel (D28). */
             attachments?: components["schemas"]["MailAttachmentInput"][];
-            /** @description Part indices from the current copy's MailMessage.attachments to carry over (FR-035, server-side carry-over by part reference). Required — the panel lists exactly what will be carried (D28). */
+            /** @description Part indices from the current copy's MailMessage.attachments to carry over (FR-035, server-side carry-over by part reference). Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Required — the panel lists exactly what will be carried (D28). */
             keep_attachment_parts: number[];
         };
         /**
@@ -12425,7 +12425,7 @@ export interface components {
             uidvalidity: number;
             /** @description uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16). */
             uid: number;
-            /** @description Part indices from the current copy's MailMessage.attachments to carry onto the sent message. Optional — absent or empty-list semantics: absent carries ALL of the current copy's attachments (spec §2.2 default carry all); an explicit list carries exactly those parts. */
+            /** @description Part indices from the current copy's MailMessage.attachments to carry onto the sent message. Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Optional — absent or empty-list semantics: absent carries ALL of the current copy's attachments (spec §2.2 default carry all); an explicit list carries exactly those parts. */
             keep_attachment_parts?: number[];
         };
         /**

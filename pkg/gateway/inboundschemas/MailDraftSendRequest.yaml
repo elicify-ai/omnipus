@@ -54,8 +54,11 @@ properties:
     type: array
     description: >
       Part indices from the current copy's MailMessage.attachments to carry
-      onto the sent message. Optional — absent or empty-list semantics:
-      absent carries ALL of the current copy's attachments (spec §2.2
-      default carry all); an explicit list carries exactly those parts.
+      onto the sent message. Each value is the attachment's own stable
+      part_index — the same value the download endpoint's {partIndex} path
+      parameter expects — NOT its position in the listing array. Optional —
+      absent or empty-list semantics: absent carries ALL of the current
+      copy's attachments (spec §2.2 default carry all); an explicit list
+      carries exactly those parts.
     items:
       type: integer

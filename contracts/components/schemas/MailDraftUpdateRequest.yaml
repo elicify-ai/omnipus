@@ -64,7 +64,10 @@ properties:
     type: array
     description: >
       Part indices from the current copy's MailMessage.attachments to carry
-      over (FR-035, server-side carry-over by part reference). Required —
-      the panel lists exactly what will be carried (D28).
+      over (FR-035, server-side carry-over by part reference). Each value is
+      the attachment's own stable part_index — the same value the download
+      endpoint's {partIndex} path parameter expects — NOT its position in
+      the listing array. Required — the panel lists exactly what will be
+      carried (D28).
     items:
       type: integer
