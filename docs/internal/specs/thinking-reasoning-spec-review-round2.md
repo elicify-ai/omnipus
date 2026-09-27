@@ -124,7 +124,7 @@ Frontend coverage (lenses 5, 8, 9 and 10) got the same depth as backend. That is
   - **Hydration.** Skip assistant entries with `outcome: "no_answer"`.
   - **Test.** Add one: the next provider request after a no-answer round contains no notice string.
 
-  See founder Q6.
+  No founder question: the display-only reading is the obvious default (D26 scopes the notice to consumers; the model-context rule of ADR-095 D8.3 keeps display copy out of provider-bound requests). Fix directly in round 2.
 
 #### [MAJ-002] Effort resolution order contradicts D10: a per-message effort overrides the serving fallback's own effort
 
@@ -142,7 +142,7 @@ Frontend coverage (lenses 5, 8, 9 and 10) got the same depth as backend. That is
   3. For a primary inherited from the instance default, `DefaultModel.reasoning_effort`.
   4. Otherwise nothing.
 
-  State that a model change clears the stored effort for that surface. Add BDD rows for the two conflicts. See Q3.
+  State that a model change clears the stored effort for that surface. Add BDD rows for the two conflicts. No founder question: D10 (binding) already settles it — the serving fallback uses its own effort.
 
 #### [MAJ-003] `/effort` on CLI and messengers "mirrors `/model`", which today rewrites the agent's persisted config, contradicting D23's "no new server state"
 
@@ -169,7 +169,7 @@ Frontend coverage (lenses 5, 8, 9 and 10) got the same depth as backend. That is
     - A user can set "high" from catalog data and the adapter silently ignores it (T1's visible note does not fire, because the level *is* in the catalog).
     - Any `LLMResponse.Reasoning` they populate becomes a stored thinking row with no live frames. That is an unplanned surface.
 - **Evidence**: `ls pkg/providers` (azure, bedrock, codex_provider.go, claude_provider.go, copilot_cli_provider.go, openai_responses_common); `pkg/providers/openai_responses_common/responses_common.go` (`case "reasoning":`); `pkg/providers/anthropic/provider.go` (the old `options["thinking_level"]` mapping being deleted).
-- **Recommendation**: Add an adapter matrix to §2.2 with the columns: adapter, sends effort (field name), live reasoning callback, stored thinking row, v1 scope. For adapters out of scope, state that the effort control shows "Default" only, whatever the catalog says, and that stored `Reasoning` from them either does or does not become a thinking row. Add request-shape unit tests per in-scope adapter. See Q5.
+- **Recommendation**: Add an adapter matrix to §2.2 with the columns: adapter, sends effort (field name), live reasoning callback, stored thinking row, v1 scope. For adapters out of scope, state that the effort control shows "Default" only, whatever the catalog says, and that stored `Reasoning` from them either does or does not become a thinking row. Add request-shape unit tests per in-scope adapter. See Q4.
 
 #### [MAJ-005] Live text comes from the streaming callback, before the markup strip; stored text comes from the post-strip parse, so live and reload can differ. The ADR is not amended
 
@@ -195,7 +195,7 @@ Frontend coverage (lenses 5, 8, 9 and 10) got the same depth as backend. That is
   - **Correct the §6 caps text.**
   - **Add the test.** A 64 KiB thinking stream leaves a toggle-off connection's catch-up of answer frames intact, and a second session's journal is not trimmed.
 
-  See Q4.
+  See Q3.
 
 #### [MAJ-007] §20 labels self-decided risks as founder-accepted
 
@@ -203,7 +203,7 @@ Frontend coverage (lenses 5, 8, 9 and 10) got the same depth as backend. That is
 - **Affected section**: §20 heading ("residual risks the founder has already accepted"); rows 9 and 10
 - **Failure scenario**: Row 9 (hold-back delay) and row 10 (journal-pressure degradation, 64 KiB live cutoff) are marked "**Accepted** (MAJ-006 rule)" and "**Accepted** (MAJ-007)". Neither appears in D1 to D28 or in ADR-095. The implementer and the 8-reviewer gate will treat them as founder decisions and dismiss findings against them. Row 10 is exactly where MAJ-006 above finds real cross-user impact.
 - **Evidence**: §20 rows 9 and 10; the interview's decisions log (D22 to D28 cover Q1 to Q7 of round 1 only).
-- **Recommendation**: Relabel rows 9 and 10 as "Proposed by spec author, pending founder", and put them to the founder (Q4). Keep "Accepted" only for rows that cite a D-number or an ADR clause.
+- **Recommendation**: Relabel rows 9 and 10 as "Proposed by spec author, pending founder", and put them to the founder (Q3). Keep "Accepted" only for rows that cite a D-number or an ADR clause.
 
 #### [MAJ-008] The revision log claims fixes that are not in the text, and the traceability matrix is incomplete while claiming completeness
 
@@ -394,7 +394,7 @@ Frontend coverage (lenses 5, 8, 9 and 10) got the same depth as backend. That is
 | Dataset | Missing Boundary Type | Recommendation |
 |---------|----------------------|----------------|
 | Gated boundary matrix | CLI token vs a real account named "cli" | Expect hidden (MAJ-011) |
-| Effort value handling | Per-message "high" while fallback "low" serves | Expect "low" (MAJ-002, pending Q3) |
+| Effort value handling | Per-message "high" while fallback "low" serves | Expect "low" (MAJ-002, per D10) |
 | Effort value handling | Agent without its own model, instance default carries effort | Expect the default model's effort (MAJ-002) |
 | Effort value handling | An adapter with no effort support and a catalog listing levels | Expect Default-only control, nothing sent (MAJ-004) |
 
@@ -439,6 +439,8 @@ Frontend coverage (lenses 5, 8, 9 and 10) got the same depth as backend. That is
 
 ## Questions for the founder
 
+(Capped at four by the dispatch brief. MAJ-002 and MAJ-001 were drafted as founder questions and dropped: D10 already decides MAJ-002, and MAJ-001 has an obvious default — both are direct round-2 fixes.)
+
 1. **Q1 — Hidden thinking breaks the default user's live chat (CRIT-001).** The browser app treats a missing sequence number as "I lost frames" and asks the server to resend. Hiding thinking frames from toggle-off users creates exactly such gaps, several a second, for every default user. Options:
    - **(A)** The server sends a tiny, content-free "skip" frame in place of each hidden thinking frame, so numbers stay continuous. This is one new wire frame and an ADR-095 amendment.
    - **(B)** Every frame carries the previous sequence number, and the app checks that instead.
@@ -450,24 +452,14 @@ Frontend coverage (lenses 5, 8, 9 and 10) got the same depth as backend. That is
    - **(B)** On CLI and messengers, `/effort` only shows the current level; changing it is web-only (revises D27).
 
    **Recommendation: A**, stated plainly in the docs.
-3. **Q3 — Effort picked in the chat, but a fallback model answers (MAJ-002).** Options:
-   - **(A)** The fallback uses its own configured effort (D10 as written); the chat pick applies only to the model it was picked for.
-   - **(B)** The chat pick applies to whichever model answers.
-
-   **Recommendation: A.**
-4. **Q4 — Long thinking crowds out everyone's reconnect buffer (MAJ-006, MAJ-007).** Each session keeps a 1 MiB buffer used to catch up after a reconnect. Long thinking fills it in seconds and pushes out other users' answer frames, and with many sessions it trims other sessions too. Options:
+3. **Q3 — Long thinking crowds out everyone's reconnect buffer (MAJ-006, MAJ-007).** Each session keeps a 1 MiB buffer used to catch up after a reconnect. Long thinking fills it in seconds and pushes out other users' answer frames, and with many sessions it trims other sessions too. Options:
    - **(A)** Keep only the latest thinking frame per row in the buffer. It is small, and it fixes the problem.
    - **(B)** Accept the degradation, since reconnecting users fall back to a slower full reload.
 
    **Recommendation: A.** Either way, the spec should not call this "founder-accepted" until you decide.
-5. **Q5 — Providers the spec does not cover (MAJ-004).** Effort and thinking are specified for Anthropic and OpenAI-compatible (incl. OpenRouter) only. Azure, Codex, Bedrock and the CLI-based providers are not mentioned. Options:
+4. **Q4 — Providers the spec does not cover (MAJ-004).** Effort and thinking are specified for Anthropic and OpenAI-compatible (incl. OpenRouter) only. Azure, Codex, Bedrock and the CLI-based providers are not mentioned. Options:
    - **(A)** v1 covers only the two specified families; others show "Default" only and never show thinking rows.
    - **(B)** Include the OpenAI Responses-API family (Azure, Codex) in v1.
-
-   **Recommendation: A.**
-6. **Q6 — Should the model itself see the "did not respond" notice on the next turn (MAJ-001)?** Options:
-   - **(A)** No: the notice is for people and other consumers only, and the model's own history keeps the round as it really was (empty).
-   - **(B)** Yes: the model sees the notice as its previous answer.
 
    **Recommendation: A.**
 
@@ -492,7 +484,7 @@ This was the final grill round, so the blocking findings go to the founder, not 
 |---|---|---|
 | CRIT-001 | New in round 2: neither ADR-095 nor round 1 considered the SPA's gap-recovery rule. The fix is a wire-contract addition and an ADR-095 D2 amendment | Q1: skip marker (A), `prev_seq` (B), or unsequenced (C) |
 | CRIT-002 | New in round 2: the storage unit was decided in fix round 1 without specifying role or field, and the spec says "no change" to role-keyed hydration | No product decision needed. It must be closed in fix round 2 (role empty, `thinking_text` field, explicit type filter plus guard test). If it is not closed there, the founder decides whether implementation may start |
-| MAJ-006 / MAJ-007 | Rated MAJOR, not blocking, but mislabelled "founder-accepted" | Q4 |
+| MAJ-006 / MAJ-007 | Rated MAJOR, not blocking, but mislabelled "founder-accepted" | Q3 |
 
 ### Recommended Next Actions
 
