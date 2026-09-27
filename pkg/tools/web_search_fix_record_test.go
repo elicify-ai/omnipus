@@ -86,8 +86,7 @@ func TestFixK5_PerCallRecordHopNamesFallback(t *testing.T) {
 	f.setHandler("tavily", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
-	var log string
-	log = captureSearchLogFile(t, func() {
+	log := captureSearchLogFile(t, func() {
 		res := f.run(map[string]any{"query": "golang"})
 		if res.IsError {
 			t.Fatalf("expected the fallback to answer: %s", res.ForLLM)
@@ -116,8 +115,7 @@ func TestFixK5_ConsecutiveEmptyDDGWarning(t *testing.T) {
 		c.DefaultProvider = config.SearchProviderDuckDuckGo
 	}, nil)
 	f.setHandler("ddg", jsonBody(`<html><body><p>no anchors here</p></body></html>`))
-	var log string
-	log = captureSearchLogFile(t, func() {
+	log := captureSearchLogFile(t, func() {
 		for i := 0; i < 4; i++ {
 			f.run(map[string]any{"query": "golang"})
 		}
