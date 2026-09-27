@@ -26,38 +26,53 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 			continue
 		}
 		st, err := email.LoadWatcherState(a.homePath, agentID, workspaceID)
-		if err != nil && !errors.Is(err, email.ErrNoWatcherState) {
-			slog.Warn("rest: mail summary state load failed; mailbox omitted from the panel",
-				"agent_id", agentID, "workspace_id", workspaceID, "error", err)
-			continue
-		}
 		row := gen.MailboxNewMailSummary{WatcherState: gen.MailboxNewMailSummaryWatcherStateOk}
-		if st == nil {
-			st = &email.WatcherState{State: "ok", UnseenTotal: 0}
-		}
-		switch st.EffectiveState(time.Now()) {
-		case "error":
+		renderState := err == nil
+		if err != nil {
+			// MC-23/MAJ-019: an absent or unreadable state must never render
+			// as ok, and must never drop the row - the mailbox stays on the
+			// panel with an honest shape.
 			row.WatcherState = gen.MailboxNewMailSummaryWatcherStateError
-		case "backoff":
-			row.WatcherState = gen.MailboxNewMailSummaryWatcherStateBackoff
-		}
-		row.AgentId = agentID
-		row.UnseenTotal = st.UnseenTotal
-		if st.LastSeenUID > 0 {
-			u := int(st.LastSeenUID)
-			row.LastSeenUid = &u
-		}
-		if s := st.LastErrorClass; s != "" {
-			row.LastErrorClass = &s
-		}
-		if st.LastSuccessAt != "" {
-			if ts, perr := time.Parse(time.RFC3339, st.LastSuccessAt); perr == nil {
-				row.LastSuccessAt = &ts
+			if errors.Is(err, email.ErrNoWatcherState) {
+				// Never checked: no state file has ever been written. No
+				// cycle ever succeeded and none has failed either, so no
+				// error class - just the honest never-checked shape.
+			} else {
+				// Corrupt/unreadable state file: name the failure.
+				// "state_unreadable" is a load-failure class, deliberately
+				// outside pkg/email's MC-8 transport-failure enum - this is
+				// not a mail-server failure.
+				slog.Warn("rest: mail summary state load failed; rendering unreadable state",
+					"agent_id", agentID, "workspace_id", workspaceID, "error", err)
+				cls := "state_unreadable"
+				row.LastErrorClass = &cls
 			}
 		}
-		if st.NextAttemptAt != "" {
-			if ts, perr := time.Parse(time.RFC3339, st.NextAttemptAt); perr == nil {
-				row.NextAttemptAt = &ts
+		row.AgentId = agentID
+		if renderState {
+			switch st.EffectiveState(time.Now()) {
+			case "error":
+				row.WatcherState = gen.MailboxNewMailSummaryWatcherStateError
+			case "backoff":
+				row.WatcherState = gen.MailboxNewMailSummaryWatcherStateBackoff
+			}
+			row.UnseenTotal = st.UnseenTotal
+			if st.LastSeenUID > 0 {
+				u := int(st.LastSeenUID)
+				row.LastSeenUid = &u
+			}
+			if s := st.LastErrorClass; s != "" {
+				row.LastErrorClass = &s
+			}
+			if st.LastSuccessAt != "" {
+				if ts, perr := time.Parse(time.RFC3339, st.LastSuccessAt); perr == nil {
+					row.LastSuccessAt = &ts
+				}
+			}
+			if st.NextAttemptAt != "" {
+				if ts, perr := time.Parse(time.RFC3339, st.NextAttemptAt); perr == nil {
+					row.NextAttemptAt = &ts
+				}
 			}
 		}
 		out.Items = append(out.Items, struct {
