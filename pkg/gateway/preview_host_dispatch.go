@@ -21,12 +21,18 @@
 // CSRF-gated on state changes (S-2.11).
 //
 // The label registry IS the token registries: a label resolves through
-// LookupByLabel on the two registration stores (dev first, then static, with
-// the dev-preference for static entries — OneCodePath: a static registration
-// whose agent has a live dev server serves the dev server, exactly like the
-// Mode 2 path's dev-first lookup), so the FR-008 guarantee ("the label maps
-// to the same registry entry as the Mode 2 token") is structural — there is
-// no second store to drift.
+// LookupByLabel on the two registration stores (dev first, then static), so
+// the FR-008 guarantee ("the label maps to the same registry entry as the
+// Mode 2 token") is structural — there is no second store to drift.
+//
+// Lookup ORDER mirrors the Mode 2 path (dev registry first, then static),
+// but serving is not exact parity: the static-entry dev-preference (a static
+// registration whose agent has a live dev server proxies to the dev server)
+// is Mode-1-ONLY serving behaviour — Mode 2's HandlePreview static branch
+// (rest_preview.go) serves the static files directly, with no dev re-check.
+// The same agent with both a live dev server and a static registration
+// therefore serves dev-server content through a Mode 1 label URL and static
+// content through its Mode 2 URL.
 package gateway
 
 import (
@@ -351,10 +357,14 @@ func (a *restAPI) previewHostDispatchMW(next http.Handler) http.Handler {
 		// resolves gets its own per-label bucket and never draws the shared
 		// unknown-label budget, so a junk-label flood cannot 429 a
 		// legitimate label's first request (FR-027). Only labels resolving
-		// to no registration consume the unknown budget. The resolution is
-		// the same dev-first registry read servePreviewByLabel serves
-		// with — an in-memory scan under the store locks, paid only until
-		// the label owns a bucket.
+		// to no registration consume the unknown budget. NOTE (wave-3 N1):
+		// the resolution (a.previewLabelResolves(label)) is an eager
+		// ARGUMENT to admit, so Go evaluates the registry scan on EVERY
+		// dispatched request — including requests whose label already owns
+		// a bucket, where the scan's result does not change admission. The
+		// cost was judged acceptable (an in-memory scan under the store
+		// locks); a refactor that defers it must keep admission resolving-
+		// first, or fix4's semantics change.
 		if !a.previewLabelLimiter().admit(label, a.previewLabelResolves(label)) {
 			writeDevProxyError(w, http.StatusTooManyRequests, "rate limited")
 			return
@@ -377,11 +387,11 @@ func (a *restAPI) previewLabelLimiter() *previewLabelLimiter {
 }
 
 // previewLabelResolves reports whether the label currently resolves through
-// the SAME registries, in the SAME dev-first order, servePreviewByLabel
-// serves with (OneCodePath): admission routing must not disagree with the
-// serving lookup, or a resolving label could be unknown-capped (a 429 the
-// registry would have served) and a non-resolving one promoted. Both
-// lookups are in-memory scans under their registry locks.
+// the SAME registries, in the SAME dev-first order servePreviewByLabel
+// serves with: admission routing must not disagree with the serving lookup,
+// or a resolving label could be unknown-capped (a 429 the registry would
+// have served) and a non-resolving one promoted. Both lookups are in-memory
+// scans under their registry locks.
 func (a *restAPI) previewLabelResolves(label string) bool {
 	if a.devServers != nil && a.devServers.LookupByLabel(label) != nil {
 		return true
@@ -394,11 +404,15 @@ func (a *restAPI) previewLabelResolves(label string) bool {
 // ---------------------------------------------------------------------------
 
 // servePreviewByLabel resolves a dispatched label to its registration and
-// serves it — the Mode 1 half of HandlePreview. Resolution order mirrors the
-// Mode 2 path (OneCodePath): dev registry first, then the static registry
-// with the dev-preference for its entries (a static registration whose agent
-// has a live dev server proxies to the dev server), else the static file
-// server, else 404.
+// serves it — the Mode 1 half of HandlePreview. The lookup ORDER mirrors the
+// Mode 2 path (dev registry first, then the static registry), but the
+// dev-preference inside the static branch — a static registration whose
+// agent has a live dev server proxies to the dev server — is Mode-1-only
+// serving behaviour: Mode 2's HandlePreview static branch (rest_preview.go)
+// serves the static files directly, with no dev re-check. A static
+// registration whose agent also has a live dev server therefore serves
+// dev-server content through a Mode 1 label URL and static content through
+// its Mode 2 URL.
 //
 // FR-026 (redaction): the label NEVER enters logs or audit details — the
 // static branch audits with an empty token (token_prefix "<invalid>") and
