@@ -170,6 +170,13 @@ func TestPreviewLabelLifecycle(t *testing.T) {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(dir, "index.html"), []byte("x"), 0o644))
 		reg := newDevRegistryForLife(t)
+		// Wire the mint registry into the gateway's label dispatch
+		// (servePreviewByLabel consults a.devServers — pkg/gateway/
+		// preview_host_dispatch.go; with it nil the dispatch skips the dev
+		// store entirely and every dev label 404s regardless of lifecycle,
+		// which would make the retired-label pin below pass vacuously).
+		// Same wiring every sibling dev-row test uses (api.devServers = reg).
+		h.api.devServers = reg
 		devExecute := func(port int32) *tools.ToolResult {
 			tool := tools.NewWebServeTool(
 				dir, "pi-red-life-agent-dev",
@@ -220,13 +227,40 @@ func TestPreviewLabelLifecycle(t *testing.T) {
 				"RED (FR-029 dev variant): the dev mint carries no isolated_url")
 			labelURL, ok := isoRaw.(string)
 			require.True(t, ok, "the dev mint's isolated_url must be a string (FR-001 dev variant)")
-			return labelURL
+			host := strings.TrimPrefix(labelURL, "http://")
+			host = strings.TrimSuffix(host, "/")
+			parts := strings.SplitN(host, ".", 2)
+			require.Len(t, parts, 2,
+				"the dev mint's isolated_url must be <label>.localhost[:port], got %q", labelURL)
+			return parts[0]
 		}
 		first := devMint(18044)
+		// Positive control for the pin below: the minted label must resolve in
+		// the dispatch registry BEFORE the re-serve, so the 404 assertion can
+		// actually see a retirement (a pin that starts at 404 proves nothing).
+		require.NotNil(t, reg.LookupByLabel(first),
+			"fixture: the minted dev label must resolve in the dispatch registry before the re-serve")
+		// FR-029: a re-serve happens after the previous dev server is gone.
+		// End the first registration the way production does —
+		// UnregisterByAgent is the janitor/agent-deletion path
+		// (pkg/sandbox/dev_servers.go::UnregisterByAgent). No process/port
+		// wait is needed before the second mint: the per-agent cap
+		// (ReservePort's entries scan, dev_servers.go) clears synchronously
+		// with the map delete, the second mint binds a different port, and
+		// the 404 pin below resolves from the registry miss before any proxy
+		// dial — nothing asserted here touches the SIGTERMed child.
+		require.True(t, reg.UnregisterByAgent("pi-red-life-agent-dev"),
+			"fixture: the first dev registration must exist to be ended for the re-serve")
 		second := devMint(18045)
 		assert.NotEqual(t, first, second,
 			"FR-029 (round-2 MIN-005): a dev re-serve does NOT renew — each mint is a new "+
 				"token, label and origin")
+		// FR-029: the label becomes unresolvable on every token-revocation
+		// path — UnregisterByAgent among them. The retired first label must
+		// 404 through the real label-host dispatch.
+		assert.Equal(t, http.StatusNotFound, piRedLifeLabelGet(t, h, first),
+			"FR-029: after the dev re-serve (UnregisterByAgent) the first label no longer "+
+				"resolves — the retired label 404s")
 	})
 }
 
