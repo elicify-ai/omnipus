@@ -275,6 +275,16 @@ type services struct {
 	// can suppress reload on app-initiated writes.
 	selfWriteReg *configSelfWriteRegistry
 
+	// loadConfigForSwap re-reads config.json for handleConfigReload's swap,
+	// under restAPI.configMu, so a config write committed through
+	// safeUpdateConfigJSON while the reload was stopping services is not
+	// overwritten by the reload's older snapshot (a lost update: a login's
+	// session-cookie hash vanished and the next request got 401). Set by
+	// serveReloadLoop to the same loader every reload uses
+	// (newReloadConfigLoader). Nil — tests and paths that never serve
+	// reloads — keeps the loaded config as is.
+	loadConfigForSwap func() (*config.Config, error)
+
 	// homePath is the Omnipus home directory. Stored here so omnipusGracefulShutdown
 	// can remove the self-registered PID file without an additional parameter.
 	homePath string
@@ -1596,39 +1606,10 @@ func (rc *runContextWithOptions) serveReloadLoop() error {
 	// path AND every coalesced follow-up reload — the latter MUST re-read from
 	// disk, since the whole reason a request was coalesced is that its write
 	// post-dates the running reload's snapshot.
-	//
-	// LoadConfigWithStoreAndSelfHealHook (not LoadConfigWithStore): this path
-	// bypasses safeUpdateConfigJSON's configMu + selfWriteReg registration, so
-	// if the single-user-model role self-heal writes config.json here, the write
-	// must be registered manually or the watcher's next tick would misidentify
-	// it as an external edit.
-	loadReloadConfig := func() (*config.Config, error) {
-		newCfg, err := config.LoadConfigWithStoreAndSelfHealHook(
-			rc.configPath, rc.credStore, selfHealWriteHook(rc.runningServices.selfWriteReg),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("loading config for reload: %w", err)
-		}
-		// ADR-054 D2/D3: repopulate cfg.Agents.List from the agent store —
-		// config.LoadConfig* strips agents.list on every load
-		// (legacy_agents_list.go), and this reload path is a separate
-		// config-load call site from restAPI.refreshConfigAndRewireServices's
-		// own bridge. Strict variant: a roster-population failure here must
-		// reject this reload attempt exactly like the config-load/validation
-		// failures around it, not silently proceed with an empty/stale roster
-		// (see populateAgentsListFromEntityStoreStrict's doc for why) — and mark
-		// the service degraded so /health surfaces it.
-		if err = populateAgentsListFromEntityStoreStrict(newCfg, rc.homePath); err != nil {
-			rc.runningServices.markReloadDegraded(
-				fmt.Errorf("reload rejected: agent roster population failed: %w", err),
-			)
-			return nil, fmt.Errorf("agent roster population failed: %w", err)
-		}
-		if err = newCfg.ValidateProviders(); err != nil {
-			return nil, fmt.Errorf("config validation failed: %w", err)
-		}
-		return newCfg, nil
-	}
+	loadReloadConfig := newReloadConfigLoader(rc.configPath, rc.homePath, rc.credStore, rc.runningServices)
+	// The swap-time re-read (handleConfigReload, under restAPI.configMu) must
+	// read the same file with the same checks as every other reload load.
+	rc.runningServices.loadConfigForSwap = loadReloadConfig
 
 	// runOneReload is the production executor handed to runReloadCycle. provider
 	// is captured by address because executeReload swaps it in place on success.
@@ -1658,6 +1639,47 @@ func (rc *runContextWithOptions) serveReloadLoop() error {
 			logger.Info("Manual reload triggered via /reload endpoint")
 			runReloadCycle(rc.agentLoop, rc.runningServices, nil, runOneReload, loadReloadConfig)
 		}
+	}
+}
+
+// newReloadConfigLoader returns the loader every reload uses to read
+// config.json: the /reload path, every coalesced follow-up reload, and the
+// swap-time re-read handleConfigReload takes under restAPI.configMu.
+//
+// LoadConfigWithStoreAndSelfHealHook (not LoadConfigWithStore): this path
+// bypasses safeUpdateConfigJSON's configMu + selfWriteReg registration, so
+// if the single-user-model role self-heal writes config.json here, the write
+// must be registered manually or the watcher's next tick would misidentify
+// it as an external edit.
+func newReloadConfigLoader(
+	configPath, homePath string, credStore *credentials.Store, rs *services,
+) func() (*config.Config, error) {
+	return func() (*config.Config, error) {
+		newCfg, err := config.LoadConfigWithStoreAndSelfHealHook(
+			configPath, credStore, selfHealWriteHook(rs.selfWriteReg),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("loading config for reload: %w", err)
+		}
+		// ADR-054 D2/D3: repopulate cfg.Agents.List from the agent store —
+		// config.LoadConfig* strips agents.list on every load
+		// (legacy_agents_list.go), and this reload path is a separate
+		// config-load call site from restAPI.refreshConfigAndRewireServices's
+		// own bridge. Strict variant: a roster-population failure here must
+		// reject this reload attempt exactly like the config-load/validation
+		// failures around it, not silently proceed with an empty/stale roster
+		// (see populateAgentsListFromEntityStoreStrict's doc for why) — and mark
+		// the service degraded so /health surfaces it.
+		if err = populateAgentsListFromEntityStoreStrict(newCfg, homePath); err != nil {
+			rs.markReloadDegraded(
+				fmt.Errorf("reload rejected: agent roster population failed: %w", err),
+			)
+			return nil, fmt.Errorf("agent roster population failed: %w", err)
+		}
+		if err = newCfg.ValidateProviders(); err != nil {
+			return nil, fmt.Errorf("config validation failed: %w", err)
+		}
+		return newCfg, nil
 	}
 }
 
