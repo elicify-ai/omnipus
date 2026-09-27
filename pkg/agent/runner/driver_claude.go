@@ -603,7 +603,11 @@ func (d *ClaudeDriver) Input(_ string) error {
 	return nil
 }
 
-// Resume re-starts the claude process with `--resume <runID>`.
+// Resume starts a NEW claude run under runID, reusing the prior Run's turn
+// cap. It does NOT pass `--resume <runID>`: buildArgs deliberately omits
+// --resume (runID is an Omnipus dispatch identifier, never a claude session
+// ID, and `claude --resume <id>` errors on an unknown session — ADR-032 fix
+// C), so the prior conversation is not continued; the run starts fresh.
 func (d *ClaudeDriver) Resume(ctx context.Context, runID string) (<-chan RunEvent, error) {
 	// Reuse the prior Run's turn cap (#904 D4). With no prior Run it is 0 and
 	// Run refuses it with ErrMaxTurnsRequired — no hidden default (FR-004).
