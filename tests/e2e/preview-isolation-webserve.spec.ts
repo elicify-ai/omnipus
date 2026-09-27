@@ -145,7 +145,7 @@ interface WireMessage {
 
 /**
  * Drive one REAL agent turn through the composer and wait until the
- * transcript (via the sessions API) carries a successful web_serve call for
+ * transcript (via the sessions API) carries a successful serve_web call for
  * `dirName`. Returns the tool result exactly as the gateway persisted it.
  */
 async function mintWebServeViaAgent(
@@ -158,21 +158,31 @@ async function mintWebServeViaAgent(
   await waitForConnected(page, { timeout: 15_000 })
   await startNewChat(page)
 
+  // The agent-facing tool name is serve_web, not "web_serve" — pinned by the
+  // spec (adr-094-preview-isolation-spec.md: "The agent-facing tool name is
+  // serve_web") and by pkg/tools/web_serve.go::ToolNameWebServe. A literal
+  // "web_serve" here made the CI model ToolSearch an unknown tool, then
+  // improvise bash on the dev prompt's "Run npm run dev" — the Ask-gated
+  // approval hung the turn for its full 600 s escalation window and the
+  // approval dialog replaced the app shell for every later test in the shard
+  // (2026-09-27 CI, run 36341209887).
   const commandLine = dev
-    ? `npm run dev`
-    : `web_serve with path "${dirName}" and duration_seconds 1800`
+    ? `Call the serve_web tool with path "${dirName}" and command "npm run dev"`
+    : `Call the serve_web tool with path "${dirName}" and duration_seconds 1800`
   const prompt = dev
     ? `Do exactly three things with tools, in this order, then stop: ` +
       `(1) Create directory ${dirName} in your workspace. ` +
       `(2) In it create package.json with exactly this content: ` +
       `{"scripts":{"dev":"python3 -m http.server $PORT"}} — and a file ` +
       `index.html whose full content is: <title>${dirName}</title>dev-e2e. ` +
-      `(3) Run ${commandLine} on directory ${dirName} (do not pass a port; ` +
-      `the tool injects PORT into the environment). Report the URL.`
+      `Use your file tools for steps 1 and 2, never shell commands. ` +
+      `(3) ${commandLine} (omit the port parameter; the tool assigns one). ` +
+      `Report the URL.`
     : `Do exactly two things with tools, in this order, then stop: ` +
       `(1) Create directory ${dirName} in your workspace with a file ` +
       `index.html whose full content is: <title>${dirName}</title>static-e2e. ` +
-      `(2) Run the ${commandLine}. Report the URL.`
+      `Use your file tools, never shell commands. ` +
+      `(2) ${commandLine}. Report the URL.`
 
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 15_000 })
@@ -191,7 +201,7 @@ async function mintWebServeViaAgent(
       for (const msg of messages) {
         for (const call of msg.tool_calls ?? []) {
           if (
-            call.tool === 'web_serve' &&
+            call.tool === 'serve_web' &&
             call.status === 'success' &&
             (call.parameters?.path === dirName ||
               (call.result && typeof call.result === 'object' &&
@@ -201,14 +211,14 @@ async function mintWebServeViaAgent(
           }
         }
       }
-      lastBody = `polled ${messages.length} messages, no web_serve success for ${dirName}`
+      lastBody = `polled ${messages.length} messages, no serve_web success for ${dirName}`
     } else {
       lastBody = `messages API ${resp.status()}`
     }
     await page.waitForTimeout(2_000)
   }
   throw new Error(
-    `mint failed: no successful web_serve result for "${dirName}" within ` +
+    `mint failed: no successful serve_web result for "${dirName}" within ` +
       `${MINT_TIMEOUT} ms (last: ${lastBody}). The agent turn is the only ` +
       `product surface that registers a preview — a failure here is loud, ` +
       `never a skip.`,
@@ -530,7 +540,7 @@ test.describe('order 24 — S-2.1/S-2.2/S-8.1 Mode 1 + WebKit fallback', () => {
     const isolated = String(result.isolated_url ?? '')
     expect(
       isolated,
-      'BLOCKED: the web_serve result carries no isolated_url — FR-001/FR-011 ' +
+      'BLOCKED: the serve_web result carries no isolated_url — FR-001/FR-011 ' +
         '(ADR-094 Mode 1 minting) is not implemented yet; required by order 24 ' +
         '(S-2.1). Minted result keys: ' + Object.keys(result).join(','),
     ).toBeTruthy()
