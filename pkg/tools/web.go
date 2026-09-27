@@ -206,7 +206,17 @@ func mapBaiduRecencyFilter(rangeCode string) string {
 }
 
 type BraveSearchProvider struct {
-	keyPool     *APIKeyPool
+	keyPool *APIKeyPool
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key set is read from it at CALL time —
+	// the same live config the usability test reads. The construction
+	// snapshot (keyPool) stays the fallback for the legacy path and direct
+	// constructions. An empty effective key set is "not usable: no API key"
+	// (D16), never a hop.
+	keySource func() []string
+	// rotation carries the cross-call round-robin over the effective key
+	// list — the same behaviour APIKeyPool.NewIterator gave the snapshot.
+	rotation    uint32
 	baseURL     string // ADR-096: "" → default at search time
 	proxy       string
 	client      *http.Client
@@ -310,7 +320,17 @@ func (p *BraveSearchProvider) Search(
 }
 
 type TavilySearchProvider struct {
-	keyPool     *APIKeyPool
+	keyPool *APIKeyPool
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key set is read from it at CALL time —
+	// the same live config the usability test reads. The construction
+	// snapshot (keyPool) stays the fallback for the legacy path and direct
+	// constructions. An empty effective key set is "not usable: no API key"
+	// (D16), never a hop.
+	keySource func() []string
+	// rotation carries the cross-call round-robin over the effective key
+	// list — the same behaviour APIKeyPool.NewIterator gave the snapshot.
+	rotation    uint32
 	baseURL     string
 	proxy       string
 	client      *http.Client
@@ -471,6 +491,9 @@ type DuckDuckGoSearchProvider struct {
 	proxy       string
 	client      *http.Client
 	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
+	// emptyRun counts consecutive empty results (D20's consecutive-empty
+	// warning); reset to 0 by any non-empty result.
+	emptyRun int32
 }
 
 func (p *DuckDuckGoSearchProvider) Search(
@@ -572,12 +595,22 @@ func stripTags(content string) string {
 }
 
 type PerplexitySearchProvider struct {
-	keyPool     *APIKeyPool
+	keyPool *APIKeyPool
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key set is read from it at CALL time —
+	// the same live config the usability test reads. The construction
+	// snapshot (keyPool) stays the fallback to the legacy path and direct
+	// constructions. An empty effective key set is "not usable: no API key"
+	// (D16), never a hop.
+	keySource func() []string
+	// rotation carries the cross-call round-robin over the effective key
+	// list — the same behaviour APIKeyPool.NewIterator gave the snapshot.
+	rotation    uint32
 	baseURL     string // ADR-096: "" → default at search time
 	proxy       string
 	client      *http.Client
 	ingestBound int64  // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
-	contextSize string // ADR-096: operator-set search_context_size; "" → never sent
+	contextSize string // ADR-096 D20: operator ceiling clamping agent depth; "" → agent depth only
 }
 
 func (p *PerplexitySearchProvider) Search(
@@ -694,8 +727,9 @@ func (p *PerplexitySearchProvider) Search(
 }
 
 type SearXNGSearchProvider struct {
-	baseURL string
-	client  *http.Client
+	baseURL     string
+	client      *http.Client
+	ingestBound int64 // ADR-066 D10 / ADR-096 D10: <= 0 means the config default
 }
 
 func (p *SearXNGSearchProvider) Search(
@@ -722,6 +756,15 @@ func (p *SearXNGSearchProvider) Search(
 	}
 	defer resp.Body.Close()
 
+	// FR-020 / ADR-096 D10: bound the body before decode. SearXNG's base
+	// URL is operator-set, so an unbounded read can exhaust memory. The
+	// bound error is returned unwrapped so the ladder classifies it as
+	// ingest-bound and does not hop.
+	body, err := readIngestBounded(resp.Body, p.ingestBound, "SearXNG")
+	if err != nil {
+		return "", err
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("SearXNG returned status %d", resp.StatusCode)
 	}
@@ -736,7 +779,7 @@ func (p *SearXNGSearchProvider) Search(
 		} `json:"results"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
 
@@ -764,13 +807,20 @@ func (p *SearXNGSearchProvider) Search(
 }
 
 type GLMSearchProvider struct {
-	apiKey       string
+	apiKey string
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key is read from it at CALL time — the
+	// same live config the usability test reads. The construction snapshot
+	// (apiKey) stays the fallback for the legacy path and direct
+	// constructions. An empty effective key is "not usable: no API key"
+	// (D16), never a hop.
+	keySource    func() string
 	baseURL      string
 	searchEngine string
 	proxy        string
 	client       *http.Client
 	ingestBound  int64  // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
-	contentSize  string // ADR-096: "" → "medium"
+	contentSize  string // ADR-096: operator-set content_size, D20's ceiling on agent depth; "" → "medium"
 }
 
 func (p *GLMSearchProvider) Search(
@@ -784,12 +834,16 @@ func (p *GLMSearchProvider) Search(
 		searchURL = "https://open.bigmodel.cn/api/paas/v4/web_search"
 	}
 
+	// effectiveContentSize returns (value, clamped); the legacy path ignores
+	// clamped — it never sends an agent depth — so the payload stays
+	// byte-identical.
+	contentSize, _ := p.effectiveContentSize("")
 	payload := map[string]any{
 		"search_query":  query,
 		"search_engine": p.searchEngine,
 		"search_intent": false,
 		"count":         count,
-		"content_size":  p.effectiveContentSize(""),
+		"content_size":  contentSize,
 	}
 	if recencyFilter := mapGLMRecencyFilter(rangeCode); recencyFilter != "" {
 		payload["search_recency_filter"] = recencyFilter
@@ -857,7 +911,14 @@ func (p *GLMSearchProvider) Search(
 }
 
 type BaiduSearchProvider struct {
-	apiKey      string
+	apiKey string
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key is read from it at CALL time — the
+	// same live config the usability test reads. The construction snapshot
+	// (apiKey) stays the fallback for the legacy path and direct
+	// constructions. An empty effective key is "not usable: no API key"
+	// (D16), never a hop.
+	keySource   func() string
 	baseURL     string
 	proxy       string
 	client      *http.Client
@@ -900,7 +961,10 @@ func (p *BaiduSearchProvider) Search(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	// K1: currentKey() reads the live resolver on the dynamic path; on the
+	// legacy path (keySource nil) it returns the construction snapshot, so
+	// legacy behaviour is unchanged.
+	req.Header.Set("Authorization", "Bearer "+p.currentKey())
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -957,6 +1021,10 @@ type WebSearchTool struct {
 	// dynamic is the ADR-096 provider map (catalogue id -> provider), built
 	// only when Roles is set; the R-table ladder dispatches over it.
 	dynamic map[string]SearchProvider
+	// constructErr is a catalogue id whose constructor failed, so it is
+	// absent from dynamic. The call reports "not usable: <cause>" and
+	// does not hop (ADR-096 D16). nil when Roles is nil.
+	constructErr map[string]string
 	// callBudget is D17a: the whole call's wall-clock budget (0 → default).
 	callBudget time.Duration
 	// redact runs over every provider message that reaches the result text.
@@ -1102,6 +1170,19 @@ func newPerplexitySearchProvider(opts WebSearchToolOptions, ingestBound int64) (
 		client:      client,
 		ingestBound: ingestBound,
 	}
+	// K1: on the dynamic path the key set is read at call time through the
+	// same live config the usability test reads (D4a / AC-16). The snapshot
+	// pool stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		provider.keySource = func() []string {
+			c := roles()
+			if c == nil {
+				return nil
+			}
+			return singleKeyList(c.Perplexity.APIKey())
+		}
+	}
 	if opts.PerplexityMaxResults > 0 {
 		return provider, min(opts.PerplexityMaxResults, 10), nil
 	}
@@ -1123,33 +1204,44 @@ func newBraveSearchProvider(opts WebSearchToolOptions, ingestBound int64) (Searc
 		client:      client,
 		ingestBound: ingestBound,
 	}
+	// K1: on the dynamic path the key set is read at call time through the
+	// same live config the usability test proves (D4a / AC-16). The snapshot
+	// pool stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		keySource := func() []string {
+			c := roles()
+			if c == nil {
+				return nil
+			}
+			return singleKeyList(c.Brave.APIKey())
+		}
+		provider.keySource = keySource
+	}
 	if opts.BraveMaxResults > 0 {
 		return provider, min(opts.BraveMaxResults, 10), nil
 	}
 	return provider, 0, nil
 }
 
-// newSearXNGSearchProvider builds the SearXNG search provider from opts. It
-// cannot fail (self-hosted: no credential, no proxy client to construct), so
-// it returns no error; it takes no ingestBound because SearXNGSearchProvider
-// carries no ingestBound field.
-func newSearXNGSearchProvider(opts WebSearchToolOptions) (SearchProvider, int) {
-	// SearXNG: when SSRFChecker is present use its safe client; otherwise
-	// use a minimal stock client (SearXNG is self-hosted so no proxy needed).
-	var searXNGClient *http.Client
-	if opts.SSRFChecker != nil {
-		searXNGClient = opts.SSRFChecker.SafeClient()
-	} else {
-		searXNGClient = &http.Client{Timeout: 10 * time.Second}
+// newSearXNGSearchProvider builds the SearXNG search provider from opts.
+// The client comes from makeSearchClient, like every other provider
+// (ADR-096 D10 / AC-9): SSRF-safe when a checker is set, proxy-aware
+// otherwise. The response body is capped at ingestBound.
+func newSearXNGSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchProvider, int, error) {
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create HTTP client for SearXNG: %w", err)
 	}
 	provider := &SearXNGSearchProvider{
-		baseURL: opts.SearXNGBaseURL,
-		client:  searXNGClient,
+		baseURL:     opts.SearXNGBaseURL,
+		client:      client,
+		ingestBound: ingestBound,
 	}
 	if opts.SearXNGMaxResults > 0 {
-		return provider, min(opts.SearXNGMaxResults, 10)
+		return provider, min(opts.SearXNGMaxResults, 10), nil
 	}
-	return provider, 0
+	return provider, 0, nil
 }
 
 // newTavilySearchProvider builds the Tavily search provider from opts. It
@@ -1167,6 +1259,19 @@ func newTavilySearchProvider(opts WebSearchToolOptions, ingestBound int64) (Sear
 		searchDepth: opts.TavilySearchDepth,
 		client:      client,
 		ingestBound: ingestBound,
+	}
+	// K1: on the dynamic path the key set is read at call time through the
+	// same live config the usability test reads (D4a / AC-16). The snapshot
+	// pool stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		provider.keySource = func() []string {
+			c := roles()
+			if c == nil {
+				return nil
+			}
+			return singleKeyList(c.Tavily.APIKey())
+		}
 	}
 	if opts.TavilyMaxResults > 0 {
 		return provider, min(opts.TavilyMaxResults, 10), nil
@@ -1204,6 +1309,19 @@ func newBaiduSearchProvider(opts WebSearchToolOptions, ingestBound int64) (Searc
 		client:      client,
 		ingestBound: ingestBound,
 	}
+	// K1: on the dynamic path the key is read at call time through the same
+	// live config the usability test reads (D4a / AC-16). The snapshot above
+	// stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		provider.keySource = func() string {
+			c := roles()
+			if c == nil {
+				return ""
+			}
+			return c.BaiduSearch.APIKey()
+		}
+	}
 	if opts.BaiduSearchMaxResults > 0 {
 		return provider, min(opts.BaiduSearchMaxResults, 10), nil
 	}
@@ -1230,6 +1348,19 @@ func newGLMSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchP
 		client:       client,
 		ingestBound:  ingestBound,
 		contentSize:  opts.GLMContentSize,
+	}
+	// K1: on the dynamic path the key is read at call time through the same
+	// live config the usability test reads (D4a / AC-16). The snapshot above
+	// stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		provider.keySource = func() string {
+			c := roles()
+			if c == nil {
+				return ""
+			}
+			return c.GLMSearch.APIKey()
+		}
 	}
 	if opts.GLMSearchMaxResults > 0 {
 		return provider, min(opts.GLMSearchMaxResults, 10), nil
@@ -1322,75 +1453,54 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	// (names only, never key values).
 	warnKeylessSearchProviders(opts)
 
-	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu Search > GLM Search
-	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
-		prov, override, err := newPerplexitySearchProvider(opts, ingestBound)
+	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu Search > GLM Search.
+	// A constructor error fails the tool only on the legacy path (Roles nil),
+	// where this one provider is the whole tool. With Roles set, the dynamic
+	// map records the cause and the call reports "not usable" — boot continues.
+	assign := func(prov SearchProvider, override int, err error) error {
 		if err != nil {
-			return nil, err
+			if roles != nil {
+				return nil
+			}
+			return err
 		}
 		provider = prov
 		if override > 0 {
 			maxResults = override
+		}
+		return nil
+	}
+	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
+		if err := assign(newPerplexitySearchProvider(opts, ingestBound)); err != nil {
+			return nil, err
 		}
 	} else if opts.BraveEnabled && len(opts.BraveAPIKeys) > 0 {
-		prov, override, err := newBraveSearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newBraveSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	} else if opts.SearXNGEnabled && opts.SearXNGBaseURL != "" {
-		prov, override := newSearXNGSearchProvider(opts)
-		provider = prov
-		if override > 0 {
-			maxResults = override
+		if err := assign(newSearXNGSearchProvider(opts, ingestBound)); err != nil {
+			return nil, err
 		}
 	} else if opts.TavilyEnabled && len(opts.TavilyAPIKeys) > 0 {
-		prov, override, err := newTavilySearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newTavilySearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	} else if opts.DuckDuckGoEnabled {
-		prov, override, err := newDuckDuckGoSearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newDuckDuckGoSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	} else if opts.BaiduSearchEnabled && opts.BaiduSearchAPIKey != "" {
-		prov, override, err := newBaiduSearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newBaiduSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	} else if opts.GLMSearchEnabled && opts.GLMSearchAPIKey != "" {
-		prov, override, err := newGLMSearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newGLMSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	} else {
-		prov, override, err := newDuckDuckGoFallbackSearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newDuckDuckGoFallbackSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	}
 
@@ -1398,48 +1508,80 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	// ladder can fail over across providers; the legacy single-provider
 	// chain above stays the path when Roles is nil.
 	var dynamic map[string]SearchProvider
+	var constructErr map[string]string
 	if roles != nil {
-		dynamic = buildDynamicSearchProviders(opts, ingestBound)
+		dynamic, constructErr = buildDynamicSearchProviders(opts, ingestBound)
 	}
 
 	return &WebSearchTool{
-		provider:   provider,
-		maxResults: maxResults,
-		roles:      roles,
-		dynamic:    dynamic,
-		callBudget: opts.CallBudget,
-		redact:     opts.Redact,
+		provider:     provider,
+		maxResults:   maxResults,
+		roles:        roles,
+		dynamic:      dynamic,
+		constructErr: constructErr,
+		callBudget:   opts.CallBudget,
+		redact:       opts.Redact,
 	}, nil
 }
 
 // buildDynamicSearchProviders constructs the whole ADR-096 provider map.
-// A provider whose constructor errors (e.g. a malformed base URL) is simply
-// absent — the R-table then reports it "switched off" rather than failing
-// the boot.
-func buildDynamicSearchProviders(opts WebSearchToolOptions, ingestBound int64) map[string]SearchProvider {
+// A constructor error is not swallowed: it is logged with the provider id
+// and the cause, and returned so the call can report "not usable: <cause>"
+// instead of a network hop (ADR-096 D16).
+func buildDynamicSearchProviders(opts WebSearchToolOptions, ingestBound int64) (map[string]SearchProvider, map[string]string) {
 	dynamic := map[string]SearchProvider{}
-	if p, _, err := newPerplexitySearchProvider(opts, ingestBound); err == nil {
+	failed := map[string]string{}
+	note := func(id string, err error) {
+		if err == nil {
+			return
+		}
+		logger.WarnCF("tool", "search provider not usable: constructor failed", map[string]any{
+			"provider": id,
+			"cause":    err.Error(),
+		})
+		failed[id] = err.Error()
+	}
+	if p, _, err := newPerplexitySearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderPerplexity, err)
+	} else {
 		dynamic[config.SearchProviderPerplexity] = p
 	}
-	if p, _, err := newBraveSearchProvider(opts, ingestBound); err == nil {
+	if p, _, err := newBraveSearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderBrave, err)
+	} else {
 		dynamic[config.SearchProviderBrave] = p
 	}
-	p, _ := newSearXNGSearchProvider(opts)
-	dynamic[config.SearchProviderSearXNG] = p
-	if p, _, err := newTavilySearchProvider(opts, ingestBound); err == nil {
+	if p, _, err := newSearXNGSearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderSearXNG, err)
+	} else {
+		dynamic[config.SearchProviderSearXNG] = p
+	}
+	if p, _, err := newTavilySearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderTavily, err)
+	} else {
 		dynamic[config.SearchProviderTavily] = p
 	}
-	if p, _, err := newDuckDuckGoSearchProvider(opts, ingestBound); err == nil {
+	if p, _, err := newDuckDuckGoSearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderDuckDuckGo, err)
+	} else {
 		dynamic[config.SearchProviderDuckDuckGo] = p
 	}
-	if p, _, err := newBaiduSearchProvider(opts, ingestBound); err == nil {
+	if p, _, err := newBaiduSearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderBaidu, err)
+	} else {
 		dynamic[config.SearchProviderBaidu] = p
 	}
-	if p, _, err := newGLMSearchProvider(opts, ingestBound); err == nil {
+	if p, _, err := newGLMSearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderGLM, err)
+	} else {
 		dynamic[config.SearchProviderGLM] = p
 	}
-	dynamic[config.SearchProviderExa] = newExaProvider(opts)
-	return dynamic
+	if p, err := newExaProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderExa, err)
+	} else {
+		dynamic[config.SearchProviderExa] = p
+	}
+	return dynamic, failed
 }
 
 func (t *WebSearchTool) Name() string {

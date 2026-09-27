@@ -18,11 +18,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"bytes"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // roleEntries is the per-call snapshot of the usable set the resolver and
@@ -152,10 +154,17 @@ func resolveRoles(cfg *config.WebToolsConfig) roleEntries {
 			entries.ignoredSameAsDefault = true
 		}
 	case fallbackRaw == "":
-		// R3/R6: absent → auto-DuckDuckGo when DDG is usable and not the
-		// default, regardless of the default's own usability (lane decision
-		// anchored in US-1.5's own wording).
-		if defaultID != config.SearchProviderDuckDuckGo && usable[config.SearchProviderDuckDuckGo] {
+		// R3: absent → auto-DuckDuckGo when DDG is usable and the default
+		// is a USABLE provider other than DuckDuckGo. The usable-default
+		// conjunct is R3's own third condition: without it, an unusable
+		// default + absent fallback + usable DDG would hand off to DDG
+		// even though R6 requires an R3/R4 fallback and R7 says nobody
+		// runs — D3's "it does not run because nothing else matched".
+		// US-1 acceptance 5 stays reachable: its "resolved fallback is a
+		// usable DuckDuckGo" is an explicit R4 pick.
+		if defaultID != config.SearchProviderDuckDuckGo &&
+			usable[config.SearchProviderDuckDuckGo] &&
+			usable[defaultID] {
 			entries.fallbackID = config.SearchProviderDuckDuckGo
 			entries.fallbackAuto = true
 		}
@@ -232,7 +241,14 @@ type searchRequest struct {
 
 // ExaSearchProvider calls the Exa search API (ADR-096 D2/AC-1).
 type ExaSearchProvider struct {
-	apiKey      string
+	apiKey string
+	// keySource is the D4a live resolver handle (finding K1): when non-nil
+	// (the ADR-096 dynamic path), the key is read from it at CALL time — the
+	// same live config the usability test reads. The construction snapshot
+	// (apiKey) stays the fallback for the legacy path and direct
+	// constructions. An empty effective key is "not usable: no API key"
+	// (D16), never a hop.
+	keySource   func() string
 	baseURL     string
 	client      *http.Client
 	ingestBound int64
@@ -241,17 +257,39 @@ type ExaSearchProvider struct {
 
 // newExaProvider builds the Exa provider; empty base URL falls back to the
 // shipped default.
-func newExaProvider(opts WebSearchToolOptions) *ExaSearchProvider {
+func newExaProvider(opts WebSearchToolOptions, ingestBound int64) (*ExaSearchProvider, error) {
 	baseURL := opts.ExaBaseURL
 	if baseURL == "" {
 		baseURL = "https://api.exa.ai/search"
 	}
-	return &ExaSearchProvider{
-		apiKey:     opts.ExaAPIKey,
-		baseURL:    baseURL,
-		client:     &http.Client{Timeout: searchTimeout},
-		maxResults: 10,
+	// S1: the same client factory as every other provider. A stock
+	// http.Client would send the Bearer key to whatever base_url is set,
+	// including a private address the SSRF checker is supposed to block.
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP client for Exa: %w", err)
 	}
+	provider := &ExaSearchProvider{
+		apiKey:      opts.ExaAPIKey,
+		baseURL:     baseURL,
+		client:      client,
+		ingestBound: ingestBound,
+		maxResults:  10,
+	}
+	// K1: on the dynamic path the key is read at call time through the same
+	// live config the usability test reads (D4a / AC-16). The snapshot above
+	// stays the fallback for the legacy path and direct constructions.
+	if opts.Roles != nil {
+		roles := opts.Roles
+		provider.keySource = func() string {
+			c := roles()
+			if c == nil {
+				return ""
+			}
+			return c.Exa.APIKey()
+		}
+	}
+	return provider, nil
 }
 
 // Failure classes (spec 292–317). Hop classes move to the fallback; final
@@ -266,6 +304,10 @@ const (
 	classRejected    = "rejected"
 	classCancelled   = "cancelled"
 	classIngestBound = "ingest-bound"
+	// classNotUsable is a constructor failure. It is not a hop class: the
+	// provider was never built, so the agent is told "not usable: <cause>"
+	// (ADR-096 D16) instead of a network retry.
+	classNotUsable = "not usable"
 )
 
 // hopClass reports whether a failure class hops to the fallback (spec "Which
@@ -365,6 +407,9 @@ func (t *WebSearchTool) runProvider(
 	req searchRequest,
 ) (string, *searchProviderError) {
 	p, ok := t.dynamic[id]
+	if reason, failed := t.constructErr[id]; failed {
+		return "", &searchProviderError{class: classNotUsable, msg: reason}
+	}
 	if !ok {
 		return "", &searchProviderError{class: classNetwork, msg: id + ": provider not constructed"}
 	}
@@ -411,31 +456,54 @@ func (t *WebSearchTool) runProvider(
 // searchProviderDefaultCount is the dynamic path's default result count.
 const searchProviderDefaultCount = 10
 
-// validSearchHostname applies the spec's site-filter rules (spec 479–527):
-// lowercase, strip ONE trailing dot, reject empty entries, wildcards, ports
-// (a ":" anywhere), and anything scheme-shaped ("https://..." carries ":").
-// Returns the normalised hostname.
+// validSearchHostname applies FR-026: the rule set of
+// pkg/gateway/video_embed_hosts.go::validVideoEmbedHosts (bare DNS name,
+// no IP literal, at most 253 characters, labels of 1-63), after the search
+// normalisation the spec adds (lowercase, one trailing dot stripped).
+// Returns the normalised hostname. A failure rejects the call; entries are
+// not dropped.
 func validSearchHostname(raw string) (string, error) {
 	h := strings.ToLower(strings.TrimSpace(raw))
 	h = strings.TrimSuffix(h, ".")
 	if h == "" {
 		return "", fmt.Errorf("empty domain entry")
 	}
-	if strings.ContainsAny(h, ":*") {
-		return "", fmt.Errorf("%q is not a bare hostname (no ports, schemes or wildcards)", raw)
+	// Length is the normalised name, so a trailing dot does not count.
+	// The raw value is not quoted: a 10 KB entry must not be copied into the
+	// tool error.
+	if len(h) > 253 {
+		return "", fmt.Errorf("entry is over 253 characters")
 	}
-	if strings.ContainsAny(h, "/@? ") {
+	if strings.Contains(h, "*") {
+		return "", fmt.Errorf("%q is not a bare hostname (no wildcards)", raw)
+	}
+	if strings.Contains(h, "://") || strings.ContainsAny(h, "/:?#@\\ ") {
+		return "", fmt.Errorf("%q is not a bare hostname (no ports, schemes or paths)", raw)
+	}
+	labels := strings.Split(h, ".")
+	if len(labels) < 2 {
 		return "", fmt.Errorf("%q is not a bare hostname", raw)
 	}
-	for _, label := range strings.Split(h, ".") {
-		if label == "" {
-			return "", fmt.Errorf("%q has an empty label", raw)
+	for _, label := range labels {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return "", fmt.Errorf("%q has an invalid label", raw)
 		}
 		for _, r := range label {
 			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
 				return "", fmt.Errorf("%q has invalid characters", raw)
 			}
 		}
+	}
+	last := labels[len(labels)-1]
+	allDigits := true
+	for _, r := range last {
+		if r < '0' || r > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		return "", fmt.Errorf("%q is an IP literal, not a hostname", raw)
 	}
 	return h, nil
 }
@@ -452,9 +520,6 @@ func normalizeSearchDomains(raws []any, kind string) ([]string, error) {
 		s, ok := raw.(string)
 		if !ok {
 			return nil, fmt.Errorf("%s entries must be strings", kind)
-		}
-		if len(s) > 253 {
-			return nil, fmt.Errorf("%s: %q is over 253 characters", kind, s)
 		}
 		h, err := validSearchHostname(s)
 		if err != nil {
@@ -557,6 +622,21 @@ func (t *WebSearchTool) parseDynamicArgs(args map[string]any) (searchRequest, *T
 	return req, nil
 }
 
+// searchCallRecord carries ADR-096 D20's per-call observability fields from
+// the executors back to executeDynamic, which emits exactly ONE structured
+// record per search call (spec test 50). The provider that answered and its
+// role, the class of the attempt that ended the call, and whether a hop,
+// refusal or skip occurred; the resolved default and fallback come from
+// roleEntries at emission time.
+type searchCallRecord struct {
+	servedID string
+	role     string
+	class    string
+	hop      bool
+	refusal  bool
+	skip     string
+}
+
 // executeDynamic is the new-path Execute: parse, resolve roles, run the
 // pre-flight refusals against the first runner, then the ladder.
 func (t *WebSearchTool) executeDynamic(ctx context.Context, args map[string]any) *ToolResult {
@@ -567,10 +647,36 @@ func (t *WebSearchTool) executeDynamic(ctx context.Context, args map[string]any)
 	cfg := t.roles()
 	entries := resolveRoles(cfg)
 	start := time.Now()
+	rec := &searchCallRecord{}
+	var res *ToolResult
 	if req.namedID != "" {
-		return t.executeChosen(ctx, cfg, entries, req, start)
+		res = t.executeChosen(ctx, cfg, entries, req, start, rec)
+	} else {
+		res = t.executeDefaultPath(ctx, cfg, entries, req, start, rec)
 	}
-	return t.executeDefaultPath(ctx, cfg, entries, req, start)
+	t.emitSearchCallRecord(entries, req, rec)
+	return res
+}
+
+// emitSearchCallRecord writes the D20 record for one finished search call.
+// "skip" carries the exact skip reason ("cannot honour include_domains",
+// "no time budget remaining"); "class" is the class of the attempt that
+// ended the call ("" on a clean success).
+func (t *WebSearchTool) emitSearchCallRecord(entries roleEntries, req searchRequest, rec *searchCallRecord) {
+	if rec == nil {
+		return
+	}
+	logger.InfoCF("tool", "web search call", map[string]any{
+		"default":  entries.defaultID,
+		"fallback": entries.fallbackID,
+		"served":   rec.servedID,
+		"role":     rec.role,
+		"depth":    req.depth,
+		"class":    rec.class,
+		"hop":      rec.hop,
+		"refusal":  rec.refusal,
+		"skip":     rec.skip,
+	})
 }
 
 // capabilityRefusal builds the pre-request refusal when the provider that
@@ -705,24 +811,30 @@ func (t *WebSearchTool) executeDefaultPath(
 	entries roleEntries,
 	req searchRequest,
 	start time.Time,
+	rec *searchCallRecord,
 ) *ToolResult {
 	defaultID := entries.defaultID
 	if !entries.usable[defaultID] {
-		return t.executeNotUsableDefault(ctx, cfg, entries, req, start)
+		return t.executeNotUsableDefault(ctx, cfg, entries, req, start, rec)
 	}
 	// Pre-flights: the first runner is the default.
 	if res := t.preflightCheck(entries, defaultID, "default", req); res != nil {
+		rec.refusal = true
 		return res
 	}
 	text, spErr := t.runProvider(ctx, start, defaultID, req)
 	if spErr == nil {
+		rec.servedID = defaultID
+		rec.role = "default"
 		return successText(text, defaultID, "default", t.excludeNote(entries, defaultID, req))
 	}
 	// Final classes never hop (spec "Which failures hop").
 	if !hopClass(spErr.class) {
+		rec.class = spErr.class
 		lines := []string{"search failed", t.failureLine(defaultID, "default", spErr.class, spErr.msg)}
 		if entries.fallbackID != "" {
 			if reason := entries.notCalledReason(cfg, entries.fallbackID); reason != "" {
+				rec.skip = reason
 				lines = append(lines, notCalledLine(entries.fallbackID, "fallback", reason))
 			}
 		}
@@ -730,6 +842,8 @@ func (t *WebSearchTool) executeDefaultPath(
 	}
 	// Hop-class failure.
 	if reason := t.fallbackEligibility(entries, req, start); reason != "" {
+		rec.class = spErr.class
+		rec.skip = reason
 		lines := []string{"search failed", t.failureLine(defaultID, "default", spErr.class, spErr.msg)}
 		if entries.fallbackID != "" {
 			lines = append(lines, notCalledLine(entries.fallbackID, "fallback", reason))
@@ -737,9 +851,11 @@ func (t *WebSearchTool) executeDefaultPath(
 		return ErrorResult(strings.Join(lines, "\n"))
 	}
 	if entries.fallbackID == "" || !entries.usable[entries.fallbackID] {
+		rec.class = spErr.class
 		lines := []string{"search failed", t.failureLine(defaultID, "default", spErr.class, spErr.msg)}
 		if entries.fallbackID != "" {
 			if reason := entries.notCalledReason(cfg, entries.fallbackID); reason != "" {
+				rec.skip = reason
 				lines = append(lines, notCalledLine(entries.fallbackID, "fallback", reason))
 			}
 		}
@@ -747,10 +863,14 @@ func (t *WebSearchTool) executeDefaultPath(
 	}
 	text2, spErr2 := t.runProvider(ctx, start, entries.fallbackID, req)
 	if spErr2 == nil {
+		rec.servedID = entries.fallbackID
+		rec.role = "fallback"
+		rec.hop = true
 		notes := t.excludeNote(entries, entries.fallbackID, req)
 		notes = append(notes, t.hopNote(defaultID, "default", spErr.class, spErr.msg))
 		return successText(text2, entries.fallbackID, "fallback", notes)
 	}
+	rec.class = spErr2.class
 	lines := []string{"search failed",
 		t.failureLine(defaultID, "default", spErr.class, spErr.msg),
 		t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}
@@ -766,12 +886,14 @@ func (t *WebSearchTool) executeNotUsableDefault(
 	entries roleEntries,
 	req searchRequest,
 	start time.Time,
+	rec *searchCallRecord,
 ) *ToolResult {
 	defaultID := entries.defaultID
 	reason := entries.notCalledReason(cfg, defaultID)
 	fb := entries.fallbackID
 	if fb == "" || !entries.usable[fb] {
 		// R7: nobody can run. List the default (and any R4b fallback).
+		rec.skip = reason
 		lines := []string{"search failed", notCalledLine(defaultID, "default", reason)}
 		if fb != "" && fb != defaultID {
 			lines = append(lines, notCalledLine(fb, "fallback", entries.notCalledReason(cfg, fb)))
@@ -779,12 +901,22 @@ func (t *WebSearchTool) executeNotUsableDefault(
 		return ErrorResult(strings.Join(lines, "\n"))
 	}
 	// R6: the fallback runs; the default is named in a note or an error line.
+	// Pre-flight the fallback as this path's first runner (K3): depth low on
+	// GLM (or depth/site-filter asks a provider cannot honour) is refused
+	// before any request fires.
+	if res := t.preflightCheck(entries, fb, "fallback", req); res != nil {
+		rec.refusal = true
+		return res
+	}
 	text, spErr := t.runProvider(ctx, start, fb, req)
 	if spErr == nil {
+		rec.servedID = fb
+		rec.role = "fallback"
 		notes := t.excludeNote(entries, entries.fallbackID, req)
 		notes = append(notes, fmt.Sprintf("Note: %s (default) was not called: %s.", defaultID, reason))
 		return successText(text, fb, "fallback", notes)
 	}
+	rec.class = spErr.class
 	lines := []string{"search failed",
 		notCalledLine(defaultID, "default", reason),
 		t.failureLine(fb, "fallback", spErr.class, spErr.msg)}
@@ -800,6 +932,7 @@ func (t *WebSearchTool) executeChosen(
 	entries roleEntries,
 	req searchRequest,
 	start time.Time,
+	rec *searchCallRecord,
 ) *ToolResult {
 	id := req.namedID
 	// A capability use never rides the default shortcut (US-4): include/
@@ -809,29 +942,51 @@ func (t *WebSearchTool) executeChosen(
 		req.depth != "" || id == config.SearchProviderPerplexity
 	// Unknown or unusable picks are refused honestly, no silent substitution.
 	if !slices.Contains(searchProviderCatalogueOrder, id) || !entries.usable[id] {
+		rec.refusal = true
 		return t.chosenRefusal(entries, id)
 	}
 	// Naming the default equals omitting the argument entirely (US-4) --
 	// plain calls only.
 	if id == entries.defaultID && !usesCap {
 		req.namedID = ""
-		return t.executeDefaultPath(ctx, cfg, entries, req, start)
+		return t.executeDefaultPath(ctx, cfg, entries, req, start, rec)
+	}
+	// Pre-flight: the chosen provider is about to be the first runner; the
+	// same capability refusals that guard the default path guard it here
+	// (K3): depth on a non-depth provider, GLM low, site filters.
+	if res := t.preflightCheck(entries, id, "chosen", req); res != nil {
+		rec.refusal = true
+		return res
 	}
 	// Usable pick: one named attempt.
 	text, spErr := t.runProvider(ctx, start, id, req)
 	if spErr == nil {
+		rec.servedID = id
+		rec.role = "chosen"
 		return successText(text, id, "chosen", t.excludeNote(entries, id, req))
 	}
-	// A capability use never hops (US-4); usesCap was computed on entry.
-	if hopClass(spErr.class) && !usesCap && entries.usable[entries.fallbackID] {
-		text2, spErr2 := t.runProvider(ctx, start, entries.fallbackID, req)
-		if spErr2 == nil {
-			return successText(text2, entries.fallbackID, "fallback",
-				[]string{t.hopNote(id, "chosen", spErr.class, spErr.msg)})
+	// A capability use never hops (US-4); usesCap was computed on entry. A
+	// plain named call hops only when the fallback passes the SAME
+	// eligibility gate as the default path (K4): site filters and the D17a
+	// time budget.
+	if hopClass(spErr.class) && !usesCap {
+		if reason := t.fallbackEligibility(entries, req, start); reason != "" {
+			return ErrorResult(strings.Join([]string{
+				"search failed",
+				t.failureLine(id, "chosen", spErr.class, spErr.msg),
+				notCalledLine(entries.fallbackID, "fallback", reason),
+			}, "\n"))
 		}
-		return ErrorResult(strings.Join([]string{"search failed",
-			t.failureLine(id, "chosen", spErr.class, spErr.msg),
-			t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}, "\n"))
+		if entries.usable[entries.fallbackID] {
+			text2, spErr2 := t.runProvider(ctx, start, entries.fallbackID, req)
+			if spErr2 == nil {
+				return successText(text2, entries.fallbackID, "fallback",
+					[]string{t.hopNote(id, "chosen", spErr.class, spErr.msg)})
+			}
+			return ErrorResult(strings.Join([]string{"search failed",
+				t.failureLine(id, "chosen", spErr.class, spErr.msg),
+				t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}, "\n"))
+		}
 	}
 	// Hard fail: capability use, no fallback, or final class.
 	tail := fmt.Sprintf("This call named %s, so the fallback was not tried. "+
@@ -1053,6 +1208,12 @@ func (p *ExaSearchProvider) SearchWithCaps(ctx context.Context, req searchReques
 }
 
 func (p *ExaSearchProvider) search(ctx context.Context, req searchRequest) (string, error) {
+	// K1: the key is read at call time (D4a); an empty effective key is
+	// "not usable" (D16), never a hop.
+	apiKey := p.currentKey()
+	if apiKey == "" {
+		return "", errNoAPIKey()
+	}
 	payload := map[string]any{
 		"query":      req.query,
 		"numResults": req.count,
@@ -1073,9 +1234,7 @@ func (p *ExaSearchProvider) search(ctx context.Context, req searchRequest) (stri
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", userAgent)
-	if p.apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+p.apiKey)
-	}
+	request.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := p.client.Do(request)
 	if err != nil {
@@ -1128,19 +1287,19 @@ func (p *TavilySearchProvider) searchCaps(ctx context.Context, req searchRequest
 	if searchURL == "" {
 		searchURL = "https://api.tavily.com/search"
 	}
+	keys := p.currentKeys()
+	if len(keys) == 0 {
+		return "", errNoAPIKey()
+	}
 	var lastErr error
-	iter := p.keyPool.NewIterator()
-	for {
-		apiKey, ok := iter.Next()
-		if !ok {
-			break
-		}
+	for _, apiKey := range keys {
 		depth, clamped := p.effectiveDepth(req.depth)
 		payload := map[string]any{
-			"api_key":      apiKey,
-			"query":        req.query,
-			"search_depth": depth,
-			"max_results":  req.count,
+			"api_key":        apiKey,
+			"query":          req.query,
+			"search_depth":   depth,
+			"include_answer": false,
+			"max_results":    req.count,
 		}
 		if timeRange := mapTavilyTimeRange(req.rangeFilter); timeRange != "" {
 			payload["time_range"] = timeRange
@@ -1219,17 +1378,24 @@ func (p *TavilySearchProvider) searchCaps(ctx context.Context, req searchRequest
 	return "", fmt.Errorf("all api keys failed, last error: %w", lastErr)
 }
 
-// effectiveContentSize maps agent depth onto GLM's content_size; no agent
-// depth means the operator's setting ("" → "medium").
-func (p *GLMSearchProvider) effectiveContentSize(agentDepth string) string {
-	switch agentDepth {
-	case "low", "medium", "high":
-		return agentDepth
+// effectiveContentSize maps agent depth onto GLM's content_size through the
+// operator ceiling (ADR-096 D20): no agent depth means the ceiling ("" →
+// "medium", the spec's migration value); an agent depth is clamped when it
+// asks above the ceiling. Order medium < high; agent low is refused upstream
+// at pre-flight and never reaches here.
+func (p *GLMSearchProvider) effectiveContentSize(agentDepth string) (string, bool) {
+	ceiling := p.contentSize
+	if ceiling == "" {
+		ceiling = "medium"
 	}
-	if p.contentSize != "" {
-		return p.contentSize
+	if agentDepth == "" {
+		return ceiling, false
 	}
-	return "medium"
+	order := map[string]int{"low": 0, "medium": 1, "high": 2}
+	if order[agentDepth] > order[ceiling] {
+		return ceiling, true
+	}
+	return agentDepth, false
 }
 
 // honoursDepth: GLM exposes content_size (matrix), but agent depth low is
@@ -1248,16 +1414,30 @@ func (p *GLMSearchProvider) SearchWithCaps(ctx context.Context, req searchReques
 // searchCaps mirrors the legacy GLM request with content_size from the
 // agent's depth (D-GLM row).
 func (p *GLMSearchProvider) searchCaps(ctx context.Context, req searchRequest) (string, error) {
+	// FR-015: GLM has no low content_size value. Agent depth low is refused
+	// here — final class, no request fires — on every path that reaches this
+	// provider, so a hop or a fallback can never route a low-depth ask to
+	// GLM even where the tool-level pre-flight does not run.
+	if req.depth == "low" {
+		return "", &searchProviderError{class: classRejected, msg: "depth is not supported"}
+	}
+	// K1: the key is read at call time (D4a); an empty effective key is
+	// "not usable" (D16), never a hop.
+	apiKey := p.currentKey()
+	if apiKey == "" {
+		return "", errNoAPIKey()
+	}
 	searchURL := p.baseURL
 	if searchURL == "" {
 		searchURL = "https://open.bigmodel.cn/api/paas/v4/web_search"
 	}
+	contentSize, clamped := p.effectiveContentSize(req.depth)
 	payload := map[string]any{
 		"search_query":  req.query,
 		"search_engine": p.searchEngine,
 		"search_intent": false,
 		"count":         req.count,
-		"content_size":  p.effectiveContentSize(req.depth),
+		"content_size":  contentSize,
 	}
 	if recencyFilter := mapGLMRecencyFilter(req.rangeFilter); recencyFilter != "" {
 		payload["search_recency_filter"] = recencyFilter
@@ -1271,7 +1451,7 @@ func (p *GLMSearchProvider) searchCaps(ctx context.Context, req searchRequest) (
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+p.apiKey)
+	request.Header.Set("Authorization", "Bearer "+apiKey)
 	resp, err := p.client.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
@@ -1308,6 +1488,10 @@ func (p *GLMSearchProvider) searchCaps(ctx context.Context, req searchRequest) (
 			lines = append(lines, fmt.Sprintf("   %s", item.Content))
 		}
 	}
+	if clamped {
+		lines = append(lines, fmt.Sprintf(
+			"Note: requested depth %q was clamped to the operator ceiling %q.", req.depth, contentSize))
+	}
 	return strings.Join(lines, "\n"), nil
 }
 
@@ -1333,6 +1517,26 @@ func perplexityDepthToContextSize(depth string) string {
 	return ""
 }
 
+// effectiveContextSize maps agent depth through the operator's
+// search_context_size ceiling (ADR-096 D20). No operator value: the agent's
+// depth decides and an omitted depth sends nothing (D11 — a default would
+// change the bill on existing installs). A set ceiling is returned when the
+// agent asks above it, with clamped=true. Order low < medium < high.
+func (p *PerplexitySearchProvider) effectiveContextSize(agentDepth string) (string, bool) {
+	agentSize := perplexityDepthToContextSize(agentDepth)
+	if p.contextSize == "" {
+		return agentSize, false
+	}
+	if agentSize == "" {
+		return p.contextSize, false
+	}
+	order := map[string]int{"low": 0, "medium": 1, "high": 2}
+	if order[agentSize] > order[p.contextSize] {
+		return p.contextSize, true
+	}
+	return agentSize, false
+}
+
 // searchCaps mirrors the legacy Perplexity request with the ADR-096
 // additions; the legacy Search payload stays byte-identical.
 func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchRequest) (string, error) {
@@ -1341,13 +1545,15 @@ func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchReq
 		searchURL = "https://api.perplexity.ai/chat/completions"
 	}
 
+	keys := p.currentKeys()
+	if len(keys) == 0 {
+		return "", errNoAPIKey()
+	}
+	// D20: when the agent's depth ask exceeds the operator ceiling, the
+	// result carries a clamp note naming both values.
+	var clampDepth, clampCeiling string
 	var lastErr error
-	iter := p.keyPool.NewIterator()
-	for {
-		apiKey, ok := iter.Next()
-		if !ok {
-			break
-		}
+	for _, apiKey := range keys {
 		payload := map[string]any{
 			"model":       "sonar",
 			"temperature": 0.0,
@@ -1359,10 +1565,11 @@ func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchReq
 		}
 
 		// search_context_size is sent ONLY when the operator set it or the
-		// agent passed depth (D-PPLX gating).
-		contextSize := p.contextSize
-		if agentSize := perplexityDepthToContextSize(req.depth); agentSize != "" {
-			contextSize = agentSize
+		// agent passed depth (D-PPLX gating); a set operator value is the
+		// ceiling (D20), clamping an agent ask above it.
+		contextSize, clamped := p.effectiveContextSize(req.depth)
+		if clamped {
+			clampDepth, clampCeiling = req.depth, contextSize
 		}
 		if contextSize != "" {
 			payload["web_search_options"] = map[string]any{"search_context_size": contextSize}
@@ -1443,6 +1650,9 @@ func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchReq
 				result += " " + c
 			}
 		}
+		if clampDepth != "" {
+			result += fmt.Sprintf("\nNote: requested depth %q was clamped to the operator ceiling %q.", clampDepth, clampCeiling)
+		}
 		return result, nil
 	}
 	return "", fmt.Errorf("all api keys failed, last error: %w", lastErr)
@@ -1486,7 +1696,33 @@ func (p *DuckDuckGoSearchProvider) SearchWithCaps(ctx context.Context, req searc
 			msg:   fmt.Sprintf("duckduckgo api error (status %d): %s", resp.StatusCode, string(body)),
 		}
 	}
-	return p.extractResults(string(body), req.count, req.query)
+	return p.noteEmptyRun(p.extractResults(string(body), req.count, req.query))
+}
+
+// ddgEmptyWarnThreshold is how many consecutive empty DuckDuckGo results
+// trigger D20's consecutive-empty warning ("the cheap version of the
+// block-page fingerprint"). Lane decision: the spec fixes the warning, not
+// a number.
+const ddgEmptyWarnThreshold = 3
+
+// noteEmptyRun tracks consecutive empty results: an empty result is a
+// SUCCESS shape (it carries no failure class), so the warning is the only
+// signal an operator gets before the agent keeps trusting a blocked page.
+// Any non-empty result resets the count.
+func (p *DuckDuckGoSearchProvider) noteEmptyRun(text string, err error) (string, error) {
+	if err != nil {
+		return text, err
+	}
+	if strings.HasPrefix(text, "No results found or extraction failed") {
+		if n := atomic.AddInt32(&p.emptyRun, 1); n >= ddgEmptyWarnThreshold {
+			logger.WarnCF("tool", "duckduckgo returned no results repeatedly", map[string]any{
+				"consecutive_empty": n,
+			})
+		}
+		return text, nil
+	}
+	atomic.StoreInt32(&p.emptyRun, 0)
+	return text, nil
 }
 
 // honoursDepth/honoursSiteFilters: Brave supports neither (capability
@@ -1506,13 +1742,12 @@ func (p *BraveSearchProvider) SearchWithCaps(ctx context.Context, req searchRequ
 		searchURL += "&freshness=" + url.QueryEscape(freshness)
 	}
 
+	keys := p.currentKeys()
+	if len(keys) == 0 {
+		return "", errNoAPIKey()
+	}
 	var lastErr error
-	iter := p.keyPool.NewIterator()
-	for {
-		apiKey, ok := iter.Next()
-		if !ok {
-			break
-		}
+	for _, apiKey := range keys {
 		request, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 		if err != nil {
 			return "", fmt.Errorf("failed to create request: %w", err)
@@ -1594,5 +1829,11 @@ func (p *BaiduSearchProvider) honoursSiteFilters() bool { return false }
 
 // SearchWithCaps delegates to the legacy search (base-URL aware already).
 func (p *BaiduSearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
+	// K1: the key is read at call time (D4a); an empty effective key is
+	// "not usable" (D16), never a hop. The legacy Search re-reads the same
+	// currentKey() when it builds its header.
+	if p.currentKey() == "" {
+		return "", errNoAPIKey()
+	}
 	return p.Search(ctx, req.query, req.count, req.rangeFilter)
 }
