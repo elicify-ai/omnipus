@@ -2,8 +2,6 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-//go:build grep_scope_hook
-
 // #920 RED pack — the real installer for FR-010's test-only seam. Excluded
 // from the default build until GREEN adds grepScopeStatOpenHook /
 // setGrepScopeStatOpenHook; see grep_scope_hook_pending_test.go for the

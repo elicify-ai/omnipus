@@ -4,13 +4,18 @@
 
 // grep is the agent-facing surface of ADR-081 / workstream B
 // (docs/internal/specs/unified-search-and-grep-spec.md, US-3 "Best-in-class
-// agent grep tool"): recursive file name AND text content search over the
-// calling agent's OWN workspace root and its mounts — no `workspace_id`
-// argument, ever (FR-020, US-3 AS-7). It is a thin tools.Tool adapter over
-// the frozen pkg/filegrep engine; every search bound, truncation reason, and
-// case-mode rule lives there (see that package's own doc comment) — this
-// file only resolves WHICH folders an agent may search, translates its
-// arguments into filegrep.Options, and renders the result for the model.
+// agent grep tool"): recursive file name AND text content search. With no
+// `path` it covers the calling agent's own workspace root and its mounts
+// (D5); a `path` is admitted or refused by the same single read decision
+// read_file and list_directory use (ResolvePath — #920,
+// read-boundary-consistency-spec.md FR-001, which supersedes that spec's
+// FR-020 own-workspace confinement for a `path`). The secret set, other
+// agents' homes and other workspaces stay unreachable. It is a thin
+// tools.Tool adapter over the frozen pkg/filegrep engine; every search
+// bound, truncation reason, and case-mode rule lives there (see that
+// package's own doc comment) — this file and grep_scope.go only resolve
+// WHICH folders a call searches, gate what the walk may see, translate the
+// arguments into filegrep.Options, and render the result for the model.
 package tools
 
 import (
@@ -24,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/filegrep"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
@@ -48,14 +54,23 @@ type GrepTool struct {
 	// second, independently-computed idea of "this agent's workspace".
 	agentHome string
 	// restrict mirrors read_file/list_directory's own restrict flag
-	// (fspolicy.FSScopeConfined vs Unrestricted). It is threaded through
-	// only because ResolveTurnFSPolicy's signature requires it — grep never
-	// actually consults policy.Scope (see grepRoots' doc comment): FR-020
-	// confines every search to policy.WorkDir + its mounts unconditionally,
-	// which is already narrower than what FSScopeUnrestricted would permit
-	// for other tools' arbitrary path arguments.
+	// (fspolicy.FSScopeConfined vs Unrestricted) and feeds
+	// ResolveTurnFSPolicy exactly as those tools do, so a `path` is judged
+	// by the very policy read_file would judge it by (#920 FR-001).
+	// ResolvePath's read branch admits a read outside policy.WorkDir
+	// whatever policy.Scope says (outside the secret set, and within the
+	// workspace plus its mounts for a read-confined turn).
 	restrict bool
+	// auditLogger receives path.access_denied rows for a refused `path` and
+	// one path.search_roots row per search that ran (#920 FR-020/FR-021).
+	// Set by the registry through auditLoggerAware; nil is best-effort (no
+	// row, no failure), as for read_file.
+	auditLogger *audit.Logger
 }
+
+// SetAuditLogger implements auditLoggerAware (#920 FR-020), so the registry
+// hands grep its logger whether it is set before or after registration.
+func (t *GrepTool) SetAuditLogger(l *audit.Logger) { t.auditLogger = l }
 
 // NewGrepTool builds the tool. agentHome/restrict are the same values the
 // call site in pkg/agent/instance.go already computed for
@@ -199,10 +214,6 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	if err != nil {
 		return ErrorResult("grep: " + err.Error())
 	}
-	if scopeErr := validateGrepScope(scope); scopeErr != nil {
-		return ErrorResult("grep: " + scopeErr.Error())
-	}
-	scope = normalizeGrepScope(scope)
 
 	includeGlobs, err := grepStringSliceArg(args, "include_globs")
 	if err != nil {
@@ -239,10 +250,10 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		return ErrorResult(fmt.Sprintf("grep: failed to resolve filesystem policy: %v", err))
 	}
 
-	roots, closeRoots, ancestorIgnoreUnreadable, err := t.grepRoots(ctx, policy, scope)
+	set, closeRoots, err := t.resolveGrepRoots(ctx, policy, scope)
 	defer closeRoots()
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("grep: %v", err))
+		return t.grepRootsError(ctx, scope, err)
 	}
 
 	acqCtx, cancel := context.WithTimeout(ctx, grepBusyWait)
@@ -259,7 +270,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 	defer filegrep.Release()
 
-	result, searchErr := filegrep.Search(ctx, roots, filegrep.Options{
+	result, searchErr := filegrep.Search(ctx, set.roots, filegrep.Options{
 		Query:        pattern,
 		Regex:        regexFlag,
 		Case:         caseMode,
@@ -287,28 +298,34 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		return ErrorResult(fmt.Sprintf("grep: invalid pattern: %v", searchErr))
 	}
 
+	// FR-021: the search ran (a truncated or root_lost result counts), so
+	// exactly one path.search_roots row is written — after a nil Search
+	// error, never on a refusal, a busy refusal or an invalid pattern.
+	emitGrepSearchRoots(ctx, t.auditLogger, t.Name(), set.real, scope)
+
 	// Finding L11: fold in the ancestor .gitignore/.ignore read failures
 	// resolveScopedRoot could not fold into filegrep's own Stats (they
 	// happen before a filegrep.state exists) — same counter, same honesty
 	// contract as the within-walk case, just added after the fact.
-	result.Stats.IgnoreFilesUnreadable += ancestorIgnoreUnreadable
+	result.Stats.IgnoreFilesUnreadable += set.ancestorUnreadable
+	fixGrepRootSlash(&result)
 
 	rendered := renderGrepResult(pattern, regexFlag, caseMode, result)
 	rendered = grepCapOutput(rendered, result.Truncated)
 	return NewToolResult(rendered)
 }
 
-// grepRoots resolves the fs.FS roots this call is confined to: the calling
-// agent's own effective working directory (policy.WorkDir — its fixed home,
-// or the per-turn Workspace re-root when it is a CoreTeam member) plus every
-// mount on that SAME workspace (FR-020). It never consults an argument named
-// workspace_id — there is no such argument — and it never widens beyond
-// policy.WorkDir + that workspace's mounts regardless of policy.Scope: a
-// Scope of FSScopeUnrestricted governs whether OTHER tools may resolve an
-// argument path outside their working directory, a question grep's `path`
-// argument never asks (validateGrepScope refuses ".." outright, and
-// (*os.Root).OpenRoot refuses an escape at the syscall level even if it
-// somehow reached one).
+// grepRoots resolves the fs.FS roots one call searches. With no scope that
+// is the calling agent's own effective working directory (policy.WorkDir —
+// its fixed home, or the per-turn Workspace re-root when it is a CoreTeam
+// member) plus every mount on that SAME workspace (D5). A scope naming a
+// mount by its name searches that mount; any other scope is admitted or
+// refused by ResolvePath exactly as list_directory would judge it (#920
+// FR-001) — resolveGrepRoots in grep_scope.go holds that dispatch. It never
+// consults an argument named workspace_id — there is no such argument.
+// grepRoots is the four-value shape kept for its in-package callers;
+// Execute uses resolveGrepRoots, which also returns each root's realpath
+// for the path.search_roots audit row.
 //
 // # Resolving which workspace's mounts apply
 //
@@ -339,12 +356,12 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 // "" searches the whole workspace: the root plus every mount, each its own
 // filegrep.Root. A non-empty scope opens ONE further-confined os.Root via
 // (*os.Root).OpenRoot — pruning the walk itself, not just filtering after
-// the fact — and returns a single Root whose Name is the resolved prefix, so
-// a hit's reported path is still the full workspace-relative address no
-// matter how deep the scope reaches. scope's first path segment is matched
+// the fact — and returns a single Root whose Name is the resolved prefix:
+// workspace-relative inside the workspace, the mount name for the
+// shorthand, and the absolute forward-slash location anywhere else (#920
+// FR-004). A relative, ".."-free scope's first path segment is matched
 // against the workspace's mount names FIRST (an exact segment match, never a
-// prefix of a longer name); anything else is resolved as a subdirectory of
-// the agent's own root.
+// prefix of a longer name); anything else goes through ResolvePath.
 //
 // # A broken mount is never silently dropped
 //
@@ -359,7 +376,9 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 //
 // An os.Root confines the walk to one host directory; it says nothing about
 // WHICH files inside it an agent may see. Every root handed to the engine is
-// therefore wrapped in carveOutFS, which applies fspolicy.IsCarveOut — the
+// therefore wrapped in carveOutFS (and, on top of it, grepGateFS — the
+// skills-registry gate, the metadata guard and D13, grep_scope.go), which
+// applies fspolicy.IsCarveOut — the
 // same predicate ResolvePath consults before it looks at a mount at all — to
 // every entry the engine can list, name-match, or open. Without it a mount on
 // an ANCESTOR of $OMNIPUS_HOME (warn-and-allow per workspace.CheckMountTarget,
@@ -376,84 +395,83 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 // cannot be folded into filegrep.Stats until after filegrep.Search runs;
 // Execute performs that fold.
 func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scope string) ([]filegrep.Root, func(), int, error) {
-	var opened []*os.Root
-	closeAll := func() {
-		for _, r := range opened {
-			if cerr := r.Close(); cerr != nil {
-				logger.WarnCF("tool", "grep: closing a confined root failed", map[string]any{"error": cerr.Error()})
-			}
+	set, closeAll, err := t.resolveGrepRoots(ctx, policy, scope)
+	return set.roots, closeAll, set.ancestorUnreadable, err
+}
+
+// closeGrepRoots closes every os.Root one call opened (FR-032: grepRoots'
+// single closer, deferred by Execute before the busy check).
+func closeGrepRoots(opened []*os.Root) {
+	for _, r := range opened {
+		if cerr := r.Close(); cerr != nil {
+			logger.WarnCF("tool", "grep: closing a confined root failed", map[string]any{"error": cerr.Error()})
 		}
 	}
+}
 
-	home := config.OmnipusHomeDir()
-	mountWorkspaceID := ToolWorkspaceID(ctx)
-	if mountWorkspaceID == "" {
-		if wsID, found := workspace.FindForAgentPreferring(home, ToolAgentID(ctx), ""); found {
-			mountWorkspaceID = wsID
-		}
-	}
-	var mounts []workspace.Mount
-	if mountWorkspaceID != "" {
-		if loaded, ok := workspace.LoadMounts(home, mountWorkspaceID); ok {
-			mounts = loaded
-		}
-	}
-
-	if scope != "" {
-		if idx, rest, matched := splitGrepScopeMount(scope, mounts); matched {
-			m := mounts[idx]
-			var root filegrep.Root
-			var ancestorUnreadable int
-			mr, mErr := os.OpenRoot(m.HostPath)
-			if mErr != nil {
-				// FR-021: a dead mount is root_lost, not a request error —
-				// same unreachableRootFS carrier the default full-workspace
-				// search uses below for the identical failure.
-				root = filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: mErr}}
-			} else {
-				opened = append(opened, mr)
-				if rest == "" {
-					root = filegrep.Root{Name: m.Name, FS: guardCarveOuts(m.HostPath, mr.FS(), policy)}
-				} else {
-					r, n, rErr := t.resolveScopedRoot(mr, m.HostPath, rest, m.Name, fmt.Sprintf("mount %q", m.Name), policy, &opened)
-					if rErr != nil {
-						return nil, closeAll, 0, rErr
-					}
-					root = r
-					ancestorUnreadable = n
-				}
-			}
-			return []filegrep.Root{root}, closeAll, ancestorUnreadable, nil
-		}
-
-		wr, wErr := os.OpenRoot(policy.WorkDir)
-		if wErr != nil {
-			return nil, closeAll, 0, fmt.Errorf("cannot open your workspace root: %w", wErr)
-		}
-		opened = append(opened, wr)
-		root, ancestorUnreadable, rErr := t.resolveScopedRoot(wr, policy.WorkDir, scope, "", "your workspace", policy, &opened)
-		if rErr != nil {
-			return nil, closeAll, 0, rErr
-		}
-		return []filegrep.Root{root}, closeAll, ancestorUnreadable, nil
-	}
-
+// defaultGrepRoots is the no-scope search area (D5): the workspace root plus
+// every mount, a dead mount carried as an unreachable root.
+func defaultGrepRoots(policy fspolicy.FSPolicy, mounts []workspace.Mount, opened *[]*os.Root) (grepRootSet, error) {
+	var set grepRootSet
 	wr, wErr := os.OpenRoot(policy.WorkDir)
 	if wErr != nil {
-		return nil, closeAll, 0, fmt.Errorf("cannot open your workspace root: %w", wErr)
+		return grepRootSet{}, fmt.Errorf("cannot open your workspace root: %w", wErr)
 	}
-	opened = append(opened, wr)
-	roots := []filegrep.Root{{Name: "", FS: guardCarveOuts(policy.WorkDir, wr.FS(), policy)}}
+	*opened = append(*opened, wr)
+	set.add(filegrep.Root{Name: "", FS: guardGrepRoot(policy.WorkDir, wr.FS(), policy)}, grepRootRealpath(policy.WorkDir))
 	for _, m := range mounts {
 		mr, mErr := os.OpenRoot(m.HostPath)
 		if mErr != nil {
-			roots = append(roots, filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: mErr}})
+			set.add(filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: mErr}}, grepRootRealpath(m.HostPath))
 			continue
 		}
-		opened = append(opened, mr)
-		roots = append(roots, filegrep.Root{Name: m.Name, FS: guardCarveOuts(m.HostPath, mr.FS(), policy)})
+		*opened = append(*opened, mr)
+		set.add(filegrep.Root{Name: m.Name, FS: guardGrepRoot(m.HostPath, mr.FS(), policy)}, grepRootRealpath(m.HostPath))
 	}
-	return roots, closeAll, 0, nil
+	return set, nil
+}
+
+// mountScopeRoot is the mount-name shorthand branch (FR-002, unchanged
+// behaviour): the mount itself, or a sub-path of it.
+func (t *GrepTool) mountScopeRoot(m workspace.Mount, rest string, policy fspolicy.FSPolicy, opened *[]*os.Root) (grepRootSet, error) {
+	var set grepRootSet
+	real := grepRootRealpath(filepath.Join(m.HostPath, filepath.FromSlash(rest)))
+	mr, mErr := os.OpenRoot(m.HostPath)
+	if mErr != nil {
+		// FR-021: a dead mount is root_lost, not a request error — same
+		// unreachableRootFS carrier the default full-workspace search uses
+		// for the identical failure.
+		set.add(filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: mErr}}, real)
+		return set, nil
+	}
+	*opened = append(*opened, mr)
+	if rest == "" {
+		set.add(filegrep.Root{Name: m.Name, FS: guardGrepRoot(m.HostPath, mr.FS(), policy)}, real)
+		return set, nil
+	}
+	r, n, rErr := t.resolveScopedRoot(mr, m.HostPath, rest, m.Name, fmt.Sprintf("mount %q", m.Name), policy, opened)
+	if rErr != nil {
+		return grepRootSet{}, rErr
+	}
+	set.add(r, real)
+	set.ancestorUnreadable = n
+	return set, nil
+}
+
+// grepRootsError turns a resolveGrepRoots failure into the tool result. A
+// refusal of the `path` by the single read decision (or the NUL pre-check)
+// writes one path.access_denied row with read_file's own reason vocabulary
+// and Judge correlation (FR-020) and returns the same permission-denied
+// shape read_file returns; anything else (not found, not a directory, a
+// kernel pseudo-folder) is a plain error that writes no denial row.
+func (t *GrepTool) grepRootsError(ctx context.Context, scope string, err error) *ToolResult {
+	var refusal *grepPathRefusal
+	if errors.As(err, &refusal) {
+		emitPathAccessDeniedCorrelated(ctx, t.auditLogger, t.Name(), scope, refusal.err, 0)
+		detail := fmt.Sprintf("grep cannot search %s: %v", filepath.ToSlash(scope), refusal.err)
+		return PermissionDeniedResult(t.Name(), refusal.err, detail)
+	}
+	return ErrorResult(fmt.Sprintf("grep: %v", err))
 }
 
 // resolveScopedRoot resolves subPath (relative to container, whose real host
@@ -519,22 +537,29 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 	if statErr != nil {
 		return filegrep.Root{}, 0, grepScopeStatError(subPath, label, statErr)
 	}
+	// FR-010's seam: the existence check above succeeded; a test may now
+	// remove the location before it is opened (nil in production).
+	runGrepScopeStatOpenHook(subPath)
+
+	// Ancestor .gitignore/.ignore files are read through the container,
+	// which no grepGateFS covers; regularOnlyFS keeps a pipe planted there
+	// from blocking the call (D13).
+	ancestorFS := regularOnlyFS{fsys: container.FS()}
 
 	switch {
 	case info.IsDir():
-		ancestor, unreadable := filegrep.LoadAncestorIgnore(container.FS(), subPath)
+		ancestor, unreadable := filegrep.LoadAncestorIgnore(ancestorFS, subPath)
 		sub, sErr := container.OpenRoot(subPath)
 		if sErr != nil {
-			return filegrep.Root{}, 0, fmt.Errorf("path %q in %s could not be opened as a directory: %w", subPath, label, sErr)
+			return filegrep.Root{}, 0, &grepScopeLostError{
+				msg: fmt.Sprintf("path %q in %s could not be opened as a directory: %v", subPath, label, sErr),
+				err: sErr,
+			}
 		}
 		*opened = append(*opened, sub)
 		anchor := filepath.Join(containerHostPath, filepath.FromSlash(subPath))
-		name := subPath
-		if namePrefix != "" {
-			name = namePrefix + "/" + subPath
-		}
 		return filegrep.Root{
-			Name: name, FS: guardCarveOuts(anchor, sub.FS(), policy),
+			Name: joinGrepName(namePrefix, subPath), FS: guardGrepRoot(anchor, sub.FS(), policy),
 			ScopePrefix: subPath, AncestorIgnore: ancestor,
 		}, unreadable, nil
 
@@ -546,7 +571,10 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 		if parentRel != "." {
 			p, pErr := container.OpenRoot(parentRel)
 			if pErr != nil {
-				return filegrep.Root{}, 0, fmt.Errorf("path %q in %s could not be opened: %w", subPath, label, pErr)
+				return filegrep.Root{}, 0, &grepScopeLostError{
+					msg: fmt.Sprintf("path %q in %s could not be opened: %v", subPath, label, pErr),
+					err: pErr,
+				}
 			}
 			*opened = append(*opened, p)
 			parent = p
@@ -557,17 +585,13 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 		scopePrefix := ""
 		name := namePrefix
 		if parentRel != "." {
-			ancestor, unreadable = filegrep.LoadAncestorIgnore(container.FS(), parentRel)
+			ancestor, unreadable = filegrep.LoadAncestorIgnore(ancestorFS, parentRel)
 			scopePrefix = parentRel
-			if namePrefix != "" {
-				name = namePrefix + "/" + parentRel
-			} else {
-				name = parentRel
-			}
+			name = joinGrepName(namePrefix, parentRel)
 		}
 
 		anchor := filepath.Join(containerHostPath, filepath.FromSlash(parentRel))
-		fsys := guardCarveOuts(anchor, singleEntryFS{fsys: parent.FS(), name: base}, policy)
+		fsys := guardGrepRoot(anchor, singleEntryFS{fsys: parent.FS(), name: base}, policy)
 		return filegrep.Root{
 			Name: name, FS: fsys, ScopePrefix: scopePrefix, AncestorIgnore: ancestor,
 		}, unreadable, nil
@@ -710,7 +734,9 @@ func (s singleEntryFS) Stat(name string) (fs.FileInfo, error) {
 	if name == "." {
 		return fs.Stat(s.fsys, name)
 	}
-	if name != s.name {
+	// The ignore-file names are Stat-able for the same reason Open reaches
+	// them: grepGateFS checks a file's kind before opening it (D13).
+	if name != s.name && !isGrepIgnoreFileName(name) {
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 	}
 	return fs.Stat(s.fsys, name)
@@ -1037,30 +1063,7 @@ func splitGrepScopeMount(scope string, mounts []workspace.Mount) (idx int, rest 
 	return -1, "", false
 }
 
-// validateGrepScope rejects a `path` argument before any I/O is attempted,
-// so a caller gets a clear reason rather than a raw *fs.PathError.
-// (*os.Root).OpenRoot refuses the same escapes at the syscall level
-// regardless — this is defense-in-depth for a better message, not the sole
-// guard.
-func validateGrepScope(scope string) error {
-	if scope == "" {
-		return nil
-	}
-	if strings.IndexByte(scope, 0) != -1 {
-		return fmt.Errorf("`path` contains an embedded NUL byte")
-	}
-	if strings.HasPrefix(scope, "/") {
-		return fmt.Errorf("`path` must be relative to your workspace, not absolute")
-	}
-	for _, seg := range strings.Split(scope, "/") {
-		if seg == ".." {
-			return fmt.Errorf("`path` may not contain \"..\"")
-		}
-	}
-	return nil
-}
-
-// normalizeGrepScope canonicalises a validated `path` argument to the same
+// normalizeGrepScope canonicalises a shorthand-eligible `path` argument to the same
 // slash-clean form filegrep.Root.Name is built from and every reported hit
 // path (and include_globs/exclude_globs pattern) is matched against (F5,
 // review finding): (*os.Root).Stat happily accepts an unnormalized spelling
@@ -1075,13 +1078,12 @@ func validateGrepScope(scope string) error {
 // reported path and the caller's own glob disagreeing about the scope's
 // spelling is a defect either way.
 //
-// Must run AFTER validateGrepScope, never before or instead of it:
-// path.Clean alone happily collapses a ".." into whatever prefix preceded it
-// (e.g. "a/../../etc" -> "../etc"), which would silently turn a rejected
-// escape attempt into a shorter, still-outside-the-workspace one.
-// validateGrepScope has already refused any ".." segment outright by the
-// time this runs, so Clean here can only ever shorten a legitimate path, it
-// can never launder an illegitimate one.
+// Only ever applied to a scope grepShorthandCandidate accepted — relative
+// and free of any ".." segment — because path.Clean happily collapses a
+// ".." into whatever prefix preceded it (e.g. "a/../../etc" -> "../etc"),
+// which would let a lexical rewrite, not the single read decision, decide
+// where a ".."-bearing path points. Every other scope goes to ResolvePath
+// verbatim (#920 FR-001).
 func normalizeGrepScope(scope string) string {
 	if scope == "" {
 		return ""
@@ -1371,6 +1373,10 @@ func grepTruncatedRootLabel(name string) string {
 	if name == "" {
 		return "your workspace root"
 	}
+	if filepath.IsAbs(filepath.FromSlash(name)) {
+		// #920: the absolute root type names its folder by location.
+		return fmt.Sprintf("folder %s", name)
+	}
 	return fmt.Sprintf("mount %q", name)
 }
 
@@ -1386,7 +1392,7 @@ func grepNarrowingHint(reason filegrep.TruncatedReason) string {
 	case filegrep.ReasonMaxOutput:
 		return "results were larger than the output budget — narrow scope, lower `context_lines`, or lower `max_matches`/`max_matches_per_file`"
 	case filegrep.ReasonRootLost:
-		return "your workspace root or a mount became unreadable mid-search — check `list_mounts` and retry"
+		return "a searched folder (your workspace root, a mount, or the folder named by `path`) became unreadable mid-search — check `list_mounts` or the path and retry"
 	case filegrep.ReasonCanceled:
 		// Finding L10: this switch covered every reason except the newly
 		// added `canceled` (filegrep's finding F-H) and fell through to the
