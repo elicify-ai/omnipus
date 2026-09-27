@@ -303,7 +303,7 @@ func (uf *restAPIUpdateAgentFlow) validateMaxToolIterations() bool {
 		return false
 	}
 	if err := config.ValidateAgentMaxToolIterations(*uf.ru.req.MaxToolIterations, &uf.cfg.Agents.Defaults); err != nil {
-		jsonErr(uf.w, http.StatusBadRequest, err.Error())
+		jsonErrField(uf.w, http.StatusBadRequest, err.Error(), maxToolIterationsFieldName)
 		return true
 	}
 	return false
@@ -942,7 +942,7 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 	if rp.ru.req.MaxToolIterations != nil {
 		if err := config.ValidateAgentMaxToolIterations(*rp.ru.req.MaxToolIterations,
 			&rp.ru.a.agentLoop.GetConfig().Agents.Defaults); err != nil {
-			return &requestRefusalError{msg: err.Error()}
+			return &requestRefusalError{msg: err.Error(), field: maxToolIterationsFieldName}
 		}
 	}
 

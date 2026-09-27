@@ -576,7 +576,7 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	if pap.maxToolIterations != nil {
 		if err := config.ValidateAgentMaxToolIterations(*pap.maxToolIterations,
 			&pap.cra.a.agentLoop.GetConfig().Agents.Defaults); err != nil {
-			jsonErr(pap.cra.w, http.StatusBadRequest, err.Error())
+			jsonErrField(pap.cra.w, http.StatusBadRequest, err.Error(), maxToolIterationsFieldName)
 			return true, true
 		}
 	}
@@ -793,7 +793,7 @@ func (cra *restAPICreateAgent) persistAgent() bool {
 			if cra.ac.MaxToolIterations > 0 {
 				if err := config.ValidateAgentMaxToolIterations(cra.ac.MaxToolIterations,
 					&cra.a.agentLoop.GetConfig().Agents.Defaults); err != nil {
-					return &requestRefusalError{msg: err.Error()}
+					return &requestRefusalError{msg: err.Error(), field: maxToolIterationsFieldName}
 				}
 			}
 			result, err := agentstore.New(cra.a.homePath).CreateState(cra.ac.ID, &cra.ac, cra.createSoulContent)
