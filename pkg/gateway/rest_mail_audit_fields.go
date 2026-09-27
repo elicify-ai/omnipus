@@ -71,6 +71,16 @@ func mailAuditDraftBodyPart(atts []email.Attachment) []email.Attachment {
 	return out
 }
 
+// mailViewDraftBodyPart reports whether a view part (email.MailPart) is the
+// draft's own body bookkeeping part — the same two-field recognition pair as
+// mailAuditDraftBodyPart above, applied to the view walk's part type. Such a
+// part is Omnipus bookkeeping (renderMarkdownPart), never a user attachment:
+// the draft carry paths skip it silently and unconditionally, and the draft
+// update response's attachment listing never lists it.
+func mailViewDraftBodyPart(p email.MailPart) bool {
+	return p.Filename == "message.md" && p.ContentType == "text/markdown"
+}
+
 // mailAuditRecipients concatenates the recipient lists into one address list
 // (MC-19: addresses, not a count — incl. Bcc, MAJ-005).
 func mailAuditRecipients(lists ...[]string) []string {

@@ -519,6 +519,16 @@ func splitAddressList(joined string) []string {
 	return out
 }
 
+// ParseViewRaw parses raw RFC 5322 bytes into a MailView — the in-process
+// twin of the fetch path's viewFromRaw, for callers that already hold the
+// wire bytes. The draft-update path uses it on the freshly composed copy so
+// its response listing reports the same stable PartIndex fields the download
+// route later serves from the appended bytes (APPEND stores the message
+// verbatim, so the two parse identically).
+func ParseViewRaw(raw []byte) *MailView {
+	return viewFromRaw(raw, "", 0)
+}
+
 // viewFromRaw parses the raw RFC 5322 bytes: top-level headers (Bcc — present
 // only on the owner's own copies, X-Omnipus-* draft markers, References) and
 // the MIME leaf walk (text bodies, the stored text/markdown part of Omnipus

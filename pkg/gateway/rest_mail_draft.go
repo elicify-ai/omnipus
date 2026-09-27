@@ -131,11 +131,21 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		SignatureHTML: mb.SignatureHTML,
 	}
 	for _, idx := range req.KeepAttachmentParts {
-		if idx < 0 || idx >= len(cur.Attachments) {
+		// FR-035/D28: keep values are each attachment's own stable PartIndex
+		// (the download route's {partIndex}) — matched by search, never by
+		// listing position (rest_mail_read.go::mailPartByStableIndex).
+		p := mailPartByStableIndex(cur.Attachments, idx)
+		if p == nil {
 			jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names no such part")
 			return
 		}
-		p := cur.Attachments[idx]
+		if mailViewDraftBodyPart(*p) {
+			// The draft's own body bookkeeping part (renderMarkdownPart) is
+			// never a user attachment: skipped silently and unconditionally,
+			// even when a caller names its index (the audit path's
+			// recognition precedent, mailAuditDraftBodyPart).
+			continue
+		}
 		if p.DataUnavailable {
 			jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names an unavailable part")
 			return
@@ -178,7 +188,13 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		mailErr502(w, aerr)
 		return
 	}
+	// MAJ-009/MC-28 (same mechanism as the send path below): a failed
+	// old-copy delete after the successful update-APPEND is a warning on the
+	// response, never an error — the new copy exists; the panel warns of a
+	// possible duplicate draft.
+	cleanupWarn := ""
 	if derr := client.DeleteDraft(r.Context(), cur.UID); derr != nil {
+		cleanupWarn = "the draft was updated, but deleting the old copy failed"
 		slog.Warn("rest: old draft copy delete failed", "agent_id", agentID, "error", derr)
 	}
 	draftSendForget(out.MessageID)
@@ -204,13 +220,26 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 	resp.BodyMarkdown = &bm
 	bcc := derefStrings(req.Bcc)
 	resp.Bcc = &bcc
-	for _, at := range in.Attachments {
+	// The listing describes the NEW copy the response returns (ruling: its
+	// uid is in this response; download links are built from it). Parse the
+	// just-composed wire bytes so every entry reports the same stable
+	// PartIndex field the download route later serves the appended copy at
+	// (APPEND stores verbatim; the walk is the view parser's own). The
+	// draft's own body bookkeeping part is never listed.
+	newView := email.ParseViewRaw(out.Transmitted)
+	for _, p := range newView.Attachments {
+		if mailViewDraftBodyPart(p) {
+			continue
+		}
 		resp.Attachments = append(resp.Attachments, struct {
 			ContentType string `json:"content_type"`
 			Filename    string `json:"filename"`
 			PartIndex   int    `json:"part_index"`
 			SizeBytes   int    `json:"size_bytes"`
-		}{ContentType: at.ContentType, Filename: email.SanitizeAttachmentName(at.Name), PartIndex: len(resp.Attachments), SizeBytes: len(at.Data)})
+		}{ContentType: p.ContentType, Filename: p.Filename, PartIndex: p.PartIndex, SizeBytes: p.SizeBytes})
+	}
+	if cleanupWarn != "" {
+		resp.DraftCleanupWarning = &cleanupWarn
 	}
 	jsonOK(w, resp)
 }
@@ -382,7 +411,13 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 	}
 	keepParts := derefInts(req.KeepAttachmentParts)
 	if req.KeepAttachmentParts == nil {
+		// Contract default: carry ALL — the draft's own body bookkeeping part
+		// (the message.md marker) is not an attachment and is skipped
+		// silently and unconditionally.
 		for _, p := range cur.Attachments {
+			if mailViewDraftBodyPart(p) {
+				continue
+			}
 			ct := p.ContentType
 			if ct == "" {
 				ct = "application/octet-stream"
@@ -391,11 +426,17 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		}
 	} else {
 		for _, idx := range keepParts {
-			if idx < 0 || idx >= len(cur.Attachments) {
+			// FR-035/D28: keep values are each attachment's own stable
+			// PartIndex (the download route's {partIndex}) — matched by
+			// search, never by listing position.
+			p := mailPartByStableIndex(cur.Attachments, idx)
+			if p == nil {
 				jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names no such part")
 				return
 			}
-			p := cur.Attachments[idx]
+			if mailViewDraftBodyPart(*p) {
+				continue
+			}
 			if p.DataUnavailable {
 				jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names an unavailable part")
 				return

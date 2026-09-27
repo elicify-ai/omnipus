@@ -257,6 +257,19 @@ func (a *restAPI) handleMailSeen(w http.ResponseWriter, r *http.Request, workspa
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// mailPartByStableIndex returns the view's attachment part whose stable
+// PartIndex equals idx, or nil when none does — the download route's
+// addressing rule (the {partIndex} path parameter's meaning), shared with
+// the draft keep paths so one scheme answers every part reference.
+func mailPartByStableIndex(atts []email.MailPart, idx int) *email.MailPart {
+	for i := range atts {
+		if atts[i].PartIndex == idx {
+			return &atts[i]
+		}
+	}
+	return nil
+}
+
 func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, workspaceID, agentID, folder, ref string, idx int) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -274,13 +287,7 @@ func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, w
 		return
 	}
 	v := mv
-	var part *email.MailPart
-	for i := range v.Attachments {
-		if v.Attachments[i].PartIndex == idx {
-			part = &v.Attachments[i]
-			break
-		}
-	}
+	part := mailPartByStableIndex(v.Attachments, idx)
 	if part == nil {
 		jsonErr(w, http.StatusNotFound, "no such attachment part")
 		return
