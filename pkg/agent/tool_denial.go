@@ -180,6 +180,22 @@ var denialTable = map[string]DenialClass{
 			"Do not retry; report this as a configuration blocker.",
 		TranscriptText: "Not run: no approval mechanism is configured on this gateway.",
 	},
+	// missing_turn_id (D-03, ADR-092, 2026-09-24 UAT tester t5):
+	// pkg/gateway/approvals.go::approvalRegistryV2.requestApproval's
+	// fail-closed guard for a request with an empty turn id — a defect in
+	// the calling code path (every production caller of
+	// AgentLoop.CheckGrantOrRequestApproval must supply the real turn id),
+	// never something the model or a retry can influence, so this is
+	// classified the same conservative way as internal_error and
+	// no_approver_configured: permanent, and a system fault to report
+	// rather than a decision the model made a wrong call on.
+	"missing_turn_id": {
+		Reason:    "missing_turn_id",
+		Permanent: true,
+		ModelMessage: "An internal error (missing turn id) prevented this approval request from being processed. " +
+			"Do not retry; report this as a system fault.",
+		TranscriptText: "Not run: an internal error (missing turn id) prevented the approval request from being processed.",
+	},
 	// policy_denied is the loop-side pseudo-reason for site 1 (TOCTOU
 	// policy flip to deny), which today emits no "reason" field at all.
 	// ModelMessage is unchanged from the existing literal ("already true"

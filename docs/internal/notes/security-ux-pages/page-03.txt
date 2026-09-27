@@ -13,7 +13,7 @@
 
 You can Allow `bash` and still have Landlock block `/etc/shadow`. You can Deny `bash` and never reach the sandbox for shell.
 
-**God mode** collapses layers 1–4 (not audit / prompt-guard / rate limits). It lives under **Settings → Gateway**, easy to miss from Security.
+**God mode** collapses layers 1–4 (not audit / prompt-guard / rate limits). *(Corrected 2026-09-25: not layer 2's guard — God Mode does not switch off the shell's outside-workspace write refusal or the deny rules; see docs/security.md.)* It lives under **Settings → Gateway**, easy to miss from Security.
 
 ---
 

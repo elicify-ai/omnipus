@@ -135,6 +135,8 @@ describe('US-1: system.* tools appear in the flat category grid, not a separate 
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -162,6 +164,8 @@ describe('US-1: system.* tools appear in the flat category grid, not a separate 
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -194,6 +198,8 @@ describe('US-1: system.* tools appear in the flat category grid, not a separate 
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -218,6 +224,8 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
         isLocked={true}
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -235,6 +243,8 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
         isLocked={false}
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -256,6 +266,8 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
         isLocked={true}
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -276,6 +288,8 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
         isLocked={true}
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )

@@ -1,6 +1,6 @@
 //go:build linux
 
-// RLIMIT_NPROC coverage for hardened-exec children (v0.2 #155 item 5).
+// RLIMIT_NPROC coverage for hardened-exec children (#155 item 5).
 //
 // Two distinct failure modes are guarded here, and they pull in opposite
 // directions — which is why both need tests:

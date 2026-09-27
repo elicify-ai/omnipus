@@ -35,9 +35,11 @@ export interface SettingsScreenProps { // not-wire-format: React props from the 
   initialTab?: SettingsTab
   /** `?provider=&model=` — T068-29 / ADR-068 X-08: pre-fill a Models → Model overrides row. */
   prefillOverride?: { provider: string; model: string }
+  /** `?focus=god-mode` — scroll to and focus the God Mode control on the Gateway tab (target of the sidebar pill / corner dot). */
+  focusGodMode?: boolean
 }
 
-export function SettingsScreen({ initialTab = 'providers', prefillOverride }: SettingsScreenProps = {}) {
+export function SettingsScreen({ initialTab = 'providers', prefillOverride, focusGodMode }: SettingsScreenProps = {}) {
   const { data: aboutInfo, isError: aboutInfoError } = useQuery({
     queryKey: ['about'],
     queryFn: fetchAboutInfo,
@@ -72,7 +74,16 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride }: Se
           )}
         </div>
 
-        <Tabs defaultValue={initialTab}>
+        {/* key={initialTab}: Radix Tabs applies defaultValue only on mount,
+            and TanStack Router RE-RENDERS (does not remount) this screen
+            when only search params change — so a God Mode pill / corner-dot
+            click that changes ?tab= while /settings is already open would
+            otherwise be silently ignored (review round 2, finding 2).
+            Keying on the tab remounts the Tabs onto the new defaultValue;
+            ordinary in-page tab clicks never touch the URL, so they behave
+            exactly as before. This also repairs the pre-existing
+            ?provider=&model= deep link, which had the same flaw. */}
+        <Tabs key={initialTab} defaultValue={initialTab}>
           {/* Sticky tab bar — stays visible while scrolling tab content */}
           <TabsList className="mb-[var(--space-4)] flex-wrap h-auto gap-[var(--space-1)] sticky top-0 z-10 bg-[var(--color-primary)] py-[var(--space-2)] -mx-[var(--space-1)] px-[var(--space-1)]">
             <TabsTrigger data-testid="settings-tab-providers" value="providers">Providers</TabsTrigger>
@@ -106,7 +117,7 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride }: Se
           </TabsContent>
 
           <TabsContent value="gateway">
-            <GatewaySection />
+            <GatewaySection focusGodMode={focusGodMode} />
           </TabsContent>
 
           <TabsContent value="data">

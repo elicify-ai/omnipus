@@ -8,7 +8,7 @@
 // scripting language with sockets — would bypass the proxy entirely
 // unless the kernel intervenes.
 //
-// Status: CLOSED in v0.2 (#155 item 4). pkg/sandbox/sandbox_linux.go
+// Status: CLOSED by #155 (item 4). pkg/sandbox/sandbox_linux.go
 // computeRights now declares NET_CONNECT_TCP in handledAccessNet on
 // Landlock ABI v4+, and DefaultPolicy seeds ConnectPortRules with
 // {53, 80, 443} (DefaultConnectPorts). The gateway boot path additionally
@@ -140,7 +140,7 @@ func runEgressChild() {
 // returns EACCES BEFORE the syscall reaches the network stack. Without it,
 // the kernel forwards the syscall and the closed port returns ECONNREFUSED.
 //
-// Status: closed by v0.2 (#155 item 4). NET_CONNECT_TCP is now declared in
+// Status: closed by #155 (item 4). NET_CONNECT_TCP is now declared in
 // handledAccessNet on ABI v4+ (sandbox_linux.go::computeRights), and
 // DefaultPolicy seeds ConnectPortRules with {53, 80, 443}. Port 1 is not
 // in the allow-list, so the kernel returns EACCES — the test exits 42.
@@ -153,7 +153,7 @@ func runEgressChild() {
 // zero external impact.
 func TestRedteam_RawTCP_Egress_Blocked(t *testing.T) {
 	t.Logf(
-		"documents C4 (raw TCP egress) from insider-pentest report; closes when v0.2 #155 adds NET_CONNECT_TCP enforcement",
+		"documents C4 (raw TCP egress) from insider-pentest report; closed by #155 (NET_CONNECT_TCP connect-port enforcement)",
 	)
 
 	if os.Getenv("OMNIPUS_REDTEAM_EGRESS_CHILD") == "1" {
@@ -205,7 +205,7 @@ func TestRedteam_RawTCP_Egress_Blocked(t *testing.T) {
 		t.Skipf("Landlock unavailable in child (exit 77):\n%s", out)
 	case 1:
 		t.Errorf(
-			"C4 GAP CONFIRMED: sandboxed child completed raw TCP connect — NET_CONNECT_TCP enforcement is intentionally disabled (sandbox_linux.go:160). Fix in v0.2 (#155).\nchild stderr:\n%s",
+			"C4 GAP CONFIRMED: sandboxed child completed raw TCP connect — NET_CONNECT_TCP enforcement is intentionally disabled (sandbox_linux.go). Enforcement shipped in #155 (item 4); firing now means a regression.\nchild stderr:\n%s",
 			out,
 		)
 	default:

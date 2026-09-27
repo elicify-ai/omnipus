@@ -5,7 +5,7 @@
 // collects the memories surfaced by recall_memory, and after each LLM response
 // the agent loop scans the response text for references to those memories'
 // IDs/titles. On a hit it appends an op:cited record to the citing memory's
-// room counters.jsonl — so v0.2 ranking has citation history from v0.1.0
+// room counters.jsonl — so future ranking has citation history from v0.1.0
 // sessions with no backfill (NFR-1).
 //
 // Detection is deliberately simple: a case-insensitive substring match on the

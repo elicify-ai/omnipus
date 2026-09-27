@@ -1,5 +1,7 @@
 # ADR-035 — Remove the Per-Agent Sandbox Profile
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Status:** Accepted
 **Date:** 2026-07-04
 **Deciders:** Daniel Piatkowski (product owner)

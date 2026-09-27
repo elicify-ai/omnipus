@@ -54,7 +54,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgents: vi.fn(), fetchWorkspaces: vi.fn(), updateAgent: vi.fn(), testAgentRunner: vi.fn(), fetchCliDetect: vi.fn() }
+  return { ...actual, fetchAgents: vi.fn(), fetchWorkspaces: vi.fn(), updateAgent: vi.fn(), fetchCliDetect: vi.fn() }
 })
 
 // CreateAgentModal pulls in heavy deps; stub it to keep the screen test focused.
@@ -260,7 +260,8 @@ describe('AgentListScreen — Agents-screen IA: Built-in roster renders first', 
   })
 })
 
-// Per-section "New…" buttons (v0.3 worker roster split). Each section
+// Per-section "New…" buttons (the worker-roster split — originally labelled
+// v0.3; that label is retired and the split is live today). Each section
 // header carries its own affordance, and each opens the modal pre-set to
 // the matching tier (createAgentModalType='custom' | 'worker') so the
 // CreateAgentModal can render the right form shape.

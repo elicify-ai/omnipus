@@ -95,7 +95,7 @@ When invoked, `/cancel`:
 - **Emits** an audit event (`turn_cancelled` for fired cancels; `turn_cancel_attempt` for every request including no-ops; `turn_cancel_stuck` if detach fires)
 - **Detaches** any goroutine still alive 5s after hard cancel — `turnState.abandoned = true`; subsequent writes/frames/cost-accumulations from that turn become no-ops without affecting any other session
 
-Out of scope: cancelling tools that have already started execution (their goroutines may persist), retrying the cancelled prompt automatically, ending the session itself (turn-level only), rate limiting on `/cancel`, and v0.2's HMAC chain wiring (covered by the audit emit path automatically once v0.2 lands).
+Out of scope: cancelling tools that have already started execution (their goroutines may persist), retrying the cancelled prompt automatically, ending the session itself (turn-level only), rate limiting on `/cancel`, and the HMAC chain (shipped with #155; wired via the audit emit path).
 
 ### Pre-condition: MaixCam channel removal
 
@@ -199,11 +199,11 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 
 ### US-5: Cancelled turn is auditable — P1
 
-**As an** operator (or auditor in v0.2 with HMAC chain)
+**As an** operator (or auditor — the HMAC chain shipped with #155)
 **I want** every cancellation attempt to appear in the audit log with full attribution
 **so that** I can answer "who cancelled what when, and what state was in flight."
 
-**Why P1:** Required for v0.2 pentest compliance and operational forensics.
+**Why P1:** Required for the pentest-hardening compliance (shipped with #155) and operational forensics.
 
 **Independent test:** Trigger a cancel, inspect the audit log, verify a `turn_cancel_attempt` entry exists, plus a `turn_cancelled` entry if cancel actually fired.
 
@@ -294,7 +294,7 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 - **The system must not** mutate `context.jsonl` (LLM history) on cancel — the partial assistant content stays as-is so the next turn's LLM sees natural truncation. Only `transcript.jsonl` receives the truncation flag and `turn_cancelled` entry.
 - **The system must not** rate-limit `/cancel`. Q6 + Q11 already make cancel structurally idempotent and resource-cheap. Abuse-detection observability (FR-25a) replaces the missing rate-limit.
 - **The system must not** treat `/cancel` as a session-end command. The session remains alive after cancel; the next user message starts a fresh turn in the same session.
-- **The system must not** offer user-scoped authorization in v0.1 (only the turn initiator can cancel). Channel-scoped + identity attribution suffices for v0.1; user-scoped is deferred to v0.2 if usage data warrants.
+- **The system must not** offer user-scoped authorization in v0.1 (only the turn initiator can cancel). Channel-scoped + identity attribution suffices for v0.1; user-scoped is deferred (tracked; no release scheduled).
 
 ---
 
@@ -308,7 +308,7 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 | **Teams / Feishu / DingTalk / Google Chat** — `teams`, `feishu`, `dingtalk`, `googlechat` | Adaptive card or platform-native command | Platform-specific ack | Each implements `RegisterCommands` following Telegram pattern; falls back to text parsing on registration failure. |
 | **Matrix / IRC / LINE / WeChat / WeCom / QQ / OneBot / WhatsApp / WhatsApp Native** — `matrix`, `irc`, `line`, `weixin`, `wecom`, `qq`, `onebot`, `whatsapp`, `whatsapp_native` | Plain text message exactly matching `/cancel` | Plain text "✓ Cancelled by @user" reply | No registration needed; text-match in inbound message handler. |
 | **OpenRouter LLM stream** (any provider) | Stream chunks until cancel | Context cancellation + explicit `providerCancel()` aborts in-flight HTTP request | Connection close is best-effort; partial chunk captured by `AddFullMessage` before cancel propagates. The LLM provider may receive a request-cancelled signal; if not honored server-side, we just stop reading and the connection drops. |
-| **Audit log writer** (`pkg/audit/`) | `event_type: turn_cancel_attempt | turn_cancelled | turn_cancel_stuck` + metadata | One JSONL line per event | If audit write fails, falls back to structured log line at ERROR level; does not block cancel completion. In v0.2, HMAC chain reads these entries via the existing audit emit path (FR-18 uses `audit.EmitEntry` — verified compatible). |
+| **Audit log writer** (`pkg/audit/`) | `event_type: turn_cancel_attempt | turn_cancelled | turn_cancel_stuck` + metadata | One JSONL line per event | If audit write fails, falls back to structured log line at ERROR level; does not block cancel completion. The HMAC chain (shipped with #155) reads these entries via the existing audit emit path (FR-18 uses `audit.EmitEntry` — verified compatible). |
 | **MCP server (in-flight RPC)** | Context cancellation propagates to RPC client | RPC client stops reading; server may continue computing | Document for operators: MCP server-side compute may continue past cancel. Mitigation: tool-author responsibility to make MCP tools cancel-aware. |
 
 ---
@@ -343,7 +343,7 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 | `executeSlashCommand` | `src/components/chat/ChatScreen.tsx:463` | **EXTENDED** | Case for `/cancel` → call `cancelStream()`. |
 | `MessageInput` Escape handler | `src/components/chat/MessageInput.tsx:21-30` | **UNCHANGED** | Existing Escape→cancel path preserved; fires only when `isStreaming === true`. |
 | `interactiveMode` | `cmd/omnipus/internal/agent/helpers.go:86` | **MODIFIED** | Add raw-stdin polling goroutine during inference; double-Escape detection (per F-12); call agent loop cancel API. |
-| `audit.EmitEntry` | `pkg/audit/emit.go:34` | **CALLED** | Cancel handler emits via this helper. v0.2 HMAC chain reads from same path. |
+| `audit.EmitEntry` | `pkg/audit/emit.go:34` | **CALLED** | Cancel handler emits via this helper. The HMAC chain (shipped with #155) reads from the same path. |
 | MaixCam channel | `pkg/channels/maixcam/` | **DELETED** | Removed in prep commit per F-15. Also removes references in `manager.go`, `config.go`, `config_old.go`, REST endpoints, doctor command, OpenClaw migration. |
 
 ### Impact assessment
@@ -715,7 +715,7 @@ New regression assertion (per F-20):
 - **FR-23**: Tier B channels without `MessageEditor` capability MUST send two messages: "⏸ Cancelling..." then "✓ Cancelled by @user".
 - **FR-24**: CLI MUST display `(interrupted)` after partial output and present the next `You: ` prompt within 5 seconds of double-Escape.
 - **FR-25**: The cancellation message in chat channels MUST include the canceller's channel-side identity (display name preferred; fall back to unique ID).
-- **FR-25a**: System MUST emit a WARNING audit entry `event_type: cancel_abuse_pattern` when a single canceller exceeds N=10 cancel attempts within M=60s for the same or different sessions on the same channel. This is observability, not rate limiting — the cancels still fire. Operators consume this signal to investigate. Threshold and window are hard-coded for v0.1; tunable in v0.2 if needed.
+- **FR-25a**: System MUST emit a WARNING audit entry `event_type: cancel_abuse_pattern` when a single canceller exceeds N=10 cancel attempts within M=60s for the same or different sessions on the same channel. This is observability, not rate limiting — the cancels still fire. Operators consume this signal to investigate. Threshold and window are hard-coded for v0.1; tunable later (no release scheduled).
 - **FR-26**: Web Stop button MUST be disabled when no turn is active in the current session. (`/cancel` slash menu and Escape key are still wired and fire `turn_cancel_attempt{was_fired: false}` if invoked.)
 
 ### Channels & registration
@@ -738,7 +738,7 @@ New regression assertion (per F-20):
 
 ### Provenance & implementation guarantees (cross-cutting)
 
-- **FR-35**: All audit emissions for cancel events MUST go through `audit.EmitEntry` (`pkg/audit/emit.go:34`). This guarantees v0.2 HMAC chain compatibility — chain-integrity is provided automatically once v0.2 lands without spec changes.
+- **FR-35**: All audit emissions for cancel events MUST go through `audit.EmitEntry` (`pkg/audit/emit.go:34`). This guarantees HMAC-chain compatibility (shipped with #155) — chain-integrity came with it, without spec changes.
 - **FR-36**: Cancel handler MUST NOT block on I/O for >100ms before initiating cascade. Audit log writes and channel-side message sends MUST happen on goroutines spawned from the handler.
 
 ---
@@ -834,7 +834,7 @@ Every FR in traceability. Every BDD scenario traces to ≥1 FR.
 | AMB-18 (NEW) | MCP in-flight RPC during cancel? | **RESOLVED + DOCUMENTED LIMITATION** — context cancel propagates to RPC client (standard wiring); MCP server may continue computing on its side; operators of expensive MCP servers should make tools cancel-aware. |
 | AMB-19 (NEW) | Race winner of cancel vs natural-completion in chat channels? | **RESOLVED** — if natural-completion wins (`cancelFired==false` when cancel handler enters), NO "Cancelled by @user" message is sent; the bot's natural reply stands. EC-2 reflects this. |
 | AMB-20 (NEW) | MaixCam config strip on save? | **RESOLVED** — next save strips the section (FR-34). |
-| AMB-21 (NEW) | Abuse-detection threshold tunable? | **DEFERRED** — N=10 / M=60s hard-coded in v0.1; tunable in v0.2 if operator feedback warrants. |
+| AMB-21 (NEW) | Abuse-detection threshold tunable? | **DEFERRED** — N=10 / M=60s hard-coded in v0.1; tunable later (no release scheduled) if operator feedback warrants. |
 
 ---
 
@@ -899,11 +899,11 @@ Each Phase 2 step is independently reviewable and can land sequentially; failure
 
 ## 17. Out of Scope / Future Work
 
-- **Per-subagent cancel** (cancel one sub-turn while keeping parent running). Defer to v0.2 if requested.
-- **`/retry` after cancel.** Defer to v0.2 if usage data shows demand.
+- **Per-subagent cancel** (cancel one sub-turn while keeping parent running). Defer (tracked; no release scheduled) if requested.
+- **`/retry` after cancel.** Defer (tracked; no release scheduled) if usage data shows demand.
 - **`/end` session-close command.** Defer; SPA handles session-end.
-- **User-scoped cancel authorization** (only the turn initiator can cancel). Defer to v0.2 — the F-08 abuse-detection observability is the v0.1 mitigation; if audit logs show real abuse patterns post-launch, v0.2 adds initiator-only mode as an opt-in channel setting.
+- **User-scoped cancel authorization** (only the turn initiator can cancel). Defer (tracked; no release scheduled) — the F-08 abuse-detection observability is the v0.1 mitigation; if audit logs show real abuse patterns post-launch, initiator-only mode can be added then as an opt-in channel setting.
 - **`/cancel-all` global kill switch** across all user sessions. Defer; out of v0.1 mental model.
 - **Cancel-on-disconnect** (auto-cancel on WebSocket close). Considered separately from explicit `/cancel`; not addressed by this spec.
-- **Tunable abuse-detection thresholds (FR-25a).** Hard-coded N=10/M=60s in v0.1; configurable in v0.2.
+- **Tunable abuse-detection thresholds (FR-25a).** Hard-coded N=10/M=60s in v.1; configurable later (no release scheduled).
 - **MCP server-side cancel propagation** beyond the standard context-cancel contract. Tool-author responsibility for v0.1.

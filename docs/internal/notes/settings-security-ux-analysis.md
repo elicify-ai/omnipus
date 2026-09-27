@@ -10,6 +10,13 @@ _Note for reading outside the TUI. Written 2026-07-13 from codebase walk of Sett
 > egress open, shell guard off, audit and prompt guard still on — still holds, and so does its UX
 > argument. Recorded in
 > [ADR-084 §12](../architecture/ADR-084-judge-as-an-active-reviewer.md).
+>
+> **Correction 2026-09-25.** A second claim in this note is also wrong: where it says god mode
+> "kills shell-guard" (§1's diagram and §3 C) and "collapses layers 1–4" (§1's summary — layer 2 is
+> the shell gates), it does not. The shell's outside-workspace write refusal and operator deny rules
+> still fire under god mode; only the prompt that could widen the write refusal is gone
+> (`pkg/tools/shell.go::Execute` → `shell_path_guard.go::guardCommand`). The "shell guard off" item
+> in the 2026-09-20 list above repeats the same error. See docs/security.md, "God Mode".
 
 ---
 
@@ -24,12 +31,16 @@ User message → Agent turn → wants tool X
 ┌───────────────────────────────────────┐
 │ 0. God mode (Gateway tab)             │  If ON: floors tools to allow,   [1]
 │    global bypass (restart to arm)     │  kills kernel sandbox, opens egress,
-└───────────────────────────────────────┘  kills shell-guard. Audit/prompt-guard/
+└───────────────────────────────────────┘  kills shell-guard [2]. Audit/prompt-guard/
         │                                  rate limits stay on.
         │                                  [1] SUPERSEDED 2026-09-20 (#761):
         │                                      it floors the GLOBAL tool policy
         │                                      to allow. Per-agent policy still
         │                                      applies; a per-agent deny denies.
+        │                                  [2] CORRECTED 2026-09-25: god mode does
+        │                                      NOT kill the shell guard — outside-
+        │                                      workspace writes and deny rules still
+        │                                      refuse. See docs/security.md.
         ▼
 ┌───────────────────────────────────────┐
 │ 1. Tool policy (allow / ask / deny)   │  Global + per-agent. Global Deny wins.
@@ -86,7 +97,7 @@ User message → Agent turn → wants tool X
 
 You can Allow `bash` and still have Landlock block `/etc/shadow`. You can Deny `bash` and never reach the sandbox for shell.
 
-**God mode** collapses layers 1–4 (not audit / prompt-guard / rate limits). It lives under **Settings → Gateway**, easy to miss from Security.
+**God mode** collapses layers 1–4 (not audit / prompt-guard / rate limits). *(Corrected 2026-09-25: not layer 2's guard — God Mode does not switch off the shell's outside-workspace write refusal or the deny rules; see docs/security.md.)* It lives under **Settings → Gateway**, easy to miss from Security.
 
 ---
 
@@ -144,7 +155,7 @@ Under Advanced: Landlock ABI, seccomp, blocked syscalls, enforce/permissive/off,
 
 ### C. God mode is the nuclear option, off-tab
 
-God mode disables kernel sandbox, ~~floors tool policies to allow~~ **floors the *global* tool policy to allow — superseded 2026-09-20 (issue #761); the per-agent policy still applies and a per-agent deny still denies**, opens egress, kills shell-guard—while Security may still show “Must ask first” until doctor re-runs. Split surface = false confidence.
+God mode disables kernel sandbox, ~~floors tool policies to allow~~ **floors the *global* tool policy to allow — superseded 2026-09-20 (issue #761); the per-agent policy still applies and a per-agent deny still denies**, opens egress, ~~kills shell-guard~~ **keeps the shell guard — corrected 2026-09-25: the outside-workspace write refusal and operator deny rules still fire under god mode (docs/security.md)**—while Security may still show “Must ask first” until doctor re-runs. Split surface = false confidence.
 
 ### D. Restart semantics are uneven
 

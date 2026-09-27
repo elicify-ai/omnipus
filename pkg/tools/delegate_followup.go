@@ -143,11 +143,12 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	}
 
 	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] A session carrying a Stop
-	// marker for its OWN current generation is checked FIRST, off the plain
-	// Load above — terminal or not: the founder's decision is that only a
-	// newer instruction revives a stopped session, as a new generation,
-	// never the steering queue (which a stopped session has no live
-	// consumer left to drain). Deliberately NOT folded into the
+	// marker for its OWN current generation — OR a terminal record (ADR-093
+	// D4) — is checked FIRST, off the plain Load above: the founder's
+	// decision is that only a newer instruction revives a stopped session,
+	// as a new generation, never the steering queue (which a stopped session
+	// has no live consumer left to drain). BOTH states revive through
+	// ReviveStoppedSession in the branch below. Deliberately NOT folded into the
 	// Mutate-based terminal-rejection closure below: a Stop marker, once
 	// stamped for a generation, is retained forever as inert history (see
 	// SteerCanceller.Revive's own doc comment) — the same "checked off a
@@ -163,7 +164,8 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// below relies on) trips the store's own immutable-terminal invariant
 	// (ErrLifecycleTerminalImmutable) — Mutate's no-op persist is only
 	// harmless when the record is NOT terminal.
-	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+	// ADR-093 D4: a terminal record, stopped or not, takes this same revive.
+	if rec.Terminal() || rec.Stopped() {
 		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
 			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
 		}
@@ -213,6 +215,11 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		if cur == nil {
 			return session.ErrLifecycleNotFound
 		}
+		// A record already terminal (or Stop-stamped) never reaches this
+		// closure — the branch above revived it. This check exists ONLY for
+		// the race where the record becomes terminal between the plain Load
+		// and this lock-protected re-read; its "cannot be steered" string is
+		// a refusal for that race alone.
 		if cur.Terminal() {
 			return fmt.Errorf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)
 		}
@@ -226,11 +233,21 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
 	}
 
-	if serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID, providers.Message{Role: "user", Content: text}); serr != nil {
+	// correlation_id is optional for action="steer" (the schema's own
+	// description: "Required for action=\"respond\" (optional for
+	// \"steer\")") — a caller who wants to match a later steering_receipt
+	// (issue #870) to this exact instruction supplies one; when absent,
+	// EnqueueSteeringMessage mints a server-assigned reference and hands it
+	// back below regardless, so the receipt is always correlatable.
+	requestedCorrelationID, _ := stringArg(args, "correlation_id")
+	resolvedCorrelationID, serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID,
+		providers.Message{Role: "user", Content: text}, requestedCorrelationID)
+	if serr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", serr)).WithError(serr)
 	}
 	return NewToolResult(fmt.Sprintf(
-		"Steering message queued for session %s; it will apply at the child's next tool boundary.", sessionID,
+		"Steering message queued for session %s (correlation_id=%s); it will apply at the child's next tool boundary.",
+		sessionID, resolvedCorrelationID,
 	))
 }
 
@@ -356,6 +373,10 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	// — the follow_up caller is not necessarily the agent that originally
 	// spawned the session, and re-sourcing would silently re-parent it. Do
 	// not replace this copy with field-by-field construction.
+	// Origin.CallID stays the original run's call id on every generation.
+	// The follow-up's own span is not a new call id: pkg/agent.SubagentSpanID
+	// appends _g<N> for generation N >= 2, and replay rebuilds that same
+	// string. Minting a new CallID here would break parent_call_id.
 	newRec := *rec
 	newRec.SessionID = newSessionID
 	newRec.Generation = rec.Generation + 1

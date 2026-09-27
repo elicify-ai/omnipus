@@ -11,9 +11,10 @@
 //	C3-INDIRECT — indirect fork bomb. The same payload written to a file
 //	            (`fork.sh`) inside the workspace, then invoked via `sh fork.sh`.
 //	            The shell-guard regex never sees the bomb's pattern (only sees
-//	            "sh fork.sh"). Today: NOT contained — there is no
-//	            RLIMIT_NPROC on hardened-exec children. Test FAILS by design
-//	            until v0.2 (#155) adds RLIMIT_NPROC to hardened_exec_linux.go.
+//	            "sh fork.sh"). Today: contained — #155 (item 5) added
+//	            RLIMIT_NPROC to hardened-exec children
+//	            (hardened_exec_linux.go::applyPostStartHardening); a
+//	            regression reports the gap via t.Errorf.
 //
 // Safety: the indirect test sets RLIMIT_NPROC on the test process itself
 // before launching the bomb. This means even if the production code lacks
@@ -50,14 +51,14 @@ import (
 // transitive deps. Instead we reproduce the production regex inline so
 // this test fails loudly if anyone reworks the regex without keeping the
 // same coverage. The regex string MUST be kept in sync with the production
-// definition at pkg/tools/shell.go ~L227 (post v0.2 #155 item 5 widening).
+// definition in pkg/tools/shell.go (post the #155 item-5 widening).
 func TestRedteam_ForkBomb_DirectPattern_Blocked(t *testing.T) {
 	t.Logf(
 		"documents C3-DIRECT (fork bomb literal pattern) from insider-pentest report; current control is shell-guard regex",
 	)
 
 	// Production regex — keep in sync with pkg/tools/shell.go ~L227.
-	// v0.2 #155 item 5: widened to also accept arbitrary identifiers and newlines.
+	// #155 item 5: widened to also accept arbitrary identifiers and newlines.
 	const guardPattern = `(?s)([A-Za-z_]\w*|:)\s*\(\s*\)\s*\{[^{}]*[|&][^{}]*\}\s*;\s*([A-Za-z_]\w*|:)`
 	guard, err := regexp.Compile(guardPattern)
 	if err != nil {
@@ -65,7 +66,7 @@ func TestRedteam_ForkBomb_DirectPattern_Blocked(t *testing.T) {
 	}
 
 	// Each variant exercises one whitespace permutation the production
-	// regex now handles. After v0.2 #155 item 5 widened the pattern to
+	// regex now handles. After #155 item 5 widened the pattern to
 	// `:\s*\(\s*\)\s*\{.*\};\s*:`, the canonical bomb, trivial trailing-
 	// space variants, and the formerly-narrow `:( ){…};:` shape ALL match.
 	// `space_inside_func_def` is kept in the table at mustMatch=true so
@@ -80,7 +81,7 @@ func TestRedteam_ForkBomb_DirectPattern_Blocked(t *testing.T) {
 		{"trailing_double_space", `:(){ :|:& };  :`, true, ""},
 		{"no_space_before_colon", `:(){ :|:&}; :`, true, ""},
 		{
-			// Was a documented C3-DIRECT-NARROW gap pre-v0.2; the widened
+			// Was a documented C3-DIRECT-NARROW gap before the #155 widening; the widened
 			// regex matches `:( )` thanks to the \s* inside the parens.
 			// Locked in at mustMatch=true to catch future regressions.
 			"space_inside_func_def",
@@ -121,7 +122,7 @@ func TestRedteam_ForkBomb_DirectPattern_Blocked(t *testing.T) {
 }
 
 // TestRedteam_ForkBomb_BypassShapes documents additional bypass variants that
-// should be caught by the shell-guard regex. After v0.2 #155 item 5 widened
+// should be caught by the shell-guard regex. After #155 item 5 widened
 // the regex to allow whitespace inside the parens, `whitespace_inside_parens`
 // is no longer a documented gap — it's a must-match. The remaining
 // mustMatch=false rows (disguised identifier, newline-inside-braces) are
@@ -136,10 +137,10 @@ func TestRedteam_ForkBomb_DirectPattern_Blocked(t *testing.T) {
 // Production regex location: pkg/tools/shell.go ~L227
 func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 	t.Logf("documents C3-DIRECT bypass shapes from insider-pentest report; " +
-		"after v0.2 #155 item 5, `whitespace_inside_parens` is closed (must match)")
+		"after #155 item 5, `whitespace_inside_parens` is closed (must match)")
 
 	// Production regex — keep in sync with pkg/tools/shell.go ~L227.
-	// v0.2 #155 item 5: widened to also accept arbitrary identifiers and newlines.
+	// #155 item 5: widened to also accept arbitrary identifiers and newlines.
 	const guardPattern = `(?s)([A-Za-z_]\w*|:)\s*\(\s*\)\s*\{[^{}]*[|&][^{}]*\}\s*;\s*([A-Za-z_]\w*|:)`
 	guard, err := regexp.Compile(guardPattern)
 	if err != nil {
@@ -152,8 +153,8 @@ func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 	//   mustMatch=false means the CURRENT regex does NOT catch them; the test
 	//   t.Errorf (not t.Fatalf) so all cases are reported in one run.
 	//
-	//   When v0.2 #155 ships: flip these to mustMatch=true and the test
-	//   validates the widened coverage.
+	//   All bypass rows are mustMatch=true (closed by the #155 item-5 widening);
+	//   the test validates the widened coverage.
 	bypasses := []struct {
 		name      string
 		text      string
@@ -162,7 +163,7 @@ func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 	}{
 		{
 			// Whitespace injected throughout — `: ( ) { : | : & } ; :`.
-			// CLOSED in v0.2 #155 item 5: the widened regex
+			// CLOSED by #155 item 5: the widened regex
 			// `:\s*\(\s*\)\s*\{.*\};\s*:` matches \s* at the leading colon,
 			// inside the parens, after the parens, and around `};:`. All
 			// the spaces in this case are absorbed by the \s* tokens.
@@ -211,7 +212,7 @@ func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 			// guard pattern anchors on `:` and `\(` — it will NOT match `b()`.
 			// Expected: FAIL today (mustMatch=false).
 			// Closes when: the regex is generalised to match any identifier.
-			// CLOSED in v0.2 #155 item 5: regex now accepts any identifier
+			// CLOSED by #155 item 5: regex now accepts any identifier
 			// `[A-Za-z_]\w*` in both head and tail position.
 			// Note: text uses `()` not `(){}` — it's a function call followed
 			// by a subshell, the literal `b()(b|b);b`. Rewrite as the canonical
@@ -229,7 +230,7 @@ func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 			// content. Since `.` does NOT match `\n` in RE2, `{.*}` fails across
 			// a newline and the pattern does not match.
 			// Expected: FAIL today (mustMatch=false).
-			// CLOSED in v0.2 #155 item 5: regex now uses `(?s)` so the body
+			// CLOSED by #155 item 5: regex now uses `(?s)` so the body
 			// can span lines.
 			name:      "newline_inside_braces",
 			text:      ":(){ :|:&\n};:",
@@ -254,7 +255,7 @@ func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 			// mustMatch=false: document the gap.
 			if !ok {
 				t.Errorf("C3-BYPASS GAP CONFIRMED: regex did not match %q. %s "+
-					"(expected-fail; flip mustMatch=true when v0.2 #155 ships)", b.text, b.gapNote)
+					"(expected-fail; assign an issue and flip mustMatch=true when fixed)", b.text, b.gapNote)
 			} else {
 				t.Logf("C3-BYPASS closed: regex now matches %q — flip mustMatch=true in this test", b.name)
 			}
@@ -289,10 +290,10 @@ func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 //     limit exists, so the bomb saturates against the test cap and the
 //     assertion fails — that's the documented gap.
 //
-// This test is documenting-only. It will FAIL until #155 adds RLIMIT_NPROC.
+// This test documents the control; a regression (missing RLIMIT_NPROC) reports via t.Errorf.
 func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 	t.Logf(
-		"documents C3-INDIRECT (fork bomb via script) from insider-pentest report; closes when v0.2 #155 adds RLIMIT_NPROC",
+		"documents C3-INDIRECT (fork bomb via script) from insider-pentest report; closed by #155 (RLIMIT_NPROC, hardened_exec_linux.go)",
 	)
 
 	if runtime.GOOS != "linux" {
@@ -367,7 +368,7 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 	cmd.Dir = workspace
 	// Mirror the production hardened-exec path: apply pre-start hardening
 	// (Setpgid + Pdeathsig) via the same primitive shell.go uses, then
-	// post-start hardening which (after v0.2 #155 item 5) sets
+	// post-start hardening which (after #155 item 5) sets
 	// RLIMIT_NPROC on the child PID.
 	if err := sandbox.ApplyChildHardening(cmd, sandbox.Limits{}); err != nil {
 		t.Fatalf("ApplyChildHardening: %v", err)
@@ -387,7 +388,7 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 			"C3-INDIRECT GAP CONFIRMED (preflight): even bomb startup hit the test's safety cap of %d. "+
 				"That means production hardened_exec_linux.go applies NO limit of its own — the only thing "+
 				"keeping the host alive is operator-level user nproc limits. Fix: ship RLIMIT_NPROC on "+
-				"hardened-exec children in v0.2 (#155).",
+				"hardened-exec children; RLIMIT_NPROC shipped in #155 (item 5), firing here means it was stripped.",
 			safetyCap,
 		)
 		return
@@ -396,7 +397,7 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 	// Apply post-start hardening (RLIMIT_NPROC=baseline+childNProcSlack(128)).
 	// This is the production contract — sandbox.Run does this automatically;
 	// callers that bypass Run (web_serve, workspace.shell_bg, etc.) must
-	// invoke ApplyChildPostStartHardening themselves. v0.2 #155 item 5.
+	// invoke ApplyChildPostStartHardening themselves. (#155 item 5.)
 	if err := sandbox.ApplyChildPostStartHardening(cmd, sandbox.Limits{}); err != nil {
 		// Non-fatal here: the test's own safety cap still bounds host
 		// damage, but the test will fail the gap assertion below.
@@ -414,7 +415,7 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 		_ = waitErr
 	}
 
-	// After v0.2 #155 item 5, the production hardened-exec code applies
+	// After the #155 item-5 change, the production hardened-exec code applies
 	// RLIMIT_NPROC=baseline+128 to every child. The bomb's growth must
 	// saturate against THAT cap, well below the test's own dynamically-
 	// sized safetyCap, proving the production limit is in effect. If

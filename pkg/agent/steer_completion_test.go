@@ -876,7 +876,7 @@ func TestSubagentLifecycleFrames_StartQueuedRunningTerminalEndOrder(t *testing.T
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	rec := launchRunningChild(t, al, parentID, "call-frame-order")
-	al.deliverSubagentState(parentID, rec, string(session.LifecycleRunning))
+	al.deliverSubagentState(parentID, rec, string(session.LifecycleRunning), nil)
 	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: "done"}, nil); err != nil {
 		t.Fatalf("completeSteeredTurn: %v", err)
 	}

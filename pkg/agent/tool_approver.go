@@ -49,12 +49,24 @@ type PolicyApprovalReq struct {
 //  2. Emit a tool_approval_required WS frame (scoped to session owner, FR-073).
 //  3. Block until the user approves/denies, the timeout fires, the queue is
 //     saturated, or the gateway shuts down.
-//  4. Return (true, "") on approve; (false, reason) otherwise.
+//  4. Return (true, "", recordGrant) on approve; (false, reason, false) otherwise.
 //
 // denialReason matches the Reason field from ApprovalOutcome:
 // "user", "timeout", "saturated", "restart", "cancel", "batch_short_circuit".
+//
+// recordGrant (review finding #5, MEDIUM, 2026-09-23 security fix lane) is
+// true only when approved is true AND the human's wire action was literally
+// "allow" (ADR-092 D4's three-button dialog), never for "allow_once". The
+// classic ask-policy grant path (CheckGrantOrRequestApproval's own callers)
+// does not consume this value — it already records "Always Allow" grants
+// through a separate, decoupled mechanism
+// (rest_tool_registry.go::approvalGrantRecorder, driven by the wire action
+// directly). This field exists for the NEWER ADR-092 D7/D8 pre-flight
+// escalation call sites (pkg/tools/shell_permission_mode.go), which have no
+// such separate mechanism and previously recorded a persistent
+// PathGrant/network grant on ANY approval, "Allow once" included.
 type PolicyApprover interface {
-	RequestApproval(ctx context.Context, req PolicyApprovalReq) (approved bool, denialReason string)
+	RequestApproval(ctx context.Context, req PolicyApprovalReq) (approved bool, denialReason string, recordGrant bool)
 }
 
 // nopApproverDenialReason is the reason string returned by the default-build
@@ -96,7 +108,7 @@ type nopPolicyApprover struct {
 // RequestApproval is the V2.B fail-closed default-build implementation:
 // always deny with reason "no_approver_configured", and emit one
 // `approver.fallback` audit row per process so the gap is loud.
-func (n nopPolicyApprover) RequestApproval(_ context.Context, req PolicyApprovalReq) (bool, string) {
+func (n nopPolicyApprover) RequestApproval(_ context.Context, req PolicyApprovalReq) (bool, string, bool) {
 	nopApproverFallbackOnce.Do(func() {
 		audit.EmitEntry(n.auditLogger, &audit.Entry{
 			Event:     audit.EventApproverFallback,
@@ -113,5 +125,5 @@ func (n nopPolicyApprover) RequestApproval(_ context.Context, req PolicyApproval
 			},
 		})
 	})
-	return false, nopApproverDenialReason
+	return false, nopApproverDenialReason, false
 }

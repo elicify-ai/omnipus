@@ -1,7 +1,9 @@
 /**
  * ws.reattach.test.ts — ADR-082 D5 (FR-010): on EVERY WebSocket reopen (not
- * only the first connect), the SPA re-attaches its active session with the
- * `since` cursor, without user action. Spec: T-20.
+ * only the first connect), the SPA re-attaches its active session with its
+ * numbered cursor (`since_seq`/`boot_id` — #823 catch-up redesign,
+ * BE-DESIGN.md §6.1, replacing the retired `since` RFC3339 cursor), without
+ * user action. Spec: T-20.
  *
  * `WsConnection` (this file) owns the transport/reconnect lifecycle only —
  * it never sends `attach_session` itself. That is `reattachActiveSession`'s
@@ -17,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { WsConnection } from '../ws'
 import { reattachActiveSession } from '@/components/chat/OmnipusRuntimeProvider'
 import { useChatStore } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import { useSessionStore } from '@/store/session'
 
 // ── Mock WebSocket (mirrors src/lib/ws.timeout.test.ts's harness) ───────────
@@ -87,25 +90,37 @@ function lastSentFrames(instance: typeof lastWsInstance): unknown[] {
   return instance.send.mock.calls.map((call) => JSON.parse(call[0] as string))
 }
 
-function attachFrames(instance: typeof lastWsInstance): Array<{ type: string; session_id?: string; since?: string }> {
+function attachFrames(
+  instance: typeof lastWsInstance,
+): Array<{ type: string; session_id?: string; since_seq?: number; boot_id?: string }> {
   return lastSentFrames(instance).filter(
-    (f): f is { type: string; session_id?: string; since?: string } =>
+    (f): f is { type: string; session_id?: string; since_seq?: number; boot_id?: string } =>
       typeof f === 'object' && f !== null && (f as { type?: string }).type === 'attach_session',
   )
 }
 
 describe('WsConnection + reattachActiveSession — reconnect re-attach (ADR-082 D5/FR-010)', () => {
-  it('sends attach_session with the since cursor on the FIRST connect', () => {
+  // PROVENANCE (#823 catch-up redesign, BE-DESIGN.md §6.1, Step 0's contract
+  // change removing AttachSessionFrame.since — founder decision Q3, REPLACE,
+  // guarantee kept, test rewritten never weakened): these two tests used to
+  // seed and assert the legacy `since` RFC3339 timestamp cursor
+  // (lastReceivedEventTime). That field is REMOVED from the wire contract
+  // (Step 0's SQUAD-REPORT-BE0.md); the replacement is the numbered
+  // `{since_seq, boot_id}` pair, tracked per-bucket as SessionChatState.cursor
+  // (src/store/chat/cursor.ts) and advanced by every sequenced frame (§1.2)
+  // — only the four terminal/state frames (session_state, session_snapshot,
+  // catch_up_complete, session_started, §3.4) carry `boot_id` on the wire;
+  // an ordinary sequenced frame like `user_message` carries only `seq` and
+  // inherits the cursor's already-established bootId (gateFrameBySeq's own
+  // fallback). Seeded here by setting the bucket's cursor directly, which is
+  // exactly that already-established state. The user-visible D5 guarantee
+  // (every reopen re-attaches without user action) is unchanged; only the
+  // cursor's SHAPE changed.
+  it('sends attach_session with since_seq/boot_id on the FIRST connect', () => {
     useSessionStore.setState({ activeSessionId: 'sess-1', activeAgentId: null, activeAgentType: null })
-    // Seed a lastReceivedEventTime for sess-1 via a real frame, mirroring how
-    // the store actually populates the `since` cursor (chat.ts's I1 fix).
-    useChatStore.getState().handleFrame({
-      type: 'replay_message',
-      session_id: 'sess-1',
-      role: 'assistant',
-      content: 'seen before',
-      timestamp: '2026-09-08T09:00:00.000Z',
-    })
+    useChatStore.setState({
+      sessionsById: { 'sess-1': { ...emptySessionState(), cursor: { bootId: 'boot-first', seq: 5 } } },
+    } as never)
 
     const connRef: { current: WsConnection | null } = { current: null }
     const setConnectionError = vi.fn()
@@ -117,21 +132,22 @@ describe('WsConnection + reattachActiveSession — reconnect re-attach (ADR-082 
 
     const attaches = attachFrames(lastWsInstance)
     expect(attaches).toHaveLength(1)
-    expect(attaches[0]).toMatchObject({ type: 'attach_session', session_id: 'sess-1', since: '2026-09-08T09:00:00.000Z' })
+    expect(attaches[0]).toMatchObject({
+      type: 'attach_session',
+      session_id: 'sess-1',
+      since_seq: 5,
+      boot_id: 'boot-first',
+    })
 
     conn.disconnect()
   })
 
-  it('re-sends attach_session with the since cursor on EVERY subsequent reopen (reconnect after a drop), not only the first connect', () => {
+  it('re-sends attach_session with the LATEST since_seq/boot_id on EVERY subsequent reopen (reconnect after a drop), not only the first connect', () => {
     vi.useFakeTimers()
     useSessionStore.setState({ activeSessionId: 'sess-2', activeAgentId: null, activeAgentType: null })
-    useChatStore.getState().handleFrame({
-      type: 'replay_message',
-      session_id: 'sess-2',
-      role: 'assistant',
-      content: 'seen before reconnect',
-      timestamp: '2026-09-08T09:30:00.000Z',
-    })
+    useChatStore.setState({
+      sessionsById: { 'sess-2': { ...emptySessionState(), cursor: { bootId: 'boot-second', seq: 1 } } },
+    } as never)
 
     const connRef: { current: WsConnection | null } = { current: null }
     const setConnectionError = vi.fn()
@@ -144,20 +160,25 @@ describe('WsConnection + reattachActiveSession — reconnect re-attach (ADR-082 
     expect(attachFrames(firstInstance)[0]).toMatchObject({
       type: 'attach_session',
       session_id: 'sess-2',
-      since: '2026-09-08T09:30:00.000Z',
+      since_seq: 1,
+      boot_id: 'boot-second',
     })
 
-    // A successful attach wipes the local bucket so the gateway's replay can
-    // repopulate it from scratch (reattachActiveSession's own contract).
-    // Simulate that replay landing before the NEXT drop — this is what
-    // actually advances the since-cursor across a full reconnect cycle, and
-    // is what the second assertion below proves gets sent again.
+    // #823 catch-up redesign (§6.1): a successful attach no longer wipes the
+    // bucket — the cursor persists and keeps advancing as more sequenced
+    // frames land, which is what the second assertion below proves gets
+    // sent again on the NEXT reopen.
+    // Advances via a REAL sequenced frame with no boot_id of its own — the
+    // ordinary shape (only the four terminal/state frames carry boot_id,
+    // §3.4) — proving the cursor correctly inherits the already-established
+    // bootId rather than losing it.
     useChatStore.getState().handleFrame({
-      type: 'replay_message',
+      type: 'user_message',
       session_id: 'sess-2',
-      role: 'assistant',
+      id: 'u3',
       content: 'seen after first attach, before the drop',
       timestamp: '2026-09-08T09:45:00.000Z',
+      seq: 2,
     })
 
     // Simulate an abnormal drop (network blip) — NOT an intentional close —
@@ -179,7 +200,8 @@ describe('WsConnection + reattachActiveSession — reconnect re-attach (ADR-082 
     expect(secondAttaches[0]).toMatchObject({
       type: 'attach_session',
       session_id: 'sess-2',
-      since: '2026-09-08T09:45:00.000Z',
+      since_seq: 2,
+      boot_id: 'boot-second',
     })
 
     conn.disconnect()

@@ -386,8 +386,9 @@ func TestReAuthToken_Fresh_NotExpired(t *testing.T) {
 //
 // setCredential and deleteCredential mutate the encrypted credential vault —
 // the highest-blast-radius excluded mutation in ADR-021's scope (they store API
-// keys and channel tokens). ADR-022 expands ADR-021's v0.2 deferral to v0.1.0,
-// gating both with requireReAuth. These mirror the existing 6-gate pattern:
+// keys and channel tokens). ADR-022 expands ADR-021's v0.2 deferral to v0.1.0
+// (v0.2/v0.3 release labels retired 2026-09-25 — decision history kept as
+// written), gating both with requireReAuth. These mirror the existing 6-gate pattern:
 // negative (no token → 403) and positive (valid token → success).
 
 // newCredVaultReAuthTestAPI builds a restAPI whose credential store is present

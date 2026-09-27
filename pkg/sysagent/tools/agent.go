@@ -177,7 +177,6 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
 			},
-			"shell_policy": shellPolicyParameters(),
 			"context_window_override": map[string]any{
 				"type":        "integer",
 				"description": "Positive token override. JSON null clears the override.",
@@ -657,7 +656,6 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
 			},
-			"shell_policy":            shellPolicyParameters(),
 			"context_window_override": map[string]any{"type": "integer", "description": "Positive token override. JSON null clears the override."},
 			"model_params":            modelParamsParameters(),
 		},

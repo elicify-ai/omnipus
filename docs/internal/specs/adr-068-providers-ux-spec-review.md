@@ -1,4 +1,6 @@
 # Adversarial Review: ADR-068 — Subscription login policy, provider deletion, the default model, and the provider UX at 190 providers
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 **Spec reviewed**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-context-budget/docs/internal/specs/adr-068-providers-ux-spec.md`
 **Ratified brief**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-context-budget/docs/internal/architecture/ADR-068-subscriptions-provider-deletion-and-provider-ux.md`

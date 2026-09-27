@@ -1,0 +1,316 @@
+{
+  "scenario": "F3",
+  "title": "Reload mid-message: snapshot with the active-turn projection",
+  "description": "After a reload the tab attaches with no cursor. The gateway answers with session_snapshot (reason unknown_position), session_state (active_turn present), the transcript replay (the user message), the answer-so-far as one unsequenced token{replace:true, message_id} (it is not persisted yet), catch_up_complete, then the rest of the answer live and done. Only the second tab's events describe the store after the reload; tab A's events are the pre-reload history.",
+  "expect": {
+    "assistant_messages": [
+      "s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 "
+    ],
+    "catch_up_mode": "snapshot",
+    "one_bubble_per_message": true,
+    "snapshot_reason": "unknown_position",
+    "user_message": "stream then reload"
+  },
+  "tabs": [
+    {
+      "name": "A",
+      "events": [
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:01Z",
+            "pending_approvals": [],
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "client_message_id": "client-1",
+            "content": "stream then reload",
+            "type": "message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "boot_id": "boot-1",
+            "seq": 1,
+            "session_id": "sess-1",
+            "type": "session_started"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "client_message_id": "client-1",
+            "content": "stream then reload",
+            "id": "id-1",
+            "seq": 2,
+            "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "type": "user_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "seq": 3,
+            "session_id": "sess-1",
+            "state": "received",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "seq": 4,
+            "session_id": "sess-1",
+            "state": "working",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s0 ",
+            "message_id": "msg-1",
+            "seq": 5,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s1 ",
+            "message_id": "msg-1",
+            "seq": 6,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s2 ",
+            "message_id": "msg-1",
+            "seq": 7,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s3 ",
+            "message_id": "msg-1",
+            "seq": 8,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s4 ",
+            "message_id": "msg-1",
+            "seq": 9,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "note",
+          "note": "page reloaded here: the store is empty and has no cursor for this session"
+        }
+      ]
+    },
+    {
+      "name": "A (after reload)",
+      "events": [
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:03Z",
+            "pending_approvals": [],
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "session_id": "sess-1",
+            "type": "attach_session"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "reason": "unknown_position",
+            "seq": 9,
+            "session_id": "sess-1",
+            "type": "session_snapshot"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "active_turn": {
+              "agent_id": "mia",
+              "started_at": "2026-01-01T00:00:04Z",
+              "turn_id": "turn-1"
+            },
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:05Z",
+            "pending_approvals": [],
+            "session_id": "sess-1",
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "client_message_id": "client-1",
+            "content": "stream then reload",
+            "id": "id-1",
+            "role": "user",
+            "session_id": "sess-1",
+            "type": "replay_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "session_id": "sess-1",
+            "stats": {
+              "duplicate_tool_call_id_count": 0,
+              "frames_emitted": 1,
+              "orphan_count": 0,
+              "truncated_result_count": 0
+            },
+            "type": "done"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s0 s1 s2 s3 s4 ",
+            "message_id": "msg-1",
+            "replace": true,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "mode": "snapshot",
+            "seq": 9,
+            "session_id": "sess-1",
+            "type": "catch_up_complete"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s5 ",
+            "message_id": "msg-1",
+            "seq": 10,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s6 ",
+            "message_id": "msg-1",
+            "seq": 11,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s7 ",
+            "message_id": "msg-1",
+            "seq": 12,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s8 ",
+            "message_id": "msg-1",
+            "seq": 13,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "s9 ",
+            "message_id": "msg-1",
+            "seq": 14,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "message_id": "msg-1",
+            "seq": 15,
+            "session_id": "sess-1",
+            "stats": {
+              "cost": 0,
+              "duration_ms": 1,
+              "tokens": 0
+            },
+            "turn_id": "turn-1",
+            "type": "done"
+          }
+        }
+      ]
+    }
+  ]
+}

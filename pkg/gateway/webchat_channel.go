@@ -6,9 +6,9 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -68,52 +68,57 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 		return nil
 	}
 
-	// Resolve the originating chat's session_id and find every connection
-	// currently bound to that session. Cross-browser session attach (#133)
-	// requires that a second tab observing the same session receives the
-	// final token/done frames — not just the chat_id that triggered the turn.
-	c.wsHandler.mu.Lock()
-	sid := msg.SessionID
+	sid, origin := c.resolveOutbound(msg.ChatID, msg.SessionID)
 	if sid == "" {
-		sid = c.wsHandler.sessionIDs[msg.ChatID]
-	}
-	// ADR-082 review CR7: resolveSessionConnsLocked (WSHandler's own session
-	// resolver, shared with wsStreamer.Update/Finalize) now also accepts an
-	// origin-chatID fallback, unifying what used to be two independent
-	// resolvers with the same job — see that function's doc comment.
-	conns := c.wsHandler.resolveSessionConnsLocked(msg.ChatID, sid)
-	c.wsHandler.mu.Unlock()
-
-	if len(conns) == 0 {
-		// ADR-082 D6/FR-012: zero bound connections is no longer a failure.
-		// A turn is UI-independent (ADR-082 P1) — the content is already
-		// durable in the transcript (written by the streaming path's
-		// Finalize, or by the caller before this Send for a non-streamed
-		// response) and will replay on the next attach_session, whenever
-		// that happens. Returning ErrSendFailed here used to make the
-		// Manager's sendWithRetry loop classify a merely-absent viewer as a
-		// PERMANENT failure and (for keeper-originated turns, E5) log
-		// "Send failed"/trigger a drop notice every 60-90s until the goal
-		// cleared — pure noise, since there was never anything to retry.
-		slog.Debug("webchat: no bound connection, transcript is durable",
-			"chat_id", msg.ChatID, "session_id", sid)
+		// No session to number against: the only possible viewer is the
+		// originating connection itself (if it is still open).
+		if origin != nil {
+			if msg.Content != "" {
+				sendConnGenFrame(origin, string(generated.WsFrameTypeToken), generated.TokenFrame{
+					Type:    string(generated.WsFrameTypeToken),
+					Content: msg.Content,
+				})
+			}
+			sendConnGenFrame(origin, string(generated.WsFrameTypeDone), generated.DoneFrame{
+				Type: string(generated.WsFrameTypeDone),
+			})
+		}
 		return nil
 	}
 
-	for _, conn := range conns {
-		if msg.Content != "" {
-			sendConnGenFrame(conn, string(generated.WsFrameTypeToken), generated.TokenFrame{
-				Type:      string(generated.WsFrameTypeToken),
-				Content:   msg.Content,
-				SessionId: sid,
-			})
-		}
-		sendConnGenFrame(conn, string(generated.WsFrameTypeDone), generated.DoneFrame{
-			Type:      string(generated.WsFrameTypeDone),
+	// #823 (BE-DESIGN.md §1.2, H17): a turn with no streamed text still gets
+	// a numbered token + done through the session hub, delivered to every
+	// tab bound to the session and journaled for a tab that attaches later.
+	// ADR-082 D6/FR-012: zero bound connections is not a failure — the
+	// content is durable in the transcript and in the journal.
+	if msg.Content != "" {
+		c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeToken), hubFrameMeta{
+			kind: hubKindToken, content: msg.Content,
+		}, generated.TokenFrame{
+			Type:      string(generated.WsFrameTypeToken),
+			Content:   msg.Content,
 			SessionId: sid,
 		})
 	}
+	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeDone), hubFrameMeta{kind: hubKindDone},
+		generated.DoneFrame{
+			Type:      string(generated.WsFrameTypeDone),
+			SessionId: sid,
+		})
 	return nil
+}
+
+// resolveOutbound returns the session an outbound message belongs to (its
+// own session id, else the one its chat id is bound to) and the chat's own
+// connection, if it is still open.
+func (c *webchatChannel) resolveOutbound(chatID, sessionID string) (string, *wsConn) {
+	c.wsHandler.mu.Lock()
+	defer c.wsHandler.mu.Unlock()
+	sid := sessionID
+	if sid == "" {
+		sid = c.wsHandler.sessionIDs[chatID]
+	}
+	return sid, c.wsHandler.sessions[chatID]
 }
 
 func mediaRefURL(ref string) string {
@@ -127,49 +132,20 @@ func mediaRefURL(ref string) string {
 // Implements channels.MediaSender so the channel manager can route
 // OutboundMediaMessage to the webchat channel.
 //
-// [ADR-082 review CR7] Previously resolved only msg.ChatID's single
-// connection (c.wsHandler.sessions[msg.ChatID]) and returned
-// channels.ErrSendFailed whenever that one connection was not live —
-// ignoring msg.SessionID entirely and, worse, ignoring EVERY other
-// connection bound to the same session (a second browser tab, or the SAME
-// tab reconnected under a NEW chatID after ADR-082 D2). On a reconnect the
-// attachment was lost both live (no connection found under the STALE
-// chatID) AND on replay: the caller (pkg/agent/loop.go's tool-media-delivery
-// block) treats a SendMedia error as fatal and REPLACES the tool result with
-// a plain error message, discarding toolResult.Media entirely — so nothing
-// about the attachment ever reaches the transcript either.
-//
-// Now resolves via the SAME session-bound connection set Send uses
-// (resolveSessionConnsLocked, with msg.ChatID as the origin-chatID
-// fallback), delivers to every one of them, and — matching Send's ADR-082 D6
-// "zero bound connections is not a failure" semantics exactly — returns nil
-// rather than ErrSendFailed when nobody is currently watching: the media
-// itself is durable (the caller's toolResult.Media references survive
-// untouched when this returns nil), so it will show up correctly on the
-// next attach_session replay regardless of whether anyone was live to see it
-// arrive.
+// [ADR-082 review CR7] It reaches every connection bound to the message's
+// session (a second tab, or the same tab reconnected under a new chat id) —
+// #823: through one numbered publish in the session hub — and, matching
+// Send's ADR-082 D6 semantics, returns nil rather than ErrSendFailed when
+// nobody is watching: the caller (the agent loop's tool-media delivery)
+// treats an error as fatal and would otherwise discard toolResult.Media, so
+// the attachment would be lost from the transcript too.
 func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessage) error {
 	if len(msg.Parts) == 0 {
 		slog.Warn("webchat: SendMedia called with empty parts — skipping", "chat_id", msg.ChatID)
 		return nil
 	}
 
-	c.wsHandler.mu.Lock()
-	sid := msg.SessionID
-	if sid == "" {
-		sid = c.wsHandler.sessionIDs[msg.ChatID]
-	}
-	conns := c.wsHandler.resolveSessionConnsLocked(msg.ChatID, sid)
-	c.wsHandler.mu.Unlock()
-
-	if len(conns) == 0 {
-		// ADR-082 D6/FR-012, extended to media by CR7: no bound connection is
-		// not a failure — the caller still has msg's media refs and will
-		// persist them to the transcript; a reconnect replays them normally.
-		slog.Debug("webchat: SendMedia — no bound connection, media stays durable",
-			"chat_id", msg.ChatID, "session_id", sid)
-		return nil
-	}
+	sid, origin := c.resolveOutbound(msg.ChatID, msg.SessionID)
 
 	parts := make([]generated.MediaPart, 0, len(msg.Parts))
 	for _, p := range msg.Parts {
@@ -198,22 +174,26 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 		)
 	}
 
-	slog.Debug("webchat: sending media frame", "chat_id", msg.ChatID, "session_id", sid, "parts", len(parts), "conns", len(conns))
+	slog.Debug("webchat: sending media frame", "chat_id", msg.ChatID, "session_id", sid, "parts", len(parts))
 
-	// Marshal once and route through sendRawFrameBytes (replay-divert +
-	// backpressure logic) to every connection bound to this session — a
-	// second browser tab (or the SAME tab reconnected under a new chatID)
-	// must see the attachment too, matching Send's fan-out above.
-	raw, err := json.Marshal(generated.MediaFrame{
+	frame := generated.MediaFrame{
 		Type:      string(generated.WsFrameTypeMedia),
 		SessionId: sid,
 		Parts:     parts,
-	})
-	if err != nil {
-		return fmt.Errorf("webchat: marshal media frame: %w", err)
 	}
-	for _, conn := range conns {
-		sendRawFrameBytes(conn, string(generated.WsFrameTypeMedia), raw)
+	if sid == "" {
+		// No session to number against: only the originating connection.
+		if origin != nil {
+			sendConnGenFrame(origin, string(generated.WsFrameTypeMedia), frame)
+		}
+		return nil
 	}
+	// #823: published once through the session hub — every bound tab gets
+	// it; a tab that attaches later gets it from the journal (or, until the
+	// turn's done, from the active-turn projection). ADR-082 D6/CR7: no bound
+	// connection is not a failure — the media refs stay durable.
+	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeMedia), hubFrameMeta{
+		kind: hubKindItem, key: "media:" + parts[0].Url + ":" + strconv.Itoa(len(parts)),
+	}, frame)
 	return nil
 }

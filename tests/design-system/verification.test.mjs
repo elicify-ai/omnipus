@@ -117,6 +117,27 @@ test('requires Playwright evidence and four projects for browser-family checks i
   assert.equal((await run(root, [playwright])).pass, true, 'owner browser files retain exact path matching')
 })
 
+test('requires forced-colors evidence only from engines that implement forced colors', async () => {
+  const root = await setup([{ id: 'button-forced-colors', kind: 'forced-colors', applicable: true, file: 'tests/design-system/browser.spec.ts', test: 'Button forced-colors', story: 'Primary' }])
+  const evidence = join(root, 'playwright.json')
+  // WebKit absent: not required by the forced-colors contract, so not an error.
+  await writeFile(evidence, JSON.stringify(playwrightSpec({ title: 'Button forced-colors', projects: ['chromium', 'firefox', 'chromium-coarse-pointer'] })))
+  assert.equal((await run(root, [evidence])).pass, true)
+  // The authorized WebKit skip (issue #865) is recorded, but is not failure evidence.
+  await writeFile(evidence, JSON.stringify({
+    suites: [{ title: 'browser.spec.ts', file: 'tests/design-system/browser.spec.ts', specs: [{ title: 'Button forced-colors', file: 'tests/design-system/browser.spec.ts', tests: [
+      { projectName: 'chromium', status: 'expected', results: [{ status: 'passed' }] },
+      { projectName: 'firefox', status: 'expected', results: [{ status: 'passed' }] },
+      { projectName: 'chromium-coarse-pointer', status: 'expected', results: [{ status: 'passed' }] },
+      { projectName: 'webkit', status: 'skipped', results: [] },
+    ] }] }],
+  }))
+  assert.equal((await run(root, [evidence])).pass, true)
+  // Control: a failed-then-retried pass on a REQUIRED engine still errors.
+  await writeFile(evidence, JSON.stringify(playwrightSpec({ title: 'Button forced-colors', projects: ['chromium', 'firefox', 'chromium-coarse-pointer'], failedFirst: true })))
+  assert.match((await run(root, [evidence])).errors.join('\n'), /failed or retried-failure/)
+})
+
 test('rejects malformed checks before considering evidence', async () => {
   const root = await setup([{ id: ' ', kind: 'unknown', test: '', applicable: undefined }])
   const report = await run(root, [])

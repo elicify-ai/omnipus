@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useToolApprovalStore } from './toolApproval'
-import type { WsSessionStateFrame } from '@/lib/ws'
+import type { WsSessionStateFrame, WsToolApprovalRequiredFrame } from '@/lib/ws'
 
 beforeEach(() => {
   act(() => {
@@ -269,5 +269,87 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
     })
 
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
+  })
+})
+
+// ADR-092 D4/FR-025: CommandSegmentInfo carried on a live
+// tool_approval_required frame must land on the queue entry — this is the
+// store-side half of the per-segment display proof; the render-side half
+// lives in ToolApprovalModal.scopeAndSegments.test.tsx.
+describe('enqueue — carries segments through (ADR-092 D4)', () => {
+  it('copies frame.segments onto the new queue entry', () => {
+    const frame: WsToolApprovalRequiredFrame = {
+      type: 'tool_approval_required',
+      approval_id: 'appr-chain-1',
+      tool_call_id: 'call-chain-1',
+      tool_name: 'bash',
+      args: { command: 'npm run build && git push' },
+      agent_id: 'agent-main',
+      session_id: 'sess-1',
+      turn_id: 'turn-1',
+      expires_in_ms: 120_000,
+      segments: [
+        { segment_index: 0, command_text: 'npm run build', resolved_binary: 'npm' },
+        { segment_index: 1, command_text: 'git push', resolved_binary: 'git' },
+      ],
+    }
+
+    act(() => {
+      useToolApprovalStore.getState().enqueue(frame)
+    })
+
+    const entry = useToolApprovalStore.getState().queue[0]
+    expect(entry.segments).toEqual(frame.segments)
+  })
+
+  it('leaves segments undefined when the frame carried none', () => {
+    const frame: WsToolApprovalRequiredFrame = {
+      type: 'tool_approval_required',
+      approval_id: 'appr-plain-1',
+      tool_call_id: 'call-plain-1',
+      tool_name: 'fetch_url',
+      args: { url: 'https://example.com' },
+      agent_id: 'agent-main',
+      session_id: 'sess-1',
+      turn_id: 'turn-2',
+      expires_in_ms: 120_000,
+    }
+
+    act(() => {
+      useToolApprovalStore.getState().enqueue(frame)
+    })
+
+    expect(useToolApprovalStore.getState().queue[0].segments).toBeUndefined()
+  })
+
+  it('updates segments in place when a duplicate frame for the same approval arrives', () => {
+    const base: WsToolApprovalRequiredFrame = {
+      type: 'tool_approval_required',
+      approval_id: 'appr-dup-1',
+      tool_call_id: 'call-dup-1',
+      tool_name: 'bash',
+      args: { command: 'rm -rf /tmp/x' },
+      agent_id: 'agent-main',
+      session_id: 'sess-1',
+      turn_id: 'turn-3',
+      expires_in_ms: 120_000,
+    }
+    act(() => {
+      useToolApprovalStore.getState().enqueue(base)
+    })
+    expect(useToolApprovalStore.getState().queue).toHaveLength(1)
+    expect(useToolApprovalStore.getState().queue[0].segments).toBeUndefined()
+
+    act(() => {
+      useToolApprovalStore.getState().enqueue({
+        ...base,
+        segments: [{ segment_index: 0, command_text: 'rm -rf /tmp/x', resolved_binary: 'rm' }],
+      })
+    })
+
+    expect(useToolApprovalStore.getState().queue).toHaveLength(1)
+    expect(useToolApprovalStore.getState().queue[0].segments).toEqual([
+      { segment_index: 0, command_text: 'rm -rf /tmp/x', resolved_binary: 'rm' },
+    ])
   })
 })

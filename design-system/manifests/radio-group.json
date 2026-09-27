@@ -48,7 +48,7 @@
       "id": "radio-group-interaction",
       "kind": "interaction",
       "file": "src/components/ui/radio-group.stories.tsx",
-      "test": "ArrowKeyNavigation",
+      "test": "Arrow Key Navigation",
       "story": "ArrowKeyNavigation",
       "applicable": true
     },

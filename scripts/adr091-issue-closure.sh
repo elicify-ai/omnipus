@@ -43,7 +43,14 @@ for n in 658 614 670 755 763 764 765; do
 done
 
 # Issues the delivery leaves open by design. Each must be OPEN with a comment matching open_re.
-for n in 784 803; do
+# 803 was CLOSED by founder decision 2026-09-25, not left open: its premise was
+# disproved. A delegated worker does not run out of context — AgentLoop::windowTrim
+# evicts the oldest turns proactively before the provider call, and buildBreadcrumb
+# hands the agent an explicit list of what was evicted, while the full archive is
+# retained. There is no cliff to warn a parent about, so there is nothing to assert
+# a "stays open because" reason for. 784 remains, and genuinely cannot be fixed at
+# this layer (see its comment).
+for n in 784; do
   fetch "$n" state; fetch "$n" comments
   s=$(cat "$tmp/$n.state"); ok=$(grep -c -E "$open_re" "$tmp/$n.comments" || true)
   [ "$s" = "OPEN" ] && [ "$ok" -ge 1 ] || { echo "issue #$n: state=$s reason-comments=$ok" >&2; fail=1; }

@@ -1,0 +1,96 @@
+{
+  "scenario": "F7",
+  "title": "Gateway restart: the cursor's boot id no longer matches",
+  "description": "The tab attaches with a cursor from the previous gateway run. The gateway answers with session_snapshot{reason: boot_mismatch}, session_state (no active_turn — the interrupted turn is gone), the transcript (only the user's question; the answer was never persisted) and catch_up_complete. The client shows the interrupted answer as \"couldn't be finished\" (BE-DESIGN.md §6.5).",
+  "expect": {
+    "active_turn": null,
+    "snapshot_reason": "boot_mismatch",
+    "unfinished_answer": true,
+    "user_message": "question before the restart"
+  },
+  "tabs": [
+    {
+      "name": "A",
+      "events": [
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:01Z",
+            "pending_approvals": [],
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "note",
+          "note": "the gateway restarted mid-answer; the tab still holds {boot_id: old, seq: 42} for this chat"
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "boot_id": "boot-2",
+            "session_id": "sess-1",
+            "since_seq": 42,
+            "type": "attach_session"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "reason": "boot_mismatch",
+            "seq": 1,
+            "session_id": "sess-1",
+            "type": "session_snapshot"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:02Z",
+            "pending_approvals": [],
+            "session_id": "sess-1",
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "content": "question before the restart",
+            "id": "id-1",
+            "role": "user",
+            "session_id": "sess-1",
+            "type": "replay_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "session_id": "sess-1",
+            "stats": {
+              "duplicate_tool_call_id_count": 0,
+              "frames_emitted": 1,
+              "orphan_count": 0,
+              "truncated_result_count": 0
+            },
+            "type": "done"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "mode": "snapshot",
+            "seq": 1,
+            "session_id": "sess-1",
+            "type": "catch_up_complete"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,15 +1,15 @@
 // Advanced — collapsible disclosure rendered ABOVE the footer (NOT a 4th
 // step in the stepper). Houses the wire-format fields that the operator
-// rarely touches on first-create: model_params, shell_policy, rate_limits,
+// rarely touches on first-create: model_params, rate_limits,
 // timeout_seconds, max_tool_iterations, and the subagent_3p executor block.
 //
 // All fields are type-branched (per the field matrix in
 // docs/internal/architecture/agent-types-field-matrix.md):
-//   Main + Subagent: model_params, shell_policy, rate_limits,
+//   Main + Subagent: model_params, rate_limits,
 //                     timeout_seconds, max_tool_iterations
 //   subagent_3p:     timeout_seconds + rate_limits ONLY — the CLI manages
-//                     its own isolation/auth/retries, so model_params,
-//                     shell_policy, and max_tool_iterations
+//                     its own isolation/auth/retries, so model_params
+//                     and max_tool_iterations
 //                     are all rejected 400 on the wire
 //                     (`AgentCreateRequestSubagent3p` never carries them —
 //                     see payloadToCreateRequest in CreateAgentModal.tsx).
@@ -26,7 +26,6 @@
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
-import { ShellDenyPatternsEditor } from '../ShellDenyPatternsEditor'
 import type { AdvancedProps } from './types'
 
 export function Advanced({
@@ -104,10 +103,6 @@ interface MainAdvancedFieldsProps {
 
 function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
   const modelParams = payload.model_params ?? {}
-  const shellPolicy = payload.shell_policy ?? {
-    enable_deny_patterns: false,
-    custom_deny_patterns: [],
-  }
 
   function setModelParam<K extends 'temperature' | 'max_tokens'>(
     key: K,
@@ -146,22 +141,6 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
             onChange={(v) => setModelParam('max_tokens', v)}
           />
         </div>
-      </div>
-
-      {/* Shell deny patterns */}
-      <div className="space-y-[var(--space-2)]">
-        <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Shell deny patterns</p>
-        <ShellDenyPatternsEditor
-          value={shellPolicy.custom_deny_patterns ?? []}
-          onChange={(deny) =>
-            setField(
-              'shell_policy',
-              deny.length > 0
-                ? { enable_deny_patterns: true, custom_deny_patterns: deny }
-                : { enable_deny_patterns: false, custom_deny_patterns: [] },
-            )
-          }
-        />
       </div>
 
       {/* Rate limits */}

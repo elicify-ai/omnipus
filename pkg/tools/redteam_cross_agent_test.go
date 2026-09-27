@@ -58,12 +58,13 @@ const agentBSecretContent = "REDTEAM_C5_SENTINEL_agent_B_secret_soul_content"
 // to deny access to. The mediaStore is built but kept on the test side —
 // callers that need send_file pass it in.
 type crossAgentSetup struct {
-	homeDir       string // common parent (~/.omnipus)
-	agentsDir     string // <home>/agents
-	agentAWS      string // <agents>/agent-A
-	agentBWS      string // <agents>/agent-B
-	agentBSoul    string // <agentBWS>/SOUL.md (the sentinel)
-	mediaStoreDir string // a tempdir for the media pipeline
+	t             *testing.T // for build closures that construct a media.FileMediaStore and must Stop() it (see build funcs below)
+	homeDir       string     // common parent (~/.omnipus)
+	agentsDir     string     // <home>/agents
+	agentAWS      string     // <agents>/agent-A
+	agentBWS      string     // <agents>/agent-B
+	agentBSoul    string     // <agentBWS>/SOUL.md (the sentinel)
+	mediaStoreDir string     // a tempdir for the media pipeline
 }
 
 func newCrossAgentSetup(t *testing.T) *crossAgentSetup {
@@ -100,6 +101,7 @@ func newCrossAgentSetup(t *testing.T) *crossAgentSetup {
 		t.Fatalf("mkdir media: %v", err)
 	}
 	return &crossAgentSetup{
+		t:             t,
 		homeDir:       home,
 		agentsDir:     agents,
 		agentAWS:      wsA,
@@ -234,6 +236,7 @@ func TestRedteam_CrossAgent_DirectRead(t *testing.T) {
 			toolName: "send_file",
 			build: func(s *crossAgentSetup) Tool {
 				store := media.NewFileMediaStore()
+				s.t.Cleanup(store.Stop)
 				tool := NewSendFileTool(s.agentAWS, true, 0, store)
 				tool.SetContext("cli", "test-chat")
 				return tool
@@ -292,6 +295,7 @@ func TestRedteam_CrossAgent_SymlinkRead(t *testing.T) {
 			toolName: "send_file_symlink",
 			build: func(s *crossAgentSetup) Tool {
 				store := media.NewFileMediaStore()
+				s.t.Cleanup(store.Stop)
 				tool := NewSendFileTool(s.agentAWS, true, 0, store)
 				tool.SetContext("cli", "test-chat")
 				return tool

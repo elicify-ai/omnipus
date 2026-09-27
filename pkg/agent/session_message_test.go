@@ -69,7 +69,7 @@ func TestDeliverSessionMessage_Steer_LandsInSteeringQueue(t *testing.T) {
 		t.Fatalf("DeliverSessionMessage(steer) failed: %v", err)
 	}
 
-	drained := al.dequeueSteeringMessagesForScope(scope)
+	drained, _ := al.dequeueSteeringMessagesForScope(scope)
 	if len(drained) != 1 {
 		t.Fatalf("expected 1 queued steering message, got %d", len(drained))
 	}
@@ -93,7 +93,7 @@ func TestDeliverSessionMessage_Respond_LandsInSteeringQueue(t *testing.T) {
 		t.Fatalf("DeliverSessionMessage(respond) failed: %v", err)
 	}
 
-	drained := al.dequeueSteeringMessagesForScope(scope)
+	drained, _ := al.dequeueSteeringMessagesForScope(scope)
 	if len(drained) != 1 || drained[0].Content != "yes, proceed" {
 		t.Fatalf("expected the respond text queued, got: %+v", drained)
 	}

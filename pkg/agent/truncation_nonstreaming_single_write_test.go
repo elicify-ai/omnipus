@@ -34,7 +34,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,20 +42,13 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// fileInode returns path's platform inode number. ok is false on a platform
-// where os.FileInfo.Sys() is not *syscall.Stat_t (e.g. Windows) — callers
-// must skip the inode assertion rather than fail in that case, since the
-// property this proves (append vs. rewrite) has no meaning there.
-func fileInode(t *testing.T, path string) (ino uint64, ok bool) {
-	t.Helper()
-	info, err := os.Stat(path)
-	require.NoError(t, err, "stat transcript file")
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, false
-	}
-	return st.Ino, true
-}
+// fileInode is defined per-platform: truncation_inode_unix_test.go (build
+// tag unix) returns the real inode via syscall.Stat_t; truncation_inode_
+// other_test.go (build tag !unix, e.g. Windows) always returns ok=false —
+// syscall.Stat_t does not exist on GOOS=windows, so a single cross-platform
+// definition cannot compile there. Callers skip the inode assertion when
+// ok is false, since the property it proves (append vs. rewrite) has no
+// meaning on a platform with no inode concept.
 
 // ---------------------------------------------------------------------------
 // Call site 2 — runTurn's own non-streaming tail (loop.go, gated on

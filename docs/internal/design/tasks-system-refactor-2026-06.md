@@ -1,4 +1,6 @@
 # Task System Refactor — Assessment & Plan
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 **Status:** IMPLEMENTED (§1–§7) on `feat/0.1.0-uat-fixes` · supersedes the task-tool-granularity &
 scheduling portions of `tasks-redesign-2026-05.md`

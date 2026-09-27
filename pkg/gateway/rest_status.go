@@ -154,16 +154,19 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 	// cfg.Sandbox.GodMode true covers both S1 (armed via the UI, pending
 	// restart — the config write already happened even though this boot
 	// hasn't activated it) and S2 (live-active): either way an operator has
-	// committed to disabling the kernel sandbox, egress restrictions, and
-	// the shell guard, which is strictly worse than the sandbox-disabled
-	// check above (that one only concerns the sandbox; god mode disables
-	// three controls simultaneously), hence "high" not "medium".
+	// committed to disabling the kernel sandbox's filesystem confinement and
+	// network port controls and opening egress, which is strictly worse than
+	// the sandbox-disabled check above (that one only concerns the sandbox;
+	// god mode disables multiple controls simultaneously and floors every
+	// tool's global policy at allow), hence "high" not "medium". It does NOT
+	// disable the shell's outside-workspace write refusal — that refusal
+	// still fires under god mode, it just never prompts first.
 	if cfg.Sandbox.GodMode {
 		issues = append(issues, map[string]any{
 			"id":             "god-mode-armed",
 			"severity":       "high",
 			"title":          "God-mode is armed",
-			"description":    "God-mode is enabled or pending activation. It bypasses every permission prompt and disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.",
+			"description":    "God-mode is enabled or pending activation. It bypasses every permission prompt and disables the kernel sandbox's filesystem confinement and network port controls, and opens outbound network access, for every agent's shell tool.",
 			"recommendation": "Go to Settings → Security → Danger zone and turn god-mode off, unless this is intentional.",
 			"action_link":    "/settings?tab=security",
 			"action_label":   "Open security settings",
@@ -317,6 +320,23 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 			// binary was built as, and whether THIS request is signed in. The
 			// only field the UI reads to branch on edition or sign-in state.
 			"identity": identity,
+			// contracts/components/schemas/AppState.yaml `dev_mode_bypass` —
+			// "True when gateway.dev_mode_bypass is enabled... The SPA uses
+			// this to hide controls that are inoperative when bypass is
+			// active." This field was documented and generated
+			// (gen.AppState.DevModeBypass) but never populated here, so every
+			// SPA gate keyed on it (GodModeControl / the sidebar God Mode
+			// pill, commit 671a68ad6) silently never engaged: `appState?.
+			// dev_mode_bypass === true` read false even when bypass was on,
+			// because the field was always absent, not false. Confirmed via
+			// CI run 35990283526's gateway.log: 79
+			// gateway.admin_route_blocked_by_bypass_gate 503s on
+			// /api/v1/gateway/god-mode across the E2E job despite the SPA
+			// gate's own logic being correct. Read directly from config
+			// (mirrors HandleDoctor's `a.agentLoop.GetConfig()` above) —
+			// read-only, no auth-decision here, matches how every other
+			// dev_mode_bypass check in this package reads the same field.
+			"dev_mode_bypass": a.agentLoop.GetConfig().Gateway.DevModeBypass,
 			// ADR-083 CW-3 / EMB-080 — the video-embed allow-list the READER
 			// uses to decide whether to draw a play control at all.
 			//

@@ -346,6 +346,35 @@ func executeReload(
 		runningServices.reloadMu.Unlock()
 	}
 
+	if err := prepareReloadConfig(newCfg, runningServices); err != nil {
+		markDegraded(err)
+		return err
+	}
+	if err := handleConfigReload(
+		ctx,
+		agentLoop,
+		newCfg,
+		provider,
+		runningServices,
+		msgBus,
+		allowEmptyStartup,
+	); err != nil {
+		markDegraded(err)
+		return err
+	}
+	clearDegraded()
+	return nil
+}
+
+// prepareReloadConfig runs a reloaded config's pre-swap checks and wiring:
+// the tool-policy ceiling repair/coverage check, provider credential
+// injection, the channel SecretBundle re-resolution (stored on
+// runningServices.bundle) and the scrubber's sensitive-value set. A non-nil
+// error rejects the reload; the caller rolls back (executeReload's
+// markDegraded restores the bundle snapshot). Called for the config a reload
+// was handed and again, under restAPI.configMu, for handleConfigReload's
+// swap-time re-read.
+func prepareReloadConfig(newCfg *config.Config, runningServices *services) error {
 	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: a
 	// config reload (file-watcher poll via configReloadChan, or manual
 	// /reload via manualReloadChan — both funnel through this function) must
@@ -366,7 +395,6 @@ func executeReload(
 			"reload rejected: tool-policy coverage validation failed (%d gap(s): %s)",
 			len(gaps), joinCoverageGapMessages(gaps),
 		)
-		markDegraded(reloadErr)
 		return reloadErr
 	}
 
@@ -386,7 +414,6 @@ func executeReload(
 					"reload rejected: provider credential injection failed: %w",
 					errors.Join(fatal...),
 				)
-				markDegraded(reloadErr)
 				return reloadErr
 			}
 		}
@@ -410,7 +437,7 @@ func executeReload(
 		// the file-watcher. That means a configureChannel request can be
 		// audited as DecisionAllow (its own write succeeded) and 200 OK to
 		// the caller, and then have its effect asynchronously rolled back
-		// moments later by markDegraded below because SOME OTHER enabled
+		// moments later by executeReload's markDegraded because SOME OTHER enabled
 		// channel's pre-existing credential ref fails to resolve — not the
 		// channel the caller just configured. This is deliberate: we fail
 		// closed rather than silently run an enabled channel with a broken
@@ -433,7 +460,6 @@ func executeReload(
 						"reload rejected: enabled credential %q not found in store: %w",
 						notFound.Name, e,
 					)
-					markDegraded(reloadErr)
 					return reloadErr
 				}
 				slog.Info("reload: credential not found (not currently enabled/in use)", "ref", notFound.Name)
@@ -443,14 +469,13 @@ func executeReload(
 			// worse than a simple missing ref (the credential exists but can't
 			// be read) — escalate exactly like the NotFoundError-on-enabled
 			// case above, reusing the existing reject-and-rollback mechanism
-			// (markDegraded / reloadDegraded) rather than a log-only Warn or a
+			// (executeReload's markDegraded / reloadDegraded) rather than a log-only Warn or a
 			// new degraded-signal field.
 			if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
 				reloadErr := fmt.Errorf(
 					"reload rejected: enabled credential %q failed to resolve: %w",
 					ref, e,
 				)
-				markDegraded(reloadErr)
 				return reloadErr
 			}
 			slog.Warn("reload: credential bundle resolution error", "error", e)
@@ -473,19 +498,6 @@ func executeReload(
 		reloadValues = append(reloadValues, providers.CollectOAuthSensitiveValues(cs)...)
 		newCfg.RegisterSensitiveValues(reloadValues)
 	}
-	if err := handleConfigReload(
-		ctx,
-		agentLoop,
-		newCfg,
-		provider,
-		runningServices,
-		msgBus,
-		allowEmptyStartup,
-	); err != nil {
-		markDegraded(err)
-		return err
-	}
-	clearDegraded()
 	return nil
 }
 
@@ -507,11 +519,38 @@ func handleConfigReload(
 	logger.Info("  Stopping all services...")
 	stopAndCleanupServices(runningServices, serviceShutdownTimeout, true)
 
+	// Lost-update guard: newCfg was read from disk before the services
+	// stopped — possibly seconds ago. A config write committed through
+	// safeUpdateConfigJSON since then (a login's session-cookie hash, a
+	// settings save) is live in memory but missing from newCfg, and swapping
+	// newCfg in would silently undo it. Take the same configMu those writers
+	// hold, re-read config.json, and keep the lock until the swap is done so
+	// no write can land between the re-read and the swap.
+	unlockWrites := lockConfigWrites(runningServices)
+	defer unlockWrites()
+	swapCfg, err := reloadConfigForSwap(runningServices, newCfg)
+	if err != nil {
+		unlockWrites()
+		logger.Errorf("  ⚠ Error re-reading config for the swap: %v", err)
+		logger.Warn("  Attempting to restart services with old provider and config...")
+		if restartErr := restartServices(al, runningServices, msgBus); restartErr != nil {
+			logger.Errorf("  ⚠ Failed to restart services: %v", restartErr)
+			return fmt.Errorf(
+				"error re-reading config for the swap: %w; additionally, rollback restart failed: %w",
+				err,
+				restartErr,
+			)
+		}
+		return fmt.Errorf("error re-reading config for the swap: %w", err)
+	}
+	newCfg = swapCfg
+
 	// Build the real LLM provider on reload. The test_harness override hook
 	// was removed 2026-05-10; reload always recreates the real provider from
 	// the new config's `providers` entry.
 	newProvider, _, err := createStartupProvider(newCfg, allowEmptyStartup)
 	if err != nil {
+		unlockWrites()
 		logger.Errorf("  ⚠ Error creating new provider: %v", err)
 		logger.Warn("  Attempting to restart services with old provider and config...")
 		if restartErr := restartServices(al, runningServices, msgBus); restartErr != nil {
@@ -537,8 +576,11 @@ func handleConfigReload(
 	reloadCtx, reloadCancel := context.WithTimeout(context.Background(), providerReloadTimeout)
 	defer reloadCancel()
 
-	if err := al.ReloadProviderAndConfig(reloadCtx, newProvider, newCfg); err != nil {
-		logger.Errorf("  ⚠ Error reloading agent loop: %v", err)
+	reloadErr := al.ReloadProviderAndConfig(reloadCtx, newProvider, newCfg)
+	// The swap is done (or failed): config writers may proceed.
+	unlockWrites()
+	if reloadErr != nil {
+		logger.Errorf("  ⚠ Error reloading agent loop: %v", reloadErr)
 		if cp, ok := newProvider.(providers.StatefulProvider); ok {
 			cp.Close()
 		}
@@ -550,11 +592,11 @@ func handleConfigReload(
 			logger.Errorf("  ⚠ Failed to restart services: %v", restartErr)
 			return fmt.Errorf(
 				"error reloading agent loop: %w; additionally, rollback restart failed: %w",
-				err,
+				reloadErr,
 				restartErr,
 			)
 		}
-		return fmt.Errorf("error reloading agent loop: %w", err)
+		return fmt.Errorf("error reloading agent loop: %w", reloadErr)
 	}
 
 	*providerRef = newProvider
@@ -567,6 +609,39 @@ func handleConfigReload(
 
 	logger.Info("  ✓ Provider, configuration, and services reloaded successfully (thread-safe)")
 	return nil
+}
+
+// lockConfigWrites takes restAPI.configMu — the lock every config.json
+// read-modify-write (safeUpdateConfigJSON, withToolPolicyCoverageGuard, …)
+// holds — and returns an idempotent unlock. A no-op when no restAPI is wired
+// (unit tests that build services by hand).
+func lockConfigWrites(runningServices *services) (unlock func()) {
+	if runningServices == nil || runningServices.restAPIRef == nil {
+		return func() {}
+	}
+	mu := &runningServices.restAPIRef.configMu
+	mu.Lock()
+	var once sync.Once
+	return func() { once.Do(mu.Unlock) }
+}
+
+// reloadConfigForSwap returns the config handleConfigReload swaps in: a fresh
+// read of config.json (runningServices.loadConfigForSwap) run through
+// prepareReloadConfig, so it carries every write committed before the caller
+// took configMu. Returns loaded unchanged when no swap-time loader is wired.
+// The caller must hold configMu (lockConfigWrites).
+func reloadConfigForSwap(runningServices *services, loaded *config.Config) (*config.Config, error) {
+	if runningServices == nil || runningServices.loadConfigForSwap == nil {
+		return loaded, nil
+	}
+	fresh, err := runningServices.loadConfigForSwap()
+	if err != nil {
+		return nil, err
+	}
+	if prepErr := prepareReloadConfig(fresh, runningServices); prepErr != nil {
+		return nil, prepErr
+	}
+	return fresh, nil
 }
 
 // restartServicesState carries the shared state of restartServices across its stages.
@@ -885,10 +960,13 @@ func (rs *restartServicesState) applyMessagingCaps() error {
 // silently vanishes on the next external config edit. Passing the real
 // homePath in avoids the derivation entirely.
 //
-// markDegraded (may be nil, e.g. in tests) is called when
-// populateAgentsListFromEntityStoreStrict rejects a candidate config for
-// this home — see its doc for why an empty/wiped roster is a
-// privilege-escalation risk, not merely a UX gap. This lets the poller
+// markDegraded (may be nil, e.g. in tests) is called whenever the poller
+// rejects a candidate config: the file fails to load or validate (an invalid
+// sandbox.command_rules entry, malformed JSON, a bad provider entry), or
+// populateAgentsListFromEntityStoreStrict rejects it for this home — see its
+// doc for why an empty/wiped roster is a privilege-escalation risk, not
+// merely a UX gap. The next successful reload clears it (executeReload's
+// clearDegraded). This lets the poller
 // surface the same operator-visible /health degraded signal executeReload's
 // own internal checks already produce, for a failure that happens BEFORE
 // executeReload is even reached.
@@ -961,6 +1039,14 @@ func setupConfigWatcherPolling(
 					if err != nil {
 						logger.Errorf("⚠ Error loading new config: %v", err)
 						logger.Warn("  Using previous valid config")
+						// A rejected external edit (e.g. an invalid
+						// sandbox.command_rules entry) must be visible on
+						// GET /health, not only in the log: the operator
+						// believes their edit is live. Cleared by the next
+						// successful reload (executeReload's clearDegraded).
+						if markDegraded != nil {
+							markDegraded(fmt.Errorf("config reload rejected: %w", err))
+						}
 						continue
 					}
 					// ADR-054 D2/D3: repopulate cfg.Agents.List from the agent
@@ -985,6 +1071,9 @@ func setupConfigWatcherPolling(
 					if err := newCfg.ValidateProviders(); err != nil {
 						logger.Errorf("  ⚠ New config validation failed: %v", err)
 						logger.Warn("  Using previous valid config")
+						if markDegraded != nil {
+							markDegraded(fmt.Errorf("config reload rejected: %w", err))
+						}
 						continue
 					}
 

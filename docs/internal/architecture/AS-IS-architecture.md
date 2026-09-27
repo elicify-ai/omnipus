@@ -382,7 +382,7 @@ The same edge logic applies to inbound WS frames in `src/lib/ws.ts`: every frame
 
 ### Backend inbound validation (SPA → server)
 
-The backend symmetrically validates inbound traffic when `gateway.validate_inbound: true` (default `false` for v0.1, flip target v0.2 per ADR-013):
+The backend symmetrically validates inbound traffic when `gateway.validate_inbound: true` (default `false` for v0.1; the flip is unscheduled — the v0.2 target label was retired 2026-09-25 — per ADR-013):
 
 | Direction | Helper | Schema lookup | Failure response |
 |---|---|---|---|

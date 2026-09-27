@@ -72,12 +72,8 @@ func (a environmentSetupTarget) Abort() error { return a.inner.Abort() }
 //
 // Registration is unconditional (ES-FR-01): the Ask policy — not registration
 // — decides who may call it.
-func (al *AgentLoop) wireEnvironmentSetupDepsOn(registry *AgentRegistry) {
-	if registry == nil {
-		return
-	}
-	cfg := al.GetConfig()
-	if cfg == nil {
+func (al *AgentLoop) wireEnvironmentSetupDepsOn(registry *AgentRegistry, cfg *config.Config) {
+	if registry == nil || cfg == nil {
 		return
 	}
 	godMode := GodModeActive(cfg)

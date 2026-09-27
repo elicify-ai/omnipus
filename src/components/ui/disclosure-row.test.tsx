@@ -139,6 +139,40 @@ describe('DisclosureRow — base contract', () => {
     )
     expect(screen.getByTestId('row')).toHaveAttribute('data-tool', 'bash')
   })
+
+  // Consolidated contract test (design-system audit coverage: disclosure-row-unit) —
+  // asserts, in one place, the full base contract the manifest names: aria-expanded
+  // tracks the controlled prop and onExpandedChange fires the toggled value while
+  // expandable, and both aria-expanded and interactivity are withdrawn together when
+  // the row has nothing to disclose.
+  it('toggles aria-expanded/onExpandedChange and omits aria-expanded plus disables the row when not expandable', async () => {
+    const user = userEvent.setup()
+    const onExpandedChange = vi.fn()
+    const { rerender } = render(
+      <DisclosureRow expanded={false} onExpandedChange={onExpandedChange} expandable data-testid="row">
+        Read file
+      </DisclosureRow>,
+    )
+    expect(screen.getByTestId('row')).toHaveAttribute('aria-expanded', 'false')
+    await user.click(screen.getByTestId('row'))
+    expect(onExpandedChange).toHaveBeenCalledWith(true)
+
+    rerender(
+      <DisclosureRow expanded onExpandedChange={onExpandedChange} expandable data-testid="row">
+        Read file
+      </DisclosureRow>,
+    )
+    expect(screen.getByTestId('row')).toHaveAttribute('aria-expanded', 'true')
+
+    rerender(
+      <DisclosureRow expanded={false} onExpandedChange={onExpandedChange} expandable={false} data-testid="row">
+        Bash — Running…
+      </DisclosureRow>,
+    )
+    const notExpandableRow = screen.getByTestId('row')
+    expect(notExpandableRow).not.toHaveAttribute('aria-expanded')
+    expect(notExpandableRow).toBeDisabled()
+  })
 })
 
 describe('DisclosureRow — real call-site shapes', () => {

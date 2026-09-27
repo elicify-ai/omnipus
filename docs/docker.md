@@ -360,7 +360,7 @@ docker rm omnipus-gateway
 # Re-run the original docker run command with the same volume mount.
 ```
 
-The data directory is never modified by the image pull. **Patch and minor releases require no migration step.** Major-version upgrades (`v0.1 → v0.2 → v0.3`) may require manual `~/.omnipus/` migration — the v0.3 Workspaces redesign explicitly breaks backward compatibility. **Snapshot the data directory before pulling a new major tag.**
+The data directory is never modified by the image pull. **Patch and minor releases require no migration step.** Major-version upgrades may require manual `~/.omnipus/` handling — the v0.1.1 workspaces redesign is a fresh-build line with **no migration path** (greenfield; founder ruling 2026-09-15). **Snapshot the data directory before pulling a new major tag.**
 
 ---
 

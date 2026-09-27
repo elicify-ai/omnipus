@@ -45,6 +45,7 @@ import { MAX_MESSAGES_PER_SESSION, evictMessageFromBucket, findAssistantMessageI
 import { isTurnFinished, schedulePlanStatusInvalidate } from '../routing'
 import { sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
+import { insertHistoryMessageId } from '../cursor'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, RateLimitEventData, SessionChatState } from '../types'
 
 
@@ -58,6 +59,171 @@ interface ReplayAndStatusFrameContext {
   armRateLimitClear: (sid: string, event: RateLimitEventData) => void
 }
 
+// #823 Opus review round 2 item 2: a role:'user' replay_message can name the
+// SAME message this tab already holds as its own send-time optimistic
+// bubble — which is stored under the CLIENT's locally-generated id
+// (sendMessage's own buildQueuedUserMessage), never the server's
+// `messageId`, because nothing re-keys it once sent. Checking `messageId`
+// alone therefore missed this case entirely and created a second, duplicate
+// bubble on every reconnect that replayed a message this tab itself had
+// sent. Detected via `client_message_id` (which the optimistic bubble's
+// `id` equals) and RE-KEYED to the server's real id — safe here
+// specifically because this is a RECONNECT replay, not the live first send:
+// message_status for this client_message_id (the only OTHER reader keyed on
+// it) already ran on an earlier connection cycle. Returns true when it
+// handled (deduped) the frame — the caller must return without any further
+// processing of this replay_message.
+function reconcileOwnOptimisticBubble(
+  draft: SessionChatState,
+  clientMessageId: string | undefined,
+  messageId: string | undefined,
+  role: string,
+  targetSid: string | null,
+): boolean {
+  if (!clientMessageId || !draft.messageOrder.includes(clientMessageId) || clientMessageId === messageId) {
+    return false
+  }
+  const idx = draft.messageOrder.indexOf(clientMessageId)
+  const existing = draft.messagesById[clientMessageId]
+  if (messageId) {
+    delete draft.messagesById[clientMessageId]
+    draft.messagesById[messageId] = { ...existing, id: messageId, deliveryStatus: 'received' }
+    draft.messageOrder[idx] = messageId
+  } else {
+    existing.deliveryStatus = 'received'
+  }
+  console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'client-message-id-match' })
+  logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: 'client-message-id-match', sessionId: targetSid })
+  return true
+}
+
+// Extracted from handleReplayAndStatusFrame's 'session_state' case (budget
+// split, ADR-092) — kept as its own named function purely to stay under the
+// module-level function-size budget; no behaviour change from the inline
+// version. See the case's own history for the reasoning below.
+function handleSessionStateFrame(
+  frame: SessionStateFrame,
+  targetSid: string | null,
+  get: StoreApi<ChatStore>['getState'],
+  withBucket: ReplayAndStatusFrameContext['withBucket'],
+): void {
+  useToolApprovalStore.getState().reconcileWithSessionState(frame)
+  // askuserquestion-tool-spec v3 US-6 S1/FR-9: reconcile pending
+  // AskUserQuestion cards on every reconnect snapshot. The
+  // hydrate/clear/race semantics live in the dedicated, unit-tested
+  // reconcilePendingAsks (mirrors the toolApproval
+  // reconcileWithSessionState pattern); this case only applies the
+  // computed per-session changes.
+  const askChanges = reconcilePendingAsks(
+    frame.pending_asks ?? [],
+    get().sessionsById,
+  )
+  for (const [sid, card] of Object.entries(askChanges)) {
+    withBucket(sid, () => ({ pendingAsk: card }))
+  }
+  // ADR-082 D4/D5 (FR-008/FR-009), review CR3/S2: a connection that
+  // just bound to a session (fresh mount, reconnect, or second tab)
+  // learns here whether a turn is already running for it. `targetSid`
+  // resolves to `frame.session_id` when the frame carries one (the
+  // generated `SessionStateFrame` type carries an optional
+  // `session_id` — CR3), falling back to `activeSid` only when it is
+  // absent (an older gateway, or any other reason the field is
+  // missing) — see the generic `frameSessionId` resolution above.
+  // This matters because a client can be attached/foreground on one
+  // session while a session_state snapshot for a DIFFERENT session
+  // (e.g. a background tab's own reconnect, or a stale broadcast)
+  // arrives — routing it to whatever happens to be foreground would
+  // wrongly stamp an unrelated session's turn onto the active one.
+  //
+  // Mirror exactly the state a live turn THIS client had started
+  // would already be in — isStreaming:true so the Stop control and
+  // composer lock render immediately — without creating the
+  // assistant bubble yet: replay history for this attach has not
+  // arrived on the wire at this point (case 'replay_message' below
+  // pushes messages in arrival order onto messageOrder), so opening
+  // the bubble here would insert it BEFORE messages that are
+  // chronologically earlier, corrupting order. The bubble opens
+  // instead at the replay-terminating `done` (see case 'done'
+  // above), which is guaranteed to fire only after every
+  // replay_message for this attach has already landed — UNLESS a
+  // token for this turn beats that done here (out-of-order gateway,
+  // or a fast concurrent turn), in which case the 'token' case's own
+  // ADR-082 review fix opens/marks the bubble first and this done
+  // becomes a no-op for placeholder purposes.
+  if (!targetSid) return
+  // ADR-092 review finding D: a page reload or gateway reconnect re-fetches
+  // this frame, but a plain WS reconnect never replays a fresh
+  // session_mode_updated ack — that only fires from a LIVE
+  // session_mode_update send, so a reload used to silently drop the chat's
+  // per-chat Auto-approve modifier from the UI even though the server still
+  // held it (session_mode_updated's own case comment above previously,
+  // wrongly, called this a "reconnect snapshot echo" — no such echo
+  // existed). frame.auto_approve_modifier is only meaningful when
+  // frame.session_id is present (the connection-open emit, before any
+  // session is attached, carries neither) — guard on that, not just
+  // targetSid's truthiness, since targetSid can fall back to the active
+  // session on that same connection-open emit. null/absent (a fresh gateway
+  // process, or simply never set) explicitly CLEARS any stale local true —
+  // same field, same semantics as the session_mode_updated ack case below.
+  if (frame.session_id) {
+    withBucket(targetSid, () => ({ autoApproveEffective: frame.auto_approve_modifier ?? null }))
+  }
+  const activeTurn = frame.active_turn
+  if (activeTurn) {
+    // S2: a stale/racing announcement for a turn this client
+    // already finalized (its own done already processed — see
+    // markTurnFinished in the 'done' case) must be ignored
+    // outright. Re-applying it would set isStreaming:true /
+    // activeTurnId again with no second done ever coming to close
+    // it a second time — a permanent Stop button and locked
+    // composer.
+    if (!isTurnFinished(targetSid, activeTurn.turn_id)) {
+      // #823 catch-up redesign pass 2 (§6.3, Q3): no "bubble opened" flag
+      // to maintain any more — bubble existence is now derived directly
+      // from message_id-keyed lookups (resolveTokenBubbleByMessageId,
+      // slices/frames.ts), not tracked as separate bucket state.
+      withBucket(targetSid, () => ({
+        isStreaming: true,
+        activeTurnId: activeTurn.turn_id,
+        activeTurnAgentId: activeTurn.agent_id,
+      }))
+    }
+  } else {
+    // CR3: this snapshot says NO turn is in flight for this
+    // session. If a PRIOR snapshot (or the token case) had
+    // announced one and it is still unresolved, clear it so a
+    // stale announcement can never wedge the composer — but only
+    // force isStreaming:false when no bubble is actually open;
+    // a genuinely open, mid-stream bubble keeps streaming exactly
+    // as before (its own done will finalize it normally).
+    //
+    // Check bucket existence BEFORE calling withBucket: withBucket
+    // always creates (`?? emptySessionState()`) and writes back the
+    // bucket it's given, even for a no-op `{}` patch. A session
+    // this client has never otherwise heard of (no bucket yet) has
+    // nothing to clear — calling withBucket unconditionally here
+    // would materialize a brand-new empty bucket for it, which is
+    // an observable regression: a bare "no turn in flight" snapshot
+    // for a session with no other activity must stay a true no-op,
+    // exactly like it was before this fix (chat.reconnect.test.ts's
+    // "session_state WITHOUT active_turn leaves current behaviour
+    // unchanged").
+    const existing = get().sessionsById[targetSid]
+    if (existing?.activeTurnId) {
+      withBucket(targetSid, (b) => {
+        // #823 catch-up redesign pass 2: "is a bubble actually open" is now
+        // answered directly (findOpenAssistantMessageId) rather than via a
+        // separately-tracked flag.
+        const bubbleOpen = findOpenAssistantMessageId(b.messageOrder, b.messagesById) !== null
+        return {
+          activeTurnId: null,
+          activeTurnAgentId: null,
+          ...(bubbleOpen ? {} : { isStreaming: false }),
+        }
+      })
+    }
+  }
+}
 
 // ADR-070 §2.1/§2.2, Fix 5c, A-I4 (function-budget extraction, function-size
 // gate — a brand-new function must be under 240 lines from the start,
@@ -449,6 +615,8 @@ function handleReplayMessageFrame({
       // Cursor advancement is handled centrally before the switch (I1);
       // no per-case advance needed here.
       const msgs = getMessages(b)
+      // #823 Opus review round 2 item 2 — see reconcileOwnOptimisticBubble above.
+      if (reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, messageId, role, targetSid)) return
       // Reconnection dedup: prefer server-assigned id match when present;
       // fall back to (content + role + timestamp) tuple. Content-only dedup
       // was silently dropping legitimate identical user retries.
@@ -575,7 +743,13 @@ function handleReplayMessageFrame({
           : {}),
       }
       draft.messagesById[newMsg.id] = newMsg
-      draft.messageOrder.push(newMsg.id)
+      // #823 Opus review round 2 item 2 (founder decision Q1): a
+      // replay_message is HISTORY the server already persisted — insert it
+      // before the pending tail (unresolved queued/sending/failed sends),
+      // not blindly at the true end of messageOrder, so a pending message a
+      // session_snapshot preserved never renders ABOVE history it was sent
+      // after.
+      insertHistoryMessageId(draft.messageOrder, draft.messagesById, newMsg.id)
       // Ring buffer enforcement during replay — evict oldest entry plus all dependent maps.
       if (draft.messageOrder.length > MAX_MESSAGES_PER_SESSION) {
         const evictId = draft.messageOrder[0]
@@ -1017,116 +1191,11 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           break
 
         case 'session_state': {
-          useToolApprovalStore.getState().reconcileWithSessionState(frame)
-          // askuserquestion-tool-spec v3 US-6 S1/FR-9: reconcile pending
-          // AskUserQuestion cards on every reconnect snapshot. The
-          // hydrate/clear/race semantics live in the dedicated, unit-tested
-          // reconcilePendingAsks (mirrors the toolApproval
-          // reconcileWithSessionState pattern); this case only applies the
-          // computed per-session changes.
-          const stateFrame = frame as SessionStateFrame
-          const askChanges = reconcilePendingAsks(
-            stateFrame.pending_asks ?? [],
-            get().sessionsById,
-          )
-          for (const [sid, card] of Object.entries(askChanges)) {
-            withBucket(sid, () => ({ pendingAsk: card }))
-          }
-          // ADR-082 D4/D5 (FR-008/FR-009), review CR3/S2: a connection that
-          // just bound to a session (fresh mount, reconnect, or second tab)
-          // learns here whether a turn is already running for it. `targetSid`
-          // resolves to `frame.session_id` when the frame carries one (the
-          // generated `SessionStateFrame` type carries an optional
-          // `session_id` — CR3), falling back to `activeSid` only when it is
-          // absent (an older gateway, or any other reason the field is
-          // missing) — see the generic `frameSessionId` resolution above.
-          // This matters because a client can be attached/foreground on one
-          // session while a session_state snapshot for a DIFFERENT session
-          // (e.g. a background tab's own reconnect, or a stale broadcast)
-          // arrives — routing it to whatever happens to be foreground would
-          // wrongly stamp an unrelated session's turn onto the active one.
-          //
-          // Mirror exactly the state a live turn THIS client had started
-          // would already be in — isStreaming:true so the Stop control and
-          // composer lock render immediately — without creating the
-          // assistant bubble yet: replay history for this attach has not
-          // arrived on the wire at this point (case 'replay_message' below
-          // pushes messages in arrival order onto messageOrder), so opening
-          // the bubble here would insert it BEFORE messages that are
-          // chronologically earlier, corrupting order. The bubble opens
-          // instead at the replay-terminating `done` (see case 'done'
-          // above), which is guaranteed to fire only after every
-          // replay_message for this attach has already landed — UNLESS a
-          // token for this turn beats that done here (out-of-order gateway,
-          // or a fast concurrent turn), in which case the 'token' case's own
-          // ADR-082 review fix opens/marks the bubble first and this done
-          // becomes a no-op for placeholder purposes.
-          if (targetSid) {
-            const activeTurn = stateFrame.active_turn
-            if (activeTurn) {
-              // S2: a stale/racing announcement for a turn this client
-              // already finalized (its own done already processed — see
-              // markTurnFinished in the 'done' case) must be ignored
-              // outright. Re-applying it would set isStreaming:true /
-              // activeTurnId again with no second done ever coming to close
-              // it a second time — a permanent Stop button and locked
-              // composer.
-              if (!isTurnFinished(targetSid, activeTurn.turn_id)) {
-                withBucket(targetSid, (b) => {
-                  // If a bubble for this session is already streaming (e.g.
-                  // an older gateway that sends session_state LAST, after
-                  // tokens have already started flowing for this very
-                  // turn), do not reset the "bubble opened" flag to false —
-                  // the 'token' case's own fix already flipped it true the
-                  // instant the first token landed, and stomping it back to
-                  // false here would make a later replay-terminator-shaped
-                  // done wrongly think it still needs to open a placeholder.
-                  const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
-                  const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
-                  const alreadyStreaming =
-                    !!lastMsg && (lastMsg.isStreaming === true || lastMsg.status === 'streaming')
-                  return {
-                    isStreaming: true,
-                    activeTurnId: activeTurn.turn_id,
-                    activeTurnAgentId: activeTurn.agent_id,
-                    activeTurnBubbleOpened: b.activeTurnBubbleOpened || alreadyStreaming,
-                  }
-                })
-              }
-            } else {
-              // CR3: this snapshot says NO turn is in flight for this
-              // session. If a PRIOR snapshot (or the token case) had
-              // announced one and it is still unresolved, clear it so a
-              // stale announcement can never wedge the composer — but only
-              // force isStreaming:false when no bubble is actually open;
-              // a genuinely open, mid-stream bubble keeps streaming exactly
-              // as before (its own done will finalize it normally).
-              //
-              // Check bucket existence BEFORE calling withBucket: withBucket
-              // always creates (`?? emptySessionState()`) and writes back the
-              // bucket it's given, even for a no-op `{}` patch. A session
-              // this client has never otherwise heard of (no bucket yet) has
-              // nothing to clear — calling withBucket unconditionally here
-              // would materialize a brand-new empty bucket for it, which is
-              // an observable regression: a bare "no turn in flight" snapshot
-              // for a session with no other activity must stay a true no-op,
-              // exactly like it was before this fix (chat.reconnect.test.ts's
-              // "session_state WITHOUT active_turn leaves current behaviour
-              // unchanged").
-              const existing = get().sessionsById[targetSid]
-              if (existing?.activeTurnId) {
-                withBucket(targetSid, (b) => {
-                  const bubbleOpen = !!b.activeTurnBubbleOpened
-                  return {
-                    activeTurnId: null,
-                    activeTurnAgentId: null,
-                    activeTurnBubbleOpened: false,
-                    ...(bubbleOpen ? {} : { isStreaming: false }),
-                  }
-                })
-              }
-            }
-          }
+          // ADR-092 budget split: the full handling (tool-approval
+          // reconcile, pending-ask reconcile, and active-turn mirroring) now
+          // lives in handleSessionStateFrame above — see that function's
+          // doc comment and inline comments for the complete reasoning.
+          handleSessionStateFrame(frame as SessionStateFrame, targetSid, get, withBucket)
           break
         }
 
@@ -1153,6 +1222,21 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // the stop-button label in real time. The done handler (above) clears
           // it back to null once the turn is definitively over.
           withBucket(targetSid, () => ({ cancelStage: frame.stage }))
+          break
+
+        case 'session_mode_updated':
+          // ADR-092: acknowledgement of a LIVE session_mode_update send —
+          // the session's resolved per-chat Auto-approve state. Always an
+          // ack; there is no rejection case. A page reload or WS reconnect
+          // does NOT re-arrive here (there is no "echo" of this frame on
+          // reconnect) — that case is covered separately by
+          // SessionStateFrame.auto_approve_modifier in
+          // handleSessionStateFrame's 'session_state' case above, which is
+          // what actually survives a reload. targetSid (not frame.session_id
+          // directly) matches every other session-scoped case in this
+          // switch — same resolver, same fallback behaviour if the frame is
+          // ever missing it.
+          withBucket(targetSid, () => ({ autoApproveEffective: frame.auto_approve_effective }))
           break
 
         case 'device_pairing_request':

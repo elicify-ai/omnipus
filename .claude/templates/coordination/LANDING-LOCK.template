@@ -1,0 +1,18 @@
+# LANDING-LOCK template (design 5.9)
+#
+# The live file is normally ABSENT or EMPTY — that is what "free" means
+# (design: "absent/empty = free"). It exists with exactly one line only
+# while a landing is in progress, created atomically so the first
+# announcer wins (design: "Created atomically (one writer wins); released
+# right after the push"). Release means deleting the file (or truncating it
+# to empty) immediately after the push completes.
+#
+# Format (this exact shape is what scripts/hooks/pre-push-ledger-check
+# parses — a format change here must land together with a matching change
+# to that script):
+#
+#   squad=<squad-id> branch=<branch-name> taken-at=<ISO8601>
+#
+# Example (illustration only — do not leave this file present with content
+# when nothing is actually landing):
+# squad=squad-security branch=release/v0.1.1 taken-at=2026-09-25T09:15:00Z

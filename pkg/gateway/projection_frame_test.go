@@ -32,7 +32,10 @@ func TestGateway_ProjectionFrameAndContentState(t *testing.T) {
 
 		h := makeMinimalHandler()
 		wc, ch := makeForwarderTestConn(64)
-		done := runForwarder(h, wc, "chat-1", bus)
+		// #823: tool_result_projection is produced once by the session hub
+		// through the EventBus sync tap, routed by the payload's session id.
+		bus.SetSyncTap(h.hubSyncTap)
+		bindTestConnToSession(h, "chat-1", "sess-1", wc)
 
 		const mark = `{"error":"tool_result_recall_mark","content_state":"emptied","tool":"bash","tool_call_id":"call-9","archive_line":12,"size_chars":1178522,"turn":6,"hint":"recall"}`
 		bus.Emit(agent.Event{
@@ -55,7 +58,6 @@ func TestGateway_ProjectionFrameAndContentState(t *testing.T) {
 			},
 		})
 		bus.Close()
-		<-done
 
 		require.Len(t, ch, 1, "exactly one frame: the other chat's projection is filtered")
 		raw := <-ch

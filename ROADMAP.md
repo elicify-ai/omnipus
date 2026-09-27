@@ -2,7 +2,11 @@
 
 A single open-source Go binary today. The long-term plan also includes an Electron desktop wrapper and a hosted Cloud / SaaS variant, both sharing the same Go core. This roadmap tracks the Open Source release plan; the Desktop and Cloud variants will fork from a stable 1.0 release of the core.
 
-<img src="docs/marketing/diagrams/roadmap.svg" alt="Omnipus roadmap timeline: v0.1 (stabilize, complete), v0.2 (pentest hardening, complete), v0.3/1.0 (Rooms redesign, design complete + implementation pending), post-1.0 (Desktop variant + Cloud/SaaS variant)" width="960">
+<img src="docs/marketing/diagrams/roadmap.svg" alt="Omnipus roadmap timeline: v0.1 stabilize complete (with the #155 security hardening shipped on that line); v0.1.1 active — the single release line carrying the workspaces redesign and the tracked open items; post-1.0 variants (Desktop and Cloud/SaaS) planned" width="960">
+
+---
+
+> **Release-line note (2026-09-25):** Omnipus ships a single release line, **v0.1.1** — the separate v0.2 / v0.3 releases are retired (founder decision 2026-09-25). Where this document still says v0.2 or v0.3, it is either historical record (kept deliberately) or a pointer to a tracked issue; nothing is scheduled against a v0.2/v0.3 label anymore.
 
 ---
 
@@ -10,9 +14,8 @@ A single open-source Go binary today. The long-term plan also includes an Electr
 
 | Release | Status | Headline |
 |---|---|---|
-| **v0.1** | ✅ Complete on `feature/iframe-preview-tier13` | Stabilized branch; iframe preview + kernel bind-port allow-list + sandbox-aware exec + `web_serve` unification all shipped |
-| **v0.2** | ✅ Complete ([#155](https://github.com/elicify-ai/omnipus/issues/155) closed 2026-05-04) | Pentest quick wins: HMAC-chained audit log, default-deny internal-CIDR egress, per-agent memory rate limits, shell-guard hardening, master.key path guard, env-var allowlist |
-| **v0.3 / 1.0** | 🟡 Design complete; implementation pending ([#156](https://github.com/elicify-ai/omnipus/issues/156)) | "Rooms" redesign — memory + projects + tasks + sandbox topology rebuilt around private agent rooms and shared project rooms |
+| **v0.1** | ✅ Shipped — merged to `main` via #157 | Stabilized branch; iframe preview + kernel bind-port allow-list + sandbox-aware exec + `web_serve` unification all shipped |
+| **v0.1.1** | 🚧 Current — the single release line | Founder decision 2026-09-25: no separate v0.2/v0.3 releases; v0.1.1 carries the landed #156 workspaces work (memory rooms, workspace model, tasks) and the tracked open items |
 | **v1.0 — Feature Parity** | 🟡 In progress | Close the gap between the CLI and the web UI so a terminal/headless user can do (nearly) everything a browser user can — tracked by epic [#211](https://github.com/elicify-ai/omnipus/issues/211) |
 | **Post-1.0** | 📋 Planned | Desktop variant (Electron wrapper), Cloud / SaaS variant (hosted with team features) |
 
@@ -22,7 +25,7 @@ A single open-source Go binary today. The long-term plan also includes an Electr
 
 **Branch:** `feature/iframe-preview-tier13` (260+ commits ahead of `main`)
 
-Everything in v0.1 is on the branch and tested. Highlights:
+Everything in v0.1 shipped and tested (merged to `main` via #157). Highlights:
 
 - **`web_serve` tool unification** — single HTTP-serve implementation across preview + Tier-1/3 workspace tools
 - **Kernel-enforced bind-port allow-list** — Landlock NET_BIND_TCP rules limit the gateway to its configured ports
@@ -41,7 +44,7 @@ Everything in v0.1 is on the branch and tested. Highlights:
 
 ---
 
-## v0.2 — Security hardening (pentest quick wins) ✅
+## Security hardening (#155) — shipped on the v0.1 line ✅
 
 **Issue:** [#155](https://github.com/elicify-ai/omnipus/issues/155) — closed 2026-05-04
 
@@ -57,25 +60,29 @@ Shipped on `main` as part of `#157` (`feat(v0.1+v0.2): iframe preview, web_serve
 | Per-agent + per-IP rate limit on memory writes | ✅ | `a7da565` — `MemoryRateLimiter` |
 | 14-reviewer security review findings | ✅ | `ba8ec56` (CRIT-1, CRIT-2, B1, H1, H2, test gap) |
 
-Items that **required architectural change** (process isolation, capability-based RBAC) were deferred to v0.3 per the original plan and now form part of the Rooms scope.
+Items that **required architectural change** (process isolation, capability-based RBAC) were deferred — tracked as [#887](https://github.com/elicify-ai/omnipus/issues/887); no release scheduled.
 
 ---
 
-## v0.3 / 1.0 — "Rooms" redesign 🟡
+## The workspaces redesign (#156) — landed, decided-against, and re-homed
 
-**Issue:** [#156](https://github.com/elicify-ai/omnipus/issues/156) — design complete, implementation not started
+**Issue:** [#156](https://github.com/elicify-ai/omnipus/issues/156) — closed 2026-06-27.
 
-Fresh-build. **No backward compatibility guarantee** with v0.1/v0.2 storage layouts. The five locked design documents in `docs/internal/design/` are the implementation spec:
+The issue's "Rooms" redesign closed with part of its scope landed in a different shape, part decided against, and part still open — the open parts are tracked, not dropped:
 
-| Design doc | What changes |
-|---|---|
-| [`sandbox-redesign-2026-05.md`](docs/internal/_archive/design-2026-05-rooms-era/sandbox-redesign-2026-05.md) | Two-room workspace topology — **private agent rooms** under each agent's workspace, **shared project rooms** under `.omnipus/projects/`, each room being its own sandbox boundary |
-| [`memory-redesign-2026-05.md`](docs/internal/_archive/design-2026-05-rooms-era/memory-redesign-2026-05.md) | 4-tier memory (sessions / memories / learnings / last-session.md), three tools (`remember` / `recall` / `retrospective`) — **rename `recall_memory` → `recall`** — Dreamcatcher consolidation pass that promotes per-session retros to durable memories, bleve + JSONL + MinHash for similarity, no embeddings |
-| [`tasks-redesign-2026-05.md`](docs/internal/_archive/design-2026-05-rooms-era/tasks-redesign-2026-05.md) | Tasks scoped per-room, cascade-delete with project, reassignment audit trail, replaces today's flat task list |
-| [`projects-ui-2026-05.md`](docs/internal/_archive/design-2026-05-rooms-era/projects-ui-2026-05.md) | Three SPA surfaces: session creation modal (project picker), Command Center pivoted to rooms, session history with project grouping |
-| [`settings-notifications-2026-05.md`](docs/internal/_archive/design-2026-05-rooms-era/settings-notifications-2026-05.md) | Memory and Dreamcatcher settings tabs, tier-based retention notifications |
+| #156 item | State | Where |
+|---|---|---|
+| Memory redesign | ✅ Landed (different shape) | `pkg/memrooms/` — memory rooms + MinHash similarity; greenfield, no migration (founder ruling 2026-09-15) |
+| Tasks redesign | ✅ Landed (different shape) | `pkg/task/` scoped to workspaces (the per-room TaskStore was removed) |
+| Workspace topology | ✅ Landed (different shape) | ADR-019 / ADR-046 workspaces model |
+| Sandbox redesign (per-agent Landlock profiles) | ❌ Decided against | ADR-035 removed per-agent sandbox profiles; today: one policy ceiling + per-agent tool-policy tightening (ADR-077) |
+| Projects UI redesign | 🟡 Superseded shape | The rooms-era UI plan is superseded; the Command Center surface was deleted (see "Retired surfaces" in root `CLAUDE.md`) |
+| `DefaultChildPolicy` production wiring | ❌ Open — tracked | [#884](https://github.com/elicify-ai/omnipus/issues/884) — built but unwired (pentest C1/C2 kernel path-guard) |
+| Structural sandbox findings (cross-agent FS + namespace isolation) | ❌ Open — tracked | [#885](https://github.com/elicify-ai/omnipus/issues/885) |
+| LAST_SESSION.md / retrospectives replacement | ❌ Open — tracked | [#886](https://github.com/elicify-ai/omnipus/issues/886) |
+| Process isolation + capability-based RBAC | ❌ Open — tracked | [#887](https://github.com/elicify-ai/omnipus/issues/887) |
 
-When v0.3 ships, the version cut is **1.0** — the rooms redesign is the architectural foundation we want to commit to long-term.
+The five rooms-era design documents in `docs/internal/_archive/design-2026-05-rooms-era/` are superseded pre-ADR background (retired Rooms/5-core vocabulary) — do **not** implement from them without checking the archived concept (`docs/internal/_archive/preview-doc-v03-concept/`) and the ADRs.
 
 ---
 
@@ -130,12 +137,13 @@ Some work doesn't fit a release box and runs in parallel:
 
 ## Routing new work
 
-| Work type | Target release |
+New work is sized first — small / standard / feature (see "Change sizes and the review gate" in root `CLAUDE.md`). There is no release-phase routing anymore:
+
+| Work type | Routing |
 |---|---|
-| Completing the open v0.1 polish (this branch) | v0.1 release-candidate |
-| Pentest finding that needs structural change | v0.3 (Rooms scope) |
-| Pentest finding that doesn't need structural change | Hotfix line, backport to v0.1 |
-| Memory / projects / tasks / sandbox topology | v0.3 |
+| Pentest finding that doesn't need structural change | Hotfix line |
+| Pentest finding that needs structural change | Tracked issue — no release scheduled until the founder rules where it lands |
+| Memory / projects / tasks / sandbox topology | Tracked issue — re-homed per the #156 table above |
 | Plugin system | Continuous — track in [#151](https://github.com/elicify-ai/omnipus/issues/151) |
 | Other feature | Flag the scope question explicitly before starting |
 

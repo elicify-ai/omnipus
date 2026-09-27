@@ -1005,7 +1005,8 @@ func TestExecute_ParameterValidation(t *testing.T) {
 //    objects) by returning null rather than an explicit error. The CDP layer
 //    silently coerces unserializable values to null. This may be confusing to
 //    operators; a future improvement could detect the null-coercion and return
-//    an informative error message. Tracked as a v0.3 UX improvement.
+//    an informative error message. A future UX improvement (no release
+//    scheduled).
 //
 // 2. browser_navigate's post-redirect SSRF check relies on chromedp.Location()
 //    to read the final URL after Chrome has followed the redirect internally.

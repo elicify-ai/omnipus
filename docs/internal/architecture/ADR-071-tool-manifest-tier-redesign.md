@@ -1,5 +1,7 @@
 # ADR-071 — Tool manifest tier redesign: `ToolSearch`, a search-only third tier, `switch_agent`, and a cached catalog boundary
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** Proposed — **revision 5** (2026-08-27). Every decision below was made by the operator
   in session on 2026-08-26/27; this document records them with rationale, blast radius, and the
   mechanisms they require. Awaiting ratification before `/plan-spec`.

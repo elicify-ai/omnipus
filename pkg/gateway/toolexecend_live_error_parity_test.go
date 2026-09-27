@@ -32,16 +32,13 @@ import (
 // pre-fix code (frame.Error == "") and PASS once the live path falls back
 // to p.Result for any non-delegation error.
 func TestToolExecEnd_NonDelegationFailure_LivePathPopulatesError(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
-
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	bindTestConnToSession(h, "chat-1", "sess-1", wc)
 
 	const failureText = "bash: command not found: frobnicate"
 
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindToolExecEnd,
 		Payload: agent.ToolExecEndPayload{
 			ToolCallID: session.ToolCallID("call-1"),
@@ -52,9 +49,6 @@ func TestToolExecEnd_NonDelegationFailure_LivePathPopulatesError(t *testing.T) {
 			Result:     failureText,
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1, "exactly one frame must be emitted for ToolExecEnd")
 
@@ -78,9 +72,6 @@ func TestToolExecEnd_NonDelegationFailure_LivePathPopulatesError(t *testing.T) {
 // longer carries any readable reason. Error must then carry it — bounded, so it
 // cannot re-inline the payload the offload just removed.
 func TestToolExecEnd_OffloadedError_PopulatesErrorInstead(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
-
 	// A real tool-result store, so the offload actually fires. Without one
 	// maybeOffloadResult is a no-op and Result keeps the raw payload — which
 	// would make this test silently exercise the ordinary path instead of the
@@ -89,11 +80,11 @@ func TestToolExecEnd_OffloadedError_PopulatesErrorInstead(t *testing.T) {
 	h.toolStore = newToolResultStore(t.TempDir())
 
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	bindTestConnToSession(h, "chat-1", "sess-1", wc)
 
 	huge := strings.Repeat("x", InlineToolResultMaxBytes+1024)
 
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindToolExecEnd,
 		Payload: agent.ToolExecEndPayload{
 			ToolCallID: session.ToolCallID("call-huge"),
@@ -104,9 +95,6 @@ func TestToolExecEnd_OffloadedError_PopulatesErrorInstead(t *testing.T) {
 			Result:     huge,
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1)
 	frame := drainFrame(t, ch)
@@ -129,16 +117,13 @@ func TestToolExecEnd_OffloadedError_PopulatesErrorInstead(t *testing.T) {
 // object, frame.Error must still come from parseStructuredToolFailure's reason,
 // not the raw (JSON-encoded) p.Result string.
 func TestToolExecEnd_DelegationDenial_StillUsesParsedReason(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
-
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	bindTestConnToSession(h, "chat-1", "sess-1", wc)
 
 	const denialJSON = `{"error":"delegation_denied","reason":"target agent not in trust set"}`
 
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindToolExecEnd,
 		Payload: agent.ToolExecEndPayload{
 			ToolCallID: session.ToolCallID("call-2"),
@@ -149,9 +134,6 @@ func TestToolExecEnd_DelegationDenial_StillUsesParsedReason(t *testing.T) {
 			Result:     denialJSON,
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1, "exactly one frame must be emitted for ToolExecEnd")
 

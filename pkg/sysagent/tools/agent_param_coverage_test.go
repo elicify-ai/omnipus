@@ -57,7 +57,7 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 		"heartbeat": true, "max_tool_iterations": true,
 		"skills": true, "mcp_servers": true, "tool_policy_changes": true,
 		"memory_enabled": true, "default": true, "voice": true,
-		"shell_policy": true, "context_window_override": true, "model_params": true,
+		"context_window_override": true, "model_params": true,
 	}
 
 	for name := range declared {
@@ -105,7 +105,7 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 		"tool_policy_changes": true,
 		"max_tool_iterations": true,
 		"memory_enabled":      true, "default": true, "voice": true,
-		"shell_policy": true, "context_window_override": true, "model_params": true,
+		"context_window_override": true, "model_params": true,
 	}
 
 	for name := range declared {
@@ -317,18 +317,6 @@ func TestAgentToolNestedParameterSchemasAreTyped(t *testing.T) {
 		}
 		if _, ok := modelProps["max_tokens"]; !ok {
 			t.Error("model_params.properties missing max_tokens")
-		}
-
-		shell := objectAt(t, props, "shell_policy")
-		if shell["additionalProperties"] != false {
-			t.Errorf("shell_policy.additionalProperties=%v, want false", shell["additionalProperties"])
-		}
-		shellProps := objectAt(t, shell, "properties")
-		if _, ok := shellProps["enable_deny_patterns"]; !ok {
-			t.Error("shell_policy.properties missing enable_deny_patterns")
-		}
-		if _, ok := shellProps["custom_deny_patterns"]; !ok {
-			t.Error("shell_policy.properties missing custom_deny_patterns")
 		}
 	}
 }

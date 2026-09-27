@@ -1,5 +1,7 @@
 # ADR-053: Should AWS Bedrock stop being build-tag-gated and become a first-class provider?
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** **Accepted — 2026-09-21.** Superseded implementation details are
   retained below as historical evidence; the accepted decision in the next
   section is authoritative.
@@ -271,7 +273,7 @@ selectable next to 23 streaming providers.
 
 **Proposed, not ratified. Recommendation: Option C (drop the tag *and* add the
 catalog entry, with the credential-archetype work done properly), routed to
-v0.3.** Option A (status quo) remains correct until that work is scheduled —
+the Workspaces-class track (the v0.3 release label was retired 2026-09-25).** Option A (status quo) remains correct until that work is scheduled —
 because Option B, the tempting middle step, is strictly dominated.
 
 The single most important structural finding: **the build tag is the trivial half
@@ -279,8 +281,9 @@ of this question and the credential model is the whole of it.** Any plan that
 drops the tag without solving the credential archetype pays 4 MB in every shipped
 binary and delivers nothing a user can reach.
 
-Routing, per CLAUDE.md's routing rule: this is provider/onboarding **structure**
-touching two wire contracts, so it is **v0.3**, not a v0.2 quick win.
+Routing, per the routing rule then in force: this is provider/onboarding **structure**
+touching two wire contracts — structural work, not a quick win (the v0.2/v0.3 release
+labels were retired 2026-09-25).
 
 ## Options considered
 
@@ -429,7 +432,8 @@ additive rather than each a new special case.
 
 Against it: strictly larger than C, and scope-creeps a 4 MB build-tag question into
 a provider-model refactor. It is the right end-state, but only if it is scheduled
-as its own v0.3 item — not smuggled in as "while we're here".
+as its own item — not smuggled in as "while we're here" (the v0.3 release label was
+retired 2026-09-25).
 
 **Confidence: Medium-Low** on adopting E *now* (scope discipline); **High** that
 `auth_kind` is the correct eventual model.

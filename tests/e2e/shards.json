@@ -22,6 +22,7 @@
         "tests/e2e/quiet-disconnect-banner.spec.ts",
         "tests/e2e/delegation-hidden.spec.ts",
         "tests/e2e/recap-continuity.spec.ts",
+        "tests/e2e/catchup-scenarios.spec.ts",
         "tests/e2e/steered-session-reachability.spec.ts"
       ]
     },
@@ -97,7 +98,8 @@
         "tests/e2e/uat-shell-and-screens.spec.ts",
         "tests/e2e/ws-reconnect.spec.ts",
         "tests/e2e/xss.spec.ts",
-        "tests/e2e/steered-session-stop.spec.ts"
+        "tests/e2e/steered-session-stop.spec.ts",
+        "tests/e2e/steered-midturn-tool-rows.spec.ts"
       ]
     },
     {

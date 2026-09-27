@@ -136,16 +136,6 @@ func TestWSReadLimit_AcceptsSmallFrame(t *testing.T) {
 	assert.NoError(t, err, "connection must remain open after a small frame")
 }
 
-// ---------------------------------------------------------------------------
-// M4-3: Degraded-warning threshold (droppedFramesWarnThreshold)
-// ---------------------------------------------------------------------------
-
-// TestDroppedFramesWarnThreshold_Is20 verifies the threshold is exactly 20.
-// BDD: Given the gateway WebSocket handler,
-// When droppedFramesWarnThreshold is inspected,
-// Then its value must be exactly 20.
-// Traces to: pkg/gateway/websocket.go — const droppedFramesWarnThreshold
-func TestDroppedFramesWarnThreshold_Is20(t *testing.T) {
-	assert.Equal(t, 20, droppedFramesWarnThreshold,
-		"droppedFramesWarnThreshold must be 20 per M4 spec")
-}
+// M4-3 (the droppedFramesWarnThreshold / "connection degraded" warning) was
+// deleted with the drop path itself (#823 founder decision Q5 — frames are
+// never dropped; a too-far-behind tab is closed with 4008 and catches up).

@@ -99,7 +99,7 @@ type syncedApprover struct {
 	proceed           chan struct{}
 }
 
-func (s *syncedApprover) RequestApproval(ctx context.Context, req agentpkg.PolicyApprovalReq) (bool, string) {
+func (s *syncedApprover) RequestApproval(ctx context.Context, req agentpkg.PolicyApprovalReq) (bool, string, bool) {
 	n := s.calls.Add(1)
 	if n == 2 {
 		close(s.secondCallStarted)
@@ -208,7 +208,7 @@ func TestSaturatedDenial_PositiveLowerBound_RetrySucceedsAfterQueueDrains(t *tes
 
 	// Now safe to release the holder — the second call has not yet reached
 	// the registry (it is parked on syncedApprover.proceed).
-	ok, gone := reg.resolve(holderEntry.ApprovalID, ApprovalActionCancel)
+	ok, gone := reg.resolve(holderEntry.ApprovalID, ApprovalActionCancel, false)
 	require.True(t, ok)
 	require.False(t, gone)
 
@@ -229,7 +229,7 @@ func TestSaturatedDenial_PositiveLowerBound_RetrySucceedsAfterQueueDrains(t *tes
 	}, 5*time.Second, 10*time.Millisecond,
 		"the retried web_fetch call must open a genuine new pending approval entry once the queue drains")
 
-	ok, gone = reg.resolve(retryEntry.ApprovalID, ApprovalActionApprove)
+	ok, gone = reg.resolve(retryEntry.ApprovalID, ApprovalActionApprove, false)
 	require.True(t, ok)
 	require.False(t, gone)
 

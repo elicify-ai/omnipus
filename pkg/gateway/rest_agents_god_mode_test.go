@@ -1,8 +1,5 @@
-// REST shell-policy gate tests for PUT /api/v1/agents/{id}.
-//
-// Verifies:
-//  1. invalid shell_policy.custom_deny_patterns regex   → 400
-//  2. valid shell_policy.custom_deny_patterns regexes   → 200
+// buildGodModeTestAPI: shared test harness for PUT /api/v1/agents/{id}
+// god-mode-adjacent tests elsewhere in this package.
 //
 // Traces to: docs/internal/uat/remediation-decisions.md O14.
 

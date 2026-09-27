@@ -11,6 +11,19 @@ import type {
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 
+/**
+ * #823 catch-up redesign (BE-DESIGN.md §6.1) — the SPA's per-session
+ * position in the gateway's per-session event log (the "hub", Lane A's
+ * `pkg/gateway/ws_session_hub.go`). Paired boot id + sequence number, sent
+ * back as `attach_session{since_seq, boot_id}` on reconnect instead of a
+ * full-bucket wipe. See `cursor.ts::gateFrameBySeq` for the apply rule this
+ * type feeds.
+ */
+export interface SessionCursor {
+  bootId: string
+  seq: number
+}
+
 export interface MediaAttachment {
   type: 'image' | 'audio' | 'video' | 'file'
   url: string
@@ -80,6 +93,15 @@ interface SubagentSpanBase {
    * actually starts executing — I-4).
    */
   lifecycleState?: SubagentStateFrame['state']
+  /**
+   * Sticky. True once a runnable `subagent_state` (`running`, `needs_input`,
+   * `paused`, or `completed`) has been reduced onto this span. Never cleared
+   * by a later terminal state. The last `lifecycleState` cannot say this: a
+   * child that ran and then failed ends on `failed`, the same final shape as
+   * one dropped from the queue before it ran (delegation chat surface D10).
+   * Replay rebuilds it because every persisted state frame is reduced again.
+   */
+  hasRun?: boolean
   /**
    * ADR-091 D7 table's own status-line example, "last update N s ago":
    * the ISO timestamp (`created_at`) of the last `subagent_message` OR
@@ -186,6 +208,25 @@ export type ChatMessage = Message & {
    * check); this field covers the entries folded in AFTER that one.
    */
   mergedReplayIds?: string[]
+  /**
+   * #823 catch-up redesign, Opus review round 3 item N1 (BE-DESIGN.md §6.5):
+   * set ONCE, directly, by the `catch_up_complete` reducer's own sweep — NOT
+   * recomputed reactively from `turnId !== activeTurnId` on every render.
+   * The reactive comparison was the actual N1 bug: `activeTurnId` is ONLY
+   * ever populated by a `session_state.active_turn` frame, which for an
+   * ORDINARY live turn that never disconnected never arrives mid-turn (only
+   * the very first, turn-less `session_state{}` at connection bind does) —
+   * so `activeTurnId` stays `null` for the ENTIRE duration of every normal
+   * live turn, making `msg.turnId !== activeTurnId` true from the first
+   * token onward and showing "couldn't be finished · Generate again" under
+   * every streaming answer, disconnect or not (browser-confirmed at t006 of
+   * a live turn). §6.5's real rule only makes sense evaluated ONCE, right
+   * after a genuine `catch_up_complete` — the one moment `session_state`'s
+   * `active_turn` is authoritative for messages that predate it. This flag
+   * records that one-time judgment so the render layer never has to
+   * re-derive (and re-break) it.
+   */
+  confirmedUnfinished?: boolean
   /**
    * ADR-051 — the typed LLM error code carried on a live `ErrorFrame` /
    * `ReplayErrorFrame` payload (`payload.llm_error.code`). SPA-only display
@@ -323,11 +364,39 @@ export interface SessionChatState {
   /** Set when a done frame arrives while isReplaying was true. */
   replayCompletedForSession: string | null
   /**
-   * Issue #822: a real turn done arrived during replay before catch-up opened
-   * any assistant bubble. The next token is the completed catch-up snapshot,
-   * not a new live stream. Optional for hand-built fixture compatibility.
+   * Turn ids that had a still-open (isStreaming/status 'streaming')
+   * assistant bubble at the moment a session_snapshot wipe erased it. A
+   * full history rebuild always reconstructs a bubble as `status: 'done'`
+   * via replay_message, even when the underlying turn was genuinely cut
+   * short (e.g. a gateway crash mid-stream) — losing the one signal that
+   * would otherwise mark it unfinished. Carried forward across the wipe
+   * so catch_up_complete's confirmedUnfinished sweep can still flag a
+   * turn matching one of these ids, and cleared once that sweep runs.
    */
-  terminalCatchUpPending?: boolean
+  wipedOpenTurnIds?: string[]
+  /**
+   * #823 review round 9 — after a boot_mismatch (or equivalent
+   * gateway-restarted) snapshot rebuild, the transcript's LAST entry
+   * was a user message with no assistant reply and no active turn: the
+   * turn was killed before a single token streamed, so no assistant
+   * bubble was ever created for confirmedUnfinished to attach to. Set
+   * by catch_up_complete's sweep (catchup-frames.ts) to the LAST user
+   * message's id; the render layer uses it to show "couldn't be
+   * finished · Generate again" for that exchange specifically.
+   * Deliberately narrower than "any snapshot with no active turn":
+   * retention_exceeded means old history was trimmed, not that a turn
+   * was interrupted, so a trimmed reply must NOT show this.
+   */
+  unansweredLastUserMessageId?: string | null
+  /**
+   * #823 review round 9 — true for exactly one catch_up_complete cycle:
+   * set by session_snapshot when frame.reason === 'boot_mismatch',
+   * carried through the history wipe (like wipedOpenTurnIds), and read
+   * (then cleared) by catch_up_complete's sweep. Never persisted beyond
+   * that one cycle — a LATER, unrelated snapshot for this session must
+   * not accidentally inherit a stale true from an earlier restart.
+   */
+  snapshotWasBootMismatch?: boolean
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
@@ -347,6 +416,18 @@ export interface SessionChatState {
    * Cleared to null when a done frame arrives.
    */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
+  /**
+   * ADR-092: this session's resolved per-chat Auto-approve state, or null
+   * when no `session_mode_updated` ack has arrived yet for this session
+   * (the header badge falls back to the global x per-agent resolution in
+   * that case). Set by `session_mode_updated` frames; there is no
+   * "rejected" case to handle — the server always acknowledges a
+   * `session_mode_update` send. Distinct from the wire's own
+   * `auto_approve_effective: boolean` (never null) — the extra null state
+   * here is purely "we haven't heard back yet", not a value the server
+   * ever sends.
+   */
+  autoApproveEffective?: boolean | null
   /**
    * ISO timestamp of the most recent server frame the SPA has applied.
    * Used as the `since` cursor in attach_session to avoid replaying already-seen frames.
@@ -395,7 +476,7 @@ export interface SessionChatState {
    * message-only update and a later state-only update for the SAME span_id
    * both survive to be applied together.
    */
-  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string }>
+  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string; hasRun?: boolean }>
   /**
    * Session-scoped record of every replay_message id that has EVER been
    * merged (via the `replay_message` same-turn/same-agent coalesce branch)
@@ -506,39 +587,35 @@ export interface SessionChatState {
    * carries NO `active_turn` for this session (review CR3/S2). Review
    * finding S1/CR1: the `done`/`error` cases classify their OWN frame
    * shape to decide whether they are the thing that finalizes a turn — they
-   * never read `activeTurnId`/`activeTurnBubbleOpened` to make that call,
-   * only to know WHICH bubble/turn to finalize once they've already decided
-   * to. Optional for the same fixture-compat reason as
-   * `toolCallOwnerMessageId` above.
+   * never read `activeTurnId` to make that call, only to know WHICH
+   * bubble/turn to finalize once they've already decided to. Optional for
+   * the same fixture-compat reason as `toolCallOwnerMessageId` above.
    */
   activeTurnId?: string | null
   /** Agent id paired with `activeTurnId` — see its doc comment. */
   activeTurnAgentId?: string | null
   /**
-   * ADR-082 D4, review S1/CR1: whether the empty streaming placeholder for
-   * `activeTurnId` has already been opened. Deliberately NOT keyed off
-   * `isReplaying`: the MIN_REPLAY_DISPLAY_MS debounce (see
-   * `setReplaying`/the `done` case) can leave `isReplaying` true for up to
-   * 750ms after the replay-terminating `done` has already run, and a
-   * genuinely fast turn's own `done` can arrive inside that window — using
-   * `isReplaying` alone as the "is this the replay-terminator" test would
-   * then wrongly re-open a second, empty bubble on the turn's REAL `done`.
-   * This flag instead tracks the one fact that actually matters: has the
-   * placeholder/bubble for `activeTurnId` been created yet. Set true by
-   * THREE independent writers, because the wire order between
-   * session_state/replay-terminator-done/tokens is not guaranteed (an older
-   * gateway sends session_state LAST; even the fixed contract can race a
-   * fast concurrent turn): (1) the 'done' case, opening the placeholder
-   * itself once replay has landed; (2) the 'token' case, the instant ANY
-   * token arrives for an announced turn — a token proves a bubble exists
-   * even if this store never got to open one itself; (3) the 'session_state'
-   * case, when it finds a bubble already streaming for this session at
-   * announcement time. False/unset while a turn is announced but neither a
-   * placeholder nor any content has appeared yet; irrelevant once
-   * `activeTurnId` is cleared (finalization, disconnect, or explicit cancel
-   * all clear it too).
+   * #823 catch-up redesign (BE-DESIGN.md §6.1) — this bucket's position in
+   * the gateway hub's per-session event log, or `null`/unset when no
+   * sequenced frame has been applied yet (every frame before Lane A's hub
+   * lands, and every frame the design deliberately keeps unsequenced —
+   * §1.2's "Not sequenced" list). Advanced ONLY by `cursor.ts::gateFrameBySeq`
+   * (called from `handleFrame` before the per-frame switch) and by the
+   * terminal `session_started`/`catch_up_complete`/`session_snapshot` frames,
+   * which mint it directly from their own `seq`/`boot_id` fields. Read by the
+   * WS attach path (`src/store/session.ts`, `OmnipusRuntimeProvider.tsx`) to
+   * send `{since_seq, boot_id}` on reconnect instead of a full-bucket wipe.
    */
-  activeTurnBubbleOpened?: boolean
+  cursor?: SessionCursor | null
+  /**
+   * #823 catch-up redesign (BE-DESIGN.md §4.6/§6.2) — true from the moment a
+   * `session_snapshot` frame wipes this bucket's history until the matching
+   * `catch_up_complete` lands. Gates `ConnectionStatus.tsx`'s "couldn't be
+   * finished" derivation (§6.5): an `unfinished` verdict must never render
+   * mid-catch-up, only once the server's own post-catch-up
+   * `session_state.active_turn` has actually been read for this attach.
+   */
+  awaitingCatchUp?: boolean
 }
 
 /**
@@ -649,6 +726,7 @@ export interface ChatStore {
   isStreaming: boolean
   isReplaying: boolean
   replayCompletedForSession: string | null
+  wipedOpenTurnIds?: string[]
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>
@@ -671,6 +749,8 @@ export interface ChatStore {
   lastUserMessageAt: number | null
   /** B3: cancel progress stage for the active session, or null when idle. */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
+  /** ADR-092: active session's resolved per-chat Auto-approve state. See SessionChatState.autoApproveEffective. */
+  autoApproveEffective?: boolean | null
   /** ISO timestamp of the most recent server frame for the active session. */
   lastReceivedEventTime: string | null
   /**
@@ -935,6 +1015,40 @@ export interface ChatStore {
    * re-hydrate.
    */
   sendAskUserAnswer: (answer: Omit<AskUserAnswerFrame, 'type'>) => void
+  /**
+   * ADR-092: set or clear this session's per-chat Auto-approve modifier
+   * (`session_mode_update`). A human-only action — nothing agent-facing
+   * calls this. `true` turns Auto ON for this chat even when the resolved
+   * agent x global default has it off (the one deliberate loosening
+   * exception in this contract); `false` turns it off; `null` clears the
+   * modifier and reverts to the inherited agent/global resolution. Always
+   * acknowledged by a `session_mode_updated` frame — no rejection case.
+   */
+  sendSessionModeUpdate: (sessionId: string, autoApprove: boolean | null) => void
+  /**
+   * ADR-092 UX fix: a per-chat Auto-approve choice made in the composer
+   * BEFORE this chat has a real, server-known session (a brand-new chat —
+   * `session_mode_update` needs a session id the server already knows
+   * about, which does not exist until the first message is sent). Storing
+   * the choice here lets `AutoApprovePicker` stay usable and show the
+   * choice immediately instead of greying out.
+   *
+   * Consumed by `sendMessage`'s no-active-session branch
+   * (`src/store/chat/slices/outbound-lifecycle.ts`): sent as
+   * `MessageFrame.auto_approve` on the very message that mints the session,
+   * so the server records it (`SessionModeStore`) before the turn is
+   * dispatched to the agent loop — the very first turn already runs under
+   * the chosen mode, with no follow-up round trip needed. `session_started`
+   * (the frame slice's own case) then reflects the same value into the new
+   * session's bucket and clears this field. Also cleared by
+   * `startNewSession`/`attachToSession` (`src/store/session.ts`, via
+   * `registerChatClearPendingAutoApprove`) so a choice made and then
+   * abandoned (no message ever sent) does not leak onto a LATER, unrelated
+   * new chat.
+   */
+  pendingAutoApproveChoice: boolean | null
+  /** Sets or clears `pendingAutoApproveChoice`. See its doc comment. */
+  setPendingAutoApproveChoice: (choice: boolean | null) => void
 
   // C8: defensively clear in-flight/streaming state for every session bucket.
   // Called when the stream is terminated by something OTHER than a clean done

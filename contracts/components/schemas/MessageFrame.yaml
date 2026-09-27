@@ -72,6 +72,24 @@ properties:
       type: string
       minLength: 1
       maxLength: 256
+  auto_approve:
+    type: boolean
+    nullable: true
+    description: >
+      ADR-092 per-chat Auto-approve choice for the chat this message mints —
+      meaningful only when session_id is absent (this frame is minting a new
+      session); ignored when session_id is present, since an existing
+      session's mode is changed exclusively via session_mode_update. Same
+      value space and null semantics as SessionModeUpdateFrame.auto_approve:
+      true loosens Auto-approve on for this one new chat (may loosen past
+      the resolved agent x global default, because a human is present),
+      false tightens it off, null/absent leaves it unset (the chat follows
+      whatever the agent x global default resolves to). Carrying the choice
+      on the minting message itself — instead of a follow-up
+      session_mode_update sent after the session_started ack — is what lets
+      the choice gate the new chat's very first ask-policy tool call: a
+      post-ack send can race the agent loop's own first LLM round trip.
+    example: false
   metadata:
     type: object
     # additionalProperties: true — forward-compat, by design.

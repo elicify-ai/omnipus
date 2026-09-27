@@ -1,10 +1,12 @@
 # ADR-047: Live-browser streaming — WebRTC/Pion promoted to the accepted transport and capture (supersedes ADR-044's transport + capture)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** **Accepted 2026-07-18** (operator: Daniel Piatkowski). Operator decision chain: **2026-07-17** — "stream audio *alongside* video, **no PulseAudio sidecar**" (recorded in `docs/internal/design/live-browser-webrtc-context.md`); **2026-07-18** — directive to build the full WebRTC feature end-to-end. This ADR **supersedes ADR-044's transport and capture decisions** (§6.0–§6.4: WebCodecs-over-WS "A2", CDP `Page.startScreencast` capture, the encoder-page-fed-JPEG topology, and the A2-only "unavailable state" degradation with its M-10 contract removal). **ADR-044 remains valid** as decision history and for its **non-superseded** parts: the full-Chrome installer rationale (§6.5 / 2026-07-17 amendment), the CDP-over-pipe motivation (§6.0.3), the single-shared-Chrome coordinator topology (ADR-043 + §6.0.3 pt-3), the STRIDE trust framing (§6.6), and the rejection of client-side rendering / DOM-mirroring (Option D). ADR-044's Option B ("Full WebRTC via Pion", kept there only as a documented escalation path) is the decision now **promoted to Accepted**.
 - **Date:** 2026-07-18
 - **Deciders:** Daniel Piatkowski (operator); architect (this record)
 - **Evidence level (highest used):** 1 (user input + codebase facts + in-pod spike measurements), with tagged inference/assumption where noted
-- **Routing:** v0.3 scope (structural), per the release strategy. Branch `feature/browser-video-2` (cut from `bugfixes2` @ `eb4de2a2`).
+- **Routing:** structural, Workspaces-class scope at drafting, per the release strategy then in force (the v0.2/v0.3 release labels were retired 2026-09-25). Branch `feature/browser-video-2` (cut from `bugfixes2` @ `eb4de2a2`).
 - **Supersedes for this decision:** ADR-044 §6.0–§6.4 (transport, capture mechanism, degradation-to-unavailable). Amends ADR-038 D3 again: the JPEG `browser_screencast` live view is **retained** (ADR-044/M-10's removal is **cancelled**).
 
 ---

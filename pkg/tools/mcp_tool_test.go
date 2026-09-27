@@ -487,6 +487,7 @@ func TestMCPTool_Parameters_MapSchema(t *testing.T) {
 
 func TestMCPTool_Execute_ImageContentStoredAsMedia(t *testing.T) {
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	manager := &MockMCPManager{
 		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
 			return &mcp.CallToolResult{
@@ -536,6 +537,7 @@ func TestMCPTool_Execute_ImageContentStoredAsMedia(t *testing.T) {
 
 func TestMCPTool_Execute_EmbeddedResourceBlobStoredAsMedia(t *testing.T) {
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	manager := &MockMCPManager{
 		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
 			return &mcp.CallToolResult{
@@ -575,6 +577,7 @@ func TestMCPTool_Execute_EmbeddedResourceBlobStoredAsMedia(t *testing.T) {
 
 func TestMCPTool_Execute_RespectsUserAudienceForBinaryContent(t *testing.T) {
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	manager := &MockMCPManager{
 		callToolFunc: func(ctx context.Context, serverName, toolName string, arguments map[string]any) (*mcp.CallToolResult, error) {
 			return &mcp.CallToolResult{

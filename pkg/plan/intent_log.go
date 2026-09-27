@@ -152,7 +152,7 @@ type IntentRecord struct {
 	// not done.
 	DoneAt time.Time `json:"done_at,omitempty"`
 	// Hmac is the tamper-evidence chain HMAC (sec-MINOR-3/#539), reusing the
-	// exact v0.2 #155 audit-log mechanism (pkg/audit/hmac.go):
+	// exact #155 audit-log mechanism (pkg/audit/hmac.go):
 	// hex(HMAC-SHA256(chainKey, prev_hmac || canonical_json_without_hmac)).
 	// prev_hmac is the previous LINE in this plan's file (audit.GenesisSeed()
 	// for the first line), not the previous line for the same intent_id — the

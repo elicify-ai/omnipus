@@ -10963,18 +10963,18 @@ func (e TodoStatus) Valid() bool {
 
 // Defines values for ToolApprovalActionRequestAction.
 const (
-	ToolApprovalActionRequestActionAlways  ToolApprovalActionRequestAction = "always"
-	ToolApprovalActionRequestActionApprove ToolApprovalActionRequestAction = "approve"
-	ToolApprovalActionRequestActionCancel  ToolApprovalActionRequestAction = "cancel"
-	ToolApprovalActionRequestActionDeny    ToolApprovalActionRequestAction = "deny"
+	ToolApprovalActionRequestActionAllow     ToolApprovalActionRequestAction = "allow"
+	ToolApprovalActionRequestActionAllowOnce ToolApprovalActionRequestAction = "allow_once"
+	ToolApprovalActionRequestActionCancel    ToolApprovalActionRequestAction = "cancel"
+	ToolApprovalActionRequestActionDeny      ToolApprovalActionRequestAction = "deny"
 )
 
 // Valid indicates whether the value is a known member of the ToolApprovalActionRequestAction enum.
 func (e ToolApprovalActionRequestAction) Valid() bool {
 	switch e {
-	case ToolApprovalActionRequestActionAlways:
+	case ToolApprovalActionRequestActionAllow:
 		return true
-	case ToolApprovalActionRequestActionApprove:
+	case ToolApprovalActionRequestActionAllowOnce:
 		return true
 	case ToolApprovalActionRequestActionCancel:
 		return true
@@ -10985,24 +10985,60 @@ func (e ToolApprovalActionRequestAction) Valid() bool {
 	}
 }
 
+// Defines values for ToolApprovalActionRequestScope.
+const (
+	ToolApprovalActionRequestScopeExact  ToolApprovalActionRequestScope = "exact"
+	ToolApprovalActionRequestScopePrefix ToolApprovalActionRequestScope = "prefix"
+)
+
+// Valid indicates whether the value is a known member of the ToolApprovalActionRequestScope enum.
+func (e ToolApprovalActionRequestScope) Valid() bool {
+	switch e {
+	case ToolApprovalActionRequestScopeExact:
+		return true
+	case ToolApprovalActionRequestScopePrefix:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ToolApprovalResponseAction.
 const (
-	ToolApprovalResponseActionAlways  ToolApprovalResponseAction = "always"
-	ToolApprovalResponseActionApprove ToolApprovalResponseAction = "approve"
-	ToolApprovalResponseActionCancel  ToolApprovalResponseAction = "cancel"
-	ToolApprovalResponseActionDeny    ToolApprovalResponseAction = "deny"
+	ToolApprovalResponseActionAllow     ToolApprovalResponseAction = "allow"
+	ToolApprovalResponseActionAllowOnce ToolApprovalResponseAction = "allow_once"
+	ToolApprovalResponseActionCancel    ToolApprovalResponseAction = "cancel"
+	ToolApprovalResponseActionDeny      ToolApprovalResponseAction = "deny"
 )
 
 // Valid indicates whether the value is a known member of the ToolApprovalResponseAction enum.
 func (e ToolApprovalResponseAction) Valid() bool {
 	switch e {
-	case ToolApprovalResponseActionAlways:
+	case ToolApprovalResponseActionAllow:
 		return true
-	case ToolApprovalResponseActionApprove:
+	case ToolApprovalResponseActionAllowOnce:
 		return true
 	case ToolApprovalResponseActionCancel:
 		return true
 	case ToolApprovalResponseActionDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ToolApprovalResponseScope.
+const (
+	ToolApprovalResponseScopeExact  ToolApprovalResponseScope = "exact"
+	ToolApprovalResponseScopePrefix ToolApprovalResponseScope = "prefix"
+)
+
+// Valid indicates whether the value is a known member of the ToolApprovalResponseScope enum.
+func (e ToolApprovalResponseScope) Valid() bool {
+	switch e {
+	case ToolApprovalResponseScopeExact:
+		return true
+	case ToolApprovalResponseScopePrefix:
 		return true
 	default:
 		return false
@@ -11117,6 +11153,27 @@ func (e ToolPolicyChangesSet) Valid() bool {
 	case ToolPolicyChangesSetAsk:
 		return true
 	case ToolPolicyChangesSetDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ToolRegistryEntryAutoApprove.
+const (
+	ToolRegistryEntryAutoApproveAsks       ToolRegistryEntryAutoApprove = "asks"
+	ToolRegistryEntryAutoApproveRuns       ToolRegistryEntryAutoApprove = "runs"
+	ToolRegistryEntryAutoApproveRunsIfArgs ToolRegistryEntryAutoApprove = "runs_if_args"
+)
+
+// Valid indicates whether the value is a known member of the ToolRegistryEntryAutoApprove enum.
+func (e ToolRegistryEntryAutoApprove) Valid() bool {
+	switch e {
+	case ToolRegistryEntryAutoApproveAsks:
+		return true
+	case ToolRegistryEntryAutoApproveRuns:
+		return true
+	case ToolRegistryEntryAutoApproveRunsIfArgs:
 		return true
 	default:
 		return false
@@ -12414,7 +12471,10 @@ type ActivityEventsResponseEventsType string
 type Agent struct {
 	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 	ActivationStatus *AgentActivationStatus `json:"activation_status,omitempty"`
-	ChangedFields    *[]string              `json:"changed_fields,omitempty"`
+
+	// AutoApproveDisabled ADR-092 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-092 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
+	AutoApproveDisabled *bool     `json:"auto_approve_disabled,omitempty"`
+	ChangedFields       *[]string `json:"changed_fields,omitempty"`
 
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
@@ -12528,15 +12588,6 @@ type Agent struct {
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
-	// ShellPolicy Per-agent shell command deny-pattern configuration.
-	ShellPolicy *struct {
-		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
-		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-
-		// EnableDenyPatterns Enable pattern-based shell command blocking.
-		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
-	} `json:"shell_policy,omitempty"`
-
 	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
@@ -12585,7 +12636,7 @@ type Agent struct {
 	// UpdatedAt ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 
-	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured. Main only.
+	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT yet active (TTS delivery, tracked #306 — no release scheduled). Absent when not configured. Main only.
 	Voice *string `json:"voice,omitempty"`
 
 	// Warning Non-fatal advisory (e.g. config reload failed after create/update).
@@ -12623,6 +12674,9 @@ type AgentCreateRequest struct {
 
 // AgentCreateRequestMain Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
 type AgentCreateRequestMain struct {
+	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
+
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
 
@@ -12664,15 +12718,6 @@ type AgentCreateRequestMain struct {
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
-
-	// ShellPolicy Per-agent shell command deny-pattern configuration.
-	ShellPolicy *struct {
-		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
-		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-
-		// EnableDenyPatterns Enable pattern-based shell command blocking.
-		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
-	} `json:"shell_policy,omitempty"`
 
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
@@ -12704,7 +12749,7 @@ type AgentCreateRequestMain struct {
 	// Type Discriminator. Must be exactly "Main" for this variant.
 	Type AgentCreateRequestMainType `json:"type"`
 
-	// Voice Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
+	// Voice Per-agent persona voice identifier (Main only). Schema-pinned; not yet active (TTS, tracked #306).
 	Voice *string `json:"voice,omitempty"`
 }
 
@@ -12719,6 +12764,9 @@ type AgentCreateRequestMainType string
 
 // AgentCreateRequestSubagent Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
 type AgentCreateRequestSubagent struct {
+	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
+
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
 
@@ -12760,15 +12808,6 @@ type AgentCreateRequestSubagent struct {
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
-
-	// ShellPolicy Per-agent shell command deny-pattern configuration.
-	ShellPolicy *struct {
-		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
-		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-
-		// EnableDenyPatterns Enable pattern-based shell command blocking.
-		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
-	} `json:"shell_policy,omitempty"`
 
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
@@ -12939,15 +12978,6 @@ type AgentSession struct {
 
 	// UpdatedAt RFC3339 last-update timestamp.
 	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// AgentShellPolicy Per-agent shell command deny-pattern configuration.
-type AgentShellPolicy struct {
-	// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
-	CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-
-	// EnableDenyPatterns Enable pattern-based shell command blocking.
-	EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
 }
 
 // AgentStats Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
@@ -13169,6 +13199,9 @@ type AgentToolsUpdateRequestConfigBuiltinPolicies string
 
 // AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected.
 type AgentUpdateRequest struct {
+	// AutoApproveDisabled Force Auto-approve off for this agent (ADR-092), overriding the global default (SandboxConfig.auto_approve) for every tool this agent resolves to "ask". Off-only: true disables Auto for this agent; false (or omitting the field, which leaves the stored value unchanged) does not loosen past the global default — there is no value here that turns Auto on when the global default has it off. Distinct from `tool_policy_changes`, which is unchanged and still governs allow/deny/ask per tool.
+	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
+
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
 
@@ -13247,13 +13280,6 @@ type AgentUpdateRequest struct {
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
-	// ShellPolicy Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents.
-	ShellPolicy *struct {
-		// CustomDenyPatterns Must each be valid Go regexp patterns (400 on invalid regexp).
-		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-		EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
-	} `json:"shell_policy,omitempty"`
-
 	// Skills Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
 	Skills *[]string `json:"skills,omitempty"`
 
@@ -13281,7 +13307,7 @@ type AgentUpdateRequest struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear. Main only.
+	// Voice Per-agent persona voice identifier. Schema-pinned; not yet active (TTS, tracked #306). Send null to clear. Main only.
 	Voice *string `json:"voice,omitempty"`
 }
 
@@ -13469,7 +13495,7 @@ type AuditEntry struct {
 // AuditEntryDecision Outcome of the event evaluation. One of: allow, deny, error. May be absent for informational events.
 type AuditEntryDecision string
 
-// AuditLogResponse Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (v0.2 #155). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
+// AuditLogResponse Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (the #155 security wave). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
 type AuditLogResponse struct {
 	// ChainBrokenIndex 1-based index of the first entry where the chain break was detected. Present only when chain_status is "broken".
 	ChainBrokenIndex *int `json:"chain_broken_index,omitempty"`
@@ -13842,7 +13868,7 @@ type ChannelConfigureRequest struct {
 	// ImapPort IMAP server port (email channel). Defaults to 993 (IMAPS).
 	ImapPort *int `json:"imap_port,omitempty"`
 
-	// InstanceId Optional: the instance map key to configure. In v0.1 (cap-1/type) this equals the channel type and can be omitted. Reserved for v0.3 multi-instance support — the backend ignores this field today (the URL {id} is the key).
+	// InstanceId Optional. The backend ignores this field: the URL {id} is the instance key, including when more than one instance of a channel type exists. It is not persisted.
 	InstanceId *string `json:"instance_id,omitempty"`
 
 	// Password Login password for IMAP and SMTP authentication (email channel). Stored encrypted in the credential store — never returned in GET responses.
@@ -15527,18 +15553,6 @@ type EvidenceRecord struct {
 	Truncated bool `json:"truncated"`
 }
 
-// ExecAllowlist Exec binary allowlist configuration for GET/PUT /api/v1/security/exec-allowlist (SEC-05).
-type ExecAllowlist struct {
-	// AllowedBinaries Ordered list of allowed binary name patterns evaluated on every exec call. Patterns are trimmed, deduplicated, and validated server-side. Empty array = block all exec calls.
-	AllowedBinaries []string `json:"allowed_binaries"`
-
-	// Approval Approval mode for exec calls. Reflects config.tools.exec.approval. Only present in GET responses.
-	Approval *string `json:"approval,omitempty"`
-
-	// RestartRequired True in PUT responses — the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
-	RestartRequired *bool `json:"restart_required,omitempty"`
-}
-
 // ExecProxyStatus Runtime state of the exec SSRF proxy returned by GET /api/v1/security/exec-proxy-status (SEC-28).
 type ExecProxyStatus struct {
 	// Address Bound address in "host:port" format. Present only when running is true. Backend handler enforces this invariant; OpenAPI 3.0.3 cannot express conditional required fields.
@@ -16508,7 +16522,7 @@ type GoalOutcome struct {
 // GoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type GoalOutcomeEnding string
 
-// GodModeStatus O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
+// GodModeStatus O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled, every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox's filesystem confinement and network port controls are off, and outbound network access is open for the shell tool — regardless of per-agent profiles. An agent's own stricter tool policy, an operator deny command rule, and the shell's own outside-workspace write refusal are never overridden — that refusal still applies, it just never prompts. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The override is non-destructive: switching god mode off restores prior behavior exactly.
 type GodModeStatus struct {
 	// Available Whether god mode is ACTIVE-CAPABLE in this boot: the build supports it (`supported` is true) AND authorization was granted before this process started, either via the legacy --allow-god-mode boot flag or via sandbox.god_mode_allowed persisted config (set by a prior UI enable + restart). Authorization is evaluated once at boot, so granting it via the UI (POST enabled=true while available=false) does not flip this to true until the gateway restarts — see GodModeUpdateResponse.restart_required.
 	Available bool `json:"available"`
@@ -17764,6 +17778,9 @@ type Message struct {
 	// CanceledByUser Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
 	CanceledByUser *string `json:"canceled_by_user,omitempty"`
 
+	// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+
 	// Content Raw markdown/text content of the message.
 	Content *string `json:"content,omitempty"`
 
@@ -17835,6 +17852,9 @@ type Message struct {
 		// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
 		Reason *MessageSubagentEndReason `json:"reason,omitempty"`
 
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		Seq *int64 `json:"seq,omitempty"`
+
 		// SessionId Session in which this sub-turn ran.
 		SessionId string `json:"session_id"`
 
@@ -17870,6 +17890,9 @@ type Message struct {
 		// SenderIdentity Agent ID (or "human") that authored the underlying message.
 		SenderIdentity string `json:"sender_identity"`
 
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		Seq *int64 `json:"seq,omitempty"`
+
 		// SessionId Session in which the parent's span is running.
 		SessionId string `json:"session_id"`
 
@@ -17895,10 +17918,13 @@ type Message struct {
 		// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
 		ParentCallId string `json:"parent_call_id"`
 
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		Seq *int64 `json:"seq,omitempty"`
+
 		// SessionId Session in which this sub-turn is running.
 		SessionId string `json:"session_id"`
 
-		// SpanId Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID.
+		// SpanId Unique identifier for this span. Opaque on the wire. The server builds it with pkg/agent.SubagentSpanID from the parent spawn ToolCall.ID (parent_call_id) and the child's generation. Generation 1, and any generation below 2, is "span_" plus that id. Generation N of 2 or above is that same string plus "_g" plus N, so a follow-up does not reuse generation 1's id. This frame has no generation field. Replay recovers N from the transcript entry id ("<call id>:g<N>:start" or ":end").
 		SpanId string `json:"span_id"`
 
 		// TaskLabel Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases).
@@ -17913,6 +17939,9 @@ type Message struct {
 
 		// CreatedAt RFC3339 timestamp this state ping was emitted.
 		CreatedAt time.Time `json:"created_at"`
+
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which the parent's span is running.
 		SessionId string `json:"session_id"`
@@ -20517,11 +20546,16 @@ type SandboxConfig struct {
 	// AppliedMode The mode the gateway is currently enforcing. Differs from `mode` when the operator saved a change but has not restarted yet.
 	AppliedMode *string `json:"applied_mode,omitempty"`
 
+	// AutoApprove ADR-092's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear (ADR-092 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool. [2026-09-24, founder decision] Auto no longer additionally requires an enforcing kernel sandbox: it applies to bash and every other tool whether or not a kernel sandbox is confining spawned children (see SandboxStatus.kernel_sandbox_active, now purely informational for this purpose). Without a kernel sandbox, the D7/D8 pre-flights and the surviving text-based guards are the only checks on what a bash command touches — a disguised command can slip past a text-based check where a kernel boundary would have caught it; this is the accepted, founder-approved risk, not an oversight.
+	// This is the GLOBAL default only. Two narrower scopes layer on top, neither stored here: a per-agent setting (Agent.auto_approve_disabled) that may only turn Auto OFF for that agent, and a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
+	// Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
+	AutoApprove *bool `json:"auto_approve,omitempty"`
+
 	// FilesystemModel The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
 	// Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
 	FilesystemModel *SandboxConfigFilesystemModel `json:"filesystem_model,omitempty"`
 
-	// GodMode O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
+	// GodMode O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool-policy ceiling is floored at "allow" (for every tool, not just bash) — which also makes `auto_approve` below moot for that agent, since Auto only ever applies to a tool resolved to "ask" and nothing is left in "ask" state once the ceiling is floored. The kernel sandbox is off and network egress is open. Operator `deny` command rules (ADR-092 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable. Independent of `auto_approve` — the two are separate mechanisms.
 	GodMode *bool `json:"god_mode,omitempty"`
 
 	// GodModeAvailable Whether god mode CAN be enabled in this gateway: the build supports it (not compiled with the nogodmode tag) AND --allow-god-mode was passed at boot. The runtime god_mode switch is a no-op when this is false.
@@ -20535,9 +20569,6 @@ type SandboxConfig struct {
 
 	// Saved Present in PUT responses. Always true on success.
 	Saved *bool `json:"saved,omitempty"`
-
-	// ShellDenyPatterns Global fallback shell command deny-list (regex entries). Per-agent custom patterns extend this list.
-	ShellDenyPatterns *[]string `json:"shell_deny_patterns,omitempty"`
 
 	// Ssrf Nested SSRF config block for backward-compatible clients.
 	Ssrf *struct {
@@ -20565,7 +20596,7 @@ type SandboxConfigFilesystemModel string
 // SandboxConfigMode Configured sandbox enforcement mode.
 type SandboxConfigMode string
 
-// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_deny_patterns are hot-reloaded.
+// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and auto_approve are hot-reloaded. This endpoint is the routing target for ADR-092's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it.
 type SandboxConfigUpdate struct {
 	// AllowNetworkOutbound Allow agent tool calls to make outbound network connections.
 	AllowNetworkOutbound *bool `json:"allow_network_outbound,omitempty"`
@@ -20573,15 +20604,16 @@ type SandboxConfigUpdate struct {
 	// AllowedPaths List of host filesystem paths the agent is allowed to read/write. Restart-gated. Must be absolute paths; empty list clears all exceptions.
 	AllowedPaths *[]string `json:"allowed_paths,omitempty"`
 
+	// AutoApprove Set the ADR-092 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
+	// Per-agent and per-chat Auto settings are NOT set here: a per-agent override is `auto_approve_disabled` on PUT /agents/{id} (AgentUpdateRequest) — off-only, tighten-only. A chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when the agent or this global default has it off), because a human is present in that session. The per-agent field is tighten-only relative to this global default; this global default has no scope above it to tighten against.
+	AutoApprove *bool `json:"auto_approve,omitempty"`
+
 	// FilesystemModel Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
 	// Restart-gated, like `mode`: the running kernel profile was installed at boot and is not rebuilt in place, so the change is persisted and takes effect on the next start. Omit the field to leave the model unchanged.
 	FilesystemModel *SandboxConfigUpdateFilesystemModel `json:"filesystem_model,omitempty"`
 
 	// Mode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 	Mode *SandboxConfigUpdateMode `json:"mode,omitempty"`
-
-	// ShellDenyPatterns Global fallback list of Go regexp patterns to block in shell commands. Per-agent custom_deny_patterns extend this list. Hot-reloaded.
-	ShellDenyPatterns *[]string `json:"shell_deny_patterns,omitempty"`
 
 	// Ssrf Nested SSRF configuration sub-object. Flat fields take precedence.
 	Ssrf *struct {
@@ -20614,6 +20646,9 @@ type SandboxStatus struct {
 	// AuditOnly True when the sandbox is in permissive (audit-only) mode — policy violations are logged but not blocked.
 	AuditOnly *bool `json:"audit_only,omitempty"`
 
+	// AutoApproveEffective The gateway-wide Auto-approve DEFAULT: exactly the live SandboxConfig.auto_approve value, reported here so the chat-header badge needs no second request. It is NOT combined with kernel_sandbox_active and NOT resolved for any agent or chat (this endpoint has no agent or session context). Auto actually takes effect for a call when the tool resolves to "ask", the resolved Auto-approve for that chat is on (this default, turned off by the agent's auto_approve_disabled, then overridden either way by the chat's own modifier — SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier), and god_mode_active is false. [2026-09-24, founder decision] Auto no longer also requires kernel_sandbox_active — it now means exactly what the agent loop's autoApproveActive predicate computes (God Mode off, Auto resolved on), independent of kernel enforcement. Badge reading, before the per-agent and per-chat layers are folded in: god_mode_active=true shows "God Mode" whatever the other two fields say; else auto_approve_effective=false shows "Ask"; else kernel_sandbox_active= true shows "Auto"; else kernel_sandbox_active=false shows "Auto — no sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls for every tool except the shell; a shell command now asks first unless it is read-only or fully covered by an operator allow rule — there is no kernel confining what a disguised command can reach either way). There is no more "Auto → Ask" degraded state: Auto never silently becomes Ask for lack of a kernel sandbox. Always present from this gateway.
+	AutoApproveEffective *bool `json:"auto_approve_effective,omitempty"`
+
 	// Available Whether the backend is available on this platform.
 	Available bool `json:"available"`
 
@@ -20632,11 +20667,17 @@ type SandboxStatus struct {
 	// FilesystemModel Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
 	FilesystemModel *SandboxStatusFilesystemModel `json:"filesystem_model,omitempty"`
 
+	// GodModeActive Whether the global God Mode override is ACTIVE in this process right now — the same value as GodModeStatus.enabled (the persisted sandbox.god_mode switch AND availability in this boot). When true every agent's tool policy is floored at "allow": no approval prompts, no per-turn kernel sandbox for spawned children, network egress open; operator deny command rules, audit logging, the prompt-injection guard and rate limiting stay on. The chat-header badge shows God Mode whenever this is true, whatever auto_approve_effective and kernel_sandbox_active say. Always present from this gateway.
+	GodModeActive *bool `json:"god_mode_active,omitempty"`
+
 	// IssueRef Set when a known kernel incompatibility is flagged. Do NOT hard-code the literal issue number in the SPA.
 	IssueRef *string `json:"issue_ref,omitempty"`
 
 	// KernelLevel Whether the backend can enforce at the kernel level. True for Landlock on Linux 5.13+. False for the fallback (app-level) backend.
 	KernelLevel bool `json:"kernel_level"`
+
+	// KernelSandboxActive Whether a kernel sandbox is confining the processes agents spawn right now (sandbox.TurnPolicyBaseInstalled: the gateway registers a per-turn kernel policy base only once a kernel backend is enforcing for spawned children). Linux: true when Landlock was applied in enforce mode and not degraded (false in permissive mode). macOS: true when the Seatbelt boot profile was installed, so every spawned child is wrapped (policy_applied above reports the gateway's OWN confinement and is documented false on macOS by design). Windows, sandbox mode off, and the app-level fallback backend: always false. God Mode does not change this value, but under God Mode agents' children run without the per-turn kernel policy; see god_mode_active. [2026-09-24, founder decision] This no longer gates Auto-approve: Auto applies to every tool, bash included, whether or not this value is true. It is now purely informational — the input the UI uses to show the "Auto — no sandbox" warning badge/tooltip: without a kernel sandbox, shell commands under Auto now ask first (the D7/D8 pre-flights plus the founder-decision-A no-sandbox gate, pkg/tools/shell_no_sandbox_gate.go) unless the command is read-only or fully covered by an operator allow rule. Always present from this gateway.
+	KernelSandboxActive *bool `json:"kernel_sandbox_active,omitempty"`
 
 	// LandlockEnforced Whether Landlock file-system access rules are enforced.
 	LandlockEnforced *bool `json:"landlock_enforced,omitempty"`
@@ -21086,7 +21127,7 @@ type Session struct {
 	// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 	UpdatedAt time.Time `json:"updated_at"`
 
-	// WorkspaceId Associated workspace ID (optional, future v0.3 feature).
+	// WorkspaceId Associated workspace ID when the session is bound to a workspace. Absent when the session has none.
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
@@ -21146,6 +21187,9 @@ type SessionDetail struct {
 
 		// CanceledByUser Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
 		CanceledByUser *string `json:"canceled_by_user,omitempty"`
+
+		// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
+		ClientMessageId *string `json:"client_message_id,omitempty"`
 
 		// Content Raw markdown/text content of the message.
 		Content *string `json:"content,omitempty"`
@@ -21218,6 +21262,9 @@ type SessionDetail struct {
 			// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
 			Reason *SessionDetailMessagesSubagentEndReason `json:"reason,omitempty"`
 
+			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+			Seq *int64 `json:"seq,omitempty"`
+
 			// SessionId Session in which this sub-turn ran.
 			SessionId string `json:"session_id"`
 
@@ -21253,6 +21300,9 @@ type SessionDetail struct {
 			// SenderIdentity Agent ID (or "human") that authored the underlying message.
 			SenderIdentity string `json:"sender_identity"`
 
+			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+			Seq *int64 `json:"seq,omitempty"`
+
 			// SessionId Session in which the parent's span is running.
 			SessionId string `json:"session_id"`
 
@@ -21278,10 +21328,13 @@ type SessionDetail struct {
 			// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
 			ParentCallId string `json:"parent_call_id"`
 
+			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+			Seq *int64 `json:"seq,omitempty"`
+
 			// SessionId Session in which this sub-turn is running.
 			SessionId string `json:"session_id"`
 
-			// SpanId Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID.
+			// SpanId Unique identifier for this span. Opaque on the wire. The server builds it with pkg/agent.SubagentSpanID from the parent spawn ToolCall.ID (parent_call_id) and the child's generation. Generation 1, and any generation below 2, is "span_" plus that id. Generation N of 2 or above is that same string plus "_g" plus N, so a follow-up does not reuse generation 1's id. This frame has no generation field. Replay recovers N from the transcript entry id ("<call id>:g<N>:start" or ":end").
 			SpanId string `json:"span_id"`
 
 			// TaskLabel Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases).
@@ -21296,6 +21349,9 @@ type SessionDetail struct {
 
 			// CreatedAt RFC3339 timestamp this state ping was emitted.
 			CreatedAt time.Time `json:"created_at"`
+
+			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+			Seq *int64 `json:"seq,omitempty"`
 
 			// SessionId Session in which the parent's span is running.
 			SessionId string `json:"session_id"`
@@ -21545,7 +21601,7 @@ type SessionDetail struct {
 		// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 		UpdatedAt time.Time `json:"updated_at"`
 
-		// WorkspaceId Associated workspace ID (optional, future v0.3 feature).
+		// WorkspaceId Associated workspace ID when the session is bound to a workspace. Absent when the session has none.
 		WorkspaceId *string `json:"workspace_id,omitempty"`
 	} `json:"session"`
 }
@@ -22590,7 +22646,7 @@ type StorageStats struct {
 // Task The unified Task entity (Sprint 2, Tier 2) — one record that replaces both the legacy workflow `Task` and the GTD `BoardTask` schemas outright. There is no back-compat: per remediation Detail #7 there is no migration, no compat shim, and no dual status/title vocabulary. Every task belongs to a workspace (`workspace_id` is required-scoped) and may be a top-level task (no `parent_task_id`) or a subtask (delegation / decomposition child). Maps to the `task.Task` Go struct (the new `pkg/task` store) on the backend.
 // Returned by GET /tasks, GET /tasks/{id}, GET /tasks/{id}/subtasks, POST /tasks, and PATCH /tasks/{id}.
 type Task struct {
-	// Action What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
+	// Action What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for future action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
 	Action TaskAction `json:"action"`
 
 	// AgentId ID of the agent assigned to this task. Optional — human-only tasks have none.
@@ -22836,7 +22892,7 @@ type Task struct {
 		Text string `json:"text"`
 	} `json:"todos,omitempty"`
 
-	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 	// ## Tier 2 (now) `type` is one of:
 	//   - `manual`    — no automatic trigger. The task starts when a human drags its
 	//                   card into `in_progress`, or via Run / Create & Run. For an
@@ -22854,12 +22910,12 @@ type Task struct {
 	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
-	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+	// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 		Config Task_Trigger_Config `json:"config"`
 
-		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 		Type TaskTriggerType `json:"type"`
 	} `json:"trigger,omitempty"`
 
@@ -22873,7 +22929,7 @@ type Task struct {
 	WriteSet *[]string `json:"write_set,omitempty"`
 }
 
-// TaskAction What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
+// TaskAction What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for future action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
 type TaskAction string
 
 // TaskAssigneeWarningField The task field the warning is about, so a form can show it next to that control.
@@ -22930,7 +22986,7 @@ type TaskSurface string
 // TaskTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskTodosStatus string
 
-// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type Task_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
@@ -22952,14 +23008,14 @@ type Task_Trigger_Config struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
-// TaskTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+// TaskTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskTriggerType string
 
 // TaskCreateRequest Request body for POST /tasks — the ONE unified create form (Detail #8) that replaces the two legacy create bodies (`TaskCreateRequest` and `BoardTaskCreateRequest`). No back-compat aliases.
 // Landing rule (Detail #8): every created task lands in `inbox`. Nothing auto-lands in `next`; only a fully-captured task can be manually triaged to `next` via PATCH. `status` is therefore NOT a create-time field — the server always seeds `inbox`.
 // Start semantics (Detail #8): a task with no trigger (`manual`) starts when dragged to `in_progress` / Run; a task with a time trigger fires itself. The "Create & Run now" UX (create + start immediately) is a client action layered on top of this create + a subsequent start, not a distinct request field.
 type TaskCreateRequest struct {
-	// Action Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
+	// Action Task action type. Tier 2 accepts `llm` only; the enum grows additively (future growth path — design intent, do not build in this release).
 	Action TaskCreateRequestAction `json:"action"`
 
 	// AgentId Optional agent to assign the task to.
@@ -23133,7 +23189,7 @@ type TaskCreateRequest struct {
 		Text string `json:"text"`
 	} `json:"todos,omitempty"`
 
-	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 	// ## Tier 2 (now) `type` is one of:
 	//   - `manual`    — no automatic trigger. The task starts when a human drags its
 	//                   card into `in_progress`, or via Run / Create & Run. For an
@@ -23151,12 +23207,12 @@ type TaskCreateRequest struct {
 	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
-	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+	// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 		Config TaskCreateRequest_Trigger_Config `json:"config"`
 
-		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 		Type TaskCreateRequestTriggerType `json:"type"`
 	} `json:"trigger,omitempty"`
 
@@ -23167,7 +23223,7 @@ type TaskCreateRequest struct {
 	WriteSet *[]string `json:"write_set,omitempty"`
 }
 
-// TaskCreateRequestAction Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
+// TaskCreateRequestAction Task action type. Tier 2 accepts `llm` only; the enum grows additively (future growth path — design intent, do not build in this release).
 type TaskCreateRequestAction string
 
 // TaskCreateRequestCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
@@ -23212,7 +23268,7 @@ type TaskCreateRequestSurface string
 // TaskCreateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskCreateRequestTodosStatus string
 
-// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type TaskCreateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
@@ -23234,7 +23290,7 @@ type TaskCreateRequest_Trigger_Config struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
-// TaskCreateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+// TaskCreateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskCreateRequestTriggerType string
 
 // TaskOccurrenceSet The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavors that can recur (`rrule` via rrule-go, legacy `cron_expr` via gronx in the server zone, and `every_ms` as a forward-only projection off the live job's next-run instant — FR-008a). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
@@ -23337,7 +23393,7 @@ type TaskRunKind string
 // TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
 type TaskRunStatus string
 
-// TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+// TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 // ## Tier 2 (now) `type` is one of:
 //   - `manual`    — no automatic trigger. The task starts when a human drags its
 //     card into `in_progress`, or via Run / Create & Run. For an
@@ -23355,16 +23411,16 @@ type TaskRunStatus string
 //     Each fire spawns a FRESH run.
 //
 // `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
-// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 type TaskTrigger struct {
-	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 	Config TaskTrigger_Config `json:"config"`
 
-	// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+	// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 	Type TaskTriggerType `json:"type"`
 }
 
-// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type TaskTrigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
@@ -23569,7 +23625,7 @@ type TaskUpdateRequest struct {
 		Text string `json:"text"`
 	} `json:"todos,omitempty"`
 
-	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 	// ## Tier 2 (now) `type` is one of:
 	//   - `manual`    — no automatic trigger. The task starts when a human drags its
 	//                   card into `in_progress`, or via Run / Create & Run. For an
@@ -23587,12 +23643,12 @@ type TaskUpdateRequest struct {
 	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
-	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+	// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 		Config TaskUpdateRequest_Trigger_Config `json:"config"`
 
-		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 		Type TaskUpdateRequestTriggerType `json:"type"`
 	} `json:"trigger,omitempty"`
 
@@ -23645,7 +23701,7 @@ type TaskUpdateRequestSurface string
 // TaskUpdateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskUpdateRequestTodosStatus string
 
-// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type TaskUpdateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
@@ -23667,7 +23723,7 @@ type TaskUpdateRequest_Trigger_Config struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
-// TaskUpdateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+// TaskUpdateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskUpdateRequestTriggerType string
 
 // Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need an independent agent/trigger. The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy boolean `done` so a checklist can express work-in-progress (§3 tasks-system refactor — the `set_todos` agent scratchpad rides this same array).
@@ -23753,32 +23809,48 @@ type TokenUsageSummary struct {
 	TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
 }
 
-// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, cancelling, or approving-and-remembering ("always") it.
+// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
 type ToolApprovalActionRequest struct {
-	// Action Action to take on this approval. approve — allow this single invocation. deny    — reject this single invocation. cancel  — cancel this invocation (e.g. modal dismissed / turn aborted). always  — allow this invocation AND record a session-scoped "Always Allow" grant for (session, agent, tool) so future matching calls in the same session auto-approve without re-prompting.
+	// Action Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
 	Action ToolApprovalActionRequestAction `json:"action"`
+
+	// Scope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+	// Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
+	// When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact grant for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix grant it did not offer (see CommandSegmentInfo.prefix_available).
+	Scope *ToolApprovalActionRequestScope `json:"scope,omitempty"`
 }
 
-// ToolApprovalActionRequestAction Action to take on this approval. approve — allow this single invocation. deny    — reject this single invocation. cancel  — cancel this invocation (e.g. modal dismissed / turn aborted). always  — allow this invocation AND record a session-scoped "Always Allow" grant for (session, agent, tool) so future matching calls in the same session auto-approve without re-prompting.
+// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
 type ToolApprovalActionRequestAction string
+
+// ToolApprovalActionRequestScope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+// Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
+// When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact grant for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix grant it did not offer (see CommandSegmentInfo.prefix_available).
+type ToolApprovalActionRequestScope string
 
 // ToolApprovalResponse Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed.
 type ToolApprovalResponse struct {
-	// Action The action that was applied. Echoes the request action, including "always" (approve-and-remember).
+	// Action The action that was applied. Echoes the request action (ADR-092 D4), including "allow" (approve-and-remember, renamed from "always").
 	Action ToolApprovalResponseAction `json:"action"`
 
 	// ApprovalId The approval ID that was resolved.
 	ApprovalId string `json:"approval_id"`
 
-	// GrantRecorded Present only when action is "always". True when the standing Always Allow grant was stored. False means this call was approved once, but the next identical call will ask again — the grant did not stick (missing session, agent, or tool identity on the approval).
+	// GrantRecorded Present only when action is "allow". True when the grant was stored — a session command grant (scope: exact/prefix), or the pre-flight escalation's own path-widening/network-widening grant when this approval resolved a D7/D8 escalation instead of an ordinary tool-approval-required frame. False means this call was approved once, but the next identical call (or the next command needing the same widening) will ask again — the grant did not stick (missing session, agent, or tool identity on the approval).
 	GrantRecorded *bool `json:"grant_recorded,omitempty"`
+
+	// Scope The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow" and the grant was recorded (grant_recorded true); omitted otherwise.
+	Scope *ToolApprovalResponseScope `json:"scope,omitempty"`
 
 	// Status Result status. Always "ok" when the action was accepted.
 	Status ToolApprovalResponseStatus `json:"status"`
 }
 
-// ToolApprovalResponseAction The action that was applied. Echoes the request action, including "always" (approve-and-remember).
+// ToolApprovalResponseAction The action that was applied. Echoes the request action (ADR-092 D4), including "allow" (approve-and-remember, renamed from "always").
 type ToolApprovalResponseAction string
+
+// ToolApprovalResponseScope The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow" and the grant was recorded (grant_recorded true); omitted otherwise.
+type ToolApprovalResponseScope string
 
 // ToolApprovalResponseStatus Result status. Always "ok" when the action was accepted.
 type ToolApprovalResponseStatus string
@@ -23834,6 +23906,9 @@ type ToolPolicyChangesSet string
 
 // ToolRegistryEntry A single entry in the central tool registry snapshot returned by GET /api/v1/tools (FR-027).
 type ToolRegistryEntry struct {
+	// AutoApprove ADR-092 D9: this tool's verdict when Auto-approve is active and the tool's effective policy is "ask". "runs" = always runs with no prompt. "runs_if_args" = runs only when this call's arguments meet the tool's own condition (e.g. a file path resolves inside the workspace or a mount); otherwise it asks. "asks" = always asks under Auto, and is auto-denied in an unattended run. For source="builtin" this is read from the static classifier table (tools.AutoApproveClassOf); "bash" is excluded (its own per-command mechanism, D3/D7/D8) and never appears with this field set. For source="mcp" this reflects the server's tool annotations: "runs" when the server marks the tool read-only or explicitly not destructive, "asks" otherwise (including tools with no annotations at all).
+	AutoApprove *ToolRegistryEntryAutoApprove `json:"auto_approve,omitempty"`
+
 	// Category Tool domain category (e.g. "filesystem", "shell", "web", "browser", "communication", "delegation", "memory", "tasks", "skills", "tool_discovery", "agents", "workspaces", "channels", "providers", "platform", "mcp"). Legacy values "core" and "system" may appear for un-recategorized tools.
 	Category string `json:"category"`
 
@@ -23852,6 +23927,9 @@ type ToolRegistryEntry struct {
 	// Source Origin of the tool registration. "builtin" = compiled-in Go tool; "mcp" = MCP server tool.
 	Source ToolRegistryEntrySource `json:"source"`
 }
+
+// ToolRegistryEntryAutoApprove ADR-092 D9: this tool's verdict when Auto-approve is active and the tool's effective policy is "ask". "runs" = always runs with no prompt. "runs_if_args" = runs only when this call's arguments meet the tool's own condition (e.g. a file path resolves inside the workspace or a mount); otherwise it asks. "asks" = always asks under Auto, and is auto-denied in an unattended run. For source="builtin" this is read from the static classifier table (tools.AutoApproveClassOf); "bash" is excluded (its own per-command mechanism, D3/D7/D8) and never appears with this field set. For source="mcp" this reflects the server's tool annotations: "runs" when the server marks the tool read-only or explicitly not destructive, "asks" otherwise (including tools with no annotations at all).
+type ToolRegistryEntryAutoApprove string
 
 // ToolRegistryEntryScope Tool visibility scope.
 type ToolRegistryEntryScope string
@@ -25538,12 +25616,6 @@ type GetProvidersCatalogParams struct {
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
 
-// UpdateExecAllowlistJSONBody defines parameters for UpdateExecAllowlist.
-type UpdateExecAllowlistJSONBody struct {
-	// AllowedBinaries List of allowed binary name patterns.
-	AllowedBinaries []string `json:"allowed_binaries"`
-}
-
 // ListSessionsParams defines parameters for ListSessions.
 type ListSessionsParams struct {
 	// AgentId Filter by agent ID.
@@ -25827,9 +25899,6 @@ type UpdateScheduleJSONRequestBody = ScheduleUpdate
 
 // UpdateAuditLogToggleJSONRequestBody defines body for UpdateAuditLogToggle for application/json ContentType.
 type UpdateAuditLogToggleJSONRequestBody = AuditLogToggleRequest
-
-// UpdateExecAllowlistJSONRequestBody defines body for UpdateExecAllowlist for application/json ContentType.
-type UpdateExecAllowlistJSONRequestBody UpdateExecAllowlistJSONBody
 
 // UpdatePromptGuardJSONRequestBody defines body for UpdatePromptGuard for application/json ContentType.
 type UpdatePromptGuardJSONRequestBody = PromptGuardUpdateRequest

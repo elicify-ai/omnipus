@@ -21,8 +21,8 @@ func init() {
 				// (e.g. "whatsapp.eu" and "whatsapp.us") never share store.db.
 				// Legacy single-instance ("whatsapp") uses
 				// workspace/whatsapp/whatsapp/store.db — different from the old
-				// workspace/whatsapp/store.db, but v0.3 is a fresh-build so
-				// no migration is required.
+				// workspace/whatsapp/store.db. The codebase is greenfield (no
+				// migration or upgrade path exists), so this is not a breaking change.
 				storePath = filepath.Join(cfg.AgentHomeBasePath(), "whatsapp", instanceID)
 			}
 			return NewWhatsAppNativeChannel(waCfg, b, storePath)

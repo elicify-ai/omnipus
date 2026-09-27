@@ -463,3 +463,52 @@ describe('ZoomPill — range-clamped button disabling', () => {
     expect(onZoomToSelection).toHaveBeenCalledTimes(1)
   })
 })
+
+// Consolidated contract test (design-system audit coverage: zoomable-view-unit) —
+// deliberately top-level (no enclosing describe) so its title is exactly the
+// manifest's declared check name. Each line below is a real, independently
+// falsifiable assertion drawn from the detailed describes above; it exists
+// because none of those individually-titled tests carries this exact name, so
+// none of them satisfies the manifest's single named unit-check evidence match.
+it('clampZoomScale / computeFittedScale / computeOpeningScale / resolveSvgIntrinsicSize / useZoomableViewKeyboard / ZoomableMediaSurface wheel contract / ZoomPill range-clamped disabling', () => {
+  // clampZoomScale: clamps outside the shared 25%-400% range.
+  expect(clampZoomScale(0)).toBe(ZOOMABLE_VIEW_MIN_SCALE)
+  expect(clampZoomScale(10)).toBe(ZOOMABLE_VIEW_MAX_SCALE)
+
+  // computeFittedScale: binds on the tighter axis (1000x100 into 500x500 -> width binds at 0.5).
+  expect(computeFittedScale({ width: 1000, height: 100 }, { width: 500, height: 500 })).toBeCloseTo(0.5)
+
+  // computeOpeningScale: the 12px label floor overrides the fitted scale for oversized content.
+  const content = { width: 5000, height: 1000 }
+  const frame = { width: 1000, height: 1000 }
+  const fitted = computeFittedScale(content, frame)
+  expect(computeOpeningScale({ content, frame, smallestLabelPx: 10 })).toBeGreaterThan(fitted)
+
+  // resolveSvgIntrinsicSize: reads intrinsic size from viewBox, never a percentage width.
+  expect(resolveSvgIntrinsicSize('<svg width="100%" height="100%" viewBox="0 0 1600 300"></svg>')).toEqual({
+    width: 1600,
+    height: 300,
+  })
+
+  // useZoomableViewKeyboard: binds "+" to zoom in and prevents default.
+  const keyboardHandlers = { onZoomIn: vi.fn(), onZoomOut: vi.fn(), onFit: vi.fn(), onZoomTo100: vi.fn() }
+  const { result } = renderHook(() => useZoomableViewKeyboard(keyboardHandlers))
+  const preventDefault = vi.fn()
+  result.current({ key: '+', preventDefault } as unknown as React.KeyboardEvent)
+  expect(preventDefault).toHaveBeenCalled()
+  expect(keyboardHandlers.onZoomIn).toHaveBeenCalledTimes(1)
+
+  // ZoomableMediaSurface wheel contract: a wheel event is never left to scroll/zoom the page.
+  render(
+    <ZoomableMediaSurface contentSize={{ width: 400, height: 300 }}>
+      <img alt="" src="about:blank" />
+    </ZoomableMediaSurface>,
+  )
+  expect(fireEvent.wheel(screen.getByTestId('zoomable-media-surface'), { deltaY: -100 })).toBe(false)
+
+  // ZoomPill range-clamped disabling: Zoom out is disabled at the configured minimum.
+  render(
+    <ZoomPill zoom={ZOOMABLE_VIEW_MIN_SCALE} onZoomIn={vi.fn()} onZoomOut={vi.fn()} onFit={vi.fn()} onZoomTo100={vi.fn()} />,
+  )
+  expect(screen.getByRole('button', { name: 'Zoom out' })).toBeDisabled()
+})

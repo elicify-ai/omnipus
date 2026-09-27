@@ -1,5 +1,7 @@
 # Grill Review — ADR-051 Rev 4 (Workspace Media Library + Capability-Aware Presentation Layer)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Review target:** `docs/internal/architecture/ADR-051-rev4-workspace-media-library-and-presentation-layer.md`
 **Reviewer mode:** adversarial (grill-spec, generic-markdown / ADR mode)
 **Date:** 2026-07-22

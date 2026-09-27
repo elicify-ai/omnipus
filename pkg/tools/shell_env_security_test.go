@@ -25,7 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
-// Fake sentinel credentials. KEY NAMES are chosen so the v0.2 #155 child-env
+// Fake sentinel credentials. KEY NAMES are chosen so the #155 child-env
 // allowlist (allowedChildEnvKeys plus the LC_/XDG_/OMNIPUS_CHILD_ prefixes)
 // denies both names.
 const (
@@ -398,7 +398,7 @@ func assertChildEnvReport(t *testing.T, output, wsBin string) {
 
 // TestScrubbedEnvGodModeCrossCheckAgainstChildAllowlist is the R4 disposition
 // pin: everything god mode strips (the three gateway credential keys) is ALSO
-// stripped by the real boundary — the v0.2 #155 child-env allowlist. If the
+// stripped by the real boundary — the #155 child-env allowlist. If the
 // allowlist ever starts passing one of those keys through, this fires before
 // the god-mode scrub's narrower list can drift below the authority. God mode
 // PRESERVING the operator environment is intentional and pinned separately.
@@ -467,7 +467,7 @@ func TestTurnKernelPolicyUsesCallerResolvedRuntimeSnapshot(t *testing.T) {
 	// rules — even though the workspace env exists on disk and a re-read
 	// would find it.
 	zeroSnapshot := environmentsetup.RuntimeEnv{}
-	policy, err := tool.turnKernelPolicy(ctx, ws, zeroSnapshot, documentEnvLayer{})
+	policy, err := tool.turnKernelPolicy(ctx, ws, zeroSnapshot, documentEnvLayer{}, nil)
 	if err != nil {
 		t.Fatalf("zero-snapshot policy derivation failed: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestTurnKernelPolicyUsesCallerResolvedRuntimeSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve runtime env: %v", err)
 	}
-	policy, err = tool.turnKernelPolicy(ctx, ws, resolved, documentEnvLayer{})
+	policy, err = tool.turnKernelPolicy(ctx, ws, resolved, documentEnvLayer{}, nil)
 	if err != nil {
 		t.Fatalf("resolved-snapshot policy derivation failed: both snapshots ride one read: %v", err)
 	}

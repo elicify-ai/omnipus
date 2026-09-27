@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 
@@ -59,6 +60,13 @@ func (nal *newAgentLoop) initializeCore() {
 		browserMgrs:             make(map[string]*browser.BrowserManager),
 		browserRegisteredAgents: make(map[string]bool),
 	}
+	// Loop-lifetime context: alive from construction, cancelled by Stop() and
+	// Close(). The revived-turn context accessor falls back to it before Run
+	// has stored its own run-scoped context (loop.go::inboundCtx), so a
+	// revival racing boot is cancelled by the same Stop that ends the loop
+	// instead of running detached on context.Background() (architect CC-2's
+	// cancellation half, held before Run).
+	nal.al.loopCtx, nal.al.loopCancel = context.WithCancel(context.Background())
 	// Concurrency-gate consolidation (2026-08-04): session admission's cap is
 	// resolved LIVE from the SAME central authority TaskExecutor's dispatch
 	// semaphore uses (Performance.EffectiveMaxParallelAgents), instead of the
@@ -143,6 +151,12 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 			// that decision is taken below, at this call site, which is the
 			// only place that knows it.
 			AuditLogRequested: true,
+			// #914: redaction is always on for the production audit log —
+			// no config key, no off switch. Without it, credentials typed
+			// into bash/web_serve/environment_setup commands were written
+			// verbatim and served by GET /api/v1/audit-log. The logger
+			// redacts credentials only; email addresses stay (MC-19).
+			RedactEnabled: true,
 		})
 		if auditErr != nil {
 			// The audit logger could not be built. Two different populations
@@ -243,50 +257,8 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 	return nil, false, nil
 }
 
-// initializeSecurity builds policy enforcement, sandboxing, prompt protection, and the exec proxy.
+// initializeSecurity builds sandboxing, prompt protection, and the exec proxy.
 func (nal *newAgentLoop) initializeSecurity() {
-	// SEC-05/SEC-07: Build the policy evaluator from the live config.
-	// `cfg.Tools.Exec.AllowedBinaries` is the single source of truth for the
-	// exec allowlist (the same field the UI writes to via
-	// /api/v1/security/exec-allowlist). Constructing with an explicit
-	// SecurityConfig avoids the deny-everything trap of `NewEvaluator(nil)`.
-	//
-	// Default policy derivation:
-	//   - A non-empty allowlist means the operator opted into SEC-05 binary
-	//     restriction — default_policy is "deny" so unlisted binaries are blocked.
-	//   - An empty allowlist means no opt-in — default_policy is "allow" so
-	//     the existing guardCommand() checks remain the only exec restriction.
-	// This preserves backward compatibility for agents that never touched the
-	// allowlist, while honoring fail-closed semantics for agents that did.
-	defaultPolicy := policy.PolicyAllow
-	if len(nal.cfg.Tools.Exec.AllowedBinaries) > 0 {
-		defaultPolicy = policy.PolicyDeny
-	}
-	secCfg := &policy.SecurityConfig{
-		DefaultPolicy: defaultPolicy,
-		Policy: policy.PolicySection{
-			Exec: policy.ExecPolicy{
-				AllowedBinaries: nal.cfg.Tools.Exec.AllowedBinaries,
-				Approval:        nal.cfg.Tools.Exec.Approval,
-			},
-		},
-	}
-	policyEval := policy.NewEvaluator(secCfg)
-
-	// Wrap the evaluator in a PolicyAuditor so every decision is audit-logged
-	// (ADR-002 §W-3). When audit logging is disabled the bridge is nil; the
-	// PolicyAuditor tolerates a nil logger and still enforces — enforcement
-	// must NOT depend on audit logging being enabled.
-	var auditBridgeImpl *auditBridge
-	if nal.al.auditLogger != nil {
-		auditBridgeImpl = newAuditBridge(nal.al.auditLogger)
-	}
-	var policyAuditorLogger policy.AuditLogger
-	if auditBridgeImpl != nil {
-		policyAuditorLogger = auditBridgeImpl
-	}
-	nal.al.policyAuditor = policy.NewPolicyAuditor(policyEval, policyAuditorLogger, "")
-
 	// SEC-01/02/03: Select the best-available sandbox backend. This never
 	// fails: on unsupported kernels SelectBackend returns a FallbackBackend.
 	backend, backendName := sandbox.SelectBackend()
@@ -309,7 +281,7 @@ func (nal *newAgentLoop) initializeSecurity() {
 	// honored uniformly. When disabled the checker is nil and callers fall back
 	// to their default (proxy-aware) HTTP clients.
 	//
-	// v0.2 (#155 item 4): cfg.Sandbox.EgressAllowCIDRs is the operator escape
+	// #155 (item 4): cfg.Sandbox.EgressAllowCIDRs is the operator escape
 	// hatch for the default-deny outbound posture. Entries here are merged
 	// into the SSRFChecker's allow-list alongside the SSRF.AllowInternal list
 	// so a single field per concern keeps semantics clear: SSRF allow-list =
@@ -371,13 +343,35 @@ func (nal *newAgentLoop) initializeRuntime() (*AgentLoop, error) {
 	// by the gateway's tool-approval REST path and the delegate tool's
 	// async/await paths. Always non-nil.
 	nal.al.approvalGrants = security.NewApprovalGrantStore()
+	// Review finding #8(a) (LOW, 2026-09-23 security fix lane): wire the
+	// audit logger in AT CONSTRUCTION, not only on the first bash call
+	// (pkg/tools/shell_permission_mode.go::enforceShellPermissionMode also
+	// calls SetAuditLogger idempotently on every invocation — this is not a
+	// replacement for that call, it closes the WINDOW before the first bash
+	// call ever runs). Before this fix, a grant recorded by ANY OTHER path
+	// before the first bash command of the process — e.g. a classic
+	// exact/prefix "Allow" via rest_tool_registry.go::HandleToolApprovals on
+	// a non-bash tool, or a bash grant recorded through a delegate's own
+	// early turn — emitted no shell.grant_recorded event, because
+	// al.auditLogger (set just above at line ~244) was never propagated into
+	// the store that actually records the grant. al.auditLogger is already
+	// resolved by this point in construction (nil is a valid, deliberate
+	// value — degraded/disabled audit — SetAuditLogger's own nil-safe
+	// contract).
+	nal.al.approvalGrants.SetAuditLogger(nal.al.auditLogger)
+
+	// ADR-092: per-chat Auto-approve modifier and the bash permission gate
+	// built over it. Constructed before wireExecToolDeps below, which
+	// injects the gate into every agent's bash tool.
+	nal.al.sessionModes = NewSessionModeStore()
+	nal.al.shellGate = &ShellPermissionGate{Loop: nal.al}
 
 	// Process-wide AsyncNotifier (async-notifier-spec.md): the reusable
 	// "wake the conversation when background work finishes" primitive,
 	// extracted from the asyncCallback closure below. Always non-nil.
 	nal.al.asyncNotifier = newAsyncNotifier(nal.al)
 
-	// v0.2 #155 item 6: build the shared memory-write rate limiter and
+	// #155 item 6: build the shared memory-write rate limiter and
 	// propagate it to every agent's tool registry. One limiter is shared
 	// across all agents so the per-caller bucket is genuinely global —
 	// otherwise a malicious caller could route writes through different

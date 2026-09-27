@@ -532,7 +532,7 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 func boolPtr(b bool) *bool { return &b }
 
 // agentModelParamsInput is a request-shape-agnostic normalization of the
-// wire model_params object, mirroring agentCreateShellPolicyInput above.
+// wire model_params object.
 // gen.AgentCreateRequestMain, gen.AgentCreateRequestSubagent, and
 // gen.AgentUpdateRequest each generate their own anonymous ModelParams
 // struct (none $refs AgentModelParams.yaml — oapi-codegen inlines
@@ -707,7 +707,6 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// the single-account model.
 	// Chain: withAuth (verifies token) → handler.
 	rae.cm.RegisterHTTPHandler("/api/v1/audit-log", rae.a.withAuth(rae.a.HandleAuditLog))
-	rae.cm.RegisterHTTPHandler("/api/v1/security/exec-allowlist", rae.a.withAuth(rae.a.HandleExecAllowlist))
 	// Wave 3 security endpoints (SEC-25, SEC-28).
 	rae.cm.RegisterHTTPHandler("/api/v1/security/exec-proxy-status", rae.a.withAuth(rae.a.HandleExecProxyStatus))
 	// High-blast-radius security endpoints.
@@ -729,7 +728,7 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// and PUT (write — gated by RequireNotBypass, since dev_mode_bypass would
 	// otherwise let an anonymous caller change global rate-limit caps). Wrapped
 	// with adminWrap to bring it in line with the other high-blast-radius
-	// security endpoints below and to satisfy item 7 of v0.2-#155 (admin-route
+	// security endpoints below and to satisfy item 7 of #155 (admin-route
 	// bypass coverage).
 	rae.cm.RegisterHTTPHandler("/api/v1/security/rate-limits", rae.a.adminWrap(rae.a.HandleRateLimits))
 	rae.cm.RegisterHTTPHandler("/api/v1/security/sandbox-config", rae.a.adminWrap(rae.a.HandleSandboxConfig))

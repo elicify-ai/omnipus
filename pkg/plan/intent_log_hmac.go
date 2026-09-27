@@ -4,7 +4,7 @@
 
 // intent_log_hmac.go implements sec-MINOR-3/#539 tamper-evidence for the
 // write-ahead intent-log: a per-record HMAC chain over each plan's JSONL
-// file, reusing the v0.2 #155 audit-log mechanism (pkg/audit/hmac.go,
+// file, reusing the #155 audit-log mechanism (pkg/audit/hmac.go,
 // pkg/audit/verify.go) rather than a parallel implementation (DoD-11/BOM
 // discipline) —
 //

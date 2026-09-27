@@ -1,4 +1,6 @@
 # Production-Grade Tool Test Plan (2026-06)
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 **Scope:** every agent tool (~78 across `pkg/tools`, `pkg/sysagent/tools`, `pkg/tools/browser`) plus the time-bound subsystems (heartbeat, scheduled/recurring tasks, drains, idle-close, retention) and the **compressed-manifest reliability** mechanism. Goal: excellent coverage with no production surprises — each tool gets happy-path **and** edge/failure cases, driven through real seams (real files, real subprocesses, real Chrome, real channel delivery, a real served site, real multi-MCP discovery) wherever a unit stub would hide a bug.
 

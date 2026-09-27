@@ -1,16 +1,8 @@
 /**
- * ChatScreen.delegation-thread-visibility.test.tsx — ADR-091 D7/AC-7: the
- * parent's chat THREAD must show exactly the one line a `delegate` call
- * produces — a `run` action (the default, sync or async) is VISIBLE by
- * default, with no isError exception either way (see toolVisibility.ts's
- * shouldRenderToolCall doc comment). This supersedes the pre-ADR-091 Fix 2
- * rule (delegation hidden from the thread by default) — the span/step
- * surface that rule deferred to (SubagentBlock's delegation card,
- * `shouldRenderSubagentSpan`) is deleted: a child's own frames never arrive
- * in the parent's bucket any more, so there is nothing left for a span to
- * show, and this tool-call line is the thread's ONLY delegation surface.
- * Only `status` (polling a previously-delegated task) still stays hidden by
- * default — pure noise, no standalone meaning to a reader.
+ * ChatScreen.delegation-thread-visibility.test.tsx — delegation chat
+ * surface D2 (docs/internal/specs/delegation-chat-surface-spec.md): with
+ * verbose chat off, a `delegate` call is not a badge. The grey event line
+ * is the thread's delegation surface. Verbose chat still shows the badge.
  *
  * ADR-091 D7/D10: this file's original first describe block asserted
  * presence/absence of the SubagentBlock span card (a `./SubagentBlock`
@@ -21,7 +13,7 @@
  * verbosity. That block, and the stub, are removed with it. The remaining
  * two blocks — the flat `delegate` tool-call row (GenericToolCall's own
  * `shouldRenderToolCall` gate) and the ghost-bubble guard — are untouched
- * by that deletion and stay, updated for the new default-visible `run` rule.
+ * by that deletion and stay. They now assert D2: hidden unless verbose chat is on.
  *
  * Style mirrors ChatScreen.tool-order.test.tsx: full ChatScreen render,
  * PlainMessageList fallback (ResizeObserver forced undefined) so a finished
@@ -133,6 +125,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ navigate: vi.fn() }),
   useSearch: () => ({}),
+  useNavigate: () => vi.fn(),
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
@@ -241,7 +234,7 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
     act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
   }
 
-  it('an explicit synchronous (async:false) delegate run renders a tool-call badge by default — the parent chat\'s ONLY delegation surface (ADR-091 D7/AC-7)', async () => {
+  it('an explicit synchronous delegate run renders no badge when verbose is off', async () => {
     seedSyncDelegateCall({ status: 'success' })
 
     let container!: HTMLElement
@@ -250,10 +243,10 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
       container = result.container
     })
 
-    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
   })
 
-  it('a FAILED synchronous delegate run is ALSO visible by default — no isError exception either way', async () => {
+  it('a FAILED synchronous delegate run also renders no badge when verbose is off', async () => {
     seedSyncDelegateCall({ status: 'error', error: 'delegation_denied' })
 
     let container!: HTMLElement
@@ -262,8 +255,53 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
       container = result.container
     })
 
-    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
   })
+
+  it.each(['steer', 'respond', 'cancel', 'follow_up'] as const)(
+    'a FAILED delegate %s shows no badge when verbose chat is off (spec D6)',
+    async (action) => {
+      seedSyncDelegateCall({
+        status: 'error',
+        error: 'the child could not take that',
+        params: { action, session_id: 'child-d6', text: 'try again' },
+      })
+
+      const stored = useChatStore.getState().messages.flatMap((message) => message.tool_calls ?? [])
+      const failed = stored.find((call) => call.tool === 'delegate' && call.params?.action === action)
+      expect(failed?.status).toBe('error')
+
+      let container!: HTMLElement
+      await act(async () => {
+        const result = render(<ChatScreen />)
+        container = result.container
+      })
+
+      expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
+    },
+  )
+
+  it.each(['steer', 'respond', 'cancel', 'follow_up'] as const)(
+    'a FAILED delegate %s shows its badge once verbose chat is on (spec D6)',
+    async (action) => {
+      act(() => {
+        useChatPreferencesStore.setState({ verboseChatEnabled: true })
+      })
+      seedSyncDelegateCall({
+        status: 'error',
+        error: 'the child could not take that',
+        params: { action, session_id: 'child-d6', text: 'try again' },
+      })
+
+      let container!: HTMLElement
+      await act(async () => {
+        const result = render(<ChatScreen />)
+        container = result.container
+      })
+
+      expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).not.toBeNull()
+    },
+  )
 
   it('a FAILED synchronous delegate run stays visible once verbose chat is enabled too', async () => {
     act(() => {
@@ -281,7 +319,7 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
     expect(badge).not.toBeNull()
   })
 
-  it('a delegate STATUS poll (the one shape that still hides by default) renders NO tool-call badge by default', async () => {
+  it('a delegate STATUS poll renders no tool-call badge when verbose chat is off', async () => {
     seedSyncDelegateCall({ status: 'success', params: { action: 'status', call_id: 'tc_delegate_sync' } })
 
     let container!: HTMLElement
@@ -311,12 +349,12 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
 
 // ── Fix 3 (2026-07-16): ghost bubble — a turn whose only content is a
 // hidden tool call must not render "avatar + empty body + Copy" (the D-fix
-// UAT defect resurfacing once a call starts hiding by default). ADR-091
-// D7/AC-7 made a `delegate` 'run' call visible by default (see the describe
-// block above), so it no longer exercises this concern — these two tests
-// use a delegate STATUS poll instead, the one delegate shape that still
-// hides by default (pure noise, no standalone meaning), to keep covering the
-// actual ghost-bubble scenario. Both tests render via the PlainMessageList
+// UAT defect resurfacing once a call starts hiding by default). Every
+// delegate action is hidden unless verbose chat is on (spec D2), so a
+// message that is only a delegation still exercises this guard. These two
+// tests use a delegate status poll — a call that produces no event line —
+// so the placeholder is the only thing the thread can show. Both tests
+// render via the PlainMessageList
 // fallback (ResizeObserver forced undefined, per this file's header) so
 // VirtualAssistantMessageRow handles a still-in-progress (isStreaming:true)
 // message, exactly the D-fix scenario this fix wave's finding cites.

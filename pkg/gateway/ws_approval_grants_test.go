@@ -27,11 +27,11 @@ type fakePolicyApprover struct {
 func (f *fakePolicyApprover) RequestApproval(
 	_ context.Context,
 	req agent.PolicyApprovalReq,
-) (bool, string) {
+) (bool, string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, req)
-	return f.approved, f.reason
+	return f.approved, f.reason, false
 }
 
 func (f *fakePolicyApprover) callCount() int {
@@ -134,7 +134,7 @@ func TestCheckGrantOrRequestApproval_AskWithGrantAutoApproves(t *testing.T) {
 
 	al.ApprovalGrants().Record("session-1", "agent-a", "exec", nil)
 
-	approved, reason := al.CheckGrantOrRequestApproval(
+	approved, reason, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), "session-1", "agent-a", "exec", "call-1", "turn-1", nil,
 	)
 	assert.True(t, approved, "an existing grant must auto-approve")
@@ -154,7 +154,7 @@ func TestCheckGrantOrRequestApproval_AskWithoutGrantPrompts(t *testing.T) {
 	fake := &fakePolicyApprover{approved: true, reason: ""}
 	al.SetToolApprover(fake)
 
-	approved, reason := al.CheckGrantOrRequestApproval(
+	approved, reason, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), "session-1", "agent-a", "exec", "call-1", "turn-1",
 		map[string]any{"command": "ls"},
 	)
@@ -184,14 +184,14 @@ func TestCheckGrantOrRequestApproval_GrantScopedByAgentAndSession(t *testing.T) 
 	al.ApprovalGrants().Record("session-1", "agent-a", "exec", nil)
 
 	// Same session, same agent, same tool -> auto-approved, no prompt.
-	approved, _ := al.CheckGrantOrRequestApproval(
+	approved, _, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), "session-1", "agent-a", "exec", "c1", "t1", nil,
 	)
 	assert.True(t, approved)
 	assert.Equal(t, 0, fake.callCount())
 
 	// Different agent, same session/tool -> must still prompt.
-	approved, reason := al.CheckGrantOrRequestApproval(
+	approved, reason, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), "session-1", "agent-b", "exec", "c2", "t1", nil,
 	)
 	assert.False(t, approved, "a different agent must not reuse agent-a's grant")
@@ -199,7 +199,7 @@ func TestCheckGrantOrRequestApproval_GrantScopedByAgentAndSession(t *testing.T) 
 	assert.Equal(t, 1, fake.callCount(), "a different agent must trigger a fresh approval request")
 
 	// Different session, same agent/tool -> must still prompt.
-	approved, _ = al.CheckGrantOrRequestApproval(
+	approved, _, _ = al.CheckGrantOrRequestApproval(
 		context.Background(), "session-2", "agent-a", "exec", "c3", "t1", nil,
 	)
 	assert.False(t, approved, "a different session must not reuse the grant")

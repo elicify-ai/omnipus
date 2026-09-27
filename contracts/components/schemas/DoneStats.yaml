@@ -23,9 +23,13 @@ properties:
   tokens_dropped:
     type: integer
     minimum: 0
+    deprecated: true
     description: >
-      Number of token frames dropped due to backpressure on the send channel.
-      Only present when > 0.
+      Deprecated (#823 catch-up redesign, Q5): the gateway no longer drops frames under
+      backpressure — a connection that falls too far behind is closed with WS close code
+      4008 ("catch-up required") and reconnects to catch up from its cursor instead. This
+      field is never set by the current gateway; kept only so an older client's decoder
+      does not choke on its absence. Do not read it as a liveness signal.
   # Replay-only diagnostics (present on done frames emitted by streamReplay)
   frames_emitted:
     type: integer

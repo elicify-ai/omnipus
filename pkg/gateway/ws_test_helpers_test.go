@@ -67,16 +67,18 @@ func makeTestConn() *wsConn {
 	}
 }
 
-// bindTestConnToSession registers wc under chatID in h.sessions AND binds
-// chatID to sessionID in h.sessionIDs, under h.mu — the two-map invariant
-// WSHandler.resolveSessionConnsLocked (ADR-082 D2) requires for a connection
-// to be resolved as a delivery target for sessionID. Production code
-// performs both writes together at connection-open/message-intake time (see
-// websocket.go); this helper is the test-side equivalent for constructing a
-// wsStreamer scenario without a full WS handshake.
+// bindTestConnToSession registers wc under chatID in h.sessions, binds
+// chatID to sessionID in h.sessionIDs, AND binds wc to sessionID's session
+// hub for live delivery — what the production accept loop plus a message
+// or attach on that session do together. #823: a connection receives a
+// session's frames only through that hub's bound set (ws_hub_binding.go),
+// so a test that registered only the two maps would now receive nothing.
 func bindTestConnToSession(h *WSHandler, chatID, sessionID string, wc *wsConn) {
 	h.mu.Lock()
 	h.sessions[chatID] = wc
 	h.sessionIDs[chatID] = sessionID
+	if h.hubs != nil {
+		h.bindConnToSessionHubLocked(wc, sessionID)
+	}
 	h.mu.Unlock()
 }

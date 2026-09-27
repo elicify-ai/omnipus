@@ -144,6 +144,40 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
     return false
   }
 
+  // "please continue" with nothing actually in progress is exactly the vague
+  // prose door goal-work-first.spec.ts documents as model-dependent (holdout
+  // H-2, spec §9): the worker may, instead of proceeding, call
+  // AskUserQuestion to check what "continue" means before doing anything
+  // else. ADR-088 D5 makes ordinary chat the entire steering mechanism, and
+  // the composer is deliberately locked while a question is pending
+  // (AskUserQuestionThreadTail's own copy: "chat input is locked while
+  // questions are pending — Cancel to unlock") — so an unattended CI run
+  // left facing that card would sit with `input.fill()` retrying against a
+  // disabled textarea for the rest of the test's budget, never timing out on
+  // anything the test actually asserts. Observed on CI (job 107857384754,
+  // commit bd4ff739f): attempt 0 hit exactly this — the transcript shows
+  // set_goal rejected once, a second self-authored goal registered, then an
+  // AskUserQuestion card ("I found no in-progress work to continue. What
+  // would you like to do?"), and `locator.fill` retried 825 times over the
+  // full 420s budget with "element is not enabled" before the suite's own
+  // flaky-test guard (correctly) failed the job. Dismissing a stray blocking
+  // card before steering is the same category of fix as clearing a leftover
+  // Tool-Approval overlay before a click — it does not touch the oracle
+  // (still only `donePill` decides pass/fail), it only clears a UI door the
+  // steer loop needs to get past to ask again.
+  const askUserQuestionCard = page.locator('[data-testid="ask-user-question-card"]')
+  const askUserCancel = page.locator('[data-testid="ask-user-cancel"]')
+  const dismissPendingAsk = async (): Promise<void> => {
+    if (!(await askUserQuestionCard.isVisible({ timeout: 1_000 }).catch(() => false))) return
+    console.log('t0: AskUserQuestion card is blocking the composer — cancelling it to steer past it')
+    await askUserCancel.click().catch(() => {
+      /* card may resolve itself between the check and the click */
+    })
+    await expect(input, 'composer must unlock once the pending question is cancelled').toBeEnabled({
+      timeout: 15_000,
+    })
+  }
+
   // FAST PATH: the worker may have claimed during its own turn. A model that
   // already claimed must not be steered again, so check before asking.
   let sawDone = await waitForDone(20_000)
@@ -192,6 +226,10 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // walk from a met claim through the Judge to a done pill.
   const STEER_ATTEMPTS = 3
   for (let attempt = 1; attempt <= STEER_ATTEMPTS && !sawDone; attempt++) {
+    // Clear a stray AskUserQuestion card first — see dismissPendingAsk's own
+    // comment above for why one can be sitting here blocking the composer.
+    await dismissPendingAsk()
+
     // Grounded evidence, not an echo of the criterion — see the block
     // comment above this loop for why.
     await input.fill(

@@ -51,4 +51,40 @@ var (
 	// ErrTerminal is returned by Dispatch of a terminal session with no
 	// follow-up.
 	ErrTerminal = errors.New("steer: dispatch: session is terminal")
+
+	// ErrSteeringStopped is ADR-093 D2's launch-time backstop: a launch whose
+	// steering conversation's own lifecycle record is terminal — or carries a
+	// Stop marker for its current generation — is refused before anything is
+	// created (no child record, no unified session, no goal). Callers map it
+	// through IsSteeringUnavailable to ADR-093 D5's plain sentence instead of
+	// surfacing store machinery text. The revival-failed variant
+	// (ErrSteeringRevivalFailed) is the same backstop when the conversation's
+	// last resume attempt itself failed.
+	ErrSteeringStopped = errors.New("steer: launch: steering conversation is not active (its record is terminal, or stopped for its current generation)")
+
+	// ErrSteeringRevivalFailed is the revival-failed variant of the D2
+	// backstop (gate SFH#6): the steering conversation is inactive AND its
+	// most recent revive attempt itself failed — so the D5 sentence ("send a
+	// new message ... resumes it") would point the user at the exact action
+	// that just failed. The underlying revive cause is wrapped alongside the
+	// sentinel so errors.Is still identifies both. Mapped to
+	// SteeringRevivalFailedMessage by the same callers that map
+	// ErrSteeringStopped to SteeringUnavailableMessage.
+	ErrSteeringRevivalFailed = errors.New("steer: launch: steering conversation is not active and its last resume attempt failed")
 )
+
+// IsSteeringUnavailable reports whether err is one of the refusal sentinels
+// that mean "this conversation cannot take the delegation right now because
+// it is not active" (ADR-093 D5): the launch-time backstop
+// (ErrSteeringStopped, or its revival-failed variant ErrSteeringRevivalFailed)
+// or a dispatch refusal (ErrDispatchCancelled, ErrTerminal,
+// ErrStaleGeneration). Callers map these to the D5 sentence — or, for the
+// revival-failed variant, the truthful revival-failed variant sentence —
+// instead of surfacing store machinery text.
+func IsSteeringUnavailable(err error) bool {
+	return errors.Is(err, ErrSteeringStopped) ||
+		errors.Is(err, ErrSteeringRevivalFailed) ||
+		errors.Is(err, ErrDispatchCancelled) ||
+		errors.Is(err, ErrTerminal) ||
+		errors.Is(err, ErrStaleGeneration)
+}

@@ -1,5 +1,7 @@
 # ADR-049: Planning & Goals — Plan entity, evidence-ladder judge, goal loops, System Agents
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 > **Update 2026-09-14:** the token budgets this document rejects were later adopted as the app-level token budget (ADR-053 D12); that budget and the per-delegation token budget have since been deleted from the product by founder decision. Token usage accounting is tracked in #707.
 
 - **Status:** Proposed (ratification of operator interview 2026-07-19; amended post grill-reviews **r1 (BLOCK) → r2 (REVISE) → r3 (PASS)**, all 2026-07-19; grill gate cleared — next: `/plan-spec`)
@@ -77,7 +79,7 @@ point and is corrected in the same change set as this amendment (OBS-001).
 - FR-4: **Every task execution runs as a goal loop with a judge**; every plan runs as a goal loop with a plan-level judge. Scratchpad (`set_todos`) tasks are exempt — they are never executed as goal loops (r1). `[FACT — user input; exemption from review]`
 - FR-5: Chat **`/goal <condition>`** (proof-driven) and **`/loop`** (time-driven: interval mode and self-paced mode; `status`/`stop` verbs) commands. One active `/goal` per session, replace-on-set. `[FACT — user input]`
 - FR-6: Agent tool-created tasks MUST carry ≥1 acceptance criterion (strict); agent tool paths cannot edit criteria count below 1 (r1); human/UI creation is soft (fallback in D5). `[FACT — user input + review]`
-- FR-7 (r1): New **System Agents** category: seeded, locked, visible, editable model + rubric prompt. **This epic ships the category + the Judge only.** Standing rule ratified: every future *out-of-turn* LLM action (scheduled retrospectives, dreaming mode, memory consolidation) MUST run as a System Agent — the Memory System Agent lands with the first such feature (v0.3 memory work). `[FACT — operator decision 2026-07-19 r1]`
+- FR-7 (r1): New **System Agents** category: seeded, locked, visible, editable model + rubric prompt. **This epic ships the category + the Judge only.** Standing rule ratified: every future *out-of-turn* LLM action (scheduled retrospectives, dreaming mode, memory consolidation) MUST run as a System Agent — the Memory System Agent lands with the first such feature (the memory work; the v0.3 release label was retired 2026-09-25). `[FACT — operator decision 2026-07-19 r1]`
 - FR-8: Goal-clear affordances at every level: task/plan card button, `/goal clear` (+ aliases), `/loop stop`. `[FACT — user input]`
 - FR-9 (r1): Loop bounds configurable **globally and per entity that runs a loop** (plan, task, /goal, /loop). A workspace-level default layer is deferred until a concrete need appears (review MIN-004; a workspace is not itself a level where a goal is set). `[FACT — user input, scoped per review]`
 
@@ -91,7 +93,7 @@ point and is corrected in the same change set as this amendment (OBS-001).
 ### Constraints
 - File-based storage only (JSON per entity, atomic writes, striped locks). `[FACT]`
 - No back-compat obligation for Milestone removal — precedent ADR-035/ADR-037. `[FACT]`
-- **Release placement (r1, operator decision):** this epic ships **in release v0.1.1**. PRs target the release line; the release line merges to `main` at ship time via a human-approved PR (never admin-bypassed). Because non-`main` PRs do not auto-close issues, whoever merges the release→main PR closes the epic's issues manually with PR citations (repo convention). The epic consciously pulls the plan/goal/orchestrator slice of the `.preview-doc/` v0.3 concept forward; the Workspaces re-cast itself remains v0.3. `[FACT — operator decision 2026-07-19 r1]`
+- **Release placement (r1, operator decision):** this epic ships **in release v0.1.1**. PRs target the release line; the release line merges to `main` at ship time via a human-approved PR (never admin-bypassed). Because non-`main` PRs do not auto-close issues, whoever merges the release→main PR closes the epic's issues manually with PR citations (repo convention). The epic consciously pulls the plan/goal/orchestrator slice of the `.preview-doc/` v0.3 concept forward; the Workspaces re-cast itself was v0.3 at the time (that release label was retired 2026-09-25). `[FACT — operator decision 2026-07-19 r1]`
 
 ## 3. Gaps and Ambiguities
 
@@ -219,13 +221,13 @@ surviving `summarizeSession` output is legacy reference-only text and does not
 justify same-epic scope. Standing rule (FR-7): all future out-of-turn LLM actions —
 scheduled retrospectives, dreaming mode/Dreamcatcher, memory consolidation — MUST run
 as System Agents; the **Memory System Agent** ships together with the first such
-feature (v0.3 memory work). Today's memory LLM work (`/remember`, `/recall`,
+feature (the memory work; the v0.3 release label was retired 2026-09-25). Today's memory LLM work (`/remember`, `/recall`,
 `/retrospective`) runs inside the acting agent's own turn via steering prompts + tools
 `[FACT — cmd_memory.go, applyMemoryCommandPrompt loop.go:9770]` and is unaffected.
 **Grandfather clause (r2):** `summarizeSession` runs in a goroutine and is genuinely
 out-of-turn; it is explicitly grandfathered un-attributed (legacy, reference-only
 output) until the Memory System Agent lands — it is the sole exception to the FR-7
-standing rule and is re-homed in the v0.3 memory work.
+standing rule and is re-homed with the memory work (the v0.3 release label was retired 2026-09-25).
 
 **Ratified privilege decision (r1, CRIT-002):** System Agents are **NOT privileged**.
 The wire type value `system` is revived for the category, and

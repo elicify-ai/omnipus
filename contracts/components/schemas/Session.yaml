@@ -96,7 +96,7 @@ properties:
     $ref: './SessionStats.yaml'
   workspace_id:
     type: string
-    description: Associated workspace ID (optional, future v0.3 feature).
+    description: Associated workspace ID when the session is bound to a workspace. Absent when the session has none.
     example: "ws-123"
   task_id:
     type: string

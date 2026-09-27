@@ -978,7 +978,7 @@ func (tc *taskCreateToolExecute) validateRequest() (*ToolResult, bool) {
 	// SetDelegationDenyChecker), but the legacy fallback this replaced was
 	// itself deny-by-default — removing it must not silently flip the
 	// unwired-checker case from deny to allow for the NEXT wiring bug (a new
-	// agent-construction path, a v0.3 plugin-system entry point, a refactor
+	// agent-construction path, a future plugin-system entry point, a refactor
 	// slip). Do NOT "simplify" this back to fail-open — CLAUDE.md Hard
 	// Constraint #6 forbids a silent runtime default here.
 	if tc.t.delegationDeny != nil {

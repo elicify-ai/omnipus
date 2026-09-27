@@ -61,9 +61,8 @@ func buildOwnershipTestStreamer(
 	} else {
 		ch = make(chan []byte, 16)
 		conn = &wsConn{
-			sendCh:         ch,
-			doneCh:         make(chan struct{}),
-			replayDivertCh: make(chan []byte, replayLiveBufferCap),
+			sendCh: ch,
+			doneCh: make(chan struct{}),
 		}
 		bindTestConnToSession(h, chatID, sessionID, conn)
 	}
@@ -240,11 +239,12 @@ func TestWsStreamer_Finalize_ShadowStreamStillPersistsCompleteCorrectTranscript(
 	owner.agentStore = store
 	// buildOwnershipTestStreamer bound chatID's connection under the default
 	// "session-"+chatID id — rebind it to the REAL session id the test just
-	// overrode both streamers onto, so Update/Finalize's resolveSessionConnsLocked
-	// (ADR-082 D2) actually finds this connection.
+	// overrode both streamers onto, so Update/Finalize's session-hub
+	// delivery (#823) actually reaches this connection.
 	h.mu.Lock()
-	h.sessionIDs[chatID] = meta.ID
+	rebind := h.sessions[chatID]
 	h.mu.Unlock()
+	bindTestConnToSession(h, chatID, meta.ID, rebind)
 
 	shadow, chShadow := buildOwnershipTestStreamer(t, h, wch, chatID, "turn-shadow-delegate")
 	shadow.sessionID = meta.ID

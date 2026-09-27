@@ -80,7 +80,7 @@ func TestAttach_CatchUpSnapshotOrdering(t *testing.T) {
 			time.Sleep(delay)
 
 			wc := &wsConn{
-				sendCh: make(chan []byte, replayLiveBufferCap+numTokens+8),
+				sendCh: make(chan []byte, 1000+numTokens+8),
 				doneCh: make(chan struct{}),
 			}
 			chatID := "chat-conn-" + strconv.Itoa(i)
@@ -197,6 +197,13 @@ func TestFix_CR5_F1_NoCatchUpForAlreadyPersistedRoundText(t *testing.T) {
 	round1, ok := round1Any.(*wsStreamer)
 	require.True(t, ok)
 	round1.SetTurnID("turn-cr5")
+	// #823 (BE-DESIGN.md §6.3; Lane B's stampStreamerMessageID): the agent
+	// loop stamps each round's streamer with the SAME id
+	// appendIntermediateAssistantTranscript persists the round under, which
+	// is how a catch-up tells "already in the transcript" from "still only
+	// live". The pre-#823 version of this test left the ids unrelated because
+	// liveStreamers tracked "already persisted" with a flag instead.
+	round1.SetMessageID("entry-round1-cr5")
 	require.NoError(t, round1.Update(context.Background(), "round one narration"))
 
 	require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
@@ -456,13 +463,13 @@ collect:
 	assert.True(t, sawError, "an error frame must be delivered on replay failure")
 	assert.True(t, sawReplayErrorDone, "a done{replay_error:true} frame must follow")
 
-	// The divert must have been disarmed AND drained — nothing left over to
-	// leak into a later attach on this same connection.
-	assert.False(t, wc.isReplayingLive.Load(), "isReplayingLive must be disarmed after a replay error")
-	select {
-	case leftover := <-wc.replayDivertCh:
-		t.Fatalf("BUG REGRESSION: replayDivertCh must be drained after a replay error, found: %s", string(leftover))
-	default:
-		// expected — empty
-	}
+	// #823: the divert channel is gone; its successor is hold mode. After a
+	// replay error the hold must still be released (nothing left parked to
+	// leak into a later attach on this connection, and live frames flow
+	// again).
+	wc.qmu.Lock()
+	holding, held := wc.holding, len(wc.held)
+	wc.qmu.Unlock()
+	assert.False(t, holding, "hold mode must be released after a replay error")
+	assert.Zero(t, held, "no held live frame may be left parked after a replay error")
 }

@@ -94,6 +94,8 @@ describe('ToolsAndPermissions - pre-hydration edit window', () => {
         isMcpEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     // The MCP section renders from the mcp-servers query alone - hydration

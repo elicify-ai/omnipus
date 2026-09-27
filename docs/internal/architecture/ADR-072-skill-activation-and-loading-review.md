@@ -1,5 +1,7 @@
 # Adversarial Review: ADR-072 — Skill activation and loading
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Spec reviewed**: docs/internal/architecture/ADR-072-skill-activation-and-loading.md
 **Review date**: 2026-09-01
 **Verdict**: REVISE

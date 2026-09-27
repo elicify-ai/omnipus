@@ -6,10 +6,6 @@
  *   Advanced layer — All jargon (sandbox internals, SSRF, deny-regex, tool grid,
  *                    audit log) under ONE AdvancedDisclosure.
  *
- * Risky controls wrapped in RiskySettingControl (US-B2 / #328):
- *   - policyMode (safe = 'deny')
- *   - bind_address (in GatewaySection — not here; done there)
- *
  * Global Tool Access via ToolPolicyEditor (US-B3 / #329):
  *   - Replaces GlobalToolPoliciesSection entirely.
  *   - Deletes local CATEGORY_LABELS / PolicyBadge / groupByCategory duplicates.
@@ -25,8 +21,8 @@
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { cn } from '@/lib/utils'
 import { AuditLogViewer } from './AuditLogViewer'
-import { ExecAllowlistSection } from './ExecAllowlistSection'
 import { PromptGuardSection } from './PromptGuardSection'
 import { ExecProxyStatusCard } from './ExecProxyStatusCard'
 import { SkillTrustSection } from './SkillTrustSection'
@@ -38,7 +34,6 @@ import { Input } from '@/components/ui/input'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Switch } from '@/components/ui/switch'
-import { SmartSelect } from '@/components/ui/smart-select'
 import {
   Dialog,
   DialogContent,
@@ -57,6 +52,9 @@ import {
   fetchBuiltinTools,
   fetchGlobalToolPolicies,
   updateGlobalToolPolicies,
+  fetchSandboxConfig,
+  updateSandboxConfig,
+  fetchSandboxStatus,
   getErrorMessage,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -65,9 +63,9 @@ import { SandboxSection } from './SandboxSection'
 import { Label } from '@/components/ui/label'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
-import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
+import { AutoApproveAskList } from './AutoApproveAskList'
 
 // ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
 // CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
@@ -156,14 +154,154 @@ function GlobalToolPoliciesSection() {
   )
 }
 
-// ── Policy mode risky control (US-B2) ─────────────────────────────────────────
+// ── Auto-approve (ADR-092) — global default ───────────────────────────────────
+//
+// Auto-approve is a SEPARATE setting from tool policy (allow/deny/ask) — it
+// only has meaning for a tool currently resolved to "ask". It covers every
+// such tool, not just shell commands (ADR-092 addendum §2/§3) — "runs" is
+// what the classifier proves never leaves the workspace/sandbox for that
+// specific call; a short, fixed list always asks regardless (§7).
+//
+// Founder decision (2026-09-24): Auto-approve no longer requires an
+// enforcing kernel sandbox — it works for every tool, shell included, on
+// every platform (Windows too), whether or not the sandbox is enforcing.
+// `kernel_sandbox_active` (read from the same ['sandbox-status'] query the
+// chat-header badge uses) is WARNING-ONLY here: with no enforcing sandbox,
+// shell commands now ask first unless they are read-only or covered by an
+// operator allow rule (see pkg/tools/shell_no_sandbox_gate.go), and the
+// card's platform caveat line is shown as a caution instead of muted.
+//
+// Lives on the same SandboxConfig the Process Sandbox (Advanced) section
+// already manages, and goes through the same re-auth-gated
+// PUT /security/sandbox-config handler — no separate auth path to build.
+//
+// Exported (not just used locally) so AutoApproveControl.stories.tsx can
+// mount this one card in isolation for a visual check, without seeding
+// every query the rest of SecuritySection needs.
+export function AutoApproveControl() {
+  const { addToast } = useUiStore()
+  const stepUp = useStepUp()
+  const queryClient = useQueryClient()
 
-const POLICY_MODE_COPY = {
-  dialogTitle: 'Switch to Allow mode?',
-  dialogDescription:
-    'Allow mode lets agents run tools without asking first. This gives agents more autonomy but lowers your oversight. Switch to Deny to stay in control.',
-  confirmLabel: 'Switch to Allow anyway',
-  cancelLabel: 'Keep Deny (safer)',
+  const { data: sandboxConfig, isLoading, isError } = useQuery({
+    queryKey: ['sandbox-config'],
+    queryFn: fetchSandboxConfig,
+  })
+  const { data: sandboxStatus } = useQuery({
+    queryKey: ['sandbox-status'],
+    queryFn: fetchSandboxStatus,
+  })
+  const kernelSandboxEnforcing = sandboxStatus?.kernel_sandbox_active === true
+  const noSandboxCaution = sandboxStatus !== undefined && !kernelSandboxEnforcing
+
+  const { mutateAsync: saveAsync, isPending: isSaving } = useMutation({
+    mutationFn: (vars: { next: boolean; token?: string }) =>
+      updateSandboxConfig({ auto_approve: vars.next }, vars.token),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
+      queryClient.invalidateQueries({ queryKey: ['sandbox-status'] })
+    },
+    onError: (err: unknown) => {
+      addToast({ message: getErrorMessage(err, 'Could not change Auto-approve'), variant: 'error' })
+    },
+  })
+
+  // Founder feedback (2026-09-24): the old copy put the full grouped
+  // ask-list, the workspace path rule, an example and the Windows caveat
+  // into one long paragraph here too — "a huge blob of text". The
+  // confirmation stays short (at most 2-3 plain sentences) and points at
+  // the SAME collapsed "Always asks when set to Ask" list the card itself
+  // shows, rather than restating all 28 tools inline. `ConfirmDialog`'s
+  // `description` renders inside an `AlertDialogDescription`, which Radix
+  // renders as a `<p>` — a list/disclosure element cannot legally nest
+  // inside a `<p>`, which is why this is a pointer to the list, not the
+  // list itself.
+  //
+  // Founder decision (2026-09-24, UAT defect D-02): the pointer sentence
+  // used to say these tools "always still ask" — false for a tool on
+  // Allow, which several of these are by default. Reworded to name the
+  // actual condition: they never skip the prompt once set to Ask.
+  function requestChange(next: boolean) {
+    if (isSaving) return
+    void stepUp
+      .gate((token) => saveAsync({ next, token }), {
+        title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
+        body: next
+          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace. See “Always asks when set to Ask” on this card for the short list of things that never skip the prompt once set to Ask. Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and commands an operator rule allows.'
+          : 'Every tool set to “ask” will prompt every time again, with no auto-approval.',
+        confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
+      })
+      .catch((err: unknown) => {
+        // A cancelled gate sent nothing — stay silent. A real failure already
+        // toasted once via saveAsync's own onError; do not toast twice.
+        if (isReAuthCancelled(err)) return
+      })
+  }
+
+  if (isLoading) {
+    return (
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
+        <div className="h-4 w-32 rounded bg-[var(--color-surface-2)] animate-pulse" />
+        <div className="h-3 w-full rounded bg-[var(--color-surface-2)] animate-pulse" />
+      </Card>
+    )
+  }
+
+  if (isError) {
+    return (
+      <Card className="p-[var(--space-3)]">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+          Failed to load the Auto-approve setting. Please try again.
+        </p>
+      </Card>
+    )
+  }
+
+  const enabled = sandboxConfig?.auto_approve === true
+
+  // Founder feedback (2026-09-24): "a huge blob of text, not well written".
+  // Redesign — one short summary sentence, a collapsed group list
+  // (AutoApproveAskList), and a small muted platform caveat, instead of one
+  // long paragraph carrying the summary, the full 28-tool list, the
+  // workspace path rule, an example, and the Windows caveat all at once.
+  return (
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
+      <div className="flex items-center justify-between gap-[var(--space-3)]">
+        <div>
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Auto-approve</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
+            Tools set to &ldquo;Ask&rdquo; run without a prompt when it&rsquo;s safe: they stay inside your
+            workspace.
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          disabled={isSaving}
+          onCheckedChange={requestChange}
+          aria-label="Auto-approve"
+          data-testid="auto-approve-global-switch"
+        />
+      </div>
+
+      <AutoApproveAskList />
+
+      <p
+        className={cn(
+          'text-[length:var(--type-caption-size)]',
+          noSandboxCaution ? 'text-[var(--color-warning)]' : 'text-[var(--color-muted)]',
+        )}
+      >
+        Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and
+        commands an operator rule allows.
+      </p>
+
+      {/* This control's OWN useStepUp() instance — its dialogs must be
+          mounted here, not assumed to come from SecuritySection's separate
+          credential-vault stepUp instance (each useStepUp() call owns
+          independent open/close state). */}
+      {stepUp.dialogs}
+    </Card>
+  )
 }
 
 // ── SecuritySection ────────────────────────────────────────────────────────────
@@ -187,16 +325,11 @@ export function SecuritySection() {
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
 
-  // US-B2: policyMode derives its badge from the PERSISTED value (config.security.policy_mode).
-  // The local state is the draft; after save the query is invalidated so config refetches.
-  const [policyMode, setPolicyMode] = useState<'allow' | 'deny'>('deny')
-  const [execApproval, setExecApproval] = useState<'auto' | 'ask' | 'deny'>('ask')
   // ADR-053 D12: dailyCostCap state retired alongside the SEC-26 USD cap.
   const [agentLlmCallsPerHour, setAgentLlmCallsPerHour] = useState('')
   const [agentToolCallsPerMin, setAgentToolCallsPerMin] = useState('')
   const [execTimeoutSecs, setExecTimeoutSecs] = useState('')
   const [maxBackgroundSecs, setMaxBackgroundSecs] = useState('')
-  const [enableDenyPatterns, setEnableDenyPatterns] = useState(false)
   // D3 / UAT spurious-PUT fix: reactive readiness flag, distinct from the
   // `!config` check useAutoSave's `disabled` option used to key off of.
   // `config` turns truthy in the SAME commit the hydration effect below is
@@ -226,36 +359,27 @@ export function SecuritySection() {
   useEffect(() => {
     if (!config) return
     if (isDirtyRef.current) return
-    setPolicyMode(config.security.policy_mode)
-    setExecApproval(config.security.exec_approval)
     setAgentLlmCallsPerHour(config.security.rate_limits.max_agent_llm_calls_per_hour?.toString() ?? '')
     setAgentToolCallsPerMin(config.security.rate_limits.max_agent_tool_calls_per_minute?.toString() ?? '')
     setExecTimeoutSecs(config.security.exec_timeout_seconds?.toString() ?? '')
     setMaxBackgroundSecs(config.security.max_background_seconds?.toString() ?? '')
-    setEnableDenyPatterns(config.security.enable_deny_patterns ?? false)
     setSecurityHydrated(true)
   }, [config])
 
   const securityFormData = useMemo(() => ({
-    policy_mode: policyMode,
-    exec_approval: execApproval,
     exec_timeout_seconds: execTimeoutSecs,
     max_background_seconds: maxBackgroundSecs,
-    enable_deny_patterns: enableDenyPatterns,
     agent_llm_calls_per_hour: agentLlmCallsPerHour,
     agent_tool_calls_per_min: agentToolCallsPerMin,
-  }), [policyMode, execApproval, execTimeoutSecs, maxBackgroundSecs, enableDenyPatterns, agentLlmCallsPerHour, agentToolCallsPerMin])
+  }), [execTimeoutSecs, maxBackgroundSecs, agentLlmCallsPerHour, agentToolCallsPerMin])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
     securityFormData,
     async () => {
       await updateConfig({
         security: {
-          policy_mode: policyMode,
-          exec_approval: execApproval,
           exec_timeout_seconds: execTimeoutSecs ? parseInt(execTimeoutSecs, 10) : undefined,
           max_background_seconds: maxBackgroundSecs ? parseInt(maxBackgroundSecs, 10) : undefined,
-          enable_deny_patterns: enableDenyPatterns,
           rate_limits: {
             ...config?.security.rate_limits,
             max_agent_llm_calls_per_hour: agentLlmCallsPerHour ? parseInt(agentLlmCallsPerHour, 10) : undefined,
@@ -365,10 +489,6 @@ export function SecuritySection() {
 
   // ADR-053 D12 retired the "Daily spending limit" UI block.
 
-  // US-B2: badge derives from persisted config.security.policy_mode (not local state).
-  // After save, the query is invalidated so persistedPolicyMode updates.
-  const persistedPolicyMode = config?.security.policy_mode ?? 'deny'
-
   return (
     <div className="space-y-[var(--space-4)]">
       <div className="flex items-center justify-between">
@@ -398,56 +518,11 @@ export function SecuritySection() {
           Protection settings
         </p>
 
-        {/* 1. Default policy mode — wraps risky "Allow" (US-B2) */}
-        <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
-          <div>
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Agent tool access</p>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-              Whether agents must ask your permission before running tools or can run freely.
-            </p>
-          </div>
-          <RiskySettingControl
-            options={[
-              { value: 'deny', label: 'Must ask first (safer)' },
-              { value: 'allow', label: 'Run freely' },
-            ]}
-            currentValue={persistedPolicyMode}
-            selectedValue={policyMode}
-            safeValue="deny"
-            copy={POLICY_MODE_COPY}
-            onConfirm={(v) => {
-              markDirty()
-              setPolicyMode(v as 'allow' | 'deny')
-            }}
-            onSelectSafe={(v) => {
-              markDirty()
-              setPolicyMode(v as 'allow' | 'deny')
-            }}
-          />
-        </Card>
+        {/* 1. Auto-approve (ADR-092) — primary-layer tool-access control:
+            whether a tool resolved to "ask" still prompts. */}
+        <AutoApproveControl />
 
-        {/* 2. Exec approval */}
-        <Card className="p-[var(--space-3)]">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Shell command approval</p>
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">How shell commands are handled when an agent wants to run them</p>
-            </div>
-            <SmartSelect
-              value={execApproval}
-              onValueChange={(v) => { markDirty(); setExecApproval(v as typeof execApproval) }}
-              triggerClassName="w-[130px] h-8 text-xs"
-              ariaLabel="Shell command approval"
-              items={[
-                { value: 'auto', label: 'Auto-allow' },
-                { value: 'ask', label: 'Ask each time' },
-                { value: 'deny', label: 'Always deny' },
-              ]}
-            />
-          </div>
-        </Card>
-
-        {/* 3. Skill Trust (US-E4 / #340) — plain language, top-level */}
+        {/* 2. Skill Trust (US-E4 / #340) — plain language, top-level */}
         <SkillTrustSection />
       </section>
 
@@ -508,26 +583,7 @@ export function SecuritySection() {
                   placeholder="0"
                 />
               </div>
-
-              <Separator />
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Enable deny patterns</p>
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Block commands matching configured deny patterns</p>
-                </div>
-                <Switch
-                  checked={enableDenyPatterns}
-                  onCheckedChange={(v) => { markDirty(); setEnableDenyPatterns(v) }}
-                  aria-label="Enable deny patterns"
-                />
-              </div>
             </Card>
-
-            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mt-[var(--space-3)] mb-[var(--space-2)]">
-              Binary Allowlist
-            </p>
-            <ExecAllowlistSection />
           </section>
 
           <Separator />

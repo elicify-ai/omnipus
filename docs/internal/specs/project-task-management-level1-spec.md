@@ -374,12 +374,12 @@ A user wants a Monitor screen (new SYSTEM-group sidebar item) showing: live agen
 
 - The system must not use `project_id` as an access control gate — any agent can work on any project's tasks because core_team is a default roster only, not a permission system.
 - The system must not require users to manually link sessions to projects — auto-link on tool result is the only mechanism.
-- The system must not add file-system directories or room structures per project — that is Level 2 (v0.3 Rooms). A project is a metadata record only.
+- The system must not add file-system directories or room structures per project — that is Level 2 (the Workspaces redesign; the v0.3/Rooms labels are retired). A project is a metadata record only.
 - The system must not add color customization to projects — project identity is name-only; the design system handles visual states.
 - The system must not move existing workflow tasks (`pkg/taskstore`) to the GTD board system — they are separate concerns with different semantics and remain at `/api/v1/tasks`.
 - The system must not remove the Schedules functionality — only relocate it from Command Center to Monitor.
 - The system must not show GTD board tasks in the Monitor screen — Monitor is for operational (workflow) tasks and system observability only.
-- The system must not add Level 2 memory scoping, git checkout, or per-project filesystem roots — those are v0.3 scope.
+- The system must not add Level 2 memory scoping, git checkout, or per-project filesystem roots — those are deferred scope (no release scheduled).
 
 ---
 
@@ -1116,7 +1116,7 @@ The following were identified during spec review as gaps that required resolutio
 | UQ-5 | What does the `GET /api/v1/projects/{id}/sessions` endpoint look like when the link file doesn't exist yet? | Returns `200` with `[]`. Absence of the file equals empty link set — same as FR-028. |
 | UQ-6 | How are `created_at` values formatted in `project_session_links.jsonl`? | RFC3339 UTC strings, e.g. `"2026-06-08T14:22:00Z"`. Same convention as all other timestamps in Omnipus. |
 | UQ-7 | What happens to the 301 redirect if the user has TanStack Router client-side routing? | No server-side 301. The `/command-center` TanStack Router route is replaced with `<Navigate to="/tasks" replace />`. The Go gateway catch-all serves `index.html` regardless; routing happens client-side. (FR-030 updated accordingly.) |
-| UQ-8 | Who can delete a project? Any user or admin-only? | Any authenticated user in MVP (no per-project ownership model at Level 1). All new endpoints use the existing authenticated rate limiter. Admin-only scoping is Level 2/v0.3. |
+| UQ-8 | Who can delete a project? Any user or admin-only? | Any authenticated user in MVP (no per-project ownership model at Level 1). All new endpoints use the existing authenticated rate limiter. Admin-only scoping is Level 2 (unscheduled). |
 | UQ-9 | What does `GET /api/v1/projects/{id}/sessions` return when the link file has corrupted (non-JSON) lines? | Corrupted lines are skipped silently (same as compaction behavior) and a WARN is logged per bad line. The endpoint still returns all valid entries. |
 | UQ-10 | Is there a maximum number of projects? | No hard limit in MVP. `GET /api/v1/projects` returns all projects (no pagination in this version). With very large numbers (> 10,000), task_count computation degrades — users should page results. Add pagination in a follow-up. |
 | UQ-11 | How does the SPA sidebar know to refresh after an agent creates a project via `system.project.create`? | The sidebar polls `GET /api/v1/projects` every 30s (same interval as existing config polling) and invalidates on relevant WS events. New projects from agent tool calls appear within 30s without user action. |

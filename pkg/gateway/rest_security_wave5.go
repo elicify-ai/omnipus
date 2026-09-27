@@ -7,6 +7,7 @@ package gateway
 import (
 	"net/http"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -48,22 +49,91 @@ func (a *restAPI) HandleSandboxStatus(w http.ResponseWriter, r *http.Request) {
 		bindCount = len(a.sandboxResult.Policy.BindPortRules)
 	}
 	status := sandbox.DescribeBackendWithState(backend, state)
-	// Wrap the status with the bind-port-rule count so operators can curl
-	// /api/v1/security/sandbox-status and verify the bind allow-list is the
-	// size they expect (per cfg.Sandbox.DevServerPortRange). Count is zero on
-	// FallbackBackend, on Mode=Off, and on Landlock ABI < 4 — exactly the
-	// cases where no kernel net rules were installed.
+	// bind_ports_count lets operators curl this endpoint and verify the bind
+	// allow-list is the size they expect (per cfg.Sandbox.DevServerPortRange).
+	// Zero on FallbackBackend, on Mode=Off, and on Landlock ABI < 4 — exactly
+	// the cases where no kernel net rules were installed.
 	//
 	// connect_ports_count was removed in v0.1 (A1.3): the kernel never
 	// enforced connect-port rules (NET_CONNECT_TCP not in handledAccessNet),
 	// so advertising a count was misleading. Outbound TCP filtering is
 	// handled by the egress proxy.
-	resp := struct {
-		sandbox.Status
-		BindPortsCount int `json:"bind_ports_count"`
-	}{
-		Status:         status,
+	resp := sandboxStatusToWire(status, bindCount)
+
+	// ADR-092 (review finding A): the three inputs the chat badge and the
+	// composer's Auto switch read. [2026-09-24, founder decision]
+	// kernel_sandbox_active is no longer the predicate the agent loop uses to
+	// choose Auto vs Ask — Auto applies whether or not it is true (see
+	// pkg/agent/auto_approve_gate.go::autoApproveActive). It stays here as
+	// the informational value the SPA uses to show the "Auto — no sandbox"
+	// warning; auto_approve_effective is the raw global default, deliberately
+	// NOT ANDed with it (the SPA renders "Auto" or "Auto — no sandbox" from
+	// the pair — never a silent "Ask"); god_mode_active mirrors
+	// GodModeStatus.enabled.
+	cfg := a.agentLoop.GetConfig()
+	kernelActive := sandbox.TurnPolicyBaseInstalled()
+	autoApprove := cfg != nil && cfg.Sandbox.AutoApprove
+	godModeActive := cfg != nil && cfg.Sandbox.GodMode && a.godModeAvailable()
+	resp.KernelSandboxActive = &kernelActive
+	resp.AutoApproveEffective = &autoApprove
+	resp.GodModeActive = &godModeActive
+	jsonOK(w, resp)
+}
+
+// sandboxStatusToWire maps the sandbox package's runtime description onto
+// the generated SandboxStatus wire type (Hard Constraint #8). Optional
+// members keep their previous omit-when-zero shape — the SPA tests
+// abi_version against null, for instance — so the only additions on the wire
+// are the ADR-092 fields HandleSandboxStatus sets itself.
+func sandboxStatusToWire(status sandbox.Status, bindCount int) gen.SandboxStatus {
+	out := gen.SandboxStatus{
+		Backend:        status.Backend,
+		Available:      status.Available,
+		KernelLevel:    status.KernelLevel,
+		PolicyApplied:  status.PolicyApplied,
+		SeccompEnabled: status.SeccompEnabled,
 		BindPortsCount: bindCount,
 	}
-	jsonOK(w, resp)
+	if status.ABIVersion != 0 {
+		v := status.ABIVersion
+		out.AbiVersion = &v
+	}
+	if status.BlockedSyscalls != nil {
+		v := append([]string(nil), status.BlockedSyscalls...)
+		out.BlockedSyscalls = &v
+	}
+	if status.LandlockFeatures != nil {
+		v := append([]string(nil), status.LandlockFeatures...)
+		out.LandlockFeatures = &v
+	}
+	if status.Notes != nil {
+		v := append([]string(nil), status.Notes...)
+		out.Notes = &v
+	}
+	if status.FilesystemModel != "" {
+		v := gen.SandboxStatusFilesystemModel(status.FilesystemModel)
+		out.FilesystemModel = &v
+	}
+	if status.Mode != "" {
+		v := string(status.Mode)
+		out.Mode = &v
+	}
+	if status.DisabledBy != "" {
+		v := status.DisabledBy
+		out.DisabledBy = &v
+	}
+	out.LandlockEnforced = trueOrNil(status.LandlockEnforced)
+	out.SeccompEnforced = trueOrNil(status.SeccompEnforced)
+	out.AuditOnly = trueOrNil(status.AuditOnly)
+	return out
+}
+
+// trueOrNil returns a pointer to true, or nil for false — the omit-when-false
+// shape these three optional flags have always had on the wire.
+func trueOrNil(b bool) *bool {
+	if !b {
+		return nil
+	}
+	t := true
+	return &t
 }

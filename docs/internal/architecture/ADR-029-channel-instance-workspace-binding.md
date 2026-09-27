@@ -1,10 +1,12 @@
 # ADR-029: Channel-Instance ↔ Workspace Binding with Workspace-Scoped Mandatory Agent Routing
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** **Accepted** (2026-07-02, ratified by operator direction: the binding feature was fully implemented on `feat/channel-workspace-binding` — 13 reviewer passes + grill-code, CI green — merged to `hotfix/v0.1.1` at the operator's direction, and the operator commissioned the Track-2 Channels UI that renders this model.) — *Grill history:* rounds 1–3 (R1: 3 CRITICAL + 8 MAJOR → R2: 1 CRITICAL + 4 MAJOR → R3: **0 CRITICAL** + 6 MAJOR, all folded in; convergence 3C→1C→0C). A later round-4 doc review (`…-review-round4.md`, parallel session) raised 1 CRITICAL + 7 MAJOR against the *document*; disposition: **F-01 (BoundInstance derivation ambiguity) is RESOLVED IN THE IMPLEMENTATION** — half-bound states fail loud at load (`pkg/config/config.go` `ErrHalfBoundChannelInstance`, `ValidateChannels`), `IsWorkspaceBound()` is the single authoritative predicate the routing layer consults, and workspace-delete unbinds (`WorkspaceID` + `Identity`, disable) *before* file removal with abort-500 on failure (`rest_workspaces.go` `unbindChannelInstancesForWorkspace`). F-02 (stale factory counts) is a doc-only errata. **Tracked follow-ups (not blockers, pre-existing in the merged feature):** F-03 (warn/reject when binding shadows pre-existing per-peer bindings), F-05 (cascade idempotency/orphan reconciliation), F-06 (remove/gate the legacy `instance_id` *metadata* fallback in `inboundInstanceID` — spoofing hardening; security follow-up).
 - **Date:** 2026-07-02
 - **Deciders:** Daniel Piatkowski (operator) + architecture
 - **Evidence level (highest used):** 1 (user-provided requirements), grounded throughout in `[FACT]` from the codebase
-- **Release phase:** v0.3 (Workspaces redesign — [#156]). Structural + touches workspaces/channels topology, so it does **not** belong in v0.1.x/v0.2 per the CLAUDE.md routing rule; multi-instance was already earmarked "v0.3 will lift" `[FACT: pkg/config/config.go:1491]`.
+- **Release phase:** was v0.3 (Workspaces redesign — [#156]). Structural + touches workspaces/channels topology, so it did **not** belong in v0.1.x/v0.2 per the CLAUDE.md routing rule then in force; multi-instance was already earmarked "v0.3 will lift" `[FACT: pkg/config/config.go:1491]`. (The v0.2/v0.3 release labels were retired 2026-09-25 — the binding shipped on the single v0.1.1 line.)
 
 ---
 

@@ -918,12 +918,24 @@ describe('ClientFrameTypes — contract test', () => {
       'browser_input',
       'browser_control',
       'browser_detach',
+      // Always in the spec (contracts/asyncapi.yaml BrowserTabActionFrame /
+      // BrowserViewportFrame messages, `action: send` on the `browser`
+      // channel) but missing from this hand-maintained list until
+      // 0399a7b60 switched generation to derive clientFrames from
+      // doc.operations instead of a manually kept array — a pre-existing
+      // gap in the generator, not a new frame type.
+      'browser_tab_action',
+      'browser_viewport',
       // ADR-047 — WebRTC live-view signaling (viewer→gateway SDP offer).
       'browser_webrtc_offer',
       // ADR-081 — dedicated input connection signaling.
       'browser_input_offer',
       // ADR-074 D4b — AskUserQuestion card submission (answer | cancel).
       'ask_user_answer',
+      // ADR-092 — per-chat Auto-approve mode change (client → server request;
+      // contracts/asyncapi.yaml SessionModeUpdateFrame, `action: send` on the
+      // `chat` channel).
+      'session_mode_update',
     ])
     expect(new Set(ClientFrameTypes)).toEqual(expectedTypes)
   })

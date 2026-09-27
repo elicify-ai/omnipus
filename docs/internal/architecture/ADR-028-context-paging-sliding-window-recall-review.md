@@ -1,5 +1,7 @@
 # Adversarial Review: ADR-028 — Context paging (sliding-window + recall)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Spec reviewed**: docs/internal/architecture/ADR-028-context-paging-sliding-window-recall.md
 **Review date**: 2026-07-01
 **Review mode**: structured-spec (ADR with FR-/NFR-/D- identifiers; no BDD/traceability)

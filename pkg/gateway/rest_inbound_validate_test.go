@@ -231,40 +231,6 @@ func TestPutSandboxConfig_ValidateInbound_NullBody(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// ── Handler integration tests — HandleExecAllowlist ──────────────────────────
-
-// TestExecAllowlist_ValidateInbound_WrongFieldType asserts that sending wrong
-// type for allowed_binaries → 400 when validate_inbound=true.
-func TestExecAllowlist_ValidateInbound_WrongFieldType(t *testing.T) {
-	api := newTestRestAPIWithValidation(t)
-
-	// allowed_binaries must be array of strings; sending a string instead.
-	body := `{"allowed_binaries": "not-an-array"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/exec-allowlist", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.HandleExecAllowlist(w, r)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// TestExecAllowlist_ValidateInbound_ValidBody asserts valid body passes.
-func TestExecAllowlist_ValidateInbound_ValidBody(t *testing.T) {
-	api := newTestRestAPIWithValidation(t)
-
-	body := `{"allowed_binaries":[]}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/exec-allowlist", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.HandleExecAllowlist(w, r)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
 // ── SchemaLoader unit test ────────────────────────────────────────────────────
 
 // TestInboundSchemaLoader_ReadsEmbeddedFile asserts the inboundSchemaLoader

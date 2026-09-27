@@ -157,7 +157,12 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		model = producedModel[0]
 	}
 	entry := session.TranscriptEntry{
-		ID:        uuid.New().String(),
+		// ID: #823 — the SAME id as this round's live streamed frames
+		// (TokenFrame.message_id / DoneFrame.message_id), via
+		// turn_stream.go::roundMessageIDOrNew. Falls back to a fresh uuid
+		// (this method's pre-#823 behavior) for callers with no active
+		// streaming round — see that method's doc comment.
+		ID:        ts.roundMessageIDOrNew(),
 		Role:      "assistant",
 		AgentID:   agentID,
 		Content:   content,

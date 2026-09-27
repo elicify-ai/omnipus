@@ -90,7 +90,12 @@ func (al *AgentLoop) TaskAssigneeCannotFinish(agentID string, judged []task.Acce
 		problems = append(problems, assigneeCannotClaimText(name))
 	}
 	if hasMachineCheck(judged) {
-		if policy := machineCheckRunnerPolicy(inst); policy != string(config.ToolPolicyAllow) {
+		// ADR-092 D1 re-point (2026-09-24): machineCheckAskPolicyAcceptable
+		// (judge.go) is the shared "ask" exception judge.go::runMachineCheck
+		// itself applies — this pre-run gate and the Judge must never
+		// disagree, see TestTaskReadiness_CheckRunnerPolicyMatchesTheJudge.
+		if policy := machineCheckRunnerPolicy(inst); policy != string(config.ToolPolicyAllow) &&
+			!al.machineCheckAskPolicyAcceptable(agentID, policy) {
 			problems = append(problems, assigneeCannotRunChecksText(name, policy))
 		}
 	}

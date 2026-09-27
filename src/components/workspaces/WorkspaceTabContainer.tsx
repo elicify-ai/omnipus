@@ -164,7 +164,11 @@ function WorkspaceTabContainerView({
             WorkspaceTabBar's own full-strip/dropdown breakpoint).
             No secondary breadcrumb row: the tab strip already names the
             workspace + active view, so a second chrome line was redundant and
-            broke the flat 44px shell alignment. */}
+            broke the flat 44px shell alignment.
+            The God Mode corner dot that used to live on this hamburger is
+            deleted (founder decision 2026-09-25 revision 2) — AppShell
+            renders one app-wide corner indicator instead; see
+            GodModeIndicators.tsx. */}
         <header
           role="banner"
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"

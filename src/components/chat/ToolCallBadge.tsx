@@ -33,18 +33,19 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
   const [expanded, setExpanded] = useState(false)
 
   // Client-side render gate (verbose-chat off by default): hides noisy
-  // background infra calls (ToolSearch, background-bash dispatch/poll/read)
-  // unless the user has opted into verbose chat, via shouldRenderToolCall —
-  // this component's ONE caller is MessageItem's historical/live list
-  // (ADR-091 D10 deleted SubagentBlock, this badge's other former caller,
-  // along with the ActivityPanel step list it fed — see toolVisibility.ts's
-  // header comment). shouldRenderToolCall's error/marshal-failure override
-  // is per-tool-class (see that function's doc comment): ToolSearch still
-  // forces visible on error, delegate does not consult isError at all
-  // (ADR-091 D7/AC-7: the `run` action is already visible unconditionally),
-  // and background-bash does not either (that failure is left to the
-  // calling agent's own response text). Must sit after every hook above and
-  // before the JSX return (Rules of Hooks).
+  // background infra calls (ToolSearch, background-bash dispatch/poll/read,
+  // and every delegate action) unless the user has opted into verbose chat,
+  // via shouldRenderToolCall — this component's ONE caller is MessageItem's
+  // historical/live list (ADR-091 D10 deleted SubagentBlock, this badge's
+  // other former caller, along with the ActivityPanel step list it fed —
+  // see toolVisibility.ts's header comment). shouldRenderToolCall's
+  // error/marshal-failure override is per-tool-class (see that function's
+  // doc comment): ToolSearch still forces visible on error. Every delegate
+  // action is hidden in the non-verbose thread (spec D2) — isError is not
+  // consulted, and the grey event line is the surface. Verbose chat shows
+  // every delegate badge. Background-bash does not consult isError either
+  // (that failure is left to the calling agent's own response text). Must
+  // sit after every hook above and before the JSX return (Rules of Hooks).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   const marshalErr = isMarshalErrorResult(toolCall.result)
   // F1: the three structured-failure sentinels (delegation-denied,

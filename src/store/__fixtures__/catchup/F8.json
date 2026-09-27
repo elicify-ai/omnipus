@@ -1,0 +1,254 @@
+{
+  "scenario": "F8",
+  "title": "Message typed while offline",
+  "description": "After a completed turn the tab goes offline; the user types a message, which the client keeps in its pending tail. On reconnect the tab first attaches (an empty incremental catch-up), then sends the queued message: its user_message (matched by client_message_id) and every later frame come after catch_up_complete, so the message is placed at the end, followed by its answer.",
+  "expect": {
+    "assistant_messages": [
+      "First answer.",
+      "Second answer."
+    ],
+    "offline_message_at_end": true,
+    "pending_bubble_resolved": "cm-f8-2",
+    "user_messages": [
+      "first question",
+      "second question"
+    ]
+  },
+  "tabs": [
+    {
+      "name": "A",
+      "events": [
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:01Z",
+            "pending_approvals": [],
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "client_message_id": "client-1",
+            "content": "first question",
+            "type": "message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "boot_id": "boot-1",
+            "seq": 1,
+            "session_id": "sess-1",
+            "type": "session_started"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "client_message_id": "client-1",
+            "content": "first question",
+            "id": "id-1",
+            "seq": 2,
+            "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "type": "user_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "seq": 3,
+            "session_id": "sess-1",
+            "state": "received",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "seq": 4,
+            "session_id": "sess-1",
+            "state": "working",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "First ",
+            "message_id": "msg-1",
+            "seq": 5,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "answer.",
+            "message_id": "msg-1",
+            "seq": 6,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "message_id": "msg-1",
+            "seq": 7,
+            "session_id": "sess-1",
+            "stats": {
+              "cost": 0,
+              "duration_ms": 1,
+              "tokens": 0
+            },
+            "turn_id": "turn-1",
+            "type": "done"
+          }
+        },
+        {
+          "dir": "note",
+          "note": "connection lost; the user types \"second question\" while offline (kept in the pending tail)"
+        }
+      ]
+    },
+    {
+      "name": "A (back online)",
+      "events": [
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:03Z",
+            "pending_approvals": [],
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "boot_id": "boot-1",
+            "session_id": "sess-1",
+            "since_seq": 7,
+            "type": "attach_session"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:04Z",
+            "pending_approvals": [],
+            "session_id": "sess-1",
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "mode": "incremental",
+            "seq": 7,
+            "session_id": "sess-1",
+            "type": "catch_up_complete"
+          }
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "client_message_id": "client-2",
+            "content": "second question",
+            "session_id": "sess-1",
+            "type": "message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "client_message_id": "client-2",
+            "content": "second question",
+            "id": "id-2",
+            "seq": 8,
+            "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:05Z",
+            "type": "user_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-2",
+            "seq": 9,
+            "session_id": "sess-1",
+            "state": "received",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-2",
+            "seq": 10,
+            "session_id": "sess-1",
+            "state": "working",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "Second ",
+            "message_id": "msg-2",
+            "seq": 11,
+            "session_id": "sess-1",
+            "turn_id": "turn-2",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "answer.",
+            "message_id": "msg-2",
+            "seq": 12,
+            "session_id": "sess-1",
+            "turn_id": "turn-2",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "message_id": "msg-2",
+            "seq": 13,
+            "session_id": "sess-1",
+            "stats": {
+              "cost": 0,
+              "duration_ms": 1,
+              "tokens": 0
+            },
+            "turn_id": "turn-2",
+            "type": "done"
+          }
+        }
+      ]
+    }
+  ]
+}

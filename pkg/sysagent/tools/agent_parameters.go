@@ -52,18 +52,6 @@ func toolPolicyChangesParameters() map[string]any {
 	}
 }
 
-func shellPolicyParameters() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"description":          "Per-agent shell deny-pattern override. Unknown keys are rejected.",
-		"properties": map[string]any{
-			"enable_deny_patterns": map[string]any{"type": "boolean"},
-			"custom_deny_patterns": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-		},
-	}
-}
-
 func modelParamsParameters() map[string]any {
 	return map[string]any{
 		"type":                 "object",

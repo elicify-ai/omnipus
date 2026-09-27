@@ -13,6 +13,18 @@ properties:
     type: string
     description: Unique message identifier.
     example: "msg_01HXYZ"
+  client_message_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      #823 catch-up redesign. Present on a user entry that was persisted with a
+      client-supplied correlation id (mirrors MessageFrame.client_message_id /
+      ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent
+      bubble against this REST-loaded entry by id instead of by content+timestamp
+      matching. Absent on entries written before this field existed and on non-user
+      entries.
+    example: "cmid_01HXYZ"
   type:
     type: string
     enum:

@@ -8,11 +8,40 @@
 // local timestamp (expiresAt = Date.now() + expires_in_ms) so the countdown
 // is independent of gateway clock skew.
 //
-// Buttons:
-//   Approve      → POST /api/v1/tool-approvals/{id} {action:"approve"}
-//   Always Allow → POST /api/v1/tool-approvals/{id} {action:"always"}
+// Buttons — wire action values renamed by ADR-092 D4:
+//   Approve Once → POST /api/v1/tool-approvals/{id} {action:"allow_once"}
+//   Always Allow → POST /api/v1/tool-approvals/{id} {action:"allow", scope}
 //   Deny         → POST /api/v1/tool-approvals/{id} {action:"deny"}
 //   Cancel       → POST /api/v1/tool-approvals/{id} {action:"cancel"}
+// "Approve" was relabelled "Approve Once" (review finding, post-D4) — as a
+// backend lane makes allow_once record NO grant, "Approve" alone read as
+// ambiguous next to "Always Allow"; the label must say one-time on its face.
+// The action mapping itself (Approve Once → allow_once, Always Allow →
+// allow) was already correct and is unchanged.
+//
+// ADR-092 D4 status: the wire-value rename (L0: approve→allow_once,
+// always→allow) landed first so the component compiled against the current
+// ToolApprovalActionRequest enum. This pass adds the two pieces that were
+// still open:
+//   - Grant scope (FR-024): for a shell (`bash`) command only, a RadioGroup
+//     ("Allow this exact command" / "Allow commands starting with <server-
+//     suggested prefix>") appears above the buttons whenever Always Allow is
+//     offered; the selected scope is sent on `allow` only (omitted for every
+//     other action/tool, matching the contract's default). The "prefix"
+//     option only ever appears once the server has actually supplied a
+//     suggested prefix (CommandSegmentInfo.suggested_prefix) — never guessed
+//     client-side.
+//   - Per-segment display (FR-025/FR-027): when the frame carried
+//     ToolApprovalRequiredFrame.segments (a chained command the D3 matcher
+//     could not fully resolve), each segment's command text is shown
+//     separately with its resolved binary highlighted, in the generic
+//     (non-`replace`-mode) tool-info area.
+// The four-button layout (including the rendered Cancel button) is
+// UNCHANGED by this pass — D4's UI-presentation note describing a
+// [Deny][Allow once][Allow]-only layout with no rendered Cancel button is
+// not implemented here; `cancel` already behaves as a distinct wire value
+// from `deny` per FR-023, which is the part of that note this modal's own
+// resolution test (ToolApprovalModal.resolution.test.tsx) depends on.
 //
 // Accessibility (C2 — this is a SECURITY-CRITICAL control):
 //   - Built on the shadcn/Radix Dialog primitive, which provides a focus trap,
@@ -33,7 +62,7 @@
 //   403 → "you must be an admin to approve this tool" toast
 //   404 / 410 → the approval is no longer pending server-side (410 inside the
 //         registry's retention window, 404 after it) → markResolved: the
-//         card goes and cannot come back; an approve/always also gets a
+//         card goes and cannot come back; allow_once/allow also gets a
 //         warning that it was not applied
 //
 // Dismissal: Cancel and Close/Escape/overlay remove the card from this tab
@@ -59,19 +88,20 @@
 //     args.command is a string, in addition to (not instead of) the generic
 //     Arguments JSON dump. See the per-tool preview registry note below.
 //   - PORTED: ExecApprovalBlock's 3-way decision (Allow / Deny / "Always
-//     Allow") is now fully available here too — the Always Allow button
-//     posts {action:"always"}, which the gateway resolves by approving the
-//     call AND recording a session-scoped grant via ApprovalGrantStore.Record
+//     Allow") is now fully available here too — the Allow button posts
+//     {action:"allow"}, which the gateway resolves by approving the call AND
+//     recording a session-scoped grant via ApprovalGrantStore.Record
 //     (pkg/gateway/rest_tool_registry.go, commit 35447760). The wire contract
-//     (ToolApprovalActionRequest.action) carries "always" for every tool, not
+//     (ToolApprovalActionRequest.action) carries "allow" for every tool, not
 //     just bash — closing the gap that used to make grant-inheritance
 //     (agent-delegation-spec.md FR-D8) reachable only via the retired
 //     exec-only flow.
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { CheckCircle, XCircle, ProhibitInset, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
   Dialog,
   DialogContent,
@@ -83,12 +113,15 @@ import { useToolApprovalStore, isApprovalInScope } from '@/store/toolApproval'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { submitToolApproval, isApiError, fetchAgents } from '@/lib/api'
 import type { Agent } from '@/lib/api'
+import type { ToolApprovalActionRequest } from '@/lib/api/generated/openapi-types'
+import type { CommandSegmentInfo } from '@/lib/api/generated/asyncapi-types'
 import { useUiStore } from '@/store/ui'
 import { forceLogout } from '@/lib/authLogout'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { queryClient } from '@/lib/queryClient'
 import { TOOL_APPROVAL_PREVIEWS } from './approvalPreviews/registry'
 import type { ToolApprovalPreviewContext } from './approvalPreviews/types'
+import { highlightBinaryInText } from './approvalPreviews/BashApprovalPreview'
 
 function useCountdown(expiresAt: number): { remainingMs: number; progressPct: number; totalMs: number } {
   const [remainingMs, setRemainingMs] = useState(() => Math.max(0, expiresAt - Date.now()))
@@ -127,6 +160,42 @@ function useCountdown(expiresAt: number): { remainingMs: number; progressPct: nu
   }
 }
 
+// ── ADR-092 D7/D8 Auto pre-flight escalations, and the D3 rule-ask prompt ──
+// A tool call that hits an Auto-mode pre-flight escalation (D7 filesystem,
+// D8 network) carries the reason in its own args, not in a separate wire
+// field — pkg/tools/shell_permission_mode.go's requestPreflightApproval
+// sets args.adr092_kind ("fs_preflight" | "fs_preflight_blind" |
+// "network_preflight") and args.note (a human-readable sentence already
+// built server-side). Without this, the card looked exactly like an
+// ordinary "ask"-policy bash approval, with no hint that Auto had already
+// tried and failed to clear the call itself.
+//
+// The D3 "rule_ask" kind is a DIFFERENT thing — an ordinary operator
+// command-rule ask, not an Auto escalation (nothing tried and failed to
+// clear the call; an operator rule simply requires a human look at this
+// command). pkg/agent/loop_policy.go::ruleAskRequestArgs sets adr092_kind
+// "rule_ask" together with a note naming the matched rule (e.g. `matches an
+// operator rule that requires approval (binary="rm" arg_prefix="rm -rf")`)
+// whenever the call matched a genuine ask rule — so rule_ask DOES carry a
+// note, same as the escalation kinds, and describeEscalation shows it
+// through the same banner with its own, non-escalation headline below.
+const ESCALATION_HEADLINES: Record<string, string> = {
+  fs_preflight: 'This command wants to reach outside the workspace.',
+  fs_preflight_blind: "This command's filesystem reach could not be classified from its text alone.",
+  network_preflight: 'This command wants network access.',
+  rule_ask: 'An operator command rule requires approval for this command.',
+}
+
+function describeEscalation(args: Record<string, unknown>): { headline: string; detail: string } | null {
+  const kind = args.adr092_kind
+  const note = args.note
+  if (typeof kind !== 'string' || typeof note !== 'string' || note.length === 0) return null
+  return {
+    headline: ESCALATION_HEADLINES[kind] ?? 'This command needs more access than the sandbox currently grants.',
+    detail: note,
+  }
+}
+
 function formatCountdown(ms: number): string {
   if (ms <= 0) return 'Expired'
   const secs = Math.ceil(ms / 1000)
@@ -152,6 +221,13 @@ interface ToolApprovalCardProps {
   toolCallId: string
   turnId: string
   sessionId: string
+  /**
+   * ADR-092 D4 — per-segment breakdown of a chained shell command, present
+   * only when the server could not fully resolve every segment. Undefined
+   * (not just empty) means "no breakdown to show" — see PendingToolApproval's
+   * own doc comment (src/store/toolApproval.ts).
+   */
+  segments?: CommandSegmentInfo[]
 }
 
 function ToolApprovalCard({
@@ -164,6 +240,7 @@ function ToolApprovalCard({
   toolCallId,
   turnId,
   sessionId,
+  segments,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
   const markResolved = useToolApprovalStore((s) => s.markResolved)
@@ -175,6 +252,46 @@ function ToolApprovalCard({
   const denyButtonRef = useRef<HTMLButtonElement>(null)
 
   const hasExpired = remainingMs <= 0
+
+  // ── ADR-092 D4: grant scope (exact vs. prefix) ────────────────────────────
+  // Only a shell command has a meaningful "prefix" grant (a resolved
+  // {binary, arg_prefix} pair) — every other tool's Allow keeps recording an
+  // exact-arguments grant exactly as before, so `scope` is never sent for
+  // them (submitToolApproval omits the key entirely; the contract's own
+  // documented default is "exact"). "exact" is always a legal choice for a
+  // shell command too, and is the safer default (narrowest grant), so it is
+  // selected on open regardless of whether a prefix suggestion exists.
+  const isShellCommand = toolName === 'bash' && typeof args.command === 'string' && args.command.length > 0
+  const [scope, setScope] = useState<NonNullable<ToolApprovalActionRequest['scope']>>('exact')
+
+  // A prefix grant needs a server-suggested prefix to offer (FR-026's
+  // stop-token algorithm runs server-side, in CommandSegmentInfo.suggested_prefix
+  // — this UI never guesses one client-side). Absent segments (a non-chained
+  // command the server hasn't emitted per-segment info for, or a build that
+  // doesn't populate it yet), only "exact" is offered — never a fabricated
+  // prefix. When multiple unmatched segments each offer a suggestion, the one
+  // scope choice covers all of them (D4: "one rule per segment" is a
+  // server-side recording detail, not a per-segment client choice), so the
+  // label lists every distinct suggested prefix.
+  const suggestedPrefixes = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (segments ?? [])
+            .filter((s) => s.prefix_available && s.suggested_prefix)
+            .map((s) => s.suggested_prefix as string),
+        ),
+      ),
+    [segments],
+  )
+  const prefixScopeAvailable = isShellCommand && suggestedPrefixes.length > 0
+  // If a later frame update (or the card being re-shown after a queue
+  // re-render) drops the prefix suggestion out from under an already-selected
+  // "prefix" choice, fall back to the always-legal "exact" rather than
+  // silently sending a scope the UI no longer shows a description for.
+  useEffect(() => {
+    if (!prefixScopeAvailable && scope === 'prefix') setScope('exact')
+  }, [prefixScopeAvailable, scope])
 
   const handleAction = useCallback(
     // Action union sourced from submitToolApproval's own signature (which in
@@ -191,12 +308,38 @@ function ToolApprovalCard({
       setSubmitting(true)
       if (opts?.dismissFirst) dequeue(approvalId)
       try {
-        const resp = await submitToolApproval(approvalId, action)
-        if (action === 'always' && resp.grant_recorded !== true) {
-          addToast({
-            message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
-            variant: 'warning',
-          })
+        // ADR-092 D4/FR-024: scope is only meaningful (and only sent) when
+        // this action IS the grant-recording "allow" AND the approval is a
+        // shell command — every other action/tool combination calls
+        // submitToolApproval with its two-argument signature (no `scope` at
+        // all, not even an explicit `undefined` third argument) so the wire
+        // body has no `scope` key, matching the contract's own "ignored
+        // otherwise" note without relying on the server to ignore a stray
+        // value.
+        const resp =
+          action === 'allow' && isShellCommand
+            ? await submitToolApproval(approvalId, action, scope)
+            : await submitToolApproval(approvalId, action)
+        if (action === 'allow') {
+          if (resp.grant_recorded !== true) {
+            addToast({
+              message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
+              variant: 'warning',
+            })
+          } else if (resp.scope) {
+            // ADR-092 D4/FR-024: resp.scope is the scope the server actually
+            // RECORDED, not a passthrough of the local `scope` selection —
+            // show that, not the client's own request, so a server-side
+            // downgrade (e.g. no prefix suggestion survived a race) is never
+            // silently different from what the operator is told stuck.
+            addToast({
+              message:
+                resp.scope === 'prefix'
+                  ? 'Always allowed — every command starting with that prefix is now allowed for this session.'
+                  : 'Always allowed — this exact command is now allowed for this session.',
+              variant: 'success',
+            })
+          }
         }
         // The server resolved it: remember that, rather than only hiding it.
         markResolved(approvalId)
@@ -227,7 +370,7 @@ function ToolApprovalCard({
             // this, a 404 only toasted and left a dialog whose every button
             // (Close included) re-sent a request that could only 404 again.
             markResolved(approvalId)
-            if (action === 'approve' || action === 'always') {
+            if (action === 'allow_once' || action === 'allow') {
               // Deny/cancel stay silent (what the user asked for holds or no
               // longer matters). An approval that did not land deserves a word.
               addToast({
@@ -252,7 +395,7 @@ function ToolApprovalCard({
         setSubmitting(false)
       }
     },
-    [approvalId, dequeue, markResolved, addToast, submitting],
+    [approvalId, dequeue, markResolved, addToast, submitting, isShellCommand, scope],
   )
 
   // Safe-default handler for Escape / overlay-click / X close. The Dialog
@@ -337,7 +480,8 @@ function ToolApprovalCard({
   const dialogTitleText = replaceEntry
     ? (replaceEntry.title?.(previewCtx) ?? 'Tool Approval Required')
     : 'Tool Approval Required'
-  const primaryLabel = replaceEntry?.primaryLabel ?? 'Approve'
+  const escalation = replaceEntry ? null : describeEscalation(args)
+  const primaryLabel = replaceEntry?.primaryLabel ?? 'Approve Once'
   const secondaryLabel = replaceEntry?.secondaryLabel ?? 'Deny'
   const showCancelButton = replaceEntry ? (replaceEntry.showCancel ?? true) : true
 
@@ -421,6 +565,23 @@ function ToolApprovalCard({
           <replaceEntry.Body {...previewCtx} />
         ) : (
           <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]">
+            {escalation && (
+              <div
+                data-testid="auto-escalation-explanation"
+                className="flex items-start gap-[var(--space-2)] rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
+              >
+                <WarningCircle size={16} weight="bold" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-warning)]" aria-hidden="true" />
+                <div className="space-y-[var(--space-0-5)]">
+                  <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-warning)]">
+                    {escalation.headline}
+                  </p>
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]/80">
+                    {escalation.detail}
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div>
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Tool</p>
               <p className="font-mono text-[length:var(--type-body-compact-size)] text-[var(--color-accent)] font-semibold">
@@ -429,6 +590,56 @@ function ToolApprovalCard({
             </div>
 
             {previewEntry && <previewEntry.Body {...previewCtx} />}
+
+            {segments && segments.length > 0 && (
+              <div data-testid="command-segments">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">
+                  {segments.length > 1
+                    ? 'Chained command — each part needs approval'
+                    : 'Command part needing approval'}
+                </p>
+                <ul className="space-y-[var(--space-2)]">
+                  {segments.map((segment) => {
+                    const { before, binary, after } = highlightBinaryInText(
+                      segment.command_text,
+                      segment.resolved_binary,
+                    )
+                    return (
+                      <li
+                        key={segment.segment_index}
+                        data-testid={`command-segment-${segment.segment_index}`}
+                        className="rounded-lg bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
+                      >
+                        <div className="flex items-center justify-between gap-[var(--space-2)]">
+                          {segments.length > 1 && (
+                            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                              Part {segment.segment_index + 1}
+                            </span>
+                          )}
+                          <div className="flex items-center gap-[var(--space-1)] ml-auto">
+                            {segment.classification && segment.classification !== 'none' && (
+                              <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] bg-[var(--color-surface-1)] px-[var(--space-2)] py-[var(--space-0-5)] rounded-full">
+                                {segment.classification === 'read_write' ? 'read + write' : segment.classification}
+                              </span>
+                            )}
+                            {segment.network_required && (
+                              <span className="text-[length:var(--type-caption-size)] text-[var(--color-warning)] bg-[var(--color-surface-1)] px-[var(--space-2)] py-[var(--space-0-5)] rounded-full">
+                                network
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <pre className="mt-[var(--space-1)] font-mono text-[length:var(--type-utility-xs-size)] whitespace-pre-wrap break-all text-[var(--color-secondary)]">
+                          {before}
+                          <span className="text-[var(--color-accent)] font-semibold">{binary}</span>
+                          {after}
+                        </pre>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            )}
 
             {args && Object.keys(args).length > 0 && (
               <div>
@@ -464,6 +675,39 @@ function ToolApprovalCard({
           )}
         </div>
 
+        {/* ADR-092 D4/FR-024: grant scope choice — only for a shell command
+            with an Always Allow button on offer. "exact" (command text + cwd)
+            is always available and is the default; "prefix" ({binary,
+            arg_prefix}, ignores cwd, token-boundary matched) only appears
+            once the server has actually suggested one (prefixScopeAvailable)
+            — never a client-guessed prefix. Applies to every currently
+            unmatched segment shown above (one choice, not one per segment). */}
+        {!hasExpired && !isReconnectStub && !hideAlwaysAllow && isShellCommand && (
+          <div className="px-[var(--space-3)] pb-[var(--space-2-5)]">
+            <RadioGroup
+              aria-label="Grant scope for Always Allow"
+              value={scope}
+              onValueChange={(next) => setScope(next as NonNullable<ToolApprovalActionRequest['scope']>)}
+              orientation="vertical"
+            >
+              <RadioGroupItem value="exact" data-testid="scope-exact">
+                Allow this exact command
+              </RadioGroupItem>
+              {prefixScopeAvailable && (
+                <RadioGroupItem value="prefix" data-testid="scope-prefix">
+                  Allow commands starting with{' '}
+                  {suggestedPrefixes.map((p, i) => (
+                    <span key={p}>
+                      {i > 0 && ', '}
+                      <span className="font-mono text-[var(--color-accent)]">{p}</span>
+                    </span>
+                  ))}
+                </RadioGroupItem>
+              )}
+            </RadioGroup>
+          </div>
+        )}
+
         {/* Action buttons.
             Approve/Deny carry equal visual weight as the primary decision.
             Always Allow is a de-emphasized (ghost) secondary action — it
@@ -497,7 +741,7 @@ function ToolApprovalCard({
                 <Button
                   size="sm"
                   variant="default"
-                  onClick={() => handleAction('approve')}
+                  onClick={() => handleAction('allow_once')}
                   disabled={submitting}
                   className="h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"
                 >
@@ -520,7 +764,7 @@ function ToolApprovalCard({
                   size="sm"
                   variant="ghost"
                   data-testid="always-allow-toggle"
-                  onClick={() => handleAction('always')}
+                  onClick={() => handleAction('allow')}
                   disabled={submitting}
                   className="h-8 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] flex-1 sm:flex-none"
                 >
@@ -585,6 +829,7 @@ export function ToolApprovalModal() {
       toolCallId={first.toolCallId}
       turnId={first.turnId}
       sessionId={first.sessionId}
+      segments={first.segments}
     />
   )
 }

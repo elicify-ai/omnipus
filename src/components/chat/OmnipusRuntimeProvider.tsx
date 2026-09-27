@@ -7,7 +7,7 @@ import { useOmnipusRuntime } from "@/lib/omnipus-runtime";
 import { useChatStore } from "@/store/chat";
 import { useConnectionStore } from "@/store/connection";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
-import { useSessionStore, resetChatBucketForReplay } from "@/store/session";
+import { useSessionStore, attachSessionCursorFields } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
 import { queryClient } from "@/lib/queryClient";
 import type { Session, SessionDetail } from "@/lib/api";
@@ -21,8 +21,8 @@ import {
 } from "./tools/BashOutput";
 import { FileReadPreviewUI, FileReadAliasDotUI } from "./tools/FileReadPreview";
 import { FileWriteConfirmUI, FileWriteAliasDotUI, EditFileConfirmUI, AppendFileConfirmUI } from "./tools/FileWriteConfirm";
-import { FileTreeViewUI, FileListAliasDotUI } from "./tools/FileTreeView";
-import { WebSearchResultUI } from "./tools/WebSearchResult";
+import { FileTreeViewUI, FileListAliasDotUI, FileTreeDirectoryUI } from "./tools/FileTreeView";
+import { WebSearchResultUI, WebSearchCanonicalUI } from "./tools/WebSearchResult";
 import { WebFetchPreviewUI, WebFetchLegacyUI } from "./tools/WebFetchPreview";
 import { BrowserNavigateUI, BrowserNavigateUnderscoreUI } from "./tools/BrowserNavigate";
 import { WebServeUI } from "./tools/WebServeUI";
@@ -154,19 +154,21 @@ export function reattachActiveSession(
   if (seedAgentId) {
     useSessionStore.getState().setActiveSession(activeSessionId, seedAgentId);
   }
-  // The gateway will replay the entire transcript. Mark the session as replaying
-  // symmetrically here (same as in attachToSession).
+  // The gateway will confirm catch-up completion (or send a session_snapshot)
+  // — mark the session as replaying symmetrically here (same as in
+  // attachToSession) until that lands.
   useChatStore.setState({ isReplaying: true });
-  // Pass the since-cursor so the gateway only replays frames the SPA hasn't seen.
-  const since =
-    useChatStore.getState().sessionsById[activeSessionId]?.lastReceivedEventTime ?? undefined;
-  // Reset the bucket ONLY on the success path, where the gateway's replay is in
-  // flight and will repopulate it from scratch (preventing duplicate
-  // "Browse to … / Browse to …" bubbles). If send() fails, the reattach never
-  // happens and no replay will rebuild the transcript, so wiping the bucket
-  // would leave the user a blank chat behind the "please reload" error. Preserve
-  // the existing transcript instead.
-  const sent = conn.send({ type: "attach_session", session_id: activeSessionId, since });
+  // #823 catch-up redesign (BE-DESIGN.md §6.1): send this bucket's own
+  // numbered cursor (if any) so the gateway can answer with an incremental
+  // catch-up instead of a full replay — the same wiring attachToSession uses
+  // (src/store/session.ts::attachSessionCursorFields). A first-ever attach
+  // (no cursor yet) sends the bare frame, same as before Step 0 removed the
+  // legacy `since` field.
+  const sent = conn.send({
+    type: "attach_session",
+    session_id: activeSessionId,
+    ...attachSessionCursorFields(activeSessionId),
+  });
   if (!sent) {
     // send() returned false — socket closed between onopen and here. Preserve
     // local state (do not wipe bucket) and surface an error. Clear the replaying
@@ -176,7 +178,11 @@ export function reattachActiveSession(
     setConnectionError('Failed to reattach session — please reload');
     return false;
   }
-  resetChatBucketForReplay(activeSessionId);
+  // #823 catch-up redesign (BE-DESIGN.md §6.1): the bucket is NO LONGER
+  // wiped here on success either — the cursor just sent carries it across
+  // the reattach. Only an explicit `session_snapshot` frame wipes history
+  // now (src/store/chat/slices/catchup-frames.ts). See this file's own
+  // reattach.test.ts for the rewritten test and its full Q3 provenance.
   return true;
 }
 
@@ -269,42 +275,43 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        * (Omnipus convention); dot-notation names match BRD C.6.1.4 spec. Both registered
        * to handle either naming convention from the agent.
        *   bash              → BashOutputUI              (canonical, unified shell tool — ADR-036)
-       *   exec              → ExecLegacyUI              (legacy alias, old transcripts only)
-       *   workspace_shell   → WorkspaceShellLegacyUI    (legacy alias, old transcripts only)
-       *   workspace.shell   → WorkspaceShellDotLegacyUI (legacy alias, old transcripts only)
-       *   workspace_shell_bg → WorkspaceShellBgLegacyUI (legacy alias, old transcripts only)
-       *   workspace.shell_bg → WorkspaceShellBgDotLegacyUI (legacy alias, old transcripts only)
-       *   read_file         → FileReadPreviewUI         (read file content)
-       *   file.read         → FileReadAliasDotUI        (BRD alias)
+       *   exec / workspace_shell / workspace.shell / workspace_shell_bg /
+       *   workspace.shell_bg → *LegacyUI              (legacy aliases, old transcripts only)
+       *   read_file         → FileReadPreviewUI         (canonical, pkg/tools/filesystem.go)
+       *   file.read         → FileReadAliasDotUI        (BRD alias, old transcripts only)
        *   write_file        → FileWriteConfirmUI        (create/overwrite file)
-       *   file.write        → FileWriteAliasDotUI       (BRD alias)
+       *   file.write        → FileWriteAliasDotUI       (BRD alias, old transcripts only)
        *   edit_file         → EditFileConfirmUI         (targeted string replacement)
        *   append_file       → AppendFileConfirmUI       (append to file)
-       *   list_dir          → FileTreeViewUI            (legacy alias, directory listing)
-       *   list_directory    → FileTreeViewUI            (canonical name)
-       *   file.list         → FileListAliasDotUI        (BRD alias)
-       *   search_web        → WebSearchResultUI         (canonical, search the web)
-       *   web_search        → WebSearchResultUI         (legacy alias)
+       *   list_directory    → FileTreeDirectoryUI       (canonical, pkg/tools/filesystem.go — #898)
+       *   list_dir          → FileTreeViewUI            (legacy alias, old transcripts only)
+       *   file.list         → FileListAliasDotUI        (BRD alias, old transcripts only)
+       *   search_web        → WebSearchCanonicalUI      (canonical, pkg/tools/web.go — #898)
+       *   web_search        → WebSearchResultUI         (legacy alias, old transcripts only)
        *   fetch_url         → WebFetchPreviewUI         (canonical, fetch a URL)
        *   web_fetch         → WebFetchLegacyUI          (legacy alias)
-       *   serve_web         → WebServeUI                (canonical: static or dev, kind field)
-       *   web_serve         → WebServeUI                (legacy alias)
+       *   web_serve         → WebServeUI                (static or dev, kind field)
        *   serve_workspace   → ServeWorkspaceUI          (back-compat alias → WebServeUI)
        *   run_in_workspace  → RunInWorkspaceUI          (back-compat alias → WebServeUI)
-       *   browser_navigate  → BrowserNavigateUI         (canonical, browser navigation)
-       *   browser.navigate  → BrowserNavigateUnderscoreUI (legacy dot alias)
-       *   browser_click     → BrowserClickUI            (canonical)
-       *   browser.click     → BrowserClickUnderscoreUI  (legacy dot alias)
-       *   browser_type      → BrowserTypeUI             (canonical)
-       *   browser.type      → BrowserTypeUnderscoreUI   (legacy dot alias)
-       *   browser_screenshot → BrowserScreenshotUI      (canonical)
-       *   browser.screenshot → BrowserScreenshotUnderscoreUI (legacy dot alias)
-       *   browser_get_text  → BrowserGetTextUI          (canonical)
-       *   browser.get_text  → BrowserGetTextUnderscoreUI (legacy dot alias)
-       *   browser_wait      → BrowserWaitUI             (canonical)
-       *   browser.wait      → BrowserWaitUnderscoreUI   (legacy dot alias)
-       *   browser_evaluate  → BrowserEvaluateUI         (canonical)
-       *   browser.evaluate  → BrowserEvaluateUnderscoreUI (legacy dot alias)
+       *   NOTE: the backend canonical serve name, serve_web
+       *   (pkg/tools/web_serve.go::ToolNameWebServe), is NOT registered here
+       *   yet — a live/replayed serve_web call falls to the generic badge
+       *   (issue-#898 class of gap, reported 2026-09-26, out of this
+       *   change's approved scope).
+       *   browser_navigate  → BrowserNavigateUnderscoreUI (underscore alias)
+       *   browser.navigate  → BrowserNavigateUI         (registered dotted name)
+       *   browser_click     → BrowserClickUnderscoreUI  (underscore alias)
+       *   browser.click     → BrowserClickUI            (registered dotted name)
+       *   browser_type      → BrowserTypeUnderscoreUI   (underscore alias)
+       *   browser.type      → BrowserTypeUI             (registered dotted name)
+       *   browser_screenshot → BrowserScreenshotUnderscoreUI (underscore alias)
+       *   browser.screenshot → BrowserScreenshotUI      (registered dotted name)
+       *   browser_get_text  → BrowserGetTextUnderscoreUI (underscore alias)
+       *   browser.get_text  → BrowserGetTextUI          (registered dotted name)
+       *   browser_wait      → BrowserWaitUnderscoreUI   (underscore alias)
+       *   browser.wait      → BrowserWaitUI             (registered dotted name)
+       *   browser_evaluate  → BrowserEvaluateUnderscoreUI (underscore alias)
+       *   browser.evaluate  → BrowserEvaluateUI         (registered dotted name)
        *   set_goal          → SetGoalToolUI             (ADR-082 D9: goal record card, anchored at the call)
        */}
       <BashOutputUI />
@@ -319,8 +326,10 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <FileWriteAliasDotUI />
       <EditFileConfirmUI />
       <AppendFileConfirmUI />
+      <FileTreeDirectoryUI />
       <FileTreeViewUI />
       <FileListAliasDotUI />
+      <WebSearchCanonicalUI />
       <WebSearchResultUI />
       <WebFetchPreviewUI />
       <WebFetchLegacyUI />

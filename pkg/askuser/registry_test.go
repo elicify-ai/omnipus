@@ -922,13 +922,26 @@ func TestRestart_RearmFromPersistedState(t *testing.T) {
 	if err := regB.RearmSession(sid); err != nil {
 		t.Fatalf("RearmSession: %v", err)
 	}
-	got, ok := regB.PendingForSession(sid)
-	if !ok || got.CardID != set.CardID {
-		t.Fatalf("re-hydrated set mismatch: %v %v", got, ok)
+	// The re-armed timer fires (near-)immediately BY DESIGN: the persisted
+	// CreatedAt is already older than the new 20ms delay. So by the time we
+	// look, the card may already have been auto-submitted and dropped from the
+	// pending map. Both states are legal, and asserting "still pending" races
+	// the very timer this test deliberately made fast — it failed in CI as
+	// `re-hydrated set mismatch: <nil> false`. Pin the card id on whichever
+	// path we observe, so re-hydration is proven rather than won.
+	if got, ok := regB.PendingForSession(sid); ok && got.CardID != set.CardID {
+		t.Fatalf("re-hydrated the wrong card while still pending: want %s, got %s", set.CardID, got.CardID)
 	}
 	waitFor(t, "re-armed timer to fire and server-submit", func() bool { return resumeB.count() == 1 })
 	if auditB.count() != 1 {
 		t.Fatalf("want 1 audit entry after re-armed fire, got %d", auditB.count())
+	}
+	// Whichever path ran above, the timer must have fired for the PERSISTED
+	// card. This is what actually proves RearmSession re-hydrated from disk,
+	// and unlike the pending-map read it holds even when the card has already
+	// gone — so the property survives the race instead of depending on it.
+	if fired := resumeB.last(t); fired.Set == nil || fired.Set.CardID != set.CardID {
+		t.Fatalf("the re-armed timer fired for the wrong card: want %s, got %+v", set.CardID, fired.Set)
 	}
 }
 

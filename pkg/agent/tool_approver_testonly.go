@@ -26,11 +26,15 @@ import "context"
 // paths without standing up the full gateway approval-registry plumbing.
 type testAutoApproveApprover struct{}
 
-// RequestApproval returns (true, "test_auto_approve") for every request.
-// The non-empty denialReason on approve is unused by the agent loop
-// (denialReason is only consumed when approved == false), but the explicit
-// "test_auto_approve" string is included for diagnostic clarity if a future
-// loop change starts logging it on the approve path.
-func (testAutoApproveApprover) RequestApproval(_ context.Context, _ PolicyApprovalReq) (bool, string) {
-	return true, "test_auto_approve"
+// RequestApproval returns (true, "test_auto_approve", true) for every
+// request. The non-empty denialReason on approve is unused by the agent
+// loop (denialReason is only consumed when approved == false), but the
+// explicit "test_auto_approve" string is included for diagnostic clarity if
+// a future loop change starts logging it on the approve path. recordGrant
+// is true (matches this type's own "auto-approve everything" contract —
+// see review finding #5's PolicyApprover doc comment for what the field
+// means); a test that specifically needs to distinguish allow-once from
+// allow-with-grant should wire a purpose-built fake instead.
+func (testAutoApproveApprover) RequestApproval(_ context.Context, _ PolicyApprovalReq) (bool, string, bool) {
+	return true, "test_auto_approve", true
 }

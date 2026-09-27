@@ -65,3 +65,61 @@ func TestValidateFieldsReportsEveryOffendingFieldInRequestOrder(t *testing.T) {
 		}
 	}
 }
+
+// ADR-092 review finding B: the per-agent "Never auto-approve" switch
+// (auto_approve_disabled) is an operator-only safety setting. The operator
+// view (REST/SPA) must describe it as editable so the SPA's buildAgentUpdate
+// can save it; an agent's own mutation path (sysagent) must be refused with
+// PROTECTED_FIELD, because turning it back off would loosen that agent's
+// Auto-approve past what the operator set.
+func TestAutoApproveDisabledIsOperatorOnly(t *testing.T) {
+	agents := map[string]config.AgentConfig{
+		"custom worker": {ID: "writer", Type: config.AgentTypeWorker},
+		"ordinary core": {ID: "mia", Type: config.AgentTypeCore, Locked: true},
+		"system agent":  {ID: "ava", Type: config.AgentTypeSystem, Locked: true},
+	}
+	for name, agent := range agents {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateOperatorFields(agent, []string{"auto_approve_disabled"}); err != nil {
+				t.Fatalf("operator write refused: %v", err)
+			}
+			err := ValidateFields(agent, []string{"auto_approve_disabled"})
+			var fe *FieldError
+			if !errors.As(err, &fe) || fe.Code != ProtectedField || len(fe.Fields) != 1 || fe.Fields[0] != "auto_approve_disabled" {
+				t.Fatalf("agent-path error=%#v want PROTECTED_FIELD for auto_approve_disabled", err)
+			}
+			if d := descriptorFor(OperatorFieldDescriptors(agent), "auto_approve_disabled"); d == nil || !d.Editable {
+				t.Fatalf("operator descriptor=%#v want editable", d)
+			}
+			if d := descriptorFor(FieldDescriptors(agent), "auto_approve_disabled"); d == nil || d.Editable || d.Reason == "" {
+				t.Fatalf("agent descriptor=%#v want listed, not editable, with a reason", d)
+			}
+		})
+	}
+
+	t.Run("external CLI worker has no Auto-approve to switch off", func(t *testing.T) {
+		err := ValidateOperatorFields(externalAgent("codex"), []string{"auto_approve_disabled"})
+		var fe *FieldError
+		if !errors.As(err, &fe) || fe.Code != InvalidInput {
+			t.Fatalf("error=%#v want INVALID_INPUT", err)
+		}
+	})
+
+	t.Run("operator validation still applies the role matrix to other fields", func(t *testing.T) {
+		err := ValidateOperatorFields(config.AgentConfig{ID: "mia", Type: config.AgentTypeCore, Locked: true},
+			[]string{"auto_approve_disabled", "name"})
+		var fe *FieldError
+		if !errors.As(err, &fe) || fe.Code != ProtectedField || len(fe.Fields) != 1 || fe.Fields[0] != "name" {
+			t.Fatalf("error=%#v want PROTECTED_FIELD for name only", err)
+		}
+	})
+}
+
+func descriptorFor(descriptors []FieldDescriptor, name string) *FieldDescriptor {
+	for i := range descriptors {
+		if descriptors[i].Name == name {
+			return &descriptors[i]
+		}
+	}
+	return nil
+}

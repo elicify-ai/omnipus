@@ -33,7 +33,7 @@ import (
 //
 // Idempotent: prctl(PR_SET_DUMPABLE, 0) is safe to call repeatedly.
 //
-// Closes: C6 (TestChildCannotReadGatewayProcEnviron) — v0.2 #155.
+// Closes: C6 (TestChildCannotReadGatewayProcEnviron) — #155.
 func HardenGatewaySelf() error {
 	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
 		return fmt.Errorf("prctl(PR_SET_DUMPABLE, 0): %w", err)

@@ -1,4 +1,4 @@
-// Permission tests for the master.key loader (v0.2 #155 item 2).
+// Permission tests for the master.key loader (#155 item 2).
 //
 // Verifies the strict 0600 contract documented in keymgr.go::loadKeyFile:
 //

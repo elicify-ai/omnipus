@@ -11,9 +11,11 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -68,39 +70,6 @@ func wireStringMap[V ~string](in map[string]V) map[string]string {
 	return out
 }
 
-// agentCreateShellPolicyInput is a request-shape-agnostic normalization of
-// the wire ShellPolicy object, mirroring agentCreateToolsCfgInput above.
-// gen.AgentCreateRequestMain and gen.AgentCreateRequestSubagent each carry an
-// anonymous ShellPolicy struct (oapi-codegen inlines it per-variant);
-// gen.AgentCreateRequestSubagent3p has no shell_policy property at all (the
-// external runner manages its own isolation), so this stays nil for that
-// variant.
-type agentCreateShellPolicyInput struct {
-	EnableDenyPatterns *bool
-	CustomDenyPatterns []string
-}
-
-// agentCreateShellPolicyFromWire converts either variant's shell_policy wire
-// object into the common agentCreateShellPolicyInput. gen.AgentCreateRequestMain
-// and gen.AgentCreateRequestSubagent each generate their own anonymous
-// ShellPolicy struct, but — unlike ToolsCfg below — neither carries a
-// per-variant enum type, so the two anonymous types are structurally
-// identical and one non-generic helper handles both call sites.
-func agentCreateShellPolicyFromWire(wp *struct {
-	CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-	EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
-},
-) *agentCreateShellPolicyInput {
-	if wp == nil {
-		return nil
-	}
-	out := &agentCreateShellPolicyInput{EnableDenyPatterns: wp.EnableDenyPatterns}
-	if wp.CustomDenyPatterns != nil {
-		out.CustomDenyPatterns = *wp.CustomDenyPatterns
-	}
-	return out
-}
-
 // agentCreateMCPServerInput is one entry of agentCreateToolsCfgInput.MCPServers.
 type agentCreateMCPServerInput struct {
 	ID             string
@@ -128,7 +97,7 @@ type agentCreateToolsCfgInput struct {
 // map values (AgentCreateRequestMainToolsCfgBuiltinPolicies vs
 // AgentCreateRequestSubagentToolsCfgBuiltinPolicies, both underlying type
 // string) — since that's the only reason ToolsCfg isn't structurally
-// identical across variants the way ShellPolicy is; every other field
+// identical across variants; every other field
 // (including the Mcp.Servers element shape, which carries no enum) is
 // identical, so the whole tools_cfg object is accepted directly (Go's
 // generic type inference resolves P from tc's concrete argument type) rather
@@ -267,10 +236,12 @@ type restAPICreateAgentPrepareAgent struct {
 	icon           *string
 	skills         *[]string
 	fallbackModels *[]gen.FallbackModel
-	shellPolicyIn  *agentCreateShellPolicyInput
 	modelParamsIn  *agentModelParamsInput
 	mcpServers     *[]agentCreateMCPServerInput
 	policyChanges  *agentmutation.ToolPolicyChanges
+	// autoApproveDisabled is ADR-092's per-agent "Never auto-approve"
+	// switch (Main and Subagent only; subagent_3p runs its own CLI's tools).
+	autoApproveDisabled *bool
 }
 
 // prepareAgent decodes and validates the request and builds the persistent agent config.
@@ -420,7 +391,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 	// and copies out only the fields that variant actually carries.
 	// AgentCreateRequestSubagent has no Executor field at all;
 	// AgentCreateRequestSubagent3p has no ToolsCfg/Skills/FallbackModels/
-	// ShellPolicy/Voice/MaxToolIterations
+	// Voice/MaxToolIterations
 	// fields — a subagent_3p create supplying any of those is rejected at
 	// decode time, both because the Go type has no matching field and
 	// because the strict decoder refuses to silently drop it.
@@ -432,6 +403,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 			return nil, true
 		}
 		pap.name = vreq.Name
+		pap.autoApproveDisabled = vreq.AutoApproveDisabled
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
@@ -442,7 +414,6 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.mcpServers = agentCreateMCPServersFromWire(vreq.McpServers)
 		pap.policyChanges = agentCreatePolicyChangesFromWire(vreq.ToolPolicyChanges)
 		pap.fallbackModels = vreq.FallbackModels
-		pap.shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
 		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
 		return nil, false
@@ -452,6 +423,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 			return nil, true
 		}
 		pap.name = vreq.Name
+		pap.autoApproveDisabled = vreq.AutoApproveDisabled
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
@@ -462,7 +434,6 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.mcpServers = agentCreateMCPServersFromWire(vreq.McpServers)
 		pap.policyChanges = agentCreatePolicyChangesFromWire(vreq.ToolPolicyChanges)
 		pap.fallbackModels = vreq.FallbackModels
-		pap.shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
 		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
 		return nil, false
@@ -616,21 +587,10 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	// helper that fix introduced for updateAgent; existing is nil here since
 	// this is a brand-new agent record.
 	pap.cra.ac.ModelParams = mergeAgentModelParams(nil, pap.modelParamsIn)
-	// shell_policy: mapped onto AgentConfig so it is actually persisted.
-	// subagent_3p has no shell_policy property on the wire (shellPolicyIn
-	// stays nil for that variant — the CLI manages its own isolation), so it
-	// stays unset there, matching updateAgent's rejection of this field on a
-	// subagent_3p PUT.
-	if pap.shellPolicyIn != nil {
-		sp := &config.AgentShellPolicy{}
-		if pap.shellPolicyIn.EnableDenyPatterns != nil {
-			sp.EnableDenyPatterns = *pap.shellPolicyIn.EnableDenyPatterns
-		}
-		if len(pap.shellPolicyIn.CustomDenyPatterns) > 0 {
-			sp.CustomDenyPatterns = make([]string, len(pap.shellPolicyIn.CustomDenyPatterns))
-			copy(sp.CustomDenyPatterns, pap.shellPolicyIn.CustomDenyPatterns)
-		}
-		pap.cra.ac.ShellPolicy = sp
+	// ADR-092: the operator may create an agent with Auto-approve forced off
+	// (tighten-only; false or absent inherits the global default).
+	if pap.autoApproveDisabled != nil {
+		pap.cra.ac.AutoApproveDisabled = *pap.autoApproveDisabled
 	}
 	// Heartbeat is workspace-scoped (ADR-027); no per-agent heartbeat at create.
 	if pap.skills != nil && len(*pap.skills) > 0 {
@@ -837,6 +797,7 @@ func (cra *restAPICreateAgent) publishResponse() {
 	//
 	// The "warning" field signals a partial success — frontend must check this field.
 	createReloadWarning := cra.a.fastAgentUpsert(cra.ac.ID)
+	cra.auditAutoApproveDisabled()
 	// Build the response from local variables only (do NOT read from live config — race).
 	respModel := cra.defaultModelName
 	if cra.ac.Model != nil && cra.ac.Model.Primary != "" {
@@ -890,4 +851,19 @@ func (cra *restAPICreateAgent) publishResponse() {
 	changed := []string{"name", "type", "soul"}
 	ag.ChangedFields = &changed
 	jsonCreated(cra.w, ag)
+}
+
+// auditAutoApproveDisabled writes ADR-092's FR-032(a) mode-change event when
+// an agent is created with Auto-approve forced off, mirroring the PUT path's
+// auditAutoApproveChange. A create without the switch (or with it false)
+// inherits the global default unchanged, so there is no change to record.
+func (cra *restAPICreateAgent) auditAutoApproveDisabled() {
+	if !cra.ac.AutoApproveDisabled || cra.a.agentLoop == nil {
+		return
+	}
+	al := cra.a.agentLoop
+	resolved := agent.ResolveAutoApprove(al.GetConfig(), cra.ac.ID, nil)
+	audit.EmitShellModeChange(cra.r.Context(), al.AuditLogger(), audit.DecisionAllow,
+		shellModeName(resolved), "agent", audit.ShellModeActorOperator,
+		cra.ac.ID, "", "agents."+cra.ac.ID+".auto_approve_disabled")
 }

@@ -863,3 +863,58 @@ describe('C1 Gap 2: governed STATUS_BADGE map read through cn()', () => {
     assert.ok(findings.some((finding) => finding.ruleId === RULE.unsupported), 'an unresolvable spread argument must fail closed')
   })
 })
+
+// A status switch case whose value is a colour-free TEMPLATE is not a
+// status-COLOUR concern. Source of truth for that posture is the scanner's own
+// StringLiteral branch (classifyValue: `if (colors.length === 0) return`) and
+// contract.json's scope — D4 governs the seven status colours, not human-readable
+// prose that happens to sit under a case label spelled like a status. The
+// TemplateExpression branch omitted the same colour-free check, so
+// `case 'cancelled': return `Stopped ${agent}`` failed closed as `unsupported`
+// while the byte-identical value in a string literal, or in a ternary, passed.
+// Regression origin: release/v0.1.1 @ 73f2fc004, job "Design system enforcement
+// audit", src/lib/delegationEventLine.ts.
+describe('design-system status lock — colour-free templates under a status case', () => {
+  it('does not report a colour-free template returned from a status switch case', () => {
+    const findings = run([
+      'export function label(status: string, agent: string) {',
+      '  switch (status) {',
+      "    case 'cancelled':",
+      '      return `Stopped ${agent}`',
+      '  }',
+      "  return ''",
+      '}',
+      '',
+    ].join('\n'))
+    assert.deepEqual(findings, [], `a colour-free sentence is not a status-colour finding, got: ${JSON.stringify(findings)}`)
+  })
+
+  it('still reports a colour-BEARING template returned from a status switch case', () => {
+    const findings = run([
+      'export function paint(status: string, shade: string) {',
+      '  switch (status) {',
+      "    case 'cancelled':",
+      '      return `linear-gradient(#EAB308, ${shade})`',
+      '  }',
+      "  return ''",
+      '}',
+      '',
+    ].join('\n'))
+    assert.ok(findings.length > 0, 'a template carrying a hex must still be scanned')
+    assert.ok(ids(findings).includes(RULE.unsupported), `expected ${RULE.unsupported}, got ${JSON.stringify(ids(findings))}`)
+  })
+
+  it('still reports a colour-free template whose case label is a status when an interpolation is an unresolved palette read', () => {
+    const findings = run([
+      'export function paint(status: string, palette: Record<string, string>) {',
+      '  switch (status) {',
+      "    case 'cancelled':",
+      "      return `${palette['cancelled']}`",
+      '  }',
+      "  return ''",
+      '}',
+      '',
+    ].join('\n'))
+    assert.ok(findings.length > 0, 'an unresolved palette read inside a template is still a finding')
+  })
+})

@@ -1,4 +1,6 @@
 # UAT Report — release/v0.1.1 defect-fix pass (ToolSearch policy seeding + 8 other UAT-found defects)
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 Date: 2026-09-01
 Branch under test: `release/v0.1.1`

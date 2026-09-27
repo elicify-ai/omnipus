@@ -56,6 +56,13 @@ type steeringQueue struct {
 type steeringQueueItem struct {
 	message providers.Message
 	wake    *steeringWake
+	// correlationID is issue #870's steering_receipt carrier: set on every
+	// item EnqueueSteeringMessage creates (caller-supplied, or server-
+	// assigned when blank — see enqueueSteeringMessage), empty for a bare
+	// wake with no steer/respond behind it. Travels item->dequeue->
+	// pendingMessages->injection unchanged so the receipt stamped at
+	// injection (loop_run_turn.go) can name the steer it belongs to.
+	correlationID string
 }
 
 type steeringWake struct {
@@ -87,10 +94,6 @@ func (sq *steeringQueue) push(msg providers.Message) error {
 // pushScope enqueues a steering message for the provided scope.
 func (sq *steeringQueue) pushScope(scope string, msg providers.Message) error {
 	return sq.pushItemScope(scope, steeringQueueItem{message: msg})
-}
-
-func (sq *steeringQueue) pushWakeScope(scope string, msg providers.Message, wake steeringWake) error {
-	return sq.pushItemScope(scope, steeringQueueItem{message: msg, wake: &wake})
 }
 
 func (sq *steeringQueue) pushItemScope(scope string, item steeringQueueItem) error {
@@ -237,7 +240,8 @@ func (al *AgentLoop) Steer(msg providers.Message) error {
 		scope = ts.sessionKey
 		agentID = ts.agentID
 	}
-	return al.enqueueSteeringMessage(scope, agentID, msg)
+	_, err := al.enqueueSteeringMessage(scope, agentID, msg, "")
+	return err
 }
 
 // enqueueSteeringFromMessage redirects an inbound bus message into the
@@ -259,23 +263,14 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 	// w.inTurn is still true, but a Stop's durable marker lands before its
 	// cooperative grace window elapses — a message arriving in that window
 	// would otherwise be enqueued into a steering queue whose consumer is
-	// about to disappear for good, exactly the false-success failure mode
-	// Finding 1 closes for the delegate tool's own steer/respond. Only a
-	// NEWER instruction revives a durably-stopped session, as a new
-	// generation — never the steering queue.
-	if sessionID := strings.TrimSpace(msg.SessionID); sessionID != "" {
-		if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
-			if rec, lerr := lifecycle.Load(sessionID); lerr == nil && rec.Stop != nil && rec.Stop.Generation == rec.Generation {
-				revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID,
-					steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}, msg.Content)
-				if rerr != nil {
-					return fmt.Errorf("enqueueSteeringFromMessage: revive stopped session %q: %w", sessionID, rerr)
-				}
-				if revived {
-					return nil
-				}
-			}
-		}
+	// about to disappear for good, the false-success Finding 1 closes for the
+	// delegate tool's own steer/respond. Only a newer instruction revives it.
+	handled, herr := al.reviveInactiveInbound(route, msg)
+	if herr != nil {
+		return herr
+	}
+	if handled {
+		return nil
 	}
 	// The steering queue uses route.SessionKey ("agent:<id>:<sid>") — the same
 	// key that runTurn registered the active turn under in activeTurnStates.
@@ -284,7 +279,80 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Content: msg.Content,
 		Media:   append([]string(nil), msg.Media...),
 	}
-	return al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg)
+	_, err = al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg, "")
+	return err
+}
+
+// reviveInactiveInbound applies ADR-093 D4 when msg's session is terminal or
+// stopped for its current generation. handled is true when the message was
+// taken onto a new generation and must not also be enqueued. A blank id, a
+// missing store, an unreadable record, or a live record is not handled: the
+// caller enqueues as before. When ReviveStoppedSession declines, handled is
+// false and the caller enqueues too.
+//
+// An ordinary root is revived and then run as a fresh inbound turn (MAJ-003:
+// never a steered redispatch, never the steered instruction write). Damaged
+// and legacy rows (nil classify error, not an ordinary root) keep the
+// pre-ADR-093 revive-and-redispatch; a classify ERROR — including unreadable
+// metadata — fails the enqueue and does NOT revive.
+func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.InboundMessage) (bool, error) {
+	sessionID := strings.TrimSpace(msg.SessionID)
+	if sessionID == "" {
+		return false, nil
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false, nil
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return false, nil
+		}
+		logger.ErrorCF("agent", "adr093: could not read the lifecycle record while routing an inbound message",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return false, fmt.Errorf("enqueueSteeringFromMessage: load %q: %w", sessionID, err)
+	}
+	if !rec.Terminal() && !rec.Stopped() {
+		return false, nil
+	}
+	classifier := NewSteerRecordClassifier(lifecycle, al.ResolveSessionStore(sessionID))
+	class, cerr := classifier.Classify(context.Background(), sessionID)
+	if cerr != nil {
+		return false, fmt.Errorf("enqueueSteeringFromMessage: classify %q: %w", sessionID, cerr)
+	}
+	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}
+	if class == steer.ClassOrdinaryRoot {
+		// ADR-093 D4 + MIN-001: the revival itself is synchronous (the message
+		// must not be queued while the record is still terminal), but the TURN
+		// is not run inline — enqueueSteeringFromMessage is called from Run's
+		// dispatch loop, and an inline processMessage would block the pump for
+		// a whole turn (gate review F1) and return the turn's error as an
+		// "enqueue rejected" signal that session_worker's fallback answers by
+		// queuing the SAME message again (silent-failure-hunter #1: two runs,
+		// one per turn). runRevivedOrdinaryTurn owns the message from here:
+		// exactly one run, published like every other inbound turn (CC-1),
+		// under the Run-scoped context (CC-2), failures error-level.
+		if rerr := al.reviveRecordForHumanTurn(al.inboundRunContext(), sessionID, by); rerr != nil {
+			return false, fmt.Errorf("enqueueSteeringFromMessage: revive ordinary root %q: %w", sessionID, rerr)
+		}
+		// The handoff wait inside runRevivedOrdinaryTurn looks the replaced
+		// turn up in activeTurnStates under the key runTurn registers it
+		// under — resolveScopeKey's output, the same expression processMessage
+		// evaluates for THIS message (loop.go). The bare lifecycle id is a
+		// different string ("agent:<id>:session:<sid>" vs "<sid>"), and a
+		// lookup with it always misses, so the wait never ran and the resumed
+		// turn overlapped the turn it replaces while that turn was still
+		// appending its final history writes (rev2 review, gate CC-2's
+		// overlap half).
+		al.runRevivedOrdinaryTurn(msg, resolveScopeKey(route, msg.SessionKey))
+		return true, nil
+	}
+	revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID, by, msg.Content)
+	if rerr != nil {
+		return false, fmt.Errorf("enqueueSteeringFromMessage: revive stopped session %q: %w", sessionID, rerr)
+	}
+	return revived, nil
 }
 
 // ReviveStoppedSession implements Finding 1's fix (ADR-091 fix lane 2 —
@@ -296,10 +364,13 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 // tool's own steer/respond enqueued into a steering queue no live turn would
 // ever drain, silently orphaning the message.
 //
-// Returns (false, nil) when sessionID is not durably stopped at its current
-// generation — the caller's ordinary path applies instead. instruction, when
-// non-blank, is appended to the session's durable history BEFORE dispatch,
-// exactly like follow_up's own appendFollowUpInstruction
+// Returns (false, nil) when the record is neither terminal nor durably
+// stopped at its current generation (ADR-093 D4) — the caller's ordinary path
+// applies instead. A TERMINAL record (a finished child) takes this same
+// revive path — ADR-093 D4 keeps a terminal child resumable until
+// housekeeping deletes it; SteerCanceller.Revive accepts both states.
+// instruction, when non-blank, is appended to the session's durable history
+// BEFORE dispatch, exactly like follow_up's own appendFollowUpInstruction
 // (pkg/tools/delegate_followup.go), so the reconstructed turn actually sees
 // it.
 func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
@@ -314,7 +385,10 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	if err != nil {
 		return false, err
 	}
-	if rec.Stop == nil || rec.Stop.Generation != rec.Generation {
+	// Neither terminal nor durably stopped for this generation: nothing to
+	// revive — the caller's ordinary path applies. (A terminal child takes
+	// the revive path below, not this decline branch.)
+	if !rec.Terminal() && !rec.Stopped() {
 		return false, nil
 	}
 	// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] The instruction lands
@@ -338,8 +412,23 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	}
 	newGeneration, rerr := al.steerCanceller().Revive(ctx, sessionID, by)
 	if rerr != nil {
+		// Gate SFH#6: record the failed revive so the D2 launch backstop
+		// refuses truthfully instead of send-a-new-message — the user's
+		// revive attempt itself just failed, so pointing at "send another
+		// message" repeats the failure. Sibling site:
+		// reviveRecordForHumanTurn.
+		al.markRevivalFailure(sessionID, rerr)
 		return false, fmt.Errorf("steer: revive %q: %w", sessionID, rerr)
 	}
+	// ADR-093 MIN-002 (gate SFH#5): the child revive now resets the
+	// session-list status to active with the same helper the human-message
+	// path uses, so a resumed child no longer stays "interrupted" in the
+	// session list while it runs. Failures are error-logged, never
+	// success-pretended (gate SFH#4). The failed-revive memory is dropped
+	// too: the session IS live again, so a later refusal must not be
+	// mislabelled (gate SFH#6).
+	al.clearRevivalFailure(sessionID)
+	al.resetUnifiedMetaStatusActive(sessionID)
 	// al.dispatchSteeredSession IS steer.SessionLauncher.Dispatch's own body
 	// (SteerLauncher.Dispatch, steer_launcher.go: "a thin delegate onto
 	// AgentLoop.dispatchSteeredSession") — called directly here, exactly as
@@ -400,13 +489,27 @@ func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction st
 
 // EnqueueSteeringMessage is the exported wrapper used by the delegate tool
 // after it has synchronously verified the caller's authority for the target
-// session. The queue only transports the resulting user message.
-func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
-	return al.enqueueSteeringMessage(scope, agentID, msg)
+// session. The queue transports the resulting user message plus a
+// correlation id for issue #870's steering_receipt: correlationID is the
+// caller-supplied id when non-blank, otherwise EnqueueSteeringMessage mints
+// a server-assigned one (SubagentStateFrame.yaml's steering_receipt.
+// correlation_id: "supplied, when one was supplied; otherwise a
+// server-assigned reference"). The resolved id is always returned so the
+// caller (the delegate tool's steer action) can hand it back to whoever
+// steered, to match a later receipt to this instruction.
+func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
+	return al.enqueueSteeringMessage(scope, agentID, msg, correlationID)
 }
 
-func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
-	return al.enqueueSteeringItem(scope, agentID, steeringQueueItem{message: msg})
+func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
+	correlationID = strings.TrimSpace(correlationID)
+	if correlationID == "" {
+		correlationID = "corr_" + uuid.NewString()
+	}
+	if err := al.enqueueSteeringItem(scope, agentID, steeringQueueItem{message: msg, correlationID: correlationID}); err != nil {
+		return "", err
+	}
+	return correlationID, nil
 }
 
 // EnqueueSteeringWake queues an upward wake into an already-live turn while
@@ -430,12 +533,10 @@ func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQue
 		return fmt.Errorf("steering queue is not initialized")
 	}
 
-	var err error
-	if item.wake == nil {
-		err = al.steering.pushScope(scope, item.message)
-	} else {
-		err = al.steering.pushWakeScope(scope, item.message, *item.wake)
-	}
+	// Pushed via pushItemScope directly, not pushScope/pushWakeScope: those
+	// two rebuild a steeringQueueItem from only message+wake, which would
+	// silently drop correlationID (issue #870) on every enqueue.
+	err := al.steering.pushItemScope(scope, item)
 	if err != nil {
 		logger.WarnCF("agent", "Failed to enqueue steering message", map[string]any{
 			"error": err.Error(),
@@ -508,48 +609,58 @@ func (al *AgentLoop) SetSteeringMode(mode SteeringMode) {
 }
 
 // dequeueSteeringMessages is the internal method called by the agent loop
-// to poll for steering messages in the legacy fallback scope.
-func (al *AgentLoop) dequeueSteeringMessages() []providers.Message {
+// to poll for steering messages in the legacy fallback scope. The second
+// return value is the parallel correlation-id slice consumeDequeuedSteering
+// produces (issue #870) — index i's id belongs to index i's message.
+func (al *AgentLoop) dequeueSteeringMessages() ([]providers.Message, []string) {
 	if al.steering == nil {
-		return nil
+		return nil, nil
 	}
 	scope, items := al.steering.dequeueItemsScope(manualSteeringScope)
 	return al.consumeDequeuedSteering(scope, items)
 }
 
-func (al *AgentLoop) dequeueSteeringMessagesForScope(scope string) []providers.Message {
+func (al *AgentLoop) dequeueSteeringMessagesForScope(scope string) ([]providers.Message, []string) {
 	if al.steering == nil {
-		return nil
+		return nil, nil
 	}
 	actualScope, items := al.steering.dequeueItemsScope(scope)
 	return al.consumeDequeuedSteering(actualScope, items)
 }
 
-func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) []providers.Message {
+func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) ([]providers.Message, []string) {
 	if al.steering == nil {
-		return nil
+		return nil, nil
 	}
 	actualScope, items := al.steering.dequeueItemsScopeWithFallback(scope)
 	return al.consumeDequeuedSteering(actualScope, items)
 }
 
-func (al *AgentLoop) consumeDequeuedSteering(scope string, items []steeringQueueItem) []providers.Message {
+// consumeDequeuedSteering flattens dequeued steeringQueueItems into their
+// providers.Message payloads and a parallel slice of correlation ids
+// (issue #870): correlationIDs[i] is the id — possibly "" for an item with
+// none — that belongs to msgs[i]. Kept as a parallel slice rather than a
+// field on providers.Message itself: that struct is the literal wire shape
+// of an LLM provider request, never a carrier for receipt bookkeeping.
+func (al *AgentLoop) consumeDequeuedSteering(scope string, items []steeringQueueItem) ([]providers.Message, []string) {
 	if len(items) == 0 {
-		return nil
+		return nil, nil
 	}
 	msgs := make([]providers.Message, 0, len(items))
+	correlationIDs := make([]string, 0, len(items))
 	for i, item := range items {
 		if item.wake != nil {
 			if err := al.writeSteeringConsumedMarker(*item.wake); err != nil {
 				al.steering.prependItemsScope(scope, items[i:])
 				slog.Error("agent: steering wake not consumed; restored to queue",
 					"scope", scope, "message_id", item.wake.messageID, "error", err)
-				return msgs
+				return msgs, correlationIDs
 			}
 		}
 		msgs = append(msgs, item.message)
+		correlationIDs = append(correlationIDs, item.correlationID)
 	}
-	return msgs
+	return msgs, correlationIDs
 }
 
 func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) error {
@@ -578,15 +689,17 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	agent *AgentInstance,
 	sessionKey, channel, chatID, workspaceID string,
 	steeringMsgs []providers.Message,
+	steeringCorrelationIDs []string,
 ) (string, error) {
 	return al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:              sessionKey,
-		Channel:                 channel,
-		ChatID:                  chatID,
-		DefaultResponse:         defaultResponse,
-		SendResponse:            false,
-		InitialSteeringMessages: steeringMsgs,
-		SkipInitialSteeringPoll: true,
+		SessionKey:                    sessionKey,
+		Channel:                       channel,
+		ChatID:                        chatID,
+		DefaultResponse:               defaultResponse,
+		SendResponse:                  false,
+		InitialSteeringMessages:       steeringMsgs,
+		InitialSteeringCorrelationIDs: steeringCorrelationIDs,
+		SkipInitialSteeringPoll:       true,
 		// FIX 1 (re-review): see AgentLoop.resolveWorkspaceIDForContinuation
 		// (loop.go) for the resolution this value is sourced from — this
 		// function previously left WorkspaceID unset entirely, degrading a
@@ -634,7 +747,7 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		return "", err
 	}
 
-	steeringMsgs := al.dequeueSteeringMessagesForScopeWithFallback(sessionKey)
+	steeringMsgs, steeringCorrelationIDs := al.dequeueSteeringMessagesForScopeWithFallback(sessionKey)
 	if len(steeringMsgs) == 0 {
 		return "", nil
 	}
@@ -650,7 +763,7 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		}
 	}
 
-	return al.continueWithSteeringMessages(ctx, agent, sessionKey, channel, chatID, workspaceID, steeringMsgs)
+	return al.continueWithSteeringMessages(ctx, agent, sessionKey, channel, chatID, workspaceID, steeringMsgs, steeringCorrelationIDs)
 }
 
 func (al *AgentLoop) InterruptGraceful(hint string) error {
@@ -1350,10 +1463,11 @@ func (al *AgentLoop) DeliverSessionMessage(_ context.Context, childSessionKey, c
 		if strings.TrimSpace(env.Text) == "" {
 			return fmt.Errorf("agent: session message: kind %q: empty text", kind)
 		}
-		return al.enqueueSteeringMessage(childSessionKey, childAgentID, providers.Message{
+		_, enqErr := al.enqueueSteeringMessage(childSessionKey, childAgentID, providers.Message{
 			Role:    "user",
 			Content: env.Text,
-		})
+		}, "")
+		return enqErr
 	default:
 		return fmt.Errorf("%w: kind %q", ErrSessionMessageNotTurnInjectable, kind)
 	}

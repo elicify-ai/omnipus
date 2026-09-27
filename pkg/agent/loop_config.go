@@ -81,13 +81,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// fresh AgentInstances whose Tools registries don't know about the shared
 	// ServedSubdirs / DevServerRegistry / EgressProxy singletons.
 	if al.tier13Deps != nil {
-		al.wireTier13DepsLocked(registry, *al.tier13Deps)
+		al.wireTier13DepsLocked(registry, *al.tier13Deps, cfg)
 	}
 
 	// Re-wire exec tool deps (sandbox mode + egress proxy) on the new
 	// registry. Without this, the rebuilt exec tool would lose the kernel
 	// sandbox routing and revert to the legacy `sh -c` path on a hot reload.
-	al.wireExecToolDepsOn(registry)
+	al.wireExecToolDepsOn(registry, cfg)
 
 	// Re-wire system.* tools on the new registry (FR-001, FR-002).
 	if al.sysagentDeps != nil {
@@ -111,7 +111,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		tools.SetSkillsWriteAuditLogger(al.auditLogger)
 	}
 
-	// Re-wire the shared memory-write rate limiter (v0.2 #155 item 6) onto
+	// Re-wire the shared memory-write rate limiter (#155 item 6) onto
 	// the new registry, re-applying the SAME instance built once in
 	// NewAgentLoop — never a freshly constructed one, so per-agent/per-caller
 	// sliding-window buckets survive config reloads. al.memoryRateLimiter is

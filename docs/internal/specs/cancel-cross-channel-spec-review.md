@@ -1,4 +1,6 @@
 # Cross-Channel `/cancel` — Spec Review (Adversarial)
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 **Spec under review:** `docs/internal/specs/cancel-cross-channel-spec.md`
 **Mode detected:** `plan-spec` (full BDD scenarios, FR-IDs, SC-IDs, traceability matrix, ambiguity log)

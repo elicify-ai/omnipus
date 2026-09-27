@@ -1,5 +1,7 @@
 # Grill-Spec Review (ROUND 2) — ADR-029: Channel-Instance ↔ Workspace Binding
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Reviewed document:** `docs/internal/architecture/ADR-029-channel-instance-workspace-binding.md` (revised after round 1)
 - **Review date:** 2026-07-02
 - **Input classification:** structured-spec mode (FR/NFR/Gap/WS IDs, decision criteria, option analysis; ADR prose, no BDD/traceability matrix)

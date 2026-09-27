@@ -24,10 +24,19 @@
 //
 //  3. A tool an agent never mentions in its own map — e.g. bash for an agent
 //     with no explicit bash entry — resolves from the reconciled ceiling's
-//     shipped default. For bash that is "allow" (CLAUDE.md hard constraint 6:
-//     bash is registered for every agent and the kernel sandbox is the
-//     protective layer). That is the intended, ratified behaviour, not a gap
-//     to paper over with a fail-closed backfill.
+//     shipped default. For bash that default is "ask" on a FRESH install
+//     (founder decision, 2026-09-23, ADR-092 D1: the three-mode selector,
+//     the D7 filesystem pre-flight, and the D8 network deny-by-default only
+//     engage when the "bash" ceiling resolves to "ask" — paired with
+//     sandbox.AutoApprove seeded true, a fresh install still runs
+//     kernel-clearable commands without a prompt). That is the intended,
+//     ratified behaviour, not a gap to paper over with a fail-closed
+//     backfill. config.ReconcileToolPolicyCeiling NEVER overwrites an
+//     operator-set value (pkg/config/validate.go::ReconcileToolPolicyCeiling
+//     — "never overwrite an existing entry, operator-set or otherwise"), so
+//     an install that already has "bash":"allow" written from before this
+//     ADR shipped stays "allow" forever; this fresh-install-only seed change
+//     is not a behaviour change for existing users.
 package gateway
 
 import (
@@ -50,7 +59,8 @@ import (
 // This is the guard called for by ADR-077 D6 Guard 1: if a fail-closed
 // per-agent deny backfill is ever reintroduced into the load path, this test
 // fails loudly — either the agent's own policies map stops being empty, or
-// bash stops resolving "allow" from the ceiling alone.
+// bash stops resolving its shipped ceiling default (currently "ask",
+// ADR-092 D1) from the ceiling alone.
 func TestRepairAndValidate_BothSidesGap_ResolvesFromReconciledCeiling_NoDenyBackfill(t *testing.T) {
 	cfg := &config.Config{
 		// A deliberately EMPTY global ceiling: without ReconcileToolPolicyCeiling
@@ -74,12 +84,16 @@ func TestRepairAndValidate_BothSidesGap_ResolvesFromReconciledCeiling_NoDenyBack
 		"ADR-077: there must be no fail-closed per-agent backfill; an agent that never mentions a "+
 			"tool must ride the global ceiling, not gain a synthesized entry of its own")
 
-	// bash resolves "allow" from the reconciled global ceiling alone.
+	// bash resolves its shipped ceiling default from the reconciled global
+	// ceiling alone — not a hardcoded "allow" (ADR-092 D1 changed the
+	// fresh-install shipped default to "ask", 2026-09-23); this test asserts
+	// against config.DefaultConfig() itself so it does not silently drift
+	// from whatever that default is.
 	require.Contains(t, cfg.Sandbox.ToolPolicies, "bash", "ReconcileToolPolicyCeiling must have filled bash into the global ceiling")
 	wantBash := config.DefaultConfig().Sandbox.ToolPolicies["bash"]
-	require.Equal(t, "allow", wantBash, "fixture assumption: bash ships allow by default")
+	require.Equal(t, "ask", wantBash, "fixture assumption: bash ships ask by default (ADR-092 D1)")
 	assert.Equal(t, wantBash, cfg.Sandbox.ToolPolicies["bash"],
-		"bash must resolve to its shipped default (allow) from the reconciled ceiling, not a deny backfill")
+		"bash must resolve to its shipped default from the reconciled ceiling, not a deny backfill")
 
 	// And the reconciled config is genuinely complete by the coverage definition.
 	assert.Empty(t, config.ValidateToolPolicyCoverage(cfg, buildKnownBuiltinToolNames()))

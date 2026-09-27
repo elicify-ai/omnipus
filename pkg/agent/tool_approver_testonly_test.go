@@ -41,7 +41,7 @@ func TestNopApprover_TestApproverInstalled_AllowsAndDoesNotAudit(t *testing.T) {
 
 	// Direct invocation of testAutoApproveApprover (no AgentLoop needed).
 	approver := testAutoApproveApprover{}
-	approved, reason := approver.RequestApproval(context.Background(), PolicyApprovalReq{
+	approved, reason, _ := approver.RequestApproval(context.Background(), PolicyApprovalReq{
 		ToolCallID: "call-test",
 		ToolName:   "exec",
 		AgentID:    "ray",

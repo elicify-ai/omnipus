@@ -27,6 +27,14 @@ type EventBus struct {
 	nextID  uint64
 	closed  bool
 	dropped [eventKindCount]atomic.Int64
+
+	// tapMu guards tap. Deliberately a SEPARATE lock from mu: Emit reads tap
+	// under tapMu.RLock() before it ever touches mu, so SetSyncTap (a rare,
+	// boot/reconfig-time call) never contends with the Subscribe/Emit hot
+	// path beyond the width of a single pointer read. See SetSyncTap's doc
+	// comment for the full #823 rationale.
+	tapMu sync.RWMutex
+	tap   func(Event)
 }
 
 // NewEventBus creates a new in-process event broadcaster.
@@ -57,6 +65,46 @@ func (b *EventBus) Subscribe(buffer int) EventSubscription {
 	ch := make(chan Event, buffer)
 	b.subs[id] = eventSubscriber{ch: ch}
 	return EventSubscription{ID: id, C: ch}
+}
+
+// SetSyncTap installs (or, with nil, clears) a synchronous tap that Emit
+// calls FIRST — before the closed check, before subscriber fan-out, outside
+// b.mu entirely, on the emitting goroutine — so it observes 100% of Emit
+// calls regardless of subscriber state (#823 catch-up-redesign design §1.3).
+//
+// This exists because ordinary Subscribe delivery is deliberately lossy: a
+// full subscriber channel drops the event (or, for the narrow
+// mustNotDropEvent set, gets one bounded blocking retry and then still
+// drops). That is the right tradeoff for a live-UI forwarder, but wrong for
+// the gateway's per-session numbering hub — losing an event BEFORE it is
+// assigned a sequence number would create a permanent hole nothing can ever
+// fill in later, unlike a dropped best-effort frame a client can shrug off.
+// The hub therefore taps here instead of subscribing.
+//
+// At most one tap is installed at a time; a second SetSyncTap call replaces
+// the first outright (no chaining). The tap function must not block: it
+// runs synchronously on the SAME goroutine that is emitting the event — the
+// agent turn's own goroutine, in the common case — so a slow or blocking tap
+// stalls that turn for as long as it runs, with NO timeout of its own
+// (deliberately: Emit's mustNotDropEventKindTimeout budget exists to bound a
+// SUBSCRIBER's backpressure; a numbering tap's whole purpose is to never
+// drop, so bounding it would reintroduce exactly the hole it exists to
+// close). Callers installing a tap that itself needs a lock must never let
+// anything on the other side of that lock call back into EventBus.Emit, or
+// an unrelated goroutine already holding that lock deadlocks against the
+// tap.
+func (b *EventBus) SetSyncTap(tap func(Event)) {
+	b.tapMu.Lock()
+	defer b.tapMu.Unlock()
+	b.tap = tap
+}
+
+// syncTap returns the currently installed tap (nil if none), read under
+// tapMu so it is safe to call concurrently with SetSyncTap.
+func (b *EventBus) syncTap() func(Event) {
+	b.tapMu.RLock()
+	defer b.tapMu.RUnlock()
+	return b.tap
 }
 
 // Unsubscribe removes a subscriber and closes its channel.
@@ -110,6 +158,15 @@ func (b *EventBus) Emit(evt Event) {
 	if evt.Time.IsZero() {
 		evt.Time = time.Now()
 	}
+
+	// #823 §1.3: the sync tap runs FIRST, outside b.mu, unconditionally —
+	// including past Close — so it never misses an event the (deliberately
+	// lossy) subscriber fan-out below might drop or that a closed bus would
+	// otherwise discard with zero trace. See SetSyncTap's doc comment.
+	if tap := b.syncTap(); tap != nil {
+		tap(evt)
+	}
+
 	mustRetry := mustNotDropEvent(evt)
 
 	b.mu.RLock()

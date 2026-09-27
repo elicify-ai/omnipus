@@ -436,50 +436,6 @@ func TestCreateAgent_ExecutorPersistsAndEchoes(t *testing.T) {
 	assert.Nil(t, exec, "Main agents must not persist an executor block")
 }
 
-// TestCreateAgent_ShellPolicy_PersistAndEcho is the Fix-3 regression test:
-// createAgent previously never even read shell_policy from the create
-// request at all (unlike updateAgent, which persists it). This proves the
-// full round trip: create a Main agent with a shell_policy, then GET it back
-// and confirm it is echoed AND persisted to config.json.
-func TestCreateAgent_ShellPolicy_PersistAndEcho(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	body := `{"name":"Sandboxed","type":"Main","soul":"s",` +
-		`"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf"]}}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-
-	created := decodeAgentResp(t, w.Body.Bytes())
-	require.NotNil(t, created.ShellPolicy, "create response must echo shell_policy")
-	require.NotNil(t, created.ShellPolicy.EnableDenyPatterns)
-	assert.True(t, *created.ShellPolicy.EnableDenyPatterns)
-	require.NotNil(t, created.ShellPolicy.CustomDenyPatterns)
-	assert.Equal(t, []string{"rm\\s+-rf"}, *created.ShellPolicy.CustomDenyPatterns)
-
-	// Persisted to the agent's entity record (ADR-054: agents are per-entity
-	// records under entities/agents/<id>.json now, not config.json's
-	// agents.list).
-	rec, err := agentstore.New(api.homePath).Get(created.Id)
-	require.NoError(t, err, "created agent must be persisted")
-	require.NotNil(t, rec.ShellPolicy, "shell_policy must be persisted to the entity record")
-	assert.True(t, rec.ShellPolicy.EnableDenyPatterns)
-	assert.Equal(t, []string{"rm\\s+-rf"}, rec.ShellPolicy.CustomDenyPatterns)
-
-	// GET /agents/{id} must independently reflect the persisted values (not
-	// just the create response, which could echo a value that never landed).
-	getW := httptest.NewRecorder()
-	getR := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+created.Id, nil)
-	api.HandleAgents(getW, getR)
-	require.Equal(t, http.StatusOK, getW.Code, "get body: %s", getW.Body.String())
-	got := decodeAgentResp(t, getW.Body.Bytes())
-	require.NotNil(t, got.ShellPolicy, "GET must echo shell_policy")
-	require.NotNil(t, got.ShellPolicy.EnableDenyPatterns)
-	assert.True(t, *got.ShellPolicy.EnableDenyPatterns)
-}
-
 // TestCreateAgent_InvalidExecutor_400 proves the validator rejects bad executors
 // on subagent_3p creates. A Main agent with an external executor is coerced to
 // native instead of rejected (covered by TestCreateAgent_Main_CoercesExternalExecutorWithWarning).
@@ -594,10 +550,6 @@ func TestCreateAgent_Subagent3p_ForbiddenFields_ValidationEnabled(t *testing.T) 
 		{
 			"model_params",
 			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"model_params":{"temperature":0.5}}`,
-		},
-		{
-			"shell_policy",
-			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"shell_policy":{"enable_deny_patterns":true}}`,
 		},
 	}
 	for _, tc := range cases {

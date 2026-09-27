@@ -1,5 +1,7 @@
 # ADR-043 — Browser: one shared Chrome + per-agent browser contexts (tab-sets)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** Accepted (decision recorded 2026-07-14; implementation gated behind this ADR, ~2 sprints on `bugfixes2`, then UAT)
 - **Deciders:** Daniel Piatkowski (operator), lead engineering
 - **Extends/amends:** [[ADR-038]] (live interactive browser panel — its D1↔D5 amendment made `browser_attach.session_id` "correlation only" against one hardcoded `"default"` tab; this ADR re-introduces session identity as *per-agent*), [[ADR-040]] (take-the-wheel — preserved within an agent's context), [[ADR-041]] (browser tabs / multi-target — the tab-set model this builds on, one tab-set per agent), [[ADR-042]] (browser provisioning — unchanged; one managed Chrome still downloads at boot).

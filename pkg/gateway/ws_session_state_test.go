@@ -273,7 +273,16 @@ func TestFix_CR1_S1_SessionStateFirstInWireOrder(t *testing.T) {
 	}
 
 	require.NotEmpty(t, frames)
-	assert.Equal(t, "session_state", frames[0].Type, "session_state must be the FIRST frame of the attach")
+	// #823 (BE-DESIGN.md §4.1/§4.6, review finding 2): an attach with no
+	// cursor is answered with a snapshot, whose session_snapshot marker —
+	// it carries no history, it only tells the client to rebuild — comes
+	// first so that session_state lands AFTER the client's wipe and can
+	// never be erased by it. session_state is still the first frame with
+	// any content, ahead of every replay/catch-up frame (CR1/S1's intent).
+	require.Equal(t, "session_snapshot", frames[0].Type, "a first attach opens with the snapshot marker")
+	frames = frames[1:]
+	require.NotEmpty(t, frames)
+	assert.Equal(t, "session_state", frames[0].Type, "session_state must be the FIRST content frame of the attach")
 	require.NotNil(t, frames[0].SessionID, "session_state must carry session_id")
 	assert.Equal(t, sessionID, *frames[0].SessionID)
 	require.NotNil(t, frames[0].ActiveTurn, "session_state must report the in-flight turn")

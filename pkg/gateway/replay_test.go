@@ -70,7 +70,7 @@ func runReplay(t *testing.T, entries []session.TranscriptEntry) ([]replayFrameDe
 	t.Helper()
 	sink := &sliceSink{}
 	rs := computeReplayStats(entries)
-	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil, nil)
+	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil, nil, nil)
 	require.NoError(t, err, "streamReplay must not return an error for valid input")
 	return sink.all(), n
 }
@@ -119,7 +119,7 @@ func TestStreamReplay_Extracted_TestableSignature(t *testing.T) {
 	sink := &sliceSink{}
 	// Pass pre-computed stats; nil entries produce an empty stats struct.
 	rs := computeReplayStats(nil)
-	n, err := streamReplay(context.Background(), "s1", nil, rs, sink.emit, nil, nil, nil)
+	n, err := streamReplay(context.Background(), "s1", nil, rs, sink.emit, nil, nil, nil, nil)
 	require.NoError(t, err, "streamReplay must accept a nil entry slice")
 	// Done frame is NOT counted in framesEmitted (content frames only).
 	assert.Equal(t, 0, n, "empty transcript must emit 0 content frames (done frame excluded from count)")
@@ -950,7 +950,7 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 		return nil
 	}
 
-	_, err := streamReplay(ctx, "session_cancel", entries, computeReplayStats(entries), emitFn, nil, nil, nil)
+	_, err := streamReplay(ctx, "session_cancel", entries, computeReplayStats(entries), emitFn, nil, nil, nil, nil)
 	assert.ErrorIs(t, err, context.Canceled, "streamReplay must return context.Canceled on ctx cancellation")
 	// goleak.VerifyNone (deferred) will fail the test if any goroutine was leaked.
 }
@@ -1282,9 +1282,11 @@ func TestLiveEventForwarder_ToolCallStart_CarriesAgentID(t *testing.T) {
 	eb := agent.NewEventBus()
 	t.Cleanup(eb.Close)
 
-	sub := eb.Subscribe(16)
-	eventDone := make(chan struct{})
-	go handler.eventForwarder(wc, chatID, sub, eventDone)
+	// #823: tool_call_start is produced once by the session hub through the
+	// EventBus sync tap, delivered to the connection bound to the session the
+	// event's chat id resolves to.
+	eb.SetSyncTap(handler.hubSyncTap)
+	bindTestConnToSession(handler, chatID, "session-agentid-parity", wc)
 
 	eb.Emit(agent.Event{
 		Kind: agent.EventKindToolExecStart,
@@ -1308,9 +1310,6 @@ func TestLiveEventForwarder_ToolCallStart_CarriesAgentID(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no frame received within 2s")
 	}
-
-	eb.Unsubscribe(sub.ID)
-	<-eventDone
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"regexp"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
 
 // EditFileTool edits a file by replacing old_text with new_text.
@@ -67,6 +69,18 @@ func (t *EditFileTool) Parameters() map[string]any {
 	}
 }
 
+// AutoApproveVerdict implements AutoApproveClassifier: edit_file reads and
+// writes one file, and runs under Auto only when that file is inside the
+// workspace or a mount (ADR-092 D9).
+func (t *EditFileTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
+	path, ok := args["path"].(string)
+	if !ok {
+		return autoAsks("edit_file: path argument missing")
+	}
+	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpWrite, path, t.patterns,
+		fspolicy.PathGrantAccessRead|fspolicy.PathGrantAccessWrite)
+}
+
 func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
@@ -96,7 +110,8 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("new_text is required")
 	}
 
-	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)
+	handle, err := resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpWrite, path, t.patterns,
+		fspolicy.PathGrantAccessRead|fspolicy.PathGrantAccessWrite)
 	if err != nil {
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}
@@ -158,6 +173,18 @@ func (t *AppendFileTool) Parameters() map[string]any {
 	}
 }
 
+// AutoApproveVerdict implements AutoApproveClassifier: append_file reads the
+// existing content and writes it back extended, and runs under Auto only
+// when the file is inside the workspace or a mount (ADR-092 D9).
+func (t *AppendFileTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
+	path, ok := args["path"].(string)
+	if !ok {
+		return autoAsks("append_file: path argument missing")
+	}
+	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpWrite, path, t.patterns,
+		fspolicy.PathGrantAccessRead|fspolicy.PathGrantAccessWrite)
+}
+
 func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
@@ -182,7 +209,8 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("content is required")
 	}
 
-	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)
+	handle, err := resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpWrite, path, t.patterns,
+		fspolicy.PathGrantAccessRead|fspolicy.PathGrantAccessWrite)
 	if err != nil {
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}

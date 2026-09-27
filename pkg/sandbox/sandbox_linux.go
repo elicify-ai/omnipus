@@ -124,7 +124,7 @@ func (lb *LinuxBackend) computeRights() {
 	lb.allRights = landlockRightsForABI(lb.abiVersion)
 
 	// Landlock ABI v4+ adds NET_BIND_TCP and NET_CONNECT_TCP. We declare
-	// BOTH as handled (v0.2 #155 item 4):
+	// BOTH as handled (#155 item 4):
 	//
 	//   - NET_BIND_TCP closes the rogue-port hole — an agent shell can no
 	//     longer bind 0.0.0.0:5173 outside the dev-server allow-list.
@@ -371,7 +371,7 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 				return fmt.Errorf("landlock: add bind rule for port %d: %w", rule.Port, err)
 			}
 		}
-		// v0.2 (#155 item 4): connect-port enforcement. Each entry becomes
+		// #155 (item 4): connect-port enforcement. Each entry becomes
 		// an allow-rule for NET_CONNECT_TCP; any connect(2) to a destination
 		// port not listed is denied with EACCES. We treat kernel rejection
 		// the same as bind rules — hard error so operators see partial
@@ -392,7 +392,7 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 		// low to honor them. Log once and proceed — refusing to apply
 		// here would force the operator into a no-sandbox-at-all state
 		// just because they configured net rules on an older kernel.
-		// v0.2 (#155 item 4) re-introduced ConnectPortRules; on pre-ABI-v4
+		// #155 (item 4) re-introduced ConnectPortRules; on pre-ABI-v4
 		// kernels they are computed but not enforced (documented gap).
 		slog.Warn("Landlock: net port rules ignored on this kernel",
 			"abi_version", lb.abiVersion,
@@ -520,8 +520,9 @@ func (lb *LinuxBackend) ApplyToCmd(_ *exec.Cmd, _ SandboxPolicy) error {
 // The per-cmd ordering guard (startLockedCalledOnce + the companion atomic
 // field) was written-but-never-read dead code: the doc comment promised a
 // "debug-build assertion below" that was never implemented. Removed under the
-// v0.2 quick-wins charter; a proper per-cmd assertion via sync.Map is deferred
-// to v0.3 per docs/internal/design/sandbox-redesign-2026-05.md.
+// #155 quick-wins charter; a proper per-cmd assertion via sync.Map is deferred
+// — tracked #885 (structural sandbox follow-ups); see
+// docs/internal/design/sandbox-redesign-2026-05.md.
 //
 // The function signature is preserved so callers (hardened_exec.go) do not
 // need a conditional: the call is a no-op and the compiler will inline+elide it.
@@ -802,7 +803,7 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 				return fmt.Errorf("landlock: re-add bind port %d: %w", rule.Port, err)
 			}
 		}
-		// v0.2 (#155 item 4): re-add connect-port rules so children forked
+		// #155 (item 4): re-add connect-port rules so children forked
 		// from this thread inherit the outbound allow-list. Skipping these
 		// would silently drop connect enforcement on hardened-exec spawns
 		// even though the gateway thread itself was correctly restricted —

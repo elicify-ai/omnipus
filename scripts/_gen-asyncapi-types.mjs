@@ -1,15 +1,29 @@
 /**
  * _gen-asyncapi-types.mjs
  *
- * Generates three files from contracts/asyncapi.yaml:
+ * Generates four files from contracts/asyncapi.yaml:
  *
  *   1. src/lib/api/generated/asyncapi-types.ts
  *      TypeScript interfaces for every AsyncAPI component schema.
  *
  *   2. src/lib/api/generated/_asyncapi-zod-schemas.generated.ts
- *      Zod runtime schemas for every AsyncAPI component schema.
+ *      Zod runtime schemas for every AsyncAPI component schema, as a FRAGMENT
+ *      concatenated into schemas.ts by _gen-ts.sh (kept for the existing
+ *      schemas.ts consumers/tests that already import WS names from there —
+ *      not meant to be imported on its own, see its own header comment).
  *
- *   3. src/lib/api/generated/llm-error-messages.ts
+ *   3. src/lib/api/generated/ws-schemas.ts
+ *      The SAME Zod runtime schemas as #2, but as a genuinely self-contained,
+ *      standalone module (its own `import { z } from "zod"`, no dependency on
+ *      schemas.ts's REST-derived prefix). This is what SPA WS-frame code
+ *      (src/lib/ws.ts, src/workers/ws-parser.worker.ts, src/lib/browserLiveWs.ts,
+ *      and other runtime WS-frame validators) should import — importing the
+ *      WS value schemas from schemas.ts instead pulls in that file's entire
+ *      REST Zodios `makeApi([...])` call, which references every REST schema
+ *      and defeats tree-shaking, bloating every chunk that imports it
+ *      (bundle-budget incident, PR #860 / issue #823 follow-up).
+ *
+ *   4. src/lib/api/generated/llm-error-messages.ts
  *      The LLMError user-facing copy catalogue, from the x-user-messages
  *      extension on components.schemas.LLMError. src/lib/llm-error.ts consumes
  *      it instead of hand-maintaining `codeToDisplay`; the Go half of the same
@@ -103,6 +117,7 @@ const CONTRACTS_DIR = resolveContractsDir();
 const asyncapiPath = resolve(CONTRACTS_DIR, "asyncapi.yaml");
 const outPath = resolve(ROOT, "src/lib/api/generated/asyncapi-types.ts");
 const zodOutPath = resolve(ROOT, "src/lib/api/generated/_asyncapi-zod-schemas.generated.ts");
+const wsSchemasOutPath = resolve(ROOT, "src/lib/api/generated/ws-schemas.ts");
 const messagesOutPath = resolve(ROOT, "src/lib/api/generated/llm-error-messages.ts");
 
 const doc = yaml.load(readFileSync(asyncapiPath, "utf8"));
@@ -113,6 +128,20 @@ const schemas = doc.components?.schemas ?? {};
 /** Convert a single JSON Schema node to a TypeScript type string. */
 function schemaToTs(schema, indent = 0, schemaName = "") {
   if (!schema) return "unknown";
+
+  // nullable: true — JSON Schema (OpenAPI 3.0-style) nullable marker, not a
+  // JSON Schema keyword this generator otherwise interprets. Handled once,
+  // generically, for every type shape below (primitive/array/object/enum/
+  // $ref) by stripping the marker and unioning the base type with `null`,
+  // rather than threading nullable-awareness through every branch — every
+  // pre-existing `nullable: true` field in contracts/asyncapi.yaml
+  // (SubagentStateFrame.steering_receipt, TaskRunStatusFrame.occurrence_ms)
+  // silently generated as non-nullable before this, which ADR-092's
+  // auto_approve field (also nullable: true) surfaced.
+  if (schema.nullable) {
+    const { nullable, ...rest } = schema;
+    return `${schemaToTs(rest, indent, schemaName)} | null`;
+  }
 
   const pad = "  ".repeat(indent);
   const inner = "  ".repeat(indent + 1);
@@ -187,6 +216,13 @@ function schemaToTs(schema, indent = 0, schemaName = "") {
  */
 function schemaToZod(schema, indent = 0) {
   if (!schema) return "z.unknown()";
+
+  // nullable: true — see the matching comment in schemaToTs; same generic
+  // strip-and-wrap handling here, via Zod's own .nullable().
+  if (schema.nullable) {
+    const { nullable, ...rest } = schema;
+    return `${schemaToZod(rest, indent)}.nullable()`;
+  }
 
   const pad = " ".repeat(indent);
   const propPad = " ".repeat(indent + 4);
@@ -384,42 +420,77 @@ frameNames.forEach((name, i) => {
 });
 lines.push("");
 
-// ── Client→server frame union ─────────────────────────────────────────────────
-const clientFrames = [
-  "AuthFrame",
-  "MessageFrame",
-  "CancelFrame",
-  "PingFrame",
-  "AttachSessionFrame",
-  "DevicePairingResponseFrame",
-  "SessionCloseFrame",
-  "WhatsAppPairingSubscribeFrame",
-  // AskUserQuestion card submission/cancel (askuserquestion-tool-spec v3 §3)
-  // — client (SPA) → server on the chat channel.
-  "AskUserAnswerFrame",
-  // Browser live channel (ADR-038) — client → server frames.
-  "BrowserAttachFrame",
-  "BrowserInputFrame",
-  "BrowserControlFrame",
-  "BrowserDetachFrame",
-  // Browser WebRTC signaling (ADR-047 D1/D4) — client (SPA) → server frame
-  // on the SPA-facing `browser` channel.
-  "BrowserWebRTCOfferFrame",
-  "BrowserInputOfferFrame",
-  // NOTE: BrowserCapture*Frame schemas (browser_capture_hello/offer/answer/
-  // control) belong to the loopback-only browserCaptureIngest channel
-  // between the gateway and the capture extension's encoder page — the SPA
-  // never connects to that channel. This script has no per-channel scoping
-  // (it unions every components.schemas entry into one flat WsFrame/
-  // ServerFrame/ClientFrame set regardless of channel, same as every prior
-  // schema), so those 4 names are NOT listed here — deliberately, so they
-  // fall into `serverFrames` below and are therefore NEVER treated as a
-  // valid client-direction type the SPA's own outbound path could construct.
-  // They still appear as inert exported types/Zod schemas in the generated
-  // SPA files (dead code, never imported by ws.ts/browserLiveWs.ts) because
-  // the generator has no "exclude from SPA channels" bucket — see ADR-047
-  // W1-D notes.
-];
+// ── Client→server frame union — DERIVED from contracts/asyncapi.yaml's own
+// operations (action: send/receive), not hand-maintained ───────────────────
+// This used to be a hand-written array sitting next to the authoritative
+// source, and it silently drifted: at the point this derivation replaced it,
+// THREE real client→server frames were missing from the array and therefore
+// misclassified as ServerFrame-only — SessionModeUpdateFrame (ADR-092, the
+// bug that forced this fix — L6 correctly refused to cast around
+// connection.send() taking a ClientFrame it wasn't in) and two independent,
+// pre-existing misses, BrowserTabActionFrame and BrowserViewportFrame (both
+// `action: send` on the `browser` channel — ADR-041/live-view tab switching
+// and viewport reporting were exposed to the exact same bug shape, unnoticed
+// until this derivation was written). A hand-maintained list next to an
+// authoritative source is exactly how bugs like this happen and recur; this
+// derivation is the fix for the class, not just the one instance.
+//
+// SPA_CLIENT_CHANNELS is an ALLOWLIST, not a denylist, deliberately: the SPA
+// (ws.ts / browserLiveWs.ts) connects to exactly the `chat` and `browser`
+// channels today. `browserCaptureIngest` is a loopback-only channel between
+// the gateway and the capture extension's encoder page that the SPA never
+// touches — its `action: send` operations (sendBrowserCaptureHello/Offer/
+// Control) must NOT make those frames constructable via ws.ts's
+// ClientFrame/CLIENT_FRAME_TYPES. An allowlist fails CLOSED for a future
+// loopback-only channel (its send-frames stay out of ClientFrame until
+// someone deliberately adds the channel here); a denylist would fail OPEN —
+// silently leaking a new loopback channel's frames into ClientFrame, the
+// same class of bug this replaces the array to prevent. A schema-registered
+// frame with no `action: send` operation on either channel simply never
+// enters `sendFrameNames` and falls through to `serverFrames` below, exactly
+// as the BrowserCapture*Frame schemas do today.
+const SPA_CLIENT_CHANNELS = new Set(["chat", "browser"]);
+
+function channelNameFromRef(ref) {
+  const m = /^#\/channels\/([^/]+)$/.exec(ref ?? "");
+  if (!m) {
+    throw new Error(
+      `operation channel ref "${ref}" is not in the expected "#/channels/<name>" form`
+    );
+  }
+  return m[1];
+}
+
+function frameNameFromMessageRef(ref) {
+  const parts = (ref ?? "").split("/");
+  const name = parts[parts.length - 1];
+  if (!name) {
+    throw new Error(`operation message ref "${ref}" has no trailing frame name`);
+  }
+  return name;
+}
+
+const sendFrameNames = new Set();
+for (const [opName, op] of Object.entries(doc.operations ?? {})) {
+  if (op.action !== "send") continue;
+  const channelName = channelNameFromRef(op.channel?.$ref);
+  if (!SPA_CLIENT_CHANNELS.has(channelName)) continue;
+  for (const msg of op.messages ?? []) {
+    const frameName = frameNameFromMessageRef(msg.$ref);
+    if (!(frameName in schemas)) {
+      throw new Error(
+        `operation "${opName}" (action: send, channel: ${channelName}) references message ` +
+          `"${frameName}" which has no matching entry under components.schemas`
+      );
+    }
+    sendFrameNames.add(frameName);
+  }
+}
+
+// Preserve components.schemas declaration order (frameNames' own order),
+// filtered to the send-derived set, so the emitted union is deterministic
+// and stable across regenerations of the same spec.
+const clientFrames = frameNames.filter((name) => sendFrameNames.has(name));
 
 lines.push("// ── Client → server frames ──────────────────────────────────────────────────");
 lines.push("");
@@ -550,6 +621,38 @@ zodLines.push("export type WsFrame = z.infer<typeof WsFrame>;");
 const zodOutput = zodLines.join("\n");
 writeFileSync(zodOutPath, zodOutput, "utf8");
 console.log(`Generated ${zodOutPath} (${zodOutput.split("\n").length} lines)`);
+
+// ── Generate the self-contained ws-schemas.ts ─────────────────────────────────
+//
+// Same schema body as the fragment above (everything after its banner — the
+// banner is the 8 lines seeded into `zodLines` before the loop), but with its
+// own `import { z } from "zod"` so it can be imported directly without pulling
+// in schemas.ts's REST Zodios `makeApi([...])` call. See the file-header note
+// above (item 3) for why this module exists.
+const WS_ZOD_BANNER_LINE_COUNT = 8;
+const zodBodyLines = zodLines.slice(WS_ZOD_BANNER_LINE_COUNT);
+const wsSchemasOutput = [
+  "/**",
+  " * This file was auto-generated from contracts/asyncapi.yaml.",
+  " * Do not make direct changes to the file.",
+  " * Re-run: node scripts/_gen-asyncapi-types.mjs",
+  " *",
+  " * Self-contained AsyncAPI (WebSocket frame) Zod runtime schemas — safe to",
+  " * import directly. Unlike src/lib/api/generated/schemas.ts (REST + WS,",
+  " * concatenated), importing from here does NOT pull in the REST Zodios",
+  " * `makeApi([...])` call, which references every REST schema and defeats",
+  " * tree-shaking. WS-frame runtime validation (src/lib/ws.ts,",
+  " * src/workers/ws-parser.worker.ts, src/lib/browserLiveWs.ts, and any other",
+  " * SPA code that validates a live WS frame at runtime) MUST import from",
+  " * here, not from schemas.ts.",
+  " */",
+  "",
+  'import { z } from "zod";',
+  "",
+  ...zodBodyLines,
+].join("\n");
+writeFileSync(wsSchemasOutPath, wsSchemasOutput, "utf8");
+console.log(`Generated ${wsSchemasOutPath} (${wsSchemasOutput.split("\n").length} lines)`);
 
 // ── Generate the LLMError user-facing copy catalogue ─────────────────────────
 //

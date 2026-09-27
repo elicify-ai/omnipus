@@ -139,7 +139,7 @@ func newAskTaskHarness(t *testing.T) *askTaskHarness {
 	setWorkspaceCoreTeam(t, api, wsID, []string{"mia", "builder"})
 	t.Cleanup(func() {
 		for _, e := range reg.pendingApprovals() {
-			reg.resolve(e.ApprovalID, ApprovalActionCancel)
+			reg.resolve(e.ApprovalID, ApprovalActionCancel, false)
 		}
 		api.taskExecutor.Drain(10 * time.Second)
 	})
@@ -226,7 +226,7 @@ func TestTaskRun_AskTool_WaitsWithNoBrowserAndContinuesWhenApproved(t *testing.T
 	assert.Equal(t, entry.ApprovalID, first["approval_id"])
 	assert.Equal(t, h.wsID, first["workspace_id"], "the request carries the task's workspace")
 
-	resolved, gone := h.reg.resolve(entry.ApprovalID, ApprovalActionApprove)
+	resolved, gone := h.reg.resolve(entry.ApprovalID, ApprovalActionApprove, false)
 	require.True(t, resolved && !gone, "the pending approval must resolve")
 
 	final := h.awaitTerminal(t, created.Id)
@@ -257,7 +257,7 @@ func TestTaskRun_AskTool_BroadcastsWithTheWorkspaceAndDenialReachesTheWorker(t *
 	assert.Equal(t, frame["approval_id"], entry.ApprovalID)
 	h.requireWaiting(t, created.Id)
 
-	resolved, gone := h.reg.resolve(entry.ApprovalID, ApprovalActionDeny)
+	resolved, gone := h.reg.resolve(entry.ApprovalID, ApprovalActionDeny, false)
 	require.True(t, resolved && !gone)
 
 	final := h.awaitTerminal(t, created.Id)

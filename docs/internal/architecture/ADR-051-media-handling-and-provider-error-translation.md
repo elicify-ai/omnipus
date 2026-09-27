@@ -1,9 +1,11 @@
 # ADR-051: Provider-Capability-Aware Media Handling and User-Facing Error Translation
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Status:** Proposed (Revision 3 — operator decisions locked 2026-07-21: GIF→static PNG; `detail`→Verbose-Chat-gated; `x/image` IN v0.1.1; e2e env-var fail-if-unset preseeded `deepseek/deepseek-chat`. ADR-grill round-2 wiring findings CRIT-001/002 + 8 MAJ corrected in Rev 3.)
 **Date:** 2026-07-21
 **Deciders:** architect (+ backend-lead, frontend-lead, qa-lead for implementation/review); operator Daniel Piatkowski
-**Target release:** `release/v0.1.1` (stability) for RD1, RD2, RD4–RD7; `v0.3` for RD3
+**Target release:** `release/v0.1.1` (stability) for RD1, RD2, RD4–RD7; RD3 deferred, no release scheduled (the v0.3 label was retired 2026-09-25)
 **Defect origin:** operator UAT, 2026-07-21 — `send_file` of an image to an xAI/Grok provider returned `400 invalid-argument: "Downloaded response does not contain a valid JPG, PNG, WebP, or ICO image."`, and the full raw provider JSON body was surfaced verbatim to the chat user.
 **Implements spec:** `docs/internal/specs/media-handling-error-translation-spec.md` (Rev 3)
 
@@ -64,9 +66,9 @@ Before sending an image, normalize to **PNG** via pure-Go transcode when the sou
 
 On a media-class provider rejection, **downgrade the offending media and retry the turn exactly once.** Image → strip + text note; PDF → reuse `downgradePDFMediaToText` (`loop_media.go:215`). Catches everything RD1 can't transcode (AVIF/HEIC/SVG), registry gaps, OR routing surprises, new models. **One retry only.**
 
-### RD3 — Declarative provider-capability registry [DEFERRED to v0.3]
+### RD3 — Declarative provider-capability registry [DEFERRED — no release scheduled]
 
-Data, operator-editable: per-provider `{image_formats, pdf, audio, video, …}` seeded from OpenRouter `input_modalities` + docs. **Job: efficiency** (skip unneeded transcoding) and audio/video. Adds nothing to reliability → out of scope for v0.1.1; belongs in v0.3.
+Data, operator-editable: per-provider `{image_formats, pdf, audio, video, …}` seeded from OpenRouter `input_modalities` + docs. **Job: efficiency** (skip unneeded transcoding) and audio/video. Adds nothing to reliability → out of scope for v0.1.1; deferred (no release scheduled).
 
 ### RD4 — Opaque binaries stay non-raw: archive manifest + agentic-tool model [v0.1.1]
 
@@ -97,7 +99,7 @@ At the chat reducer (`src/store/chat.ts:3086`), render the translated `message`.
 ### RD8 — Release placement
 
 - **`release/v0.1.1` (stability):** RD1 (incl. `x/image`), RD2, RD4, RD5, RD6, RD7, plus the **real-LLM e2e** extending `tests/e2e/media.spec.ts`, gated by `$OMNIPUS_E2E_NO_VISION_MODEL` (preseeded `deepseek/deepseek-chat`; **fails if unset** — not skip). Fixes the incident (D-A, D-B). One new pure-Go dep (`golang.org/x/image`).
-- **`v0.3` (capability-aware redesign):** RD3 (registry), audio/video.
+- **Deferred (capability-aware redesign; no release scheduled):** RD3 (registry), audio/video.
 
 ---
 
@@ -137,7 +139,7 @@ At the chat reducer (`src/store/chat.ts:3086`), render the translated `message`.
 - `appendErrorTranscript` becomes load-bearing for translation; existing replay fixtures must update.
 
 ### Neutral / out of scope
-- RD3 (registry), audio/video — v0.3.
+- RD3 (registry), audio/video — deferred (no release scheduled).
 - No change to `send_file` or channel-side format limits (separate capability domain).
 
 ### Rollback
@@ -227,4 +229,4 @@ CRIT-001 (single seam false) → two choke points. CRIT-002 (incident string mis
 - e2e model evidence: OpenRouter `/api/v1/models` — `deepseek/deepseek-chat` `input_modalities:["text"]`, `tools:true`, `context_length:131072` (verified 2026-07-21). Backups: `meta-llama/llama-3.3-70b-instruct`, `qwen/qwen-2.5-72b-instruct`.
 - Prior error spec: `docs/internal/specs/phase-1-chat-model-and-errors.md` (FR-001/002/014 — error *persistence*; this ADR adds *translation*).
 - Constraints: #1 (single binary), #2 (pure Go / no CGo), #6 (explicit data over branches), #8 (contract-first wire formats).
-- Release strategy: v0.1.1 = stability (RD1,2,4,5,6,7 + e2e); v0.3 = capability-aware redesign (RD3).
+- Release strategy: v0.1.1 = stability (RD1,2,4,5,6,7 + e2e); the capability-aware redesign (RD3) is deferred with no release scheduled (the v0.3 label was retired 2026-09-25).

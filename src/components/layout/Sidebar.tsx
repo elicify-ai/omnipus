@@ -47,6 +47,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { cn } from '@/lib/utils'
 import { Wordmark } from '@/components/shared/Wordmark'
+import { GodModeSidebarPill } from './GodModeIndicators'
 
 // Assets — reusable, cross-workspace resources (library-spec.md D-7 rename:
 // this section used to be titled "Library"; that name now belongs to the new
@@ -362,6 +363,12 @@ export function Sidebar() {
           onboarding/landing). 44px chrome row, no border-b (flat shell). */}
       <div className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0">
         <Wordmark className="text-base" />
+        {/* God Mode pill (founder decision 2026-09-25) — replaces the old
+            app-wide banner; renders nothing unless god-mode is live. Off,
+            loading, unknown, fetch error and bypass all render nothing
+            (revision 2 ruling: no unknown variant exists). See
+            GodModeIndicators.tsx. */}
+        <GodModeSidebarPill />
         {/* Search icon — opens the cross-workspace session search modal */}
         <IconButton
           onClick={() => useUiStore.getState().openSearchModal()}

@@ -145,6 +145,7 @@ type SessionDetail = {
 };
 type Message = {
   id: string;
+  client_message_id?: string | undefined;
   type?:
     | (
         | "message"
@@ -195,6 +196,7 @@ type Message = {
         task_label: string;
         agent_id?: string | undefined;
         child_session_id?: string | undefined;
+        seq?: number | undefined;
       }
     | undefined;
   subagent_state?:
@@ -219,6 +221,7 @@ type Message = {
             }
           | undefined;
         created_at: string;
+        seq?: number | undefined;
       }
     | undefined;
   subagent_message?:
@@ -246,6 +249,7 @@ type Message = {
         sender_identity: string;
         untrusted_origin: boolean;
         created_at: string;
+        seq?: number | undefined;
       }
     | undefined;
   subagent_end?:
@@ -273,6 +277,7 @@ type Message = {
         agent_id?: string | undefined;
         parent_call_id?: string | undefined;
         message?: string | undefined;
+        seq?: number | undefined;
       }
     | undefined;
 };
@@ -1199,7 +1204,7 @@ type Agent = {
   timeout_seconds: number;
   max_tool_iterations: number;
   tools_cfg?: AgentToolsCfg | undefined;
-  shell_policy?: AgentShellPolicy | undefined;
+  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
   rate_limits?: AgentRateLimits | undefined;
@@ -1234,10 +1239,6 @@ type AgentToolsMcpServerBinding = {
   id: string;
   tools?: Array<string> | undefined;
 };
-type AgentShellPolicy = Partial<{
-  enable_deny_patterns: boolean;
-  custom_deny_patterns: Array<string>;
-}>;
 type FallbackModel = {
   model: string;
   provider?: string | undefined;
@@ -1299,6 +1300,7 @@ type AgentCreateRequestMain = {
   color?: string | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
+  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
     | Partial<{
@@ -1309,7 +1311,6 @@ type AgentCreateRequestMain = {
   skills?: Array<string> | undefined;
   soul: string;
   voice?: (string | null) | undefined;
-  shell_policy?: AgentShellPolicy | undefined;
   max_tool_iterations?: number | undefined;
 };
 type AgentMCPBinding = {
@@ -1331,6 +1332,7 @@ type AgentCreateRequestSubagent = {
   color?: string | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
+  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
     | Partial<{
@@ -1340,7 +1342,6 @@ type AgentCreateRequestSubagent = {
     | undefined;
   skills?: Array<string> | undefined;
   soul: string;
-  shell_policy?: AgentShellPolicy | undefined;
   max_tool_iterations?: number | undefined;
 };
 type AgentCreateRequestSubagent3p = {
@@ -1374,12 +1375,6 @@ type AgentUpdateRequest = {
   context_window_override?: (number | null) | undefined;
   soul?: string | undefined;
   max_tool_iterations?: number | undefined;
-  shell_policy?:
-    | Partial<{
-        enable_deny_patterns: boolean;
-        custom_deny_patterns: Array<string>;
-      }>
-    | undefined;
   color?: string | undefined;
   icon?: string | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
@@ -1390,6 +1385,7 @@ type AgentUpdateRequest = {
       }>
     | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
+  auto_approve_disabled?: boolean | undefined;
   default?: boolean | undefined;
   skills?: Array<string> | undefined;
   voice?: (string | null) | undefined;
@@ -3165,6 +3161,7 @@ export const GoalOutcome: z.ZodType<GoalOutcome> = z.object({
 });
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
+  client_message_id: z.string().min(1).max(128).optional(),
   type: z
     .enum([
       "message",
@@ -3215,6 +3212,7 @@ export const Message: z.ZodType<Message> = z.object({
       task_label: z.string().min(1).max(100),
       agent_id: z.string().optional(),
       child_session_id: z.string().min(1).optional(),
+      seq: z.number().int().gte(1).optional(),
     })
     .optional(),
   subagent_state: z
@@ -3240,6 +3238,7 @@ export const Message: z.ZodType<Message> = z.object({
         })
         .optional(),
       created_at: z.string().datetime({ offset: true }),
+      seq: z.number().int().gte(1).optional(),
     })
     .optional(),
   subagent_message: z
@@ -3268,6 +3267,7 @@ export const Message: z.ZodType<Message> = z.object({
       sender_identity: z.string().min(1),
       untrusted_origin: z.boolean(),
       created_at: z.string().datetime({ offset: true }),
+      seq: z.number().int().gte(1).optional(),
     })
     .optional(),
   subagent_end: z
@@ -3296,6 +3296,7 @@ export const Message: z.ZodType<Message> = z.object({
       agent_id: z.string().optional(),
       parent_call_id: z.string().optional(),
       message: z.string().optional(),
+      seq: z.number().int().gte(1).optional(),
     })
     .optional(),
 });
@@ -3336,13 +3337,6 @@ export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
       .object({ servers: z.array(AgentToolsMcpServerBinding) })
       .partial()
       .passthrough(),
-  })
-  .partial()
-  .passthrough();
-export const AgentShellPolicy: z.ZodType<AgentShellPolicy> = z
-  .object({
-    enable_deny_patterns: z.boolean(),
-    custom_deny_patterns: z.array(z.string()),
   })
   .partial()
   .passthrough();
@@ -3417,7 +3411,7 @@ export const Agent: z.ZodType<Agent> = z
     timeout_seconds: z.number().int().gte(0),
     max_tool_iterations: z.number().int().gte(0),
     tools_cfg: AgentToolsCfg.optional(),
-    shell_policy: AgentShellPolicy.optional(),
+    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: AgentModelParams.optional(),
     rate_limits: AgentRateLimits.optional(),
@@ -3461,6 +3455,7 @@ export const AgentCreateRequestMain =
       .optional(),
     icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
+    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
       .object({ temperature: z.number(), max_tokens: z.number().int() })
@@ -3470,7 +3465,6 @@ export const AgentCreateRequestMain =
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
     voice: z.string().nullish(),
-    shell_policy: AgentShellPolicy.optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestMain>;
 export const AgentCreateRequestSubagent =
@@ -3488,6 +3482,7 @@ export const AgentCreateRequestSubagent =
       .optional(),
     icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
+    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
       .object({ temperature: z.number(), max_tokens: z.number().int() })
@@ -3496,7 +3491,6 @@ export const AgentCreateRequestSubagent =
       .optional(),
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
-    shell_policy: AgentShellPolicy.optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent>;
 export const AgentCreateRequestSubagent3p =
@@ -3542,14 +3536,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   context_window_override: z.number().int().gte(1).nullish(),
   soul: z.string().min(1).optional(),
   max_tool_iterations: z.number().int().optional(),
-  shell_policy: z
-    .object({
-      enable_deny_patterns: z.boolean(),
-      custom_deny_patterns: z.array(z.string()),
-    })
-    .partial()
-    .passthrough()
-    .optional(),
   color: z
     .string()
     .regex(/^#[0-9A-Fa-f]{6}$/)
@@ -3562,6 +3548,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
     .passthrough()
     .optional(),
   tools_cfg: AgentToolsCfg.optional(),
+  auto_approve_disabled: z.boolean().optional(),
   default: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
   voice: z.string().nullish(),
@@ -3732,15 +3719,18 @@ export const ToolRegistryEntry = z
     category: z.string(),
     source: z.enum(["builtin", "mcp"]),
     server_id: z.string().optional(),
+    auto_approve: z.enum(["runs", "runs_if_args", "asks"]).optional(),
   })
   .passthrough();
 export const ToolApprovalActionRequest = z.object({
-  action: z.enum(["approve", "deny", "cancel", "always"]),
+  action: z.enum(["deny", "allow_once", "allow", "cancel"]),
+  scope: z.enum(["exact", "prefix"]).optional(),
 });
 export const ToolApprovalResponse = z
   .object({
     approval_id: z.string(),
-    action: z.enum(["approve", "deny", "cancel", "always"]),
+    action: z.enum(["deny", "allow_once", "allow", "cancel"]),
+    scope: z.enum(["exact", "prefix"]).optional(),
     status: z.literal("ok"),
     grant_recorded: z.boolean().optional(),
   })
@@ -3748,14 +3738,6 @@ export const ToolApprovalResponse = z
 export const GlobalToolPolicies = z.object({
   policies: z.record(z.enum(["allow", "ask", "deny"])),
 });
-export const ExecAllowlist = z.object({
-  allowed_binaries: z.array(z.string().min(1).max(256)).max(256),
-  approval: z.string().optional(),
-  restart_required: z.boolean().optional(),
-});
-export const updateExecAllowlist_Body = z
-  .object({ allowed_binaries: z.array(z.string()) })
-  .passthrough();
 export const ExecProxyStatus = z
   .object({
     enabled: z.boolean(),
@@ -3833,7 +3815,7 @@ export const SandboxConfig = z
     god_mode_available: z.boolean(),
     workspace_path_guard: z.boolean(),
     workspace_path_guard_env_override: z.boolean(),
-    shell_deny_patterns: z.array(z.string()),
+    auto_approve: z.boolean(),
     requires_restart: z.boolean(),
     saved: z.boolean(),
   })
@@ -3851,7 +3833,7 @@ export const SandboxConfigUpdate = z
       .object({ allow_internal: z.array(z.string()) })
       .partial()
       .passthrough(),
-    shell_deny_patterns: z.array(z.string()),
+    auto_approve: z.boolean(),
     workspace_path_guard: z.boolean(),
   })
   .partial()
@@ -3875,6 +3857,9 @@ export const SandboxStatus = z
     seccomp_enforced: z.boolean().optional(),
     audit_only: z.boolean().optional(),
     bind_ports_count: z.number().int().gte(0),
+    kernel_sandbox_active: z.boolean().optional(),
+    auto_approve_effective: z.boolean().optional(),
+    god_mode_active: z.boolean().optional(),
   })
   .passthrough();
 export const AuditEntry: z.ZodType<AuditEntry> = z
@@ -7483,6 +7468,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: AuditLogResponse,
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -7752,6 +7742,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: BackupCreateResponse,
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -7775,6 +7770,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         .passthrough()
     ),
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -7825,6 +7825,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: z.array(ChannelEntry),
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -7850,6 +7855,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 400,
         description: `Unknown channel type or malformed slug.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -7881,6 +7891,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: z.object({}).partial().passthrough(),
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
         schema: ErrorResponse,
@@ -7906,6 +7921,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 400,
         description: `Malformed channel id.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -7949,6 +7969,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
         schema: ErrorResponse,
@@ -7971,6 +7996,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: ChannelEnabledResponse,
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
         schema: ErrorResponse,
@@ -7992,6 +8022,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
     response: ChannelEnabledResponse,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 404,
         description: `Channel ID not found.`,
@@ -8092,6 +8127,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: ChannelTestResponse,
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
         schema: ErrorResponse,
@@ -8185,6 +8225,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: z.array(PendingRestartEntry),
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -8234,6 +8279,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 422,
         description: `Key field is required (empty key).`,
         schema: ErrorResponse,
@@ -8262,6 +8312,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       .object({ status: z.literal("removed"), key: z.string() })
       .passthrough(),
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 404,
         description: `Credential key not found.`,
@@ -8293,6 +8348,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 400,
         description: `Invalid request (e.g. empty passphrase).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -8379,7 +8439,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/gateway/god-mode",
     alias: "setGodMode",
-    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required&#x3D;true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503); the SPA additionally confirms the flip with the operator before sending (ADR-0008 ruling 6). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
+    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox&#x27;s filesystem confinement and network port controls are off, and outbound network access is open for the shell tool, regardless of per-agent profiles. An agent&#x27;s own stricter tool policy, an operator deny command rule, and the shell&#x27;s own outside-workspace write refusal are never overridden by this switch — that refusal still applies, it just never prompts. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required&#x3D;true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503); the SPA additionally confirms the flip with the operator before sending (ADR-0008 ruling 6). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
 `,
     requestFormat: "json",
     parameters: [
@@ -10488,6 +10548,11 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
@@ -11248,6 +11313,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Backup file not found.`,
         schema: ErrorResponse,
@@ -11504,47 +11574,13 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/security/exec-allowlist",
-    alias: "getExecAllowlist",
-    description: `Returns the current exec allowlist and approval mode.
-`,
-    requestFormat: "json",
-    response: ExecAllowlist,
-    errors: [
-      {
-        status: 401,
-        description: `Missing or invalid bearer token.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "put",
-    path: "/security/exec-allowlist",
-    alias: "updateExecAllowlist",
-    description: `Atomically updates the exec binary allowlist. Patterns are trimmed, validated, and deduplicated. Changes are audit-logged (SEC-15). Note: requires_restart&#x3D;true in the response because the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: updateExecAllowlist_Body,
-      },
-    ],
-    response: ExecAllowlist,
-    errors: [
-      {
-        status: 400,
-        description: `Invalid pattern (empty, too long, or too many entries).`,
         schema: ErrorResponse,
       },
     ],
@@ -11558,6 +11594,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     requestFormat: "json",
     response: ExecProxyStatus,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -11600,6 +11641,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 400,
         description: `Invalid level value.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -11647,6 +11693,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
@@ -11691,6 +11742,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
@@ -11706,6 +11762,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     requestFormat: "json",
     response: RetentionSweepResult,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -11748,7 +11809,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "put",
     path: "/security/sandbox-config",
     alias: "updateSandboxConfig",
-    description: `Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_deny_patterns. At least one field required. mode and allowed_paths are restart-gated (requires_restart&#x3D;true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
+    description: `Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, auto_approve. At least one field required. mode and allowed_paths are restart-gated (requires_restart&#x3D;true). SSRF and auto_approve are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
 `,
     requestFormat: "json",
     parameters: [
@@ -11763,6 +11824,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 400,
         description: `Validation error (invalid mode, profile, or path).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -11885,6 +11951,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
@@ -11926,6 +11997,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 400,
         description: `Invalid policy values.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -12252,6 +12328,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     requestFormat: "json",
     response: ClearAllSessionsResponse,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -12624,6 +12705,11 @@ Polled by the SPA StatusBar every 15 seconds.
     requestFormat: "json",
     response: StorageStats,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -13325,6 +13411,11 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     response: z.array(ToolRegistryEntry),
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -13340,6 +13431,11 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     requestFormat: "json",
     response: ErrorResponse,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 404,
         description: `Endpoint removed — use GET /api/v1/tools instead.
@@ -14337,7 +14433,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message"]);
 
 export const AuthFrame = z
   .object({
@@ -14354,6 +14450,7 @@ export const MessageFrameBase = z
     session_id: z.string().min(1).max(128).optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
+    auto_approve: z.boolean().nullable().optional(),
     metadata: z
     .object({
       model_name: z.string().min(1).max(256).optional(),
@@ -14404,7 +14501,8 @@ export const AttachSessionFrame = z
   .object({
     type: z.literal("attach_session"),
     session_id: z.string().min(1).max(128),
-    since: z.string().optional(),
+    since_seq: z.number().int().min(1).optional(),
+    boot_id: z.string().optional(),
   })
   .strict();
 
@@ -14421,6 +14519,8 @@ export const SessionStartedFrame = z
     type: z.literal("session_started"),
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
+    boot_id: z.string().optional(),
   })
   .strict();
 
@@ -14430,6 +14530,7 @@ export const MessageStatusFrame = z
     session_id: z.string().min(1).max(128),
     client_message_id: z.string().min(1).max(128),
     state: z.enum(["received", "working", "failed"]),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14439,6 +14540,10 @@ export const TokenFrame = z
     session_id: z.string().min(1).max(128),
     content: z.string().max(65536),
     agent_id: z.string().optional(),
+    turn_id: z.string().optional(),
+    message_id: z.string().optional(),
+    replace: z.boolean().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14464,6 +14569,9 @@ export const DoneFrame = z
     type: z.literal("done"),
     session_id: z.string().min(1),
     stats: DoneStats.optional(),
+    turn_id: z.string().optional(),
+    message_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14494,6 +14602,7 @@ export const ErrorFrame = z
       llm_error: LLMError,
     })
     .strict().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14506,6 +14615,7 @@ export const ToolCallStartFrame = z
     params: z.record(z.unknown()),
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14603,6 +14713,7 @@ export const ToolCallResultFrame = z
     error: z.string().optional(),
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14615,6 +14726,7 @@ export const SubagentStartFrame = z
     task_label: z.string().max(100),
     agent_id: z.string().optional(),
     child_session_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14630,6 +14742,7 @@ export const SubagentEndFrame = z
     agent_id: z.string().optional(),
     parent_call_id: z.string().optional(),
     message: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14647,6 +14760,7 @@ export const SubagentMessageFrame = z
     sender_identity: z.string().min(1),
     untrusted_origin: z.boolean(),
     created_at: z.string(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14664,6 +14778,7 @@ export const SubagentStateFrame = z
     })
     .strict().optional(),
     created_at: z.string(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14682,7 +14797,7 @@ export const TaskRunStatusFrame = z
     type: z.literal("task_run_status"),
     task_id: z.string().min(1),
     run_id: z.string().min(1),
-    occurrence_ms: z.number().int().optional(),
+    occurrence_ms: z.number().int().nullable().optional(),
     status: z.enum(["in_progress", "done", "failed", "skipped"]),
   })
   .strict();
@@ -14700,6 +14815,7 @@ export const ReplayMessageFrame = z
     turn_id: z.string().optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
+    client_message_id: z.string().optional(),
   })
   .strict();
 
@@ -14728,6 +14844,7 @@ export const ToolResultProjectionFrame = z
     archive_line: z.number().int().min(0),
     content_state: z.enum(["capped", "emptied"]),
     mark: z.string().max(2048).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14741,6 +14858,7 @@ export const RateLimitFrame = z
     retry_after_seconds: z.number().min(0),
     agent_id: z.string().optional(),
     tool: z.string().max(128).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14768,6 +14886,7 @@ export const MediaFrame = z
     type: z.literal("media"),
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14777,6 +14896,22 @@ export const AgentSwitchedFrame = z
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
     message: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const CommandSegmentInfo = z
+  .object({
+    segment_index: z.number().int().min(0),
+    command_text: z.string().min(1),
+    resolved_binary: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    classification: z.enum(["read", "write", "read_write", "none"]).optional(),
+    path: z.string().optional(),
+    network_required: z.boolean().optional(),
+    suggested_prefix: z.string().optional(),
+    prefix_available: z.boolean().optional(),
   })
   .strict();
 
@@ -14792,6 +14927,7 @@ export const ToolApprovalRequiredFrame = z
     turn_id: z.string().min(1),
     expires_in_ms: z.number().int().min(0).max(86400000),
     workspace_id: z.string().min(1).max(128).optional(),
+    segments: z.array(CommandSegmentInfo).optional(),
   })
   .strict();
 
@@ -14891,7 +15027,9 @@ export const SessionStateFrame = z
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
+    auto_approve_modifier: z.boolean().nullable().optional(),
     active_turn: SessionStateActiveTurn.optional(),
+    boot_id: z.string().optional(),
     emitted_at: z.string(),
   })
   .strict();
@@ -14934,6 +15072,7 @@ export const CancelStageFrame = z
     skipped_newer_generation: z.array(z.string()).optional(),
     skipped_terminal: z.array(z.string()).optional(),
     partial: z.boolean().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -14942,6 +15081,23 @@ export const SessionCloseAckFrame = z
     type: z.literal("session_close_ack"),
     session_id: z.string().min(1),
     id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const SessionModeUpdateFrame = z
+  .object({
+    type: z.literal("session_mode_update"),
+    session_id: z.string().min(1),
+    auto_approve: z.boolean().nullable(),
+  })
+  .strict();
+
+export const SessionModeUpdatedFrame = z
+  .object({
+    type: z.literal("session_mode_updated"),
+    session_id: z.string().min(1),
+    auto_approve_effective: z.boolean(),
   })
   .strict();
 
@@ -15291,6 +15447,7 @@ export const GoalStatusFrame = z
       clause_count: z.number().int().min(1).optional(),
     })
     .strict()).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -15303,6 +15460,7 @@ export const LoopStatusFrame = z
     max_runs: z.number().int().min(1),
     next_delay: z.number().int().optional(),
     state: z.string(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -15349,6 +15507,7 @@ export const JudgeVerdictFrame = z
     judged_at: z.string(),
     judge_agent_id: z.string(),
     session_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -15380,6 +15539,7 @@ export const GoalOutcomeFrame = z
     session_id: z.string().min(1),
     message_id: z.string().min(1),
     outcome: GoalOutcomeFrameOutcome,
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -15458,6 +15618,47 @@ export const BrowserInputControlAckFrame = z
   })
   .strict();
 
+export const SessionSnapshotFrame = z
+  .object({
+    type: z.literal("session_snapshot"),
+    session_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    boot_id: z.string().optional(),
+    reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position", "boot_mismatch"]).optional(),
+  })
+  .strict();
+
+export const CatchUpCompleteFrame = z
+  .object({
+    type: z.literal("catch_up_complete"),
+    session_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    boot_id: z.string().optional(),
+    mode: z.enum(["incremental", "snapshot"]),
+  })
+  .strict();
+
+export const UserMessageFrame = z
+  .object({
+    type: z.literal("user_message"),
+    session_id: z.string().min(1).max(128),
+    id: z.string().min(1),
+    client_message_id: z.string().min(1).max(128).optional(),
+    content: z.string().max(5242880),
+    attachments: z.array(z
+    .object({
+      type: z.enum(["image", "audio", "video", "file"]),
+      path: z.string(),
+      size: z.number().int(),
+      mime_type: z.string(),
+    })
+    .strict()).optional(),
+    timestamp: z.string(),
+    agent_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -15497,6 +15698,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   ReplayWarningFrame,
   CancelStageFrame,
   SessionCloseAckFrame,
+  SessionModeUpdateFrame,
+  SessionModeUpdatedFrame,
   DevicePairingRequestFrame,
   WhatsAppPairingFrame,
   SessionCloseFrame,
@@ -15529,6 +15732,9 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserInputAnswerFrame,
   BrowserInputStateFrame,
   BrowserInputControlAckFrame,
+  SessionSnapshotFrame,
+  CatchUpCompleteFrame,
+  UserMessageFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

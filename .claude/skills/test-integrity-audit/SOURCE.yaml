@@ -1,0 +1,32 @@
+# Provenance record for the vendored `test-integrity-audit` skill.
+# See design section 6.4, R12, and guard check 9 (8.1) for the schema this
+# file implements. The watched upstream is the upstream *skill* on this
+# branch — not the auditor agent file (R12, review-2 R2-2).
+
+source_repo: https://github.com/elicify-ai/elicify-Skills
+source_branch: feat/test-integrity-audit-skill
+source_commit: d87fdcf6c8ba4cfdc22c0735793d7258bd9dc3f9
+upstream_subpath: skills/test-integrity-audit
+copy_date: 2026-09-25
+copy_or_derived: copy
+local_clone: /Users/danielpiatkowski/AI-Agent-Workspace/elicify-Skills
+
+# The branch can be rebased or change before merging, and the reference
+# below goes stale the moment it lands on `main`. When elicify-Skills PR
+# #1 and the `feat/test-integrity-audit-skill` branch merge, update
+# `source_branch` to `main`, set `source_commit` to the merge commit, and
+# retarget guard check 9's drift watch at the merged skill on `main`.
+#
+# Local edits (design 6.4, recorded here per review C3, applied
+# 2026-09-25): knowledge/active-probing.md's probe 1 replaced a `git
+# stash`-based example with a `git worktree add` one — the file's own
+# prose already recommended worktree over stash, but the runnable example
+# above it modelled stash first; this repo bans bare `git stash`
+# (shared stash stack across worktrees). knowledge/detection-signatures.md
+# marked its generic cross-ecosystem `go test ./... -list` example
+# `# agent-guard: allow` with a same-line note that a tagged build adds
+# `-tags` locally — it is a cross-language illustration (paired with a
+# pytest and a jest line), not an instruction to run untagged in this
+# repo. Neither edit changes the skill's detection rules, scores, or
+# verdict levels — both are the risky example commands the guard's own
+# checks 2/4 correctly caught.

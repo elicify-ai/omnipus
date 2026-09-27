@@ -186,10 +186,12 @@ func TestGetStreamer_EmptySessionIDAndNoBinding_ReturnsFalse(t *testing.T) {
 	assert.Nil(t, streamer)
 }
 
-// TestGetStreamer_RegistersLiveStreamer proves GetStreamer registers the
-// streamer in h.liveStreamers keyed by session id (ADR-082 D3/D4's
-// prerequisite for catch-up snapshot and active_turn reporting).
-func TestGetStreamer_RegistersLiveStreamer(t *testing.T) {
+// TestUpdate_ActiveTurnTextLivesInHubProjection replaces the pre-#823
+// TestGetStreamer_RegistersLiveStreamer: GetStreamer no longer registers the
+// round's streamer anywhere — the in-flight text a catch-up needs is kept by
+// the session hub's active-turn projection, fed by the very publish that
+// numbers each token, and forgotten at the turn's done (BE-DESIGN.md §4.4).
+func TestUpdate_ActiveTurnTextLivesInHubProjection(t *testing.T) {
 	handler, _, al := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
 
@@ -198,12 +200,27 @@ func TestGetStreamer_RegistersLiveStreamer(t *testing.T) {
 	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err)
 
-	streamer, ok := handler.GetStreamer(context.Background(), "webchat", "chat-reg", meta.ID)
+	st, ok := handler.GetStreamer(context.Background(), "webchat", "chat-reg", meta.ID)
 	require.True(t, ok)
+	ws, ok := st.(*wsStreamer)
+	require.True(t, ok)
+	ws.SetTurnID("turn-proj")
+	ws.SetMessageID("msg-proj")
+	require.NoError(t, ws.Update(context.Background(), "hello "))
+	require.NoError(t, ws.Update(context.Background(), "world"))
 
-	handler.mu.Lock()
-	registered, exists := handler.liveStreamers[meta.ID]
-	handler.mu.Unlock()
-	require.True(t, exists, "GetStreamer must register the streamer in liveStreamers")
-	assert.Same(t, streamer, registered)
+	hub := handler.hubs.lookup(meta.ID)
+	require.NotNil(t, hub, "the first token must create the session's hub")
+	hub.mu.Lock()
+	items := hub.proj.snapshot()
+	hub.mu.Unlock()
+	require.Len(t, items, 1)
+	assert.Equal(t, "msg-proj", items[0].messageID)
+	assert.Equal(t, "hello world", items[0].text)
+
+	require.NoError(t, ws.Finalize(context.Background(), "hello world"))
+	hub.mu.Lock()
+	active := hub.proj.active()
+	hub.mu.Unlock()
+	assert.False(t, active, "the turn's done (after its answer was persisted) clears the projection")
 }

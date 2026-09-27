@@ -33,18 +33,30 @@ type agentLoopRunTurnToolsExecute struct {
 	toolArgs                  map[string]any
 	ledgerToolName            string
 	toctouPolicy              string
-	toolCallID                string
-	asyncCallback             func(_ context.Context, result *tools.ToolResult)
-	asyncCallbackGate         *asyncToolCallbackGate
-	toolCBSig                 string
-	toolResult                *tools.ToolResult
-	toolDuration              time.Duration
-	contentForLLM             string
-	recallDecision            recallInjectionDecision
-	admitted                  admittedToolResult
-	toolResultMsg             providers.Message
-	tcRecord                  session.ToolCall
-	ret0                      agentLoopRunTurnToolsFlow
+	// shellModePin is the ADR-092 bash mode resolveAskPolicy settled on for
+	// this call; guardAndDispatch pins it on the tool's context so the bash
+	// tool enforces the same decision. Empty for every non-bash call.
+	shellModePin tools.ShellMode
+	// autoPin is the ADR-092 D9 Auto-approve verdict resolveAskPolicy
+	// reached for this call; when it ran the call, guardAndDispatch pins it
+	// on the tool's context (tools.WithAutoApproved). Reset for every call.
+	autoPin tools.AutoVerdict
+	// ruleAskSettled is true when this bash call's one upfront prompt also
+	// settled an operator D3 ask rule (§5.7); guardAndDispatch pins it so
+	// the bash tool does not prompt again. Reset for every call.
+	ruleAskSettled    bool
+	toolCallID        string
+	asyncCallback     func(_ context.Context, result *tools.ToolResult)
+	asyncCallbackGate *asyncToolCallbackGate
+	toolCBSig         string
+	toolResult        *tools.ToolResult
+	toolDuration      time.Duration
+	contentForLLM     string
+	recallDecision    recallInjectionDecision
+	admitted          admittedToolResult
+	toolResultMsg     providers.Message
+	tcRecord          session.ToolCall
+	ret0              agentLoopRunTurnToolsFlow
 }
 
 // asyncToolCallbackGate keeps an executor that completes inline from publishing
@@ -840,193 +852,303 @@ func (ex *agentLoopRunTurnToolsExecute) enforceExecutionPolicy(tc providers.Tool
 	return agentLoopRunTurnToolsExecuteNext
 }
 
-// resolveAskPolicy resolves ask-policy approval before dispatch.
+// resolveAskPolicy resolves ask-policy approval before dispatch. The order
+// (ADR-092 D9 §5.1, ruling J1) is: Auto and the operator's standing
+// authorisations first — bash's Auto shell mode, the Auto-approve verdict
+// for every other tool, D3 rules that fully settle a bash call, the
+// session's "Always Allow" grants — and only then either the unattended
+// auto-deny or a human prompt. A call that would run unprompted in a chat
+// therefore also runs in a scheduled run; anything that needs a human is
+// denied there.
 func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
-	if ex.toctouPolicy == "ask" {
-		// Headless auto-deny (issue #264, FR-009): a scheduled run has no
-		// operator to approve, so any `ask`-policy tool is denied without
-		// ever issuing an approval request — the run must never stall.
-		if ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk {
-			// ADR-058: this literal is a DEDICATED denialTable row
-			// (agent.autoDenyHeadlessReason, tool_denial.go) with
-			// headless-specific wording, not the generic
-			// unknown-reason fallback — an earlier revision of this
-			// comment described the fallback path, which produced a
-			// stuttering message ("the tool call was refused (reason:
-			// auto-denied: ...)") with no headless-specific guidance
-			// and failed AC-01's "every driven reason must be known"
-			// guard. A headless scheduled run has no operator by
-			// construction, for the whole run, so Permanent: true is
-			// the correct classification (ADR D1 row 9).
-			const denialReason = autoDenyHeadlessReason
-			cls, _ := ClassifyDenial(denialReason)
-			denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
-			// Build optional extra Details for the deny.attempted entry so
-			// both correlated records carry the schedule identity (O-3 / F-13
-			// / issue #342). scheduledJobContextFrom is a no-op read — safe to
-			// call even when no job info was injected.
-			var denyExtra map[string]any
-			if jobInfo, ok := scheduledJobContextFrom(ex.rx.rr.rq.ri.rf.rt.turnCtx); ok && jobInfo.JobID != "" {
-				denyExtra = map[string]any{
-					"schedule_job_id":   jobInfo.JobID,
-					"schedule_job_name": jobInfo.JobName,
-				}
-			}
-			ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason, denyExtra)
-			// O-3 / F-13 / issue #342: emit the canonical tool.policy.ask.denied
-			// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
-			// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
-			ex.rx.rr.rq.ri.rf.rt.al.emitScheduledAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, tc.ID)
-			// Persist the refusal as a real tool_call entry. This path
-			// never blocks (there is no approver on a headless run), so
-			// there is no pending placeholder to settle — but without
-			// this the scheduled run's transcript showed the tool had
-			// simply never been called, with the reason living only in
-			// the audit log. settleAskToolCallTranscript appends when it
-			// finds no placeholder, which is exactly this case.
-			settleAskToolCallTranscript(
-				ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
-			// ADR-066 D4: denied results enter through the choke point on the
-			// builtin-failure surface (FR-009); it persists the line itself.
-			deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
-				Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-			}).Message
-			ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-			// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-			// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-			// ends the turn typed with no further provider call (FR-032).
-			if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-				res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-				ex.rx.rr.rq.ri.turnStatus = status
-				ex.rx.ret0 = res
-				ex.rx.ret1 = exitErr
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
-			}
-			ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
-				EventKindToolExecSkipped,
-				ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.skipped"),
-				ToolExecSkippedPayload{
-					Tool:   ex.toolName,
-					Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
-				},
-			)
-			if used, exhausted := ex.rx.rr.rq.ri.rf.rt.ts.recordToolDenial(ex.ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
-				ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
-				ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurnForToolDenialBudget(ex.rx.rr.rq.ri.rf.rt.ts, ex.ledgerToolName, denialReason, used)
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
-			}
-			return agentLoopRunTurnToolsExecuteContinue
-		}
-		// ask-policy: consult the session-scoped "Always Allow" grant
-		// store first (ADR-036 §3.4 — the sole grant-consultation point
-		// now that the legacy WS-frame gate, wsApprovalHook, has been
-		// retired), then fall through to interactive human approval
-		// (FR-011) only when no grant is on file.
-		//
-		// A standing grant resolves without ever contacting a human, so
-		// it must NOT write a pending placeholder — that would render an
-		// "awaiting approval" card for a call nobody was asked about.
-		// Consult the grant store separately here (CheckGrantOrRequestApproval
-		// consults the SAME store first, so a granted call still
-		// short-circuits identically), and write the placeholder only on
-		// the path that genuinely blocks on a human.
-		approved := ex.rx.rr.rq.ri.rf.rt.al.ApprovalGrants().IsAllowed(ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID, ex.rx.rr.rq.ri.rf.rt.ts.agentID, ex.toolName, ex.toolArgs)
-		denialReason := ""
-		if !approved {
-			// About to block on a human, for up to the approval
-			// registry's timeout (600 s by default, configurable —
-			// pkg/gateway/gateway.go's defaultToolApprovalTimeout). The
-			// wait is server-side and needs no browser attached: a task
-			// run's approval waits exactly like a chat turn's (ADR-082;
-			// pinned by pkg/gateway/task_run_ask_approval_test.go).
-			// Record the call as `pending`
-			// FIRST so the thread shows what the turn is waiting on for
-			// the whole wait, and so a reload mid-wait still shows it:
-			// the tool_approval_required WS frame is live-only and does
-			// not survive a refresh. Before this, an unanswered approval
-			// rendered nothing at all and the turn looked hung for no
-			// visible reason.
-			recordAskPendingToolCall(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs)
-			approved, denialReason = ex.rx.rr.rq.ri.rf.rt.al.CheckGrantOrRequestApproval(
-				ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID, ex.rx.rr.rq.ri.rf.rt.ts.agentID, ex.toolName, tc.ID, ex.rx.rr.rq.ri.rf.rt.ts.turnID, ex.toolArgs,
-			)
-		}
-		if !approved {
-			// Settle the placeholder to `denied` with the outcome
-			// reason, so "denied by the user" and "expired after five
-			// minutes with nobody watching" are distinguishable in the
-			// thread and on replay.
-			settleAskToolCallTranscript(
-				ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
-			// ADR-058 site 3 — the original defect: denialReason here
-			// is verbatim from CheckGrantOrRequestApproval, so it is
-			// classified for real rather than assumed to be a user
-			// "no". ClassifyDenial handles every reason this call is
-			// KNOWN to be able to produce — not just the
-			// approvals.go-authored six (user, timeout, saturated,
-			// cancel, restart, batch_short_circuit), but also
-			// internal_error (policy_approver.go's nil-entry branch),
-			// no_approver_configured (tool_approver.go's nop
-			// fallback), the empty reason, and "session canceled"
-			// (verified end-to-end in this session:
-			// pkg/agent/cancel.go::AgentLoop.RequestCancel ->
-			// hooks.CancelPendingApprovals ->
-			// pkg/gateway/approvals.go::cancelAllPendingForSessions's
-			// ApprovalOutcome{Reason: "session canceled"} -> here,
-			// distinct from the single-word "cancel" reason above).
-			// An earlier revision of this comment claimed the table
-			// "covers every reason this call can produce" and
-			// enumerated only nine of these — that was never a
-			// closed set, and any reason NOT in denialTable still
-			// fails safe (Permanent: true) through ClassifyDenial's
-			// unknown-reason fallback rather than being silently
-			// treated as retryable.
-			cls, _ := ClassifyDenial(denialReason)
-			denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
-			ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason)
-			// ADR-066 D4: denied results enter through the choke point on the
-			// builtin-failure surface (FR-009); it persists the line itself.
-			deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
-				Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-			}).Message
-			ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-			// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-			// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-			// ends the turn typed with no further provider call (FR-032).
-			if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-				res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-				ex.rx.rr.rq.ri.turnStatus = status
-				ex.rx.ret0 = res
-				ex.rx.ret1 = exitErr
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
-			}
-			ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
-				EventKindToolExecSkipped,
-				ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.skipped"),
-				ToolExecSkippedPayload{
-					Tool:   ex.toolName,
-					Reason: fmt.Sprintf("permission_denied (ask denied: %s)", denialReason),
-				},
-			)
-			// ADR-058 §3.5 (R5, Binding Rule 4 — the positive lower
-			// bound): cls.Permanent is false ONLY for "saturated" at
-			// THIS site, so recordToolDenial never quarantines it
-			// here — a later call to the same tool in the same turn
-			// is free to reach the approver and execute (AC-06).
-			if used, exhausted := ex.rx.rr.rq.ri.rf.rt.ts.recordToolDenial(ex.ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
-				ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
-				ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurnForToolDenialBudget(ex.rx.rr.rq.ri.rf.rt.ts, ex.ledgerToolName, denialReason, used)
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
-			}
-			return agentLoopRunTurnToolsExecuteContinue
-		}
-		// Approved: fall through to execute.
+	rt := ex.rx.rr.rq.ri.rf.rt
+	ex.shellModePin = rt.al.bashShellModeFor(rt.ts, ex.toolName)
+	ex.autoPin = tools.AutoVerdict{}
+	ex.ruleAskSettled = false
+	if ex.toctouPolicy != "ask" {
+		return agentLoopRunTurnToolsExecuteNext
 	}
-	return agentLoopRunTurnToolsExecuteNext
+	// ADR-092 Auto-approve: a bash call resolved to Auto skips the upfront
+	// prompt. The bash tool itself then runs the D3 rules and the D7/D8
+	// pre-flights and asks, through the same approver, only for what the
+	// kernel sandbox cannot confine (shellModePin carries this decision onto
+	// the tool's context, guardAndDispatch). Every other tool asks the
+	// Auto-approve classifier (autoApproveFor); a RUNS verdict is pinned on
+	// the call and never reads or records a grant. D3 operator rules that
+	// already settle a bash call (all segments allowed, or any denied) skip
+	// the prompt too.
+	//
+	// A standing grant resolves without ever contacting a human (ADR-036
+	// §3.4), so it must NOT write a pending placeholder — that would render
+	// an "awaiting approval" card for a call nobody was asked about.
+	ex.autoPin = ex.autoApproveFor()
+	rules := bashCommandRuleVerdict(rt.ts, ex.toolName, ex.toolArgs)
+	ruleSettled := rules.settlesPrompt()
+	// §5.7 fix: the standing-grant lookup MUST fingerprint against the same
+	// argument object a "rule_ask" grant was actually recorded under. A bash
+	// call whose one upfront prompt also settles a D3 {action: ask} rule
+	// carries the adr092_kind:"rule_ask" + note augmentation
+	// (ruleAskRequestArgs) into BOTH the approval request and the recorded
+	// "Always Allow" grant (rest_tool_registry.go::approvalGrantRecorder
+	// records entry.Args verbatim) — looking this up against the tool's own
+	// bare ex.toolArgs, as this used to, fingerprints a DIFFERENT JSON object
+	// than the one actually granted, so a repeat of the exact same command
+	// could never find its own grant here and always fell through to
+	// requestAskApproval, which wrote a pending-approval placeholder for a
+	// call a grant already settles (confirmed: the placeholder write in
+	// requestAskApproval ran unconditionally, before its own
+	// CheckGrantOrRequestApproval call ever consulted the grant store).
+	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
+	grantLookupArgs := ex.toolArgs
+	if ruleAsk {
+		grantLookupArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
+	}
+	approved := ex.shellModePin == tools.ShellModeAuto ||
+		ex.autoPin.Run ||
+		ruleSettled ||
+		rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, grantLookupArgs)
+	if rules.fullyAllowedSettlesPrompt() {
+		// Review finding #8(c) (LOW): a prompt an operator D3 ALLOW rule
+		// fully settled left no audit trail before this fix —
+		// indistinguishable, by event log, from an ordinary unprompted
+		// "allow"-ceiling execution.
+		//
+		// D-12 fix (MEDIUM, 2026-09-24 security review): gated on
+		// fullyAllowedSettlesPrompt(), NOT the broader ruleSettled
+		// (settlesPrompt(), which is ALSO true for a D3 deny verdict) — see
+		// that method's own doc comment for why the deny case must write
+		// nothing from here.
+		rt.al.emitShellRuleSettledAudit(rt.ts, ex.toolArgs)
+	}
+	if approved {
+		if ruleAsk {
+			// A standing grant settled the same rule_ask this call would
+			// otherwise need to ask about — pin it exactly as the
+			// interactive path does (below) so the bash tool's own D3
+			// enforcement does not ask a second time for this call.
+			ex.ruleAskSettled = true
+		}
+		return agentLoopRunTurnToolsExecuteNext
+	}
+	if rt.ts.opts.AutoDenyAsk {
+		// Headless auto-deny (issue #264, FR-009): a scheduled run has no
+		// operator to approve, so a call that still needs a human is denied
+		// without ever issuing an approval request — the run must never
+		// stall.
+		return ex.autoDenyHeadlessAsk(tc)
+	}
+	return ex.requestAskApproval(tc, rules)
+}
+
+// requestAskApproval blocks on a human for one ask-policy call no standing
+// authorisation settled. When the call is a bash command matching an
+// operator D3 ask rule, this one prompt carries the rule's context and, once
+// approved, settles the rule too (§5.7): the bash tool does not prompt a
+// second time.
+func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall, rules bashRuleVerdict) agentLoopRunTurnToolsExecuteFlow {
+	rt := ex.rx.rr.rq.ri.rf.rt
+	requestArgs := ex.toolArgs
+	decisionKind := "classic_ask"
+	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
+	if ruleAsk {
+		requestArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
+		decisionKind = "rule_ask"
+	}
+	// §5.7 fix: re-check the standing grant, with the SAME args
+	// CheckGrantOrRequestApproval below would, BEFORE writing the pending
+	// placeholder — closing the window between resolveAskPolicy's own grant
+	// check (which may have missed, e.g. a grant recorded by a concurrent
+	// call between that check and this one) and CheckGrantOrRequestApproval's
+	// own internal grant check. Before this fix the placeholder was written
+	// unconditionally, ahead of any grant consultation at all, so a call a
+	// grant already settles could still flash an "awaiting approval" card
+	// for a human nobody was actually about to ask.
+	if rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, requestArgs) {
+		if ex.toolName == "bash" {
+			rt.al.emitShellClassicAskDecisionAudit(rt.ts, ex.toolArgs, decisionKind, true, "")
+		}
+		ex.ruleAskSettled = ruleAsk
+		return agentLoopRunTurnToolsExecuteNext
+	}
+	// About to block on a human, for up to the approval registry's timeout
+	// (600 s by default, configurable — pkg/gateway/gateway.go's
+	// defaultToolApprovalTimeout). The wait is server-side and needs no
+	// browser attached: a task run's approval waits exactly like a chat
+	// turn's (ADR-082; pinned by pkg/gateway/task_run_ask_approval_test.go).
+	// Record the call as `pending` FIRST so the thread shows what the turn is
+	// waiting on for the whole wait, and so a reload mid-wait still shows it:
+	// the tool_approval_required WS frame is live-only and does not survive a
+	// refresh. Reached only now that the standing-grant check above has
+	// already ruled out a grant settling this call without ever asking.
+	recordAskPendingToolCall(rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs)
+	// The third return (recordGrant, review finding #5) is consumed only by
+	// pkg/tools' D7/D8 pre-flight escalation call sites, reached through
+	// ShellPermissionGate.RequestShellApproval — this classic ask-policy
+	// branch records "Always Allow" grants via the separate
+	// rest_tool_registry.go::approvalGrantRecorder mechanism, driven directly
+	// by the wire action.
+	approved, denialReason, _ := rt.al.CheckGrantOrRequestApproval(
+		rt.turnCtx, rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, tc.ID, rt.ts.turnID, requestArgs,
+	)
+	if ex.toolName == "bash" {
+		// Review finding #8(b) (LOW): the classic ask-policy human decision
+		// for bash records its own shell.approval_decision event.
+		rt.al.emitShellClassicAskDecisionAudit(rt.ts, ex.toolArgs, decisionKind, approved, denialReason)
+	}
+	if approved {
+		ex.ruleAskSettled = ruleAsk
+		return agentLoopRunTurnToolsExecuteNext
+	}
+	return ex.denyAskedCall(tc, denialReason)
+}
+
+// autoDenyHeadlessAsk refuses an ask-policy call in a headless run that no
+// standing authorisation settled.
+func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
+	// ADR-058: this literal is a DEDICATED denialTable row
+	// (agent.autoDenyHeadlessReason, tool_denial.go) with
+	// headless-specific wording, not the generic
+	// unknown-reason fallback — an earlier revision of this
+	// comment described the fallback path, which produced a
+	// stuttering message ("the tool call was refused (reason:
+	// auto-denied: ...)") with no headless-specific guidance
+	// and failed AC-01's "every driven reason must be known"
+	// guard. A headless scheduled run has no operator by
+	// construction, for the whole run, so Permanent: true is
+	// the correct classification (ADR D1 row 9).
+	const denialReason = autoDenyHeadlessReason
+	cls, _ := ClassifyDenial(denialReason)
+	denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
+	// Build optional extra Details for the deny.attempted entry so
+	// both correlated records carry the schedule identity (O-3 / F-13
+	// / issue #342). scheduledJobContextFrom is a no-op read — safe to
+	// call even when no job info was injected.
+	var denyExtra map[string]any
+	if jobInfo, ok := scheduledJobContextFrom(ex.rx.rr.rq.ri.rf.rt.turnCtx); ok && jobInfo.JobID != "" {
+		denyExtra = map[string]any{
+			"schedule_job_id":   jobInfo.JobID,
+			"schedule_job_name": jobInfo.JobName,
+		}
+	}
+	ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason, denyExtra)
+	// O-3 / F-13 / issue #342: emit the canonical tool.policy.ask.denied
+	// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
+	// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
+	ex.rx.rr.rq.ri.rf.rt.al.emitScheduledAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, tc.ID)
+	// Persist the refusal as a real tool_call entry. This path
+	// never blocks (there is no approver on a headless run), so
+	// there is no pending placeholder to settle — but without
+	// this the scheduled run's transcript showed the tool had
+	// simply never been called, with the reason living only in
+	// the audit log. settleAskToolCallTranscript appends when it
+	// finds no placeholder, which is exactly this case.
+	settleAskToolCallTranscript(
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
+	// ADR-066 D4: denied results enter through the choke point on the
+	// builtin-failure surface (FR-009); it persists the line itself.
+	deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
+	}).Message
+	ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
+	// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+	// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+	// ends the turn typed with no further provider call (FR-032).
+	if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
+		res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
+		ex.rx.rr.rq.ri.turnStatus = status
+		ex.rx.ret0 = res
+		ex.rx.ret1 = exitErr
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
+	}
+	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
+		EventKindToolExecSkipped,
+		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.skipped"),
+		ToolExecSkippedPayload{
+			Tool:   ex.toolName,
+			Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
+		},
+	)
+	if used, exhausted := ex.rx.rr.rq.ri.rf.rt.ts.recordToolDenial(ex.ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
+		ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
+		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurnForToolDenialBudget(ex.rx.rr.rq.ri.rf.rt.ts, ex.ledgerToolName, denialReason, used)
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
+	}
+	return agentLoopRunTurnToolsExecuteContinue
+}
+
+// denyAskedCall records a human (or approver) refusal of an ask-policy call.
+func (ex *agentLoopRunTurnToolsExecute) denyAskedCall(tc providers.ToolCall, denialReason string) agentLoopRunTurnToolsExecuteFlow {
+	// Settle the placeholder to `denied` with the outcome
+	// reason, so "denied by the user" and "expired after five
+	// minutes with nobody watching" are distinguishable in the
+	// thread and on replay.
+	settleAskToolCallTranscript(
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
+	// ADR-058 site 3 — the original defect: denialReason here
+	// is verbatim from CheckGrantOrRequestApproval, so it is
+	// classified for real rather than assumed to be a user
+	// "no". ClassifyDenial handles every reason this call is
+	// KNOWN to be able to produce — not just the
+	// approvals.go-authored six (user, timeout, saturated,
+	// cancel, restart, batch_short_circuit), but also
+	// internal_error (policy_approver.go's nil-entry branch),
+	// no_approver_configured (tool_approver.go's nop
+	// fallback), the empty reason, and "session canceled"
+	// (verified end-to-end in this session:
+	// pkg/agent/cancel.go::AgentLoop.RequestCancel ->
+	// hooks.CancelPendingApprovals ->
+	// pkg/gateway/approvals.go::cancelAllPendingForSessions's
+	// ApprovalOutcome{Reason: "session canceled"} -> here,
+	// distinct from the single-word "cancel" reason above).
+	// An earlier revision of this comment claimed the table
+	// "covers every reason this call can produce" and
+	// enumerated only nine of these — that was never a
+	// closed set, and any reason NOT in denialTable still
+	// fails safe (Permanent: true) through ClassifyDenial's
+	// unknown-reason fallback rather than being silently
+	// treated as retryable.
+	cls, _ := ClassifyDenial(denialReason)
+	denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
+	ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason)
+	// ADR-066 D4: denied results enter through the choke point on the
+	// builtin-failure surface (FR-009); it persists the line itself.
+	deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
+	}).Message
+	ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
+	// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+	// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+	// ends the turn typed with no further provider call (FR-032).
+	if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
+		res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
+		ex.rx.rr.rq.ri.turnStatus = status
+		ex.rx.ret0 = res
+		ex.rx.ret1 = exitErr
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
+	}
+	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
+		EventKindToolExecSkipped,
+		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.skipped"),
+		ToolExecSkippedPayload{
+			Tool:   ex.toolName,
+			Reason: fmt.Sprintf("permission_denied (ask denied: %s)", denialReason),
+		},
+	)
+	// ADR-058 §3.5 (R5, Binding Rule 4 — the positive lower
+	// bound): cls.Permanent is false ONLY for "saturated" at
+	// THIS site, so recordToolDenial never quarantines it
+	// here — a later call to the same tool in the same turn
+	// is free to reach the approver and execute (AC-06).
+	if used, exhausted := ex.rx.rr.rq.ri.rf.rt.ts.recordToolDenial(ex.ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
+		ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
+		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurnForToolDenialBudget(ex.rx.rr.rq.ri.rf.rt.ts, ex.ledgerToolName, denialReason, used)
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
+	}
+	return agentLoopRunTurnToolsExecuteContinue
 }
 
 // prepareDispatch records dispatch metadata and prepares asynchronous result handling.
@@ -1324,6 +1446,17 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// the correlation anchor a spawned child sub-turn's transcript
 	// entries will carry back as ParentSpawnCallID.
 	execCtx = tools.WithToolCallID(execCtx, tc.ID)
+	// Stamp the turn's own ID (D-03 fix, UAT tester t5, 2026-09-24): a tool
+	// that raises its OWN interactive escalation — ADR-092's D3/D7/D8
+	// ShellApprovalRequester.RequestShellApproval call sites in
+	// pkg/tools/shell_permission_mode.go — has no other way to reach the
+	// calling turn's ID, unlike the classic ask-policy path
+	// (requestAskApproval, above) which already has rt.ts.turnID in hand
+	// directly. Before this stamp existed those call sites hardcoded turnID
+	// as "", which contracts/components/schemas/ToolApprovalRequiredFrame.yaml's
+	// minLength:1 on turn_id causes the SPA to silently drop on arrival —
+	// see tools.WithTurnID's doc comment for the full chain.
+	execCtx = tools.WithTurnID(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.turnID)
 	// Carry the turn's EXISTING AutoDenyAsk onto the tool context.
 	// The loop already uses it to auto-deny `ask`-policy calls; a
 	// tool that must refuse one ARGUMENT rather than the whole call
@@ -1332,10 +1465,23 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// field, not a second discriminator: two independently-computed
 	// answers to "is anyone there" would eventually disagree.
 	execCtx = tools.WithAutoDenyAsk(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk)
+	if ex.shellModePin != "" {
+		execCtx = withPinnedShellMode(execCtx, ex.shellModePin)
+	}
+	if ex.ruleAskSettled {
+		execCtx = tools.WithRuleAskSettled(execCtx)
+	}
 	// Approval can wait while configuration changes. Recheck current authority
 	// immediately before dispatch, including connector assignments removed meanwhile.
 	if flow := ex.enforceExecutionPolicy(tc); flow != agentLoopRunTurnToolsExecuteNext {
 		return flow
+	}
+	if ex.autoPin.Run && ex.toctouPolicy == "ask" {
+		// ADR-092 D9 §5.3/§5.5: Auto ran this call without a prompt. Pin the
+		// decision so a RUNS-IF tool re-checks its final path against it,
+		// and record exactly one tool.auto_approved row.
+		execCtx = tools.WithAutoApproved(execCtx, tools.AutoPinForVerdict(ex.toolName, ex.autoPin))
+		ex.rx.rr.rq.ri.rf.rt.al.emitToolAutoApprovedAudit(execCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.autoPin)
 	}
 	ex.toolResult = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.ExecuteWithContext(
 		execCtx,
@@ -1992,8 +2138,9 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 	// turn, and the parked turn's waiter resolves instead of
 	// dying. ASKUSER-FIX.
 	if !parked {
-		if steerMsgs := ex.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if steerMsgs, steerCorrelationIDs := ex.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
 			ex.rx.rr.rq.ri.pendingMessages = append(ex.rx.rr.rq.ri.pendingMessages, steerMsgs...)
+			ex.rx.rr.rq.ri.pendingSteeringReceipts = append(ex.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}
 	}
 

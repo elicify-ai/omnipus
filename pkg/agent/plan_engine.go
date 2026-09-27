@@ -52,6 +52,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // --- Test seams --------------------------------------------------------
@@ -1861,6 +1862,13 @@ func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourc
 		// fan-out), and the timeout bounds a wedged provider.
 		turnCtx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 		defer cancel()
+		// D-08/FR-057: every caller of dispatchPlanTurn (wakeOwner's two call
+		// sites, the plan supervisor's own wake) is the engine reacting to a
+		// plan-state transition on its own — never a person clicking anything
+		// — so this supervision/outcome turn must always auto-deny an
+		// ask-policy tool rather than open a live approval card nobody is
+		// watching.
+		turnCtx = tools.WithAutoDenyAsk(turnCtx, true)
 		if _, err := al.processTaskDirect(turnCtx, agentID, prompt, sessionKey, sessionID); err != nil {
 			logger.WarnCF("plan_engine", "plan wake turn ended with an error",
 				map[string]any{

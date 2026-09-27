@@ -1,9 +1,11 @@
 # ADR-038 — Live interactive browser panel (CDP screencast + input injection)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** Accepted (build authorized 2026-07-11)
 - **Deciders:** Daniel Piatkowski (operator), lead engineering
 - **Supersedes / relates to:** builds on the existing `pkg/tools/browser` headless tooling; ADR-037 (delegation) is unrelated (number was the next free one after 037).
-- **Target:** `feat/browser` branch; phase deferred ("explore first, decide later") — implemented as a self-contained, config-gated feature that can ship in either the hotfix line or v0.3.
+- **Target:** `feat/browser` branch; phase deferred ("explore first, decide later") — implemented as a self-contained, config-gated feature (the "hotfix line or v0.3" fork is retired with the v0.2/v0.3 release labels, 2026-09-25).
 
 ## Context
 

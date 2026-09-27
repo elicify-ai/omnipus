@@ -49,7 +49,6 @@ describe('buildAgentUpdate', () => {
     expect(buildAgentUpdate(baseline, {
       name: 'Mia', soul: '', skills: ['plan'], provider: '', default: false,
       voice: null, model_params: { temperature: 1, max_tokens: 4096 },
-      shell_policy: { custom_deny_patterns: [] },
     })).toBeNull()
   })
 

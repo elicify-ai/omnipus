@@ -71,7 +71,21 @@
     <key>StandardErrorPath</key>
     <string>@OMNIPUS_HOME@/logs/gateway.launchd.err</string>
 
+    <!-- Interactive, NOT Background. The gateway serves the human's UI directly:
+         every page load and every streamed token goes through it, so it is
+         user-facing work by definition. launchd's "Background" class means "no
+         one is waiting for this" and macOS honours it literally -- throttled CPU,
+         throttled disk I/O, and preferred victim for memory eviction.
+         Measured on a developer machine 2026-09-25 (issue #880): the gateway ran
+         at scheduling priority 4 while every other interactive process ran at 31,
+         and once its pages had been swapped out a page load took 20 SECONDS.
+         Flipping this one value and reloading the job moved it to priority 31.
+         LowPriorityIO is pinned false for the same reason: the throttled-I/O half
+         is what turns a 20ms read into a 20s one under memory pressure. -->
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Interactive</string>
+
+    <key>LowPriorityIO</key>
+    <false/>
 </dict>
 </plist>

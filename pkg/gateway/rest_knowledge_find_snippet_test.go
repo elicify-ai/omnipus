@@ -23,13 +23,8 @@
 package gateway
 
 import (
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,47 +91,11 @@ func TestVaultSearchWindowNoPanicOnExpandingFold(t *testing.T) {
 	}
 }
 
-// TestVaultSearchReadNoteHead_ToleratesAShortReadWithoutEOF is F8's direct
-// regression: a single f.Read call legally returns fewer bytes than
-// requested WITHOUT io.EOF — reproduced here with a FIFO, whose Read()
-// returns whatever is CURRENTLY buffered in the pipe rather than waiting to
-// fill the caller's buffer. The writer delivers the note in two separate
-// writes with a pause between them, so a single Read only ever sees the
-// first write; io.ReadFull must keep reading until the second write (or a
-// real EOF) arrives.
-func TestVaultSearchReadNoteHead_ToleratesAShortReadWithoutEOF(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("syscall.Mkfifo is POSIX-only")
-	}
-
-	dir := t.TempDir()
-	const name = "slow-note.md"
-	fifoPath := filepath.Join(dir, name)
-	require.NoError(t, syscall.Mkfifo(fifoPath, 0o600))
-
-	go func() {
-		wf, err := os.OpenFile(fifoPath, os.O_WRONLY, 0)
-		if err != nil {
-			return
-		}
-		defer func() { _ = wf.Close() }()
-		// First write: whatever is available when the reader's (possibly
-		// single) Read() call fires.
-		_, _ = wf.WriteString("head-marker ")
-		// Give a single-Read implementation time to have already returned
-		// with just the first write before the rest arrives — reproducing
-		// the exact "short read, no EOF yet" window F8 is about.
-		time.Sleep(150 * time.Millisecond)
-		_, _ = wf.WriteString("tail-marker")
-	}()
-
-	body, ok := vaultSearchReadNoteHead(dir, name)
-	require.True(t, ok, "a legitimately short-but-not-EOF read must still succeed")
-	assert.Contains(t, body, "head-marker")
-	assert.Contains(t, body, "tail-marker",
-		"a short read that returns fewer bytes than the scan window without EOF must not be "+
-			"treated as the whole file — the reader must keep reading until the writer catches up")
-}
+// TestVaultSearchReadNoteHead_ToleratesAShortReadWithoutEOF (F8's FIFO
+// regression) lives in rest_knowledge_find_snippet_fifo_unix_test.go
+// (build tag unix): syscall.Mkfifo does not exist on GOOS=windows, so a
+// runtime-only t.Skip there still fails `go vet`/`go build` for windows —
+// the test must not compile on that platform at all.
 
 // TestVaultSearchOrigOffset_ASCIIBodyAllocatesNothing is F9's allocation
 // regression: walking an all-ASCII body must not allocate per rune. Every

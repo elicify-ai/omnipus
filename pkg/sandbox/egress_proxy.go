@@ -30,6 +30,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -92,6 +93,21 @@ type EgressProxy struct {
 	// tunnels tracks active CONNECT-tunnel goroutines so Close can
 	// wait for them to drain rather than leaking them past Shutdown.
 	tunnels sync.WaitGroup
+
+	// runHosts is the D-13 fix (2026-09-24 security review): per-run or
+	// per-session DYNAMIC host grants, layered on top of the static
+	// operator allow-list above. Keyed by an opaque, per-(run|session)
+	// token a caller mints (security.ApprovalGrantStore.SessionEgressToken
+	// for a session-scoped "Always Allow", or a fresh crypto/rand token for
+	// a single-run "Approve Once") — never by session/agent id directly, so
+	// a process that cannot present the exact token gains nothing by
+	// guessing an id. A request carries its token as this proxy's own
+	// Proxy-Authorization username (see tokenFromRequest); a request with
+	// no token, or one whose token holds no grant for the host, falls
+	// through to the static allow-list exactly as before this fix — this
+	// is ADDITIVE, never a replacement for the operator's own
+	// cfg.Sandbox.EgressAllowList.
+	runHosts map[string]map[string]struct{}
 
 	closeOnce sync.Once
 	closed    bool
@@ -250,7 +266,7 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "egress_proxy: missing host", http.StatusBadRequest)
 		return
 	}
-	if !p.hostAllowed(host) {
+	if !p.hostAllowed(host, tokenFromRequest(r)) {
 		p.deny(w, host)
 		return
 	}
@@ -337,7 +353,7 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "egress_proxy: missing host", http.StatusBadRequest)
 		return
 	}
-	if !p.hostAllowed(host) {
+	if !p.hostAllowed(host, tokenFromRequest(r)) {
 		p.deny(w, host)
 		return
 	}
@@ -541,7 +557,7 @@ func (p *EgressProxy) isSSRFError(err error) bool {
 // - For each pattern, exact patterns require host == pattern.host.
 // Suffix patterns require host to END WITH "." + pattern.host AND
 // to have at least one label before the suffix.
-func (p *EgressProxy) hostAllowed(host string) bool {
+func (p *EgressProxy) hostAllowed(host, token string) bool {
 	if host == "" {
 		return false
 	}
@@ -577,7 +593,96 @@ func (p *EgressProxy) hostAllowed(host string) bool {
 			return true
 		}
 	}
+
+	// D-13 fix: a per-run/per-session dynamic grant, presented via this
+	// request's own token, additionally allows an exact host it names —
+	// no wildcard support here (a D8 approval card lists literal hosts,
+	// never a pattern), and NO effect at all without the matching token
+	// (an untokenised or wrongly-tokenised request sees only the static
+	// list above, unchanged from before this fix).
+	if token != "" {
+		p.mu.Lock()
+		hosts := p.runHosts[token]
+		_, ok := hosts[host]
+		p.mu.Unlock()
+		if ok {
+			return true
+		}
+	}
 	return false
+}
+
+// GrantRunHosts is the D-13 fix's write side: it additively allows hosts
+// through this proxy for any request presenting token (see runHosts' own
+// doc comment for how a request supplies one). Idempotent — granting the
+// same host twice under the same token is a no-op the second time. No-op on
+// a nil proxy or an empty token (fail-closed: a caller that failed to mint
+// a token grants nothing, rather than accidentally becoming a global
+// allow-all under the empty-string key).
+func (p *EgressProxy) GrantRunHosts(token string, hosts []string) {
+	if p == nil || token == "" || len(hosts) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.runHosts == nil {
+		p.runHosts = make(map[string]map[string]struct{})
+	}
+	set := p.runHosts[token]
+	if set == nil {
+		set = make(map[string]struct{}, len(hosts))
+		p.runHosts[token] = set
+	}
+	for _, h := range hosts {
+		if h = normaliseHost(h); h != "" {
+			set[h] = struct{}{}
+		}
+	}
+}
+
+// RevokeRunToken removes every host granted under token — called once a
+// single "Approve Once" run's child has exited (the token was minted fresh
+// for that one run and is never reused), or once a session ends
+// (AgentLoop.CloseSession, for a session-scoped "Always Allow" token — see
+// security.ApprovalGrantStore.NetworkTokensForSession). No-op on a nil
+// proxy or an empty token.
+func (p *EgressProxy) RevokeRunToken(token string) {
+	if p == nil || token == "" {
+		return
+	}
+	p.mu.Lock()
+	delete(p.runHosts, token)
+	p.mu.Unlock()
+}
+
+// tokenFromRequest extracts the D-13 run/session token from a proxied
+// request's own Proxy-Authorization header (RFC 7617 Basic auth, username
+// slot — note this is Proxy-Authorization, NOT Authorization: a forward
+// proxy's own credential is a distinct header from the one an upstream
+// origin server would see, and Go's http.Request.BasicAuth only reads
+// the latter, so it cannot be reused here) — the standard mechanism curl,
+// wget, npm and Go's own http.ProxyFromEnvironment all populate
+// automatically from a proxy URL's userinfo (`http://TOKEN@host:port`,
+// exactly what hardened_exec.go now embeds —
+// pkg/sandbox/hardened_exec.go::Limits.EgressProxyToken). Returns "" for a
+// request with no such header, or one that fails to parse — never an
+// error, since an absent/malformed token must fall through to the static
+// allow-list, not break the request.
+func tokenFromRequest(r *http.Request) string {
+	header := r.Header.Get("Proxy-Authorization")
+	const prefix = "Basic "
+	if !strings.HasPrefix(header, prefix) {
+		return ""
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, prefix))
+	if err != nil {
+		return ""
+	}
+	user, _, ok := strings.Cut(string(decoded), ":")
+	if !ok {
+		return ""
+	}
+	return user
 }
 
 // matchSuffixWildcard reports whether host is "<one-or-more-labels>.suffix".

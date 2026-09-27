@@ -50,7 +50,7 @@ func TestDeleteAgent_DeniesPendingApprovalsAndBroadcasts(t *testing.T) {
 	survivor, accepted := reg.requestApproval("tc-survivor", "write_file",
 		map[string]any{"path": "keep.txt"}, "other-agent", "sess-other", "turn-other")
 	require.True(t, accepted)
-	t.Cleanup(func() { reg.resolve(survivor.ApprovalID, ApprovalActionCancel) })
+	t.Cleanup(func() { reg.resolve(survivor.ApprovalID, ApprovalActionCancel, false) })
 
 	w := httptest.NewRecorder()
 	api.HandleAgents(w, revisionedDeleteRequest(t, api, "test-agent"))

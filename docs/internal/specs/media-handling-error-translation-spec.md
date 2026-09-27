@@ -5,7 +5,7 @@
 **Branch**: `release/v0.1.1`
 **Input**: Operator UAT defect 2026-07-21 (xAI image-rejection 400 + raw error blob surfaced); ADR-051; `/grill-spec` reviews (spec round 1 BLOCK→corrected; ADR round 2 BLOCK→architecture endorsed, wiring pending).
 **Implements**: ADR-051 (Provider-Capability-Aware Media Handling and User-Facing Error Translation)
-**Scope release**: `release/v0.1.1` (RD1 incl. `x/image`, RD2, RD4, RD5, RD6, RD7). RD3 (capability registry) is a v0.3 non-goal.
+**Scope release**: `release/v0.1.1` (RD1 incl. `x/image`, RD2, RD4, RD5, RD6, RD7). RD3 (capability registry) is a non-goal — deferred, no release scheduled (the v0.3 label was retired 2026-09-25).
 
 > **Revision 3 (2026-07-21) — operator decisions locked:** Q1 animated GIF → transcode to static PNG. Q2 raw `detail` → ships on wire, rendered **only under Verbose Chat** (`verboseChatEnabled`, `src/store/chatPreferences.ts`), not DEV mode. Q3 → **`x/image` IN v0.1.1** (transcode WebP/BMP/TIFF; one new pure-Go dep). Q4 e2e → `$OMNIPUS_E2E_NO_VISION_MODEL` env var, **fail if unset**, preseeded `deepseek/deepseek-chat` (OpenRouter-verified `input_modalities:["text"]`, `tools:true`, 131072 ctx). Also folded in the ADR-grill round-2 wiring corrections: thread `*ProviderError` through `ErrorPayload` (CRIT-001); correct the emit-site coverage argument (CRIT-002); rate-limit skip at write (MAJ-001/004); model_switch sanitize (MAJ-003); REST-executor in-scope (MAJ-005); persist `code` (MAJ-006); rollback mixed-state accepted (MAJ-007); classify pre-truncation (MAJ-008).
 >
@@ -19,7 +19,7 @@
 |---|---|
 | D1 | Normalize outbound images to **PNG** via pure-Go transcode — **stdlib** (PNG/JPEG/GIF) **+ `golang.org/x/image`** (WebP/BMP/TIFF) — before sending (operator Q3). AVIF/HEIC/SVG (non-decodable without CGo) fall to D2. Animated GIF → static PNG first frame (operator Q1). |
 | D2 | On a **media-class** provider rejection (image/PDF block rejected), **downgrade the offending media and retry the turn exactly once**. Never retry content-policy or unclassified rejections more than once. |
-| D3 | **No provider-capability registry in v0.1.1.** Optimize-only; deferred to v0.3. Reliability = D1+D2, not prediction. |
+| D3 | **No provider-capability registry in v0.1.1.** Optimize-only; deferred (no release scheduled). Reliability = D1+D2, not prediction. |
 | D4 | **No file type other than normalized images (D1) and gated PDFs is ever sent as a raw binary content block.** Archives → manifest note; opaque binaries → metadata note + agent-tool inspection. |
 | D5 | Raw provider errors **never persist and never cross the gateway→SPA boundary in production.** Translate at **two boundary choke points** — (a) `appendErrorTranscript` (`turn.go:1152`, single write choke point) and (b) the new `case agent.EventKindError:` in the WS forwarder (single live choke point). Both call one shared pure `translateLLMError`. **Wiring requirement (ADR-grill CRIT-001):** extend `ErrorPayload` (`pkg/agent/events.go`) with `*ProviderError` so the choke-point classifier sees real HTTP status/body instead of a stringified message. Replay reads already-translated text. Raw `err` only in `logger.ErrorCF` + wrapped `error`. |
 | D6 | Add the missing `case agent.EventKindError:` to the WS forwarder so translated errors render **live**, using the `LLMError` shape, carrying the transcript entry id (SPA dedupes vs replay). Suppress the error frame when `code==rate_limited` (RateLimitFrame authoritative). |
@@ -438,7 +438,7 @@ The `runTurn` error block keeps D2 (downgrade+retry) and raw `err` in `logger.Er
 - **FR-011**: MUST define `LLMError` in `contracts/`, add `ReplayErrorFrame.payload.llm_error`, add live `error` message, regenerate.
 - **FR-012**: MUST classify via a dataset-driven classifier covering both pattern classes with the incident string pinned.
 - **FR-013**: MUST extend `tests/e2e/media.spec.ts` with a real-LLM fallback using `$OMNIPUS_E2E_NO_VISION_MODEL` (preseed `deepseek/deepseek-chat`); **MUST fail (not skip) if unset** (operator Q4).
-- **FR-014**: NON-GOAL (v0.3): capability registry, audio/video.
+- **FR-014**: NON-GOAL (deferred, no release scheduled): capability registry, audio/video.
 
 ---
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/google/uuid"
 )
 
 func (ts *turnState) setLastStreamer(s bus.Streamer) {
@@ -126,6 +127,71 @@ func (ts *turnState) stampStreamerParentSpawnCallID(streamer bus.Streamer) {
 		SetParentSpawnCallID(parentSpawnCallID string)
 	}); ok {
 		pid.SetParentSpawnCallID(ts.parentSpawnCallID)
+	}
+}
+
+// nextRoundMessageID mints (or reuses) the id for the assistant round about
+// to run, records it as ts.currentMessageID, and returns it. This is the
+// "message" identity #823's live/persisted unification hangs on:
+//
+//   - A genuinely NEW round (turn start, or the round immediately after a
+//     tool call resolves) gets a fresh uuid — a new bubble.
+//   - A round that continues the PREVIOUS round's own text (an ADR-087 D6
+//     auto-continue, armed one-shot by markContinuationDispatched via
+//     continueSameMessageID) gets the SAME id back — the model is finishing
+//     the same answer, not starting a new one, so the live tokens and the
+//     eventual persisted entry must share one identity across both rounds.
+//
+// See continueSameMessageID's doc comment (turn.go) for why the sibling D4
+// "truncated with complete tool calls" carve-out (markContinuationPending)
+// must NOT trigger reuse here even though it also leaves continuationPending
+// true.
+func (ts *turnState) nextRoundMessageID() string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.continueSameMessageID {
+		ts.continueSameMessageID = false
+		return ts.currentMessageID
+	}
+	ts.currentMessageID = uuid.New().String()
+	return ts.currentMessageID
+}
+
+// getCurrentMessageID returns the message id minted by the most recent
+// nextRoundMessageID call ("" if none has run yet for this turn) — for
+// callers that need to stamp something else with the SAME id a live
+// streamer round already carries.
+func (ts *turnState) getCurrentMessageID() string {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.currentMessageID
+}
+
+// roundMessageIDOrNew returns the current round's message id if
+// nextRoundMessageID has minted one for this turn, or a fresh uuid
+// otherwise. The fallback preserves this method's pre-#823 behavior
+// (uuid.New().String() on every call) exactly for callers that never go
+// through callProviderOnce's streaming call site — e.g.
+// external_dispatch.go's child sub-turn narration, which has no live
+// streamer to correlate with in the first place, so a unique-but-otherwise-
+// unremarkable per-entry id is correct.
+func (ts *turnState) roundMessageIDOrNew() string {
+	if id := ts.getCurrentMessageID(); id != "" {
+		return id
+	}
+	return uuid.New().String()
+}
+
+// stampStreamerMessageID stamps this round's message id (from
+// nextRoundMessageID) onto a freshly-obtained streamer, before any token can
+// flow through it. Mirrors stampStreamerTurnID exactly.
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
+// wsStreamer implements SetMessageID.
+func (ts *turnState) stampStreamerMessageID(streamer bus.Streamer) {
+	if mid, ok := streamer.(interface{ SetMessageID(messageID string) }); ok {
+		mid.SetMessageID(ts.getCurrentMessageID())
 	}
 }
 

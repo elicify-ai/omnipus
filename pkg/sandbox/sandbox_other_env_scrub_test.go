@@ -9,7 +9,7 @@
 // hardened-exec path. This test covers the ScrubGatewayEnv exported function
 // that is the cross-platform allowlist primitive.
 //
-// v0.2 #155 item 3 inverted the model from a 3-key denylist to a closed
+// #155 item 3 inverted the model from a 3-key denylist to a closed
 // allowlist. As a result, any env var not on the allowlist is stripped — not
 // just the three previously-named sensitive keys. The historical assertions
 // "OMNIPUS_MASTER_KEY is absent" and "OMNIPUS_TEST_SAFE_KEY is preserved" no
@@ -37,14 +37,14 @@ import (
 )
 
 // TestScrubGatewayEnv_StripsSensitiveKeys verifies that ScrubGatewayEnv
-// strips the three sensitive gateway env keys (and now, under v0.2 #155
+// strips the three sensitive gateway env keys (and now, under #155
 // item 3, every other key not on the allowlist).
 //
 // Differentiation: three distinct sensitive keys are set and all three must
 // be absent; a key using the OMNIPUS_CHILD_* opt-in prefix must be preserved.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 6 (Rank-8)
-// Updated: v0.2 #155 item 3 — denylist → allowlist switch.
+// Updated: #155 item 3 — denylist → allowlist switch.
 func TestScrubGatewayEnv_StripsSensitiveKeys(t *testing.T) {
 	// Set all three previously-sensitive keys in the parent env.
 	t.Setenv("OMNIPUS_MASTER_KEY", "secret123")
@@ -189,7 +189,7 @@ func TestScrubGatewayEnv_SensitiveKeysAbsentWhenUnset(t *testing.T) {
 // We use the OMNIPUS_CHILD_* opt-in prefix so the allowlist permits the key.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 6 (Rank-8)
-// Updated: v0.2 #155 item 3 — denylist → allowlist switch.
+// Updated: #155 item 3 — denylist → allowlist switch.
 func TestScrubGatewayEnv_Differentiation(t *testing.T) {
 	const uniqueKey = "OMNIPUS_CHILD_SCRUB_DIFFERENTIATION_XYZ"
 	t.Setenv(uniqueKey, "")

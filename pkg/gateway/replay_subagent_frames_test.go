@@ -52,7 +52,7 @@ func TestReplay_SubagentMessage_LegacyStoredChildSessionId_StampedToParentOnRepl
 
 	sink := &sliceSink{}
 	entries := []session.TranscriptEntry{entry}
-	_, err := streamReplay(t.Context(), parentID, entries, computeReplayStats(entries), sink.emit, nil, nil, nil)
+	_, err := streamReplay(t.Context(), parentID, entries, computeReplayStats(entries), sink.emit, nil, nil, nil, nil)
 	require.NoError(t, err)
 	// streamReplay always appends a trailing "done" frame (FR-I-004) after
 	// the content frames — find the subagent_message frame among whatever
@@ -105,7 +105,7 @@ func TestReplay_SubagentState_LegacyStoredChildSessionId_StampedToParentOnReplay
 
 	sink := &sliceSink{}
 	entries := []session.TranscriptEntry{entry}
-	_, err := streamReplay(t.Context(), parentID, entries, computeReplayStats(entries), sink.emit, nil, nil, nil)
+	_, err := streamReplay(t.Context(), parentID, entries, computeReplayStats(entries), sink.emit, nil, nil, nil, nil)
 	require.NoError(t, err)
 	got := decodeFrameOfType[generated.SubagentStateFrame](t, sink.frames, "subagent_state")
 	require.Equal(t, parentID, got.SessionId,

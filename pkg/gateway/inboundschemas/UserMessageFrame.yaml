@@ -1,0 +1,70 @@
+title: UserMessageFrame
+description: >
+  Server → client. #823 catch-up redesign, founder decision Q1 (YES). Echoes a persisted
+  user message to every tab bound to the session, not only the sender's own connection —
+  today a second tab never sees the user's own question live. The server publishes this
+  frame right after the user transcript entry is durably persisted. The sender's SPA
+  reconciles the matching pending bubble (by client_message_id) into history at this
+  frame's seq position; other tabs insert a new bubble there. This is also what puts an
+  offline-queued message that was drained after reconnect at the end of history instead
+  of above it (§4.7): its user_message always carries a seq greater than the catch-up
+  high-water mark, so it arrives strictly after catch_up_complete.
+type: object
+required:
+  - type
+  - session_id
+  - id
+  - content
+  - timestamp
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: user_message
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Session this user message was recorded in.
+  id:
+    type: string
+    minLength: 1
+    description: >-
+      Server-assigned message id, identical to the persisted transcript entry's own id
+      (Message.id) — the same id a later replay_message frame for this entry carries, so
+      a live-arrived and a replayed copy of the same message converge on one bubble.
+  client_message_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >-
+      Echoes MessageFrame.client_message_id when the sender supplied one. Lets the
+      sender's own SPA match this frame back to its pending/sending bubble; absent when
+      the originating MessageFrame carried none (older clients).
+  content:
+    type: string
+    maxLength: 5242880
+    description: User message text, as persisted. May be empty when attachments is non-empty.
+  attachments:
+    type: array
+    items:
+      $ref: './Attachment.yaml'
+    description: File attachments associated with this message, as persisted.
+  timestamp:
+    type: string
+    format: date-time
+    description: RFC 3339 timestamp of when the message was recorded.
+  agent_id:
+    type: string
+    description: Agent this message was routed to.
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >-
+      Per-session sequence number of this frame (#823 catch-up redesign). Strictly
+      increasing and gap-free within the session, assigned by the gateway's per-session
+      hub as the single chokepoint through which every session-scoped frame is published.
+      The client stores the highest seq it has applied per session and sends it back as
+      since_seq on attach_session; frames at or below that cursor are ignored, which makes
+      re-delivery idempotent.

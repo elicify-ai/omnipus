@@ -71,7 +71,7 @@ func TestReplay_TruncatedEmptyAssistantEntry_IsEmitted(t *testing.T) {
 
 	sink := &sliceSink{}
 	rs := computeReplayStats([]session.TranscriptEntry{entry})
-	n, err := streamReplay(t.Context(), "session_truncated_empty", []session.TranscriptEntry{entry}, rs, sink.emit, nil, nil, nil)
+	n, err := streamReplay(t.Context(), "session_truncated_empty", []session.TranscriptEntry{entry}, rs, sink.emit, nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n, "exactly one content frame (the annotated empty entry) must be emitted")
 

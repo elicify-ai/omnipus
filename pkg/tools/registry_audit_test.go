@@ -140,7 +140,7 @@ func (m *mockMemoryRateLimiterAwareTool) SetMemoryRateLimiter(limiter *MemoryRat
 // methods copied mediaStore and auditLogger onto the cloned registry but
 // omitted memoryRateLimiter, so any subagent-delegated remember/
 // run_retrospective call (via the delegate tool's sub-turn tool registry)
-// silently bypassed the v0.2 #155 item 6 memory-write rate limiter.
+// silently bypassed the #155 item 6 memory-write rate limiter.
 func TestToolRegistry_CloneAndCloneExcept_PropagateMemoryRateLimiter(t *testing.T) {
 	limiter := NewMemoryRateLimiter(MemoryRateLimitConfig{})
 

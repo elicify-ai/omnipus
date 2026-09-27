@@ -1,5 +1,7 @@
 # ADR-033: Per-(Agent, Workspace) Email Mailboxes
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** **Accepted** (2026-07-03, retroactive — ratifies operator decisions made live during the 2026-07-03 session; implemented on `hotfix/v0.1.1`, commits `6e3bdbe8` (pair model), `b85766c1` (test migration), `bf7dd681` (7-reviewer fix wave). Written after implementation at the architect reviewer's recommendation: the shipped model contradicted the locked `.preview-doc/channels.html` ownership statement, and the only prior paper trail was commit messages.)
 - **Date:** 2026-07-03
 - **Deciders:** Daniel Piatkowski (operator, all three decisions verbatim in session), architecture
@@ -41,7 +43,7 @@ Repairing the dead seam re-opened the ownership question. The operator decided, 
 ## 4. Decision points
 
 - **`core_team` alignment — DECIDED 2026-07-03 (operator, verbatim: "require core_team membership, implement it is a must"):** mailbox ownership requires the owning agent to be a `core_team` member of the target workspace, aligning with ADR-029 FR-006. Implemented same-day: backend 422 (`agent %q is not a member of workspace %q`, identical message to the channel-routing gate) plus a worker exclusion (FR-008 parity — workers cannot own a mailbox); the panel offers agents only after a workspace is selected, filters the roster by the workspace's team (CreateChannelSheet's exact pattern including its loading fallback), and clears a selection invalidated by a workspace change. Existing mailboxes whose owner is no longer a member keep working (registration is not membership-gated); the rule is enforced at write time, matching ADR-029's bind-time enforcement.
-- **v0.3 reconciliation:** the Workspaces redesign should treat this ADR as the canonical mailbox model and update the concept docs accordingly (the preview-doc's Email sections now carry a supersession note rather than a rewrite).
+- **Reconciliation (was "v0.3"; the release label was retired 2026-09-25):** the Workspaces redesign should treat this ADR as the canonical mailbox model and update the concept docs accordingly (the preview-doc's Email sections now carry a supersession note rather than a rewrite).
 
 ## 5. Consequences
 

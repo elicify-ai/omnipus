@@ -1,7 +1,11 @@
 // ws-parser.worker.ts — off-main-thread WS frame Zod parsing.
 // Receives: { id: number; raw: string }   Posts back: { id: number; frame: ServerFrame | null; droppedReason?: string }
 
-import { WsFrame as WsFrameSchema, WsFrameType as WsFrameTypeSchema } from '@/lib/api/generated/schemas'
+// Runtime (value) Zod schemas come from the self-contained ws-schemas.ts —
+// see its header comment. Importing WS values from schemas.ts instead pulls
+// its whole REST Zodios `makeApi([...])` call into this worker's own bundle,
+// since a worker gets its own dependency graph (bundle-budget incident, PR #860).
+import { WsFrame as WsFrameSchema, WsFrameType as WsFrameTypeSchema } from '@/lib/api/generated/ws-schemas'
 import { ClientFrameTypes } from '@/lib/api/generated/asyncapi-types'
 import type { ServerFrame } from '@/lib/api/generated/asyncapi-types'
 

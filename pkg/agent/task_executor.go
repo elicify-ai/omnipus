@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -413,8 +414,19 @@ func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) 
 		State:          session.LifecycleQueued,
 		OwnerScopeKind: ownerKind,
 		OwnerScopeID:   ownerID,
-		WorkspaceID:    t.WorkspaceID,
-		AgentID:        t.AgentID,
+		// ADR-093 D3: a task root must carry Origin.Kind=task (with its task
+		// id) so standingRootExemptFromSweep (boot_sweep.go) never exempts
+		// it — D3's own text assumes this ("a task root always carries
+		// origin task with its task id"), and persistLocked already
+		// validates the invariant (lifecycle.go: a task-kind origin without
+		// a task id is rejected) but nothing minted it before this fix. A
+		// crashed task dispatch went unswept by boot_sweep, silently exempt
+		// under D3's "origin absent" clause — that gap is what this line
+		// closes; the hotfix-890-bootsweep-regression evidence is
+		// TestBootSweep_ReconcilesCrashedTaskDispatchSession.
+		Origin:      &session.Origin{Kind: session.OriginKindTask, TaskID: t.ID},
+		WorkspaceID: t.WorkspaceID,
+		AgentID:     t.AgentID,
 	}
 	if err := ls.Persist(rec); err != nil {
 		logger.ErrorCF("task_executor", "mintTaskLifecycleRecord: failed to persist durable session record",
@@ -541,6 +553,15 @@ func (te *TaskExecutor) executeTaskPlanVerified(ctx context.Context, taskID stri
 		return ErrExecutorDraining
 	}
 	defer te.wg.Done()
+	// D-08/FR-057: plan-member dispatch is the plan engine's own async
+	// promotion loop (Tick/runEventLoop), never a live "click and watch" —
+	// dispatchReadyMembers's own doc explains why its dispatchCtx is
+	// context.WithoutCancel(ctx), which means this stamp survives that
+	// chokepoint automatically. Stamped here (executeTaskPlanVerified's own
+	// doc calls this "the single chokepoint every plan-member dispatch funnels
+	// through") rather than at dispatchReadyMembers's several callers, so no
+	// future caller can accidentally dispatch a plan member attended.
+	ctx = tools.WithAutoDenyAsk(ctx, true)
 	// Plan-member dispatch is never tied to a recurring occurrence — nil,
 	// task.RunKindScheduled (matching every other non-manual dispatch path).
 	return te.executeTask(ctx, taskID, nil, task.RunKindScheduled, true)
@@ -1195,10 +1216,23 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	// the HTTP request; the explicit cancel stored in te.running[taskID] is the
 	// intended cancellation path (a future "cancel task" API).
 	//
+	// D-08/FR-057: StartTaskNow has two callers with different attended-ness —
+	// the REST "Run now"/"Start Task" handlers (rest_tasks.go, a literal user
+	// click, ctx carries no AutoDenyAsk marker so this defaults false/attended)
+	// and the run_task AGENT TOOL (pkg/tools/run_task.go), whose ctx is the
+	// calling turn's own execCtx and so already carries whatever AutoDenyAsk
+	// that turn was stamped with (true if the calling turn is itself headless,
+	// e.g. a task dispatched via run_task from inside a Calendar-triggered
+	// run). Read it from the caller's ctx BEFORE detaching to Background()
+	// below, or the value is silently lost and the child always defaults
+	// attended regardless of its caller.
+	//
 	// Replace the reserved slot (inserted above, cancel==nil, reserved==true)
 	// with a live slot (cancel set, reserved==false) under the same mutex so
 	// any concurrent reader always observes a consistent, named state.
+	autoDenyAsk := tools.ToolAutoDenyAsk(ctx)
 	taskCtx, cancel := context.WithCancel(context.Background())
+	taskCtx = tools.WithAutoDenyAsk(taskCtx, autoDenyAsk)
 	te.mu.Lock()
 	te.running[taskID] = &taskSlot{cancel: cancel, reserved: false}
 	te.mu.Unlock()
@@ -1207,6 +1241,31 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	te.wg.Add(1)
 	go te.runTaskFromInProgress(taskCtx, t, taskSessionID, cancel, release)
 	return taskSessionID, nil
+}
+
+// steeringRefusalError is the task path's ADR-093 D5 surface: Error() is the
+// plain sentence, Unwrap() the original typed refusal — the plain-error
+// equivalent of the delegate tool's ErrorResult(sentence).WithError(cause).
+// It keeps the real refusal cause machine-readable (errors.Is reaches
+// ErrSteeringStopped, ErrSteeringRevivalFailed and the dispatch sentinels)
+// while the string a caller stores as the task's failure reason carries no
+// machinery text (gate SFH#7).
+type steeringRefusalError struct {
+	sentence string
+	cause    error
+}
+
+func (e *steeringRefusalError) Error() string { return e.sentence }
+func (e *steeringRefusalError) Unwrap() error { return e.cause }
+
+// newSteeringRefusalError maps a typed steering refusal to the task surface's
+// plain sentence, keeping the original error identifiable (gate SFH#7).
+func newSteeringRefusalError(err error) error {
+	sentence := steer.SteeringUnavailableMessage
+	if errors.Is(err, steer.ErrSteeringRevivalFailed) {
+		sentence = steer.SteeringRevivalFailedMessage
+	}
+	return &steeringRefusalError{sentence: sentence, cause: err}
 }
 
 // startTaskNowViaLauncher is FR-A-010's single task front: Launch+Dispatch
@@ -1220,16 +1279,54 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 			}
 		}
 		if _, err := te.launcher.Dispatch(ctx, t.SessionID, generation); err != nil {
+			// Gate SFH#7: map a dispatch refusal for an existing task session
+			// the same way as the launch refusal — sentence surface, cause
+			// kept identifiable, logged before mapping.
+			if steer.IsSteeringUnavailable(err) {
+				logger.ErrorCF("agent", "adr093: task dispatch refused (session not dispatchable — cancelled, terminal, or stale generation)",
+					map[string]any{"task_id": t.ID, "session_id": t.SessionID, "error": err.Error()})
+				return "", newSteeringRefusalError(err)
+			}
 			return "", fmt.Errorf("task_executor: StartTaskNow: dispatch existing session: %w", err)
 		}
 		return t.SessionID, nil
 	}
 
 	steeringSessionID := ""
+	var creatorMeta *session.UnifiedMeta
 	if t.OriginSessionID != "" {
 		if sessions := te.agentLoop.GetSessionStore(); sessions != nil {
-			if _, err := sessions.GetMeta(t.OriginSessionID); err == nil {
+			if meta, err := sessions.GetMeta(t.OriginSessionID); err == nil {
+				creatorMeta = meta
 				steeringSessionID = t.OriginSessionID
+				// ADR-093 D6: a task from a stopped or finished chat runs as
+				// an ordinary root - the task's start never revives the
+				// creating conversation (only a human message or a parent
+				// follow-up revives). Emptying the steering id here drops the
+				// launch to launchOrdinaryRoot, so the task runs against the
+				// task's own workspace/owner instead of the inactive chat.
+				// The loop's own lifecycle store, not te.lifecycleStore: the
+				// loop's store is always wired (it is the store the revival
+				// paths read), while the executor's optional injection may be
+				// nil.
+				if lifecycle := te.agentLoop.GetSessionLifecycleStore(); lifecycle != nil {
+					rec, lerr := lifecycle.Load(t.OriginSessionID)
+					if lerr != nil && !errors.Is(lerr, session.ErrLifecycleNotFound) {
+						// Gate SFH#3: a creator-record read failure is not
+						// "the creator is active" — leaving the steering id
+						// set aims the launch at the broken chat, where it is
+						// refused with the send-a-new-message sentence and the
+						// task never starts. Fail the task with the real error
+						// instead (the mapper below keeps the surface
+						// sentence-only for refusals; this is a plain error).
+						logger.ErrorCF("agent", "adr093: task start could not read the creator's lifecycle record",
+							map[string]any{"task_id": t.ID, "session_id": t.OriginSessionID, "error": lerr.Error()})
+						return "", fmt.Errorf("task_executor: StartTaskNow: load creator record %q: %w", t.OriginSessionID, lerr)
+					}
+					if lerr == nil && (rec.Terminal() || rec.Stopped()) {
+						steeringSessionID = ""
+					}
+				}
 			}
 		}
 	}
@@ -1251,7 +1348,31 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 	}
 	launched, err := te.launcher.Launch(ctx, req)
 	if err != nil {
+		// ADR-093 D5: the same plain sentence as the delegate tool when
+		// the launch is refused because the conversation is not active
+		// (e.g. the creator stopped between the gate above and Launch).
+		if steer.IsSteeringUnavailable(err) {
+			// Gate SFH#7: log the underlying refusal at error level and wrap
+			// it (Unwrap) rather than replace it — the old errors.New deleted
+			// the real cause; the surface string is still sentence-only.
+			logger.ErrorCF("agent", "adr093: task launch refused (creating conversation not active)",
+				map[string]any{"task_id": t.ID, "origin_session_id": t.OriginSessionID, "error": err.Error()})
+			return "", newSteeringRefusalError(err)
+		}
 		return "", fmt.Errorf("task_executor: StartTaskNow: launch: %w", err)
+	}
+	// Per-chat approval inheritance (gate security-lead #2): a task that
+	// dropped to the ordinary-root path because its creating chat is
+	// stopped/terminal must still inherit that chat's approval grants and
+	// session mode. The steered path gets this inside launchSteered
+	// (inheritDelegatePermissions); the D6 drop bypassed it, so the task
+	// would start with NO grants where an identical task from an active chat
+	// starts with them — and a per-chat "never auto-approve" would silently
+	// stop applying. Same helper, same components, active/inactive parity.
+	if t.OriginSessionID != "" && steeringSessionID == "" && creatorMeta != nil {
+		if parentAgentID := strings.TrimSpace(creatorMeta.ActiveAgentID); parentAgentID != "" {
+			te.agentLoop.inheritSessionPermissions(t.OriginSessionID, parentAgentID, launched.SessionID, t.AgentID)
+		}
 	}
 	updated, err := te.store.Update(t.ID, task.Patch{SessionID: &launched.SessionID})
 	if err != nil {
@@ -1259,6 +1380,15 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 	}
 	_ = te.activateTaskGoal(updated, launched.SessionID)
 	if _, err := te.launcher.Dispatch(ctx, launched.SessionID, launched.Generation); err != nil {
+		// Gate SFH#7: map a dispatch refusal the same way as the launch
+		// refusal — same sentence surface, cause kept identifiable, logged
+		// before mapping (silent-failure-hunter #7: raw steer text on the
+		// task surface was still possible here).
+		if steer.IsSteeringUnavailable(err) {
+			logger.ErrorCF("agent", "adr093: task dispatch refused (session not dispatchable — cancelled, terminal, or stale generation)",
+				map[string]any{"task_id": t.ID, "session_id": launched.SessionID, "error": err.Error()})
+			return "", newSteeringRefusalError(err)
+		}
 		return "", fmt.Errorf("task_executor: StartTaskNow: dispatch: %w", err)
 	}
 	return launched.SessionID, nil
@@ -1398,6 +1528,13 @@ func (te *TaskExecutor) StartOccurrenceRun(_ context.Context, taskID string, occ
 	if _, err := te.store.SpawnReset(taskID); err != nil {
 		return fmt.Errorf("task_executor: StartOccurrenceRun: reset task %q: %w", taskID, err)
 	}
+	// D-08/FR-057: this IS the "run now" a user clicks while watching
+	// (handleTaskRunNow, POST /api/v1/tasks/{id}/runs) — RunKindManual is
+	// exactly that per its own doc. context.Background() here is deliberate,
+	// not an oversight (the caller's ctx is even named `_` above): it carries
+	// no AutoDenyAsk marker, so ToolAutoDenyAsk defaults false and the run
+	// stays attended — cards keep showing, matching FR-057's "a turn a person
+	// actually started must keep showing cards."
 	return te.executeTask(context.Background(), taskID, occurrenceMs, task.RunKindManual, false)
 }
 
@@ -1684,6 +1821,11 @@ func isRoutineAutoDispatchRefusal(err error) bool {
 // plan with N ready members would otherwise cost N redundant
 // plan.Store.Get reads on the same pass.
 func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
+	// D-08/FR-057: the queued-task drain (TaskDrainService) is the
+	// unconditional owner of this dispatch — no operator triggers it, ever —
+	// so every task it dispatches this tick runs headless. Stamped once here,
+	// the sole call site of this method (pkg/heartbeat/task_drain.go).
+	ctx = tools.WithAutoDenyAsk(ctx, true)
 	queued, err := te.store.List(task.Filter{Status: task.StatusNext})
 	if err != nil {
 		logger.WarnCF("task_executor", "Check queued tasks: list failed",
@@ -1828,6 +1970,16 @@ func (al *AgentLoop) NotifyTaskDeleted(taskID string) {
 // processTaskDirect runs the agent loop for a task, dispatching to the given agent.
 // taskChatID identifies the WebSocket chat for event forwarding (defaults to "task:" + sessionKey).
 // Channel is "webchat" for streaming; tool context is "system" so exec/cron tools are permitted.
+//
+// D-08 (founder decision 2026-09-24, FR-057): AutoDenyAsk is read off ctx
+// rather than hardcoded — every genuinely unattended dispatcher (the
+// Calendar/task-trigger fire, the queued-task drain, the auto-advance
+// cascade, plan-member dispatch, the parent follow-up wake) stamps
+// tools.WithAutoDenyAsk(ctx, true) onto the context BEFORE it reaches this
+// function; a literal REST "Run now" click (StartOccurrenceRun/StartTaskNow)
+// leaves it unstamped, so ToolAutoDenyAsk defaults to false and the run stays
+// attended (cards show), matching runAgentLoop's identical
+// ProcessScheduled(ctx) convention (loop.go).
 func (al *AgentLoop) processTaskDirect(
 	ctx context.Context,
 	agentID, prompt, sessionKey, taskChatID string,
@@ -1903,6 +2055,11 @@ func (al *AgentLoop) processTaskDirect(
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
 		RunningTaskID:          tools.ToolRunningTaskID(taskCtx),
+		// D-08/FR-057: propagate the unattended marker a headless dispatcher
+		// stamped on ctx (see this function's own doc comment) onto the turn's
+		// own opts — this is what loop_run_turn_tools.go's AutoDenyAsk branch
+		// actually reads.
+		AutoDenyAsk: tools.ToolAutoDenyAsk(taskCtx),
 		// WorkspaceID is already on taskCtx via tools.WithWorkspaceID (the task
 		// executor sets it on ctx before calling processTaskDirect — see
 		// runTask/runTaskFromInProgress's tools.WithWorkspaceID(ctx, t.WorkspaceID)

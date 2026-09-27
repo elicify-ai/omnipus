@@ -1,4 +1,6 @@
 # Sprint 2 — Unified Task model + trigger engine (the no-back-compat big-bang)
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 **Spec of record:** `remediation-decisions.md` (D3, D4, Tier-2 Details #1–#8). **Migration: NONE** (Detail #7) —
 no users, no back-compat. **Delete** `pkg/boardtask` + `pkg/taskstore` and their REST endpoints; the new

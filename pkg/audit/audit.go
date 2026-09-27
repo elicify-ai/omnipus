@@ -141,251 +141,263 @@ func IsValidDecision(d Decision) bool {
 	return false
 }
 
-// IsValidEventName reports whether e is one of the recognized EventName
-// values. The set is intentionally narrow (only events emitted from the
+// validEventNames is the set of recognized EventName values IsValidEventName
+// checks against. The set is intentionally narrow (only events emitted from the
 // audit, agent, gateway, sandbox, and tools packages today). Unknown values
-// trigger a warn-once log so a typo or new event introduction is loud
-// without rejecting the audit row — losing audit data is worse than logging
-// a weird event name.
+// trigger a warn-once log so a typo or new event introduction is loud without
+// rejecting the audit row — losing audit data is worse than logging a weird
+// event name.
+var validEventNames = map[EventName]struct{}{
+	EventToolCall:   {},
+	EventExec:       {},
+	EventFileOp:     {},
+	EventLLMCall:    {},
+	EventPolicyEval: {},
+	EventRateLimit:  {},
+	EventSSRF:       {},
+	// SECURITY events emitted as BARE LITERALS with no Event* constant, so
+	// events_exhaustive_test.go (which walks the constants) never saw them
+	// and IsValidEventName rejected every one — meaning each landed via the
+	// warn-once "unknown Event value" path instead of being recognised.
+	// These are refusals: a CSRF rejection, a blocked SSRF egress attempt,
+	// and a sandbox restriction that failed to apply. They are the entries
+	// an operator most needs to find, so the wrong name is worst here.
+	// Found by event_literal_emitters_test.go, which scans emitters rather
+	// than constants.
+	"csrf_mismatch":              {},
+	"egress_ssrf_blocked":        {},
+	"sandbox_restrict_failed":    {},
+	"git_evidence_sandbox_block": {},
+	"path.access_denied":         {},
+	EventStartup:                 {},
+	EventShutdown:                {},
+	EventBootAbort:               {},
+	EventProcessKillFailed:       {},
+	EventChannelPairing:          {},
+	EventCliValidate:             {},
+	EventExecutorSmokeTest:       {},
+	// First-run onboarding authority events (pkg/gateway/rest_onboarding.go).
+	EventOnboardingAdminCreated: {},
+	EventOnboardingRefused:      {}, EventPlatformSignIn: {}, // omnipus.ai sign-in (pkg/gateway/rest_platform_auth.go).
+	// Tool Registry redesign event names from events.go. These are
+	// emitted from the agent loop and the policy package.
+	EventToolPolicyDenyAttempted:        {},
+	EventToolPolicyAskRequested:         {},
+	EventToolPolicyAskGranted:           {},
+	EventToolPolicyAskDenied:            {},
+	EventToolCollisionMCPRejected:       {},
+	EventAgentConfigCorrupt:             {},
+	EventAgentConfigInvalidPolicyValue:  {},
+	EventAgentConfigUnknownToolInPolicy: {},
+	EventToolAssemblyDuplicateName:      {},
+	EventMCPServerRenamed:               {},
+	EventGatewayStartupGuardDisabled:    {},
+	EventGatewayConfigInvalidValue:      {},
+	EventTurnAbortedToolDenialBudget:    {},
+	EventApproverFallback:               {},
+	// Channel workspace-binding events (ADR-029).
+	// EventChannelRoutingDriftDrop is emitted when a workspace-bound instance's
+	// configured agent is unresolvable and the message is dropped.
+	// EventChannelRoutingChanged is emitted by the REST routing PUT handler
+	// whenever an operator updates a channel's workspace/agent binding.
+	EventChannelRoutingDriftDrop:   {},
+	EventChannelRoutingChanged:     {},
+	EventChannelInstanceDeleted:    {},
+	EventChannelInstanceConfigured: {},
+	// Cancel-flow events (FR-10, FR-11, FR-15, FR-17-21, FR-25a).
+	EventTurnCancelAttempt:  {},
+	EventTurnCancelled:      {},
+	EventTurnCancelStuck:    {},
+	EventCancelAbusePattern: {},
+	// Background-session kill cascade, decoupled from the active-turn
+	// gate (see cancel.go's RequestCancel doc comment for the root-cause
+	// writeup this closes).
+	EventTurnCancelBackgroundKilled: {},
+	// Live interactive browser panel events (ADR-038 D6).
+	EventBrowserInstanceCreated: {},
+	EventBrowserAction:          {},
+	// ADR-075 D2 — the two per-call browser events with their own shapes.
+	EventBrowserUploadFile:          {},
+	EventBrowserSnapshot:            {},
+	EventBrowserLiveControlTaken:    {},
+	EventBrowserLiveControlReleased: {},
+	// ADR-085 browser control handover vocabulary (events.go's
+	// "browser_control_*" family plus browser_handover). All four are
+	// emitted for real — pkg/tools/browser/audit.go's
+	// recordControlDeferral, pkg/tools/browser/tools_handover.go and
+	// pkg/gateway/browser_ws.go's sweeper releases — so they belong in
+	// this predicate; without them every ADR-085 deferral, handover and
+	// sweeper release trips the unknown-event warn-once path.
+	EventBrowserControlDeferred:        {},
+	EventBrowserHandover:               {},
+	EventBrowserControlIdleRelease:     {},
+	EventBrowserControlDisabledRelease: {},
+	// WebRTC capture stream events (ADR-047, wave-plan W2-A).
+	EventBrowserWebRTCStreamStarted:      {},
+	EventBrowserWebRTCStreamStopped:      {},
+	EventBrowserWebRTCStreamStartFailed:  {},
+	EventBrowserWebRTCIngestAuthRejected: {},
+	EventBrowserWebRTCViewerOfferFailed:  {},
+	EventBrowserWarmUpFailed:             {},
+	// security_change.go.
+	EventSecuritySettingChange: {},
+	// skill_call.go (ADR-072 D3.1). "skill.write" is the FR-071a write-
+	// audit sibling emitted by pkg/tools/resolvepath.go's
+	// emitSkillPathWriteAudit (SkillWriteAuditEvent) — registered here as
+	// a bare literal per that file's own reconciliation note, since the
+	// constant lives in pkg/tools, not pkg/audit (importing pkg/tools
+	// from pkg/audit would invert this codebase's dependency direction).
+	EventSkillCall: {},
+	"skill.write":  {},
+	// AskUserQuestion default-safe auto-resolution (askuserquestion-tool-
+	// spec v3 US-3 S2/§4; emitted by the gateway's askuser.AuditSink
+	// adapter for every 30-minute timer fire).
+	EventAskUserAutoDefault: {},
+	// Misc event names emitted by other packages with stable wire
+	// contracts — keep the predicate aligned with them so they don't
+	// trip the unknown-event warn-once.
+	"egress_denied":                  {},
+	"egress_upstream_error":          {},
+	"path.network_denied":            {},
+	"sandbox.thread_restrict_failed": {},
+	// pkg/gateway: provider API-key validation audit events. "provider_key_validated"
+	// is emitted by the PUT /providers/{id} handler when a key probe produces a
+	// warning outcome (no_credit, unreachable, restricted) and is persisted.
+	// "provider_key_validation_skipped" is reserved for future use (e.g. --skip-verify
+	// gateway path) and included here to prevent a warn-once on first emission.
+	"provider_key_validated":          {},
+	"provider_key_validation_skipped": {},
+	// "provider.default_model.changed" is emitted by the
+	// PUT /providers/default-model handler on every successful change of
+	// the global default (provider, model) pair (ADR-068 FR-018, T068-11);
+	// details carry the old and new pairs.
+	"provider.default_model.changed": {},
+	// "provider.deleted" is emitted once per COMPLETED
+	// DELETE /providers/{id} run (ADR-068 FR-010 step 4, T068-09);
+	// details carry the credential REF NAME (never the value), the
+	// dependents count and any default change.
+	// "provider.credential_swept" is emitted by the boot-time sweep of
+	// orphaned `<id>_API_KEY` credentials whose provider row is gone
+	// (ADR-068 FR-010 last clause, T068-10).
+	// "provider.sign_in_status_checked" is emitted once per Copilot
+	// sign-in probe (pkg/gateway/rest_signin_copilot.go). That probe
+	// execs the vendor CLI and spends one premium request billed to the
+	// operator when a session exists, and ADR-068 FR-050 makes its route
+	// reachable pre-auth while onboarding is incomplete, so every call
+	// has to be attributable after the fact: details carry the actor
+	// (empty for an anonymous pre-auth caller), source_ip, the resulting
+	// state, and whether the answer came from the cost-avoiding cache.
+	"provider.deleted": {},
+	// pkg/gateway/rest_sign_in.go. Bare literals, no constants.
+	"provider.signed_in":              {},
+	"provider.signed_out":             {},
+	"provider.credential_swept":       {},
+	"provider.sign_in_status_checked": {},
+	// pkg/tools/memory.go: long-term memory write events.
+	// "memory.remember" and "memory.retrospective" are the success-path
+	// events; "memory.rate_limited" is emitted by the #155 item 6
+	// gate when a write is rejected (see RememberTool.logRateLimited
+	// and RetrospectiveTool.logRateLimited).
+	"memory.remember":      {},
+	"memory.retrospective": {},
+	"memory.rate_limited":  {},
+	// pkg/agent/session_end.go's auditRecap. Emitted as a bare literal,
+	// which is why it escaped notice: events_exhaustive_test.go walks the
+	// Event* CONSTANTS, so a literal emitter with no constant is invisible
+	// to it. It was also unobservable in practice until audit logging
+	// became ON by default (2026-09-11) — with a nil logger the emit path
+	// never ran, so the warn-once "unknown Event value" never fired. Turning
+	// audit on surfaced it on the first real run.
+	"memory.auto_recap": {},
+	// Board tasks (pkg/gateway/rest_board.go) and workspaces
+	// (pkg/gateway/rest_workspaces.go: workspace.create/update/delete).
+	// The legacy "project.*" names are retained here for back-compat
+	// with audit logs written before the project→workspace rename; no
+	// current handler emits them (rest_projects.go was renamed to
+	// rest_workspaces.go). Milestones are likewise legacy-only now —
+	// see the "milestone.*" entries below.
+	"board_task.create": {},
+	"board_task.update": {},
+	"board_task.delete": {},
+	"board_task.start":  {},
+	// Current workspace mutation events (rest_workspaces.go emits these).
+	"workspace.create": {},
+	"workspace.update": {},
+	"workspace.delete": {},
+	// Mount lifecycle (pkg/gateway/rest_workspace_mounts.go) and the
+	// one-shot setup-token consumption (pkg/gateway/websocket.go). All
+	// bare literals with no Event* constant, which is why
+	// events_exhaustive_test.go never saw them.
+	"workspace.mount.create":      {},
+	"workspace.mount.delete":      {},
+	"workspace.setup_consumed":    {},
+	"workspace.delegation.update": {},
+	// pkg/gateway/rest_tasks.go's recurrence edit.
+	"task.trigger.recurrence_changed": {},
+	// Workspace media library mutation events (FR-008, FR-009, FR-033).
+	// Emitted by pkg/media/library/library.go (single-file delete) and
+	// pkg/workspace/media_delete.go (cascade-delete on workspace removal).
+	// See events.go for the wire shape contract.
+	EventMediaDelete:        {},
+	EventMediaCascadeDelete: {},
+	// ADR-092 (shell permission modes) FR-032/FR-046 typed audit events.
+	// See shell_permission_events.go for the wire shape contract.
+	EventShellModeChange:          {},
+	EventShellPreflightEscalation: {},
+	EventShellGrantRecorded:       {},
+	EventShellApprovalDecision:    {},
+	// ADR-092 (Auto-approve for tools other than bash) §5.5 typed audit
+	// event. See tool_auto_approve_events.go for the wire shape contract.
+	EventToolAutoApproved: {},
+	// Legacy pre-rename project.* events, retained for back-compat with
+	// audit logs written before the project→workspace rename. No current
+	// handler emits them.
+	"project.create": {},
+	"project.update": {},
+	"project.delete": {},
+	// Legacy milestone.* events, retained for the same back-compat
+	// reason as project.* above: no current handler emits them.
+	// rest_milestones.go was deleted — its REST surface was superseded
+	// by the Plan (swimlane board) feature (pkg/gateway/rest_plans.go),
+	// and the underlying Milestone entity itself was migrated to a Task
+	// tag (`milestone:<name>`) by the one-way, boot-time
+	// pkg/task/migrate_milestones.go migration (ADR-049 D1). Audit logs
+	// written before that migration keep these names on disk.
+	"milestone.create": {},
+	"milestone.update": {},
+	"milestone.delete": {},
+	// Session mutation events (pkg/gateway/rest.go).
+	// session.delete.blocked: emitted when DELETE /api/v1/sessions/{id} is
+	// rejected because the session is a protected heartbeat session (FR-014).
+	"session.delete.blocked": {},
+	// Agent management events (pkg/gateway/rest.go).
+	"agent.delete": {},
+	// Knowledge-base mutation events (ADR-067 FR-090, D19). Emitted by
+	// pkg/knowledge's authoring tools and by the author/rename primitives
+	// beneath them, for every mutation AND every refusal.
+	//
+	// The names are written out here rather than referenced as
+	// knowledge.EventKnowledgeNote* constants because pkg/knowledge
+	// imports pkg/audit — the reverse reference would be an import cycle.
+	// pkg/knowledge/audit_event_names_test.go asserts the two lists agree,
+	// so a rename there fails a test instead of quietly reintroducing the
+	// warn-once path this entry exists to close.
+	//
+	// "knowledge.note.edit" is emitted by AuthorOpEdit and has no
+	// EventKnowledgeNote* constant; it is listed for the same reason as
+	// the rest.
+	"knowledge.note.create": {},
+	"knowledge.note.write":  {},
+	"knowledge.note.edit":   {},
+	"knowledge.note.rename": {},
+	"knowledge.note.delete": {},
+}
+
+// IsValidEventName reports whether e is one of the recognized EventName
+// values (see validEventNames).
 func IsValidEventName(e EventName) bool {
-	switch e {
-	case EventToolCall,
-		EventExec,
-		EventFileOp,
-		EventLLMCall,
-		EventPolicyEval,
-		EventRateLimit,
-		EventSSRF,
-		// SECURITY events emitted as BARE LITERALS with no Event* constant, so
-		// events_exhaustive_test.go (which walks the constants) never saw them
-		// and IsValidEventName rejected every one — meaning each landed via the
-		// warn-once "unknown Event value" path instead of being recognised.
-		// These are refusals: a CSRF rejection, a blocked SSRF egress attempt,
-		// and a sandbox restriction that failed to apply. They are the entries
-		// an operator most needs to find, so the wrong name is worst here.
-		// Found by event_literal_emitters_test.go, which scans emitters rather
-		// than constants.
-		"csrf_mismatch",
-		"egress_ssrf_blocked",
-		"sandbox_restrict_failed",
-		"git_evidence_sandbox_block",
-		"path.access_denied",
-		EventStartup,
-		EventShutdown,
-		EventBootAbort,
-		EventProcessKillFailed,
-		EventChannelPairing,
-		EventCliValidate,
-		EventExecutorSmokeTest,
-		// First-run onboarding authority events (pkg/gateway/rest_onboarding.go).
-		EventOnboardingAdminCreated,
-		EventOnboardingRefused, EventPlatformSignIn, // omnipus.ai sign-in (pkg/gateway/rest_platform_auth.go).
-		// Tool Registry redesign event names from events.go. These are
-		// emitted from the agent loop and the policy package.
-		EventToolPolicyDenyAttempted,
-		EventToolPolicyAskRequested,
-		EventToolPolicyAskGranted,
-		EventToolPolicyAskDenied,
-		EventToolCollisionMCPRejected,
-		EventAgentConfigCorrupt,
-		EventAgentConfigInvalidPolicyValue,
-		EventAgentConfigUnknownToolInPolicy,
-		EventToolAssemblyDuplicateName,
-		EventMCPServerRenamed,
-		EventGatewayStartupGuardDisabled,
-		EventGatewayConfigInvalidValue,
-		EventTurnAbortedToolDenialBudget,
-		EventApproverFallback,
-		// Channel workspace-binding events (ADR-029).
-		// EventChannelRoutingDriftDrop is emitted when a workspace-bound instance's
-		// configured agent is unresolvable and the message is dropped.
-		// EventChannelRoutingChanged is emitted by the REST routing PUT handler
-		// whenever an operator updates a channel's workspace/agent binding.
-		EventChannelRoutingDriftDrop,
-		EventChannelRoutingChanged,
-		EventChannelInstanceDeleted,
-		EventChannelInstanceConfigured,
-		// Cancel-flow events (FR-10, FR-11, FR-15, FR-17-21, FR-25a).
-		EventTurnCancelAttempt,
-		EventTurnCancelled,
-		EventTurnCancelStuck,
-		EventCancelAbusePattern,
-		// Background-session kill cascade, decoupled from the active-turn
-		// gate (see cancel.go's RequestCancel doc comment for the root-cause
-		// writeup this closes).
-		EventTurnCancelBackgroundKilled,
-		// Live interactive browser panel events (ADR-038 D6).
-		EventBrowserInstanceCreated,
-		EventBrowserAction,
-		// ADR-075 D2 — the two per-call browser events with their own shapes.
-		EventBrowserUploadFile,
-		EventBrowserSnapshot,
-		EventBrowserLiveControlTaken,
-		EventBrowserLiveControlReleased,
-		// ADR-085 browser control handover vocabulary (events.go's
-		// "browser_control_*" family plus browser_handover). All four are
-		// emitted for real — pkg/tools/browser/audit.go's
-		// recordControlDeferral, pkg/tools/browser/tools_handover.go and
-		// pkg/gateway/browser_ws.go's sweeper releases — so they belong in
-		// this predicate; without them every ADR-085 deferral, handover and
-		// sweeper release trips the unknown-event warn-once path.
-		EventBrowserControlDeferred,
-		EventBrowserHandover,
-		EventBrowserControlIdleRelease,
-		EventBrowserControlDisabledRelease,
-		// WebRTC capture stream events (ADR-047, wave-plan W2-A).
-		EventBrowserWebRTCStreamStarted,
-		EventBrowserWebRTCStreamStopped,
-		EventBrowserWebRTCStreamStartFailed,
-		EventBrowserWebRTCIngestAuthRejected,
-		EventBrowserWebRTCViewerOfferFailed,
-		EventBrowserWarmUpFailed,
-		// security_change.go.
-		EventSecuritySettingChange,
-		// skill_call.go (ADR-072 D3.1). "skill.write" is the FR-071a write-
-		// audit sibling emitted by pkg/tools/resolvepath.go's
-		// emitSkillPathWriteAudit (SkillWriteAuditEvent) — registered here as
-		// a bare literal per that file's own reconciliation note, since the
-		// constant lives in pkg/tools, not pkg/audit (importing pkg/tools
-		// from pkg/audit would invert this codebase's dependency direction).
-		EventSkillCall,
-		"skill.write",
-		// AskUserQuestion default-safe auto-resolution (askuserquestion-tool-
-		// spec v3 US-3 S2/§4; emitted by the gateway's askuser.AuditSink
-		// adapter for every 30-minute timer fire).
-		EventAskUserAutoDefault,
-		// Misc event names emitted by other packages with stable wire
-		// contracts — keep the predicate aligned with them so they don't
-		// trip the unknown-event warn-once.
-		"egress_denied",
-		"egress_upstream_error",
-		"path.network_denied",
-		"sandbox.thread_restrict_failed",
-		// pkg/gateway: provider API-key validation audit events. "provider_key_validated"
-		// is emitted by the PUT /providers/{id} handler when a key probe produces a
-		// warning outcome (no_credit, unreachable, restricted) and is persisted.
-		// "provider_key_validation_skipped" is reserved for future use (e.g. --skip-verify
-		// gateway path) and included here to prevent a warn-once on first emission.
-		"provider_key_validated",
-		"provider_key_validation_skipped",
-		// "provider.default_model.changed" is emitted by the
-		// PUT /providers/default-model handler on every successful change of
-		// the global default (provider, model) pair (ADR-068 FR-018, T068-11);
-		// details carry the old and new pairs.
-		"provider.default_model.changed",
-		// "provider.deleted" is emitted once per COMPLETED
-		// DELETE /providers/{id} run (ADR-068 FR-010 step 4, T068-09);
-		// details carry the credential REF NAME (never the value), the
-		// dependents count and any default change.
-		// "provider.credential_swept" is emitted by the boot-time sweep of
-		// orphaned `<id>_API_KEY` credentials whose provider row is gone
-		// (ADR-068 FR-010 last clause, T068-10).
-		// "provider.sign_in_status_checked" is emitted once per Copilot
-		// sign-in probe (pkg/gateway/rest_signin_copilot.go). That probe
-		// execs the vendor CLI and spends one premium request billed to the
-		// operator when a session exists, and ADR-068 FR-050 makes its route
-		// reachable pre-auth while onboarding is incomplete, so every call
-		// has to be attributable after the fact: details carry the actor
-		// (empty for an anonymous pre-auth caller), source_ip, the resulting
-		// state, and whether the answer came from the cost-avoiding cache.
-		"provider.deleted",
-		// pkg/gateway/rest_sign_in.go. Bare literals, no constants.
-		"provider.signed_in",
-		"provider.signed_out",
-		"provider.credential_swept",
-		"provider.sign_in_status_checked",
-		// pkg/tools/memory.go: long-term memory write events.
-		// "memory.remember" and "memory.retrospective" are the success-path
-		// events; "memory.rate_limited" is emitted by the v0.2 #155 item 6
-		// gate when a write is rejected (see RememberTool.logRateLimited
-		// and RetrospectiveTool.logRateLimited).
-		"memory.remember",
-		"memory.retrospective",
-		"memory.rate_limited",
-		// pkg/agent/session_end.go's auditRecap. Emitted as a bare literal,
-		// which is why it escaped notice: events_exhaustive_test.go walks the
-		// Event* CONSTANTS, so a literal emitter with no constant is invisible
-		// to it. It was also unobservable in practice until audit logging
-		// became ON by default (2026-09-11) — with a nil logger the emit path
-		// never ran, so the warn-once "unknown Event value" never fired. Turning
-		// audit on surfaced it on the first real run.
-		"memory.auto_recap",
-		// Board tasks (pkg/gateway/rest_board.go) and workspaces
-		// (pkg/gateway/rest_workspaces.go: workspace.create/update/delete).
-		// The legacy "project.*" names are retained here for back-compat
-		// with audit logs written before the project→workspace rename; no
-		// current handler emits them (rest_projects.go was renamed to
-		// rest_workspaces.go). Milestones are likewise legacy-only now —
-		// see the "milestone.*" entries below.
-		"board_task.create",
-		"board_task.update",
-		"board_task.delete",
-		"board_task.start",
-		// Current workspace mutation events (rest_workspaces.go emits these).
-		"workspace.create",
-		"workspace.update",
-		"workspace.delete",
-		// Mount lifecycle (pkg/gateway/rest_workspace_mounts.go) and the
-		// one-shot setup-token consumption (pkg/gateway/websocket.go). All
-		// bare literals with no Event* constant, which is why
-		// events_exhaustive_test.go never saw them.
-		"workspace.mount.create",
-		"workspace.mount.delete",
-		"workspace.setup_consumed",
-		"workspace.delegation.update",
-		// pkg/gateway/rest_tasks.go's recurrence edit.
-		"task.trigger.recurrence_changed",
-		// Workspace media library mutation events (FR-008, FR-009, FR-033).
-		// Emitted by pkg/media/library/library.go (single-file delete) and
-		// pkg/workspace/media_delete.go (cascade-delete on workspace removal).
-		// See events.go for the wire shape contract.
-		EventMediaDelete,
-		EventMediaCascadeDelete,
-		// Legacy pre-rename project.* events, retained for back-compat with
-		// audit logs written before the project→workspace rename. No current
-		// handler emits them.
-		"project.create",
-		"project.update",
-		"project.delete",
-		// Legacy milestone.* events, retained for the same back-compat
-		// reason as project.* above: no current handler emits them.
-		// rest_milestones.go was deleted — its REST surface was superseded
-		// by the Plan (swimlane board) feature (pkg/gateway/rest_plans.go),
-		// and the underlying Milestone entity itself was migrated to a Task
-		// tag (`milestone:<name>`) by the one-way, boot-time
-		// pkg/task/migrate_milestones.go migration (ADR-049 D1). Audit logs
-		// written before that migration keep these names on disk.
-		"milestone.create",
-		"milestone.update",
-		"milestone.delete",
-		// Session mutation events (pkg/gateway/rest.go).
-		// session.delete.blocked: emitted when DELETE /api/v1/sessions/{id} is
-		// rejected because the session is a protected heartbeat session (FR-014).
-		"session.delete.blocked",
-		// Agent management events (pkg/gateway/rest.go).
-		"agent.delete",
-		// Knowledge-base mutation events (ADR-067 FR-090, D19). Emitted by
-		// pkg/knowledge's authoring tools and by the author/rename primitives
-		// beneath them, for every mutation AND every refusal.
-		//
-		// The names are written out here rather than referenced as
-		// knowledge.EventKnowledgeNote* constants because pkg/knowledge
-		// imports pkg/audit — the reverse reference would be an import cycle.
-		// pkg/knowledge/audit_event_names_test.go asserts the two lists agree,
-		// so a rename there fails a test instead of quietly reintroducing the
-		// warn-once path this entry exists to close.
-		//
-		// "knowledge.note.edit" is emitted by AuthorOpEdit and has no
-		// EventKnowledgeNote* constant; it is listed for the same reason as
-		// the rest.
-		"knowledge.note.create",
-		"knowledge.note.write",
-		"knowledge.note.edit",
-		"knowledge.note.rename",
-		"knowledge.note.delete":
-		return true
-	}
-	return false
+	_, ok := validEventNames[e]
+	return ok
 }
 
 // Entry is a single audit log record.
@@ -418,8 +430,15 @@ type LoggerConfig struct {
 	Dir            string   // Directory for audit files
 	MaxSizeBytes   int64    // File rotation threshold (default 50MB)
 	RetentionDays  int      // Days to retain rotated files (default 90)
-	RedactPatterns []string // Custom redaction patterns
-	RedactEnabled  bool     // Enable redaction
+	RedactPatterns []string // Custom redaction patterns, added to the audit credential set
+
+	// RedactEnabled turns on credential redaction of Parameters, Details
+	// (recursive) and Command before each entry is signed and written. The
+	// production logger (pkg/agent initializeAudit) always sets it (#914).
+	// Redaction uses the credential patterns only — email addresses are
+	// kept, because the audit log must record mail recipients and
+	// Message-IDs in full (MC-19). See newAuditRedactor.
+	RedactEnabled bool
 
 	// AuditLogRequested signals that the operator explicitly enabled audit
 	// logging (cfg.Sandbox.AuditLog == true). When true, NewLogger returns a
@@ -430,7 +449,7 @@ type LoggerConfig struct {
 	// boot aborts on permission/disk hiccups.
 	AuditLogRequested bool
 
-	// HMACKey is the 32-byte tamper-evident chain key (v0.2 #155). Each
+	// HMACKey is the 32-byte tamper-evident chain key (#155). Each
 	// audit entry carries a `hmac` field computed over
 	//   HMAC-SHA256(HMACKey, prev_hmac || canonical_json_without_hmac)
 	// so truncation or surgical rewrite of the JSONL file is detectable
@@ -478,7 +497,7 @@ type Logger struct {
 	degraded    bool
 
 	// chainKey is the 32-byte HMAC-SHA256 key for the tamper-evident audit
-	// chain (v0.2 #155). Held only in process memory — never written to disk.
+	// chain (#155). Held only in process memory — never written to disk.
 	// See pkg/audit/hmac.go for the threat model.
 	chainKey []byte
 
@@ -555,7 +574,7 @@ func NewLogger(cfg LoggerConfig) (*Logger, error) {
 	var redactor *Redactor
 	if cfg.RedactEnabled {
 		var err error
-		redactor, err = NewRedactor(cfg.RedactPatterns)
+		redactor, err = newAuditRedactor(cfg.RedactPatterns)
 		if err != nil {
 			return nil, fmt.Errorf("audit: invalid redaction pattern: %w", err)
 		}
@@ -713,7 +732,7 @@ func criticalEventNeedsSync(entry *Entry) bool {
 // the entry is guaranteed durable before this function returns. See
 // criticalEventNeedsSync for the gating policy.
 //
-// v0.2 #155: this function ALSO computes and embeds the HMAC chain link
+// #155: this function ALSO computes and embeds the HMAC chain link
 // (`hmac` field) before writing. The computation is done while holding l.mu
 // so the prevHMAC update is consistent with the on-disk byte sequence. If
 // embedHMAC fails (malformed pre-marshaled JSON), the row is written WITHOUT
@@ -742,7 +761,7 @@ func (l *Logger) writeLine(data []byte, fsyncRequired bool) error {
 		}
 	}
 
-	// v0.2 #155: embed the HMAC chain link before writing. embedHMAC parses
+	// #155: embed the HMAC chain link before writing. embedHMAC parses
 	// the pre-marshaled `data`, removes any pre-existing `hmac` field
 	// (defense against caller mistake), computes HMAC-SHA256 over
 	//   prev_hmac || canonical_json_without_hmac
@@ -881,7 +900,7 @@ func (l *Logger) openCurrentFile() error {
 	l.currentDate = time.Now().UTC().Format("2006-01-02")
 	l.degraded = false
 
-	// v0.2 #155: seed the HMAC chain from the last good entry of the
+	// #155: seed the HMAC chain from the last good entry of the
 	// existing file. If the file is empty (fresh install or just rotated),
 	// prevHMAC stays at the genesisSeed installed by NewLogger. If the last
 	// line carries an `hmac` field, parse it and resume the chain so the
@@ -908,7 +927,7 @@ func (l *Logger) openCurrentFile() error {
 // the OLD file because the file handle still pointed at the original inode.
 // Latching degraded forces the next write to refuse and surface the failure.
 //
-// v0.2 #155: rotation preserves the HMAC chain across files. l.prevHMAC is
+// #155: rotation preserves the HMAC chain across files. l.prevHMAC is
 // the last entry of the about-to-rotate file, and openCurrentFile will see
 // an empty audit.jsonl and skip the readChainSeedFromFile path — leaving
 // l.prevHMAC pointed at the correct seed for the new file's first entry.
@@ -940,7 +959,7 @@ func (l *Logger) rotate() error {
 		}
 	}
 
-	// v0.2 #155: capture the chain seed BEFORE we rename. l.prevHMAC is
+	// #155: capture the chain seed BEFORE we rename. l.prevHMAC is
 	// already correct (it tracks every successful write), but if we ever
 	// add a code path that resets it on rotate, this comment is the
 	// reminder that doing so breaks cross-file chain verification.

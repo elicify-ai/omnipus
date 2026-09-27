@@ -1,7 +1,7 @@
 import { useConnectionStore } from '@/store/connection'
 import type { ChatStore } from '../types'
 
-type OutboundResponseSlice = Pick<ChatStore, 'sendAskUserAnswer' | 'respondToPairing'>
+type OutboundResponseSlice = Pick<ChatStore, 'sendAskUserAnswer' | 'respondToPairing' | 'sendSessionModeUpdate'>
 
 // This slice reads the connection from its own store and never touches chat state,
 // so it takes no set/get. Every other slice does; that asymmetry is deliberate.
@@ -29,6 +29,18 @@ export function createOutboundResponseSlice(): OutboundResponseSlice {
       const sent = connection.send({ type: 'device_pairing_response', device_id: deviceId, decision })
       if (!sent) {
         useConnectionStore.getState().setConnectionError('Failed to send pairing response — connection dropped. Reconnect and try again.')
+      }
+    },
+
+    sendSessionModeUpdate: (sessionId, autoApprove) => {
+      const { connection } = useConnectionStore.getState()
+      if (!connection) {
+        useConnectionStore.getState().setConnectionError('Cannot change Auto-approve for this chat — not connected. Reconnect and try again.')
+        return
+      }
+      const sent = connection.send({ type: 'session_mode_update', session_id: sessionId, auto_approve: autoApprove })
+      if (!sent) {
+        useConnectionStore.getState().setConnectionError('Failed to change Auto-approve for this chat — connection dropped. Reconnect and try again.')
       }
     },
   }

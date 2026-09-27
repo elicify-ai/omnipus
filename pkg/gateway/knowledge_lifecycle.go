@@ -1656,20 +1656,8 @@ func (h *WSHandler) broadcastKnowledgeIndexProgress(frame gen.KnowledgeIndexProg
 		return
 	}
 
-	h.mu.Lock()
-	conns := make([]*wsConn, 0, len(h.sessions))
-	for _, wc := range h.sessions {
-		conns = append(conns, wc)
-	}
-	h.mu.Unlock()
-
-	for _, wc := range conns {
-		select {
-		case wc.sendCh <- raw:
-		default:
-			slog.Warn("ws: knowledge_index_progress dropped — send buffer full",
-				"collection_id", frame.CollectionId)
-			wc.droppedFrames.Add(1)
-		}
-	}
+	// #823: through each connection's ordered queue (never dropped for a slow
+	// tab; a connection too far behind is closed with 4008 and reconnects).
+	h.broadcastRaw(raw, "ws: knowledge_index_progress not queued — connection closed",
+		"collection_id", frame.CollectionId)
 }

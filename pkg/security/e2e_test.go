@@ -20,10 +20,13 @@ import (
 )
 
 // TestE2E_AgentToolDenied: REMOVED (#70). Exercised policy.Evaluator.EvaluateTool,
-// which was never the live tool-policy authority — see pkg/policy/evaluator.go's
-// prior SCOPE (#438) note. The real deny+audit path is exercised by
-// pkg/policy/auditor_test.go's EvaluateExec tests and the agent loop's own audit
-// wiring.
+// which was never the live tool-policy authority. The real deny+audit path is
+// pkg/tools.FilterToolsByPolicy (compositor.go) plus the agent loop's own
+// audit wiring; the exec binary allowlist this test's sibling later relied on
+// (policy.Evaluator/PolicyAuditor.EvaluateExec) was itself retired under
+// ADR-092 — bash's own per-mode escalation machinery
+// (pkg/tools/shell_permission_mode.go, pkg/agent/loop_policy.go) is the live
+// enforcement path for command execution.
 // Traces to: wave2-security-layer-spec.md line 813 (TestE2E_AgentToolDenied)
 
 // TestE2E_RateLimitTriggered is an end-to-end test: agent hits rate limit →

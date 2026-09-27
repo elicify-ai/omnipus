@@ -1,11 +1,13 @@
 # ADR-031: Connectors & Providers UI/UX Redesign, Onboarding Consistency, Login Cleanup
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** Accepted (forks G-1/G-2/G-3 decided 2026-07-02; **revised R1+R2+R3 2026-07-02** to resolve three grill-spec rounds — see §10–§12; convergence 3→1→0 CRITICAL; decision-complete, plan-spec-ready)
 - **Date:** 2026-07-02 (R1+R2+R3 revisions same day)
 - **Deciders:** Daniel Piatkowski (operator) + architecture (Albert)
 - **Evidence level (highest used):** 1 (user-provided decisions) + 2 (documented UX/IA best practice, opencode/models.dev as a documented reference implementation), with `[FACT]` from the codebase throughout
 - **Mode:** Ratifying — most of the direction was decided in a prior interview + a reviewed clickable prototype (`src/routes/proto.tsx`, `/#/proto`). This ADR records those decisions grounded in code, then isolates the few genuinely-open forks.
-- **Release phase:** v0.3 (UI/UX; touches Channels + Providers + onboarding — all v0.3-class surfaces).
+- **Release phase:** was v0.3 (UI/UX; touches Channels + Providers + onboarding — all Workspaces-class surfaces); the connectors redesign shipped on the v0.1.1 line by operator direction (see ADR-033's release-phase note). (The v0.3 release label was retired 2026-09-25.)
 
 ---
 

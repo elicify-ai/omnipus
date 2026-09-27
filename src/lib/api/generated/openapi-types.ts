@@ -740,30 +740,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/security/exec-allowlist": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get exec binary allowlist (SEC-05)
-         * @description Returns the current exec allowlist and approval mode.
-         */
-        get: operations["getExecAllowlist"];
-        /**
-         * Update exec binary allowlist (SEC-05)
-         * @description Atomically updates the exec binary allowlist. Patterns are trimmed, validated, and deduplicated. Changes are audit-logged (SEC-15). Note: requires_restart=true in the response because the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
-         */
-        put: operations["updateExecAllowlist"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/security/exec-proxy-status": {
         parameters: {
             query?: never;
@@ -870,7 +846,7 @@ export interface paths {
         get: operations["getSandboxConfig"];
         /**
          * Update sandbox configuration
-         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_deny_patterns. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
+         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, auto_approve. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and auto_approve are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
          */
         put: operations["updateSandboxConfig"];
         post?: never;
@@ -1335,7 +1311,7 @@ export interface paths {
         put?: never;
         /**
          * Toggle the global god-mode switch (O14, confirmation dialog)
-         * @description Flips the global god-mode ("bypass-permissions") switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required=true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503); the SPA additionally confirms the flip with the operator before sending (ADR-0008 ruling 6). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
+         * @description Flips the global god-mode ("bypass-permissions") switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent's tool policy is floored at "allow", the kernel sandbox's filesystem confinement and network port controls are off, and outbound network access is open for the shell tool, regardless of per-agent profiles. An agent's own stricter tool policy, an operator deny command rule, and the shell's own outside-workspace write refusal are never overridden by this switch — that refusal still applies, it just never prompts. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required=true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503); the SPA additionally confirms the flip with the operator before sending (ADR-0008 ruling 6). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
          */
         post: operations["setGodMode"];
         delete?: never;
@@ -4105,7 +4081,7 @@ export interface components {
             provider?: string;
             stats: components["schemas"]["SessionStats"];
             /**
-             * @description Associated workspace ID (optional, future v0.3 feature).
+             * @description Associated workspace ID when the session is bound to a workspace. Absent when the session has none.
              * @example ws-123
              */
             workspace_id?: string;
@@ -4268,6 +4244,11 @@ export interface components {
              * @example msg_01HXYZ
              */
             id: string;
+            /**
+             * @description #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
+             * @example cmid_01HXYZ
+             */
+            client_message_id?: string;
             /**
              * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
              * @example message
@@ -8009,7 +7990,11 @@ export interface components {
              */
             max_tool_iterations: number;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
-            shell_policy?: components["schemas"]["AgentShellPolicy"];
+            /**
+             * @description ADR-092 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-092 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
@@ -8043,7 +8028,7 @@ export interface components {
              */
             updated_at?: string;
             /**
-             * @description Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured. Main only.
+             * @description Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT yet active (TTS delivery, tracked #306 — no release scheduled). Absent when not configured. Main only.
              * @example alloy
              */
             voice?: string | null;
@@ -8153,25 +8138,6 @@ export interface components {
              * @example 2026-05-17T14:23:00Z
              */
             last_active?: string;
-        };
-        /**
-         * AgentShellPolicy
-         * @description Per-agent shell command deny-pattern configuration.
-         */
-        AgentShellPolicy: {
-            /**
-             * @description Enable pattern-based shell command blocking.
-             * @example true
-             */
-            enable_deny_patterns?: boolean;
-            /**
-             * @description Additional Go regexp patterns to block in shell commands.
-             * @example [
-             *       "rm -rf /",
-             *       "curl.*169\\.254"
-             *     ]
-             */
-            custom_deny_patterns?: string[];
         };
         /** @description Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts). */
         AgentToolsCfg: {
@@ -8290,6 +8256,11 @@ export interface components {
             icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
+             * @description Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
+            /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
@@ -8327,11 +8298,10 @@ export interface components {
              */
             soul: string;
             /**
-             * @description Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
+             * @description Per-agent persona voice identifier (Main only). Schema-pinned; not yet active (TTS, tracked #306).
              * @example alloy
              */
             voice?: string | null;
-            shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Maximum number of tool calls allowed per turn.
              * @example 50
@@ -8384,6 +8354,11 @@ export interface components {
             icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
+             * @description Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
+            /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
@@ -8420,7 +8395,6 @@ export interface components {
              * @example You are a focused research assistant...
              */
             soul: string;
-            shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Maximum number of tool calls allowed per turn.
              * @example 50
@@ -8545,18 +8519,6 @@ export interface components {
              * @example 100
              */
             max_tool_iterations?: number;
-            /** @description Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents. */
-            shell_policy?: {
-                /** @example true */
-                enable_deny_patterns?: boolean;
-                /**
-                 * @description Must each be valid Go regexp patterns (400 on invalid regexp).
-                 * @example [
-                 *       "rm -rf /"
-                 *     ]
-                 */
-                custom_deny_patterns?: string[];
-            };
             /**
              * @description Hex color code for agent avatar display (e.g. "#D4AF37").
              * @example #D4AF37
@@ -8594,6 +8556,11 @@ export interface components {
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
+             * @description Force Auto-approve off for this agent (ADR-092), overriding the global default (SandboxConfig.auto_approve) for every tool this agent resolves to "ask". Off-only: true disables Auto for this agent; false (or omitting the field, which leaves the stored value unchanged) does not loosen past the global default — there is no value here that turns Auto on when the global default has it off. Distinct from `tool_policy_changes`, which is unchanged and still governs allow/deny/ask per tool.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
+            /**
              * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
              * @example false
              */
@@ -8606,7 +8573,7 @@ export interface components {
              */
             skills?: string[];
             /**
-             * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear. Main only.
+             * @description Per-agent persona voice identifier. Schema-pinned; not yet active (TTS, tracked #306). Send null to clear. Main only.
              * @example alloy
              */
             voice?: string | null;
@@ -8882,6 +8849,12 @@ export interface components {
              * @example github-mcp
              */
             server_id?: string;
+            /**
+             * @description ADR-092 D9: this tool's verdict when Auto-approve is active and the tool's effective policy is "ask". "runs" = always runs with no prompt. "runs_if_args" = runs only when this call's arguments meet the tool's own condition (e.g. a file path resolves inside the workspace or a mount); otherwise it asks. "asks" = always asks under Auto, and is auto-denied in an unattended run. For source="builtin" this is read from the static classifier table (tools.AutoApproveClassOf); "bash" is excluded (its own per-command mechanism, D3/D7/D8) and never appears with this field set. For source="mcp" this reflects the server's tool annotations: "runs" when the server marks the tool read-only or explicitly not destructive, "asks" otherwise (including tools with no annotations at all).
+             * @example runs
+             * @enum {string}
+             */
+            auto_approve?: "runs" | "runs_if_args" | "asks";
         };
         /**
          * AgentToolEntry
@@ -9096,7 +9069,7 @@ export interface components {
                 allow_internal?: string[];
             };
             /**
-             * @description O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
+             * @description O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool-policy ceiling is floored at "allow" (for every tool, not just bash) — which also makes `auto_approve` below moot for that agent, since Auto only ever applies to a tool resolved to "ask" and nothing is left in "ask" state once the ceiling is floored. The kernel sandbox is off and network egress is open. Operator `deny` command rules (ADR-092 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable. Independent of `auto_approve` — the two are separate mechanisms.
              * @example false
              */
             god_mode?: boolean;
@@ -9116,13 +9089,12 @@ export interface components {
              */
             workspace_path_guard_env_override?: boolean;
             /**
-             * @description Global fallback shell command deny-list (regex entries). Per-agent custom patterns extend this list.
-             * @example [
-             *       "^curl\\s",
-             *       "^wget\\s"
-             *     ]
+             * @description ADR-092's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear (ADR-092 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool. [2026-09-24, founder decision] Auto no longer additionally requires an enforcing kernel sandbox: it applies to bash and every other tool whether or not a kernel sandbox is confining spawned children (see SandboxStatus.kernel_sandbox_active, now purely informational for this purpose). Without a kernel sandbox, the D7/D8 pre-flights and the surviving text-based guards are the only checks on what a bash command touches — a disguised command can slip past a text-based check where a kernel boundary would have caught it; this is the accepted, founder-approved risk, not an oversight.
+             *     This is the GLOBAL default only. Two narrower scopes layer on top, neither stored here: a per-agent setting (Agent.auto_approve_disabled) that may only turn Auto OFF for that agent, and a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
+             *     Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
+             * @example true
              */
-            shell_deny_patterns?: string[];
+            auto_approve?: boolean;
             /** @description Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths). */
             requires_restart?: boolean;
             /** @description Present in PUT responses. Always true on success. */
@@ -9198,6 +9170,21 @@ export interface components {
              * @example 2
              */
             bind_ports_count: number;
+            /**
+             * @description Whether a kernel sandbox is confining the processes agents spawn right now (sandbox.TurnPolicyBaseInstalled: the gateway registers a per-turn kernel policy base only once a kernel backend is enforcing for spawned children). Linux: true when Landlock was applied in enforce mode and not degraded (false in permissive mode). macOS: true when the Seatbelt boot profile was installed, so every spawned child is wrapped (policy_applied above reports the gateway's OWN confinement and is documented false on macOS by design). Windows, sandbox mode off, and the app-level fallback backend: always false. God Mode does not change this value, but under God Mode agents' children run without the per-turn kernel policy; see god_mode_active. [2026-09-24, founder decision] This no longer gates Auto-approve: Auto applies to every tool, bash included, whether or not this value is true. It is now purely informational — the input the UI uses to show the "Auto — no sandbox" warning badge/tooltip: without a kernel sandbox, shell commands under Auto now ask first (the D7/D8 pre-flights plus the founder-decision-A no-sandbox gate, pkg/tools/shell_no_sandbox_gate.go) unless the command is read-only or fully covered by an operator allow rule. Always present from this gateway.
+             * @example true
+             */
+            kernel_sandbox_active?: boolean;
+            /**
+             * @description The gateway-wide Auto-approve DEFAULT: exactly the live SandboxConfig.auto_approve value, reported here so the chat-header badge needs no second request. It is NOT combined with kernel_sandbox_active and NOT resolved for any agent or chat (this endpoint has no agent or session context). Auto actually takes effect for a call when the tool resolves to "ask", the resolved Auto-approve for that chat is on (this default, turned off by the agent's auto_approve_disabled, then overridden either way by the chat's own modifier — SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier), and god_mode_active is false. [2026-09-24, founder decision] Auto no longer also requires kernel_sandbox_active — it now means exactly what the agent loop's autoApproveActive predicate computes (God Mode off, Auto resolved on), independent of kernel enforcement. Badge reading, before the per-agent and per-chat layers are folded in: god_mode_active=true shows "God Mode" whatever the other two fields say; else auto_approve_effective=false shows "Ask"; else kernel_sandbox_active= true shows "Auto"; else kernel_sandbox_active=false shows "Auto — no sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls for every tool except the shell; a shell command now asks first unless it is read-only or fully covered by an operator allow rule — there is no kernel confining what a disguised command can reach either way). There is no more "Auto → Ask" degraded state: Auto never silently becomes Ask for lack of a kernel sandbox. Always present from this gateway.
+             * @example true
+             */
+            auto_approve_effective?: boolean;
+            /**
+             * @description Whether the global God Mode override is ACTIVE in this process right now — the same value as GodModeStatus.enabled (the persisted sandbox.god_mode switch AND availability in this boot). When true every agent's tool policy is floored at "allow": no approval prompts, no per-turn kernel sandbox for spawned children, network egress open; operator deny command rules, audit logging, the prompt-injection guard and rate limiting stay on. The chat-header badge shows God Mode whenever this is true, whatever auto_approve_effective and kernel_sandbox_active say. Always present from this gateway.
+             * @example false
+             */
+            god_mode_active?: boolean;
         };
         /**
          * AuditEntry
@@ -9281,7 +9268,7 @@ export interface components {
         };
         /**
          * AuditLogResponse
-         * @description Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (v0.2 #155). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
+         * @description Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (the #155 security wave). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
          */
         AuditLogResponse: {
             /** @description Recent audit entries, reverse-chronological, max 100. */
@@ -9331,31 +9318,6 @@ export interface components {
              * @example 60
              */
             max_agent_tool_calls_per_minute?: number;
-        };
-        /**
-         * ExecAllowlist
-         * @description Exec binary allowlist configuration for GET/PUT /api/v1/security/exec-allowlist (SEC-05).
-         */
-        ExecAllowlist: {
-            /**
-             * @description Ordered list of allowed binary name patterns evaluated on every exec call. Patterns are trimmed, deduplicated, and validated server-side. Empty array = block all exec calls.
-             * @example [
-             *       "git",
-             *       "python3",
-             *       "node"
-             *     ]
-             */
-            allowed_binaries: string[];
-            /**
-             * @description Approval mode for exec calls. Reflects config.tools.exec.approval. Only present in GET responses.
-             * @example ask
-             */
-            approval?: string;
-            /**
-             * @description True in PUT responses — the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
-             * @example true
-             */
-            restart_required?: boolean;
         };
         /**
          * ExecProxyStatus
@@ -9457,7 +9419,7 @@ export interface components {
         };
         /**
          * GodModeStatus
-         * @description O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
+         * @description O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled, every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox's filesystem confinement and network port controls are off, and outbound network access is open for the shell tool — regardless of per-agent profiles. An agent's own stricter tool policy, an operator deny command rule, and the shell's own outside-workspace write refusal are never overridden — that refusal still applies, it just never prompts. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The override is non-destructive: switching god mode off restores prior behavior exactly.
          */
         GodModeStatus: {
             /**
@@ -10585,7 +10547,7 @@ export interface components {
              */
             ref?: string;
         };
-        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_deny_patterns are hot-reloaded. */
+        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and auto_approve are hot-reloaded. This endpoint is the routing target for ADR-092's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it. */
         SandboxConfigUpdate: {
             /**
              * @description Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
@@ -10635,13 +10597,11 @@ export interface components {
                 allow_internal?: string[];
             };
             /**
-             * @description Global fallback list of Go regexp patterns to block in shell commands. Per-agent custom_deny_patterns extend this list. Hot-reloaded.
-             * @example [
-             *       "rm -rf /",
-             *       "curl.*169\\.254"
-             *     ]
+             * @description Set the ADR-092 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
+             *     Per-agent and per-chat Auto settings are NOT set here: a per-agent override is `auto_approve_disabled` on PUT /agents/{id} (AgentUpdateRequest) — off-only, tighten-only. A chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when the agent or this global default has it off), because a human is present in that session. The per-agent field is tighten-only relative to this global default; this global default has no scope above it to tighten against.
+             * @example true
              */
-            shell_deny_patterns?: string[];
+            auto_approve?: boolean;
             /**
              * @description ADR-068 §6. Turns the IN-PROCESS bash workspace path guard on or off. Distinct from `mode`, which is the kernel sandbox — the two are separate boundaries and setting one has no effect on the other (UAT defect 002 was operators expecting otherwise). When true, a WRITE outside the agent's working directory needs an approved workspace mount; reads outside it are allowed either way. Restart-gated: it resolves into AgentDefaults.RestrictToWorkspace at boot. Ignored at runtime while OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE is set, which outranks it — see workspace_path_guard_env_override on the GET response.
              * @example false
@@ -10675,7 +10635,7 @@ export interface components {
              */
             prompt?: string;
             /**
-             * @description What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
+             * @description What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for future action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
              * @example llm
              * @enum {string}
              */
@@ -11946,18 +11906,24 @@ export interface components {
              */
             approval_id: string;
             /**
-             * @description The action that was applied. Echoes the request action, including "always" (approve-and-remember).
-             * @example approve
+             * @description The action that was applied. Echoes the request action (ADR-092 D4), including "allow" (approve-and-remember, renamed from "always").
+             * @example allow_once
              * @enum {string}
              */
-            action: "approve" | "deny" | "cancel" | "always";
+            action: "deny" | "allow_once" | "allow" | "cancel";
+            /**
+             * @description The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow" and the grant was recorded (grant_recorded true); omitted otherwise.
+             * @example exact
+             * @enum {string}
+             */
+            scope?: "exact" | "prefix";
             /**
              * @description Result status. Always "ok" when the action was accepted.
              * @example ok
              * @enum {string}
              */
             status: "ok";
-            /** @description Present only when action is "always". True when the standing Always Allow grant was stored. False means this call was approved once, but the next identical call will ask again — the grant did not stick (missing session, agent, or tool identity on the approval). */
+            /** @description Present only when action is "allow". True when the grant was stored — a session command grant (scope: exact/prefix), or the pre-flight escalation's own path-widening/network-widening grant when this approval resolved a D7/D8 escalation instead of an ordinary tool-approval-required frame. False means this call was approved once, but the next identical call (or the next command needing the same widening) will ask again — the grant did not stick (missing session, agent, or tool identity on the approval). */
             grant_recorded?: boolean;
         };
         /**
@@ -12088,7 +12054,7 @@ export interface components {
              */
             description?: string;
             /**
-             * @description Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
+             * @description Task action type. Tier 2 accepts `llm` only; the enum grows additively (future growth path — design intent, do not build in this release).
              * @example llm
              * @enum {string}
              */
@@ -12330,7 +12296,7 @@ export interface components {
         };
         /**
          * TaskTrigger
-         * @description When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+         * @description When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
          *     ## Tier 2 (now) `type` is one of:
          *       - `manual`    — no automatic trigger. The task starts when a human drags its
          *                       card into `in_progress`, or via Run / Create & Run. For an
@@ -12348,16 +12314,16 @@ export interface components {
          *                       Each fire spawns a FRESH run.
          *
          *     `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
-         *     ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+         *     ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
          */
         TaskTrigger: {
             /**
-             * @description The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+             * @description The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
              * @example recurring
              * @enum {string}
              */
             type: "manual" | "once" | "every" | "recurring";
-            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape. */
+            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape. */
             config: {
                 /**
                  * Format: int64
@@ -12754,15 +12720,23 @@ export interface components {
         };
         /**
          * ToolApprovalActionRequest
-         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, cancelling, or approving-and-remembering ("always") it.
+         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
          */
         ToolApprovalActionRequest: {
             /**
-             * @description Action to take on this approval. approve — allow this single invocation. deny    — reject this single invocation. cancel  — cancel this invocation (e.g. modal dismissed / turn aborted). always  — allow this invocation AND record a session-scoped "Always Allow" grant for (session, agent, tool) so future matching calls in the same session auto-approve without re-prompting.
-             * @example approve
+             * @description Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
+             * @example allow_once
              * @enum {string}
              */
-            action: "approve" | "deny" | "cancel" | "always";
+            action: "deny" | "allow_once" | "allow" | "cancel";
+            /**
+             * @description Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+             *     Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
+             *     When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact grant for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix grant it did not offer (see CommandSegmentInfo.prefix_available).
+             * @example exact
+             * @enum {string}
+             */
+            scope?: "exact" | "prefix";
         };
         /**
          * CredentialSetRequest
@@ -12813,7 +12787,7 @@ export interface components {
          * @description Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
          */
         ChannelConfigureRequest: {
-            /** @description Optional: the instance map key to configure. In v0.1 (cap-1/type) this equals the channel type and can be omitted. Reserved for v0.3 multi-instance support — the backend ignores this field today (the URL {id} is the key). */
+            /** @description Optional. The backend ignores this field: the URL {id} is the instance key, including when more than one instance of a channel type exists. It is not persisted. */
             instance_id?: string;
             /** @description Optional routing identity override for this channel instance. Persisted per instance; wired into ResolveRoute for inbound messages on this channel. */
             identity?: components["schemas"]["ChannelIdentity"];
@@ -16116,7 +16090,7 @@ export interface components {
             type: "subagent_start";
             /** @description Session in which this sub-turn is running. */
             session_id: string;
-            /** @description Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID. */
+            /** @description Unique identifier for this span. Opaque on the wire. The server builds it with pkg/agent.SubagentSpanID from the parent spawn ToolCall.ID (parent_call_id) and the child's generation. Generation 1, and any generation below 2, is "span_" plus that id. Generation N of 2 or above is that same string plus "_g" plus N, so a follow-up does not reuse generation 1's id. This frame has no generation field. Replay recovers N from the transcript entry id ("<call id>:g<N>:start" or ":end"). */
             span_id: string;
             /** @description The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts. */
             parent_call_id: string;
@@ -16129,6 +16103,11 @@ export interface components {
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             child_session_id?: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
         };
         /**
          * SubagentStateFrame
@@ -16171,6 +16150,11 @@ export interface components {
              * @example 2026-07-22T10:00:00Z
              */
             created_at: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
         };
         /**
          * SubagentMessageFrame
@@ -16231,6 +16215,11 @@ export interface components {
              * @example 2026-07-22T10:00:00Z
              */
             created_at: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
         };
         /**
          * SubagentEndFrame
@@ -16263,6 +16252,11 @@ export interface components {
             parent_call_id?: string;
             /** @description Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI. */
             message?: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
         };
         /**
          * ExternalCliTool
@@ -17613,6 +17607,7 @@ export interface operations {
                     "application/json": components["schemas"]["ToolRegistryEntry"][];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -17642,6 +17637,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Endpoint removed — use GET /api/v1/tools instead. */
             404: {
                 headers: {
@@ -17779,72 +17775,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
-        };
-    };
-    getExecAllowlist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current exec allowlist. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecAllowlist"];
-                };
-            };
-            /** @description Missing or invalid bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    updateExecAllowlist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description List of allowed binary name patterns. */
-                    allowed_binaries: string[];
-                };
-            };
-        };
-        responses: {
-            /** @description Updated allowlist (restart required). */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecAllowlist"];
-                };
-            };
-            /** @description Invalid pattern (empty, too long, or too many entries). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
         };
     };
     getExecProxyStatus: {
@@ -17865,6 +17797,7 @@ export interface operations {
                     "application/json": components["schemas"]["ExecProxyStatus"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -17936,6 +17869,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -17999,6 +17933,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18062,6 +17997,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18134,6 +18070,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18193,6 +18130,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuditLogResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -18264,6 +18202,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18327,6 +18266,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18348,6 +18288,7 @@ export interface operations {
                     "application/json": components["schemas"]["RetentionSweepResult"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -18430,6 +18371,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18553,6 +18495,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEntry"][];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -18595,6 +18538,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Instance key already exists. */
             409: {
                 headers: {
@@ -18641,6 +18585,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -18683,6 +18628,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Instance not found. */
             404: {
                 headers: {
@@ -18727,6 +18673,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -18762,6 +18709,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -18815,6 +18763,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -18850,6 +18799,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelTestResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -19150,6 +19100,7 @@ export interface operations {
                     "application/json": components["schemas"]["PendingRestartEntry"][];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -19479,6 +19430,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Key field is required (empty key). */
             422: {
                 headers: {
@@ -19531,6 +19483,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Credential key not found. */
             404: {
                 headers: {
@@ -19588,6 +19541,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Credential store locked. */
             503: {
                 headers: {
@@ -19617,6 +19571,7 @@ export interface operations {
                     "application/json": components["schemas"]["BackupCreateResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -19659,6 +19614,7 @@ export interface operations {
                     }[];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -19709,6 +19665,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Backup file not found. */
             404: {
                 headers: {
@@ -19747,6 +19704,7 @@ export interface operations {
                     "application/json": components["schemas"]["StorageStats"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -19776,6 +19734,7 @@ export interface operations {
                     "application/json": components["schemas"]["ClearAllSessionsResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -23772,7 +23731,6 @@ export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
 export type AgentStats = components["schemas"]["AgentStats"];
-export type AgentShellPolicy = components["schemas"]["AgentShellPolicy"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
 export type AgentToolsMcpServerBinding = components["schemas"]["AgentToolsMcpServerBinding"];
 export type AgentToolsUpdateRequest = components["schemas"]["AgentToolsUpdateRequest"];
@@ -23808,7 +23766,6 @@ export type AuditEntry = components["schemas"]["AuditEntry"];
 export type AuditLogResponse = components["schemas"]["AuditLogResponse"];
 export type AuditLogToggle = components["schemas"]["AuditLogToggle"];
 export type RateLimitConfig = components["schemas"]["RateLimitConfig"];
-export type ExecAllowlist = components["schemas"]["ExecAllowlist"];
 export type ExecProxyStatus = components["schemas"]["ExecProxyStatus"];
 export type SkillTrustResponse = components["schemas"]["SkillTrustResponse"];
 export type PromptGuardResponse = components["schemas"]["PromptGuardResponse"];

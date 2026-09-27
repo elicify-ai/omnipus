@@ -318,8 +318,9 @@ func TestTruncationD6_ChainRebuildKeepsSteeringMessage(t *testing.T) {
 			content:      "",
 			finishReason: "stop",
 			onCall: func() {
-				require.NoError(t, al.EnqueueSteeringMessage(sessionKey, "truncation-test-agent",
-					providers.Message{Role: "user", Content: steerText}))
+				_, enqErr := al.EnqueueSteeringMessage(sessionKey, "truncation-test-agent",
+					providers.Message{Role: "user", Content: steerText}, "")
+				require.NoError(t, enqErr)
 			},
 		},
 		// round 3: truncated again → continuation #2 rebuilds the chain.

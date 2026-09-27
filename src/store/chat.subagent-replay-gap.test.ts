@@ -258,3 +258,97 @@ describe('ChatStore — subagent_message/subagent_state arriving before subagent
     expect(state.sessionsById[TEST_SESSION_ID]?.pendingSpanUpdatesBySpanId?.['span-gap-multi-A']?.statusLine).toBe('A working')
   })
 })
+
+// #823/ADR-091 merge review (Opus, F4 — low, plausible race): the Go side's
+// deliverSubagentStart persists the span to the session transcript BEFORE
+// emitting the live subagent_start frame (not one atomic step). If a SECOND
+// tab's attach_session binds in that exact window, its snapshot replay emits
+// the SAME span (reconstructed from the transcript, unsequenced — no `seq`
+// field at all) that the live emit ALSO delivers moments later (sequenced,
+// `seq` above whatever the bucket's cursor already had) — one delegation,
+// two subagent_start frames for the SAME span_id, racing each other. Before
+// this fix, `case 'subagent_start'` (slices/frames.ts) had no span_id dedupe
+// at all: the second frame pushed a SECOND SubagentSpanRunning onto the same
+// message's `spans` array and overwrote `spanBySpanId[span_id]` to point at
+// the new (duplicate) index — two cards in the UI for one real delegation,
+// and any update racing in between the two starts (a subagent_message/
+// subagent_state) would have been silently orphaned on the FIRST span's
+// index once the second start clobbered the map.
+describe('ChatStore — subagent_start dedup by span_id (#823/ADR-091 merge review F4)', () => {
+  it('a live subagent_start for a span_id the bucket ALREADY has (from an earlier replayed start) is ignored — no second span, no state reset', () => {
+    act(() => {
+      useChatStore.getState().appendMessage({
+        id: 'asst-dup-start',
+        role: 'assistant',
+        content: 'Working...',
+        timestamp: new Date().toISOString(),
+        status: 'streaming',
+        isStreaming: true,
+      })
+    })
+
+    // 1. The REPLAYED copy — a session_snapshot's reconstruction of the
+    // transcript, unsequenced (no `seq` field), exactly as replay.go emits it.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        span_id: 'span-dup-race',
+        parent_call_id: 'call-dup-race',
+        task_label: 'audit',
+        agent_id: 'agent-child',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    let state = useChatStore.getState()
+    let asstMsg = state.messages.find((m) => m.id === 'asst-dup-start')
+    expect(asstMsg!.spans!.filter((s) => s.spanId === 'span-dup-race')).toHaveLength(1)
+
+    // 2. A live update lands on the (single, real) span in between the two
+    // starts — this is what proves the eventual duplicate doesn't just fail
+    // to ADD a second card, but also doesn't RESET the real one's state.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_message',
+        span_id: 'span-dup-race',
+        message_id: 'm-dup-race',
+        kind: 'progress',
+        text: 'auditing the checkout page',
+        sender_identity: 'agent-child',
+        untrusted_origin: false,
+        created_at: '2026-01-01T00:00:07.000Z',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    // 3. The LIVE copy of the SAME start arrives after — sequenced, per
+    // BE-DESIGN.md §1.2 (subagent_start carries an optional `seq`).
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        span_id: 'span-dup-race',
+        parent_call_id: 'call-dup-race',
+        task_label: 'audit',
+        agent_id: 'agent-child',
+        session_id: TEST_SESSION_ID,
+        seq: 5,
+      })
+    })
+
+    state = useChatStore.getState()
+    asstMsg = state.messages.find((m) => m.id === 'asst-dup-start')
+    const matches = asstMsg!.spans!.filter((s) => s.spanId === 'span-dup-race')
+    // Exactly one span — the live duplicate must not have appended a second.
+    expect(matches).toHaveLength(1)
+    // The pending subagent_message's update survives the duplicate start —
+    // the duplicate must not have reset the real span's already-live state.
+    expect(matches[0].statusLine).toBe('auditing the checkout page')
+    expect(matches[0].lastUpdateAt).toBe('2026-01-01T00:00:07.000Z')
+    // The O(1) index still points at the ONE real span, at its original
+    // index — a naive "push a second, then re-point the index" bug would
+    // otherwise leave this pointing at the duplicate instead.
+    const indexEntry = state.sessionsById[TEST_SESSION_ID]?.spanBySpanId?.['span-dup-race']
+    expect(indexEntry?.messageId).toBe('asst-dup-start')
+    expect(asstMsg!.spans![indexEntry!.spanIdx]?.spanId).toBe('span-dup-race')
+  })
+})

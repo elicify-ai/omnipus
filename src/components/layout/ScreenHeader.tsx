@@ -17,6 +17,10 @@ interface ScreenHeaderProps {
  * Height is locked to the shared chrome header token (`h-chrome-header` =
  * 44px) and has no bottom border so it lines up with the workspace top bar and
  * open panel headers (flat shell chrome).
+ *
+ * The God Mode corner dot that used to live on this hamburger is deleted
+ * (founder decision 2026-09-25 revision 2) — AppShell renders one app-wide
+ * corner indicator instead; see GodModeIndicators.tsx.
  */
 export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
   const toggle = useSidebarStore((s) => s.toggle)

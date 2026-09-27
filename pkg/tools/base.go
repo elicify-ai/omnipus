@@ -117,6 +117,7 @@ var (
 	ctxKeyCitationTracker       = &toolCtxKey{"citationTracker"}
 	ctxKeyDelegationDepth       = &toolCtxKey{"delegationDepth"}
 	ctxKeyToolCallID            = &toolCtxKey{"toolCallID"}
+	ctxKeyTurnID                = &toolCtxKey{"turnID"}
 	ctxKeyRunningTaskID         = &toolCtxKey{"runningTaskID"}
 	ctxKeyVerifierSessionScope  = &toolCtxKey{"verifierSessionScope"}
 	ctxKeySearchPromotion       = &toolCtxKey{"searchPromotion"}
@@ -377,6 +378,31 @@ func WithToolCallID(ctx context.Context, toolCallID string) context.Context {
 // ToolCallID extracts the current tool call's own ID from ctx, or "" if unset.
 func ToolCallID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyToolCallID).(string)
+	return v
+}
+
+// WithTurnID returns a child context carrying the ID of the turn currently
+// executing. The agent loop injects this immediately before every tool
+// execution (mirroring the ToolCallID injection above), so a tool that
+// itself raises an interactive escalation — rather than going through the
+// classic ask-policy path, which already has the turn's ID in hand via
+// turnState — can stamp its own ShellApprovalRequester.RequestShellApproval
+// call with a real, non-empty turn ID.
+//
+// D-03 (2026-09-24 UAT, ADR-092): before this accessor existed, the ADR-092
+// D3/D7/D8 escalation call sites in shell_permission_mode.go had no way to
+// read the calling turn's ID from ctx at all and passed a literal "" —
+// which contracts/components/schemas/ToolApprovalRequiredFrame.yaml's
+// minLength:1 requirement on turn_id causes the SPA's generated Zod schema
+// to silently drop on arrival, so the resulting approval card never
+// rendered and the bash call hung until the operator gave up and canceled.
+func WithTurnID(ctx context.Context, turnID string) context.Context {
+	return context.WithValue(ctx, ctxKeyTurnID, turnID)
+}
+
+// ToolTurnID extracts the current turn's ID from ctx, or "" if unset.
+func ToolTurnID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyTurnID).(string)
 	return v
 }
 

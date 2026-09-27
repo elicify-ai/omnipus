@@ -21,12 +21,13 @@
  * that: each assertion fails if its caller's precedence were reversed.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { GenericToolCall } from './GenericToolCall'
 import { ToolCallBadge } from '../ToolCallBadge'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import type { ToolCall } from '@/lib/api'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 
 const delegationDenied = {
   error: 'delegation_denied' as const,
@@ -75,6 +76,17 @@ describe('ToolCallBadge — sentinel detection beats every ordinary status, incl
       ...overrides,
     }
   }
+
+  // Spec D2 hides every delegate badge in the DEFAULT thread, so the badge these
+  // two tests inspect only exists with verbose chat on. That is a fixture
+  // precondition, not the contract under test: what is pinned here is sentinel
+  // detection beating the ordinary statuses, which is independent of the verbose
+  // gate. Enabling verbose restores the element without weakening either
+  // assertion. (Before spec D2 a delegate badge rendered unconditionally, which
+  // is why these tests originally needed no preference at all.)
+  beforeEach(() => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: true })
+  })
 
   it('status:"running" with a delegation-denied result still renders the sentinel label, not "Running..."', () => {
     render(

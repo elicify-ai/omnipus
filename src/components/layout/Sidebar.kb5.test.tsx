@@ -55,6 +55,12 @@ const workspaces = [
 ]
 
 vi.mock('@/lib/api', () => ({
+  // God Mode pill (GodModeIndicators -> useGodModeLiveStatus) reads these
+  // two; this file's wholesale api mock must define every export the Sidebar
+  // import graph touches, or Vitest throws on the missing binding. Stub to a
+  // definitive "off" so the pill renders nothing here.
+  fetchAppState: () => Promise.resolve({ onboarding_complete: true, dev_mode_bypass: false }),
+  fetchGodMode: () => Promise.resolve({ enabled: false, available: true, supported: true, persisted: false }),
   fetchWorkspaces: () => Promise.resolve(workspaces),
   fetchSessions: () => Promise.resolve([]),
   fetchAgents: () => Promise.resolve([]),

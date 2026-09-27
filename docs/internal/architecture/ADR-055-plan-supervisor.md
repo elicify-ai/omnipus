@@ -1,5 +1,7 @@
 # ADR-055: PlanSupervisor — a System Agent that adjudicates and corrects running plans
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** Proposed (v3 — revised after a second `/grill-spec` BLOCK, 41 findings)
 - **Date:** 2026-07-27
 - **Amends:** [ADR-053](ADR-053-unified-goal-plan-subagent.md) — its correction handler

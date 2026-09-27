@@ -6126,10 +6126,6 @@
       "lane": 5
     },
     {
-      "source": "src/components/agents/ShellDenyPatternsEditor.tsx",
-      "lane": 5
-    },
-    {
       "source": "src/components/agents/ToolApprovalModal.tsx",
       "lane": 8
     },
@@ -6467,6 +6463,10 @@
     },
     {
       "source": "src/components/chat/tools/WebServeUI.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/toolResultDisplay.tsx",
       "lane": 3
     },
     {
@@ -6938,6 +6938,10 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/AutoApproveAskList.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/settings/ChatSection.tsx",
       "lane": 6
     },
@@ -6959,10 +6963,6 @@
     },
     {
       "source": "src/components/settings/DiagnosticsSection.tsx",
-      "lane": 6
-    },
-    {
-      "source": "src/components/settings/ExecAllowlistSection.tsx",
       "lane": 6
     },
     {
@@ -7460,6 +7460,26 @@
     {
       "source": "src/routes/onboarding.tsx",
       "lane": 1
+    },
+    {
+      "source": "src/components/chat/ChatModeBadge.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/AutoApprovePicker.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/layout/GodModeIndicators.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/chat/DelegationEventLine.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useChatDelegationEvents.ts",
+      "lane": 3
     }
   ]
 }

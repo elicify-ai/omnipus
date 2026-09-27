@@ -1,5 +1,7 @@
 # ADR-013 — Inbound Validation Strategy (Opt-in, Fail-Closed, Default-Flip Target)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Status:** Accepted
 **Date:** 2026-05-18
 **Deciders:** architect, backend-lead, security-lead
@@ -57,7 +59,8 @@ flag's value — the flag controls only whether the validator's verdict
 gates the handler. The pre-compile boot guard runs unconditionally, so
 schema-compile failures are caught even when validation is disabled.
 
-**Target for flipping the default to `true`:** v0.2, once production logs
+**Target for flipping the default to `true`:** not scheduled (the v0.2 target
+label was retired 2026-09-25 — single v0.1.1 line), once production logs
 show zero validation 400s for 14 consecutive days on a staging deployment
 that ran with `validate_inbound: true`.
 
@@ -71,7 +74,8 @@ that ran with `validate_inbound: true`.
 - **Graceful rollout.** Opt-in default means existing deployments do not
   break the moment they pull the new binary. Operators who want strict
   enforcement can flip the flag; those who cannot afford a regression
-  window stay on the permissive path until v0.2.
+  window stay on the permissive path (the v0.2 default-flip is unscheduled —
+  the target label was retired 2026-09-25).
 - **Fail-closed on compile errors.** A schema that fails to compile at
   boot indicates a contract bug. Continuing to serve with that schema
   effectively disabled would silently weaken security. Aborting boot
@@ -173,10 +177,11 @@ criteria are:
    **zero** unintended validation 400s during that window.
 3. Any 400s that did occur trace back to actual schema violations from
    misbehaving clients, not contract drift.
-4. The default-flip lands in v0.2 alongside other security hardening
-   (issue #155).
+4. The default-flip rides the next scheduled security hardening (the v0.2
+   target label was retired 2026-09-25 — no release scheduled; #155 closed
+   2026-05-04 without flipping the default).
 
-Operators who want strict enforcement before v0.2 can set
+Operators who want strict enforcement today can set
 `gateway.validate_inbound: true` in their `config.json` today. The
 infrastructure is fully wired.
 
@@ -200,7 +205,8 @@ infrastructure is fully wired.
   bad schema and don't catch it in CI will see boot failure rather than
   silently-degraded service. (We consider this a feature, not a bug.)
 - Default-off in v0.1 means the safety net is not actually catching
-  anything in production until v0.2. The wiring exists; the catch
+  anything in production (the default remains off; the flip is unscheduled
+  after the label retirement of 2026-09-25). The wiring exists; the catch
   doesn't.
 - Per-request validation has a small CPU cost (microseconds per request
   for typical schemas). Negligible at our traffic scale but real.

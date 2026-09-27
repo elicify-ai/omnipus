@@ -433,7 +433,7 @@ func (as *applySandboxState) buildPolicy() {
 	//   does not accept ranges, so we expand to one rule per port. Agents
 	//   serving via web_serve (dev mode) and workspace.shell_bg bind here.
 	//
-	// Connect ports (v0.2 #155 item 4): DefaultPolicy seeds the policy with
+	// Connect ports (#155 item 4): DefaultPolicy seeds the policy with
 	//   sandbox.DefaultConnectPorts ({53, 80, 443}) so the gateway and every
 	//   forked child can reach DNS, HTTP, and HTTPS. We additionally extend
 	//   the connect allow-list with DevServerPortRange so children can
@@ -553,7 +553,7 @@ func (as *applySandboxState) buildPolicy() {
 			"detail", detail)
 	}
 
-	// Extend the connect-port allow-list (v0.2 #155 item 4). DefaultPolicy
+	// Extend the connect-port allow-list (#155 item 4). DefaultPolicy
 	// pre-seeds {53, 80, 443}; we append every port in DevServerPortRange so
 	// children can dial loopback dev servers and the egress proxy without
 	// the kernel intercepting at connect(2), plus every port this gateway

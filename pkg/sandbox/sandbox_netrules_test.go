@@ -47,7 +47,7 @@ func TestDefaultPolicy_NetRulesEmptyVsNil(t *testing.T) {
 	}
 }
 
-// TestDefaultPolicy_ConnectRulesSeeded verifies v0.2 (#155 item 4): every
+// TestDefaultPolicy_ConnectRulesSeeded verifies the #155 (item 4) posture: every
 // SandboxPolicy returned by DefaultPolicy carries the baseline
 // connect-port allow-list (DefaultConnectPorts = {53, 80, 443}). On
 // Landlock ABI v4+ this becomes kernel-enforced — outbound TCP to any

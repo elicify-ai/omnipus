@@ -1,4 +1,6 @@
 # Tool-System UAT Plan — v0.1.0 completion
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 **Date:** 2026-06-24 · **Scope:** the live v0.1.0 builtin tool surface (~78 tools across
 16 domain categories) — tested by **actually prompting LLM agents to use each tool** and

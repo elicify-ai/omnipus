@@ -130,7 +130,7 @@ This feature finishes that model: a scheduled job **wakes its owning agent** in 
 
 ### Cluster Placement
 
-Backend **autonomy/scheduling** cluster (`pkg/cron`, `pkg/agent`, `pkg/heartbeat`, `pkg/session`) + gateway REST/contract + SPA. Spans backend + frontend; reuses existing session model (NOT the v0.3 Rooms topology).
+Backend **autonomy/scheduling** cluster (`pkg/cron`, `pkg/agent`, `pkg/heartbeat`, `pkg/session`) + gateway REST/contract + SPA. Spans backend + frontend; reuses existing session model (NOT the Workspaces topology; the Rooms/v0.3 labels are retired).
 
 ---
 
@@ -266,9 +266,9 @@ Boundary conditions:
 - The system must **not** fall back to the default agent when a cron job's owner is unresolved, because that silently runs the wrong agent (the core #264 bug).
 - The system must **not** run a scheduled turn under `context.Background()` (no deadline), because a hung run would block the lane and strand sessions.
 - The system must **not** stall a scheduled run on an `ask`-gated tool waiting for human approval, because no human is present; it auto-denies instead.
-- The system must **not** merge schedules into `pkg/taskstore` or the Task model, because that collides with the v0.3 Rooms tasks redesign (#156).
+- The system must **not** merge schedules into `pkg/taskstore` or the Task model, because that collides with the Workspaces tasks redesign (#156 — landed).
 - The system must **not** introduce a new sandbox/room topology or background-session model; it reuses the existing `UnifiedStore` session model.
-- The system must **not** add web-push or any new notification transport; alerting reuses the message bus + Command Center Attention (web-push is v0.3).
+- The system must **not** add web-push or any new notification transport; alerting reuses the message bus + Command Center Attention (web-push is deferred, no release scheduled).
 - The system must **not** fire a missed schedule once per missed interval after downtime; it fires once and recomputes forward.
 - The system must **not** persist any hand-written wire type; all `/schedules` types are generated from the contract (hard-constraint #8).
 - The system must **not** add wall-clock `sleep`s to tests; firing is driven by an injected clock (avoid re-introducing the #265 flake class).
@@ -754,7 +754,7 @@ Write tests BEFORE implementation. Unit → Integration → E2E.
 
 ## Assumptions
 
-- Reuses the existing `UnifiedStore` session model and `pkg/cron` store; no v0.3 Rooms topology.
+- Reuses the existing `UnifiedStore` session model and `pkg/cron` store; no Workspaces topology (the Rooms/v0.3 labels are retired).
 - The mock LLM used in tests can be instructed to hang, error terminally, return a transient error, or call an `ask`-gated tool.
 - "Owning agent's default channel" = the channel resolved from the agent's bindings / default routing (US4 alert target); if the agent has no channel, the alert still records an Attention item + Activity event.
 - Config keys live under `agents.defaults` / per-schedule fields (timeout, concurrency, wake) consistent with existing config conventions.

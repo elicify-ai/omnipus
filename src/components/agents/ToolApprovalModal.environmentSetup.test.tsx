@@ -81,7 +81,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.submitToolApproval).mockResolvedValue({
     approval_id: 'appr-env-setup',
-    action: 'approve',
+    action: 'allow_once',
     status: 'ok',
   })
   queryClient.clear()
@@ -380,7 +380,7 @@ describe('ToolApprovalModal — environment_setup standard approval semantics pr
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-env-install', 'approve')
+      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-env-install', 'allow_once')
     })
   })
 

@@ -690,14 +690,47 @@ func summarizeVerdict(v *task.JudgeVerdict, couldNotVerifyIDs []string) string {
 // --- Machine checks (D2 rule 1: dispatched exclusively via the assignee's
 // own bash tool) ------------------------------------------------------------
 
+// machineCheckAskPolicyAcceptable is D2 rule 2's "ask" exception (ADR-092 D1
+// re-point, 2026-09-24): bash's global ceiling now ships "ask" on every
+// fresh install (pkg/config/defaults.go), replacing the "allow" ceiling D2
+// rule 2 was originally written against. Under Constraint #6 strictest-wins,
+// NO per-agent override can widen bash past that ceiling — so a
+// policy-exactly-"allow" gate made EVERY machine `[check:]` criterion
+// (goal/task/plan alike — runMachineCheck is the one entrypoint for all
+// three) permanently unable_to_verify on a fresh install, never scored,
+// never advancing a plan/goal past its hold — not a narrow edge case but the
+// default-config path, confirmed against
+// Conformance_t0_ChatGoalE2E/Conformance_t2_PlanLifecycleE2E.
+//
+// "ask" now also runs, but ONLY when it would run exactly the way the D1
+// Auto submode already lets an ordinary interactive bash call run
+// unprompted: God Mode active, or Auto-approve active for this agent
+// (mirrors ShellPermissionGate.liveMode's own decision, loop_policy.go) —
+// never a live approval card, preserving D2 rule 2's actual invariant ("no
+// interactive approver mid-loop"), just extended to the mechanism ADR-092
+// added for running an in-policy command without one. Callers still stamp
+// AutoDenyAsk on the dispatch context so a command this accepts, but that
+// the real D7/D8 pre-flight still finds an escalation for, is denied
+// outright rather than opening a card nobody can answer.
+//
+// Shared by runMachineCheck (below) and TaskAssigneeCannotFinish's own
+// pre-run check-runner gate (task_assignee_readiness.go) — the two must
+// never disagree (TestTaskReadiness_CheckRunnerPolicyMatchesTheJudge).
+func (al *AgentLoop) machineCheckAskPolicyAcceptable(agentID, policy string) bool {
+	return policy == string(config.ToolPolicyAsk) &&
+		(GodModeActive(al.GetConfig()) || al.autoApproveActive(agentID, "", false))
+}
+
 // runMachineCheck dispatches ONE kind:check criterion through the assignee
 // agent's OWN registered `bash` tool (D2 rule 1 — same tool registry, policy
 // resolution, sandbox enforcement, and audit trail as any other bash call;
-// there is no parallel judge-owned exec path). Policy resolution mirrors
-// D2 rule 2: allow -> runs for real; ask -> resolved to deny, unattended (no
-// interactive approver mid-loop); deny -> denied. A timeout (default 60s,
-// config.PlanningConfig.CheckTimeoutSeconds) kills the check and fails it
-// closed WITHOUT holding the caller's clock open (D2 rule 4/D7).
+// there is no parallel judge-owned exec path). Policy resolution mirrors D2
+// rule 2: allow -> runs for real; ask -> runs only when
+// machineCheckAskPolicyAcceptable (above) agrees, otherwise resolved to
+// deny, unattended (no interactive approver mid-loop); deny -> denied. A
+// timeout (default 60s, config.PlanningConfig.CheckTimeoutSeconds) kills the
+// check and fails it closed WITHOUT holding the caller's clock open (D2 rule
+// 4/D7).
 func (al *AgentLoop) runMachineCheck(
 	ctx context.Context,
 	assigneeAgentID string,
@@ -730,7 +763,7 @@ func (al *AgentLoop) runMachineCheck(
 	}
 
 	policy := tools.EffectiveToolPolicy(agentInst.LoadToolPolicy(), tools.ScopeCore, agentInst.AgentType, "bash")
-	if policy != string(config.ToolPolicyAllow) {
+	if policy != string(config.ToolPolicyAllow) && !al.machineCheckAskPolicyAcceptable(assigneeAgentID, policy) {
 		// G-3/FR-116/MAJ-13: bash is policy-denied for this agent → the
 		// mechanism could not run under the agent's OWN policy (never a
 		// privileged bypass, Constraint #6) → unable_to_verify, re-run, never
@@ -758,6 +791,13 @@ func (al *AgentLoop) runMachineCheck(
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSecs+5)*time.Second)
 	defer cancel()
 	callCtx = tools.WithAgentID(callCtx, assigneeAgentID)
+	// D2 rule 2 / D-08: this dispatch has no interactive approver by
+	// construction (the judge's own internal verification call, never a
+	// live chat turn) — stamp AutoDenyAsk so a command the "ask"+Auto
+	// acceptance above let through, but that the real D7/D8 pre-flight
+	// still finds an out-of-policy escalation for, is denied at once
+	// rather than opening a live approval card nothing here can answer.
+	callCtx = tools.WithAutoDenyAsk(callCtx, true)
 
 	// S2 UAT fix (MARCUS-P4): the check MUST run in the SAME working
 	// directory the task's own turn ran in, or any relative-path criterion

@@ -45,6 +45,28 @@ func (al *AgentLoop) UnsubscribeEvents(id uint64) {
 	al.eventBus.Unsubscribe(id)
 }
 
+// SetEventSyncTap installs (or, with nil, clears) a synchronous tap on the
+// underlying EventBus — see EventBus.SetSyncTap's doc comment for the full
+// #823 catch-up-redesign rationale (SetSyncTap runs once per Emit, before
+// the lossy per-subscriber fan-out, so a session-numbering hub observes
+// 100% of events regardless of subscriber backpressure). Exposed here,
+// mirroring SubscribeEvents/UnsubscribeEvents' exact nil-safety pattern,
+// because the unexported eventBus field is unreachable from outside this
+// package.
+//
+// CROSS-LANE NOTE (#823 squad, Lane A / Lane B split): this file is owned
+// by Lane B (pkg/agent). Lane A (pkg/gateway) added this one method to call
+// the SetSyncTap mechanism Lane B already landed specifically for this
+// purpose (see EventBus.SetSyncTap's own doc comment: "so the gateway's
+// future per-session hub can observe 100% of events"). Flagged per the
+// squad brief's cross-lane-edit rule; see Lane A's SQUAD-REPORT-BEA.md.
+func (al *AgentLoop) SetEventSyncTap(tap func(Event)) {
+	if al == nil || al.eventBus == nil {
+		return
+	}
+	al.eventBus.SetSyncTap(tap)
+}
+
 // EventDrops returns the number of dropped events for the given kind.
 func (al *AgentLoop) EventDrops(kind EventKind) int64 {
 	if al == nil || al.eventBus == nil {

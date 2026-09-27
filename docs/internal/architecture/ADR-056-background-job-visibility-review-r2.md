@@ -1,5 +1,7 @@
 # Adversarial Review (round 2): ADR-056 — `list_jobs`, unified background-job visibility
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Spec reviewed**: `docs/internal/architecture/ADR-056-background-job-visibility.md` (v2, Proposed)
 **Prior round**: `ADR-056-background-job-visibility-review.md` (v1 — BLOCK, 31 findings)
 **Review date**: 2026-07-27

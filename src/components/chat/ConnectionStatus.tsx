@@ -274,6 +274,22 @@ interface ConnectionDisplayInput {
    * server's own signal says the turn is no longer in flight.
    */
   sessionHasActiveTurn: boolean
+  /**
+   * #823 catch-up redesign (BE-DESIGN.md §6.5) — true while this session's
+   * reconnect is still mid catch-up (between `session_snapshot`/the
+   * incremental journal tail and the matching `catch_up_complete`, or
+   * before any attach has resolved at all — SessionChatState.awaitingCatchUp,
+   * set true by the `session_snapshot` case and cleared by
+   * `catch_up_complete`, see src/store/chat/slices/catchup-frames.ts).
+   * `session_state` (sessionHasActiveTurn's own source) arrives BEFORE
+   * catch_up_complete in the real attach sequence (§4.1 A6), so treating it
+   * as authoritative before the catch-up it belongs to has actually
+   * finished being applied risks flashing "couldn't be finished" mid
+   * catch-up. This is the ONLY input change this lane makes to this
+   * function (BE-DESIGN.md §9's Lane C DoD: "phase-1 components untouched
+   * apart from the unfinished input").
+   */
+  awaitingCatchUp: boolean
 }
 
 export function deriveConnectionDisplay(input: ConnectionDisplayInput): {
@@ -286,8 +302,12 @@ export function deriveConnectionDisplay(input: ConnectionDisplayInput): {
     // Review finding 14: reconnected AND the server confirms no turn is
     // in flight for this session is the only honest "couldn't be
     // finished" signal — see sessionHasActiveTurn's doc comment.
+    // #823 catch-up redesign (§6.5): also gated on the catch-up for THIS
+    // attach having actually finished — see awaitingCatchUp's doc comment.
     const answer: 'hidden' | AssistantConnectionState =
-      input.hasInterruptedAnswer && !input.sessionHasActiveTurn ? 'unfinished' : 'hidden'
+      input.hasInterruptedAnswer && !input.sessionHasActiveTurn && !input.awaitingCatchUp
+        ? 'unfinished'
+        : 'hidden'
     return { answer, chat: showRecovery ? 'back' : 'hidden' }
   }
 
@@ -362,11 +382,19 @@ export function ChatConnectionNotice() {
   const sessionHasActiveTurn = useChatStore((state) =>
     activeSessionId != null && state.sessionsById[activeSessionId]?.activeTurnId != null,
   )
+  // #823 catch-up redesign (§6.5) — only affects `display.answer`, never
+  // `display.chat` (the only field this line renders), same as
+  // sessionHasActiveTurn above; read here purely so this call site stays a
+  // valid, honest ConnectionDisplayInput.
+  const awaitingCatchUp = useChatStore((state) =>
+    activeSessionId != null && !!state.sessionsById[activeSessionId]?.awaitingCatchUp,
+  )
   const display = deriveConnectionDisplay({
     ...connection,
     hasInterruptedAnswer: connection.disconnectedAssistantMessageId !== null,
     deviceOnline: typeof navigator === 'undefined' ? true : navigator.onLine,
     sessionHasActiveTurn,
+    awaitingCatchUp,
     now,
   })
   if (display.chat === 'hidden') return null
@@ -395,17 +423,51 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
   const reconnectedAt = useConnectionStore((state) => state.reconnectedAt)
   const lastDisconnectDurationMs = useConnectionStore((state) => state.lastDisconnectDurationMs)
   const lastDisconnectWasTerminal = useConnectionStore((state) => state.lastDisconnectWasTerminal)
-  const active = disconnectedHere && (!isConnected || reconnectedAt !== null)
+  // #823 catch-up redesign, Opus review round 2 item 5 (BE-DESIGN.md §6.5):
+  // `disconnectedHere` alone cannot detect "unfinished" once reconnected —
+  // connection.ts::setConnected(true) clears disconnectedAssistantMessageId
+  // the INSTANT the socket reconnects, before catch-up (and therefore
+  // awaitingCatchUp) could possibly have resolved. Gating this component's
+  // very existence on that flag made the awaitingCatchUp check further down
+  // unreachable dead code. §6.5's rule is fully derivable from the bucket
+  // instead, with no dependency on the connection store's transient flag.
+  //
+  // Opus review round 3 item N1 (real-browser regression, browser-confirmed
+  // at t006 of a plain, never-disconnected live turn): this used to compare
+  // `msg.turnId !== bucket.activeTurnId` reactively, on every render.
+  // `activeTurnId` is ONLY ever populated by a `session_state.active_turn`
+  // frame, and for an ordinary live turn that frame never arrives mid-turn
+  // (only the turn-less `session_state{}` at connection bind does) — so
+  // `activeTurnId` stays `null` for the entire duration of a normal live
+  // turn, making that comparison true from the FIRST token onward and
+  // showing "couldn't be finished" under every streaming answer. Fixed by
+  // reading `ChatMessage.confirmedUnfinished` — a flag the
+  // `catch_up_complete` reducer sets ONCE, only when session_state's
+  // active_turn is actually authoritative (see that field's own doc
+  // comment) — instead of re-deriving the same judgment reactively here,
+  // where a live turn and a genuinely-ended one are indistinguishable.
+  const activeSessionId = useSessionStore((state) => state.activeSessionId)
+  const unfinishedHere = useChatStore((state) => {
+    if (activeSessionId == null) return false
+    const bucket = state.sessionsById[activeSessionId]
+    const msg = bucket?.messagesById?.[messageId]
+    return !!msg?.confirmedUnfinished
+  })
+  const active = (disconnectedHere || unfinishedHere) && (!isConnected || reconnectedAt !== null || unfinishedHere)
   const now = useConnectionNow(active)
   // Review finding 14 / ADR-082: the server-confirmed signal that gates
   // 'unfinished' — see ConnectionDisplayInput.sessionHasActiveTurn's doc
   // comment. activeTurnId lives on the per-session bucket, not the flat
   // foreground ChatStore — see ChatConnectionNotice's identical read above.
-  const activeSessionId = useSessionStore((state) => state.activeSessionId)
   const sessionHasActiveTurn = useChatStore((state) =>
     activeSessionId != null && state.sessionsById[activeSessionId]?.activeTurnId != null,
   )
-  if (!disconnectedHere) return null
+  // #823 catch-up redesign (BE-DESIGN.md §6.5) — see
+  // ConnectionDisplayInput.awaitingCatchUp's doc comment.
+  const awaitingCatchUp = useChatStore((state) =>
+    activeSessionId != null && !!state.sessionsById[activeSessionId]?.awaitingCatchUp,
+  )
+  if (!disconnectedHere && !unfinishedHere) return null
   const display = deriveConnectionDisplay({
     isConnected,
     reconnectPhase,
@@ -416,6 +478,7 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
     hasInterruptedAnswer: true,
     deviceOnline: typeof navigator === 'undefined' ? true : navigator.onLine,
     sessionHasActiveTurn,
+    awaitingCatchUp,
     now,
   })
   if (display.answer === 'hidden') return null
@@ -428,4 +491,28 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
     if (lastUser) chat.resendMessage(lastUser.id)
   }
   return <AssistantConnectionStatus state={display.answer} agentName={agentName} onGenerateAgain={generateAgain} />
+}
+
+// #823 review round 9 (real-browser evidence, CI run 36081327151, scenario
+// h): a turn killed before any token streamed leaves no assistant message
+// at all for AssistantMessageConnectionStatus above to attach to —
+// catch_up_complete's sweep (catchup-frames.ts) can only mark an EXISTING
+// bubble unfinished. This sibling component renders the identical
+// "couldn't be finished · Generate again" state for the exchange itself,
+// keyed off the user message rather than a (nonexistent) reply, driven by
+// SessionChatState.unansweredLastUserMessageId — that field's own doc
+// comment covers the exact scope (boot_mismatch specifically, not
+// retention_exceeded, and only when the exchange truly has no reply and no
+// turn is running).
+export function UnansweredUserMessageStatus({ messageId, agentName }: { messageId: string; agentName: string }) {
+  const activeSessionId = useSessionStore((state) => state.activeSessionId)
+  const unanswered = useChatStore((state) => {
+    if (activeSessionId == null) return false
+    return state.sessionsById[activeSessionId]?.unansweredLastUserMessageId === messageId
+  })
+  if (!unanswered) return null
+  const generateAgain = () => {
+    useChatStore.getState().resendMessage(messageId)
+  }
+  return <AssistantConnectionStatus state="unfinished" agentName={agentName} onGenerateAgain={generateAgain} />
 }

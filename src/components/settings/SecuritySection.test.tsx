@@ -3,7 +3,6 @@
  *
  * Coverage:
  *   US-B1 — two-layer IA: jargon hidden until Advanced is expanded (#327)
- *   US-B2 — risky controls: badge from persisted value; confirm-to-weaken (#328)
  *   US-B3 — ToolPolicyEditor replaces GlobalToolPoliciesSection (#329)
  *   US-B4 — score deduction links to fix; score=100 reassurance (#330)
  *   #340   — SkillTrustSection is mounted in the Security tab
@@ -35,6 +34,14 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkillTrust: vi.fn(),
     updateSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
+    // ADR-092: AutoApproveControl mounts in the primary (always-rendered)
+    // layer, unlike SandboxSection (Advanced, collapsed by default) — its
+    // ['sandbox-config'] and ['sandbox-status'] queries fire on every
+    // render, so both need a mock here too, not just inside SandboxSection's
+    // own test file.
+    fetchSandboxConfig: vi.fn(),
+    updateSandboxConfig: vi.fn(),
+    fetchSandboxStatus: vi.fn(),
   }
 })
 
@@ -64,6 +71,9 @@ import {
   fetchSkillTrust,
   rotateCredentials,
   fetchAppState,
+  fetchSandboxConfig,
+  updateSandboxConfig,
+  fetchSandboxStatus,
 } from '@/lib/api'
 import type { AppState } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -82,11 +92,8 @@ const PLATFORM_APP_STATE = {
 
 const MINIMAL_CONFIG = {
   security: {
-    policy_mode: 'deny' as const,
-    exec_approval: 'ask' as const,
     exec_timeout_seconds: 0,
     max_background_seconds: 0,
-    enable_deny_patterns: false,
     rate_limits: {
       max_agent_llm_calls_per_hour: null,
       max_agent_tool_calls_per_minute: null,
@@ -101,14 +108,6 @@ const MINIMAL_CONFIG = {
   },
   agents: {
     defaults: { default_agent_id: '' },
-  },
-}
-
-const ALLOW_CONFIG = {
-  ...MINIMAL_CONFIG,
-  security: {
-    ...MINIMAL_CONFIG.security,
-    policy_mode: 'allow' as const,
   },
 }
 
@@ -187,6 +186,11 @@ beforeEach(() => {
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
   vi.mocked(fetchSkillTrust).mockResolvedValue(SKILL_TRUST_RESPONSE)
   vi.mocked(fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
+  vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+  // Default: a kernel sandbox IS enforcing, so the platform caveat renders
+  // muted, not as a caution — individual tests override this to exercise
+  // the no-sandbox caution path.
+  vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
 })
 
 // ── US-B1: Two-layer IA ───────────────────────────────────────────────────────
@@ -215,9 +219,31 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
       expect(screen.getByTestId('plain-toggles')).toBeInTheDocument()
     })
 
-    // "Must ask first" button for policyMode (Deny = safe), and "Shell command approval" label
-    expect(screen.getByText(/must ask first/i)).toBeInTheDocument()
-    expect(screen.getByText(/shell command approval/i)).toBeInTheDocument()
+    // Auto-approve is the plain-language, top-level tool-access control.
+    await waitFor(() => {
+      expect(screen.getByTestId('auto-approve-global-switch')).toBeInTheDocument()
+    })
+  })
+
+  it('does not render the retired Shell command approval or Enable deny patterns controls', async () => {
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plain-toggles')).toBeInTheDocument()
+    })
+
+    // Both wrote fields the backend never read (security.exec_approval,
+    // security.enable_deny_patterns) — deleted outright, not just hidden.
+    // Expand Advanced too, since "Enable deny patterns" used to live there.
+    const advancedTrigger = screen.getByTestId('advanced-disclosure-trigger')
+    fireEvent.click(advancedTrigger)
+    await waitFor(() => {
+      expect(document.body.textContent).toMatch(/SSRF|Landlock|seccomp/i)
+    })
+
+    expect(screen.queryByText(/shell command approval/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/enable deny patterns/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/enable deny patterns/i)).not.toBeInTheDocument()
   })
 
   it('expanding Advanced reveals jargon (Landlock / SSRF) that was hidden', async () => {
@@ -242,83 +268,265 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
   })
 })
 
-// ── US-B2: Risky controls ─────────────────────────────────────────────────────
+// ── ADR-092: global Auto-approve switch ───────────────────────────────────────
 
-describe('SecuritySection — US-B2 risky policy mode control', () => {
-  it('shows Recommended pill on "Must ask first" (safe = deny) option', async () => {
+describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
+  it('reflects the persisted auto_approve value from sandbox-config', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: true } as never)
     renderSection()
 
     await waitFor(() => {
-      expect(screen.getAllByTestId('recommended-pill').length).toBeGreaterThan(0)
-    })
-
-    // At least one Recommended pill should be near the policy mode control
-    const pills = screen.getAllByTestId('recommended-pill')
-    expect(pills.length).toBeGreaterThan(0)
-  })
-
-  it('standing badge shows when persisted policyMode is "allow" (risky)', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(ALLOW_CONFIG as never)
-
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('risky-standing-badge')).toBeInTheDocument()
-    })
-
-    expect(screen.getByTestId('risky-standing-badge')).toHaveTextContent(/lowers your protection/i)
-  })
-
-  it('no standing badge when persisted policyMode is "deny" (safe)', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('plain-toggles')).toBeInTheDocument()
-    })
-
-    // Give time for all queries to settle
-    await waitFor(() => {
-      expect(screen.queryByTestId('risky-standing-badge')).not.toBeInTheDocument()
-    }, { timeout: 2000 })
-  })
-
-  it('clicking risky option opens AlertDialog with safe button as default', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('risky-option-allow')).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByTestId('risky-option-allow'))
-
-    await waitFor(() => {
-      // The cancel / keep-safe button (default / safe action)
-      expect(screen.getByText(/keep deny/i)).toBeInTheDocument()
+      expect(screen.getByTestId('auto-approve-global-switch')).toHaveAttribute('aria-checked', 'true')
     })
   })
 
-  it('cancelling the dialog keeps the safe value and hides the badge', async () => {
+  it('defaults to off when auto_approve is false', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
     renderSection()
 
     await waitFor(() => {
-      expect(screen.getByTestId('risky-option-allow')).toBeInTheDocument()
+      expect(screen.getByTestId('auto-approve-global-switch')).toHaveAttribute('aria-checked', 'false')
     })
+  })
 
-    // Open the dialog
-    fireEvent.click(screen.getByTestId('risky-option-allow'))
+  it('toggling opens a confirmation, and confirming saves through the re-auth-gated endpoint', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    vi.mocked(updateSandboxConfig).mockResolvedValue({ auto_approve: true, saved: true } as never)
+    renderSection()
+    // useStepUp's mode (password vs. confirm) depends on the SEPARATE
+    // ['app-state'] query resolving — wait for it explicitly so the click
+    // below doesn't race ahead and open the wrong dialog.
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Turn Auto-approve on?')
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Turn Auto-approve on' }))
+
     await waitFor(() => {
-      expect(screen.getByText(/keep deny/i)).toBeInTheDocument()
+      expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ auto_approve: true })
     })
+  })
 
-    // Click "Keep Deny (safer)" — the cancel/safe button
-    fireEvent.click(screen.getByText(/keep deny/i))
+  it('cancelling the confirmation performs no save', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
 
-    // Dialog closes, badge never appears (policyMode stays 'deny')
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+
     await waitFor(() => {
-      expect(screen.queryByText(/keep deny/i)).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).toBeNull()
     })
-    // No standing badge because policyMode is still 'deny' (persisted)
-    expect(screen.queryByTestId('risky-standing-badge')).not.toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
+  })
+
+  it('shows an error state when the sandbox-config fetch fails', async () => {
+    vi.mocked(fetchSandboxConfig).mockRejectedValue(new Error('network error'))
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByText(/failed to load the auto-approve setting/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('auto-approve-global-switch')).not.toBeInTheDocument()
+  })
+
+  it('cancelling the confirmation shows no toast at all (re-auth cancel stays silent)', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).toBeNull()
+    })
+    expect(mockAddToast).not.toHaveBeenCalled()
+  })
+
+  // Founder feedback (2026-09-24): the old card put the full grouped list of
+  // 28 always-ask tools, the workspace path rule, an example and the
+  // Windows caveat into ONE long paragraph — "a huge blob of text, not well
+  // written". The redesign: one short summary sentence, always visible; the
+  // grouped ask-list collapsed by default behind "Always asks when set to
+  // Ask" (renamed from "Still asks every time" — UAT defect D-02, founder
+  // decision 2026-09-24: the old heading promised something false, since
+  // several of these tools are on Allow by default and never ask at all);
+  // a small muted platform caveat. Written against the copy, not the
+  // implementation, so it fails if the old paragraph comes back.
+  //
+  // Founder decision (2026-09-24, same day): Auto no longer needs the
+  // sandbox — the old "Needs the sandbox — not available on Windows" line
+  // (which implied Auto is switched OFF without one) is replaced by a
+  // caveat that Auto still works, just checks shell commands by text only.
+  //
+  // Founder correction (2026-09-24, later same day): the summary sentence's
+  // own "and the sandbox" clause is also gone — under the new design Auto
+  // runs with no sandbox at all, so claiming tools "stay inside ... the
+  // sandbox" is false whenever no sandbox is enforcing. The sentence now
+  // says only "they stay inside your workspace."
+  it('shows a short always-visible summary — not the old long paragraph, and the new no-sandbox caveat, not the old "not available on Windows" line', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+
+    await screen.findByTestId('auto-approve-global-switch')
+
+    expect(screen.queryByText(/currently applies to shell commands/i)).not.toBeInTheDocument()
+    // The old paragraph's exhaustive inline wording must be gone from the
+    // always-visible summary — it now lives in the collapsed list instead.
+    expect(screen.queryByText(/asking for a mounted folder; installing a skill/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/tools set to .ask. run without a prompt when it.s safe/i)).toBeInTheDocument()
+    expect(screen.getByText(/they stay inside your workspace\./i)).toBeInTheDocument()
+    // The old "and the sandbox" clause is gone — it claimed a guarantee
+    // that no longer holds once Auto works without an enforcing sandbox.
+    expect(screen.queryByText(/workspace and the sandbox/i)).not.toBeInTheDocument()
+    // The old "Needs the sandbox — not available on Windows" line is gone.
+    expect(screen.queryByText(/needs the sandbox/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/not available on windows/i)).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i),
+    ).toBeInTheDocument()
+    // The old "checked by reading the command text only" wording described
+    // stale behaviour (2026-09-24 shell-no-sandbox-gate rewording: shell
+    // commands with no kernel sandbox now ask first) and must never reappear.
+    expect(screen.queryByText(/checked by reading the command text only/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the no-sandbox caveat as a caution (warning-colored) when the server reports no enforcing kernel sandbox', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: false } as never)
+    renderSection()
+
+    await screen.findByTestId('auto-approve-global-switch')
+
+    const caveat = await screen.findByText(
+      /without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i,
+    )
+    await waitFor(() => {
+      expect(caveat.className).toContain('text-[var(--color-warning)]')
+    })
+    expect(caveat.className).not.toContain('text-[var(--color-muted)]')
+  })
+
+  it('shows the no-sandbox caveat muted (not a caution) when the server reports an enforcing kernel sandbox', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
+    renderSection()
+
+    const caveat = await screen.findByText(
+      /without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i,
+    )
+    await waitFor(() => {
+      expect(caveat.className).toContain('text-[var(--color-muted)]')
+    })
+    expect(caveat.className).not.toContain('text-[var(--color-warning)]')
+  })
+
+  it('the ask-list is collapsed by default and expands to show every group on click', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+
+    await screen.findByTestId('auto-approve-global-switch')
+
+    // Collapsed: the trigger row is visible, but none of the group labels are.
+    const trigger = await screen.findByTestId('auto-approve-ask-list-trigger')
+    // UAT defect D-02 (founder decision 2026-09-24): "Still asks every time"
+    // promised something false — several of these tools are on Allow by
+    // default and never ask. Renamed to name the real condition.
+    expect(trigger).toHaveTextContent(/always asks when set to ask/i)
+    expect(trigger).not.toHaveTextContent(/still asks every time/i)
+    expect(screen.queryByTestId('auto-approve-ask-list-content')).not.toBeInTheDocument()
+    expect(screen.queryByText(/sending email/i)).not.toBeInTheDocument()
+
+    fireEvent.click(trigger)
+
+    const content = await screen.findByTestId('auto-approve-ask-list-content')
+    // Every one of the eight founder-approved groups must appear once expanded.
+    expect(within(content).getByText('Sending email')).toBeInTheDocument()
+    expect(within(content).getByText('Deleting tasks, agents or workspaces')).toBeInTheDocument()
+    expect(
+      within(content).getByText('Installing skills, setting up an environment or publishing a web preview'),
+    ).toBeInTheDocument()
+    expect(
+      within(content).getByText('Changing or testing settings, providers, channels, agents or skills'),
+    ).toBeInTheDocument()
+    expect(within(content).getByText('Running diagnostics')).toBeInTheDocument()
+    expect(
+      within(content).getByText('Adding or removing connected (MCP) servers, and MCP tools not marked safe'),
+    ).toBeInTheDocument()
+    expect(within(content).getByText('Browser scripts and uploads')).toBeInTheDocument()
+    expect(within(content).getByText('Mounting a folder, or files outside your workspace')).toBeInTheDocument()
+  })
+
+  it('the turn-on confirmation dialog is short (2-3 sentences) and points at the card’s own collapsed list rather than restating it', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).not.toHaveTextContent(/currently applies to shell commands/i)
+    // The dialog must NOT restate the full 28-tool list inline — it points
+    // at the card's own disclosure instead.
+    expect(dialog).not.toHaveTextContent(/deleting a task, workspace, or agent/i)
+    expect(dialog).not.toHaveTextContent(/mounted folder/i)
+    // UAT defect D-02 (founder decision 2026-09-24): the dialog used to
+    // point at "Still asks every time", a heading that promised something
+    // false — several of these tools are on Allow by default and never
+    // ask. It now points at the renamed heading, and the old phrase must
+    // not survive anywhere in the dialog.
+    expect(dialog).toHaveTextContent(/always asks when set to ask/i)
+    expect(dialog).not.toHaveTextContent(/still asks every time/i)
+    // Founder correction (2026-09-24): the dialog's own summary clause
+    // must use the same wording as the card — "stay inside your
+    // workspace", with no "and the sandbox" (false once Auto runs with no
+    // sandbox enforcing).
+    expect(dialog).toHaveTextContent(/they stay inside your workspace\./i)
+    expect(dialog).not.toHaveTextContent(/workspace and the sandbox/i)
+    // The old "not available on Windows" wording is gone — replaced by the
+    // same no-sandbox caveat the card itself shows.
+    expect(dialog).not.toHaveTextContent(/needs the sandbox/i)
+    expect(dialog).not.toHaveTextContent(/not available on windows/i)
+    expect(dialog).toHaveTextContent(
+      /without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i,
+    )
+    expect(dialog).not.toHaveTextContent(/checked by reading the command text only/i)
+  })
+
+  it('a real save failure surfaces exactly one toast, from the mutation onError — the outer step-up catch never adds a second one', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new Error('gateway unreachable'))
+    renderSection()
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Turn Auto-approve on' }))
+
+    await waitFor(() => {
+      expect(mockAddToast).toHaveBeenCalledTimes(1)
+    })
+    expect(mockAddToast).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error' }),
+    )
   })
 })
 

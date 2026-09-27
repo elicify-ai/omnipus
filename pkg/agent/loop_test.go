@@ -2891,65 +2891,6 @@ func TestHandleReasoning(t *testing.T) {
 	})
 }
 
-func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &reasoningContentProvider{
-		response:         "final answer",
-		reasoningContent: "thinking trace",
-	}
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-
-	chManager, err := channels.NewManager(&config.Config{}, credentials.SecretBundle{}, msgBus, nil)
-	if err != nil {
-		t.Fatalf("Failed to create channel manager: %v", err)
-	}
-	chManager.RegisterChannel("telegram", &fakeChannel{id: "reason-chat"})
-	al.SetChannelManager(chManager)
-
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel: "telegram",
-		Sender: bus.SenderInfo{
-			CanonicalID: "user1",
-		},
-		ChatID:  "chat1",
-		Content: "hello",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "final answer" {
-		t.Fatalf("processMessage() response = %q, want %q", response, "final answer")
-	}
-
-	select {
-	case outbound := <-msgBus.OutboundChan():
-		if outbound.Channel != "telegram" {
-			t.Fatalf("reasoning channel = %q, want %q", outbound.Channel, "telegram")
-		}
-		if outbound.ChatID != "reason-chat" {
-			t.Fatalf("reasoning chatID = %q, want %q", outbound.ChatID, "reason-chat")
-		}
-		if outbound.Content != "thinking trace" {
-			t.Fatalf("reasoning content = %q, want %q", outbound.Content, "thinking trace")
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("expected reasoning content to be published to reasoning channel")
-	}
-}
-
 func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	heartbeatFile := filepath.Join(tmpDir, "tool-feedback.txt")

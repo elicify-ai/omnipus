@@ -569,20 +569,24 @@ func TestFix_CR4_F2_LiveStreamersClearedOnAbandonedPath(t *testing.T) {
 	streamer.SetTurnID("turn-cr4-abandoned")
 	require.NoError(t, streamer.Update(context.Background(), "narration before stop"))
 
-	handler.mu.Lock()
-	_, stillRegistered := handler.liveStreamers[meta.ID]
-	handler.mu.Unlock()
-	require.True(t, stillRegistered, "sanity: the streamer must be registered as sessionID's in-flight streamer")
+	// #823: the in-flight text now lives in the session hub's active-turn
+	// projection (the successor of liveStreamers), fed by the published
+	// tokens themselves.
+	hub := handler.hubs.lookup(meta.ID)
+	require.NotNil(t, hub)
+	hub.mu.Lock()
+	require.True(t, hub.proj.active(), "sanity: the in-flight text must be in the session's projection")
+	hub.mu.Unlock()
 
 	// Simulate turnState.finalizeStreamer's B4 abandoned-turn early return:
 	// it calls ONLY ReleaseStreamOwnership, never Finalize.
 	streamer.ReleaseStreamOwnership()
 
-	handler.mu.Lock()
-	_, stillThere := handler.liveStreamers[meta.ID]
-	handler.mu.Unlock()
+	hub.mu.Lock()
+	stillThere := hub.proj.active()
+	hub.mu.Unlock()
 	assert.False(t, stillThere,
-		"BUG REGRESSION: an abandoned turn's streamer must be unregistered from liveStreamers, "+
+		"BUG REGRESSION: an abandoned turn's text must leave the session's projection, "+
 			"or every later attach gets a phantom catch-up token with no done frame ever following it")
 
 	// End-to-end proof: a LATER connection attaching now must get NO

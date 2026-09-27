@@ -14,10 +14,15 @@
  *    shows a "restart to activate" note instead of "compiled out"
  *  - enabling with restart_required=true opens GatewayRestartModal
  *  - disabling (restart_required=false) never opens GatewayRestartModal
- *  - the active-state banner renders only when god-mode is on
+ *
+ * The former GodModeActiveBanner (and its describe block) is deleted along
+ * with the component (founder decision 2026-09-25) — its app-wide-indicator
+ * successor, the sidebar God Mode pill, is covered in
+ * src/components/layout/Sidebar.test.tsx; this file covers the Gateway
+ * switch only.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -45,8 +50,17 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
+// GodModeControl consumes ?focus=god-mode once and strips the param with a
+// replace navigation after focusing (review round 2, finding 1). useNavigate
+// is the only router API it uses, so a minimal double suffices.
+const mockNavigate = vi.hoisted(() => vi.fn())
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => mockNavigate,
+}))
+
 import * as api from '@/lib/api'
-import { GodModeControl, GodModeActiveBanner } from './GodModeControl'
+import { ApiError } from '@/lib/api-error'
+import { GodModeControl } from './GodModeControl'
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
@@ -56,14 +70,6 @@ function renderControl() {
   return render(
     <QueryClientProvider client={makeClient()}>
       <GodModeControl />
-    </QueryClientProvider>,
-  )
-}
-
-function renderBanner() {
-  return render(
-    <QueryClientProvider client={makeClient()}>
-      <GodModeActiveBanner />
     </QueryClientProvider>,
   )
 }
@@ -93,6 +99,16 @@ const STATE_COMPILED_OUT = { enabled: false, available: false, supported: false,
 const PLATFORM_APP_STATE = {
   onboarding_complete: true,
   identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+} as never
+
+// Same as PLATFORM_APP_STATE but with dev_mode_bypass:true — the state a
+// dev-mode-bypass install's ['app-state'] fetch actually reports. Used to
+// pin that the ['god-mode'] query is never even attempted once this is
+// known, rather than fired and then explained away by its 503.
+const BYPASS_APP_STATE = {
+  onboarding_complete: true,
+  identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+  dev_mode_bypass: true,
 } as never
 
 beforeEach(() => {
@@ -244,6 +260,42 @@ describe('GodModeControl', () => {
     expect(screen.getByTestId('god-mode-toggle')).toBeEnabled()
   })
 
+  // pkg/gateway/rest_god_mode.go:49 gates GET god-mode with RequireNotBypass,
+  // which returns 503 before the handler ever runs when dev_mode_bypass is
+  // on — an expected "not available in this mode" response, not a transport
+  // failure. Must show a distinct, quiet note, never the alarming
+  // "gateway may be offline" fetch-error copy (which used to fire on every
+  // dev-mode-bypass install, permanently).
+  it('shows a quiet "not available while bypass is active" note (not the offline error) on a 503', async () => {
+    vi.mocked(api.fetchGodMode).mockRejectedValue(
+      new ApiError(503, 'this action is disabled while dev_mode_bypass is active'),
+    )
+    renderControl()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('god-mode-bypass-unavailable-note')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('god-mode-fetch-error-note')).not.toBeInTheDocument()
+  })
+
+  // Regression for the always-503 GET /api/v1/gateway/god-mode console-error
+  // spam: this branch's fix (2026-09-24) is to never fire the doomed request
+  // at all once AppState.dev_mode_bypass is known true, rather than fire it
+  // and explain the 503 away afterward (the test above still covers that
+  // fallback path for the window before AppState resolves). Same note shown,
+  // zero network calls made.
+  it('never calls fetchGodMode when AppState.dev_mode_bypass is true, and still shows the bypass note', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(BYPASS_APP_STATE)
+    renderControl()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('god-mode-bypass-unavailable-note')).toBeInTheDocument()
+    })
+    expect(api.fetchGodMode).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('god-mode-fetch-error-note')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('god-mode-unavailable-note')).not.toBeInTheDocument()
+  })
+
   it('cancelling performs nothing', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_OFF)
     renderControl()
@@ -294,38 +346,83 @@ describe('GodModeControl', () => {
   })
 })
 
-describe('GodModeActiveBanner', () => {
-  it('renders the banner when god-mode is active', async () => {
+// ── focusOnMount (?focus=god-mode, founder decision 2026-09-25) ──────────────
+//
+// The sidebar God Mode pill and the app-shell corner dot navigate to
+// /settings?tab=gateway&focus=god-mode; GatewaySection forwards the flag and
+// this control must scroll itself into view and focus the switch, so the
+// click lands the operator ON the control rather than merely on the right
+// tab.
+describe('GodModeControl — focusOnMount (?focus=god-mode)', () => {
+  // jsdom does not implement Element.prototype.scrollIntoView — stub it so
+  // the effect's scroll call is observable instead of throwing.
+  const scrollIntoView = vi.fn()
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = scrollIntoView
+  })
+
+  function renderControlFocused() {
+    return render(
+      <QueryClientProvider client={makeClient()}>
+        <GodModeControl focusOnMount />
+      </QueryClientProvider>,
+    )
+  }
+
+  it('scrolls the control into view and focuses the switch once loading settles', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_ON)
-    renderBanner()
+
+    renderControlFocused()
+
+    const toggle = await screen.findByTestId('god-mode-toggle')
     await waitFor(() => {
-      expect(screen.getByTestId('god-mode-active-banner')).toBeInTheDocument()
+      expect(toggle).toHaveFocus()
     })
-    expect(screen.getByText(/God-mode is active/i)).toBeInTheDocument()
+    // The scroll targets the control card (the anchor the dot/pill name),
+    // centered in the settings scroll container.
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
+    expect(document.getElementById('god-mode-control')).toBe(toggle.closest('#god-mode-control'))
   })
 
-  it('renders nothing when god-mode is off', async () => {
-    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_OFF)
-    const { container } = renderBanner()
-    // Give the query a tick to settle.
-    await waitFor(() => {
-      expect(api.fetchGodMode).toHaveBeenCalled()
-    })
-    expect(screen.queryByTestId('god-mode-active-banner')).not.toBeInTheDocument()
-    expect(container.querySelector('[role="alert"]')).toBeNull()
+  it('does not scroll or steal focus when focusOnMount is absent', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_ON)
+
+    renderControl()
+
+    const toggle = await screen.findByTestId('god-mode-toggle')
+    await waitFor(() => expect(toggle).toBeEnabled())
+    expect(toggle).not.toHaveFocus()
+    expect(scrollIntoView).not.toHaveBeenCalled()
+    expect(mockNavigate).not.toHaveBeenCalled()
   })
 
-  // Regression: a fetch failure must NOT collapse to the same falsy state as
-  // "god-mode is genuinely off" — the banner must show an explicit
-  // status-unknown indicator instead of silently rendering nothing, since
-  // silence here would look exactly like "sandboxing is confirmed on".
-  it('shows a status-unknown banner (not nothing) when the fetch fails', async () => {
-    vi.mocked(api.fetchGodMode).mockRejectedValue(new Error('network error'))
-    renderBanner()
+  // Review round 2, finding 1: ?focus=god-mode is ONE-SHOT intent. Radix
+  // TabsContent unmounts inactive tabs, so a lingering ?focus re-runs the
+  // focus effect on every away-and-back to the Gateway tab and yanks focus
+  // to the switch unbidden. After the first focus lands, the param must be
+  // consumed — stripped from the URL with a REPLACE navigation (no history
+  // entry) while every other search key survives.
+  it('consumes ?focus=god-mode once: after focusing, strips the param via a replace navigation', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_ON)
+
+    renderControlFocused()
+
+    const toggle = await screen.findByTestId('god-mode-toggle')
     await waitFor(() => {
-      expect(screen.getByTestId('god-mode-status-unknown-banner')).toBeInTheDocument()
+      expect(toggle).toHaveFocus()
     })
-    expect(screen.getByText(/god-mode status unavailable/i)).toBeInTheDocument()
-    expect(screen.queryByTestId('god-mode-active-banner')).not.toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledTimes(1)
+    })
+    const call = mockNavigate.mock.calls[0][0]
+    expect(call.to).toBe('/settings')
+    expect(call.replace).toBe(true)
+    // The search updater drops `focus` and keeps every other key — the
+    // tab the pill selected must stay in the URL.
+    expect(
+      call.search({ tab: 'gateway', focus: 'god-mode', provider: 'x', model: 'y' }),
+    ).toEqual({ tab: 'gateway', focus: undefined, provider: 'x', model: 'y' })
   })
 })

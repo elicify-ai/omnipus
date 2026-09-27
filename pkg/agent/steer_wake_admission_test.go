@@ -227,6 +227,23 @@ func TestWake_WokenTurnIsCountedByTheConcurrencyGate(t *testing.T) {
 		t.Errorf("woken session state = %q, want queued", rec.State)
 	}
 
+	// Arm the registration seam BEFORE releasing the busy child. The promoted
+	// woken turn can start AND finish inside a single poll interval, so any
+	// sampling loop can miss it outright and then spin to its deadline against
+	// a promotion that already succeeded — the exact false failure seen on the
+	// slower ubuntu-24.04-arm runner. Capturing at registration cannot race.
+	promotedCh := make(chan *turnState, 1)
+	turnRegisteredTestHook = func(hookSessionID string, ts *turnState) {
+		if hookSessionID != wokenID {
+			return
+		}
+		select {
+		case promotedCh <- ts:
+		default:
+		}
+	}
+	t.Cleanup(func() { turnRegisteredTestHook = nil })
+
 	releaseBusy()
 	if ts := al.getActiveTurnState(busyID); ts != nil {
 		select {
@@ -235,7 +252,12 @@ func TestWake_WokenTurnIsCountedByTheConcurrencyGate(t *testing.T) {
 			t.Fatal("the busy child did not finish after its provider was released")
 		}
 	}
-	promoted := waitForActiveTurn(t, al, wokenID, 30*time.Second)
+	var promoted *turnState
+	select {
+	case promoted = <-promotedCh:
+	case <-time.After(30 * time.Second):
+		t.Fatal("no turn was ever registered for the woken session within 30s — the queue never moved")
+	}
 	select {
 	case <-promoted.Finished():
 	case <-time.After(30 * time.Second):

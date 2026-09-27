@@ -1,4 +1,6 @@
 # Omnipus internal documentation
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 Documentation for people who **build or modify** Omnipus: architecture audits,
 Architecture Decision Records, in-flight specs, forward-looking designs, the
@@ -61,9 +63,9 @@ Designs being worked out. Not shipping behaviour:
 - [Tool registry redesign](specs/tool-registry-redesign-spec.md) ([review](specs/tool-registry-redesign-spec-review.md))
 - [Env-awareness & memory](specs/env-awareness-and-memory-spec.md) ([review](specs/env-awareness-and-memory-spec-review.md))
 
-## Future designs (v0.3 "Rooms")
+## Future designs (the Workspaces concept)
 
-Forward-looking designs not in v0.1 or v0.2:
+Forward-looking designs outside the shipped scope:
 
 - [Sandbox topology](design/sandbox-redesign-2026-05.md)
 - [Memory (Dreamcatcher consolidation)](design/memory-redesign-2026-05.md)

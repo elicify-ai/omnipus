@@ -298,7 +298,7 @@ Boundary conditions:
 - The system must **not** passthrough raw unsupported formats (AVIF/HEIC/ICO) to the provider — Rev 3's D2 passthrough is **deleted**. These route to step 5 (offload) directly.
 - The system must **not** replace `TryMediaDowngrade` — it is extended (operator decision 4). The classifier is retained as outcome-labeller, not retired.
 - The system must **not** offer per-agent or per-workspace capability overrides — global seed only (operator decision 1).
-- The system must **not** perform model failover (switch to a vision candidate on rejection) — deferred to v0.3 (ADR non-goal).
+- The system must **not** perform model failover (switch to a vision candidate on rejection) — deferred (no release scheduled; ADR non-goal; the v0.3 label was retired 2026-09-25).
 - The system must **not** inject a `media://` ref into content for step-5 offload — a filesystem path is injected (grill M3 resolution).
 - The system must **not** use the "1568px / Anthropic" resize budget — that was an error; the budget is per-provider from the catalog, default ~7680px / 10 MB.
 

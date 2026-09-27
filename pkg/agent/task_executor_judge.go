@@ -16,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // supersedeTaskSession closes out a retry-attempt's own session when the
@@ -404,6 +405,8 @@ func (te *TaskExecutor) onTaskCompleteAfterUpwardDelivery(t *task.Task) {
 		logger.WarnCF("task_executor", "Could not advance blocked dependents",
 			map[string]any{"completed_task_id": t.ID, "error": err.Error()})
 	}
+	// D-08/FR-057: stamped at advanceBlockedTasks itself (see its own doc
+	// comment) — a plain context.Background() here carries nothing to stamp.
 	te.advanceBlockedTasks(context.Background(), t.ID)
 }
 
@@ -549,6 +552,12 @@ func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string 
 // function dispatch its now-unblocked dependents just because they satisfy
 // their BlockedBy set — ExecuteTask itself now refuses that dispatch.
 func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
+	// D-08/FR-057: an auto-advance dispatch is the orchestrator reacting to a
+	// dependency completing — never a person watching this specific new
+	// dispatch, regardless of how completedTaskID itself was started. Stamp
+	// unconditionally at this one chokepoint (advanceBlockedTasks' sole caller
+	// is onTaskComplete).
+	ctx = tools.WithAutoDenyAsk(ctx, true)
 	for _, taskID := range te.readyBlockedCandidates(completedTaskID) {
 		if err := te.ExecuteTask(ctx, taskID, nil); err != nil {
 			if !isRoutineAutoDispatchRefusal(err) {

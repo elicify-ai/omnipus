@@ -56,7 +56,7 @@ properties:
       - llm
     description: >
       What kind of work the task performs. Tier 2 ships **`llm` only** (run an
-      agent). The enum reserves room for v0.3 action types — `human` (approval
+      agent). The enum reserves room for future action types — `human` (approval
       gate), `tool` (run a tool directly), `notify` (send a notification), and
       `sub_workflow` (expand into a child workflow) — which will be added
       additively to this enum without a breaking change.

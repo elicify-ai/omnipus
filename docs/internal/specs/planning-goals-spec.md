@@ -2905,7 +2905,7 @@ New BDD (Part B feature "Task goal-loop"):
 - Judge → evidence ladder, fail-closed.
 - Coordinator → hybrid engine + owner-agent decision points.
 - DoD → strict on agent tool paths; soft on human/UI paths.
-- Judge identity → System Agents category (revived `system` type); **Judge only this epic** (Summarizer premise was false — `forceCompression` deleted; Memory System Agent lands with v0.3 dreaming/scheduled-retros).
+- Judge identity → System Agents category (revived `system` type); **Judge only this epic** (Summarizer premise was false — `forceCompression` deleted; Memory System Agent lands with the dreaming/scheduled-retros work (the v0.3 label was retired 2026-09-25)).
 - /loop → both modes (interval + self-paced), separate from /goal.
 - Budgets → **no money/token brakes**; counts + calendar, all configurable; graceful wind-down; clear affordances at every level.
 - Release placement → ships **in release v0.1.1**.

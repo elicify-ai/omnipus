@@ -74,8 +74,8 @@ const editable = (...names: string[]) => names.map((name) => ({ name, editable: 
 const COMMON_EDITABLE_FIELDS = editable(
   'name', 'description', 'color', 'icon', 'default', 'model', 'provider',
   'fallback_models', 'model_params', 'soul', 'memory_enabled', 'voice',
-  'max_tool_iterations', 'context_window_override', 'shell_policy', 'skills',
-  'tool_policy_changes', 'executor',
+  'max_tool_iterations', 'context_window_override', 'skills',
+  'tool_policy_changes', 'executor', 'auto_approve_disabled',
 )
 const BUILTIN_EDITABLE_FIELDS = COMMON_EDITABLE_FIELDS.map((field) =>
   ['name', 'description', 'color', 'icon', 'soul', 'executor'].includes(field.name)
@@ -935,10 +935,9 @@ describe('AgentProfile — provider-aware fallback editor', () => {
   // Item 1 reorg: the fallback editor now lives on Basics, directly below
   // the Model section, which is the DEFAULT-open tab/accordion. Desktop
   // Tabs and mobile Accordion both default to "basics" and are
-  // simultaneously mounted (established pattern in this file — see the
-  // locked-agent shell_policy persistence test's use of getAllBy*), so
-  // every query below uses the *All* variant and acts on the first
-  // (desktop) match for interactions.
+  // simultaneously mounted (established pattern in this file), so every
+  // query below uses the *All* variant and acts on the first (desktop)
+  // match for interactions.
   async function openFallbackEditor(agent: typeof mockCoreAgent = mockCoreAgent) {
     vi.mocked(fetchAgent).mockResolvedValue(agent)
     renderProfile(agent.id)
@@ -2502,7 +2501,6 @@ describe('AgentProfile — subagent_3p payload restriction', () => {
     // Forbidden fields must NOT be present
     expect(payload).not.toHaveProperty('tools_cfg')
     expect(payload).not.toHaveProperty('skills')
-    expect(payload).not.toHaveProperty('shell_policy')
     expect(payload).not.toHaveProperty('fallback_models')
     expect(payload).not.toHaveProperty('model_params')
     // agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
@@ -2948,9 +2946,8 @@ describe('AgentProfile — Max tool calls per turn visibility by agent kind (fie
 describe('AgentProfile — locked core agent identity fields: visible read-only (W2c)', () => {
   it('shows the description as a disabled, read-only textarea', async () => {
     // Desktop Tabs AND mobile Accordion both default to "basics" and are
-    // simultaneously mounted (established pattern in this file — see the
-    // locked core agent shell_policy persistence test's use of getAllBy*),
-    // so use the *All* query variant.
+    // simultaneously mounted (established pattern in this file), so use
+    // the *All* query variant.
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
     await screen.findByText('Mia')
@@ -3087,40 +3084,6 @@ describe('AgentProfile — Model input kind by agent kind (external = free text)
       expect(screen.queryAllByTestId('external-model-input').length).toBe(0)
     })
     expect(screen.getAllByLabelText(/Model selector/i).length).toBeGreaterThanOrEqual(1)
-  })
-})
-
-// Live-bug fix: the locked-agent strip-list in the useAutoSave save function
-// stripped shell_policy from the PUT payload, but the backend's locked
-// reject-set (pkg/gateway/rest.go ~2458) is only name/description/soul/
-// color/icon/skills — shell_policy was never rejected. The shell deny-
-// patterns editor rendered interactive for a locked core agent but every
-// edit was silently discarded before it reached the wire.
-describe('AgentProfile — locked core agent shell_policy persistence (live-bug fix)', () => {
-  it('SENDS shell_policy in the PUT payload for a locked core agent', async () => {
-    vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockLockedCoreAgent)
-    vi.mocked(updateAgent).mockReset().mockResolvedValue(mockLockedCoreAgent)
-    renderProfile('mia')
-    await screen.findByText('Mia')
-
-    // Item 3 reorg: Shell deny patterns moved from the default-open Basics
-    // tab into Advanced — switch there first.
-    switchTab('tab-advanced')
-
-    // Open the Shell deny patterns section (editable for locked core
-    // agents too) and add a pattern.
-    const shellToggles = await screen.findAllByText(/Shell deny patterns/i)
-    fireEvent.click(shellToggles[0])
-    const textareas = await screen.findAllByTestId('shell-deny-patterns-textarea')
-    fireEvent.change(textareas[0], { target: { value: 'rm -rf /' } })
-
-    await waitFor(() => {
-      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
-    }, { timeout: 5000 })
-
-    const payload = vi.mocked(updateAgent).mock.calls[0][1] as Record<string, unknown>
-    expect(payload).toHaveProperty('shell_policy')
-    expect(payload.shell_policy).toMatchObject({ custom_deny_patterns: ['rm -rf /'] })
   })
 })
 

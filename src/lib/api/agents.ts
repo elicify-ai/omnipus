@@ -23,11 +23,6 @@ import { requestConfiguration } from './configuration'
 
 // ── Agents ────────────────────────────────────────────────────────────────────
 
-export interface AgentShellPolicy { // not-wire-format: SPA-internal helper type — the shell_policy field on the generated Agent type is an inline anonymous object; this interface is never sent to or received from the gateway as a standalone value
-  enable_deny_patterns?: boolean
-  custom_deny_patterns?: string[]
-}
-
 // Agent — re-exported from generated openapi-types (contract-first #8).
 // The generated type is the source of truth; see contracts/components/schemas/Agent.yaml.
 

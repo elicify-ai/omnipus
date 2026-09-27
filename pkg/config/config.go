@@ -621,7 +621,7 @@ type AgentConfig struct {
 	FallbackModels FallbackModelSlice `json:"fallback_models,omitempty"`
 	// Voice is the per-agent persona voice identifier (e.g. TTS voice name).
 	// Distinct from the global VoiceConfig engine settings.
-	// Schema-pinned; not active until v0.2.0 TTS delivery.
+	// Schema-pinned; not yet active (TTS delivery, tracked #306).
 	Voice string `json:"voice,omitempty"`
 	// Color is the hex color code for this agent's avatar in the UI (e.g. "#22C55E").
 	Color string `json:"color,omitempty"`
@@ -665,10 +665,17 @@ type AgentConfig struct {
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
-	// ShellPolicy configures per-agent shell command deny patterns.
-	// When non-nil, its settings are merged with the global ShellDenyPatterns
-	// at enforcement time.
-	ShellPolicy *AgentShellPolicy `json:"shell_policy,omitempty"`
+	// AutoApproveDisabled is the per-agent tighten-only override for
+	// ADR-092 D1's Auto shell-permission mode (sandbox.AutoApprove is the
+	// global default). false (default) means this agent follows the global
+	// default; true forces this agent's shell calls into Ask (every
+	// command prompts) even when the global default is Auto. There is
+	// deliberately no way to set this false when the global default is
+	// already false/Auto-disabled-by-policy — server-side tighten-only
+	// enforcement (FR-003) rejects any write that would loosen a single
+	// agent past the global default, mirroring the existing per-agent
+	// bash tool-policy override.
+	AutoApproveDisabled bool `json:"auto_approve_disabled,omitempty"`
 	// CreatedAt is the timestamp this agent record was created. Set once and
 	// never modified thereafter. Added by ADR-054 D2 (docs/internal/architecture/
 	// ADR-054-entity-config-separation.md) — the per-entity store's List()
@@ -689,22 +696,6 @@ type AgentConfig struct {
 
 // AgentType classifies an agent for scope-based tool visibility filtering.
 type AgentType string
-
-// AgentShellPolicy configures per-agent shell command deny patterns for the
-// workspace.shell tool. It is stored on AgentConfig so
-// that the enforcement layer can merge per-agent patterns with the global
-// OmnipusSandboxConfig.ShellDenyPatterns list.
-type AgentShellPolicy struct {
-	// EnableDenyPatterns activates shell command deny-pattern checking for this
-	// agent. When false (default), neither custom nor global deny patterns are
-	// applied. Operators must explicitly opt in per agent or globally.
-	EnableDenyPatterns bool `json:"enable_deny_patterns,omitempty"`
-	// CustomDenyPatterns lists agent-specific shell command deny patterns
-	// (regular expressions). Merged with the global ShellDenyPatterns list when
-	// EnableDenyPatterns is true. Patterns that fail to compile are logged at
-	// Warn and skipped.
-	CustomDenyPatterns []string `json:"custom_deny_patterns,omitempty"`
-}
 
 // AgentToolsCfg holds per-agent overrides for builtin tool visibility and MCP server bindings.
 type AgentToolsCfg struct {
@@ -1641,14 +1632,6 @@ type CronToolsConfig struct {
 type ExecConfig struct {
 	ToolConfig `envPrefix:"OMNIPUS_TOOLS_EXEC_"`
 
-	// US-7: Interactive approval before exec commands.
-	// "ask" (default) prompts the user; "off" skips the prompt.
-	Approval string `json:"approval,omitempty" env:"OMNIPUS_TOOLS_EXEC_APPROVAL"`
-
-	// US-7/US-5: Glob patterns for binaries the exec tool is allowed to run.
-	// Non-empty list acts as an allowlist; all other commands are denied.
-	AllowedBinaries []string `json:"allowed_binaries,omitempty" env:"OMNIPUS_TOOLS_EXEC_ALLOWED_BINARIES"`
-
 	// US-14: Route exec child process HTTP traffic through the local SSRF proxy.
 	// When true (default), HTTP_PROXY and HTTPS_PROXY are set on child processes.
 	EnableProxy bool `json:"enable_proxy,omitempty" env:"OMNIPUS_TOOLS_EXEC_ENABLE_PROXY"`
@@ -2508,7 +2491,7 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if cfg.Channels == nil {
 		cfg.Channels = make(map[string]ChannelInstanceConfig)
 	}
-	// ADR-029 (v0.3): validate channel instance keys, effective types, and
+	// ADR-029: validate channel instance keys, effective types, and
 	// workspace binding completeness (half-bound instances are rejected).
 	// Run on the RAW map BEFORE normalizeChannelMap so malformed keys are
 	// caught before normalization silently discards them.
@@ -2682,7 +2665,7 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 
 func (c *Config) migrateChannelConfigs() {
 	// Discord: mention_only -> group_trigger.mention_only (preserved from the typed singleton era).
-	// The map may have zero, one, or (after v0.3) more discord instances. Walk the
+	// The map may have zero, one, or more discord instances. Walk the
 	// map and normalise any instance of type "discord" that has the legacy flag set
 	// without the group_trigger equivalent.
 	for id, inst := range c.Channels {

@@ -182,6 +182,22 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTranscriptSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID)
+	// Delegate-session-id carrier (ADR-053): the session's OWN durable id
+	// for a steered/delegated turn, sourced from
+	// processOptions.SteeredSessionID (steer_reconstruct.go::
+	// reconstructSteeredTurn sets it, gated on rec.SteeredBy != nil). The
+	// call is deliberately unconditional: tools.WithDelegateSessionID is a
+	// no-op on "" — every root, heartbeat, scheduled and task turn stays
+	// unstamped, and message_parent's structural refusal keeps firing for
+	// them.
+	// GUARD: that no-op is only safe because every production turn's base
+	// ctx is detached (Background-derived) before this turn's own context
+	// construction runs — a turn's base ctx must never already carry the
+	// delegate-session-id key from a DIFFERENT turn/session. WithDelegate
+	// SessionID no-ops on "", so an unstamped turn would otherwise silently
+	// INHERIT the base ctx's id — a wrong delegate-session-id, not an
+	// absent one, and nothing would error.
+	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithDelegateSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.SteeredSessionID)
 	// ADR-085 BROWSER-FR-021: stamp the ROOT chat session id (ADR-057
 	// routingSessionID, inherited verbatim through a whole delegation
 	// subtree) so pkg/tools/browser/tools.go::controlledResult can evaluate
@@ -715,6 +731,7 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 	}
 	rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.mu.RUnlock()
 	rp.rc.rx.rr.rq.ri.pendingMessages = append([]providers.Message(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.InitialSteeringMessages...)
+	rp.rc.rx.rr.rq.ri.pendingSteeringReceipts = append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.InitialSteeringCorrelationIDs...)
 	return agentLoopRunTurnConductorNext
 }
 
@@ -1169,12 +1186,14 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 	}
 
 	if ri.rf.rt.iteration > 1 {
-		if steerMsgs := ri.rf.rt.al.dequeueSteeringMessagesForScope(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringMessagesForScope(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
 			ri.pendingMessages = append(ri.pendingMessages, steerMsgs...)
+			ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}
 	} else if !ri.rf.rt.ts.opts.SkipInitialSteeringPoll {
-		if steerMsgs := ri.rf.rt.al.dequeueSteeringMessagesForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringMessagesForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
 			ri.pendingMessages = append(ri.pendingMessages, steerMsgs...)
+			ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}
 	}
 
@@ -1203,6 +1222,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 				content := ri.cfg.FilterSensitiveData(result.ForLLM)
 				msg := providers.Message{Role: "user", Content: fmt.Sprintf("[SubTurn Result] %s", content)}
 				ri.pendingMessages = append(ri.pendingMessages, msg)
+				ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, "") // not a steer; no receipt
 			}
 		default:
 			// No results available
@@ -1242,7 +1262,17 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 				TotalContentLen: totalContentLen,
 			},
 		)
+		// [Issue #870] THIS is the "applied" moment — the field means the
+		// steer was injected into a real round, never merely enqueued. A
+		// receipt is stamped and emitted here, once EventKindSteeringInjected
+		// itself has already fired, for every message in this batch that
+		// carries a correlation id (steer_frames.go::
+		// deliverSteeringReceiptsForInjection is a no-op for a plain,
+		// unsteered session — the child lifecycle lookup it performs finds
+		// no steering parent, so nothing is emitted).
+		ri.rf.rt.al.deliverSteeringReceiptsForInjection(ri.rf.rt.ts.sessionKey, ri.pendingSteeringReceipts)
 		ri.pendingMessages = nil
+		ri.pendingSteeringReceipts = nil
 	}
 
 	logger.DebugCF("agent", "LLM iteration",
@@ -1440,6 +1470,14 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 			rt.ts.stampStreamerProducerAgentID(streamer)
 			rt.ts.stampStreamerTurnID(streamer)
 			rt.ts.stampStreamerParentSpawnCallID(streamer)
+			// #823: mint (or, for an ADR-087 D6 auto-continue round, reuse)
+			// this round's message id BEFORE any token can flow — mirrors the
+			// three stamps immediately above. nextRoundMessageID must run
+			// before the stamp so the freshly-obtained streamer and this
+			// round's later appendIntermediateAssistantTranscript call (if
+			// this round ends in tool calls) agree on the SAME id.
+			rt.ts.nextRoundMessageID()
+			rt.ts.stampStreamerMessageID(streamer)
 			var lastChunk string
 			// Residual native tool-call markup must never reach the
 			// live view. This is not only a rendering concern: the

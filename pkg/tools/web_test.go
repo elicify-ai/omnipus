@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1784,5 +1786,119 @@ func TestWebTool_GLMSearch_Priority(t *testing.T) {
 	}
 	if _, ok := tool2.provider.(*GLMSearchProvider); !ok {
 		t.Errorf("Expected GLMSearchProvider when only GLM enabled, got %T", tool2.provider)
+	}
+}
+
+// TestNewWebSearchTool_EnabledButKeyless_WarnsRegardlessOfSelection pins the
+// Lane H hotfix: a keyed search provider that is enabled in config but has no
+// resolved key at tool construction must WARN naming the provider and the
+// configured credential ref NAME (never a key value), regardless of which
+// provider wins selection. Before the fix the only misconfiguration WARN sat
+// in the final fallback branch — unreachable while
+// tools.web.duckduckgo.enabled ships true — so a fully configured Tavily
+// silently degraded to DuckDuckGo for two months (zero occurrences of the
+// WARN in the founder's live log while search was dead).
+//
+// The WARN text is captured through logger.EnableFileLogging, which swaps the
+// package's zerolog file sink; the stale comment on
+// TestNewWebSearchTool_FallbackLog claims log capture is impossible — it no
+// longer is.
+func TestNewWebSearchTool_EnabledButKeyless_WarnsRegardlessOfSelection(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "search-warn.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+
+	// The founder's exact misconfiguration: tavily.enabled = true, the
+	// credential in the vault, duckduckgo.enabled = true (the shipped
+	// default) — yet the key never reached the process environment, so
+	// TavilyAPIKeys is empty at tool construction.
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		TavilyEnabled:     true,
+		TavilyAPIKeys:     nil,
+		TavilyAPIKeyRef:   "TAVILY_API_KEY",
+		DuckDuckGoEnabled: true,
+	})
+	logger.DisableFileLogging()
+
+	if err != nil {
+		t.Fatalf("NewWebSearchTool: %v", err)
+	}
+	if tool == nil {
+		t.Fatal("expected a tool, got nil")
+	}
+	// Selection must be UNCHANGED by the hotfix: DuckDuckGo still wins when
+	// Tavily is enabled but keyless — changing the selection order is
+	// explicitly another lane's feature work.
+	if _, ok := tool.provider.(*DuckDuckGoSearchProvider); !ok {
+		t.Errorf("selection changed by hotfix: provider = %T, want *DuckDuckGoSearchProvider", tool.provider)
+	}
+
+	data, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatalf("read captured log: %v", readErr)
+	}
+	logText := string(data)
+	if !strings.Contains(logText, "enabled but no resolved key") {
+		t.Errorf("expected the enabled-but-keyless WARN in the captured log, got:\n%s", logText)
+	}
+	if !strings.Contains(logText, "tavily") {
+		t.Errorf("WARN must name the affected provider (tavily), got:\n%s", logText)
+	}
+	if !strings.Contains(logText, "TAVILY_API_KEY") {
+		t.Errorf("WARN must name the configured credential ref (the NAME, never a key value), got:\n%s", logText)
+	}
+}
+
+// TestNewWebSearchTool_EnabledWithKey_NoKeylessWarn is the negative control
+// for the enabled-but-keyless WARN: when a keyed provider is enabled AND has
+// its key, selection picks it and NO misconfiguration WARN may appear. The
+// "nothing enabled" case must likewise stay WARN-free (the final fallback's
+// INFO is the expected message there — behaviour preserved by the hotfix).
+func TestNewWebSearchTool_EnabledWithKey_NoKeylessWarn(t *testing.T) {
+	// Phase 1: Tavily enabled WITH key → selected, no WARN.
+	logPath := filepath.Join(t.TempDir(), "search-ok.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		TavilyEnabled:   true,
+		TavilyAPIKeys:   []string{"test-key"},
+		TavilyAPIKeyRef: "TAVILY_API_KEY",
+	})
+	logger.DisableFileLogging()
+	if err != nil {
+		t.Fatalf("NewWebSearchTool: %v", err)
+	}
+	if _, ok := tool.provider.(*TavilySearchProvider); !ok {
+		t.Errorf("provider = %T, want *TavilySearchProvider (key present)", tool.provider)
+	}
+	data, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatalf("read captured log: %v", readErr)
+	}
+	if s := string(data); strings.Contains(s, "enabled but no resolved key") {
+		t.Errorf("WARN must NOT fire when the enabled provider has its key, got:\n%s", s)
+	}
+
+	// Phase 2: nothing enabled → fallback INFO stays (no keyless WARN).
+	logPath2 := filepath.Join(t.TempDir(), "search-none.log")
+	if enableErr := logger.EnableFileLogging(logPath2); enableErr != nil {
+		t.Fatalf("EnableFileLogging: %v", enableErr)
+	}
+	tool2, err := NewWebSearchTool(WebSearchToolOptions{})
+	logger.DisableFileLogging()
+	if err != nil {
+		t.Fatalf("NewWebSearchTool (empty options): %v", err)
+	}
+	if _, ok := tool2.provider.(*DuckDuckGoSearchProvider); !ok {
+		t.Errorf("empty options: provider = %T, want *DuckDuckGoSearchProvider", tool2.provider)
+	}
+	data2, readErr2 := os.ReadFile(logPath2)
+	if readErr2 != nil {
+		t.Fatalf("read captured log 2: %v", readErr2)
+	}
+	if s := string(data2); strings.Contains(s, "enabled but no resolved key") {
+		t.Errorf("WARN must NOT fire when nothing is enabled, got:\n%s", s)
 	}
 }

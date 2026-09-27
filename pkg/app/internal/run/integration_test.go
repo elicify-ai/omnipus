@@ -25,7 +25,7 @@
 //  - "realAuthServer": uses bcrypt token verification (same as Gateway.Users
 //    path in WSHandler.authenticateWS) so the auth code path is exercised.
 //  - REST approval harness: the approval mock mimics the real approvalRegistryV2
-//    behavior — approve resolves, deny resolves, POST after resolution returns 410.
+//    behavior — allow_once resolves, deny resolves, POST after resolution returns 410.
 //
 // ## Test coverage (spec TDD plan IDs):
 //
@@ -79,7 +79,7 @@ import (
 //     verification in WSHandler.authenticateWS), NOT simple string comparison.
 //   - Sends scripted frames after auth + message.
 //   - Handles POST /api/v1/tool-approvals/{id} with a real state machine
-//     (pending → deny|approve; 410 on second call — same as approvalRegistryV2).
+//     (pending → deny|allow_once; 410 on second call — same as approvalRegistryV2).
 //   - Records all approval POST calls for assertion.
 //
 // This more-faithful harness ensures that:
@@ -781,7 +781,8 @@ func TestRun_URLFlagRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestApprovalDecision_DefaultDenyAndYesAllow verifies the approval decision
-// mapping: deny without --yes, approve with --yes.
+// mapping: deny without --yes, allow_once with --yes (ADR-092 D4/FR-023 —
+// single-invocation approval, no session grant recorded, for a one-shot CLI run).
 // Traces to: cli-minimization-spec.md §TDD Plan #5, Dataset: approval decision
 func TestApprovalDecision_DefaultDenyAndYesAllow(t *testing.T) {
 	tests := []struct {
@@ -789,20 +790,20 @@ func TestApprovalDecision_DefaultDenyAndYesAllow(t *testing.T) {
 		wantAction generated.ToolApprovalActionRequestAction
 	}{
 		{false, generated.ToolApprovalActionRequestActionDeny},
-		{true, generated.ToolApprovalActionRequestActionApprove},
+		{true, generated.ToolApprovalActionRequestActionAllowOnce},
 	}
 	for _, tc := range tests {
 		action := generated.ToolApprovalActionRequestActionDeny
 		if tc.yes {
-			action = generated.ToolApprovalActionRequestActionApprove
+			action = generated.ToolApprovalActionRequestActionAllowOnce
 		}
 		assert.Equal(t, tc.wantAction, action,
 			"approval action for Yes=%v", tc.yes)
 	}
-	// Differentiation: deny and approve must be distinct.
+	// Differentiation: deny and allow_once must be distinct.
 	assert.NotEqual(t,
 		generated.ToolApprovalActionRequestActionDeny,
-		generated.ToolApprovalActionRequestActionApprove)
+		generated.ToolApprovalActionRequestActionAllowOnce)
 }
 
 // ---------------------------------------------------------------------------
@@ -842,7 +843,7 @@ func TestRealAuthServer_410OnSecondPost(t *testing.T) {
 	status1 := do("deny")
 	assert.Equal(t, http.StatusOK, status1, "first POST must return 200")
 
-	status2 := do("approve")
+	status2 := do("allow_once")
 	assert.Equal(t, http.StatusGone, status2, "second POST must return 410 Gone (FR-018)")
 }
 

@@ -1,5 +1,7 @@
 # ADR-089 — Rename "vault" to "Knowledge Base", in three staged phases
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** Accepted (founder-ratified, 2026-09-07). The naming rules and the three carve-outs are decided. Two sub-questions are marked OPEN in §7 and do not block the shape.
 - **Deciders:** Daniel Piatkowski (founder, ratifying decision); architect (staging, migration, verification)
 - **Date:** 2026-09-07
@@ -183,8 +185,9 @@ makes that affordable.
   Dropbox. Concretely: an operator whose knowledge base is a git repository would find an
   unexplained rename in their next `git status`, propagated to every device, performed by a
   program they did not ask to do it. The move is **offered**, never performed silently.
-- **The fallback expires.** It is deleted in the release **after** the one that ships phase 2 —
-  that is, at **v0.2**. Carrying it past v0.2 requires a new ADR. This is not tidiness: a
+- **The fallback expires.** It is deleted in the release **after** the one that ships phase 2
+  (the v0.2 deadline label was retired 2026-09-25 — the deletion remains owed and is
+  unscheduled; carrying it further requires a new ADR). This is not tidiness: a
   fallback with no expiry means both names are correct forever, which restores exactly the
   ambiguity the rename removes.
 - **The REST path and the enum value get no alias.** The SPA is embedded in the same binary and
@@ -274,7 +277,8 @@ sessions. At most one narrowly-scoped local test
 
 ### 5.2 Costs and new obligations
 
-- A dual-read fallback exists in the detection path until v0.2, with a deletion date that
+- A dual-read fallback exists in the detection path (the deletion remains owed; the v0.2
+  deadline label was retired 2026-09-25, so no scheduled date exists) that
   someone must actually honour.
 - Operators keep a directory named `.omnipus-vault/` until they choose to move it. The product
   and one operator's disk disagree, visibly, for as long as they decline.

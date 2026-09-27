@@ -59,6 +59,20 @@ export interface GatewayProcessOptions {
    * one, so a permissive sandbox is safe and keeps the boot-sweep proof
    * focused on lifecycle reconciliation rather than sandbox mechanics). */
   extraArgs?: string[];
+  /**
+   * Extra environment variables for the spawned process — e.g. #823
+   * scenario h's `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS` (read once at
+   * gateway start, `pkg/gateway/ws_session_hub.go`'s
+   * `streamTokenDelayEnvOverrideVar`), which pauses the web streamer that
+   * long after each published token so a kill reliably lands mid-answer
+   * instead of racing a fast model to completion. Stored on the instance
+   * (below) so `restart()` — which re-spawns via the SAME `spawnProcess()`
+   * this env is read in — keeps it automatically; never needs to be passed
+   * again. Test-only knobs like this exist specifically so an isolated
+   * `GatewayProcess` can opt in without touching the shared gateway any
+   * other scenario in a spec file uses.
+   */
+  env?: Record<string, string>;
 }
 
 /**
@@ -75,13 +89,14 @@ export class GatewayProcess {
 
   private readonly binary: string;
   private readonly extraArgs: string[];
+  private readonly extraEnv: Record<string, string>;
   private readonly model: string;
   private proc: ChildProcess | null = null;
   private ctx: APIRequestContext | null = null;
   private csrfToken = '';
 
   private constructor(
-    opts: { binary: string; adminUsername: string; adminPassword: string; model: string; extraArgs: string[] },
+    opts: { binary: string; adminUsername: string; adminPassword: string; model: string; extraArgs: string[]; extraEnv: Record<string, string> },
     homeDir: string,
     port: number,
   ) {
@@ -90,6 +105,7 @@ export class GatewayProcess {
     this.adminPassword = opts.adminPassword;
     this.model = opts.model;
     this.extraArgs = opts.extraArgs;
+    this.extraEnv = opts.extraEnv;
     this.homeDir = homeDir;
     this.port = port;
     this.baseURL = `http://localhost:${port}`;
@@ -121,6 +137,7 @@ export class GatewayProcess {
         adminPassword: opts.adminPassword ?? 'admin1234',
         model: opts.model ?? DEFAULT_MODEL,
         extraArgs: opts.extraArgs ?? ['--sandbox=off'],
+        extraEnv: opts.env ?? {},
       },
       homeDir,
       port,
@@ -143,6 +160,7 @@ export class GatewayProcess {
           ...process.env,
           OMNIPUS_HOME: this.homeDir,
           OMNIPUS_BEARER_TOKEN: '',
+          ...this.extraEnv,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -299,23 +317,48 @@ export class GatewayProcess {
    * master.key + credentials.json per ADR-004, and every task/plan/session
    * record the crashed process left on disk).
    *
-   * CSRF/cookie re-mint (why a fresh login is MANDATORY here, not optional):
-   * `omnipus-session` and the CSRF cookie are minted from in-process secrets
-   * (pkg/gateway/middleware/session_cookie.go, csrf.go) — a fresh process
-   * boot mints FRESH secrets, so any cookie value captured before kill9() is
-   * dead on arrival against the restarted process even though the underlying
-   * user account persisted in the same config.json. There is no "carry the
-   * old cookie forward" shortcut available; the only correct move — and the
-   * one a real client reconnecting after a server restart would also have to
-   * make — is a brand new POST /api/v1/auth/login against the new process.
-   * login() disposes the stale APIRequestContext and captures a fresh
-   * session+CSRF pair before this method returns, so every apiFetch() call
-   * made after restart() resolves is already correctly authenticated.
+   * CORRECTION (found via #823 scenario h, real-browser run): an earlier
+   * version of this doc comment claimed "a fresh process boot mints FRESH
+   * secrets, so any cookie value captured before kill9() is dead on arrival
+   * against the restarted process". That is WRONG — checked against
+   * `pkg/gateway/middleware/session_cookie.go::ResolveUserFromCookie`, the
+   * `omnipus-session` cookie is validated by bcrypt-comparing its plaintext
+   * against `UserConfig.SessionTokenHash`, a field PERSISTED in config.json
+   * — nothing about it is re-derived from a per-process secret, so a cookie
+   * minted before kill9() is still valid against the restarted process,
+   * UNCHANGED, as long as nothing else overwrites that hash in the
+   * meantime. The REAL reason `relogin` defaults to `true` (below) is
+   * simpler and already documented elsewhere in this codebase
+   * (`src/lib/authLogout.ts`'s own comment on the 'elsewhere' reason): the
+   * session-token slot is SINGLE, one hash per user, overwritten on every
+   * login — so `login()` calling `POST /api/v1/auth/login` for `admin` a
+   * SECOND time (e.g. from a completely different browser context/page that
+   * logged in as `admin` before kill9()) silently invalidates that OTHER
+   * session, which is exactly the "You've been signed out — this session
+   * ended, possibly because you signed in elsewhere" banner a real browser
+   * shows (confirmed: this is what scenario h originally hit, tracing back
+   * to this method's own internal re-login racing the test's own page
+   * login for the SAME `admin` account).
+   *
+   * `relogin` (default `true`, matching every existing caller's behavior):
+   * pass `false` when the caller does NOT need `apiFetch()` to work after
+   * this call resolves and instead wants to observe an EXISTING session
+   * (typically a Playwright `page` that logged in as this SAME admin user
+   * via the UI, before kill9()) reconnect against the restarted process on
+   * its own — the whole point of proving a real client survives a gateway
+   * restart. With `relogin: false`, this method only re-spawns the process
+   * and waits for health; `this.ctx`/`this.csrfToken` are left exactly as
+   * they were (stale, and `apiFetch()` will throw the "not authenticated"
+   * error below if called — call `login()` explicitly first if a caller
+   * genuinely needs both an external page's session AND its own apiFetch
+   * access after a restart).
    */
-  async restart(): Promise<void> {
+  async restart(opts: { relogin?: boolean } = {}): Promise<void> {
     await this.spawnProcess();
     await waitForHealth(this.baseURL, 15_000, this.proc ?? undefined);
-    await this.login();
+    if (opts.relogin ?? true) {
+      await this.login();
+    }
   }
 
   /** Graceful shutdown (SIGTERM) + best-effort OMNIPUS_HOME cleanup. */

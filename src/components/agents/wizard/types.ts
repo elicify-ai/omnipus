@@ -31,10 +31,12 @@ export interface StepProps {
    */
   useDefaultProvider?: () => string | undefined
   /**
-   * Connected providers (filtered to status === 'connected' by the
-   * parent). The model picker on Step 1 and the FallbackEditor on Step 3
-   * both consume this. The wizard does NOT call `useQuery` itself so the
-   * step components stay query-client-free and unit-testable.
+   * Usable providers (filtered by providerStatus.isProviderUsable —
+   * connected OR signed_in — by the parent; a subscription provider is
+   * signed_in, never connected, and its models must list too). The model
+   * picker on Step 1 and the FallbackEditor on Step 3 both consume this.
+   * The wizard does NOT call `useQuery` itself so the step components stay
+   * query-client-free and unit-testable.
    */
   connectedProviders?: ReadonlyArray<import('@/lib/api/generated/openapi-types').Provider>
   /** Registry tools for the ToolPolicyEditor. */
@@ -81,11 +83,6 @@ export interface AdvancedFields {
   model_params?: {
     temperature?: number
     max_tokens?: number
-  }
-  // Shell hardening (Main + Subagent only).
-  shell_policy?: {
-    enable_deny_patterns?: boolean
-    custom_deny_patterns?: string[]
   }
   rate_limits?: {
     use_global_defaults?: boolean

@@ -51,7 +51,7 @@ func TestEgressWildcard_PrevailingConvention(t *testing.T) {
 				t.Fatalf("compileEgressAllowList: %v", err)
 			}
 			p := &EgressProxy{patterns: patterns, allowList: tc.allowList}
-			got := p.hostAllowed(tc.host)
+			got := p.hostAllowed(tc.host, "")
 			if got != tc.want {
 				t.Errorf("hostAllowed(%q) with allowList=%v = %v; want %v",
 					tc.host, tc.allowList, got, tc.want)
@@ -241,7 +241,7 @@ func TestEgressProxy_EmptyAllowListDeniesAll(t *testing.T) {
 			_ = closeErr
 		}
 	}()
-	if p.hostAllowed("registry.npmjs.org") {
+	if p.hostAllowed("registry.npmjs.org", "") {
 		t.Errorf("empty allow-list permitted registry.npmjs.org; should deny")
 	}
 }

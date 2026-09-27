@@ -137,14 +137,19 @@ func TestToAskUserCard_TerminalCarriesAnswers(t *testing.T) {
 }
 
 // broadcastAskUserCard fans out via the shared broadcastRaw helper: every
-// connected client receives the ask_user_question frame; a client with a full
-// send buffer drops it (counted, never blocking) while the others still
-// receive theirs — the exact behavior of the pre-extraction inline loop.
+// connected client receives the ask_user_question frame through its own
+// ordered queue. #823 (founder decision Q5): a client whose send window is
+// full no longer loses the frame — it waits in that client's queue — and the
+// only "drop" left is a connection that is already closed (it re-hydrates
+// from session_state's pending_asks on reconnect), which is still reported
+// as a WARN with the aggregate counts.
 func TestBroadcastAskUserCard_FanOutAndDropCounter(t *testing.T) {
 	logBuf := captureSlogJSON(t)
 	wcOK := &wsConn{sendCh: make(chan []byte, 4)}
-	wcFull := &wsConn{sendCh: make(chan []byte)} // unbuffered, nobody reading → drop
-	h := &WSHandler{sessions: map[string]*wsConn{"ok": wcOK, "full": wcFull}}
+	wcFull := &wsConn{sendCh: make(chan []byte)} // unbuffered, nobody reading → queued, not dropped
+	wcClosed := &wsConn{sendCh: make(chan []byte, 4), doneCh: make(chan struct{})}
+	wcClosed.close()
+	h := &WSHandler{sessions: map[string]*wsConn{"ok": wcOK, "full": wcFull, "closed": wcClosed}}
 
 	h.broadcastAskUserCard(toAskUserCard(askSetFixture(), 30*time.Minute))
 
@@ -159,15 +164,15 @@ func TestBroadcastAskUserCard_FanOutAndDropCounter(t *testing.T) {
 	default:
 		t.Fatal("connected client with buffer room never received the frame")
 	}
-	assert.Equal(t, int32(1), wcFull.droppedFrames.Load(),
-		"full-buffer client must count exactly one dropped frame")
-	assert.Equal(t, int32(0), wcOK.droppedFrames.Load())
+	queued, _ := wcFull.queuedFrames()
+	assert.Equal(t, 1, queued, "a full-window client keeps the frame queued — never dropped")
+	assert.Empty(t, wcClosed.sendCh, "a closed client gets nothing")
 
 	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user_question broadcast")
-	assert.Equal(t, "WARN", record["level"], "a dropped fan-out is genuine production-visible trouble")
+	assert.Equal(t, "WARN", record["level"], "a fan-out that missed a connection is genuine production-visible trouble")
 	assert.Equal(t, "ask_1", record["card_id"])
-	assert.Equal(t, float64(2), record["fanout_count"])
-	assert.Equal(t, float64(1), record["enqueued_count"])
+	assert.Equal(t, float64(3), record["fanout_count"])
+	assert.Equal(t, float64(2), record["enqueued_count"])
 	assert.Equal(t, float64(1), record["drop_count"])
 }
 

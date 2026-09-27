@@ -287,7 +287,7 @@ func TestREST_ApproveAuth_Unauthenticated401(t *testing.T) {
 	// withAuth reads OMNIPUS_BEARER_TOKEN from the environment at request time.
 	handler := api.withAuth(api.HandleToolApprovals)
 
-	body := bytes.NewBufferString(`{"action":"approve"}`)
+	body := bytes.NewBufferString(`{"action":"allow_once"}`)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tool-approvals/some-id", body)
 	// No Authorization header — withAuth must reject.
 	w := httptest.NewRecorder()
@@ -309,7 +309,7 @@ func TestREST_ApproveDenyCancel_StateTransitions(t *testing.T) {
 		action         string
 		expectedReason string
 	}{
-		{"approve", "approved"},
+		{"allow_once", "approved"},
 		{"deny", "user"},
 		{"cancel", "cancel"},
 	}
@@ -359,7 +359,7 @@ func TestREST_ApproveDenyCancel_StateTransitions(t *testing.T) {
 // TestREST_LateApprove_Returns410 verifies that acting on an already-resolved approval
 // returns HTTP 410 Gone (FR-018).
 // BDD: Given a pending approval that has already been approved,
-// When a second POST /api/v1/tool-approvals/{id} with action="approve" is sent,
+// When a second POST /api/v1/tool-approvals/{id} with action="allow_once" is sent,
 // Then 410 Gone.
 // Traces to: tool-registry-redesign-spec.md FR-018
 func TestREST_LateApprove_Returns410(t *testing.T) {
@@ -376,7 +376,7 @@ func TestREST_LateApprove_Returns410(t *testing.T) {
 	go func() { <-entry.resultCh }()
 
 	// First action — must succeed.
-	w1 := postToolApproval(t, api, entry.ApprovalID, "approve")
+	w1 := postToolApproval(t, api, entry.ApprovalID, "allow_once")
 	require.Equal(t, http.StatusOK, w1.Code, "first approve must return 200: %s", w1.Body)
 
 	// Second action on the same (now terminal) approval — must return 410.
@@ -437,7 +437,7 @@ func TestApprovalRegistry_SaturationDefault64(t *testing.T) {
 	// Cleanup: drain all 64 pending entries so timers don't fire after test.
 	for _, e := range entries {
 		go func(e *approvalEntry) {
-			reg.resolve(e.ApprovalID, ApprovalActionCancel)
+			reg.resolve(e.ApprovalID, ApprovalActionCancel, false)
 			<-e.resultCh
 		}(e)
 	}
@@ -473,7 +473,7 @@ func TestApprovalRegistry_BatchShortCircuit_MixedPolicy(t *testing.T) {
 
 	// Deny the first (user action).
 	go func() { <-e1.resultCh }()
-	ok, gone := reg.resolve(e1.ApprovalID, ApprovalActionDeny)
+	ok, gone := reg.resolve(e1.ApprovalID, ApprovalActionDeny, false)
 	require.True(t, ok, "deny e1 must succeed")
 	require.False(t, gone)
 
@@ -532,7 +532,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 		e, accepted := reg.requestApproval("tc-ap", "read_file", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 		go func() { <-e.resultCh }()
-		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionApprove)
+		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionApprove, false)
 		require.True(t, ok)
 		require.False(t, gone)
 		require.Equal(t, ApprovalStateApproved, reg.get(e.ApprovalID).state)
@@ -543,7 +543,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 		e, accepted := reg.requestApproval("tc-du", "read_file", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 		go func() { <-e.resultCh }()
-		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny)
+		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny, false)
 		require.True(t, ok)
 		require.False(t, gone)
 		require.Equal(t, ApprovalStateDeniedUser, reg.get(e.ApprovalID).state)
@@ -554,7 +554,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 		e, accepted := reg.requestApproval("tc-dc", "exec", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 		go func() { <-e.resultCh }()
-		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionCancel)
+		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionCancel, false)
 		require.True(t, ok)
 		require.False(t, gone)
 		require.Equal(t, ApprovalStateDeniedCancel, reg.get(e.ApprovalID).state)
@@ -619,7 +619,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 			t.Fatal("saturated entry must have pre-delivered outcome")
 		}
 		// Cleanup.
-		go func() { reg.resolve(e1.ApprovalID, ApprovalActionCancel); <-e1.resultCh }()
+		go func() { reg.resolve(e1.ApprovalID, ApprovalActionCancel, false); <-e1.resultCh }()
 	})
 
 	t.Run("pending→denied_batch_short_circuit", func(t *testing.T) {
@@ -647,11 +647,11 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 
 		// Approve it to put it in a terminal state.
 		go func() { <-e.resultCh }()
-		ok, _ := reg.resolve(e.ApprovalID, ApprovalActionApprove)
+		ok, _ := reg.resolve(e.ApprovalID, ApprovalActionApprove, false)
 		require.True(t, ok)
 
 		// Any subsequent resolve must return gone=true (HTTP 410 semantics).
-		_, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny)
+		_, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny, false)
 		assert.True(t, gone, "resolve on terminal entry must return gone=true (HTTP 410 semantics)")
 	})
 }
@@ -739,7 +739,7 @@ func TestWS_SessionState_SeesAllPendingApprovals(t *testing.T) {
 	)
 	require.True(t, accepted)
 	t.Cleanup(func() {
-		go func() { reg.resolve(pendingEntry.ApprovalID, ApprovalActionCancel) }()
+		go func() { reg.resolve(pendingEntry.ApprovalID, ApprovalActionCancel, false) }()
 	})
 
 	handler, _, _ := newTestWSHandler(t)
@@ -794,7 +794,7 @@ func TestWS_ToolApprovalRequired_ExpiresInMs(t *testing.T) {
 	)
 	require.True(t, accepted)
 	t.Cleanup(func() {
-		go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel) }()
+		go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel, false) }()
 	})
 
 	handler, _, _ := newTestWSHandler(t)
@@ -864,7 +864,7 @@ func TestWS_ToolApprovalRequired_NilArgsBecomesEmptyObject(t *testing.T) {
 	)
 	require.True(t, accepted)
 	t.Cleanup(func() {
-		go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel) }()
+		go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel, false) }()
 	})
 
 	handler, _, _ := newTestWSHandler(t)
@@ -972,7 +972,7 @@ func TestREST_HandleToolApprovals_UnknownAction(t *testing.T) {
 		"agent-u", "sess-u", "turn-u",
 	)
 	require.True(t, accepted)
-	t.Cleanup(func() { go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel) }() })
+	t.Cleanup(func() { go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel, false) }() })
 
 	body := bytes.NewBufferString(`{"action":"teleport"}`)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tool-approvals/"+entry.ApprovalID, body)
@@ -993,7 +993,7 @@ func TestREST_HandleToolApprovals_NilRegistry(t *testing.T) {
 
 	// We need a valid UUID-like ID to pass validateEntityID.
 	validID := "12345678-1234-4234-8234-123456789abc"
-	body := bytes.NewBufferString(`{"action":"approve"}`)
+	body := bytes.NewBufferString(`{"action":"allow_once"}`)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tool-approvals/"+validID, body)
 	r = withAdminRole(r)
 	r.URL.Path = "/api/v1/tool-approvals/" + validID
@@ -1011,7 +1011,7 @@ func TestREST_HandleToolApprovals_NotFound404(t *testing.T) {
 	api, _ := newTestRestAPIWithApprovalReg(t)
 
 	unknownID := "00000000-0000-4000-8000-000000000000"
-	body := bytes.NewBufferString(`{"action":"approve"}`)
+	body := bytes.NewBufferString(`{"action":"allow_once"}`)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tool-approvals/"+unknownID, body)
 	r = withAdminRole(r)
 	r.URL.Path = "/api/v1/tool-approvals/" + unknownID
@@ -1031,20 +1031,16 @@ func TestWS_BroadcastToolApprovalRequired_NilEntry(t *testing.T) {
 	handler.broadcastToolApprovalRequired(nil)
 }
 
-// --- REST: POST /api/v1/tool-approvals/{id} with action:"always" (ADR-036 §3.4) ---
+// --- REST: POST /api/v1/tool-approvals/{id} with action:"allow" (ADR-036 §3.4, ADR-092 D4) ---
 
-// TestApproveTool_ActionAlways_RecordsGrantAndApproves proves the generic REST
-// approval path fully supports the "always" action: a POST with
-// {"action":"always"} BOTH (a) approves the pending tool call — an identical
-// terminal transition to "approve", so the blocked loop goroutine proceeds —
-// AND (b) records a session-scoped "Always Allow" grant for the approval's
-// (session, agent, tool), queryable via ApprovalGrantStore.IsAllowed afterward.
-//
-// This restores, on the generic path, the grant that was previously reachable
-// only via the retired exec_approval_response{decision:"always"} WS frame
-// (ws_approval.go) — the mechanism agent-delegation-spec.md's FR-D8
-// grant-inheritance depends on.
-func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
+// TestApproveTool_ActionAllow_RecordsGrantAndApproves proves the generic REST
+// approval path's "allow" action (ADR-092 D4's rename of "always") BOTH (a)
+// approves the pending tool call — the same terminal transition as
+// "allow_once", so the blocked loop goroutine proceeds — AND (b) records a
+// session-scoped grant for the approval's (session, agent, tool), queryable
+// via ApprovalGrantStore.IsAllowed afterward. agent-delegation-spec.md's
+// FR-D8 grant inheritance depends on this grant.
+func TestApproveTool_ActionAllow_RecordsGrantAndApproves(t *testing.T) {
 	api, reg := newTestRestAPIWithApprovalReg(t)
 
 	const (
@@ -1065,8 +1061,8 @@ func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
 	)
 	require.True(t, accepted)
 
-	// Act: resolve via the generic REST endpoint with action:"always".
-	w := postToolApproval(t, api, entry.ApprovalID, "always")
+	// Act: resolve via the generic REST endpoint with action:"allow".
+	w := postToolApproval(t, api, entry.ApprovalID, "allow")
 
 	// (a1) HTTP 200 with the echoed action and ok status.
 	require.Equal(t, http.StatusOK, w.Code, "always must be accepted with 200")
@@ -1078,7 +1074,7 @@ func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, entry.ApprovalID, resp.ApprovalID)
-	assert.Equal(t, "always", resp.Action, "response must echo the always action")
+	assert.Equal(t, "allow", resp.Action, "response must echo the allow action")
 	assert.Equal(t, "ok", resp.Status)
 	require.NotNil(t, resp.GrantRecorded, "always must report whether the grant stuck")
 	assert.True(t, *resp.GrantRecorded, "a complete identity must record the grant")
@@ -1117,7 +1113,7 @@ func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
 // session identity. requestApproval still accepts an empty session id
 // (it increments missingActingSessionID) — that is the production shape
 // of a grant that cannot be stored.
-func TestApproveTool_ActionAlways_GrantNotRecordedWhenSessionMissing(t *testing.T) {
+func TestApproveTool_ActionAllow_GrantNotRecordedWhenSessionMissing(t *testing.T) {
 	api, reg := newTestRestAPIWithApprovalReg(t)
 	grants := api.agentLoop.ApprovalGrants()
 	require.NotNil(t, grants)
@@ -1128,7 +1124,7 @@ func TestApproveTool_ActionAlways_GrantNotRecordedWhenSessionMissing(t *testing.
 	)
 	require.True(t, accepted)
 
-	w := postToolApproval(t, api, entry.ApprovalID, "always")
+	w := postToolApproval(t, api, entry.ApprovalID, "allow")
 	require.Equal(t, http.StatusOK, w.Code, "the call itself is still approved")
 
 	var resp struct {
@@ -1137,7 +1133,7 @@ func TestApproveTool_ActionAlways_GrantNotRecordedWhenSessionMissing(t *testing.
 		GrantRecorded *bool  `json:"grant_recorded"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "always", resp.Action)
+	assert.Equal(t, "allow", resp.Action)
 	assert.Equal(t, "ok", resp.Status)
 	require.NotNil(t, resp.GrantRecorded, "always must report the grant outcome")
 	assert.False(t, *resp.GrantRecorded, "an empty session id cannot store a standing grant")

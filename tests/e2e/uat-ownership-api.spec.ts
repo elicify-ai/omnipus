@@ -201,6 +201,59 @@ function isMemoryRefusal(message: string | null): boolean {
 }
 
 /**
+ * Live navigate is admitted on the 2s interactive-input budget
+ * (`interactiveInputTimeout` in pkg/tools/browser/live_input_context.go), not
+ * the 30s page-load budget. Page.navigate's answer exceeding that budget is
+ * reported as this error even when Chrome commits the load afterwards: the
+ * tab strip comes from target-info events, which are not cancelled with the
+ * call. CI run 36027593756 logged it at 16:48:34Z, four seconds into UAT-09b,
+ * and the test then sat until the 22s collect closed at 16:48:55Z before
+ * failing `expect(error).toBeNull()`. The cookie oracle is the page text.
+ */
+const LIVE_NAVIGATE_DEADLINE = /input dispatch failed: context deadline exceeded/;
+
+/** The same browser_inspect read UAT-09b uses as its cookie oracle. */
+async function pageText(agentId: string): Promise<string> {
+  const ctx = await apiRequest.newContext({
+    baseURL: process.env.OMNIPUS_URL || 'http://localhost:6060',
+  });
+  const headers = await csrf(ctx);
+  const res = await ctx.post('/api/v1/browser/inspect', {
+    headers,
+    data: { session_id: 'uat', agent_id: agentId, x: 200, y: 100 },
+  });
+  const body = (await res.json()) as { ok?: boolean; text?: string; reason?: string };
+  await ctx.dispose();
+  if (!body.ok) throw new Error(`BLOCKED: browser_inspect refused: ${body.reason}`);
+  return body.text ?? '';
+}
+
+/**
+ * A deadline-only dispatch error is stale once the page already shows `marker`,
+ * which is only possible if the navigation committed inside the collect window
+ * this drive already waited out. No extra wait: if the marker is absent, the
+ * commit never arrived and the original error stands. Any other error is
+ * returned unchanged.
+ */
+async function errorUnlessPageShows(
+  result: { error: string | null },
+  agentId: string,
+  marker: string,
+  testInfo: TestInfo,
+  label: string,
+): Promise<string | null> {
+  if (result.error === null || !LIVE_NAVIGATE_DEADLINE.test(result.error)) return result.error;
+  try {
+    const text = await pageText(agentId);
+    await note(testInfo, label, text);
+    return text.includes(marker) ? null : result.error;
+  } catch (err) {
+    await note(testInfo, label, `inspect failed, keeping the dispatch error: ${String(err)}`);
+    return result.error;
+  }
+}
+
+/**
  * Attach, retrying ONLY a memory-ceiling refusal. The run's own instruction is
  * "a browser action that fails in ~1-2 seconds never got a browser at all —
  * re-run before believing it". Nothing else is retried: a membership refusal or
@@ -500,6 +553,9 @@ test('UAT-09b a cookie set in one workspace is absent from the other', async ({}
     { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
   ], 22_000);
   if (isMemoryRefusal(a.error)) throw new Error(`BLOCKED by the memory ceiling: ${a.error}`);
+  // The dispatch deadline is not the oracle. ownA on A's page is, and it is
+  // only present once the cookie-set navigation has committed.
+  a.error = await errorUnlessPageShows(a, fx.agentA, 'ownA', testInfo, 'workspace A after cookie set');
   expect(a.error).toBeNull();
 
   const b = await attachRetryingMemory(fx.chatB1, fx.agentB, [
@@ -508,26 +564,10 @@ test('UAT-09b a cookie set in one workspace is absent from the other', async ({}
     { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
   ], 22_000);
   if (isMemoryRefusal(b.error)) throw new Error(`BLOCKED by the memory ceiling: ${b.error}`);
+  b.error = await errorUnlessPageShows(b, fx.agentB, 'cookies', testInfo, 'workspace B after cookie read');
   expect(b.error).toBeNull();
 
-  // browser_inspect resolves the browsing context from agent_id ALONE
-  // (ADR-075), so each probe agent reads its OWN workspace's live page.
-  const read = async (agentId: string): Promise<string> => {
-    const ctx = await apiRequest.newContext({
-      baseURL: process.env.OMNIPUS_URL || 'http://localhost:6060',
-    });
-    const headers = await csrf(ctx);
-    const res = await ctx.post('/api/v1/browser/inspect', {
-      headers,
-      data: { session_id: 'uat', agent_id: agentId, x: 200, y: 100 },
-    });
-    const body = (await res.json()) as { ok?: boolean; text?: string; reason?: string };
-    await ctx.dispose();
-    if (!body.ok) throw new Error(`BLOCKED: browser_inspect refused: ${body.reason}`);
-    return body.text ?? '';
-  };
-
-  const inB = await read(fx.agentB);
+  const inB = await pageText(fx.agentB);
   await note(testInfo, 'workspace B cookie jar', inB);
   expect(inB, "workspace B must not hold workspace A's cookie").not.toContain('ownA');
   expect(inB, 'workspace B must actually be on the cookie page (so the absence means something)').toContain('cookies');
@@ -538,7 +578,7 @@ test('UAT-09b a cookie set in one workspace is absent from the other', async ({}
     { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
   ], 20_000);
   if (isMemoryRefusal(backInA.error)) throw new Error(`BLOCKED by the memory ceiling: ${backInA.error}`);
-  const inA = await read(fx.agentA);
+  const inA = await pageText(fx.agentA);
   await note(testInfo, 'workspace A cookie jar', inA);
   expect(inA, 'workspace A must still hold its own cookie — otherwise "absent in B" proves nothing').toContain('ownA');
 });

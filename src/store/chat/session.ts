@@ -19,12 +19,12 @@ export function emptySessionState(): SessionChatState {
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: null,
-    terminalCatchUpPending: false,
     sessionTokens: 0,
     sessionCost: 0,
     rateLimitEvent: null,
     lastUserMessageAt: null,
     cancelStage: null,
+    autoApproveEffective: null,
     lastReceivedEventTime: null,
     spanBySpanId: {},
     pendingSpanUpdatesBySpanId: {},
@@ -35,7 +35,10 @@ export function emptySessionState(): SessionChatState {
     pendingAsk: null,
     activeTurnId: null,
     activeTurnAgentId: null,
-    activeTurnBubbleOpened: false,
+    // #823 catch-up redesign (BE-DESIGN.md §6.1/§6.2) — see SessionCursor's
+    // and SessionChatState.cursor's doc comments.
+    cursor: null,
+    awaitingCatchUp: false,
   }
 }
 
@@ -177,6 +180,38 @@ export function bakeToolCallsByOwner(
     for (const tc of baked) mergedById.set(tc.id, tc)
     messagesById[ownerMsgId] = { ...msg, tool_calls: Array.from(mergedById.values()) }
   }
+}
+
+/**
+ * Bake-in-place at mid-turn steer close (founder-reported fix, 2026-09-26):
+ * the bubble closed by a steer send goes historical, and the historical
+ * renderer (VirtualAssistantMessageRow) reads ONLY message.tool_calls — so a
+ * close that leaves the bubble's owned tool calls OUT of `tool_calls` makes
+ * its rows vanish (measured 3 -> 0) until turn end. Bake its owned calls in
+ * place at close time via `bakeToolCallsByOwner`.
+ *
+ * `bakeToolCallsByOwner` does NOT touch toolCallOrder/toolCalls/
+ * toolCallOwnerMessageId — the live entries deliberately STAY queued: a late
+ * tool_call_result still lands in the live map, which the runtime resolves
+ * through, and turn end's bake re-merges by id with offsets preserved
+ * (stampToolCallOffset's prevOffset-first rule). Bake-in-place, not
+ * move-and-delete.
+ */
+export function bakeOwnedCallsAtSteerClose(
+  bucket: Pick<
+    SessionChatState,
+    'messagesById' | 'toolCallOrder' | 'toolCalls' | 'toolCallOwnerMessageId' | 'textAtToolCallStart'
+  >,
+  openId: string,
+): void {
+  bakeToolCallsByOwner(
+    bucket.messagesById,
+    bucket.toolCallOrder,
+    bucket.toolCalls,
+    bucket.toolCallOwnerMessageId ?? {},
+    openId,
+    bucket.textAtToolCallStart,
+  )
 }
 
 /**

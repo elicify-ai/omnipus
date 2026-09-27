@@ -11,50 +11,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestStreamReplay_SinceCursor_Integration verifies the full round-trip:
-// streamReplay with a pre-filtered entry slice skips old entries correctly.
-func TestStreamReplay_SinceCursor_Integration(t *testing.T) {
-	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	entries := []session.TranscriptEntry{
-		{
-			ID:        "e1",
-			Role:      "user",
-			Content:   "hello",
-			Timestamp: base.Add(-time.Second),
-		},
-		{
-			ID:        "e2",
-			Role:      "user",
-			Content:   "world",
-			Timestamp: base.Add(time.Second),
-		},
-	}
-
-	// Filter to only entries after base.
-	cursorStr := base.Format(time.RFC3339Nano)
-	filtered := applySinceCursor(context.Background(), "sid", &cursorStr, entries, nil)
-	require.Len(t, filtered, 1, "cursor must filter to one entry")
-
-	sink := &sliceSink{}
-	rs := computeReplayStats(filtered)
-	_, err := streamReplay(context.Background(), "sid", filtered, rs, sink.emit, nil, nil, nil)
-	require.NoError(t, err)
-
-	frames := sink.all()
-	// Expect: 1 replay_message (for "world") + 1 done
-	require.Len(t, frames, 2, "must emit exactly 1 content frame + 1 done frame")
-	assert.Equal(t, "replay_message", frames[0].Type)
-	assert.Equal(t, "world", frames[0].Content)
-	assert.Equal(t, "done", frames[1].Type)
-}
+// TestStreamReplay_SinceCursor_Integration was deleted with the timestamp
+// cursor itself (#823 founder decision Q3: attach_session.since and
+// applySinceCursor are gone; the seq cursor's servability is covered by
+// TestHub_H5_SnapshotDecisions and the attach tests in ws_attach_catchup_test.go).
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Work item B — toolResultStore

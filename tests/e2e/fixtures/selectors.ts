@@ -171,6 +171,77 @@ export const tokenCounter = (page: Page) =>
   page.locator('[data-testid="session-token-counter"]');
 
 /**
+ * Dismiss any modal dialog-overlay left over from earlier state, and keep
+ * dismissing until none remains. No-op (and instantly so) when no dialog is
+ * open — the poll's first probe already reads 0.
+ *
+ * Why this exists (CI run 36123574726, job "E2E — llm-agents"): a delegated
+ * child's `bash` call can raise an ADR-092 Auto filesystem/network pre-flight
+ * escalation ask (pkg/tools/shell_permission_mode.go::requestPreflightApproval).
+ * Unattended CI never answers it, so it sits pending for the full
+ * defaultToolApprovalTimeout — 600s (pkg/gateway/gateway.go:88). While it is
+ * pending, ToolApprovalModal rehydrates it on EVERY fresh page load —
+ * reconcileWithSessionState (src/store/toolApproval.ts) rebuilds the queue
+ * entry from the session_state snapshot (as a reconnect stub when the ask
+ * predates the page) — and that Radix dialog-overlay intercepts every pointer
+ * event on the page. Observed cost: 579 blocked click retries across a full
+ * 300s budget, then `Test timeout of 300000ms exceeded` at selectAgent
+ * (subagent.spec.ts test (a), attempt 1 of the same run).
+ *
+ * Escape is the dismissal that STICKS: while an approval is live the modal
+ * maps Escape to Deny (the safe default — ToolApprovalModal.tsx
+ * ::handleDismissRequest), which resolves the approval server-side so the
+ * next session_state snapshot cannot put the card back. Tab-local dismissal
+ * (dequeue) does not have that property — the next snapshot resurrects the
+ * card as a stub.
+ *
+ * The check is poll-shaped, not one-shot, for two reasons:
+ *   1. The rehydrating session_state frame can land after goto('/') returns;
+ *      a single count() check races it and misses. CI run 36123574726
+ *      attempt 3 shows a pending ask expiring at 11:27:30 with NO deny ever
+ *      recorded — no page ever dismissed it, despite the steered-session
+ *      spec's one-shot guard having run at that attempt's start.
+ *   2. Approvals QUEUE behind the visible card ("+N more"). One Escape may
+ *      reveal the next card; the loop presses again until the overlay is
+ *      gone, bounded by the timeout.
+ *
+ * Escape is pressed ONLY while an overlay is actually present: a bare Escape
+ * with no dialog open cancels a streaming chat turn (the behaviour
+ * cancel-cross-channel.spec.ts T23 pins), which must never happen here.
+ */
+export const dismissStaleDialogOverlay = async (page: Page): Promise<void> => {
+  const overlay = page.locator('[data-testid="dialog-overlay"]');
+  await expect
+    .poll(
+      async () => {
+        // Re-read immediately before pressing. `count() > 0` then press is
+        // check-then-act: if the overlay closes in that window the Escape lands
+        // on the page instead, and a bare Escape with no dialog CANCELS A
+        // STREAMING TURN (the behaviour cancel-cross-channel.spec.ts T23 pins).
+        // Pressing on the overlay locator itself cannot hit the page: if the
+        // element is gone the press throws and the poll simply re-reads 0.
+        if ((await overlay.count()) > 0) {
+          try {
+            await overlay.first().press('Escape', { timeout: 1_000 });
+          } catch {
+            // Overlay vanished between the count and the press — nothing to
+            // dismiss, and crucially no stray Escape reached the page.
+          }
+        }
+        return overlay.count();
+      },
+      // Generous enough to drain a short queue of stacked approvals; far
+      // below any test budget, and free (instant) when there is nothing to
+      // clear.
+      { timeout: 15_000, intervals: [250, 500, 1_000, 2_000, 4_000] },
+    )
+    // A leftover modal overlay must be dismissable — it blocks every click
+    // beneath it, so leaving one up converts every later click assertion
+    // into a slow timeout instead of a clear failure.
+    .toBe(0);
+};
+
+/**
  * Switch the active chat agent via the composer's agent picker.
  *
  * Delegate-dependent E2E specs must run against a general-purpose task agent
@@ -180,6 +251,12 @@ export const tokenCounter = (page: Page) =>
  *
  * Reuses the established picker pattern from chat.spec.ts (open menu →
  * click menuitem → assert the picker label updated).
+ *
+ * Does NOT clear dialog overlays. Calling dismissStaleDialogOverlay from here
+ * put an Escape keypress in the path of all 11 specs that select an agent, and
+ * turned E2E — ui-browser flaky on release 585b70b1b (green at d81bcb1ec) — a
+ * shard whose specs open legitimate dialogs. A spec that needs the overlay
+ * cleared calls dismissStaleDialogOverlay itself, before selecting.
  */
 export const selectAgent = async (page: Page, name: string | RegExp = /Jim/i) => {
   const picker = agentPicker(page);

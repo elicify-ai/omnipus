@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // Package audit provides the `omnipus audit` subcommand. Today it only
-// exposes `omnipus audit verify` (v0.2 #155) — chain integrity check for
+// exposes `omnipus audit verify` (#155) — chain integrity check for
 // the tamper-evident audit log.
 //
 // The verify subcommand walks every audit file under
@@ -41,7 +41,7 @@ func NewAuditCommand() *cobra.Command {
 		Use:   "audit",
 		Short: "Inspect and verify the security audit log",
 		Long: "Inspect and verify the security audit log written to $OMNIPUS_HOME/system/audit.jsonl.\n\n" +
-			"v0.2 #155 introduced an HMAC chain so truncation or surgical-rewrite of the\n" +
+			"The #155 security wave introduced an HMAC chain so truncation or surgical-rewrite of the\n" +
 			"audit log is detectable: each entry carries an `hmac` field computed over\n" +
 			"the previous entry's HMAC plus the entry's canonical content. The chain key\n" +
 			"is derived from the master key via HKDF-SHA256 and held only in process\n" +

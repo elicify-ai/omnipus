@@ -47,7 +47,7 @@ func TestApprovalRegistry_D80_LateDenyAfterExpiryDoesNotBecomeUserDenial(t *test
 	assert.Equal(t, "timeout", outcome.Reason, "an unanswered approval is a timeout")
 
 	// A deny that lands after expiry is a stale click, not a decision.
-	ok, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny)
+	ok, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny, false)
 	assert.False(t, ok, "a terminal entry must not transition again")
 	assert.True(t, gone, "the HTTP layer must answer 410, not 200")
 

@@ -1,4 +1,6 @@
 # Spec review — channel-agent-ownership-spec.md (Round 2 of 2, revision 1)
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 - **Spec under review:** `docs/internal/specs/channel-agent-ownership-spec.md` — Draft, revision 1 (2026-08-14)
 - **Round-1 review:** `docs/internal/specs/channel-agent-ownership-spec-review.md` (BLOCK; 4 CRITICAL, 8 MAJOR, 9 MINOR, 10 OBSERVATION)

@@ -2,7 +2,6 @@ package systools
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
@@ -15,7 +14,7 @@ var agentUpdateArgNames = map[string]struct{}{
 	"id": {}, "revision": {}, "name": {}, "description": {}, "soul": {},
 	"model": {}, "provider": {}, "fallback_models": {}, "color": {}, "icon": {},
 	"max_tool_iterations": {}, "skills": {}, "mcp_servers": {}, "tool_policy_changes": {},
-	"memory_enabled": {}, "default": {}, "voice": {}, "shell_policy": {},
+	"memory_enabled": {}, "default": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
 }
 
@@ -24,7 +23,7 @@ var agentCreateArgNames = map[string]struct{}{
 	"agent_type": {}, "cli": {}, "cli_path": {}, "provider": {}, "fallback_models": {},
 	"heartbeat": {}, "max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
 	"tool_policy_changes": {}, "memory_enabled": {}, "default": {}, "voice": {},
-	"shell_policy": {}, "context_window_override": {}, "model_params": {},
+	"context_window_override": {}, "model_params": {},
 }
 
 func rejectUnknownAgentFields(args map[string]any, allowed map[string]struct{}) error {
@@ -204,11 +203,6 @@ func applySharedConfigArgs(a *config.AgentConfig, args map[string]any) error {
 	}); err != nil {
 		return err
 	}
-	if raw, present := args["shell_policy"]; present {
-		if err := applyShellPolicy(a, raw); err != nil {
-			return err
-		}
-	}
 	if raw, present := args["context_window_override"]; present {
 		if err := applyContextWindow(a, raw); err != nil {
 			return err
@@ -280,43 +274,6 @@ func applyModelParams(a *config.AgentConfig, raw any) error {
 		merged.MaxTokens = &n
 	}
 	a.ModelParams = merged
-	return nil
-}
-
-func applyShellPolicy(a *config.AgentConfig, raw any) error {
-	m, ok := raw.(map[string]any)
-	if !ok {
-		return fieldErr("shell_policy", "shell_policy must be a non-null object")
-	}
-	for key := range m {
-		if key != "enable_deny_patterns" && key != "custom_deny_patterns" {
-			return fieldErr("shell_policy", fmt.Sprintf("unknown shell_policy field %q", key))
-		}
-	}
-	existing := a.ShellPolicy
-	if existing == nil {
-		existing = &config.AgentShellPolicy{}
-	}
-	if value, present := m["enable_deny_patterns"]; present {
-		b, ok := value.(bool)
-		if !ok {
-			return fieldErr("shell_policy", "enable_deny_patterns must be a boolean")
-		}
-		existing.EnableDenyPatterns = b
-	}
-	if value, present := m["custom_deny_patterns"]; present {
-		vals, err := requiredStringArray(value, "shell_policy.custom_deny_patterns")
-		if err != nil {
-			return err
-		}
-		for _, pattern := range vals {
-			if _, err := regexp.Compile(pattern); err != nil {
-				return fieldErr("shell_policy", fmt.Sprintf("invalid deny pattern %q", pattern))
-			}
-		}
-		existing.CustomDenyPatterns = vals
-	}
-	a.ShellPolicy = existing
 	return nil
 }
 

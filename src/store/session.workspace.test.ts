@@ -24,7 +24,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { fetchSessions } from '@/lib/api'
-import { useSessionStore, registerChatResetForReplay } from './session'
+import { useSessionStore, registerChatResetForReplay, registerChatClearPendingAutoApprove } from './session'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -858,7 +858,23 @@ describe('attachToSession — no bucket wipe on failed send (Wave-1 Bug 2 regres
     expect(result).toBe(false)
   })
 
-  it('DOES reset the chat bucket once send is confirmed successful', () => {
+  // PROVENANCE (#823 catch-up redesign, BE-DESIGN.md §6.1, founder decision
+  // Q3 — REPLACE, guarantee kept, test rewritten never weakened): this test
+  // used to assert the OPPOSITE — that a successful attach wiped the chat
+  // bucket (`resetChatBucketForReplay`) so the gateway's full-transcript
+  // replay could rebuild it from scratch. §6.1 replaces that mechanism: the
+  // bucket now carries its own numbered cursor across a reattach, and
+  // `attach_session` sends `{since_seq, boot_id}` so the gateway can answer
+  // with an INCREMENTAL catch-up instead of a full replay — wiping the
+  // bucket on every reattach would defeat that (it would erase the very
+  // history the incremental catch-up is trying to avoid re-sending). Wiping
+  // now happens ONLY on an explicit `session_snapshot` frame (see
+  // src/store/chat/slices/catchup-frames.ts), never as a side effect of
+  // attaching. The underlying user-visible guarantee — a reattach always
+  // ends with a correct, complete transcript on screen — is unchanged; only
+  // the mechanism moved from "wipe + full replay" to "carry a cursor +
+  // incremental or snapshot catch-up".
+  it('does NOT reset the chat bucket on a successful send, and sends the cursor fields', () => {
     const resetSpy = vi.fn()
     registerChatResetForReplay(resetSpy)
 
@@ -868,9 +884,13 @@ describe('attachToSession — no bucket wipe on failed send (Wave-1 Bug 2 regres
 
     const result = useSessionStore.getState().attachToSession('sess-ok', 'chat', 'Title', 'agent-1')
 
-    expect(resetSpy).toHaveBeenCalledWith('sess-ok')
+    expect(resetSpy).not.toHaveBeenCalled()
     expect(useSessionStore.getState().activeSessionId).toBe('sess-ok')
     expect(result).toBe(true)
+    // No local cursor exists yet for a fresh test session — the frame is
+    // sent with no since_seq/boot_id (first-ever attach shape), never a
+    // stale/undefined pair.
+    expect(okConnection.send).toHaveBeenCalledWith({ type: 'attach_session', session_id: 'sess-ok' })
   })
 })
 
@@ -985,6 +1005,114 @@ describe('pruneSessionDescriptor — round-2 fix: no zombie reattach after delet
       title: 'Alive',
       agentId: 'agent-2',
     })
+  })
+})
+
+describe('pending Auto-approve choice — cleared on every workspace switch (code-review finding 1)', () => {
+  // BDD source: a pending choice toggled in a session-less, unsent chat in
+  // workspace A (activeSessionId already null — nothing was ever minted)
+  // used to leak into workspace B's first message whenever B's OWN branch
+  // in enterWorkspaceChat never called startNewSession/attachToSession —
+  // both of which are the only things that used to clear it, and both are
+  // reached conditionally, not on every branch. The fix adds a single,
+  // unconditional clear at the very top of enterWorkspaceChat.
+  beforeEach(resetAll)
+
+  it('REGRESSION REPRO: clears the pending choice switching into a workspace that ALSO resolves to no session (both session-less — the exact leak path)', async () => {
+    const clearSpy = vi.fn()
+    registerChatClearPendingAutoApprove(clearSpy)
+
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-b' })
+    useSessionStore.setState({
+      // Mirrors workspace A's unsent chat: no session was ever minted.
+      activeSessionId: null,
+      // Workspace B was previously explicitly started fresh — descriptor is
+      // null, not undefined — so `if (state.activeSessionId !== null)` in
+      // the descriptor===null branch is false and startNewSession() (the
+      // ONLY clear on that branch before this fix) never fires.
+      sessionByWorkspace: { 'ws-b': null },
+    })
+
+    await useSessionStore.getState().enterWorkspaceChat('ws-b')
+
+    expect(clearSpy).toHaveBeenCalled()
+  })
+
+  it('REGRESSION REPRO: clears the pending choice switching into a NEVER-VISITED workspace (undefined descriptor, no persisted entry either)', async () => {
+    const clearSpy = vi.fn()
+    registerChatClearPendingAutoApprove(clearSpy)
+
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-brand-new' })
+    useSessionStore.setState({ activeSessionId: null, sessionByWorkspace: {} })
+
+    await useSessionStore.getState().enterWorkspaceChat('ws-brand-new')
+
+    expect(clearSpy).toHaveBeenCalled()
+    // And the fix doesn't disturb the existing "no server round-trip" contract.
+    expect(fetchSessions).not.toHaveBeenCalled()
+  })
+
+  it('clears the pending choice even on the already-attached no-op restore path (unconditional, not gated on a state change)', () => {
+    const clearSpy = vi.fn()
+    registerChatClearPendingAutoApprove(clearSpy)
+
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    useSessionStore.setState({
+      activeSessionId: 'sess-123',
+      sessionByWorkspace: {
+        'ws-1': { id: 'sess-123', type: 'chat', title: 'Still here', agentId: 'agent-1' },
+      },
+    })
+
+    useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+    expect(clearSpy).toHaveBeenCalled()
+  })
+})
+
+describe('attachToSession — clears the pending Auto-approve choice on the offline branch too (code-review finding 2)', () => {
+  // BDD source: attachToSession's disconnected/offline branch sets
+  // activeSessionId directly and returns without ever calling
+  // resetChatBucketForReplay — the connected branch's only clear point
+  // before this fix — so an offline attach (or a reconnect-window attach)
+  // left a stale pending choice in place for the newly attached chat.
+  beforeEach(resetAll)
+
+  it('REGRESSION REPRO: clears the pending choice when there is no WS connection at all', () => {
+    const clearSpy = vi.fn()
+    registerChatClearPendingAutoApprove(clearSpy)
+    // No connection registered — attachToSession takes the offline branch.
+
+    useSessionStore.getState().attachToSession('sess-offline-clear', 'chat', 'Title', 'agent-1')
+
+    expect(clearSpy).toHaveBeenCalled()
+  })
+
+  it('does NOT clear the pending choice when connection.send() itself returns false (Wave-1 Bug 2: a failed send leaves ALL state untouched)', () => {
+    // The failed-send path is NOT a chat change — attachToSession returns
+    // false and the caller (useSelectSession) aborts, leaving the user on
+    // whatever chat they were already on. Clearing here would wipe a still-
+    // legitimate pending choice for that same, unchanged chat.
+    const clearSpy = vi.fn()
+    registerChatClearPendingAutoApprove(clearSpy)
+    const failingConnection = { send: vi.fn().mockReturnValue(false), close: vi.fn(), isConnected: true }
+    useConnectionStore.setState({ connection: failingConnection as never, isConnected: true })
+
+    const result = useSessionStore.getState().attachToSession('sess-fail-clear', 'chat', 'Title', 'agent-1')
+
+    expect(result).toBe(false)
+    expect(clearSpy).not.toHaveBeenCalled()
+  })
+
+  it('still clears the pending choice on the connected/success branch (unaffected by this fix, guarded against regressing)', () => {
+    const clearSpy = vi.fn()
+    registerChatClearPendingAutoApprove(clearSpy)
+    const okConnection = { send: vi.fn().mockReturnValue(true), close: vi.fn(), isConnected: true }
+    useConnectionStore.setState({ connection: okConnection as never, isConnected: true })
+
+    useSessionStore.getState().attachToSession('sess-online-clear', 'chat', 'Title', 'agent-1')
+
+    expect(clearSpy).toHaveBeenCalled()
   })
 })
 

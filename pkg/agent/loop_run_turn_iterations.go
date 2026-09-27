@@ -268,7 +268,7 @@ turnLoop:
 	// rather than count as elapsed time against the horizon.
 	er.cn.rc.rx.rr.rq.ri.rf.rt.al.tickSearchPromotionHorizon(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.manifestBucket())
 
-	if steerMsgs := er.cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+	if steerMsgs, steerCorrelationIDs := er.cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
 		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
 			map[string]any{
 				"agent_id":       er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -276,6 +276,7 @@ turnLoop:
 				"session_key":    er.cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey,
 			})
 		er.cn.rc.rx.rr.rq.ri.pendingMessages = append(er.cn.rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
+		er.cn.rc.rx.rr.rq.ri.pendingSteeringReceipts = append(er.cn.rc.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		er.cn.rc.rx.finalContent = ""
 		// I2: guard against bypassing the hard iteration ceiling via goto.
 		// If the ceiling is exceeded, fall through to finalization rather than
@@ -553,7 +554,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 	if cn.rc.rx.rr.citationTracker != nil {
 		cn.rc.rx.rr.citationTracker.EmitCitations(cn.responseContent)
 	}
-	if steerMsgs := cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+	if steerMsgs, steerCorrelationIDs := cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
 		logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
 			map[string]any{
 				"agent_id":       cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -561,6 +562,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 				"steering_count": len(steerMsgs),
 			})
 		cn.rc.rx.rr.rq.ri.pendingMessages = append(cn.rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
+		cn.rc.rx.rr.rq.ri.pendingSteeringReceipts = append(cn.rc.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		return agentLoopRunTurnConductorRunIterationsContinue
 	}
 	// ADR-087 D4/D6/D9: the one success-arm truncation handler,

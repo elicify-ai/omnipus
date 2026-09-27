@@ -4,7 +4,7 @@
 **Status**: Draft (rev 5) — revised against the adversarial review (`…-spec-review.md`, REVISE: 3 CRITICAL, 5 MAJOR, 4 MINOR, 2 OBSERVATION). Three findings were design changes and landed in **ADR-072 r4** (D10.2, D6.1.1, D1.2).
 **Source**: [ADR-072 r6](../architecture/ADR-072-skill-activation-and-loading.md) (Accepted), answering
 [elicify-ai/omnipus#663](https://github.com/elicify-ai/omnipus/issues/663)
-**Phase**: v0.3 (CLAUDE.md routing rule — skills/workspaces/plugins → v0.3, issue #156)
+**Phase**: Workspaces-class at drafting (routing rule then in force — issue #156; the v0.3 release label was retired 2026-09-25)
 **Verified against**: `release/v0.1.1` @ `f101a9b4`
 
 ---
@@ -26,7 +26,7 @@ the ADR. **Where the ADR is genuinely silent, §11 records it as a gap** — not
 | **Out of scope** | `create_skill`/`edit_skill`/`remove_skill` governance (tool policy, not the grant list — ADR-072 N2); `find_skills`' marketplace role (F3); moving grants to workspace scope (§6.5, deferred) |
 | **Constraints** | CLAUDE.md Hard Constraints #1 (single binary), #2 (pure Go), #5 (ecosystem compat), #6 (no default-policy fallback), #8 (contract-first) |
 | **Integration** | `pkg/skills`, `pkg/agent` (context + loop + subturn), `pkg/coreagent`, `pkg/sysagent/tools`, `pkg/fspolicy`, `pkg/sandbox`, `pkg/tools`, `pkg/workspace`, SPA `src/lib/toolVisibility.ts` |
-| **Priority** | v0.3 foundation. D8 (workspace-aware cache) and D5.1 (`SeedConfig` gating) are prerequisites of correctness, not enhancements |
+| **Priority** | Workspaces-line foundation. D8 (workspace-aware cache) and D5.1 (`SeedConfig` gating) are prerequisites of correctness, not enhancements |
 | **Primary walkthrough** | ADR-072 §"What a real turn looks like" (draft §05), reproduced as US-1/US-5 acceptance scenarios |
 | **Non-behaviors** | ADR-072 §3 Negative + D1's "delete the force-load" + D4's out-of-scope carve-out. Consolidated in §5.2 |
 | **Failure modes** | Skill silently never fires (§3 Negative, biggest risk); grant restored on reboot (D5.1); stale menu after workspace change (D8); slug shadowing (D4.2) |
@@ -503,7 +503,7 @@ outcomes, and the loaded one's last-used timestamp updates.
   where leaking a catalogue costs much and helps nobody, whereas a direct load or delegation names
   one slug the caller already had in mind, and the operator needs "install it" and "grant it" to be
   distinguishable to act on either. Debuggability wins at the doors where one name is already known.
-- The system must not introduce a migration path for existing installs, because v0.3 is greenfield.
+- The system must not introduce a migration path for existing installs, because the line is greenfield (the v0.3 label was retired 2026-09-25).
 
 ### 5.2 Machine-verifiable constraints
 
@@ -1835,7 +1835,7 @@ All 14 findings from `skill-activation-and-loading-spec-review.md`. Three needed
 
 ## 16. Assumptions
 
-- v0.3 is greenfield; no migration path is designed or tested (ADR §6.2).
+- Greenfield line; no migration path is designed or tested (ADR §6.2; the v0.3 label was retired 2026-09-25).
 - Grants remain global on the agent for this work (ADR §6.5).
 - `find_skills` keeps its marketplace role and is not repurposed.
 - Mount names remain unique within a workspace, as enforced today.

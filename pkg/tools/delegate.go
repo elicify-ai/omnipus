@@ -59,6 +59,13 @@ type delegateSessionIDCtxKey struct{}
 // own turn context, so a child's OWN tool calls (message_parent, and any
 // future session-aware tool) can resolve their own durable identity without
 // conflating it with the shared transcript session id.
+//
+// GUARD: the "" no-op is silence, not a clean stamp — a turn's base ctx must
+// never already carry the delegate-session-id key from a DIFFERENT
+// turn/session, or an unstamped turn (id "") would silently INHERIT the base
+// ctx's id: a wrong delegate-session-id, not an absent one, and nothing
+// would error. Every production turn's base ctx is detached
+// (Background-derived) before turn-context construction stamps it.
 func WithDelegateSessionID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
@@ -479,8 +486,15 @@ func (t *DelegateTool) SetSteerCaps(ratePerMinute, bodyBytes int) {
 // *agent.AgentLoop (via its EnqueueSteeringMessage wrapper — see
 // pkg/agent/steering.go); defined as an interface here to avoid a
 // tools<->agent import cycle.
+//
+// EnqueueSteeringMessage returns the resolved correlation id — correlationID
+// echoed back when the caller supplied one, otherwise a server-assigned
+// reference (SubagentStateFrame.yaml's own steering_receipt.correlation_id
+// wording) — so executeSteer (delegate_followup.go) can hand it back to the
+// steerer: a steering_receipt (issue #870) the parent cannot correlate to
+// the instruction it sent is decoration, not a receipt.
 type DelegateSteeringSink interface {
-	EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error
+	EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error)
 }
 
 // defaultCancelGrace is the cooperative-stop grace window before the hard

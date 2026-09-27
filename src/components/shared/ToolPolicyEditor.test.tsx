@@ -1203,3 +1203,125 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 })
+
+// ── ADR-092 J14 — per-tool "Under Auto" marker ──────────────────────────────
+//
+// A tool's `auto_approve` field (ToolRegistryEntry, contract-first via L5)
+// reports what Auto-approve does for a tool once it resolves to "ask". The
+// marker is read-only, purely informational, and must appear ONLY on a row
+// whose EFFECTIVE policy is "ask" — a tool set to Allow or Deny is not
+// affected by Auto either way, so showing it there would be noise/wrong.
+// `bash` never carries this field (its own per-command D3/D7/D8 mechanism)
+// and must render no marker even when set to "ask".
+
+describe('ToolPolicyEditor — ADR-092 J14 "Under Auto" marker', () => {
+  it('shows "Auto: runs" only on a row set to Ask, for a tool classified runs', async () => {
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'send_message', category: 'communication', auto_approve: 'runs' })
+    renderEditor([tool], { policies: { send_message: 'ask' } })
+    await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /communication/i }))
+    const row = screen.getByTestId('tool-row-send_message')
+    expect(within(row).getByTestId('auto-approve-marker-send_message')).toHaveTextContent('Auto: runs')
+  })
+
+  it('shows "Auto: runs inside workspace" for a tool classified runs_if_args', async () => {
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'write_file', category: 'file', auto_approve: 'runs_if_args' })
+    renderEditor([tool], { policies: { write_file: 'ask' } })
+    await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /file/i }))
+    const row = screen.getByTestId('tool-row-write_file')
+    expect(within(row).getByTestId('auto-approve-marker-write_file')).toHaveTextContent('Auto: runs inside workspace')
+  })
+
+  it('shows "Auto: asks" for a tool classified asks', async () => {
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'delete_task', category: 'tasks', auto_approve: 'asks' })
+    renderEditor([tool], { policies: { delete_task: 'ask' } })
+    await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /tasks/i }))
+    const row = screen.getByTestId('tool-row-delete_task')
+    expect(within(row).getByTestId('auto-approve-marker-delete_task')).toHaveTextContent('Auto: asks')
+  })
+
+  it('renders no marker when the tool is resolved to Allow, even though it carries auto_approve', async () => {
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'send_message', category: 'communication', auto_approve: 'runs' })
+    renderEditor([tool], { policies: { send_message: 'allow' } })
+    await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /communication/i }))
+    const row = screen.getByTestId('tool-row-send_message')
+    expect(within(row).queryByTestId('auto-approve-marker-send_message')).not.toBeInTheDocument()
+  })
+
+  it('renders no marker when the tool is resolved to Deny, even though it carries auto_approve', async () => {
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'send_message', category: 'communication', auto_approve: 'runs' })
+    renderEditor([tool], { policies: { send_message: 'deny' } })
+    await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /communication/i }))
+    const row = screen.getByTestId('tool-row-send_message')
+    expect(within(row).queryByTestId('auto-approve-marker-send_message')).not.toBeInTheDocument()
+  })
+
+  it('renders no marker for a tool on Ask with no auto_approve classification (e.g. bash, which is always excluded)', async () => {
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'bash', category: 'shell' })
+    renderEditor([tool], { policies: { bash: 'ask' } })
+    await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /shell/i }))
+    const row = screen.getByTestId('tool-row-bash')
+    expect(within(row).queryByTestId('auto-approve-marker-bash')).not.toBeInTheDocument()
+  })
+
+  it('shows the marker on an MCP tool row too, sourced from the server annotation', async () => {
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'mcp_myserver_search', category: 'search', source: 'mcp', scope: 'general', auto_approve: 'runs' })
+    renderEditor([tool], { policies: { mcp_myserver_search: 'ask' } })
+    await user.click(screen.getByRole('button', { name: /myserver/i }))
+    const row = screen.getByTestId('tool-row-mcp_myserver_search')
+    expect(within(row).getByTestId('auto-approve-marker-mcp_myserver_search')).toHaveTextContent('Auto: runs')
+  })
+
+  // Code-review finding 4: the marker used to key off the raw per-agent
+  // value alone (`effective === 'ask'`), ignoring a stricter GLOBAL floor
+  // entirely. A tool with a per-agent value of "ask" but a global "Deny"
+  // floor never actually resolves to "ask" at runtime (the floor wins,
+  // deny > ask > allow — the same merge `lockTitle` already documents) — so
+  // the row showed BOTH "Global: Deny" and "Auto: runs" at once, which is a
+  // direct contradiction: the tool can't be both always-denied and
+  // auto-approved. The marker must use the TRUE effective policy (strictest
+  // of the floor and the per-agent value), not the per-agent value alone.
+  it('shows no Auto marker when a global "Deny" floor overrides a per-agent "Ask" — the row must not contradict its own "Global: Deny" badge', async () => {
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'send_message', category: 'communication', auto_approve: 'runs' })
+    render(
+      <ToolPolicyEditor
+        tools={[tool]}
+        value={{ policies: { send_message: 'ask' } }}
+        onChange={vi.fn()}
+        globalPolicies={{ policies: { send_message: 'deny' } }}
+      />,
+    )
+    await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /communication/i }))
+    const row = screen.getByTestId('tool-row-send_message')
+    // The floor badge is still shown — this is not about hiding the floor,
+    // only about not ALSO showing a marker that contradicts it.
+    expect(within(row).getByTestId('global-override-send_message')).toHaveTextContent(/global:\s*deny/i)
+    expect(within(row).queryByTestId('auto-approve-marker-send_message')).not.toBeInTheDocument()
+  })
+
+  it('shows no Auto marker when a global "Ask" floor and a per-agent "Ask" agree (still resolves to Ask, so this is the positive control for the fix — marker DOES still show)', async () => {
+    // Positive control: a global "ask" floor with a per-agent "ask" still
+    // truly resolves to "ask" at runtime (floor and agent agree) — the fix
+    // must not over-correct into hiding the marker whenever ANY floor exists.
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'send_message', category: 'communication', auto_approve: 'runs' })
+    render(
+      <ToolPolicyEditor
+        tools={[tool]}
+        value={{ policies: { send_message: 'ask' } }}
+        onChange={vi.fn()}
+        globalPolicies={{ policies: { send_message: 'ask' } }}
+      />,
+    )
+    await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /communication/i }))
+    const row = screen.getByTestId('tool-row-send_message')
+    expect(within(row).getByTestId('auto-approve-marker-send_message')).toHaveTextContent('Auto: runs')
+  })
+})

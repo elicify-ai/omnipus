@@ -151,8 +151,9 @@ func spawnProcess(exe string, args []string, _ string) (int, error) {
 	// Currently we pass through the full parent env so that PATH, OMNIPUS_HOME,
 	// OMNIPUS_MASTER_KEY (for non-interactive unlock), OMNIPUS_KEY_FILE, and
 	// OMNIPUS_BEARER_TOKEN all flow to the child without the caller having to
-	// re-enumerate them.  The env whitelist (FR-015 security hardening) is left
-	// for the v0.2 security wave (issue #155).
+	// re-enumerate them.  The env whitelist (FR-015 security hardening) is not
+	// applied on this path — deferred from the #155 security wave, no release
+	// scheduled.
 	childEnv := os.Environ()
 
 	cmd := exec.Command(exe, args...)

@@ -788,6 +788,20 @@
       "publicTypes": []
     },
     {
+      "source": "src/components/ui/tooltip.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Tooltip",
+        "TooltipProps"
+      ],
+      "publicExports": [
+        "Tooltip"
+      ],
+      "publicTypes": [
+        "TooltipProps"
+      ]
+    },
+    {
       "source": "src/components/ui/toast-container.tsx",
       "classification": "application",
       "exports": [

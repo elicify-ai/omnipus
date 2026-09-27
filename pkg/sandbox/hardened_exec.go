@@ -193,7 +193,7 @@ func emitRestrictFailure(callsite string, err error) {
 // here (and not matched by allowedChildEnvPrefixes) is stripped before the
 // child sees the environment.
 //
-// Threat model (v0.2 #155 item 3): the previous implementation maintained a
+// Threat model (#155 item 3): the previous implementation maintained a
 // 3-key denylist (OMNIPUS_MASTER_KEY, OMNIPUS_KEY_FILE, OMNIPUS_BEARER_TOKEN).
 // That model fails open: any newly-introduced sensitive env var (a future
 // API key, an upstream provider token, a third-party secret loaded by a
@@ -289,7 +289,7 @@ func isAllowedChildEnvKey(name string) bool {
 // outside this package (e.g. pkg/tools's bash, in shell.go) can apply the
 // same filter regardless of whether the kernel sandbox is active.
 //
-// Naming: the public function name is preserved across the v0.2 #155 item-3
+// Naming: the public function name is preserved across the #155 item-3
 // rework (denylist → allowlist) so callers do not need to change. Internally
 // the implementation is filterChildEnv — that name better reflects the new
 // semantics.
@@ -312,7 +312,7 @@ func ScrubGatewayEnv() []string {
 //	`bash` (ADR-036 merge of the former exec/workspace_shell/workspace_shell_bg),
 //	`web_serve`, and `build_static` subprocess. Leaking an
 //	Anthropic / OpenAI key into an arbitrary build script is exactly the
-//	fail-open class the v0.2 #155 allowlist rework closed.
+//	fail-open class the #155 allowlist rework closed.
 //
 //	The external-CLI runner is the ONE caller that legitimately needs these:
 //	the CLI authenticates to its upstream model provider on the operator's
@@ -508,6 +508,21 @@ type Limits struct {
 	// acknowledgement: this is HTTP/HTTPS only. Raw TCP connect
 	// is NOT covered. Documented as a trusted-prompt-feature limitation.
 	EgressProxyAddr string
+
+	// EgressProxyToken (D-13 fix, 2026-09-24 security review) is an opaque
+	// per-run or per-session credential, embedded as the proxy URL's
+	// userinfo (`http://<token>@host:port`), that a D8 network-preflight
+	// approval mints so the child's traffic is recognised as the SPECIFIC
+	// approved run/session by EgressProxy.hostAllowed's Proxy-Authorization
+	// check (pkg/sandbox/egress_proxy.go) — the fix for an approved D8
+	// escalation only widening the KERNEL port rule while the egress
+	// proxy's own, separate host allow-list still 403'd every request.
+	// Empty for every non-bash caller of BuildLimits/ResolveLimits (web_
+	// serve, environment_setup, …) and for a bash call with no approved
+	// hosts — those continue to rely solely on the proxy's static,
+	// operator-configured cfg.Sandbox.EgressAllowList, exactly as before
+	// this fix.
+	EgressProxyToken string
 
 	// KernelPolicy is the PER-TURN kernel-enforcement policy for this child,
 	// typically produced by sandbox.DeriveKernelPolicy from the turn's
@@ -896,6 +911,14 @@ func mergeEnv(env []string, lim Limits) []string {
 	// http.Transport uses both via httpproxy.FromEnvironment).
 	if lim.EgressProxyAddr != "" {
 		proxyURL := "http://" + lim.EgressProxyAddr
+		if lim.EgressProxyToken != "" {
+			// D-13 fix: userinfo on the proxy URL becomes a Basic
+			// Proxy-Authorization header (RFC 7617) that curl, wget, npm,
+			// and Go's own http.ProxyFromEnvironment all send automatically
+			// — no child-side configuration needed beyond the env var it
+			// was already reading.
+			proxyURL = "http://" + lim.EgressProxyToken + "@" + lim.EgressProxyAddr
+		}
 		merged = append(merged,
 			"HTTP_PROXY="+proxyURL,
 			"HTTPS_PROXY="+proxyURL,

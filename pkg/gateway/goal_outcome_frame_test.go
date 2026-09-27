@@ -61,24 +61,28 @@ func TestGoalOutcomeFrame_LiveAndReplayCarryTheSameIDAndOutcome(t *testing.T) {
 	const sessionID = "session_goal_outcome"
 	entry, outcome := goalOutcomeFixture(t)
 
-	// Live: the real event forwarder turns the agent's event into a frame.
+	// Live: the real EventBus sync tap turns the agent's event into a frame
+	// (#823: goal_outcome is produced once by the session hub, not per
+	// connection). This tab is on a DIFFERENT session, so it receives the
+	// unsequenced broadcast copy (BE-DESIGN.md §1.4) — byte-for-byte what
+	// replay emits, which is exactly what this test compares.
 	bus := agent.NewEventBus()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(8)
-	done := runForwarder(h, wc, "chat-goal", bus)
+	bus.SetSyncTap(h.hubSyncTap)
+	bindTestConnToSession(h, "chat-goal", "some-other-session", wc)
 	bus.Emit(agent.Event{
 		Kind:    agent.EventKindGoalOutcome,
 		Payload: agent.GoalOutcomePayload{SessionID: sessionID, MessageID: entry.ID, Outcome: outcome},
 	})
 	bus.Close()
-	<-done
 	require.Len(t, ch, 1, "exactly one frame for one goal ending")
 	liveRaw := <-ch
 
 	// Replay: the persisted entry streamed back.
 	sink := &sliceSink{}
 	entries := []session.TranscriptEntry{entry}
-	_, err := streamReplay(t.Context(), sessionID, entries, computeReplayStats(entries), sink.emit, nil, nil, nil)
+	_, err := streamReplay(t.Context(), sessionID, entries, computeReplayStats(entries), sink.emit, nil, nil, nil, nil)
 	require.NoError(t, err)
 	var replayRaw [][]byte
 	for _, f := range sink.frames {

@@ -1,0 +1,177 @@
+{
+  "scenario": "F1",
+  "title": "Live turn: two rounds with one tool call, one tab",
+  "description": "Tab A sends a message with no session id; the gateway mints the session (session_started carries the start cursor), echoes the user message, ticks received→working, streams round 1, runs one tool call, streams round 2 and sends the turn's done.",
+  "expect": {
+    "assistant_messages": [
+      "Let me check.",
+      "All done."
+    ],
+    "cursor_after_last_frame": "the seq of the done frame",
+    "one_bubble_per_message": true,
+    "tool_calls": [
+      "list_tasks"
+    ],
+    "user_message": "check my tasks",
+    "user_message_above_reply": true
+  },
+  "tabs": [
+    {
+      "name": "A",
+      "events": [
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:01Z",
+            "pending_approvals": [],
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "client_message_id": "client-1",
+            "content": "check my tasks",
+            "type": "message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "boot_id": "boot-1",
+            "seq": 1,
+            "session_id": "sess-1",
+            "type": "session_started"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "client_message_id": "client-1",
+            "content": "check my tasks",
+            "id": "id-1",
+            "seq": 2,
+            "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "type": "user_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "seq": 3,
+            "session_id": "sess-1",
+            "state": "received",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "seq": 4,
+            "session_id": "sess-1",
+            "state": "working",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "Let me ",
+            "message_id": "msg-1",
+            "seq": 5,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "check.",
+            "message_id": "msg-1",
+            "seq": 6,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "call_id": "call-1",
+            "params": {
+              "role": "assignee"
+            },
+            "seq": 7,
+            "session_id": "sess-1",
+            "tool": "list_tasks",
+            "type": "tool_call_start"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "call_id": "call-1",
+            "duration_ms": 1,
+            "result": "{\"tasks\":[],\"workspace_scoped\":false,\"matched\":0,\"returned\":0}",
+            "seq": 8,
+            "session_id": "sess-1",
+            "status": "success",
+            "tool": "list_tasks",
+            "type": "tool_call_result"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "All ",
+            "message_id": "msg-2",
+            "seq": 9,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "done.",
+            "message_id": "msg-2",
+            "seq": 10,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "message_id": "msg-2",
+            "seq": 11,
+            "session_id": "sess-1",
+            "stats": {
+              "cost": 0,
+              "duration_ms": 1,
+              "tokens": 0
+            },
+            "turn_id": "turn-1",
+            "type": "done"
+          }
+        }
+      ]
+    }
+  ]
+}

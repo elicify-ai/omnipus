@@ -54,9 +54,27 @@ func TestEmptyAgentRosterWouldResolveToPermissiveGlobalFloor(t *testing.T) {
 	// AgentConfig{ID: DefaultAgentID}, which never has Tools set.
 	polCfg := &tools.ToolPolicyCfg{GlobalPolicies: globalPolicies}
 
+	// Expected floor per tool, taken from pkg/config/defaults.go's seeded
+	// global ceiling. "bash" is intentionally NOT "allow" here (ADR-092,
+	// founder decision 2026-09-23): the global ceiling ships "ask" for bash
+	// so the D1 Ask/Auto/God Mode selector and the D7/D8 pre-flights engage
+	// on a fresh install — see defaults.go's own comment beside the "bash":
+	// "ask" seed. That is a stricter floor than the other sensitive tools
+	// below, not a weaker one; the point this test documents — a roster with
+	// no per-agent policy entry falls through to the seeded global floor,
+	// not to any agent's own deny-heavy policy — holds regardless of what
+	// that floor's value is for a given tool.
+	expected := map[string]string{
+		"bash":       "ask",
+		"write_file": "allow",
+		"edit_file":  "allow",
+		"delegate":   "allow",
+		"send_email": "allow",
+	}
+
 	for _, sensitive := range []string{"bash", "write_file", "edit_file", "delegate", "send_email"} {
 		got := tools.ResolveEffectivePolicy(polCfg, sensitive)
-		assert.Equal(t, "allow", got,
+		assert.Equal(t, expected[sensitive], got,
 			"tool %q: an agent with no per-agent policy entry falls through to the seeded global "+
 				"floor — this is exactly why populateAgentsListFromEntityStoreStrict must never let "+
 				"the roster go silently empty", sensitive)

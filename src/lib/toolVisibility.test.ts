@@ -107,24 +107,18 @@ describe('shouldRenderToolCall — set_goal (ADR-088 D5/A-3)', () => {
 })
 
 describe('shouldRenderToolCall — delegate', () => {
-  // ADR-091 D7/AC-7 (revised from the Fix 2 hide-by-default rule): the
-  // SubagentBlock span card and its gate (`shouldRenderSubagentSpan`) are
-  // deleted — a child's own frames never arrive in the parent's bucket any
-  // more, so there is no span-level surface left in the thread at all. This
-  // tool-call line is therefore now the parent chat's ONLY delegation
-  // surface, and AC-7 requires it to show: a 'run' delegation (the default
-  // action, sync or async) is visible in the normal thread. Only `status`
-  // (polling a previously-delegated task) stays hidden — pure noise, no
-  // standalone meaning to a reader.
+  // Spec D2: every delegate action is a line, not a badge, unless verbose
+  // chat is on (that short-circuit is tested below). `isError` does not
+  // bring a badge back.
   it.each<[Record<string, unknown> | undefined, boolean]>([
-    [undefined, true], // defaults: action=run → visible (ADR-091 D7/AC-7)
-    [{}, true],
-    [{ async: true }, true], // explicit async=true, same as default → visible
-    [{ async: false }, true], // explicit blocking run — still visible
-    [{ action: 'status' }, false], // status polling → hidden
-    [{ action: 'status', async: false }, false], // status wins over async
-    [{ action: 'run', async: false }, true], // explicit run + await → visible
-    [{ action: 'kill' }, true], // any action other than status is visible
+    [undefined, false],
+    [{}, false],
+    [{ async: true }, false],
+    [{ async: false }, false],
+    [{ action: 'status' }, false],
+    [{ action: 'status', async: false }, false],
+    [{ action: 'run', async: false }, false],
+    [{ action: 'kill' }, false],
   ])('params=%o → %s', (params, expected) => {
     expect(shouldRenderToolCall('delegate', params, false)).toBe(expected)
   })
@@ -200,8 +194,8 @@ describe('shouldRenderToolCall — verbose override', () => {
     expect(shouldRenderToolCall('bash', { run_in_background: true }, true)).toBe(true)
   })
 
-  it('a delegate run is visible by default even without verbose (ADR-091 D7/AC-7)', () => {
-    expect(shouldRenderToolCall('delegate', undefined, false)).toBe(true)
+  it('a delegate run badge stays hidden without verbose (the event line replaces it)', () => {
+    expect(shouldRenderToolCall('delegate', undefined, false)).toBe(false)
   })
 
   it('a hidden delegate status-poll call becomes visible when verbose', () => {
@@ -241,21 +235,16 @@ describe('shouldRenderToolCall — isError override still forces ToolSearch/Skil
   })
 })
 
-describe('shouldRenderToolCall — delegate ignores isError entirely (param-based only, ADR-091 D7/AC-7)', () => {
-  // A 'run' delegation (the default) is visible unconditionally — isError
-  // changes nothing for it, since it is already visible either way. A
-  // 'status' poll stays hidden even on error — pure noise, no standalone
-  // meaning regardless of outcome. Neither case has ever depended on
-  // verbose chat to be internally consistent between isError=true/false;
-  // verbose chat's own short-circuit (checked first in the function) is
-  // what reveals `status` when the user opts in.
+describe('shouldRenderToolCall — delegate ignores isError entirely', () => {
+  // An error does not bring a non-verbose delegate badge back. Verbose
+  // chat's short-circuit (checked first) is what reveals every action.
   it.each<[Record<string, unknown> | undefined, boolean]>([
-    [undefined, true], // default action=run, async=true → visible
-    [{}, true],
-    [{ async: true }, true],
-    [{ async: false }, true], // explicit blocking run — still visible
-    [{ action: 'status' }, false], // status polling → hidden regardless of error
-    [{ action: 'kill' }, true], // unrelated action — already always visible
+    [undefined, false],
+    [{}, false],
+    [{ async: true }, false],
+    [{ async: false }, false],
+    [{ action: 'status' }, false],
+    [{ action: 'kill' }, false],
   ])('params=%o isError=true → %s', (params, expected) => {
     expect(shouldRenderToolCall('delegate', params, false, true)).toBe(expected)
   })
@@ -294,7 +283,7 @@ describe('shouldRenderToolCall — isError=false explicit is a no-op (regression
   it.each<[string, Record<string, unknown> | undefined, boolean]>([
     ['ToolSearch', undefined, false],
     ['Skill', undefined, false],
-    ['delegate', undefined, true], // run is visible by default (ADR-091 D7/AC-7)
+    ['delegate', undefined, false], // run badge hidden; the event line is the surface
     ['delegate', { action: 'status' }, false], // status stays hidden
     ['bash', { run_in_background: true }, false],
     ['bash', { action: 'kill' }, true],
@@ -406,4 +395,47 @@ describe('shouldRenderToolCall — all six new browser tools render in their own
   // therefore now the whole answer for the parent thread; a call inside a
   // CHILD's own session is reached by opening that session directly (the
   // side panel's Open control), not through any thread-side gate here.
+})
+
+// Delegation chat surface (docs/internal/specs/delegation-chat-surface-spec.md
+// D2, AC-9, AC-5 render half). The grey event lines replace delegate badges
+// in the normal thread. Verbose chat is unchanged: the function's first
+// branch still returns true for every tool, delegate included.
+describe('shouldRenderToolCall — delegation lines replace delegate badges (D2)', () => {
+  const DELEGATE_ACTIONS = [
+    'run',
+    'status',
+    'peek',
+    'inbox',
+    'inbox_ack',
+    'steer',
+    'respond',
+    'cancel',
+    'follow_up',
+  ] as const
+
+  it.each(DELEGATE_ACTIONS)(
+    'non-verbose: delegate action %s renders no badge (the line is the surface)',
+    (action) => {
+      expect(shouldRenderToolCall('delegate', { action }, false)).toBe(false)
+      expect(shouldRenderToolCall('delegate', { action }, false, true)).toBe(false)
+    },
+  )
+
+  it('non-verbose: a delegate call with no action (the run default) renders no badge', () => {
+    expect(shouldRenderToolCall('delegate', undefined, false)).toBe(false)
+    expect(shouldRenderToolCall('delegate', {}, false)).toBe(false)
+  })
+
+  it.each(DELEGATE_ACTIONS)(
+    'verbose: delegate action %s still renders a badge (AC-9)',
+    (action) => {
+      expect(shouldRenderToolCall('delegate', { action }, true)).toBe(true)
+      expect(shouldRenderToolCall('delegate', { action }, true, true)).toBe(true)
+    },
+  )
+
+  it('verbose: a delegate call with no action still renders a badge (AC-9)', () => {
+    expect(shouldRenderToolCall('delegate', undefined, true)).toBe(true)
+  })
 })

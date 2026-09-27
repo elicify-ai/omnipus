@@ -24,10 +24,18 @@ import (
 // It writes a minimal config.json into the temp dir so safeUpdateConfigJSON can read and mutate it.
 func newTestRestAPIWithHome(t *testing.T) *restAPI {
 	t.Helper()
+	return newTestRestAPIWithHomeDevModeBypass(t, false)
+}
+
+// newTestRestAPIWithHomeDevModeBypass is newTestRestAPIWithHome with
+// gateway.dev_mode_bypass set explicitly, for tests pinning behavior that
+// differs under bypass (e.g. TestHandleStateGET_DevModeBypass).
+func newTestRestAPIWithHomeDevModeBypass(t *testing.T, devModeBypass bool) *restAPI {
+	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: devModeBypass},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:         tmpDir,
@@ -315,7 +323,8 @@ func TestDoctorGodModeArmed_HighSeverity(t *testing.T) {
 	require.NotNil(t, found, "armed god-mode (sandbox.god_mode=true) must produce a god-mode-armed issue")
 	assert.Equal(t, "high", found["severity"],
 		"god-mode-armed must be high severity — strictly worse than the medium sandbox-disabled check, "+
-			"since it disables the sandbox, egress restrictions, AND the shell guard simultaneously")
+			"since it disables the sandbox's filesystem confinement AND opens egress simultaneously, "+
+			"floored at allow for every tool (it does not disable the shell's outside-workspace write refusal)")
 	assert.NotEmpty(t, found["title"])
 	assert.NotEmpty(t, found["description"])
 	assert.NotEmpty(t, found["recommendation"])

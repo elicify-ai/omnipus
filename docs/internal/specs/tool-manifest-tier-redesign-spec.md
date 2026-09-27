@@ -5,7 +5,7 @@
 **Status**: Draft
 **Input**: [`docs/internal/architecture/ADR-071-tool-manifest-tier-redesign.md`](../architecture/ADR-071-tool-manifest-tier-redesign.md) (revision 5, 2026-08-27). Five decisions D1–D5, five workstreams W-D1/W1/W2/W3/W4 (+W5 docs), ratification section §11 with 8 open items.
 
-**Release-phase routing**: out of band. Not v0.1, not v0.2, not v0.3 — per the ADR's own routing note it neither blocks nor is blocked by any of the three phases. Ships on its own branch.
+**Release-phase routing**: out of band — outside the v0.1 stabilization and the retired v0.2/v0.3 phases (retired 2026-09-25); per the ADR's own routing note it neither blocks nor is blocked by any phase. Ships on its own branch.
 
 ---
 

@@ -1,5 +1,7 @@
 # D-92 — Two sessions on one account share a chat (product characteristic, pending ruling)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Status:** documented, not changed. Needs a founder ruling before any code moves.
 **Source:** UAT 2026-09-13, defect D-92 (S3) in
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/evidence/2026-09-13/DEFECTS.md`
@@ -41,7 +43,6 @@ because to the product they are the same person.
 1. Is "one account = one person, one live conversation" the intended model for v0.1?
    If yes: record it in the release notes and the UAT runbook (testers get one account each),
    and close D-92 as a characteristic.
-2. If not: which row of the table above, and in which release phase (v0.2 hardening or the
-   v0.3 Workspaces redesign, where session ownership is already being redrawn).
+2. If not: which row of the table above, and on which track (the structural items are tracked via [#887]; the v0.2/v0.3 release labels were retired 2026-09-25).
 
 Until ruled, the UAT re-run should give each lane its own account.

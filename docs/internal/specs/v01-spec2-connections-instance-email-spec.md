@@ -5,14 +5,14 @@
 - **Source ADR:** [ADR-019](../architecture/ADR-019-v01-workspaces-foundation.md) — FR-2 (+ scope corrections + email-dep decision); risk R2 (the one deliberate breaking change)
 - **Status:** Rev 2 (addresses `…-review.md` BLOCK — 5 CRITICAL / 7 MAJOR) → pending re-`/grill-spec`
 - **Cross-spec (Phase 3.5):** Connection binds to a Spec-1 `Workspace`; `identity{agent|user}` aligns with the agent-reference shape (Spec-3/4).
-- **Constraints:** greenfield; single-user; contract-first; secrets credential-ref'd (SEC-23); cap = 1/type (v0.3 lifts).
+- **Constraints:** greenfield; single-user; contract-first; secrets credential-ref'd (SEC-23); cap = 1/type (lifts later — the v0.3 label was retired 2026-09-25).
 
 ## 1. Overview
 
 Replace the **typed-singleton** channel config with a **`map[string]ChannelInstanceConfig`** (keyed by instance id, **cap 1/type** in v0.1.0); rewrite `initChannels` into a **loop**; **update the 13 factory constructors** (which read `cfg.Channels.<Typed>` themselves) + the extra readers to consume an instance config; modify the `ChannelEntry`/`ChannelConfigureRequest`/`ChannelId` contracts to carry **`instance_id` + `identity{agent|user}`** and add **`email`**; surface a **Connectors UI**; ship a **basic email channel** (IMAP-in via `emersion/go-imap` + SMTP-out via stdlib, one mailbox). The one deliberate breaking change, done up front.
 
 **In scope (corrected blast radius — F-1/F-3):** the config map migration (cap 1); `initChannels` loop **+ a type→factory map** (`whatsapp`→`whatsapp_native`); **the 13 factory constructors** read instance config; the extra readers `emitGHSARemovalWarn`/`countEnabledChannels`/`config_old.go`; `ChannelEntry`/`ChannelConfigureRequest`/`ChannelId` contract modification + regen; the new `email` factory; Connectors UI; per-instance credential refs.
-**Out of scope:** cap >1 (v0.3); OAuth (v0.3); new channel types beyond email; the 13 channels' message behaviour (only their config-reading + activation change).
+**Out of scope:** cap >1 (deferred, no release scheduled); OAuth (deferred, no release scheduled); new channel types beyond email; the 13 channels' message behaviour (only their config-reading + activation change).
 
 ## 2. Existing Codebase Context (grounded)
 
@@ -41,7 +41,7 @@ Replace the **typed-singleton** channel config with a **`map[string]ChannelInsta
 
 **US-1 — Instance-map config, all readers migrated (P0).** **Independent test:** with the typed fields **deleted**, `go build ./...` succeeds (the compiler proves every reader is migrated) AND the AST guard (test #8) flags 0 `config.ChannelsConfig` selectors. 1. **Given** a telegram instance keyed "tg-1", **When** loaded, **Then** `Channels["tg-1"].Type=="telegram"`. 2. **Given** the typed fields are removed, **When** `go build ./...` runs, **Then** it succeeds only once every reader (compiler-surfaced) is migrated; the AST guard additionally catches alias-form reads (R4-F2).
 
-**US-2 — Cap of one per type (P0).** 1. **Given** one telegram instance, **When** a 2nd telegram is added, **Then** 422 "one-per-type in v0.1.0". 2. **Given** the cap is a single constant, **When** v0.3 lifts it, **Then** only the constant changes.
+**US-2 — Cap of one per type (P0).** 1. **Given** one telegram instance, **When** a 2nd telegram is added, **Then** 422 "one-per-type in v0.1.0". 2. **Given** the cap is a single constant, **When** a later release lifts it (the v0.3 label was retired 2026-09-25), **Then** only the constant changes.
 
 **US-3 — `initChannels` loop + type→factory map (P0).** 1. **Given** the loop, **When** an `email` instance is enabled, **Then** it activates with no `initChannels` branch. 2. **Given** a `whatsapp`-type instance, **When** activated, **Then** the loop maps it to the `whatsapp_native` factory (F-6).
 

@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package audit — chain verification for the v0.2 #155 tamper-evident
+// Package audit — chain verification for the #155 tamper-evident
 // audit log. Pairs with hmac.go (write-side) and audit.go (Logger).
 //
 // Verification model:
@@ -62,7 +62,7 @@ type ChainResult struct {
 	FilesScanned   int    `json:"files_scanned"`
 	FinalHMAC      []byte `json:"-"`
 	// PreChainEntries counts entries that appear BEFORE any HMAC-bearing
-	// entry. These are legacy rows from before v0.2 #155 shipped and are
+	// entry. These are legacy rows from before the #155 chain shipped and are
 	// reported (not flagged as broken) so an operator running Verify against
 	// a log written by an older binary doesn't see false positives.
 	PreChainEntries int `json:"pre_chain_entries"`
@@ -212,7 +212,7 @@ func VerifyFile(ctx context.Context, path string, key []byte, seedHMAC []byte) (
 		}
 		hmacField, hasHMAC := m["hmac"].(string)
 		if !hasHMAC {
-			// Pre-chain entry from before v0.2 #155 shipped. Count it but
+			// Pre-chain entry from before the #155 chain shipped. Count it but
 			// do not flag — and do not advance prev, since prev should
 			// chain to the next HMAC-bearing entry as if these legacy
 			// rows didn't exist.

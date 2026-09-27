@@ -38,6 +38,7 @@ import type {
   RegistryTool,
 } from '@/lib/api'
 import { findOrphanedPresetOverrideKeys, resolveToolsCfg } from '@/lib/toolPolicyPresets'
+import { isProviderUsable } from '@/lib/providerStatus'
 
 import {
   CreateAgentWizard,
@@ -162,7 +163,6 @@ function payloadToCreateRequest(
     }
     if (!inheritSkills && payload.skills !== undefined) req.skills = payload.skills
     if (payload.model_params !== undefined) req.model_params = payload.model_params
-    if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
     if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
     return req
   }
@@ -183,7 +183,6 @@ function payloadToCreateRequest(
   if (payload.skills !== undefined) req.skills = payload.skills
   if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
   if (payload.model_params !== undefined) req.model_params = payload.model_params
-  if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
   if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
   return req
 }
@@ -261,9 +260,11 @@ export function CreateAgentModal({
   // that would contradict a global deny/ask (no contradicting configs).
   const globalPoliciesQuery = useQuery({ queryKey: ['global-tool-policies'], queryFn: fetchGlobalToolPolicies })
 
-  const connectedProviders = (providersQuery.data ?? []).filter(
-    (p) => p.status === 'connected',
-  )
+  // Usability, not key-connection (see providerStatus.ts): a subscription
+  // provider is signed_in, never connected, and its models must list in the
+  // wizard's Step 1 picker too. (The wizard's `connectedProviders` PROP keeps
+  // its name — renaming it is a cross-file churn this hotfix doesn't need.)
+  const usableProviders = (providersQuery.data ?? []).filter((p) => isProviderUsable(p.status))
   const registryTools = toolsQuery.data ?? []
   const skills = skillsQuery.data ?? []
   const globalPolicies = globalPoliciesQuery.data
@@ -329,7 +330,7 @@ export function CreateAgentModal({
       {...(effectiveCli ? { initialCli: effectiveCli } : {})}
       onSubmit={handleSubmit}
       onClose={handleClose}
-      connectedProviders={connectedProviders}
+      connectedProviders={usableProviders}
       registryTools={registryTools}
       skills={skills}
       globalPolicies={globalPolicies}

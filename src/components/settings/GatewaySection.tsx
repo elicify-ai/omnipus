@@ -39,7 +39,7 @@ import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
 import { usePendingRestart, PENDING_RESTART_QUERY_KEY } from '@/hooks/restart'
 import { GatewayRestartModal } from './GatewayRestartModal'
-import { GodModeControl, GodModeActiveBanner } from './GodModeControl'
+import { GodModeControl } from './GodModeControl'
 
 // ── Risky-control copy bundles (US-B2) ────────────────────────────────────────
 
@@ -89,7 +89,7 @@ function UnauthenticatedBanner({ devModeBypass }: UnauthBannerProps) {
   )
 }
 
-export function GatewaySection() {
+export function GatewaySection({ focusGodMode }: { focusGodMode?: boolean }) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const [copied, setCopied] = useState(false)
@@ -294,8 +294,8 @@ export function GatewaySection() {
 
   return (
     <div className="space-y-[var(--space-4)]">
-      {/* O14: persistent god-mode-active banner (shown whenever god-mode is on). */}
-      <GodModeActiveBanner />
+      {/* ADR-092 FR-034: the god-mode-active banner is now rendered app-wide
+          from AppShell, not here — a change here would be a second copy. */}
 
       {/* FR-107b: persistent unauthenticated-access banner (dev_mode_bypass only) */}
       <UnauthenticatedBanner devModeBypass={devModeBypass} />
@@ -517,8 +517,10 @@ export function GatewaySection() {
 
       <Separator />
 
-      {/* O14: God-mode switch (danger zone) — step-up-gated global override. */}
-      <GodModeControl />
+      {/* O14: God-mode switch (danger zone) — step-up-gated global override.
+          focusGodMode routes the ?focus=god-mode landing from the sidebar
+          pill / app-shell corner dot (2026-09-25). */}
+      <GodModeControl focusOnMount={focusGodMode} />
 
       <Separator />
 

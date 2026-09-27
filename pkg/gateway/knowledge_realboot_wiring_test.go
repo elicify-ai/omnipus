@@ -327,10 +327,10 @@ func TestBroadcastKnowledgeIndexProgress_ReachesEveryConnectedClient(t *testing.
 	}
 }
 
-// TestBroadcastKnowledgeIndexProgress_IsNilSafeAndCountsDrops pins the two
+// TestBroadcastKnowledgeIndexProgress_IsNilSafeAndNeverDrops pins the two
 // degraded paths, because the honest behaviour under backpressure is what
 // keeps a client from being stuck showing a bar that stopped moving.
-func TestBroadcastKnowledgeIndexProgress_IsNilSafeAndCountsDrops(t *testing.T) {
+func TestBroadcastKnowledgeIndexProgress_IsNilSafeAndNeverDrops(t *testing.T) {
 	frame := newKnowledgeIndexProgressFrame("kb_x", "ws_1",
 		knowledgeIndexUpdate{Phase: knowledgeIndexPhaseIdle}, time.Now())
 
@@ -338,11 +338,12 @@ func TestBroadcastKnowledgeIndexProgress_IsNilSafeAndCountsDrops(t *testing.T) {
 	// panic. startKnowledgeLifecycle passes a nil *WSHandler in exactly that case.
 	assert.NotPanics(t, func() { (*WSHandler)(nil).broadcastKnowledgeIndexProgress(frame) })
 
-	// A full send buffer drops the frame and COUNTS it. Dropping silently is
-	// what makes a stalled progress bar indistinguishable from a finished one.
+	// #823 (founder decision Q5): a full send window no longer drops the
+	// frame — it waits in the connection's ordered queue, so a slow client's
+	// progress bar still converges instead of silently stalling.
 	full := &wsConn{sendCh: make(chan []byte)} // unbuffered, nobody reading
 	h := &WSHandler{sessions: map[string]*wsConn{"chat": full}}
 	h.broadcastKnowledgeIndexProgress(frame)
-	assert.EqualValues(t, 1, full.droppedFrames.Load(),
-		"a dropped progress frame must be counted, or backpressure is invisible")
+	queued, _ := full.queuedFrames()
+	assert.Equal(t, 1, queued, "the progress frame must be queued for the slow client, not dropped")
 }

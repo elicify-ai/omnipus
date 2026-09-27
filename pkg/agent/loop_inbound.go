@@ -929,6 +929,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		release()
 		return "", steer.ErrStaleGeneration
 	}
+	if turnRegisteredTestHook != nil {
+		turnRegisteredTestHook(sessionID, ts)
+	}
 	abort := func() {
 		al.activeTurnStates.CompareAndDelete(sessionID, ts)
 		release()

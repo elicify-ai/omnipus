@@ -1,5 +1,7 @@
 # ADR-023 — Token-Usage Tracking (tokens only, read-time aggregation)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Status:** Accepted
 **Date:** 2026-06-26
 **Deciders:** operator, architect, backend-lead, frontend-lead
@@ -63,7 +65,8 @@ authenticated, human-paced screen.
 **Known scaling cliff (accepted for v0.1):** at thousands of sessions, or a
 multi-tenant variant, the full scan per request becomes the bottleneck. The trigger to
 revisit (a materialized rollup) is session-count / latency; it aligns naturally with
-v0.3 per-workspace usage. Do **not** retrofit a stale cache before then.
+per-workspace usage — no release scheduled (the v0.2/v0.3 labels were retired
+2026-09-25). Do **not** retrofit a stale cache before then.
 
 ### D3 — The aggregator lives in `pkg/session` (leaf), not a new package.
 
@@ -124,7 +127,8 @@ Input/Output/Cached triple (Input ≈ 0; cache already inside Output).
 
 A session's tokens are charged to `sm.ActiveAgentID` (fallback `AgentIDs[0]`), not split
 across `AgentIDs` — attributing to each entry would double-count on handoffs. This
-preserves the prior `HandleTokenStats` behavior. **Known coarseness (v0.3 candidate):**
+preserves the prior `HandleTokenStats` behavior. **Known coarseness (tracked
+candidate; no release scheduled):**
 in a delegation-heavy Workspaces world (Orchestrator + Scout + Builder on one session)
 this under-represents the agents that did the work; per-turn attribution
 (`TranscriptEntry.AgentID` is already recorded) is the more accurate long-term model.

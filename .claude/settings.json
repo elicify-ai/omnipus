@@ -1,6 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "enabledPlugins": {
-    "pr-review-toolkit@claude-plugins-official": true
-  }
+    "pr-review-toolkit@claude-plugins-official": true,
+    "claude-security@claude-plugins-official": true
+  },
+  "agent": "team-lead"
 }

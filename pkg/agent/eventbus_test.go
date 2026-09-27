@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -322,6 +323,105 @@ func TestEventBus_MustNotDropEventKind_SharedDeadlineNotMultipliedAndDoesNotBloc
 	case <-time.After(2 * time.Second):
 		t.Fatal("concurrent Subscribe/Emit/Unsubscribe never completed — likely blocked behind the retry's lock, " +
 			"which is exactly the writer-starvation stall this fix must avoid")
+	}
+}
+
+// TestEventBus_SyncTapSeesEveryEventUnderBackpressure proves the #823
+// catch-up-redesign design's core lossless-numbering guarantee (§1.3):
+// EventBus.SetSyncTap's callback sees every single Emit call, even when a
+// subscriber's channel is saturated and best-effort delivery drops the
+// event for every subscriber. The gateway's per-session numbering hub (Lane
+// A) taps here, never subscribes, for exactly this reason: a Subscribe
+// channel is deliberately lossy (see Emit's own best-effort/mustNotDropEvent
+// split above), but the frame numbering that answers "what happened, in
+// what order" must never have a hole a live subscriber's backpressure could
+// have caused.
+func TestEventBus_SyncTapSeesEveryEventUnderBackpressure(t *testing.T) {
+	eb := NewEventBus()
+	// A single-slot subscriber that is never drained: every Emit call below
+	// drops for this subscriber under the pre-existing best-effort semantics.
+	sub := eb.Subscribe(1)
+	defer eb.Unsubscribe(sub.ID)
+	eb.Emit(Event{Kind: EventKindLLMRequest}) // fills the 1-slot buffer
+
+	var mu sync.Mutex
+	var tapped []EventKind
+	eb.SetSyncTap(func(evt Event) {
+		mu.Lock()
+		tapped = append(tapped, evt.Kind)
+		mu.Unlock()
+	})
+
+	const n = 500
+	for i := 0; i < n; i++ {
+		eb.Emit(Event{Kind: EventKindToolExecStart})
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(tapped) != n {
+		t.Fatalf("expected the sync tap to observe all %d events despite a permanently "+
+			"saturated subscriber, got %d — a tap that can miss an event under backpressure "+
+			"defeats the whole point of numbering ahead of subscriber fan-out", n, len(tapped))
+	}
+	for i, k := range tapped {
+		if k != EventKindToolExecStart {
+			t.Fatalf("tap event %d: expected EventKindToolExecStart, got %v", i, k)
+		}
+	}
+	// The lossy subscriber path must be completely unaffected by the tap's
+	// existence: it still drops under backpressure exactly as before
+	// SetSyncTap existed.
+	if dropped := eb.Dropped(EventKindToolExecStart); dropped == 0 {
+		t.Fatal("expected the saturated subscriber to still record drops — SetSyncTap must not " +
+			"change ordinary subscriber backpressure semantics")
+	}
+}
+
+// TestEventBus_SyncTapSeesEventsEmittedAfterClose proves the tap's
+// "sees everything" guarantee extends past Close, mirroring the existing
+// must-not-drop-event guarantee for a straggling sub-turn's deferred cleanup
+// racing AgentLoop.Close (TestEventBus_MustNotDropEventKind_ClosedBusStillCounts
+// above) — the gateway's numbering hub needs the SAME guarantee for every
+// event kind, not just the must-not-drop ones, so a shutdown race can never
+// silently vanish a frame that should have been numbered.
+func TestEventBus_SyncTapSeesEventsEmittedAfterClose(t *testing.T) {
+	eb := NewEventBus()
+
+	var mu sync.Mutex
+	var tapped int
+	eb.SetSyncTap(func(Event) {
+		mu.Lock()
+		tapped++
+		mu.Unlock()
+	})
+
+	eb.Close()
+	eb.Emit(Event{Kind: EventKindToolExecStart})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if tapped != 1 {
+		t.Fatalf("expected the sync tap to observe an event emitted after Close, got %d calls", tapped)
+	}
+}
+
+// TestEventBus_SetSyncTap_NilClearsTap proves SetSyncTap(nil) is a valid,
+// safe way to remove a previously installed tap (e.g. gateway shutdown) —
+// Emit must not panic and must simply stop calling it.
+func TestEventBus_SetSyncTap_NilClearsTap(t *testing.T) {
+	eb := NewEventBus()
+	calls := 0
+	eb.SetSyncTap(func(Event) { calls++ })
+	eb.Emit(Event{Kind: EventKindLLMRequest})
+	if calls != 1 {
+		t.Fatalf("expected 1 tap call before clearing, got %d", calls)
+	}
+
+	eb.SetSyncTap(nil)
+	eb.Emit(Event{Kind: EventKindLLMRequest})
+	if calls != 1 {
+		t.Fatalf("expected no further tap calls after SetSyncTap(nil), got %d total", calls)
 	}
 }
 

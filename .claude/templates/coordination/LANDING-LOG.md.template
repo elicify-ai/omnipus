@@ -1,0 +1,18 @@
+# LANDING-LOG.md template (design 5.9)
+#
+# Append-only landing record. Never edited or truncated once a line is
+# written (design: "Append only — never edited"). Start the live file
+# empty.
+#
+# Format:
+#
+#   squad=<squad-id> | branch=<branch-name> | commit=<sha> | checks=<evidence-summary> | founder-yes=<note> | landed-at=<ISO8601>
+#
+# "checks" is a short evidence summary (which CI tiers were green on the
+# merged-latest result, plus the conflict-resolution review verdict — design
+# 5.7's "affected areas" re-check), not a full log. "founder-yes" is a one
+# line record of where/when the founder said yes (e.g. "chat, this session,
+# 2026-09-25T09:20Z" or "batched ask, event update #4").
+#
+# Example line (illustration only):
+# squad=squad-security | branch=release/v0.1.1 | commit=1eac2badd4f1 | checks=go tier green on merged result; conflict resolution reviewed, no design-decision hunks | founder-yes=chat this session 2026-09-25T09:20Z | landed-at=2026-09-25T09:22:00Z

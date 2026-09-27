@@ -37,7 +37,7 @@ type ToolRegistry struct {
 	version           atomic.Uint64 // incremented on Register/RegisterHidden for cache invalidation
 	mediaStore        media.MediaStore
 	auditLogger       *audit.Logger      // SEC-15: structured audit logging for tool executions
-	memoryRateLimiter *MemoryRateLimiter // v0.2 #155 item 6: rate-limit memory writes
+	memoryRateLimiter *MemoryRateLimiter // #155 item 6: rate-limit memory writes
 }
 
 type mediaStoreAware interface {
@@ -53,7 +53,7 @@ type auditLoggerAware interface {
 }
 
 // memoryRateLimiterAware is implemented by tools that participate in the
-// memory-write rate-limit gate (v0.2 #155 item 6). The registry propagates a
+// memory-write rate-limit gate (#155 item 6). The registry propagates a
 // shared limiter on SetMemoryRateLimiter; tools that do not implement this
 // interface are unaffected.
 type memoryRateLimiterAware interface {
@@ -296,7 +296,7 @@ func (r *ToolRegistry) SetAuditLogger(logger *audit.Logger) {
 	}
 }
 
-// SetMemoryRateLimiter injects a MemoryRateLimiter (v0.2 #155 item 6) into
+// SetMemoryRateLimiter injects a MemoryRateLimiter (#155 item 6) into
 // the registry. The limiter is propagated to any registered tools that
 // implement memoryRateLimiterAware (currently RememberTool and
 // RetrospectiveTool) so their writes are gated.

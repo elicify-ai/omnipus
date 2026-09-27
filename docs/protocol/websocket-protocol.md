@@ -96,29 +96,6 @@ Cancels an in-progress streaming response or tool execution for the given sessio
 
 ---
 
-### `exec_approval_response`
-
-Responds to a pending execution approval request from the backend.
-
-```json
-{
-  "type": "exec_approval_response",
-  "id": "approval_xyz789",
-  "decision": "allow"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| type | string | yes | Always `"exec_approval_response"` |
-| id | string | yes | The approval request ID from the corresponding `exec_approval_request` frame |
-| decision | string | yes | One of `"allow"`, `"deny"`, `"always"` |
-
-**Producer**: Exec approval block component in `src/components/chat/`
-**Consumer**: Gateway exec approval handler in `pkg/gateway/` or `pkg/tools/`
-
----
-
 ### `ping`
 
 Keep-alive ping sent every 30 seconds to prevent proxy/firewall timeout. No response is expected from the server (distinct from WebSocket protocol-level ping/pong).
@@ -301,58 +278,6 @@ Signals that a tool invocation has completed. Updates the tool call badge with r
 
 ---
 
-### `exec_approval_request`
-
-Requests explicit user approval before executing a potentially dangerous command. Renders an inline approval block that blocks further execution until the user responds.
-
-```json
-{
-  "type": "exec_approval_request",
-  "session_id": "sess_abc123",
-  "id": "approval_xyz789",
-  "command": "rm -rf /tmp/cache",
-  "working_dir": "/home/user/project",
-  "matched_policy": "requires_approval"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| type | string | yes | Always `"exec_approval_request"` |
-| session_id | string | yes | The session this approval belongs to. Required by the AsyncAPI component schema (`ExecApprovalRequestFrame`, `contracts/asyncapi.yaml:1348-1391`). |
-| id | string | yes | Unique approval request ID — must be echoed in the `exec_approval_response` |
-| command | string | yes | The full command string requiring approval |
-| working_dir | string | no | The working directory in which the command will execute |
-| matched_policy | string | no | The policy rule that triggered the approval requirement |
-
-**Producer**: Exec approval gate in `pkg/tools/` or `pkg/policy/`
-**Consumer**: Exec approval block component — renders command + 3 buttons (Allow / Deny / Always Allow)
-
----
-
-### `exec_approval_expired`
-
-Notifies the frontend that a pending approval request expired without a response. Updates the approval block to an expired state.
-
-```json
-{
-  "type": "exec_approval_expired",
-  "session_id": "sess_abc123",
-  "id": "approval_xyz789"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| type | string | yes | Always `"exec_approval_expired"` |
-| session_id | string | yes | The session this expired approval belongs to. Required by the AsyncAPI component schema (`ExecApprovalExpiredFrame`, `contracts/asyncapi.yaml:1884-1904`). |
-| id | string | yes | The approval request ID that expired |
-
-**Producer**: Exec approval timeout handler in `pkg/policy/` or `pkg/agent/`
-**Consumer**: Exec approval block component — updates buttons to disabled, shows "Expired" label
-
----
-
 ### `timeout`
 
 System-initiated interruption: the backend timed out the turn mid-stream. Partial content (if any) is preserved. This event type must NOT be silently ignored — it is semantically equivalent to a system-initiated cancel and must render visibly. (MAJ-004)
@@ -460,7 +385,6 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | C→S | `auth` | Authenticate the connection |
 | C→S | `message` | Send a user chat message |
 | C→S | `cancel` | Cancel in-progress turn |
-| C→S | `exec_approval_response` | Respond to exec approval request |
 | C→S | `ping` | Keep-alive |
 | C→S | `attach_session` | Attach to an existing session and replay its transcript (with optional `since` for incremental replay) |
 | C→S | `device_pairing_response` | Admin approval/rejection of a pending device pairing request |
@@ -474,15 +398,13 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | S→C | `tool_call_result` | Tool invocation completed |
 | S→C | `subagent_start` | Subagent span opened (FR-H-004) |
 | S→C | `subagent_end` | Subagent span closed (FR-H-004) |
-| S→C | `exec_approval_request` | Approval required before command execution |
-| S→C | `exec_approval_expired` | Pending approval timed out |
-| S→C | `exec_approval_response_ack` | Server acknowledgement that an `exec_approval_response` was resolved |
 | S→C | `task_status_changed` | Task status updated (MAJ-004) |
 | S→C | `replay_message` | One replayed transcript entry during an `attach_session` |
 | S→C | `rate_limit` | Rate-limit denial applied to an agent action (SEC-26) |
 | S→C | `media` | One or more media attachments from a tool (parts array, never null) |
 | S→C | `agent_switched` | Active agent for a session changed (`switch_agent`) |
 | S→C | `tool_approval_required` | Tool call paused for ask-policy approval (FR-011, FR-082); `args` always an object, never null |
+| S→C | `tool_approval_resolved` | A pending tool approval was resolved (approved, denied, or expired) — sent to every connected tab so all of them drop the request together |
 | S→C | `session_state` | One-shot approval-state snapshot on every WS reconnect (FR-052, FR-073, FR-081) |
 | S→C | `system_overload` | System at capacity — an agent action was blocked (FR-016, MAJ-009) |
 | S→C | `replay_warning` | Transcript contained duplicate `tool_call_id`s during replay |

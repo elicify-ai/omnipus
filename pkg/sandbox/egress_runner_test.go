@@ -38,10 +38,10 @@ func TestRunnerEgressProxy_AllowAllExternalEmptyList(t *testing.T) {
 	if !p.allowAll {
 		t.Error("runner proxy with empty allow-list should set allowAll=true")
 	}
-	if !p.hostAllowed("api.anthropic.com") {
+	if !p.hostAllowed("api.anthropic.com", "") {
 		t.Error("allowAll runner proxy denied api.anthropic.com at host layer")
 	}
-	if !p.hostAllowed("registry.npmjs.org") {
+	if !p.hostAllowed("registry.npmjs.org", "") {
 		t.Error("allowAll runner proxy denied registry.npmjs.org at host layer")
 	}
 }
@@ -61,10 +61,10 @@ func TestRunnerEgressProxy_NonEmptyAllowListEnforced(t *testing.T) {
 	if p.allowAll {
 		t.Error("runner proxy with non-empty allow-list should set allowAll=false")
 	}
-	if !p.hostAllowed("api.anthropic.com") {
+	if !p.hostAllowed("api.anthropic.com", "") {
 		t.Error("allow-listed host should be permitted")
 	}
-	if p.hostAllowed("evil.example.com") {
+	if p.hostAllowed("evil.example.com", "") {
 		t.Error("non-allow-listed host should be denied")
 	}
 }

@@ -1,0 +1,291 @@
+{
+  "scenario": "F6",
+  "title": "Switch to another chat while the answer finishes, then switch back",
+  "description": "The tab moves to another chat at token x2 (snapshot of that chat); the first chat's turn finishes meanwhile. Switching back attaches with the first chat's kept cursor: an incremental catch-up delivers exactly x3–x7 and done, then catch_up_complete.",
+  "expect": {
+    "assistant_messages": [
+      "x0 x1 x2 x3 x4 x5 x6 x7 "
+    ],
+    "catch_up_mode_on_return": "incremental",
+    "other_chat_messages_untouched": true,
+    "user_message": "answer while I look elsewhere"
+  },
+  "tabs": [
+    {
+      "name": "A",
+      "events": [
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:01Z",
+            "pending_approvals": [],
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "client_message_id": "client-1",
+            "content": "answer while I look elsewhere",
+            "type": "message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "boot_id": "boot-1",
+            "seq": 1,
+            "session_id": "sess-1",
+            "type": "session_started"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "client_message_id": "client-1",
+            "content": "answer while I look elsewhere",
+            "id": "id-1",
+            "seq": 2,
+            "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "type": "user_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "seq": 3,
+            "session_id": "sess-1",
+            "state": "received",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "seq": 4,
+            "session_id": "sess-1",
+            "state": "working",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "x0 ",
+            "message_id": "msg-1",
+            "seq": 5,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "x1 ",
+            "message_id": "msg-1",
+            "seq": 6,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "x2 ",
+            "message_id": "msg-1",
+            "seq": 7,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "note",
+          "note": "user switches to another chat"
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "session_id": "sess-2",
+            "type": "attach_session"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "reason": "unknown_position",
+            "seq": 7,
+            "session_id": "sess-2",
+            "type": "session_snapshot"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:03Z",
+            "pending_approvals": [],
+            "session_id": "sess-2",
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "content": "an older chat",
+            "id": "id-2",
+            "role": "user",
+            "session_id": "sess-2",
+            "type": "replay_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "session_id": "sess-2",
+            "stats": {
+              "duplicate_tool_call_id_count": 0,
+              "frames_emitted": 1,
+              "orphan_count": 0,
+              "truncated_result_count": 0
+            },
+            "type": "done"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "mode": "snapshot",
+            "seq": 7,
+            "session_id": "sess-2",
+            "type": "catch_up_complete"
+          }
+        },
+        {
+          "dir": "note",
+          "note": "user switches back to the first chat (its bucket kept cursor = seq of x2)"
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "boot_id": "boot-1",
+            "session_id": "sess-1",
+            "since_seq": 7,
+            "type": "attach_session"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:04Z",
+            "pending_approvals": [],
+            "session_id": "sess-1",
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "x3 ",
+            "message_id": "msg-1",
+            "seq": 8,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "x4 ",
+            "message_id": "msg-1",
+            "seq": 9,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "x5 ",
+            "message_id": "msg-1",
+            "seq": 10,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "x6 ",
+            "message_id": "msg-1",
+            "seq": 11,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "x7 ",
+            "message_id": "msg-1",
+            "seq": 12,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "message_id": "msg-1",
+            "seq": 13,
+            "session_id": "sess-1",
+            "stats": {
+              "cost": 0,
+              "duration_ms": 1,
+              "tokens": 0
+            },
+            "turn_id": "turn-1",
+            "type": "done"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "mode": "incremental",
+            "seq": 13,
+            "session_id": "sess-1",
+            "type": "catch_up_complete"
+          }
+        }
+      ]
+    }
+  ]
+}

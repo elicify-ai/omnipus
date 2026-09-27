@@ -1,5 +1,7 @@
 # Adversarial Re-Review (r3, targeted): ADR-049 — Planning & Goals (amended r2)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Spec reviewed**: `docs/internal/architecture/ADR-049-planning-goals-system-agents.md` (amended 2026-07-19 post grill-review r2, commit `01cc8741` on `feature/planning-goals`)
 **Prior reviews**: r1 (`…-review.md`, verdict BLOCK) · r2 (`…-review-r2.md`, verdict REVISE: 1 MAJ / 5 MIN / 3 OBS)
 **Review date**: 2026-07-19

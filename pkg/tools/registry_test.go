@@ -706,6 +706,7 @@ func TestToolRegistry_Execute_PanicDoesNotAffectOtherTools(t *testing.T) {
 func TestToolRegistry_SetMediaStore_PropagatesToExistingAndNewTools(t *testing.T) {
 	r := NewToolRegistry()
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 
 	existing := &mockMediaStoreAwareTool{
 		mockRegistryTool: *newMockTool("existing", "existing tool"),
@@ -747,6 +748,7 @@ func TestToolRegistry_ExecuteWithContext_SanitizesLargeBase64Payload(t *testing.
 func TestToolRegistry_ExecuteWithContext_ExtractsInlineMediaDataURL(t *testing.T) {
 	r := NewToolRegistry()
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	r.SetMediaStore(store)
 
 	payload := "![screenshot](data:image/png;base64,aGVsbG8=)"

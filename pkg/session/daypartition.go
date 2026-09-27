@@ -386,6 +386,33 @@ type TranscriptEntry struct {
 	// Backend-only: never serialized onto a wire frame.
 	ParentSpawnCallID string `json:"parent_spawn_call_id,omitempty"`
 
+	// ClientMessageID is the id the SENDING CLIENT generated for a USER
+	// message, before the server ever assigned this entry's own ID — the
+	// #823 catch-up-redesign field (contracts/components/schemas/
+	// Message.yaml, AsyncAPI's UserMessageFrame.client_message_id). Only
+	// ever populated on Role=="user" entries that arrived carrying one; a
+	// legacy entry (written before this field existed) and every non-user
+	// entry leave it empty.
+	//
+	// Persisted so a later snapshot replay's ReplayMessageFrame can carry
+	// the SAME client_message_id back to the browser — letting the sending
+	// tab reconcile its own optimistic "pending" bubble (tracked locally by
+	// this id before the server round-trip) against the persisted entry,
+	// instead of rendering a second, duplicate bubble for the message it
+	// already sent (design §4.7). Unlike this entry's own ID (which the
+	// SAME field carries as the live token/done message_id, see
+	// pkg/agent/turn_transcript.go's roundMessageIDOrNew), ClientMessageID
+	// is never used as a numbering or correlation key on the server side —
+	// it exists purely to round-trip a client-owned value back to its
+	// originator.
+	//
+	// Backend-only in the sense that no OTHER entry type ever carries it;
+	// unlike ParentSpawnCallID above, it DOES cross the wire — on
+	// ReplayMessageFrame and the REST Message resource — deliberately, by
+	// design (contrast with ParentSpawnCallID's "never serialized onto a
+	// wire frame").
+	ClientMessageID string `json:"client_message_id,omitempty"`
+
 	// SystemSubtype discriminates an EntryTypeSystem entry by what kind of
 	// system event it records (ADR-085 BROWSER-FR-043a, folded into this
 	// wave per delivery-plan R-23 — a persisted-field dependency of wave
@@ -469,7 +496,10 @@ type ToolCall struct {
 	// ParentToolCallID is set on tool calls that execute inside a sub-turn.
 	// It equals the parent spawn tool call's ID, which is the correlation anchor
 	// for the subagent span (FR-H-001). Empty for top-level tool calls.
-	// span_id = "span_" + ParentToolCallID (derivable, not stored separately).
+	// The span id is agent.SubagentSpanID(ParentToolCallID, generation), not
+	// "span_" + ParentToolCallID alone. Generation N >= 2 appends "_g<N>".
+	// The generation is not stored on this call; it lives on the lifecycle
+	// record and, for a persisted bracket, in the transcript entry id.
 	ParentToolCallID ToolCallID `json:"parent_tool_call_id,omitempty"`
 	// Error is a human-readable failure reason, set when Status is "error" and
 	// no richer Result was already attached (media descriptors or a sync

@@ -66,6 +66,15 @@ properties:
     example: "ChartBar"
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
+  auto_approve_disabled:
+    type: boolean
+    description: >
+      Initial per-agent override forcing Auto-approve off (ADR-092) for
+      this agent, regardless of the global default
+      (SandboxConfig.auto_approve). Off-only — omit or send false to
+      inherit the global default. Distinct from `tools_cfg`, which is
+      unchanged and still governs allow/deny/ask per tool.
+    example: false
   fallback_models:
     type: array
     maxItems: 2
@@ -113,8 +122,6 @@ properties:
       The CLI never reads a file from disk. Backend trims before length-validation,
       so whitespace-only is rejected as minLength violation.
     example: "You are a focused research assistant..."
-  shell_policy:
-    $ref: './AgentShellPolicy.yaml'
   max_tool_iterations:
     type: integer
     minimum: 0

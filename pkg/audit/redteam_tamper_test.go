@@ -12,13 +12,13 @@
 //  2. Surgically rewrite a previously-written line (e.g. flip
 //     decision: "deny" -> "allow") to retroactively launder a denied call.
 //
-// The defense (closed in v0.2 #155): per-entry HMAC chaining. Each entry
+// The defense (closed by #155): per-entry HMAC chaining. Each entry
 // carries an `hmac` field computed over hmac(prev_hmac || canonical_json)
 // under a key derived from the master key (the log file does NOT contain
 // the key). audit.VerifyFile / *Logger.Verify walk the log start-to-end,
 // recompute each link, and report the first broken link.
 //
-// Closing fix: v0.2 (#155) — "audit log integrity (HMAC chain)".
+// Closing fix: #155 — "audit log integrity (HMAC chain)".
 //
 // Test structure: the helper auditPackageHasIntegrityVerifier() now
 // returns true (the verifier is wired in lookupAuditVerifier below). The
@@ -56,10 +56,10 @@ import (
 // further writes leaves the SURVIVING entries internally consistent —
 // that's a documented limitation of any in-band chain.
 //
-// Closes when v0.2 #155 HMAC chain lands. PASSES once audit.VerifyFile
+// Closed by the #155 HMAC chain. PASSES: audit.VerifyFile
 // flags the appended forgery.
 func TestRedteam_AuditLog_TruncationDetected(t *testing.T) {
-	t.Logf("documents C2-AUDIT (audit truncation) from insider-pentest report; closed by v0.2 #155 HMAC chain")
+	t.Logf("documents C2-AUDIT (audit truncation) from insider-pentest report; closed by the #155 HMAC chain")
 
 	dir := t.TempDir()
 	chainKey, err := audit.DeriveAuditKey([]byte("c2-audit-redteam-master-key-v1!!"))
@@ -112,7 +112,7 @@ func TestRedteam_AuditLog_TruncationDetected(t *testing.T) {
 		t.Errorf(
 			"C2-AUDIT (truncation) GAP CONFIRMED: no audit chain verifier exists (expected audit.VerifyFile or equivalent). "+
 				"Truncation of audit.jsonl from %d to %d bytes followed by a forged append is currently UNDETECTED. "+
-				"Fix: ship per-entry HMAC chain in v0.2 (#155).",
+				"Fix: restore the per-entry HMAC chain (shipped in #155); firing here means it was stripped.",
 			len(original),
 			len(truncated),
 		)
@@ -142,9 +142,9 @@ func TestRedteam_AuditLog_TruncationDetected(t *testing.T) {
 // HMAC no longer matches its embedded `hmac` value, AND entry #3's
 // `hmac` was computed against the ORIGINAL entry #2.
 //
-// Closes when v0.2 #155 HMAC chain lands.
+// Closed by the #155 HMAC chain.
 func TestRedteam_AuditLog_RewriteDetected(t *testing.T) {
-	t.Logf("documents C2-AUDIT (audit rewrite) from insider-pentest report; closed by v0.2 #155 HMAC chain")
+	t.Logf("documents C2-AUDIT (audit rewrite) from insider-pentest report; closed by the #155 HMAC chain")
 
 	dir := t.TempDir()
 	chainKey, err := audit.DeriveAuditKey([]byte("c2-audit-redteam-master-key-v1!!"))
@@ -202,7 +202,7 @@ func TestRedteam_AuditLog_RewriteDetected(t *testing.T) {
 		t.Errorf(
 			"C2-AUDIT (rewrite) GAP CONFIRMED: no audit chain verifier exists. " +
 				"In-place rewrite of audit.jsonl entry #1 (decision: deny -> allow) is currently UNDETECTED. " +
-				"Fix: ship per-entry HMAC chain in v0.2 (#155).",
+				"Fix: restore the per-entry HMAC chain (shipped in #155); firing here means it was stripped.",
 		)
 		return
 	}
@@ -315,7 +315,7 @@ type chainVerificationResult interface {
 }
 
 // auditPackageHasIntegrityVerifier reports whether the audit package
-// exports a chain-integrity verifier function. After v0.2 #155 this
+// exports a chain-integrity verifier function. After #155 this
 // returns true. If a future regression strips audit.VerifyFile, the
 // underlying lookup returns (nil, false) and the gap-reporting branches
 // in the tests will fire — that's the regression detection contract.

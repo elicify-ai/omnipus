@@ -7,7 +7,8 @@
 // the job still reports green — the pipeline says "tests passed" while whole
 // directories were never executed. When this guard was written, 116 of 422 test
 // files (27%) never ran in CI, including all 57 under src/components/workspaces/
-// (the v0.3 flagship) and all 11 under src/components/browser/. Two patterns
+// (then called the v0.3 flagship; that release label is retired) and all 11
+// under src/components/browser/. Two patterns
 // pointed at directories that had been DELETED entirely.
 //
 // A hand-maintained allowlist drifts the moment someone adds a directory. This

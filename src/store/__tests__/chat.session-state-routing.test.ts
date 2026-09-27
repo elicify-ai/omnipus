@@ -161,7 +161,13 @@ describe('chat.session_state without active_turn clears stale announcements (com
     })
     expect(bucket(SID_A)?.activeTurnId).toBe(TURN_ID)
     expect(bucket(SID_A)?.isStreaming).toBe(true)
-    expect(bucket(SID_A)?.activeTurnBubbleOpened).toBe(false)
+    // PROVENANCE (#823 catch-up redesign pass 2, BE-DESIGN.md §6.3, Q3 —
+    // REPLACE, guarantee kept, test rewritten never weakened): this used to
+    // check the internal `activeTurnBubbleOpened` flag, deleted along with
+    // the rest of the #822 mechanism. The guarantee it protected — "no
+    // bubble has opened yet" — is checked directly against the actual
+    // transcript instead of a proxy flag.
+    expect(assistantMessages(SID_A)).toHaveLength(0)
 
     // A later snapshot for the same session says no turn is in flight.
     act(() => {
@@ -170,7 +176,7 @@ describe('chat.session_state without active_turn clears stale announcements (com
 
     expect(bucket(SID_A)?.activeTurnId).toBeNull()
     expect(bucket(SID_A)?.activeTurnAgentId).toBeNull()
-    expect(bucket(SID_A)?.activeTurnBubbleOpened).toBe(false)
+    expect(assistantMessages(SID_A)).toHaveLength(0)
     expect(bucket(SID_A)?.isStreaming).toBe(false)
   })
 
@@ -179,15 +185,16 @@ describe('chat.session_state without active_turn clears stale announcements (com
       useChatStore.getState().handleFrame(sessionStateFor(SID_A))
       useChatStore.getState().handleFrame(token(SID_A, 'partial content'))
     })
-    expect(bucket(SID_A)?.activeTurnBubbleOpened).toBe(true)
+    // PROVENANCE: see the sibling test above — "a bubble IS open" is now
+    // checked against the real transcript, not the deleted proxy flag.
     expect(assistantMessages(SID_A)).toHaveLength(1)
+    expect(assistantMessages(SID_A)[0]?.isStreaming).toBe(true)
 
     act(() => {
       useChatStore.getState().handleFrame(sessionStateNoTurnFor(SID_A))
     })
 
     expect(bucket(SID_A)?.activeTurnId).toBeNull()
-    expect(bucket(SID_A)?.activeTurnBubbleOpened).toBe(false)
     // The bubble is genuinely mid-stream — this snapshot must not force it
     // closed; its own done will finalize it normally.
     expect(bucket(SID_A)?.isStreaming).toBe(true)

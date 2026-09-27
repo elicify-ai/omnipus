@@ -17,7 +17,7 @@ import (
 // TestSeatbelt_RealChildCannotTamperWithAuditLog is the kernel-layer proof
 // for adversarial-review finding #1: $OMNIPUS_HOME/system/ (which holds
 // audit.jsonl) was not in any part of the secret set, so a sandboxed child
-// could truncate or delete the audit log outright. The v0.2 HMAC chain
+// could truncate or delete the audit log outright. The #155 HMAC chain
 // (pkg/audit/hmac.go) detects a child MODIFYING a logged entry; it detects
 // nothing about `rm audit.jsonl` or `: > audit.jsonl` — neither needs a read,
 // and a deleted file leaves no chain to verify at all.

@@ -54,7 +54,7 @@ type UnixSocketRule struct {
 // unrestricted networking. When non-empty, the kernel denies any bind() to a
 // TCP port not enumerated here.
 //
-// ConnectPortRules — re-introduced in v0.2 (#155 item 4) — install kernel-
+// ConnectPortRules — re-introduced by #155 (item 4) — install kernel-
 // enforced port-level outbound allow-listing via Landlock NET_CONNECT_TCP on
 // ABI v4+. A non-empty list activates connect filtering: connect(2) to any
 // destination port not enumerated here returns EACCES from the kernel. The
@@ -336,8 +336,8 @@ var DefaultConnectPorts = []uint16{53, 80, 443}
 // SecretFilesRelative are skipped. This relies on Landlock's hierarchical
 // allow-tree semantics: a file not under any granted tree is unreachable.
 //
-// **Production wiring is NOT yet active.** As of v0.2 (#155 item 8) this
-// function is exercised only by the redteam tests and unit tests, which
+// **Production wiring is NOT yet active.** Built by #155 (item 8) but never
+// wired, this function is exercised only by the redteam tests and unit tests, which
 // apply it directly to a re-execed test child. The production sandbox-
 // apply path (pkg/gateway/sandbox_apply.go) calls DefaultPolicy at gateway
 // boot, and tool-exec children inherit that policy unchanged across
@@ -351,8 +351,8 @@ var DefaultConnectPorts = []uint16{53, 80, 443}
 //     filesystem traversal via syscalls outside DefaultPolicy
 //
 // Wiring DefaultChildPolicy into production via per-thread Landlock
-// re-restriction is tracked as a v0.3 follow-up (#156 architectural
-// work). The pattern is described in `RestrictCurrentThread`'s contract.
+// re-restriction is tracked as #884 (architectural follow-up re-homed from
+// closed #156). The pattern is described in `RestrictCurrentThread`'s contract.
 // Until that lands, this function exists for testing and to document the
 // intended structure.
 //
@@ -448,7 +448,7 @@ func DefaultChildPolicy(
 // servers can bind their assigned port.
 //
 // ConnectPortRules are populated unconditionally with DefaultConnectPorts
-// (v0.2 #155 item 4 — default-deny outbound). On Landlock ABI v4+ this
+// (#155 item 4 — default-deny outbound). On Landlock ABI v4+ this
 // activates kernel-level enforcement: connect(2) to any port outside the
 // allow-list returns EACCES. On older kernels the field is computed but not
 // enforced (a boot-time WARN documents the degradation). Callers that need
@@ -652,7 +652,7 @@ func DefaultPolicyForModel(
 		}
 	}
 
-	// v0.2 (#155 item 4): default-deny outbound TCP via Landlock
+	// #155 (item 4): default-deny outbound TCP via Landlock
 	// NET_CONNECT_TCP. The kernel installs the allow-list once and inherits
 	// it to every child forked from the restricted thread, so a hardened-
 	// exec child issuing raw socket()+connect() to e.g. 127.0.0.1:1 is

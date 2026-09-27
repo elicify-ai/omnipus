@@ -339,6 +339,21 @@ func newE2EHarnessCustom(
 		canceller: canceller, classifier: classifier, launcher: launcher,
 		recorder: recorder, probe: probe, msgBus: msgBus, upward: recordingDeliverer,
 	}
+	// [ADR-091 fix/adr091-stop-survives-restart-race, Finding 3] Canceller and
+	// Classifier were built once above, wired to the PRE-CRASH `lifecycle`
+	// variable. Tree.Reboot installs a brand-new *session.LifecycleStore into
+	// deps.LifecycleStore (a fresh instance, own lock pool — lifecycle_lock.go)
+	// but has no way to reach into this closure and rebuild Canceller/Classifier
+	// itself, so without this hook they would keep serializing through the
+	// orphaned pre-crash store's lock pool forever after a Reboot, while
+	// deps.LifecycleStore (and this harness's own diagnostic Loads through it)
+	// use a completely independent one. Rebuilding both here mirrors what a real
+	// restart does — boot constructs a fresh SteerCanceller/RecordClassifier
+	// wired to the freshly-opened store, from the composition root
+	// (gateway.wireSteerDeps), not by reusing pre-crash instances.
+	harness.tree.RebuildAfterReboot = func(lifecycle *session.LifecycleStore, sessions *session.UnifiedStore) (steer.Canceller, steer.RecordClassifier) {
+		return agent.NewSteerCanceller(lifecycle, al.SteerGenerationCancel), agent.NewSteerRecordClassifier(lifecycle, sessions)
+	}
 	t.Cleanup(func() { harness.waitForTreeTurns() })
 	return harness
 }
@@ -404,10 +419,40 @@ func TestE2E_ThreeLevelDelegation_NoLeak(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	// Only a STEERED CHILD reaching the human is a leak. The ROOT is the
+	// human's own chat, so its own publications are the correct behaviour,
+	// not a breach — and the root does publish here: the hand-back arrives
+	// through processSystemMessage, the root runs a further turn, and
+	// e2eBoundaryProbe.Execute returns Media on EVERY call including the
+	// root's. Recording every outbound message as a leak therefore made
+	// both drains race the root's hand-back turn: green when the drain won,
+	// red with `forbidden address "human"` when the root's turn published
+	// first. It failed exactly that way on release 72bb9646e (CI job
+	// 107839025045) while passing locally, which reads like a containment
+	// regression and is not one.
+	//
+	// The assertion below stays strict — the defect was that it could not
+	// tell a child from the root, never that it demanded too much.
+	steeredChildren := map[string]struct{}{
+		h.tree.A.SessionID: {},
+		h.tree.B.SessionID: {},
+		h.tree.C.SessionID: {},
+	}
+	// Give the root's hand-back turn time to publish BEFORE draining, so
+	// every run exercises the interleaving that used to fail rather than
+	// reaching the assertion only when the drain happens to win the race.
+	// A leak from a child would be caught in this window too.
+	settle := time.Now().Add(2 * time.Second)
+	for time.Now().Before(settle) {
+		time.Sleep(20 * time.Millisecond)
+	}
+
 	for {
 		select {
 		case outbound := <-h.msgBus.OutboundChan():
-			h.recorder.Record(steer.BoundaryFinalReply, outbound.SessionID, "human", "leak")
+			if _, isChild := steeredChildren[outbound.SessionID]; isChild {
+				h.recorder.Record(steer.BoundaryFinalReply, outbound.SessionID, "human", "leak")
+			}
 		default:
 			goto textDrained
 		}
@@ -421,7 +466,12 @@ textDrained:
 	for {
 		select {
 		case outboundMedia := <-h.msgBus.OutboundMediaChan():
-			h.recorder.Record(steer.BoundaryMedia, outboundMedia.SessionID, "human", "media-leak")
+			// Same child-only rule as the text drain above: the root's own
+			// media is legitimate, a steered child's is the leak this
+			// catches.
+			if _, isChild := steeredChildren[outboundMedia.SessionID]; isChild {
+				h.recorder.Record(steer.BoundaryMedia, outboundMedia.SessionID, "human", "media-leak")
+			}
 		default:
 			goto mediaDrained
 		}
@@ -666,6 +716,64 @@ func assertStopLandedOn(t *testing.T, rec *session.LifecycleRecord, when string)
 	return false
 }
 
+// sameStopMarker reports whether two decodes of a lifecycle record carry the
+// identical Stop marker, treating "no marker" as a value so that a marker
+// appearing out of nowhere and one vanishing are both mismatches rather than
+// silently-skipped nil cases.
+//
+// time.Time is compared with Equal, never ==: the two values reach here
+// through different decodes, and == would also compare the monotonic reading
+// and the *Location pointer.
+func sameStopMarker(before, after *session.Stop) bool {
+	if before == nil || after == nil {
+		return before == nil && after == nil
+	}
+	return before.At.Equal(after.At) &&
+		before.Generation == after.Generation &&
+		before.By == after.By
+}
+
+// waitForLifecycleTerminalOrDeadline polls sessionID's lifecycle record until
+// it reaches a terminal state or timeout elapses, returning the LAST
+// successful read either way.
+//
+// Why this closes the race a bare Load cannot: a terminal read is a STABLE
+// baseline. lifecycle.go's write choke point (persistLocked) REJECTS any
+// further write to a terminal record's own generation ("a follow_up/Play
+// must mint generation N+1 via resumed_from") — so once this loop observes
+// Terminal(), nothing else can touch that generation's record again before a
+// caller's very next read. Two SEPARATE lock acquisitions (this Load, then a
+// later Revive) racing a concurrent in-flight unwind is exactly what produced
+// "Revive discarded the older stop marker" in CI (run 36263187959): a bare
+// re-read immediately before Revive only NARROWS that window, it cannot
+// CLOSE it, because Load-then-Revive are still two sequential calls with an
+// unavoidable gap between them regardless of how close together they sit in
+// source. Waiting for Terminal() first removes the gap's only remaining
+// degree of freedom: once terminal, the two reads are guaranteed to agree.
+//
+// Bounded (matches this file's own 10s-deadline/10ms-poll convention, e.g.
+// e2eHarness.waitForTreeTurns): a session the cascade left in the OTHER legal
+// "outstanding" shape (assertStopLandedOn) — a current-generation marker with
+// no live turn left to ever unwind it — never reaches Terminal(), and this
+// loop falls through at the deadline with whatever it last read, no worse
+// than the unconditional single Load it replaces. The CI failure this fixes
+// ran in 0.09s end to end, so a real unwind is expected to land many orders
+// of magnitude inside this budget.
+func waitForLifecycleTerminalOrDeadline(t *testing.T, store *session.LifecycleStore, sessionID string, timeout time.Duration) *session.LifecycleRecord {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		rec, err := store.Load(sessionID)
+		if err != nil {
+			t.Fatalf("load %s while waiting for a stable pre-Revive snapshot: %v", sessionID, err)
+		}
+		if rec.Terminal() || time.Now().After(deadline) {
+			return rec
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestE2E_StopSurvivesRestart(t *testing.T) {
 	h := newE2EHarness(t)
 	report, err := h.tree.Stop(h.tree.Root.SessionID)
@@ -696,32 +804,114 @@ func TestE2E_StopSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load B after reboot: %v", err)
 	}
-	// THE property this test is named for: the crash/reboot changes nothing.
-	// Whichever of the two shapes the Stop left, the reopened store must show
-	// the SAME one, at the same generation, with the same marker (or the same
-	// absence of one) — a Stop that evaporated on restart is the regression.
+	// THE property this test is named for: the restart must not lose the Stop.
+	//
+	// It is deliberately NOT "the record is byte-identical across the
+	// restart". This Stop cancels a LIVE turn on B, and that cancel is
+	// ASYNCHRONOUS: CancelSubtree's per-node step calls
+	// turn.go::requestCancelForGeneration, which calls
+	// turn_exit.go::requestHardAbort — and that only fires the turn's
+	// provider/turn context cancels and returns. B's own turn then unwinds on
+	// its own goroutine and writes the terminal `cancelled` record, clearing
+	// the spent marker because lifecycle.go's write choke point REJECTS a
+	// terminal record that still carries a current-generation marker. Nothing
+	// in Stop, Crash or Reboot waits for that unwind, and this harness's
+	// BootHook is a no-op (deps above), so Reboot runs no recovery at all —
+	// the transition is B's own turn finishing, not the restart doing
+	// anything.
+	//
+	// So requiring the SAME shape on both sides made this test a coin flip on
+	// whether the unwind beat the first Load. It lost in CI on 3f2308184
+	// ("outstanding shape" before, "terminal shape" after) and reproduces
+	// locally under `-cpu 1`. The unwind is legal forward progress; what the
+	// restart must preserve is the STOP, not the byte shape. Hence:
+	//
+	//   - the generation must not move — no revival happened (D8: only a
+	//     newer instruction revives, and it does so as a new generation);
+	//   - B must still be in one of the two legal stopped shapes, which
+	//     assertStopLandedOn pins: it FATALs on `running`/`queued` with no
+	//     marker and on any terminal state other than `cancelled` — i.e. on
+	//     exactly the "the Stop evaporated over the restart" regressions
+	//     this test exists to catch (ADR-091 AC-8: "every stamped session
+	//     stays stopped across a restart");
+	//   - the shape may only advance outstanding -> terminal, never back:
+	//     terminal records are immutable (lifecycle.go::persistLocked), so a
+	//     B that was terminal before the crash and is non-terminal after it
+	//     was RESURRECTED by the restart, which is its own regression;
+	//   - the marker may change only BY that advance. Still outstanding means
+	//     nothing carried the instruction out, so the very same marker must
+	//     still be on the record; unchanged shape means nothing legally
+	//     touched the marker at all.
 	if reopened.Generation != oldGeneration {
 		t.Fatalf("B generation moved across the restart: %d -> %d", oldGeneration, reopened.Generation)
 	}
-	if got := assertStopLandedOn(t, reopened, "after crash+reboot"); got != wasTerminal {
-		t.Fatalf("B's durable shape changed across the restart: terminal=%v before, terminal=%v after "+
-			"(before=%+v after=%+v)", wasTerminal, got, stopped, reopened)
+	isTerminal := assertStopLandedOn(t, reopened, "after crash+reboot")
+	if wasTerminal && !isTerminal {
+		t.Fatalf("B was terminal before the crash and is %q at generation %d after it — a terminal "+
+			"record is immutable, so the restart RESURRECTED it (before=%+v after=%+v)",
+			reopened.State, reopened.Generation, stopped, reopened)
 	}
 	switch {
-	case stopped.Stop == nil && reopened.Stop != nil:
-		t.Fatalf("B carried no stop marker before the restart but has %+v after", reopened.Stop)
-	case stopped.Stop != nil && reopened.Stop == nil:
-		t.Fatalf("B's stop marker %+v did not survive the restart", stopped.Stop)
-	case stopped.Stop != nil:
-		// time.Time is compared with Equal, never ==: the two values reach
-		// here through different decodes and == would also compare the
-		// monotonic reading and the *Location pointer.
-		if !reopened.Stop.At.Equal(stopped.Stop.At) ||
-			reopened.Stop.Generation != stopped.Stop.Generation ||
-			reopened.Stop.By != stopped.Stop.By {
-			t.Fatalf("B's stop marker changed across the restart: before=%+v after=%+v", stopped.Stop, reopened.Stop)
+	case !isTerminal:
+		// Still outstanding on both sides (wasTerminal is necessarily false
+		// here — the branch above fataled otherwise). assertStopLandedOn's
+		// non-terminal limb returns false ONLY with a current-generation
+		// marker present, so both markers are non-nil; assert that anyway
+		// rather than let a nil/nil comparison pass vacuously.
+		if stopped.Stop == nil || reopened.Stop == nil {
+			t.Fatalf("B is non-terminal on both sides of the restart but a marker is missing: "+
+				"before=%+v after=%+v — an outstanding Stop must be on the record", stopped.Stop, reopened.Stop)
 		}
+		if !sameStopMarker(stopped.Stop, reopened.Stop) {
+			t.Fatalf("B's Stop is still outstanding after the restart but its marker changed: "+
+				"before=%+v after=%+v — nothing carried the instruction out, so nothing may have "+
+				"rewritten it", stopped.Stop, reopened.Stop)
+		}
+	case wasTerminal:
+		// Terminal on both sides: nothing legally moved, so the record's
+		// marker must be exactly what it was — cleared for a spent
+		// current-generation instruction, or an OLDER generation's marker
+		// that I-6 keeps as inert history.
+		if !sameStopMarker(stopped.Stop, reopened.Stop) {
+			t.Fatalf("B was terminal on both sides of the restart, so nothing may have touched its "+
+				"stop marker: before=%+v after=%+v", stopped.Stop, reopened.Stop)
+		}
+	default:
+		// outstanding -> terminal: B's own cancelled turn landed inside the
+		// crash/reboot window. The Stop was ENFORCED, not lost —
+		// assertStopLandedOn has already pinned the state to `cancelled` at
+		// the unchanged generation, which is the fingerprint the Stop left in
+		// the marker's place. Log which branch ran; `-v` is the only thing
+		// that distinguishes the two afterwards.
+		t.Logf("B's Stop was carried out inside the restart window: %q -> %q at generation %d "+
+			"(marker %+v spent)", stopped.State, reopened.State, reopened.Generation, stopped.Stop)
 	}
+	// The stop marker can be SPENT between the post-reboot snapshot above and the
+	// Revive below. B's own turn may finish unwinding in that window, land terminal,
+	// and clear the now-carried-out marker -- both clearing sites
+	// (steer_completion.go, steer_cancel.go) clear ONLY a current-generation marker,
+	// by founder decision 2026-09-24. `reopened` is therefore a stale baseline by the
+	// time Revive runs, and comparing against it reported "Revive discarded the older
+	// stop marker" in CI (run 36120145669) when nothing had discarded anything: the
+	// marker was spent, then Revive correctly had none to retain. A bare re-read
+	// immediately before Revive (the fix for THAT run) only NARROWS this window, it
+	// cannot CLOSE it -- Load and Revive are still two SEPARATE lock acquisitions
+	// with an unavoidable gap between them (return from Load, error check, call into
+	// Revive, context setup, Revive's own Mutate lock acquisition), and CI hit
+	// exactly that residual window in run 36263187959: preRevive.Stop was read
+	// non-nil, then B's still-unwinding cancelled turn landed its terminal write
+	// (clearing the marker) before Revive's own atomic read, which correctly saw it
+	// already gone and got blamed for "discarding" it.
+	//
+	// waitForLifecycleTerminalOrDeadline closes the actual gap: it waits for B to
+	// reach Terminal() before taking the pre-Revive snapshot, and once a record is
+	// terminal, lifecycle.go's write choke point (persistLocked) refuses ANY further
+	// write to that generation -- so nothing can change the record again between
+	// this read and Revive's own atomic read. See its doc comment for the full
+	// argument, including why the OTHER legal "outstanding" shape (no live turn left
+	// to ever unwind) is not made worse by this wait.
+	preRevive := waitForLifecycleTerminalOrDeadline(t, h.tree.Deps().LifecycleStore, h.tree.B.SessionID, 10*time.Second)
+
 	newGeneration, err := h.tree.Revive(h.tree.B.SessionID)
 	if err != nil {
 		t.Fatalf("Revive(B): %v", err)
@@ -742,10 +932,17 @@ func TestE2E_StopSurvivesRestart(t *testing.T) {
 	if revived.Stopped() {
 		t.Fatalf("B is still live-stopped after Revive: marker %+v at generation %d", revived.Stop, revived.Generation)
 	}
-	if reopened.Stop != nil {
+	if preRevive.Stop != nil {
 		if revived.Stop == nil || revived.Stop.Generation != oldGeneration {
+			// Log preRevive.Stop, not reopened.Stop: reopened is the STALE,
+			// older baseline this whole re-read mechanism exists to route
+			// around (see the comment above preRevive's own assignment). The
+			// check condition already correctly compares against
+			// preRevive.Stop; the diagnostic must match it, or a real future
+			// failure here would show a misleading "before" value that was
+			// never what Revive actually saw.
 			t.Fatalf("Revive discarded the older stop marker: before=%+v after=%+v — an earlier "+
-				"generation's marker is inert history a revival retains", reopened.Stop, revived.Stop)
+				"generation's marker is inert history a revival retains", preRevive.Stop, revived.Stop)
 		}
 	}
 }
