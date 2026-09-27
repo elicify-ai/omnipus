@@ -222,7 +222,7 @@ func TestPerformancePut_LoweringRollback_RevisionConflictMidWrite(t *testing.T) 
 
 	recs := mtiSecurityChanges(t, api, extraAudit)
 	require.Len(t, recs, 2, "audit = the lowering of %s + its rollback, nothing for the global: %v", first, recs)
-	var got []string
+	got := make([]string, 0, len(recs))
 	for _, r := range recs {
 		got = append(got, fmt.Sprintf("%v|%v|%v", r["resource"], r["old_value"], r["new_value"]))
 	}
@@ -265,7 +265,7 @@ func TestPerformancePut_LoweringRollback_GlobalWriteFails(t *testing.T) {
 	assert.EqualValues(t, 300, mtiGetPerf(t, api)["max_tool_iterations"], "the global in force is unchanged")
 
 	recs := mtiSecurityChanges(t, api, extraAudit)
-	var got []string
+	got := make([]string, 0, len(recs))
 	for _, r := range recs {
 		got = append(got, fmt.Sprintf("%v|%v|%v", r["resource"], r["old_value"], r["new_value"]))
 	}

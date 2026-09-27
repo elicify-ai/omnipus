@@ -63,8 +63,8 @@ func TestMaxToolIterationsEnvImport_RefreshNeverOverwritesAdminValue(t *testing.
 	// An admin value lands on disk without the marker (the shape an older
 	// generic config write left behind).
 	adminBytes := []byte(maxToolIterConfigJSON(`"max_tool_iterations": 50`))
-	if err := os.WriteFile(path, adminBytes, 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(path, adminBytes, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	cfg, err = LoadConfig(path)
 	if err != nil {
@@ -111,8 +111,8 @@ func TestMaxToolIterationsEnvImport_FreshInstallPersistsMarker(t *testing.T) {
 		t.Fatalf("fresh install in memory: global=%d marker=%v, want 80/true",
 			cfg.Agents.Defaults.MaxToolIterations, cfg.Agents.Defaults.MaxToolIterationsEnvImported)
 	}
-	if err := SaveConfig(path, cfg); err != nil {
-		t.Fatalf("first save: %v", err)
+	if saveErr := SaveConfig(path, cfg); saveErr != nil {
+		t.Fatalf("first save: %v", saveErr)
 	}
 	d := readDefaultsMap(t, path)
 	if d["max_tool_iterations"] != float64(80) || d["max_tool_iterations_env_imported"] != true {

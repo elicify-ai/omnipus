@@ -35,7 +35,18 @@ func gateFixDiskDefaults(t *testing.T, api *restAPI) map[string]any {
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(raw, &m))
-	return m["agents"].(map[string]any)["defaults"].(map[string]any)
+	return gateFixDefaultsOf(t, m)
+}
+
+// gateFixDefaultsOf returns m["agents"]["defaults"], failing the test when
+// either level is missing or not a JSON object.
+func gateFixDefaultsOf(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	agents, ok := m["agents"].(map[string]any)
+	require.True(t, ok, "config.json: agents is not an object: %#v", m["agents"])
+	defaults, ok := agents["defaults"].(map[string]any)
+	require.True(t, ok, "config.json: agents.defaults is not an object: %#v", agents["defaults"])
+	return defaults
 }
 
 // gateFixSetDiskMarker writes the env-import marker into config.json.
@@ -46,7 +57,7 @@ func gateFixSetDiskMarker(t *testing.T, api *restAPI) {
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(raw, &m))
-	m["agents"].(map[string]any)["defaults"].(map[string]any)["max_tool_iterations_env_imported"] = true
+	gateFixDefaultsOf(t, m)["max_tool_iterations_env_imported"] = true
 	out, err := json.Marshal(m)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(p, out, 0o600))

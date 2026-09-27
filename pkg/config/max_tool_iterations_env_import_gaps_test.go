@@ -40,7 +40,7 @@ func mtiSetDiskGlobal(t *testing.T, p string, v int) {
 		t.Fatal(err)
 	}
 	m := mtiDecodeNumbers(t, raw)
-	m["agents"].(map[string]any)["defaults"].(map[string]any)["max_tool_iterations"] = v
+	mtiDefaultsOf(t, m)["max_tool_iterations"] = v
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -86,8 +86,8 @@ func TestEnvImport_FreshInstall_LaterAdminSaveWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fresh-install LoadConfig: %v", err)
 	}
-	if err := SaveConfig(p, cfg); err != nil {
-		t.Fatalf("first persist: %v", err)
+	if saveErr := SaveConfig(p, cfg); saveErr != nil {
+		t.Fatalf("first persist: %v", saveErr)
 	}
 	mtiSetDiskGlobal(t, p, 150)
 
@@ -125,11 +125,26 @@ func TestEnvImport_PreservesEveryOtherKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := mtiDecodeNumbers(t, before)
-	d := want["agents"].(map[string]any)["defaults"].(map[string]any)
+	d := mtiDefaultsOf(t, want)
 	d["max_tool_iterations"] = json.Number("80")
 	d["max_tool_iterations_env_imported"] = true
 	got := mtiDecodeNumbers(t, after)
 	if !reflect.DeepEqual(want, got) {
 		t.Errorf("the import must change only the two agents.defaults members\nwant %v\n got %v", want, got)
 	}
+}
+
+// mtiDefaultsOf returns m["agents"]["defaults"], failing the test when either
+// level is missing or not a JSON object.
+func mtiDefaultsOf(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	agents, ok := m["agents"].(map[string]any)
+	if !ok {
+		t.Fatalf("config.json: agents is not an object: %#v", m["agents"])
+	}
+	defaults, ok := agents["defaults"].(map[string]any)
+	if !ok {
+		t.Fatalf("config.json: agents.defaults is not an object: %#v", agents["defaults"])
+	}
+	return defaults
 }
