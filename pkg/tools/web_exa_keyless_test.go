@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-094 D14 / spec "Exa" section, Key injection row: Exa joins the
+// ADR-096 D14 / spec "Exa" section, Key injection row: Exa joins the
 // enabled-but-keyless warning list
 // (pkg/tools/web.go::enabledButKeylessSearchProviders) when its ref joins
 // nonChannelRefsFor. The warning fires at tool construction before

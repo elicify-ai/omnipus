@@ -2,7 +2,7 @@ import { Card } from '@/components/ui/card'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import type { IntegrationProvider } from '@/lib/api'
 
-// WebSearchGroup — the ADR-094 web-search role picker for Settings → Integrations.
+// WebSearchGroup — the ADR-096 web-search role picker for Settings → Integrations.
 //
 // The operator chooses a default and a fallback; the group reports each
 // provider's role and usability honestly (FR-012, FR-028, FR-031):
@@ -15,7 +15,7 @@ import type { IntegrationProvider } from '@/lib/api'
 //   - the R5 healing explanation when fallback_ignored_reason is present;
 //   - the FR-031 notice when native model search is in effect — the group
 //     names no provider as the one that answers;
-//   - SearXNG offered as no new choice (ADR-094 D10 — descoped): it appears
+//   - SearXNG offered as no new choice (ADR-096 D10 — descoped): it appears
 //     in neither stack, and shows as the current default only as text.
 // Depth and site-filter controls are deliberately absent: the landed
 // contract carries no depth or capability field, so any control here would
@@ -25,7 +25,7 @@ import type { IntegrationProvider } from '@/lib/api'
 // never re-declares them.
 
 // Provider ids the screen does not offer as a new default or fallback.
-// SearXNG is the one descoped provider (ADR-094 D10): the migration may have
+// SearXNG is the one descoped provider (ADR-096 D10): the migration may have
 // recorded it as the resolved default, so the screen shows it as the current
 // default as text, but offers no editor for it.
 const NOT_CHOOSABLE: ReadonlySet<string> = new Set(['searxng'])

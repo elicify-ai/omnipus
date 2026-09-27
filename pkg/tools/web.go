@@ -207,7 +207,7 @@ func mapBaiduRecencyFilter(rangeCode string) string {
 
 type BraveSearchProvider struct {
 	keyPool     *APIKeyPool
-	baseURL     string // ADR-094: "" → default at search time
+	baseURL     string // ADR-096: "" → default at search time
 	proxy       string
 	client      *http.Client
 	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
@@ -315,7 +315,7 @@ type TavilySearchProvider struct {
 	proxy       string
 	client      *http.Client
 	ingestBound int64  // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
-	searchDepth string // ADR-094: operator-set depth ceiling; "" → "advanced"
+	searchDepth string // ADR-096: operator-set depth ceiling; "" → "advanced"
 }
 
 func (p *TavilySearchProvider) Search(
@@ -461,13 +461,13 @@ func (p *TavilySearchProvider) honoursDepth() bool { return true }
 // honoursSiteFilters: Tavily supports include_domains/exclude_domains.
 func (p *TavilySearchProvider) honoursSiteFilters() bool { return true }
 
-// SearchWithCaps is the ADR-094 capability-aware entry point for Tavily.
+// SearchWithCaps is the ADR-096 capability-aware entry point for Tavily.
 func (p *TavilySearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
 	return p.searchCaps(ctx, req)
 }
 
 type DuckDuckGoSearchProvider struct {
-	baseURL     string // ADR-094: "" → default at search time
+	baseURL     string // ADR-096: "" → default at search time
 	proxy       string
 	client      *http.Client
 	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
@@ -573,11 +573,11 @@ func stripTags(content string) string {
 
 type PerplexitySearchProvider struct {
 	keyPool     *APIKeyPool
-	baseURL     string // ADR-094: "" → default at search time
+	baseURL     string // ADR-096: "" → default at search time
 	proxy       string
 	client      *http.Client
 	ingestBound int64  // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
-	contextSize string // ADR-094: operator-set search_context_size; "" → never sent
+	contextSize string // ADR-096: operator-set search_context_size; "" → never sent
 }
 
 func (p *PerplexitySearchProvider) Search(
@@ -770,7 +770,7 @@ type GLMSearchProvider struct {
 	proxy        string
 	client       *http.Client
 	ingestBound  int64  // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
-	contentSize  string // ADR-094: "" → "medium"
+	contentSize  string // ADR-096: "" → "medium"
 }
 
 func (p *GLMSearchProvider) Search(
@@ -951,10 +951,10 @@ type WebSearchTool struct {
 	BaseTool
 	provider   SearchProvider
 	maxResults int
-	// roles is the ADR-094 WS-TOOL live resolver. nil = the exact legacy
+	// roles is the ADR-096 WS-TOOL live resolver. nil = the exact legacy
 	// path (schema, execution, and error text unchanged).
 	roles func() *config.WebToolsConfig
-	// dynamic is the ADR-094 provider map (catalogue id -> provider), built
+	// dynamic is the ADR-096 provider map (catalogue id -> provider), built
 	// only when Roles is set; the R-table ladder dispatches over it.
 	dynamic map[string]SearchProvider
 	// callBudget is D17a: the whole call's wall-clock budget (0 → default).
@@ -991,14 +991,14 @@ type WebSearchToolOptions struct {
 	BaiduSearchBaseURL    string
 	BaiduSearchMaxResults int
 	BaiduSearchEnabled    bool
-	// ADR-094: Exa registers in the keyless-warning list and carries its
+	// ADR-096: Exa registers in the keyless-warning list and carries its
 	// wiring in options like every keyed provider. The selection ladder
 	// itself is another lane's surface — only the warning list changes here.
 	ExaAPIKey    string
 	ExaAPIKeyRef string
 	ExaEnabled   bool
 
-	// ADR-094 WS-TOOL: per-provider base URLs and capability defaults. The
+	// ADR-096 WS-TOOL: per-provider base URLs and capability defaults. The
 	// base-URL fields let tests pin provider wire traffic; at production
 	// wiring they are empty and the provider defaults apply.
 	BraveBaseURL          string
@@ -1081,7 +1081,7 @@ func enabledButKeylessSearchProviders(opts WebSearchToolOptions) []misconfigured
 	addIfKeyless(opts.TavilyEnabled, len(opts.TavilyAPIKeys) > 0, "tavily", opts.TavilyAPIKeyRef)
 	addIfKeyless(opts.GLMSearchEnabled, opts.GLMSearchAPIKey != "", "glm_search", opts.GLMSearchAPIKeyRef)
 	addIfKeyless(opts.BaiduSearchEnabled, opts.BaiduSearchAPIKey != "", "baidu_search", opts.BaiduSearchAPIKeyRef)
-	// ADR-094: exa joins the enabled-but-keyless warning list.
+	// ADR-096: exa joins the enabled-but-keyless warning list.
 	addIfKeyless(opts.ExaEnabled, opts.ExaAPIKey != "", "exa", opts.ExaAPIKeyRef)
 	return out
 }
@@ -1394,7 +1394,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 		}
 	}
 
-	// ADR-094: with Roles set, build the FULL provider map so the R-table
+	// ADR-096: with Roles set, build the FULL provider map so the R-table
 	// ladder can fail over across providers; the legacy single-provider
 	// chain above stays the path when Roles is nil.
 	var dynamic map[string]SearchProvider
@@ -1412,7 +1412,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	}, nil
 }
 
-// buildDynamicSearchProviders constructs the whole ADR-094 provider map.
+// buildDynamicSearchProviders constructs the whole ADR-096 provider map.
 // A provider whose constructor errors (e.g. a malformed base URL) is simply
 // absent — the R-table then reports it "switched off" rather than failing
 // the boot.

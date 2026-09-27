@@ -2,12 +2,12 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Web-search provider roles: the ONE usability test (ADR-094 D4a/D15) and
-// the roles migration (ADR-094 D11).
+// Web-search provider roles: the ONE usability test (ADR-096 D4a/D15) and
+// the roles migration (ADR-096 D11).
 //
 // Spec: docs/internal/specs/web-search-provider-model-spec.md — sections
 // "Config shape", "Shipped defaults (new install)", "Resolution", "Migration".
-// ADR-094 D4, D11, D12, D15.
+// ADR-096 D4, D11, D12, D15.
 //
 // WHY THE GATE READS THE DISK, NOT MEMORY: loadConfig starts every load from
 // DefaultConfig() and unmarshals the file OVER the defaults, so an old
@@ -32,7 +32,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// Provider catalogue ids (ADR-094 D4/D15). The config objects for GLM and
+// Provider catalogue ids (ADR-096 D4/D15). The config objects for GLM and
 // Baidu stay glm_search / baidu_search — the mapping applySearchIntegration
 // already uses — while the role keys carry the catalogue ids glm / baidu.
 const (
@@ -198,7 +198,7 @@ func offKeyedWithResolvingRef(w *WebToolsConfig, id string) bool {
 	}
 }
 
-// MigrateWebSearchRoles runs the ADR-094 D11 roles migration ONCE — when the
+// MigrateWebSearchRoles runs the ADR-096 D11 roles migration ONCE — when the
 // FILE's tools.web section carries no roles_migrated_at — writing
 // default_provider / fallback_provider / roles_migrated_at (plus the D12
 // depth defaults and the two flag corrections steps 8/9 name) to both the

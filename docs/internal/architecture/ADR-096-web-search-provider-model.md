@@ -1,9 +1,9 @@
-# ADR-094 — Web search: a default, a fallback, and an honest tool
+# ADR-096 — Web search: a default, a fallback, and an honest tool
 
-- **Status:** Proposed. Revised 2026-09-26 (round 2) against the adversarial review in [ADR-094 review](./ADR-094-web-search-provider-model-review.md). Founder decisions are settled except where the founder explicitly reopened them in the round-2 brief: D6, D7, D9, D11, D13/D15, D16, and the `prefer_native` question now D19. The changelog at the end of this file lists every change and every point still open.
+- **Status:** Proposed. Revised 2026-09-26 (round 2) against the adversarial review in [ADR-096 review](./ADR-096-web-search-provider-model-review.md). Founder decisions are settled except where the founder explicitly reopened them in the round-2 brief: D6, D7, D9, D11, D13/D15, D16, and the `prefer_native` question now D19. The changelog at the end of this file lists every change and every point still open.
 - **Date:** 2026-09-26
 - **Deciders:** Daniel Piatkowski (founder, the settled decisions); architect (drafting, plus the calls the brief left open: what a failed agent-chosen provider does, and what an unsupported site filter does).
-- **Number check:** no `ADR-094-*.md` under `docs/internal/architecture/` when this file was added. ADR-093 does not exist on this tree; the previous decision record is [ADR-092 — Shell permission modes](./ADR-092-shell-permission-modes.md).
+- **Number check:** no `ADR-096-*.md` under `docs/internal/architecture/` when this file was added. ADR-093 does not exist on this tree; the previous decision record is [ADR-092 — Shell permission modes](./ADR-092-shell-permission-modes.md).
 - **Build instructions:** `docs/internal/specs/web-search-provider-model-spec.md`. That spec traces every decision and every acceptance criterion below to a requirement and a test. This file is the why.
 
 ## Evidence baseline

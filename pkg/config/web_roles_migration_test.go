@@ -13,11 +13,11 @@ import (
 	"time"
 )
 
-// Tests for the ADR-094 web-search provider roles migration and the
+// Tests for the ADR-096 web-search provider roles migration and the
 // usability test it shares with every other consumer (spec:
 // docs/internal/specs/web-search-provider-model-spec.md — sections
 // "Config shape", "Shipped defaults (new install)", "Resolution",
-// "Migration"; ADR-094 D4, D11, D12).
+// "Migration"; ADR-096 D4, D11, D12).
 //
 // Every expected value below is derived from the SPEC, not from running the
 // implementation (oracle independence):

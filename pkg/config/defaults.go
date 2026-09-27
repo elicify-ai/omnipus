@@ -824,7 +824,7 @@ func defaultToolsConfig() ToolsConfig {
 			Interval: 5,
 		},
 		Web: WebToolsConfig{
-			// ADR-094: a fresh install ships PRE-MIGRATED — duckduckgo is
+			// ADR-096: a fresh install ships PRE-MIGRATED — duckduckgo is
 			// the live provider today, so default_provider/fallback are
 			// seeded, and the marker tells MigrateWebSearchRoles a fresh
 			// install never needs the migration. The timestamp is when the
@@ -849,7 +849,7 @@ func defaultToolsConfig() ToolsConfig {
 			},
 			Tavily: TavilyConfig{
 				Enabled: false,
-				// ADR-094 D12: shipped default is Tavily's cheapest tier.
+				// ADR-096 D12: shipped default is Tavily's cheapest tier.
 				// An EXISTING install inherits "advanced" instead, via the
 				// roles migration, because TavilySearchProvider hardcodes
 				// advanced today and the migration must not raise or lower
@@ -873,7 +873,7 @@ func defaultToolsConfig() ToolsConfig {
 			GLMSearch: GLMSearchConfig{
 				Enabled: false,
 				BaseURL: "https://open.bigmodel.cn/api/paas/v4/web_search",
-				// ADR-094 D12: medium is what GLMSearchProvider hardcodes
+				// ADR-096 D12: medium is what GLMSearchProvider hardcodes
 				// today; recording it changes nothing for anyone until the
 				// operator edits it.
 				ContentSize:  "medium",

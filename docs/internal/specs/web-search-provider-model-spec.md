@@ -1,7 +1,7 @@
 # Feature Specification: Web search default, fallback, and provider capabilities
 
 **Created**: 2026-09-26
-**Status**: Draft, revised 2026-09-26 against founder decisions, then again the same day (round 2) to follow the ADR's corrections after the adversarial review. The decision record is [ADR-094 — Web search: a default, a fallback, and an honest tool](../architecture/ADR-094-web-search-provider-model.md), whose changelog lists every round-2 change and the four questions still open for the founder. This file is the build instructions. Where an earlier draft disagreed, the later revision wins: see [What changed from the first draft](#what-changed-from-the-first-draft) and [What changed in round 2](#what-changed-in-round-2).
+**Status**: Draft, revised 2026-09-26 against founder decisions, then again the same day (round 2) to follow the ADR's corrections after the adversarial review. The decision record is [ADR-096 — Web search: a default, a fallback, and an honest tool](../architecture/ADR-096-web-search-provider-model.md), whose changelog lists every round-2 change and the four questions still open for the founder. This file is the build instructions. Where an earlier draft disagreed, the later revision wins: see [What changed from the first draft](#what-changed-from-the-first-draft) and [What changed in round 2](#what-changed-in-round-2).
 **Input**: Founder decisions F1–F10 for the feature that follows the web-search credential fix, which landed as commit `07a75c104` and is this spec's evidence baseline. Issue [#47](https://github.com/elicify-ai/omnipus/issues/47) is background only.
 
 ---
@@ -14,7 +14,7 @@ Today `search_web` is built once, with a single provider baked in. The winner is
 
 The operator sets two things: a **default** and a **fallback**. DuckDuckGo stays switched on for a new install, as the keyless safety net, and it leaves the priority list. It runs when it is the default, or when it is the resolved fallback. It does not run because nothing else matched. If the fallback has not been chosen and two or more providers are usable, DuckDuckGo becomes the fallback by a visible rule. If exactly one provider is usable, there is no second try, and a failure is a failure.
 
-The agent may name a provider on the call, but only one that is usable. Naming one that is not usable is a refusal that lists what is usable. A provider the agent named does not fall back when it fails (ADR-094 D6). Omitting the argument is the path that uses the operator's default and fallback.
+The agent may name a provider on the call, but only one that is usable. Naming one that is not usable is a refusal that lists what is usable. A provider the agent named does not fall back when it fails (ADR-096 D6). Omitting the argument is the path that uses the operator's default and fallback.
 
 The tool's description and its argument list are built from the usable set at registration, and they stay short, because that text is sent on every turn.
 
@@ -26,14 +26,14 @@ A written answer from a search engine is out of scope, except that Perplexity is
 
 | First draft | This revision | Because |
 |---|---|---|
-| Exa specified, not required to be done | Exa is in this delivery | ADR-094 D2 |
-| The agent cannot pass a provider | The agent may, if it is usable. A failure of that choice does not hop | ADR-094 D5, D6 |
-| SearXNG gains an address field and can be newly chosen in Settings | No new SearXNG config surface and no new UI. It stays only so migration does not move an install that already resolves to it | ADR-094 D10 |
-| Tool arguments `answer`, `topic`, `media`, and "ignore with a note" | Those arguments are not added. A site filter the provider cannot honour is a refusal, not a note | ADR-094 D8, D9 |
-| Three keys: `default_provider`, `fallback_provider`, `fallback_mode` | Two keys. `none` is a value of the fallback. An absent fallback is the automatic-DuckDuckGo rule | ADR-094 D4 |
-| Operator domain allow and block lists | Not in this delivery | ADR-094 D9 |
+| Exa specified, not required to be done | Exa is in this delivery | ADR-096 D2 |
+| The agent cannot pass a provider | The agent may, if it is usable. A failure of that choice does not hop | ADR-096 D5, D6 |
+| SearXNG gains an address field and can be newly chosen in Settings | No new SearXNG config surface and no new UI. It stays only so migration does not move an install that already resolves to it | ADR-096 D10 |
+| Tool arguments `answer`, `topic`, `media`, and "ignore with a note" | Those arguments are not added. A site filter the provider cannot honour is a refusal, not a note | ADR-096 D8, D9 |
+| Three keys: `default_provider`, `fallback_provider`, `fallback_mode` | Two keys. `none` is a value of the fallback. An absent fallback is the automatic-DuckDuckGo rule | ADR-096 D4 |
+| Operator domain allow and block lists | Not in this delivery | ADR-096 D9 |
 
-The failover classes, the empty-result rule, and the migration's "do not change who answers" rule are kept. They are ADR-094 D17 and D11.
+The failover classes, the empty-result rule, and the migration's "do not change who answers" rule are kept. They are ADR-096 D17 and D11.
 
 ## What changed in round 2
 
@@ -64,11 +64,11 @@ This spec does not redesign injection. It does require **Exa's reference to join
 
 "Usable" means the test in [Resolution](#resolution): switched on, and a required key resolves to a non-empty `APIKey()`, and a required base URL is non-empty. If a reference does not resolve, the provider is unusable and R6 or R7 applies. That visible failure is the correct symptom.
 
-**Where the migration runs is a requirement, not an implementation detail** (ADR-094 D11). `APIKey()` reads the process environment, and the environment is populated at boot step 4 (`credentials.InjectFromConfig`), while every config-load migration runs at step 2. A migration inside config load would therefore read an empty environment on the upgrade load and record `duckduckgo` for **every** install, permanently. It runs in the gateway's credential boot instead, after injection and before the tools are built. See [Migration](#migration).
+**Where the migration runs is a requirement, not an implementation detail** (ADR-096 D11). `APIKey()` reads the process environment, and the environment is populated at boot step 4 (`credentials.InjectFromConfig`), while every config-load migration runs at step 2. A migration inside config load would therefore read an empty environment on the upgrade load and record `duckduckgo` for **every** install, permanently. It runs in the gateway's credential boot instead, after injection and before the tools are built. See [Migration](#migration).
 
 Voice integrations on the same Settings screen stay as they are: one active transcriber.
 
-**Native model search is not "unchanged and irrelevant" — it decides whether this feature is reachable at all** (ADR-094 D19). `pkg/config/defaults.go::defaultToolsConfig` ships `PreferNative: true`, and `pkg/agent/loop_run_turn.go` filters `search_web` out of the tool definitions entirely when the active provider reports `SupportsNativeSearch()` — true for OpenAI-compatible providers against `api.openai.com` or `*.openai.azure.com` (`pkg/providers/openai_compat/provider.go::isNativeSearchHost`) and for the Codex provider with web search enabled. On those installs the model never sees `search_web`. This spec does not change that default; it requires the Settings screen to say so (FR-031) and it scopes FR-003 and AC-2 accordingly.
+**Native model search is not "unchanged and irrelevant" — it decides whether this feature is reachable at all** (ADR-096 D19). `pkg/config/defaults.go::defaultToolsConfig` ships `PreferNative: true`, and `pkg/agent/loop_run_turn.go` filters `search_web` out of the tool definitions entirely when the active provider reports `SupportsNativeSearch()` — true for OpenAI-compatible providers against `api.openai.com` or `*.openai.azure.com` (`pkg/providers/openai_compat/provider.go::isNativeSearchHost`) and for the Codex provider with web search enabled. On those installs the model never sees `search_web`. This spec does not change that default; it requires the Settings screen to say so (FR-031) and it scopes FR-003 and AC-2 accordingly.
 
 SearXNG is descoped by the founder for this feature. One line, here, so it is not redesigned in a work package: no new config surface and no new UI.
 
@@ -126,7 +126,7 @@ Three tests, not two. All three are live.
 | Can two keyed providers stay configured? | Yes, but only the first in the list is used | No. Activation deletes the other refs | Yes, until activation deletes them |
 | What happens when the chosen provider fails mid-search? | That error is the whole result | Not represented | Not represented |
 
-That split is why an outage can name the wrong provider, and why the badge said Tavily while the environment variable was empty. The design deletes both chains (ADR-094 D15). One resolver decides. The tool and the screen both use it. The badge uses the tool's test, not the key-name string and not the vault check (ADR-094 D13).
+That split is why an outage can name the wrong provider, and why the badge said Tavily while the environment variable was empty. The design deletes both chains (ADR-096 D15). One resolver decides. The tool and the screen both use it. The badge uses the tool's test, not the key-name string and not the vault check (ADR-096 D13).
 
 ### The warning that already fires
 
@@ -157,7 +157,7 @@ The earlier draft described this warning as living in the final `else` and there
 
 ## Trace to the decision record
 
-| ADR-094 | This spec | Tests |
+| ADR-096 | This spec | Tests |
 |---|---|---|
 | D1, D2, AC-1 | [Exa](#exa), FR-021 | 28, 29 |
 | D3, D4, AC-2, AC-3 | [Config shape](#config-shape), [Resolution](#resolution), FR-001–FR-006 | 1–6, 20, 21 |
@@ -267,7 +267,7 @@ Save-time rules (the UI and `PUT` reject these; a hand-edited file is healed by 
 
 Optional argument `provider`. Omitted: the D4 table and the failover table apply.
 
-**Changed in round 2 (ADR-094 D6).** The old rule was a blanket hard-fail for any named provider. Its stated reason was that a hop "would hide the failure", which [What the tool returns](#what-the-tool-returns) makes impossible — a hop must name the provider that answered, its role, and the default's failure. The rule is now capability-based.
+**Changed in round 2 (ADR-096 D6).** The old rule was a blanket hard-fail for any named provider. Its stated reason was that a hop "would hide the failure", which [What the tool returns](#what-the-tool-returns) makes impossible — a hop must name the provider that answered, its role, and the default's failure. The rule is now capability-based.
 
 | Situation | Result |
 |---|---|
@@ -304,7 +304,7 @@ Failover is per call, and only when the agent did **not** pass `provider`. One e
 
 Key rotation inside Brave, Tavily, and Perplexity stays inside that provider. The hop happens only after the pool is exhausted. GLM, Baidu, and Exa have a single key; a 401 on that key is `auth`.
 
-**One call has a wall-clock budget** (ADR-094 D17a). The existing timeouts are `searchTimeout = 10s` (Brave, Tavily, DuckDuckGo, GLM, the final DuckDuckGo) and `perplexityTimeout = 30s` (Perplexity, Baidu), and the key pool retries **per key** before the hop even starts — so a Perplexity default plus a DuckDuckGo fallback is a 40-second worst case inside one tool call, more with several keys.
+**One call has a wall-clock budget** (ADR-096 D17a). The existing timeouts are `searchTimeout = 10s` (Brave, Tavily, DuckDuckGo, GLM, the final DuckDuckGo) and `perplexityTimeout = 30s` (Perplexity, Baidu), and the key pool retries **per key** before the hop even starts — so a Perplexity default plus a DuckDuckGo fallback is a 40-second worst case inside one tool call, more with several keys.
 
 | Control | Value |
 |---|---|
@@ -403,7 +403,7 @@ Built when `pkg/agent/loop_wire.go::registerCoreTools` constructs the tool. `Web
 
 `pkg/tools/general_builtin_catalog.go::GeneralBuiltinMetadata` builds a different instance, with only DuckDuckGo switched on, and that instance is never executed. Its text is the one-provider text. The definition the agent is shown is the one `registerCoreTools` registers (`RegisterReplacing`). A test asserts the agent's registered definition, not the catalogue instance.
 
-**`Description()` stays a constant sentence; only the argument list is built from the usable set** (ADR-094 D7, changed in round 2). The per-provider "good for" lines move into the **`provider` argument's own description**, generated from the same usable set — which is where the enum needs them anyway. A dynamic `Description` bought nothing the live refusal does not already buy, and it guaranteed a divergence between what the agent sees and what `GET /api/v1/tools` serves, because `GeneralBuiltinMetadata` constructs its instance with `WebSearchToolOptions{DuckDuckGoEnabled: true}` and has no config in scope at all. With a constant `Description` the two are byte-identical by construction, so no test has to police the gap.
+**`Description()` stays a constant sentence; only the argument list is built from the usable set** (ADR-096 D7, changed in round 2). The per-provider "good for" lines move into the **`provider` argument's own description**, generated from the same usable set — which is where the enum needs them anyway. A dynamic `Description` bought nothing the live refusal does not already buy, and it guaranteed a divergence between what the agent sees and what `GET /api/v1/tools` serves, because `GeneralBuiltinMetadata` constructs its instance with `WebSearchToolOptions{DuckDuckGoEnabled: true}` and has no config in scope at all. With a constant `Description` the two are byte-identical by construction, so no test has to police the gap.
 
 The size control moves onto what is actually sent, and is measured in bytes:
 
@@ -451,7 +451,7 @@ Combining `include_domains` or `depth` with a provider that does not honour it i
 
 ## Capability matrix
 
-"Sent today" is what `pkg/tools/web.go` puts on the wire at `07a75c104`, read in this task. "This delivery" is in scope. "Noted, not now" is recorded so it is not slipped in. A written answer is a non-goal (ADR-094 D8), not a "later" item, except Perplexity's citations.
+"Sent today" is what `pkg/tools/web.go` puts on the wire at `07a75c104`, read in this task. "This delivery" is in scope. "Noted, not now" is recorded so it is not slipped in. A written answer is a non-goal (ADR-096 D8), not a "later" item, except Perplexity's citations.
 
 Four themes across the providers: depth, site filters, result type (news, image, video), and a written answer. The first two are in scope. The third is noted, not now. The fourth is a non-goal.
 
@@ -501,7 +501,7 @@ A value that fails validation is `rejected`. No search is attempted.
 | Exa | Send **`includeDomains` and `excludeDomains` — camelCase** (verified in round 1). Do not copy Tavily's snake_case: those keys are ignored and the call returns unfiltered results, which is the class of lie this feature exists to remove |
 | Brave, Baidu, SearXNG, DuckDuckGo | Cannot honour either list |
 
-**The two lists are not the same kind of thing** (ADR-094 D9, changed in round 2):
+**The two lists are not the same kind of thing** (ADR-096 D9, changed in round 2):
 
 | Argument | When the provider that would run cannot honour it | Why |
 |---|---|---|
@@ -537,7 +537,7 @@ Not a written answer. Operator default, plus an optional agent argument `depth`:
 
 Tavily `ultra-fast` is operator-only. It is not an agent value. If the operator set it and the agent omits `depth`, send `ultra-fast`.
 
-**The operator's configured depth is a ceiling, not just a default** (ADR-094 D20). `depth` may ask for less and is **clamped** if it asks for more, with a note in the result. Without this, an agent — prompt-injected or merely looping — can override an operator's `basic` or `ultra-fast` and send Tavily `advanced`, the most expensive setting, on every call. No new config key: it is a rule about values that already exist.
+**The operator's configured depth is a ceiling, not just a default** (ADR-096 D20). `depth` may ask for less and is **clamped** if it asks for more, with a note in the result. Without this, an agent — prompt-injected or merely looping — can override an operator's `basic` or `ultra-fast` and send Tavily `advanced`, the most expensive setting, on every call. No new config key: it is a rule about values that already exist.
 
 | Key | New install | Existing object, key absent |
 |---|---|---|
@@ -559,7 +559,7 @@ Providers that support depth: tavily
 
 ## Exa
 
-In this delivery (ADR-094 D2, AC-1).
+In this delivery (ADR-096 D2, AC-1).
 
 | Item | Value |
 |---|---|
@@ -818,7 +818,7 @@ Boundary:
 | Walk the old priority list, including "just in case" | That list is the bug |
 | Try more than one fallback | A chain hides failures and multiplies cost |
 | Fail over on an empty, well-formed result | Empty is an answer |
-| Fall back when the agent named a provider **and used that provider's own capability** (`include_domains`, `depth`, Perplexity's prose) | ADR-094 D6. A plain named query does hop |
+| Fall back when the agent named a provider **and used that provider's own capability** (`include_domains`, `depth`, Perplexity's prose) | ADR-096 D6. A plain named query does hop |
 | Delete another provider's `api_key_ref` when one is chosen as default | That makes a fallback impossible |
 | Add a SearXNG address field or a way to newly enable it from Settings | Descoped by the founder |
 | Add another HTML-scrape provider | DuckDuckGo is already the one scrape |
@@ -1402,7 +1402,7 @@ Reachable by a user or an agent, with three claims that are checked separately a
 | A fingerprint for a 200 block page | Failover section |
 | Operator domain allow and block lists | Explicitly not this delivery |
 | Per-agent default and fallback | Issue #47. Not this spec |
-| An operator allow-set for which providers the agent may name, and a per-turn cap on search calls | ADR-094 D20 and its open question Q2. The depth ceiling and the per-call record ship now; the policy surface is a founder decision |
-| Whether `prefer_native` should keep its `true` default | ADR-094 Q1 |
-| Whether R3's automatic DuckDuckGo fallback is worth keeping, given that nothing but a hand-edit produces an absent `fallback_provider` | ADR-094 Q3 |
+| An operator allow-set for which providers the agent may name, and a per-turn cap on search calls | ADR-096 D20 and its open question Q2. The depth ceiling and the per-call record ship now; the policy surface is a founder decision |
+| Whether `prefer_native` should keep its `true` default | ADR-096 Q1 |
+| Whether R3's automatic DuckDuckGo fallback is worth keeping, given that nothing but a hand-edit produces an absent `fallback_provider` | ADR-096 Q3 |
 | The `list_directory` half of issue #898 | That issue |

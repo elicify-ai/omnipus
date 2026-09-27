@@ -1,6 +1,6 @@
 package tools
 
-// web_search.go — the ADR-094 WS-TOOL surface: role resolution (R-table),
+// web_search.go — the ADR-096 WS-TOOL surface: role resolution (R-table),
 // the failover ladder, capability arguments, and the result-text rules.
 // Oracle: docs/internal/specs/web-search-provider-model-spec.md.
 //
@@ -72,7 +72,7 @@ var capabilityMatrix = map[string]providerCaps{
 	"searxng":    {},
 }
 
-// searchProviderCatalogueOrder lists every ADR-094 provider id in the
+// searchProviderCatalogueOrder lists every ADR-096 provider id in the
 // operator-facing priority order the legacy chain uses (Perplexity > Brave >
 // SearXNG > Tavily > DuckDuckGo > Baidu > GLM), with Exa appended. Lists in
 // refusals, notes and the provider enum render in this order.
@@ -205,7 +205,7 @@ type searchRequest struct {
 	namedID        string // provider arg, "" = not named
 }
 
-// ExaSearchProvider calls the Exa search API (ADR-094 D2/AC-1).
+// ExaSearchProvider calls the Exa search API (ADR-096 D2/AC-1).
 type ExaSearchProvider struct {
 	apiKey      string
 	baseURL     string
@@ -1295,7 +1295,7 @@ func (p *PerplexitySearchProvider) honoursDepth() bool { return true }
 // honoursSiteFilters: Perplexity supports search_domain_filter.
 func (p *PerplexitySearchProvider) honoursSiteFilters() bool { return true }
 
-// SearchWithCaps runs the ADR-094 Perplexity flow: temperature 0, context
+// SearchWithCaps runs the ADR-096 Perplexity flow: temperature 0, context
 // size sent only when the operator set it or the agent passed depth, domain
 // filter, and citations rendered as a Sources list.
 func (p *PerplexitySearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
@@ -1311,7 +1311,7 @@ func perplexityDepthToContextSize(depth string) string {
 	return ""
 }
 
-// searchCaps mirrors the legacy Perplexity request with the ADR-094
+// searchCaps mirrors the legacy Perplexity request with the ADR-096
 // additions; the legacy Search payload stays byte-identical.
 func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchRequest) (string, error) {
 	searchURL := p.baseURL
@@ -1430,7 +1430,7 @@ func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchReq
 func (p *DuckDuckGoSearchProvider) honoursDepth() bool       { return false }
 func (p *DuckDuckGoSearchProvider) honoursSiteFilters() bool { return false }
 
-// SearchWithCaps is the ADR-094 DuckDuckGo entry: honours the per-tool
+// SearchWithCaps is the ADR-096 DuckDuckGo entry: honours the per-tool
 // base URL and treats non-200 as a bad_response error (the legacy path
 // never checked status).
 func (p *DuckDuckGoSearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
@@ -1472,7 +1472,7 @@ func (p *DuckDuckGoSearchProvider) SearchWithCaps(ctx context.Context, req searc
 func (p *BraveSearchProvider) honoursDepth() bool       { return false }
 func (p *BraveSearchProvider) honoursSiteFilters() bool { return false }
 
-// SearchWithCaps is the ADR-094 Brave entry: honours the per-tool base URL
+// SearchWithCaps is the ADR-096 Brave entry: honours the per-tool base URL
 // (the legacy path keeps its hardcoded endpoint).
 func (p *BraveSearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
 	base := p.baseURL

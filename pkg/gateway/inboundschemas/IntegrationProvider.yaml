@@ -6,7 +6,7 @@ description: >
   encrypted in credentials.json (via api_key_ref) — never returned in plaintext;
   configured is true when a key (or, for keyless providers like DuckDuckGo, the
   provider itself) is available.
-  ADR-094: search rows additionally carry the provider's resolved web-search
+  ADR-096: search rows additionally carry the provider's resolved web-search
   roles — default vs fallback — and its usability, and id is an enum derived
   from the single search-provider catalogue (FR-035). Voice rows keep today's
   shape: they report active only and leave the search-role fields unset.
@@ -23,10 +23,10 @@ properties:
     description: >
       Provider identifier, from the single integration catalogue — not free-form.
       The search ids (brave, tavily, perplexity, duckduckgo, searxng, glm, baidu,
-      exa) derive from the searchProviderCatalogue (ADR-094 FR-035); the voice ids
+      exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids
       (elevenlabs, groq, audio-model) are listed so voice rows stay valid under
       this shared schema. searxng appears as a default only on installs whose
-      configuration already resolved to it (ADR-094 D10).
+      configuration already resolved to it (ADR-096 D10).
     enum:
       - brave
       - tavily
@@ -66,7 +66,7 @@ properties:
     description: >
       True when this provider is the one currently selected for its kind. Voice
       rows: unchanged — the active transcriber. Search rows: true only when this
-      row is the web-search default (ADR-094 D13 — no longer "whoever the old
+      row is the web-search default (ADR-096 D13 — no longer "whoever the old
       priority list picked"); kept so an older client still has the field. The
       Default/Fallback badges are built from default_search, fallback_search and
       the row's own usable flag instead.
@@ -74,7 +74,7 @@ properties:
   usable:
     type: boolean
     description: >
-      Search rows only; unset on voice rows. The tool's usability test (ADR-094
+      Search rows only; unset on voice rows. The tool's usability test (ADR-096
       Definitions): switched on and a required key resolves to a non-empty
       process value — or, for DuckDuckGo, simply switched on. False when the key
       name is set but the resolved key is empty ("key not reaching search"). This
@@ -85,7 +85,7 @@ properties:
     description: >
       Search rows only; unset on voice rows. True when this provider is the
       resolved web-search fallback — the provider tried once when the default
-      fails with a hop-class failure (ADR-094 D4, D17).
+      fails with a hop-class failure (ADR-096 D4, D17).
     example: false
   fallback_automatic:
     type: boolean

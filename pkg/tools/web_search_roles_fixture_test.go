@@ -1,6 +1,6 @@
 package tools
 
-// web_search_roles_fixture_test.go — shared fixture for the ADR-094 WS-TOOL
+// web_search_roles_fixture_test.go — shared fixture for the ADR-096 WS-TOOL
 // RED pack. Oracle: docs/internal/specs/web-search-provider-model-spec.md.
 // Isolation: the REAL WebSearchTool and REAL provider structs run; only the
 // network edge is faked (one httptest server per provider id). Usability is

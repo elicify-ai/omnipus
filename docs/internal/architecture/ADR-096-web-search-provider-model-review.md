@@ -1,6 +1,6 @@
-# Adversarial Review: ADR-094 — Web search: a default, a fallback, and an honest tool
+# Adversarial Review: ADR-096 — Web search: a default, a fallback, and an honest tool
 
-**Document reviewed**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus2-adr091/sq-race/docs/internal/architecture/ADR-094-web-search-provider-model.md`
+**Document reviewed**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus2-adr091/sq-race/docs/internal/architecture/ADR-096-web-search-provider-model.md`
 **Companion spec read for traceability**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus2-adr091/sq-race/docs/internal/specs/web-search-provider-model-spec.md`
 **Review date**: 2026-09-26
 **Baseline verified against**: `07a75c104` (= this worktree's HEAD; `git diff 07a75c104 -- pkg/tools/web.go pkg/credentials/inject.go` is **empty**)
@@ -475,19 +475,19 @@ On **D7**: the token concern is real but the cap is on the wrong field, so it do
 
 ---
 
-**Review written to**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus2-adr091/sq-race/docs/internal/architecture/ADR-094-web-search-provider-model-review.md`
+**Review written to**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus2-adr091/sq-race/docs/internal/architecture/ADR-096-web-search-provider-model-review.md`
 
 Address the findings above, then re-run:
 
 ```
-/grill-spec docs/internal/architecture/ADR-094-web-search-provider-model.md
+/grill-spec docs/internal/architecture/ADR-096-web-search-provider-model.md
 ```
 
 ---
 
 ## Round-2 disposition (2026-09-26)
 
-The corrections above were applied to `ADR-094-web-search-provider-model.md` and, where a decision change forced a requirement change, to `docs/internal/specs/web-search-provider-model-spec.md`. This section records the disposition of every finding so the audit trail lives with the findings. It does not re-grill; the ADR's own changelog carries the same list from the author's side.
+The corrections above were applied to `ADR-096-web-search-provider-model.md` and, where a decision change forced a requirement change, to `docs/internal/specs/web-search-provider-model-spec.md`. This section records the disposition of every finding so the audit trail lives with the findings. It does not re-grill; the ADR's own changelog carries the same list from the author's side.
 
 | Disposition | Findings |
 |---|---|

@@ -83,7 +83,7 @@ export function IntegrationsSection() {
       })
   }
 
-  // Search rows: ADR-094 replaces the retired "Active" badge with Default /
+  // Search rows: ADR-096 replaces the retired "Active" badge with Default /
   // Fallback badges. Both badges derive from the response-level resolved
   // roles (default_search / fallback_search), not from the row's own
   // `active`/`fallback` flags — the response fields are what R5's healing
@@ -95,7 +95,7 @@ export function IntegrationsSection() {
   // badge test (FR-028). Roles are moved from the Default/Fallback stacks in
   // WebSearchGroup, so there is no per-row "Set active" button here, and a
   // key save carries api_key only — storing a key is separable from
-  // assigning a role (ADR-094 D18).
+  // assigning a role (ADR-096 D18).
   const renderSearchRow = (p: IntegrationProvider) => {
     const isExpanded = expanded === p.id
     const keyVal = apiKeys[p.id] ?? ''
@@ -132,7 +132,7 @@ export function IntegrationsSection() {
                   <Badge data-testid={`needs-config-${p.id}`} variant="muted">Needs configuration</Badge>
                 )
               ) : (
-                // usable is absent on this row (pre-ADR-094 payload shape or
+                // usable is absent on this row (pre-ADR-096 payload shape or
                 // a shape the tool does not report); keep the original status
                 // badges so the row is not statusless.
                 p.configured ? (
@@ -214,7 +214,7 @@ export function IntegrationsSection() {
     )
   }
 
-  // Voice rows: untouched by ADR-094 — the spec leaves voice integrations
+  // Voice rows: untouched by ADR-096 — the spec leaves voice integrations
   // alone (one active transcriber). The "Active" badge, the "Set active"
   // button and the coupled "Save & activate" keep their pre-ADR behaviour
   // and their pre-ADR testids, which the existing voice tests assert.

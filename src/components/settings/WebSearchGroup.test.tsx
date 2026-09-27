@@ -1,5 +1,5 @@
 /**
- * WebSearchGroup.test.tsx — ADR-094 Settings screen (FR-012, FR-028, FR-031).
+ * WebSearchGroup.test.tsx — ADR-096 Settings screen (FR-012, FR-028, FR-031).
  *
  * The Web Search group must render roles and usability honestly from the
  * wire: a separate default radio stack and fallback radio stack (FR-012),

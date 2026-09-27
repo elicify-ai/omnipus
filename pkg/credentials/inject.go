@@ -263,7 +263,7 @@ func nonChannelRefsFor(cfg *config.Config) []credentialRef {
 	add(cfg.Tools.Web.Perplexity.APIKeyRef, ScopeWebSearch, "perplexity")
 	add(cfg.Tools.Web.GLMSearch.APIKeyRef, ScopeWebSearch, "glm_search")
 	add(cfg.Tools.Web.BaiduSearch.APIKeyRef, ScopeWebSearch, "baidu_search")
-	// ADR-094 (spec "Exa", Key injection row): Exa joins the shared
+	// ADR-096 (spec "Exa", Key injection row): Exa joins the shared
 	// enumeration feeding InjectFromConfig (os.Setenv) and ResolveAll (the
 	// redaction bundle). Without this line the key sits in the vault, the
 	// process environment never sees it, and search silently degrades —

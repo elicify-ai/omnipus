@@ -1,11 +1,11 @@
 /**
- * IntegrationsSection.adr094.test.tsx — ADR-094 Settings screen, section level.
+ * IntegrationsSection.adr096.test.tsx — ADR-096 Settings screen, section level.
  *
  * Verifies, through the real IntegrationsSection: search rows wear Default /
  * Fallback badges instead of the retired "Active" badge (FR-028 / settings
  * table "Badge"), a configured-but-unusable provider reads "key not reaching
  * search" (FR-028), storing a key on a search row is separable from assigning
- * a role (ADR-094 D18 — the PUT carries api_key and no role field), and each
+ * a role (ADR-096 D18 — the PUT carries api_key and no role field), and each
  * radio selection maps to exactly one contract-shaped PUT
  * (IntegrationProviderUpdateRequest). Step-up gate and data loading are the
  * existing suites' subject; mocked at the process edge only (REST client).
@@ -97,7 +97,7 @@ beforeEach(() => {
   vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
 })
 
-describe('IntegrationsSection — ADR-094 search roles', () => {
+describe('IntegrationsSection — ADR-096 search roles', () => {
   it('shows Default and Fallback badges on search rows from the role fields, and no Active badge', async () => {
     renderSection()
     await waitFor(() => {

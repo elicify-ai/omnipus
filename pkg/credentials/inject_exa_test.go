@@ -12,7 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
-// ADR-094 D2 / spec "Exa" section: Exa's credential reference must join
+// ADR-096 D2 / spec "Exa" section: Exa's credential reference must join
 // pkg/credentials/inject.go::nonChannelRefsFor — the shared enumeration that
 // feeds BOTH InjectFromConfig (os.Setenv at boot step 4) and ResolveAll (the
 // redaction bundle). A missing entry means Exa fails the way Tavily did,

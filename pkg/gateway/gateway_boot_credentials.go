@@ -446,7 +446,7 @@ func bootCredentials(
 		}
 	}
 
-	// ADR-094 D11: the web-search roles migration runs HERE — after
+	// ADR-096 D11: the web-search roles migration runs HERE — after
 	// injection (each provider's APIKey() reads the config default, process
 	// environment populated by InjectFromConfig) and before the agent loop
 	// builds its tools. Deliberately NOT a config-load migration: the

@@ -576,7 +576,7 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 		BaiduSearchEnabled:    rw.cfg.Tools.Web.BaiduSearch.Enabled,
 		Proxy:                 rw.cfg.Tools.Web.Proxy,
 		SSRFChecker:           rw.rs.al.ssrfChecker, // SEC-24: nil when SSRF disabled
-		// ADR-094 WS-TOOL: the roles surface. Roles nil would keep the tool
+		// ADR-096 WS-TOOL: the roles surface. Roles nil would keep the tool
 		// on the legacy single-provider path; wiring it here is what makes
 		// search_web reachable with provider failover, capability arguments
 		// and honest refusals (spec "Definition of done").

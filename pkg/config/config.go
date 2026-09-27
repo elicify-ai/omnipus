@@ -1555,10 +1555,10 @@ type TavilyConfig struct {
 	APIKeyRef string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_TAVILY_API_KEY_REF"`
 	BaseURL   string `json:"base_url"              yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_TAVILY_BASE_URL"`
 	// SearchDepth is the operator's Tavily search-depth default, in Tavily's
-	// own vocabulary (ADR-094 D12: basic | advanced | fast | ultra-fast).
+	// own vocabulary (ADR-096 D12: basic | advanced | fast | ultra-fast).
 	// Shipped default "basic"; an existing install whose file carries a
 	// tavily object without this key inherits "advanced" from the roles
-	// migration (ADR-094 D11), so today's bill does not change.
+	// migration (ADR-096 D11), so today's bill does not change.
 	SearchDepth string `json:"search_depth"          yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_TAVILY_SEARCH_DEPTH"`
 	MaxResults  int    `json:"max_results"           yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_TAVILY_MAX_RESULTS"`
 }
@@ -1575,9 +1575,9 @@ type PerplexityConfig struct {
 	// via the process environment (SEC-22). Raw values must never appear in config files.
 	APIKeyRef string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_API_KEY_REF"`
 	// SearchContextSize is the operator's Perplexity search-context-size
-	// default (ADR-094 D12: low | medium | high). Shipped default is
+	// default (ADR-096 D12: low | medium | high). Shipped default is
 	// ABSENT — the field is not sent today, and the roles migration is
-	// forbidden from writing one (ADR-094 D11 step 7), so an empty value is
+	// forbidden from writing one (ADR-096 D11 step 7), so an empty value is
 	// the operator-visible "do not send the field" default.
 	SearchContextSize string `json:"search_context_size,omitempty" yaml:"-" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_SEARCH_CONTEXT_SIZE"`
 	MaxResults        int    `json:"max_results"                   yaml:"-" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_MAX_RESULTS"`
@@ -1600,10 +1600,10 @@ type GLMSearchConfig struct {
 	// "search_pro", "search_pro_sogou", or "search_pro_quark".
 	SearchEngine string `json:"search_engine" yaml:"-" env:"OMNIPUS_TOOLS_WEB_GLM_SEARCH_ENGINE"`
 	// ContentSize is the operator's GLM content-size default, in GLM's own
-	// vocabulary (ADR-094 D12: medium | high — the two established values).
+	// vocabulary (ADR-096 D12: medium | high — the two established values).
 	// Shipped default "medium", the value the provider code hardcodes today;
 	// the roles migration writes "medium" onto an existing glm_search object
-	// whose file lacks the key (ADR-094 D11 step 7).
+	// whose file lacks the key (ADR-096 D11 step 7).
 	ContentSize string `json:"content_size"  yaml:"-" env:"OMNIPUS_TOOLS_WEB_GLM_CONTENT_SIZE"`
 	MaxResults  int    `json:"max_results"   yaml:"-" env:"OMNIPUS_TOOLS_WEB_GLM_MAX_RESULTS"`
 }
@@ -1625,7 +1625,7 @@ type ExaConfig struct {
 	// via the process environment (SEC-22). Raw values must never appear in config files.
 	// Exa's ref is a member of pkg/credentials/inject.go::nonChannelRefsFor and
 	// pkg/tools/web.go::enabledButKeylessSearchProviders — the two lists the
-	// spec names so the key actually reaches the process (ADR-094 D2).
+	// spec names so the key actually reaches the process (ADR-096 D2).
 	APIKeyRef string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_EXA_API_KEY_REF"`
 	// BaseURL overrides the Exa endpoint. Shipped EMPTY; the provider
 	// applies https://api.exa.ai/search when empty at call time (spec "Exa"
@@ -1635,7 +1635,7 @@ type ExaConfig struct {
 }
 
 type WebToolsConfig struct {
-	// DefaultProvider is tools.web.default_provider (ADR-094 D4): the
+	// DefaultProvider is tools.web.default_provider (ADR-096 D4): the
 	// catalogue id of who is tried first — perplexity, brave, tavily,
 	// duckduckgo, baidu, glm, exa; searxng only when the migration found
 	// today's chain already selected it. A missing key means "this file has
@@ -1645,14 +1645,14 @@ type WebToolsConfig struct {
 	// env:"-" is load-bearing: WebToolsConfig embeds ToolConfig with
 	// envPrefix:"OMNIPUS_TOOLS_WEB_" and every sibling scalar carries an
 	// env: tag, so without env:"-" an environment variable could make this
-	// non-empty and permanently suppress the migration (ADR-094 D11 keys
+	// non-empty and permanently suppress the migration (ADR-096 D11 keys
 	// idempotency off the marker's absence).
 	DefaultProvider string `json:"default_provider"           yaml:"-"           env:"-"`
-	// FallbackProvider is tools.web.fallback_provider (ADR-094 D4): a
+	// FallbackProvider is tools.web.fallback_provider (ADR-096 D4): a
 	// catalogue id, or the literal "none" ("No fallback"), or absent ("not
 	// chosen"). Same no-omitempty and env:"-" reasoning as DefaultProvider.
 	FallbackProvider string `json:"fallback_provider"          yaml:"-"           env:"-"`
-	// RolesMigratedAt is tools.web.roles_migrated_at (ADR-094 D11): the
+	// RolesMigratedAt is tools.web.roles_migrated_at (ADR-096 D11): the
 	// RFC 3339 marker the migration's idempotency keys off — NOT
 	// DefaultProvider's presence, so a later corrective pass can tell
 	// whether this migration ran.
