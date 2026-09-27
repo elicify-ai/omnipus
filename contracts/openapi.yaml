@@ -1726,6 +1726,10 @@ components:
       $ref: ./components/schemas/MailHtmlPreviewTokenRequest.yaml
     MailHtmlPreviewTokenResponse:
       $ref: ./components/schemas/MailHtmlPreviewTokenResponse.yaml
+    MailSignaturePreviewTokenRequest:
+      $ref: ./components/schemas/MailSignaturePreviewTokenRequest.yaml
+    MailSignaturePreviewTokenResponse:
+      $ref: ./components/schemas/MailSignaturePreviewTokenResponse.yaml
     CreateEmailDraftResult:
       $ref: ./components/schemas/CreateEmailDraftResult.yaml
     MailUnavailableError:
@@ -10915,6 +10919,66 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /mail/signature-preview-token:
+    post:
+      operationId: mintMailSignaturePreviewToken
+      summary: Mint a short-lived token for the draft signature's live preview
+      description: >
+        Mints the signature live-preview credential (email-mail-view-spec §16
+        Signature editor row, security sign-off MC-10 posture) —
+        session-authenticated and STAYS in the API namespace; the SPA frames
+        the served result through the existing token-only non-API
+        /mail-preview/ prefix: /mail-preview/html/{token} serves the
+        sanitized sandboxed signature HTML with the MC-10 normative header
+        set (zero new serve surface; /mail-preview/img/{token}/{index}
+        proxies the signature's https images under the same MC-41 rules).
+
+        Unlike the message HTML-preview mint, this mint NEVER dials IMAP —
+        the request carries no workspace/agent/folder/ref, only the signature
+        HTML itself. The HTML is sanitized AT MINT (MC-10(5) named-sanitizer
+        discipline: strip meta/base/forms/scripts/event handlers, harden
+        anchors; the signature policy keeps inline style, tables and
+        https+data images per FR-003). The mint NEVER PERSISTS: the sanitized
+        HTML lives only in the in-memory token store for the TTL and dies
+        with the token (logout revocation or expiry). Storage sanitization
+        stays the draft PUT's job. Token hygiene: 2-minute named
+        MailSignaturePreviewTokenTTL, REPLACE-ON-MINT — a session holds at
+        most one live signature token (a new mint revokes the session's
+        previous signature token; message-preview tokens keep their separate
+        cap-8-refuses hygiene). Rate-limited by a dedicated per-IP limiter
+        (MC-44) — 60 req/min, 429 with Retry-After.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailSignaturePreviewTokenRequest'
+      responses:
+        '200':
+          description: >
+            Token minted; the SPA points the sandboxed signature-preview
+            iframe at /mail-preview/html/{token}.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailSignaturePreviewTokenResponse'
+        '400':
+          description: >
+            Validation failure — the signature HTML is outside its MC-1 bound
+            (empty, or over the 16384-character maximum).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
 
   /workspaces/{id}/delegation:
     get:

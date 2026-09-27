@@ -18150,6 +18150,21 @@ type MailSendResponse struct {
 	SentSaved bool `json:"sent_saved"`
 }
 
+// MailSignaturePreviewTokenRequest Request to mint a short-lived token for the draft signature's live preview (POST /mail/signature-preview-token — session-authenticated, stays in the API namespace). Unlike the message HTML-preview mint, this endpoint NEVER dials IMAP: there is no workspace/agent/folder/ref in the request — the signature HTML is sanitized at mint (strip meta/base/forms/scripts/event handlers, harden anchors; the signature policy keeps inline style, tables and https+data images per FR-003) and held in the in-memory token store for the TTL. Mint never persists: the sanitized HTML lives only in memory and dies with the token (logout revocation or TTL expiry). Rate-limited by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+type MailSignaturePreviewTokenRequest struct {
+	// SignatureHtml The signature editor's current HTML (MC-1 bound: 1..16384 characters). Sanitized at mint before it is ever served into the sandboxed preview frame; storage sanitization stays the draft PUT's job — this mint never writes the signature anywhere.
+	SignatureHtml string `json:"signature_html"`
+}
+
+// MailSignaturePreviewTokenResponse Minted preview token for the draft signature's live preview. Mirrors the message preview's token hygiene (MC-43): 256-bit crypto/rand token, fail-closed on entropy failure, named TTL, indistinguishable 404s on the serve routes, logout revocation. Signature-token specifics: the TTL is the named 2-minute MailSignaturePreviewTokenTTL (bounds replay; the preview outlives debounce+render), and mints REPLACE — a session holds at most one live signature token (a new mint revokes the session's previous signature token; message-preview tokens keep their separate cap-8-refuses hygiene). The SPA constructs the /mail-preview/html/{token} URL from the token; expiry comes from expires_in_seconds.
+type MailSignaturePreviewTokenResponse struct {
+	// ExpiresInSeconds Seconds from the moment this response was produced until the token stops working (named signature TTL: 120 for the 2-minute MailSignaturePreviewTokenTTL — replace-on-mint keeps exactly one live signature token per session).
+	ExpiresInSeconds int `json:"expires_in_seconds"`
+
+	// Token The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (Library token hygiene, MC-43). This string is the entire security of the unauthenticated /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (Referrer-Policy: no-referrer on the served responses).
+	Token string `json:"token"`
+}
+
 // MailSummaryList Watcher-driven badge summary for every mailbox in a workspace (GET /workspaces/{id}/mail/summary) — one MailboxNewMailSummary per (agent, workspace) mailbox pair. Served from saved watcher state; never dials IMAP.
 type MailSummaryList struct {
 	// Items One entry per mailbox in the workspace.
@@ -26736,6 +26751,9 @@ type CreateVaultJSONRequestBody = CreateVaultRequest
 
 // MintMailHtmlPreviewTokenJSONRequestBody defines body for MintMailHtmlPreviewToken for application/json ContentType.
 type MintMailHtmlPreviewTokenJSONRequestBody = MailHtmlPreviewTokenRequest
+
+// MintMailSignaturePreviewTokenJSONRequestBody defines body for MintMailSignaturePreviewToken for application/json ContentType.
+type MintMailSignaturePreviewTokenJSONRequestBody = MailSignaturePreviewTokenRequest
 
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate

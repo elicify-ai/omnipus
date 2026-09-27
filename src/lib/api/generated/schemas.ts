@@ -5971,6 +5971,13 @@ export const MailHtmlPreviewTokenResponse = z.object({
   token: z.string().min(43).max(43),
   expires_in_seconds: z.number().int().gte(1),
 });
+export const MailSignaturePreviewTokenRequest = z.object({
+  signature_html: z.string().min(1).max(16384),
+});
+export const MailSignaturePreviewTokenResponse = z.object({
+  token: z.string().min(43).max(43),
+  expires_in_seconds: z.number().int().gte(1),
+});
 export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   persistence_status: ConfigurationPersistenceStatus.optional(),
@@ -10314,6 +10321,41 @@ This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched
         status: 502,
         description: `Upstream mail failure during the mint&#x27;s one IMAP fetch — sanitized error class in the body&#x27;s code field (MC-8).
 `,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/mail/signature-preview-token",
+    alias: "mintMailSignaturePreviewToken",
+    description: `Mints the signature live-preview credential (email-mail-view-spec §16 Signature editor row, security sign-off MC-10 posture) — session-authenticated and STAYS in the API namespace; the SPA frames the served result through the existing token-only non-API /mail-preview/ prefix: /mail-preview/html/{token} serves the sanitized sandboxed signature HTML with the MC-10 normative header set (zero new serve surface; /mail-preview/img/{token}/{index} proxies the signature&#x27;s https images under the same MC-41 rules).
+Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request carries no workspace/agent/folder/ref, only the signature HTML itself. The HTML is sanitized AT MINT (MC-10(5) named-sanitizer discipline: strip meta/base/forms/scripts/event handlers, harden anchors; the signature policy keeps inline style, tables and https+data images per FR-003). The mint NEVER PERSISTS: the sanitized HTML lives only in the in-memory token store for the TTL and dies with the token (logout revocation or expiry). Storage sanitization stays the draft PUT&#x27;s job. Token hygiene: 2-minute named MailSignaturePreviewTokenTTL, REPLACE-ON-MINT — a session holds at most one live signature token (a new mint revokes the session&#x27;s previous signature token; message-preview tokens keep their separate cap-8-refuses hygiene). Rate-limited by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ signature_html: z.string().min(1).max(16384) }),
+      },
+    ],
+    response: MailSignaturePreviewTokenResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — the signature HTML is outside its MC-1 bound (empty, or over the 16384-character maximum).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],
