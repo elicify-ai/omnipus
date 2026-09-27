@@ -250,11 +250,12 @@ func (l *previewLabelLimiter) allowUnknown() bool {
 	return l.admit("", false)
 }
 
-// allocateLocked inserts label's own full bucket, keeping the map bounded:
-// it evicts least-recently-used buckets while the map sits at the cap. The
-// idle-TTL sweep runs once per admission at the top of admit; allocation is
-// the cap half of the bound. Caller holds mu.
+// allocateLocked inserts label's own full bucket, keeping the map bounded
+// twice over: idle buckets beyond the TTL are swept first, then
+// least-recently-used buckets are evicted while the map sits at the cap.
+// Caller holds mu.
 func (l *previewLabelLimiter) allocateLocked(label string, now time.Time) {
+	l.sweepLocked(now)
 	for len(l.buckets) >= previewLabelBucketCap {
 		oldestKey, oldestAt := "", now
 		for key, b := range l.buckets {
@@ -307,9 +308,9 @@ func (l *previewLabelLimiter) sweepLocked(now time.Time) {
 // FR-027 per-label guarantee. Admission itself resolves first (admit), so
 // promote only maintains the bucket the label already owns.
 //
-// Bounded like every insertion: it evicts least-recently-used buckets while
-// the map sits at the cap, so promoted labels never grow the map without
-// bound either.
+// Bounded like every insertion: idle buckets are swept and
+// least-recently-used buckets are evicted while the map sits at the cap, so
+// promoted labels never grow the map without bound either.
 func (l *previewLabelLimiter) promote(label string) {
 	now := time.Now()
 	l.mu.Lock()
