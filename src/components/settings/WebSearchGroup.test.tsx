@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { cleanup, render, screen, fireEvent } from '@testing-library/react'
 import type { IntegrationProvider } from '@/lib/api'
 import {
   WebSearchGroup,
@@ -59,8 +59,11 @@ function renderRoles(
     onSetFallback: vi.fn(),
     ...overrides,
   }
-  render(<WebSearchRowRoles {...props} />)
-  return props
+  // A second render in one test must replace the first. Testing Library only
+  // unmounts after the test, so getByTestId would otherwise see two radios.
+  cleanup()
+  const view = render(<WebSearchRowRoles {...props} />)
+  return { ...props, ...view }
 }
 
 describe('WebSearchRowRoles — one row, both radios (spec "Same row")', () => {
@@ -116,10 +119,14 @@ describe('WebSearchRowRoles — one row, both radios (spec "Same row")', () => {
   })
 
   it('clicking an unchecked default radio reports that id; clicking the checked one reports nothing', () => {
+    // The checked radio is the one default_search already names. A click that
+    // changes nothing must not report: the spec's save is a role change, and
+    // the section test "clicking the already-selected default fires no gated
+    // save" locks the same rule. The previous assertion clicked that checked
+    // radio and expected a call, which contradicted this test's own title.
     const props = renderRoles({ provider: TAVILY, defaultSearch: 'tavily' })
     fireEvent.click(screen.getByTestId('default-radio-tavily'))
-    expect(props.onSetDefault).toHaveBeenCalledTimes(1)
-    expect(props.onSetDefault).toHaveBeenCalledWith('tavily')
+    expect(props.onSetDefault).not.toHaveBeenCalled()
 
     const braveProps = renderRoles({ provider: BRAVE, defaultSearch: 'tavily' })
     fireEvent.click(screen.getByTestId('default-radio-brave'))
@@ -156,8 +163,9 @@ describe('WebSearchNoFallbackChoice — the visible "No fallback" choice (spec "
       onSetNoFallback: vi.fn(),
       ...overrides,
     }
-    render(<WebSearchNoFallbackChoice {...props} />)
-    return props
+    cleanup()
+    const view = render(<WebSearchNoFallbackChoice {...props} />)
+    return { ...props, ...view }
   }
 
   it('renders as a visible, labelled choice — not an unselected blank', () => {

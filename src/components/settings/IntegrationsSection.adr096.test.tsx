@@ -68,8 +68,12 @@ const RESPONSE: IntegrationProvidersResponse = {
   search: [
     srow({ id: 'brave' }),
     srow({ id: 'tavily' }),
-    srow({ id: 'duckduckgo', requires_key: false }),
-    srow({ id: 'searxng', requires_key: false, configured: false, usable: false }),
+    // The helper capitalises only the first letter ("Duckduckgo", "Searxng").
+    // The assertion looks up the catalogue's real display names, which this
+    // fixture has to supply — the screen renders display_name, it does not
+    // invent the spelling.
+    srow({ id: 'duckduckgo', display_name: 'DuckDuckGo', requires_key: false }),
+    srow({ id: 'searxng', display_name: 'SearXNG', requires_key: false, configured: false, usable: false }),
   ],
   voice: [
     srow({ id: 'elevenlabs', kind: 'voice', display_name: 'ElevenLabs Scribe', requires_key: true, usable: undefined, fallback: undefined, fallback_automatic: undefined, active: true }),

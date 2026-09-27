@@ -100,8 +100,10 @@ export function IntegrationsSection() {
   // when the tool's own test passes; a stored key whose resolved value is
   // empty reads "Key not reaching search" — configured (the secret is in
   // the vault) is not the badge test (FR-028). There is no per-row "Set
-  // active" button, and a key save carries api_key only — storing a key is
-  // separable from assigning a role (ADR-096 D18).
+  // active" button. When default_search is on the wire, a key save carries
+  // api_key only — storing a key is separable from assigning a role (spec
+  // § Contract shape). A payload without that field is still the pre-role
+  // screen, whose save is "Save & activate".
   const onSetDefault = (id: string) => requestChange(id, { kind: 'search', active: true })
   const onSetFallback = (id: string) => requestChange(id, { kind: 'search', fallback: true })
   const onSetNoFallback = () => {
@@ -113,6 +115,7 @@ export function IntegrationsSection() {
   const renderSearchRow = (p: IntegrationProvider) => {
     const isExpanded = expanded === p.id
     const keyVal = apiKeys[p.id] ?? ''
+    const rolesOnWire = data?.default_search !== undefined
     const isDefaultRow = data?.default_search === p.id
     const isFallbackRow = data?.fallback_search === p.id
 
@@ -135,6 +138,17 @@ export function IntegrationsSection() {
               {isFallbackRow && (
                 <Badge data-testid={`badge-fallback-${p.id}`} variant="secondary" className="gap-[var(--space-1)]">
                   Fallback{p.fallback_automatic ? ' (automatic)' : ''}
+                </Badge>
+              )}
+              {/* Spec § Settings screen "Badge": "Active" goes away for search
+                  rows, replaced by "Default". The pre-role payload has no
+                  default_search, so the provider it marks `active` is that
+                  default. The word is "Default"; the testid stays `active-*`
+                  because the pre-ADR section test locks that marker. A
+                  role-bearing response never takes this branch. */}
+              {!rolesOnWire && p.active && (
+                <Badge data-testid={`active-${p.id}`} variant="success" className="gap-[var(--space-1)]">
+                  <Star size={10} weight="fill" /> Default
                 </Badge>
               )}
               {p.usable === true ? (
@@ -226,12 +240,17 @@ export function IntegrationsSection() {
               <Button
                 size="sm"
                 onClick={() =>
-                  requestChange(p.id, { kind: p.kind, api_key: keyVal.trim() })
+                  requestChange(
+                    p.id,
+                    rolesOnWire
+                      ? { kind: p.kind, api_key: keyVal.trim() }
+                      : { kind: p.kind, api_key: keyVal.trim(), active: true },
+                  )
                 }
                 disabled={!keyVal.trim() || isSaving}
                 data-testid={`save-${p.id}`}
               >
-                Save key
+                {rolesOnWire ? 'Save key' : 'Save & activate'}
               </Button>
             </div>
           </div>
