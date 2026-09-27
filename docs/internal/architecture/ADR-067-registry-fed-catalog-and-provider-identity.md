@@ -201,11 +201,28 @@ Applied from `docs/internal/specs/adr-067-registry-catalog-spec-review.md`; coor
 - **Refresh and staleness.** A successful refresh logs one INFO with the new version; when `updated_at` is older than 14 days the `GET` carries `stale: true` and `/health` reports the catalog degraded with the last refresh error. The startup pull is skipped when the persisted document is less than 1 h old (GitHub's unauthenticated rate limit). There is no manual refresh endpoint. A catalog refresh does **not** rebuild already-constructed provider instances; a changed `api` takes effect at the next agent reload.
 - **Rows that vanish upstream.** A provider or model that disappears from models.dev is carried forward from the last published document with `status: retired` (models) or `tier: unsupported`, `unsupported_reason: withdrawn` (providers) — never silently dropped.
 
+## 8c. Amendment 2026-09-27 — ADR-096 web-search roles migration is exempt from the greenfield gates
+
+**Founder decision, 2026-09-27.** [ADR-096 — Web-search provider model](ADR-096-web-search-provider-model.md) requires an upgrade step: on an existing install it records which search provider was answering before the new default/fallback roles existed, so that upgrading does not silently change who answers (its spec story US-3). That step writes a disk marker, `roles_migrated_at`. Both greenfield gates rejected it. The founder was shown the alternative — drop the migration under the standing 2026-09-15 greenfield ruling, as was done for the thinking feature — and chose to **keep the migration and amend this ADR with a narrow exemption** instead.
+
+**Why this is not what the greenfield rule was written against.** The rule (header; exit proof 5) targets **provider-identity** machinery: aliases, rename ladders, retired-name lists, and translation of stored provider ids. The ADR-096 step renames nothing and translates no id. It initialises a *new* setting — web-search role assignment — from the behaviour the install already had. The exemption is granted for that mechanism only; it is not a relaxation of the rule for provider identity.
+
+**What is exempt, and nothing more.**
+
+| Gate | Mechanism | Scope |
+|---|---|---|
+| Go guard `pkg/providers/greenfield_test.go::TestGreenfield_NoAliasMachinery` (bans `_migrated`) | `rolesMarkerExempt` / `onlyRolesMarkerToken`, with a stale-row rule copied from `aliasesReadSites` | the token `roles_migrated_at`, only in `pkg/config/config.go` and `pkg/config/web_search_roles.go`; a literal carrying any *other* banned token alongside it is still flagged |
+| Shell gate `scripts/check-greenfield-providers.sh` (also bans bare `migrat`) | `GENERIC_EXEMPT_LINES`, the mechanism already used for `cli_token_migration.go` | exact stripped-text entries for the migration's own lines in `web_search_roles.go`, `config.go` and `defaults.go` |
+
+Both are narrow by construction and proven so: editing an exempted line, adding a new `migrate…` function in an exempted file, or adding a `migrate…` line to any other `pkg/config` file is still rejected.
+
+**Accepted cost.** This is a deliberate exception to the 2026-09-15 greenfield ruling, made by the founder with that ruling in view. It is recorded here so the exception is visible where the rule lives, and so it is not read as precedent for provider-identity migrations — those remain forbidden.
+
 ## 9. Exit proof
 
 1. **Exact resolution** — `Resolve(provider, model)` returns the route's own limits: `(openrouter, z-ai/glm-5.2)` → 1,048,576 and `(zai, glm-5.2)` → 1,000,000; `(openrouter, glm-5.2)` is a miss, not a prefix-stripped hit.
 2. **Feed integrity** — a release whose `.sha256` does not match, **or has no `.sha256`**, or exceeds 16 MB, or carries a non-`https` / private-host `api` for a hosted provider, is rejected and the embedded snapshot serves, with one WARN naming the reason; a release at any `schema_version` other than 2.0.0 is ignored the same way. `v2026.8.9 < v2026.8.10` and `v2026.9.30 < v2026.10.1` order correctly.
 3. **Offline selector** — with the network down, the model picker lists every catalog provider and model with limits and modalities attached; no live call is made to populate it.
 4. **Protocol dispatch** — `factory_provider.go` has no `case` on a vendor name; the ~5 protocol cases construct every reachable provider from the table's URL, key variable and protocol.
-5. **Greenfield** — `grep -rnE '_migrated|alias|deprecat' pkg/providers pkg/config` returns nothing provider-related (the catalog's `status: retired` token and the search-only `aliases[]` field are the two allowed exceptions); a config with `provider: "z-ai"` or `"moonshot-cn-anthropic"` fails as unknown-provider with no rename and no WARN naming a canonical id. The proof asserts the **absence of a canonical id** in the error, log, and API bodies — it does not assert on the echoed user-supplied id, whose wording (`unknown provider %q`) ADR-068 shares.
+5. **Greenfield** — `grep -rnE '_migrated|alias|deprecat' pkg/providers pkg/config` returns nothing provider-related (the catalog's `status: retired` token and the search-only `aliases[]` field are the two allowed exceptions; *amended 2026-09-27, §8c:* the ADR-096 web-search roles migration is a third, narrowly scoped exception — it is not provider machinery); a config with `provider: "z-ai"` or `"moonshot-cn-anthropic"` fails as unknown-provider with no rename and no WARN naming a canonical id. The proof asserts the **absence of a canonical id** in the error, log, and API bodies — it does not assert on the echoed user-supplied id, whose wording (`unknown provider %q`) ADR-068 shares.
 6. **No antigravity** — `grep -ri antigravity pkg cmd src contracts config docs` returns only historical decision records (the deletion itself is ADR-068 §2.4).
