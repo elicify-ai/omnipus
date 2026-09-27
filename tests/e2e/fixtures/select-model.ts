@@ -15,7 +15,9 @@ import { E2E_MODEL } from './e2e-model.js'
  *     the DOM at all.
  *   - plain/grouped mode: same search input, flat option list.
  *   - `itemTestIdPrefix` (onboarding: "onboarding-model-"): clicks the exact
- *     `${prefix}${model}` testid; otherwise matches `[role="option"]` by text.
+ *     `${prefix}${model}` testid; otherwise matches `[role="option"]` by
+ *     EXACT text (an anchored `^slug$` RegExp — a superset slug like
+ *     `<slug>-preview` never matches, see selectExact below).
  *
  * Fails CLOSED when the central model is not offered: the thrown error names
  * the setting file, the slug, and the selector that found nothing — never a
@@ -24,6 +26,23 @@ import { E2E_MODEL } from './e2e-model.js'
 
 /** The ModelSelector search box renders only while the popover is open. */
 const SEARCH_INPUT_PLACEHOLDER = 'Search models...'
+
+/** Escape a string for literal use inside a RegExp. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * The EXACT text matcher for the central model: an anchored RegExp so a
+ * superset slug (e.g. `<slug>-preview`, `<slug>:floor`) can never stand in
+ * for the central model. Anchored on the slug ELEMENT (`getByText(exact)`),
+ * not the whole row: a row can carry sibling text — the "Recommended for
+ * chat" chip (RECOMMENDED_CHIP_LABEL) — which a whole-row match would
+ * wrongly exclude.
+ */
+function selectExact(slug: string): RegExp {
+  return new RegExp(`^${escapeRegExp(slug)}$`)
+}
 
 /**
  * Select the central e2e model in the ModelSelector whose trigger carries
@@ -72,18 +91,25 @@ export async function selectCentralModel(
     // historically missed in this suite.
     await searchInput.pressSequentially(E2E_MODEL)
 
+    // Exact option match: the row must CONTAIN an element whose whole text
+    // is the central slug (selectExact, anchored ^slug$) — a superset slug
+    // (e.g. <slug>-preview) never matches, and sibling row text (the
+    // "Recommended for chat" chip) cannot break the match either. The
+    // testid path is exact by construction. `.first()` is gone on purpose:
+    // exactly one candidate must match before the click — zero is "picker
+    // does not offer it" (fail closed below), two or more is ambiguous and
+    // refuses too.
     const modelItem = itemTestIdPrefix
       ? page.getByTestId(`${itemTestIdPrefix}${E2E_MODEL}`)
       : page
           .getByRole('option')
-          .filter({ hasText: E2E_MODEL })
-          .first()
+          .filter({ has: page.getByText(selectExact(E2E_MODEL)) })
 
     // Fail closed with context when the central model is not offered —
     // e.g. the provider catalog changed and no longer lists the slug the
     // whole suite is pinned to. Never silently pick a different model.
     try {
-      await modelItem.waitFor({ state: 'visible', timeout: 15_000 })
+      await expect(modelItem).toHaveCount(1, { timeout: 15_000 })
       await modelItem.click()
     } catch (err) {
       throw new Error(
@@ -91,7 +117,7 @@ export async function selectCentralModel(
           `"${E2E_MODEL}" (looked for ` +
           (itemTestIdPrefix
             ? `testid "${itemTestIdPrefix}${E2E_MODEL}"`
-            : `option matching "${E2E_MODEL}"`) +
+            : `the single option with exact text "${E2E_MODEL}"`) +
           `). tests/e2e/e2e-model.json pins the whole suite to it — fix the setting or ` +
           `the provider catalog, never fall back to another model. Underlying wait: ${(err as Error).message}`,
         { cause: err },
@@ -112,8 +138,14 @@ export async function selectCentralModel(
     )
   }
 
-  // The chosen model is E2E_MODEL: the trigger displays the value once set
-  // (model-selector.tsx: displayValue = value || placeholder).
-  await expect(modelTrigger).toContainText(E2E_MODEL, { timeout: 10_000 })
+  // The chosen model is E2E_MODEL — asserted EXACTLY: the trigger's value
+  // span (model-selector.tsx::ModelSelector combobox branch) renders
+  // displayValue = value || placeholder as its WHOLE text once a value is
+  // set, so exact:true + count-1 pins it. A superset slug left on the
+  // trigger (<slug>-preview) cannot pass, and the Unresolved chip and the
+  // caret icon never confound the match.
+  const triggerValue = modelTrigger.getByText(E2E_MODEL, { exact: true })
+  await expect(triggerValue).toHaveCount(1, { timeout: 10_000 })
+  await expect(triggerValue).toBeVisible({ timeout: 10_000 })
   return E2E_MODEL
 }

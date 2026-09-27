@@ -10,9 +10,11 @@ const DEFAULT_PROVIDER_ID = 'openrouter';
 // OpenRouter, not by the model alone.
 //
 // NOTE: the nightly evals (.github/workflows/evals-nightly.yml +
-// evals/cmd/eval-runner/main.go) intentionally stay on their own pinned
-// model (a LIVE model whose eval baselines depend on it) — the
-// E2E-vs-evals difference is deliberate.
+// evals/cmd/eval-runner/main.go) follow the SAME central setting: both the
+// evals agent and the judge derive AGENT_MODEL/JUDGE_MODEL from
+// tests/e2e/e2e-model.json (founder decision 2026-09-27, wired in
+// evals-nightly's "Read central e2e model" step), so tests and evals
+// cannot drift apart on which model they run.
 const DEFAULT_USERNAME = 'admin';
 const DEFAULT_PASSWORD = 'admin123';
 

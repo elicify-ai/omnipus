@@ -30,6 +30,7 @@ function loadCentralE2EModel(): string {
       `tests/e2e/e2e-model.json is missing or unreadable (${(err as Error).message}). ` +
         'It is the single source of truth for the e2e model — the whole real-LLM suite ' +
         'fails closed without it. Restore it with content {"model":"<provider/slug>"}.',
+      { cause: err },
     )
   }
 
@@ -40,6 +41,7 @@ function loadCentralE2EModel(): string {
     throw new Error(
       `tests/e2e/e2e-model.json is not valid JSON (${(err as Error).message}). ` +
         'Expected exactly {"model":"<provider/slug>"}.',
+      { cause: err },
     )
   }
 
