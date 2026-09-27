@@ -84,42 +84,88 @@ func parsePort(t *testing.T, rawURL string) int32 {
 	return port
 }
 
-// TestHandlePreview_DevProxy_StripsAuthorizationHeader (T2.3a) verifies that the
-// reverse proxy does NOT forward the caller's Authorization header to the upstream
-// dev server. This prevents leaking the admin bearer token to an agent-owned process.
-func TestHandlePreview_DevProxy_StripsAuthorizationHeader(t *testing.T) {
-	// Spin up a stub upstream that records what headers it received.
-	var receivedAuthHeader string
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedAuthHeader = r.Header.Get("Authorization")
-		w.Header().Set("Content-Security-Policy", "default-src 'unsafe-inline'")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("<html>dev app</html>"))
-	}))
-	t.Cleanup(stub.Close)
+// TestHandlePreview_DevProxy_AuthorizationFiltering (T2.3a, reconciled to
+// ADR-094 FR-020 / Q1) verifies the two-sided dev-proxy Authorization rule
+// with the SAME bearer string: a bearer the gateway's own validator does NOT
+// accept — an arbitrary foreign token, e.g. the previewed app's own API
+// token — forwards UNCHANGED so a login-bearing web app keeps working through
+// the proxy (F794-1/F794-2), while the gateway's OWN bearer (here the legacy
+// OMNIPUS_BEARER_TOKEN env credential, resolveBearerIdentity's third source)
+// is still stripped. Pre-ADR-094 this test asserted the strip-everything
+// rule; Q1 (FR-020) superseded it. The chain-level DS-4 matrix lives in
+// TestPreviewCredentialFilter_BearerMatrix (order 10); this keeps the direct
+// HandlePreview boundary.
+func TestHandlePreview_DevProxy_AuthorizationFiltering(t *testing.T) {
+	t.Run("foreign_bearer_forwards_unchanged", func(t *testing.T) {
+		// No gateway credential this token could match: users/CLI token absent
+		// from the fixture config, env token pinned empty.
+		t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
-	stubPort := parsePort(t, stub.URL)
+		// Spin up a stub upstream that records what headers it received.
+		var receivedAuthHeader string
+		stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedAuthHeader = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<html>dev app</html>"))
+		}))
+		t.Cleanup(stub.Close)
 
-	api, dr := newDevProxyTestAPI(t)
+		api, dr := newDevProxyTestAPI(t)
+		reg, err := dr.Register("proxy-test-agent", parsePort(t, stub.URL), 99999, "stub", 10)
+		require.NoError(t, err, "Register stub dev server")
 
-	reg, err := dr.Register("proxy-test-agent", stubPort, 99999, "stub", 10)
-	require.NoError(t, err, "Register stub dev server")
+		req := httptest.NewRequest(http.MethodGet,
+			"/preview/proxy-test-agent/"+reg.Token+"/foo", nil)
+		// A foreign bearer: the gateway has never issued it, the previewed app
+		// may need it (its own API auth) — FR-020 forwards it unchanged.
+		req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+		rec := httptest.NewRecorder()
 
-	path := "/preview/proxy-test-agent/" + reg.Token + "/foo"
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	// Set an Authorization header — the proxy must strip it before forwarding.
-	req.Header.Set("Authorization", "Bearer super-secret-admin-token")
-	rec := httptest.NewRecorder()
+		api.HandlePreview(rec, req)
 
-	api.HandlePreview(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code,
+			"proxy to live stub must return 200; got %d body=%s", rec.Code, rec.Body.String())
 
-	// The upstream stub should have responded with 200.
-	assert.Equal(t, http.StatusOK, rec.Code,
-		"proxy to live stub must return 200; got %d body=%s", rec.Code, rec.Body.String())
+		// ADR-094 FR-020 (DS-4 row 6): the foreign bearer must REACH the
+		// upstream byte-exact — the pre-ADR-094 strip-everything rule is the
+		// wrong behaviour now.
+		assert.Equal(t, "Bearer super-secret-admin-token", receivedAuthHeader,
+			"FR-020/Q1: a bearer the gateway's own validator does not accept must forward "+
+				"unchanged to the upstream dev server; got %q", receivedAuthHeader)
+	})
 
-	// Authorization must NOT have reached the upstream (T2.3a).
-	assert.Empty(t, receivedAuthHeader,
-		"T2.3a: upstream dev server must NOT receive Authorization header; got %q", receivedAuthHeader)
+	t.Run("gateway_own_bearer_still_stripped", func(t *testing.T) {
+		// The same literal, now the gateway's own legacy env credential
+		// (OMNIPUS_BEARER_TOKEN — gatewayOwnsBearer's third accepted source):
+		// THIS one must never reach the agent-owned upstream.
+		t.Setenv("OMNIPUS_BEARER_TOKEN", "super-secret-admin-token")
+
+		var receivedAuthHeader string
+		stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedAuthHeader = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<html>dev app</html>"))
+		}))
+		t.Cleanup(stub.Close)
+
+		api, dr := newDevProxyTestAPI(t)
+		reg, err := dr.Register("proxy-test-agent", parsePort(t, stub.URL), 99999, "stub", 10)
+		require.NoError(t, err, "Register stub dev server")
+
+		req := httptest.NewRequest(http.MethodGet,
+			"/preview/proxy-test-agent/"+reg.Token+"/foo", nil)
+		req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+		rec := httptest.NewRecorder()
+
+		api.HandlePreview(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code,
+			"proxy to live stub must return 200; got %d body=%s", rec.Code, rec.Body.String())
+
+		assert.Empty(t, receivedAuthHeader,
+			"FR-020/Q1: the gateway's own Bearer (OMNIPUS_BEARER_TOKEN) must still be stripped — "+
+				"upstream dev server got %q", receivedAuthHeader)
+	})
 }
 
 // TestHandlePreview_DevProxy_StripsUpstreamCSP (T2.3b) verifies that upstream
