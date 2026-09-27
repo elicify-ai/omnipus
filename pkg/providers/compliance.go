@@ -33,6 +33,13 @@ import (
 // Anthropic install silently took the non-streaming path with the assertion
 // green.
 //
+// Satisfying the file's rule — assert the type the factory returns — applies
+// to every optional capability interface consulted by runtime type assertion.
+// ThinkingCapable is the second such interface: the agent loop consults it the
+// same way (pkg/agent/loop_run_turn.go::prepareLLMRequest), so the same
+// silent-drop shape applies to it. A wrapper that stops forwarding
+// SupportsThinking fails the build here instead.
+//
 // Satisfying the interface is necessary, not sufficient: a wrapper can accept
 // onProgress and forward nil. streaming_forwarding_test.go covers that half.
 var (
@@ -40,4 +47,7 @@ var (
 	_ StreamingProvider = (*HTTPProvider)(nil)
 	_ StreamingProvider = (*anthropicprovider.Provider)(nil)
 	_ StreamingProvider = (*openai_compat.Provider)(nil)
+
+	_ ThinkingCapable = (*ClaudeProvider)(nil)
+	_ ThinkingCapable = (*anthropicprovider.Provider)(nil)
 )
