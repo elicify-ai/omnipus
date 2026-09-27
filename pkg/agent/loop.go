@@ -1046,6 +1046,16 @@ func (al *AgentLoop) Close() {
 	// own context; a double-cancel is a no-op.
 	al.stopSessionWorkers()
 
+	// Drain the detached request goroutines tracked by activeRequests — the
+	// ADR-093 revived ordinary-root turn, the system/unroutable dispatches,
+	// every in-flight LLM call (waitActiveRequestsDrain's doc has the full
+	// list and the placement rationale). The recap/task/steered drains each
+	// join their own class; this one was missing, and a caller that runs
+	// Close() alone (every test harness) raced a still-unwinding revived
+	// turn's writes against its own temp-dir removal
+	// (TestAdr093StopDuringRevivedTurn_DelegateRefuses).
+	al.waitActiveRequestsDrain(30 * time.Second)
+
 	// Drop every browser's manager connection (one per browsing key). In ADR-043
 	// shared-Chrome mode this closes each manager's WS connection + detaches
 	// its tabs but does NOT kill the Chrome process — that is the coordinator's
@@ -1231,6 +1241,45 @@ func (al *AgentLoop) waitRecapDrain(budget time.Duration) {
 		// All recaps drained cleanly.
 	case <-time.After(budget):
 		logger.WarnCF("agent", "Close: recap drain budget exceeded; proceeding with teardown",
+			map[string]any{"budget": budget.String()})
+	}
+}
+
+// waitActiveRequestsDrain blocks until the detached request goroutines tracked
+// by activeRequests have completed, OR until budget elapses — whichever comes
+// first. It never blocks indefinitely: a wedged turn goroutine (a provider
+// that never returns and ignores context cancellation) must not hold teardown
+// hostage. On timeout it logs a warning and proceeds so the rest of teardown
+// can run; the only cost is a turn's final writes that may not have landed.
+//
+// What activeRequests tracks here: the ADR-093 revived ordinary-root turn
+// (revive_support.go::runRevivedOrdinaryTurn), the system-message and
+// unroutable dispatch goroutines in Run's loop, and every in-flight LLM call
+// (loop_run_turn.go). Each writes session, transcript or lifecycle files.
+// The gateway's graceful shutdown waits bounded on this same counter BEFORE
+// Close (pkg/gateway/shutdown.go), so there the drain is a no-op; a caller
+// that runs Close() alone — every test harness's t.Cleanup(al.Close) — had
+// no join at all, and a revived turn still unwinding at Close() kept writing
+// through the stores the teardown below closes, racing the caller's
+// temp-dir removal (release/v0.1.1 red:
+// TestAdr093StopDuringRevivedTurn_DelegateRefuses, "TempDir RemoveAll
+// cleanup ... directory not empty").
+//
+// Placement in Close(): AFTER stopSessionWorkers, so worker-driven in-flight
+// calls are already cancelled and cannot hold the counter from here on; and
+// BEFORE the browser/MCP/store teardown, so the draining goroutines' final
+// writes land while their stores are still open.
+func (al *AgentLoop) waitActiveRequestsDrain(budget time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		al.activeRequests.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// All detached request goroutines drained cleanly.
+	case <-time.After(budget):
+		logger.WarnCF("agent", "Close: active-request drain budget exceeded; proceeding with teardown",
 			map[string]any{"budget": budget.String()})
 	}
 }
