@@ -47,6 +47,21 @@ func artifactMessage(t *testing.T, childID, messageID string) generated.SessionM
 	return sm
 }
 
+// pauseHandbackMessage builds a kind=handback, mode=pause SessionMessage for
+// direct Deliver calls and boot-recovery fixtures.
+func pauseHandbackMessage(t *testing.T, childID, messageID string) generated.SessionMessage {
+	t.Helper()
+	var sm generated.SessionMessage
+	if err := sm.FromSessionMessageHandback(generated.SessionMessageHandback{
+		MessageId: messageID, SessionId: childID, CreatedAt: time.Now(), Depth: 1,
+		SenderIdentity: "worker", Mode: generated.SessionMessageHandbackModePause,
+		ResultSoFar: "half done, pausing", Artifacts: []string{}, OpenQuestions: []string{},
+	}); err != nil {
+		t.Fatalf("FromSessionMessageHandback: %v", err)
+	}
+	return sm
+}
+
 // requireEmptyInbox fails when any entry from childID reached parentID's inbox.
 func requireEmptyInbox(t *testing.T, inbox *session.MessageInboxStore, parentID, childID string) {
 	t.Helper()
@@ -150,9 +165,10 @@ func TestDeliver_ArtifactStoredNotWoken(t *testing.T) {
 // deliverer the same way artifact was. It must be accepted and stored once
 // as a handback with mode "pause".
 func TestMessageParentHandbackPause_DeliversThroughRealDeliverer(t *testing.T) {
-	_, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
+	al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
+	seedUnifiedSession(t, al, parentID)
 	tool, ctx := newArtifactTestTool(lifecycle, deliverer, childID)
 
 	res := tool.Execute(ctx, map[string]any{
@@ -179,6 +195,51 @@ func TestMessageParentHandbackPause_DeliversThroughRealDeliverer(t *testing.T) {
 	if hb.Mode != generated.SessionMessageHandbackModePause {
 		t.Fatalf("stored mode = %q, want \"pause\"", hb.Mode)
 	}
+
+	// The side panel labels it a handback (not "blocker", the outcome it
+	// rides) and shows the child's own words.
+	entries, rerr := al.GetSessionStore().ReadTranscript(parentID)
+	if rerr != nil {
+		t.Fatalf("ReadTranscript(parent): %v", rerr)
+	}
+	var frame *generated.SubagentMessageFrame
+	for i := range entries {
+		if entries[i].SystemSubtype == session.SystemSubtypeSubagentMessage && entries[i].SubagentMessage != nil {
+			frame = entries[i].SubagentMessage
+			break
+		}
+	}
+	if frame == nil {
+		t.Fatalf("expected a subagent_message entry in the parent's transcript, got %d entries", len(entries))
+	}
+	if frame.Kind != "handback" {
+		t.Fatalf("SubagentMessage.Kind = %q, want \"handback\"", frame.Kind)
+	}
+	const wantText = "A delegated session handed back (pause): half done, pausing"
+	if frame.Text == nil || *frame.Text != wantText {
+		t.Fatalf("SubagentMessage.Text = %v, want %q", frame.Text, wantText)
+	}
+}
+
+// TestDeliver_PauseHandbackWakesParent: a pause handback is wake-eligible
+// (session.classifyEnvelope) — unlike an artifact, the parent is woken.
+func TestDeliver_PauseHandbackWakesParent(t *testing.T) {
+	_, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	const parentID, childID = "parent-1", "child-1"
+	seedParentAndChild(t, lifecycle, parentID, childID)
+
+	delivery, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
+		ChildSessionID: childID, Outcome: steer.OutcomeBlocker, Message: pauseHandbackMessage(t, childID, "pause-wake"),
+	})
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if delivery.Outcome != steer.DeliveryWoke {
+		t.Fatalf("Delivery.Outcome = %q, want woke", delivery.Outcome)
+	}
+	if delivery.MessageID != "pause-wake" {
+		t.Fatalf("Delivery.MessageID = %q, want the caller's id (a pause is not terminal: no :final id)", delivery.MessageID)
+	}
 }
 
 // TestDeliver_WidenedOutcomesStillRejectOtherPairings guards the widened
@@ -199,6 +260,9 @@ func TestDeliver_WidenedOutcomesStillRejectOtherPairings(t *testing.T) {
 		}},
 		{"progress carrying artifact", steer.OutcomeProgress, func(t *testing.T, c string) generated.SessionMessage {
 			return artifactMessage(t, c, "a-progress")
+		}},
+		{"final_answer carrying pause handback", steer.OutcomeFinalAnswer, func(t *testing.T, c string) generated.SessionMessage {
+			return pauseHandbackMessage(t, c, "pause-under-final")
 		}},
 		{"blocker carrying final handback", steer.OutcomeBlocker, func(t *testing.T, c string) generated.SessionMessage {
 			return handbackEvent(c, "final-under-blocker").Message

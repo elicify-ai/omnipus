@@ -113,7 +113,9 @@ func isTerminalOutcome(o steer.Outcome) bool {
 //   - OutcomeBlocker also carries a NON-final handback (mode=pause: wake-
 //     eligible, not terminal). A final handback stays OutcomeFinalAnswer's
 //     alone — it needs the terminal deterministic id Deliver stamps only for
-//     terminal outcomes; validateOutcomeMessage enforces the mode.
+//     terminal outcomes — and OutcomeFinalAnswer takes only a final one, so
+//     a pause is never stamped final (boot_sweep.go::bootOutcome maps it to
+//     OutcomeBlocker too); validateOutcomeMessage enforces the mode.
 var outcomeAllowedKinds = map[steer.Outcome][]string{ //nolint:gochecknoglobals
 	steer.OutcomeFinalAnswer:     {"handback"},
 	steer.OutcomeEmptyAnswer:     {"error"},
@@ -131,7 +133,8 @@ var outcomeAllowedKinds = map[steer.Outcome][]string{ //nolint:gochecknoglobals
 // validateOutcomeMessage rejects an UpwardEvent whose Outcome and message
 // kind disagree (outcomeAllowedKinds). Error-kind outcomes additionally pin
 // Fatal: true for the four terminal failures, false for a lifecycle notice.
-// A handback under OutcomeBlocker must be non-final.
+// A handback must be final under OutcomeFinalAnswer and non-final under
+// OutcomeBlocker.
 func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageDeliveryClass, msg generated.SessionMessage) error {
 	allowed, ok := outcomeAllowedKinds[outcome]
 	if !ok {
@@ -147,11 +150,12 @@ func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageD
 			return mismatch
 		}
 	case "handback":
-		if outcome == steer.OutcomeBlocker {
-			hb, err := msg.AsSessionMessageHandback()
-			if err != nil || hb.Mode == generated.SessionMessageHandbackModeFinal {
-				return fmt.Errorf("outcome %q does not match a final handback", outcome)
-			}
+		hb, err := msg.AsSessionMessageHandback()
+		if err != nil {
+			return fmt.Errorf("outcome %q: decode handback: %w", outcome, err)
+		}
+		if isFinal := hb.Mode == generated.SessionMessageHandbackModeFinal; isFinal != (outcome == steer.OutcomeFinalAnswer) {
+			return fmt.Errorf("outcome %q does not match a handback with mode %q", outcome, hb.Mode)
 		}
 	}
 	return nil
@@ -466,9 +470,10 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	// (steer_frames.go). Best-effort — see deliverSubagentMessage/State's
 	// own doc comments for why a failure here never fails Deliver itself.
 	if kind := subagentMessageKindForOutcome(event.Outcome); kind != "" {
-		if event.Outcome == steer.OutcomeCheckpoint {
-			// checkpoint or artifact (outcomeAllowedKinds) — both are
-			// SubagentMessageFrame kinds, so an artifact shows as one (#1011).
+		if event.Outcome == steer.OutcomeCheckpoint || event.Outcome == steer.OutcomeBlocker {
+			// Each allowed kind (outcomeAllowedKinds: checkpoint/artifact,
+			// blocker/handback) is a SubagentMessageFrame kind, so an
+			// artifact or a pause handback shows as itself (#1011).
 			kind = class.Kind
 		}
 		al.deliverSubagentMessage(ownerKey, childRec, kind, deliverySummary(msg), nil)
