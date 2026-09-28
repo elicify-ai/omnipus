@@ -32,10 +32,16 @@ properties:
     example: "<abc123@example.com>"
   uid:
     type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
     description: IMAP UID of the message within its folder (valid under uidvalidity).
     example: 123
   uidvalidity:
     type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
     description: >
       IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A
       changed uidvalidity renumbers uids; the mid: ref form survives that

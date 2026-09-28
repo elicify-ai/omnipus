@@ -46,9 +46,15 @@ properties:
     description: The displayed/edited Markdown body, rendered at send time (MC-3).
   uidvalidity:
     type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
     description: uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
   uid:
     type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
     description: uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
   keep_attachment_parts:
     type: array

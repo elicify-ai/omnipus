@@ -22,7 +22,7 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 	out := gen.MailSummaryList{Items: []struct {
 		AgentId        string                               `json:"agent_id"`
 		LastErrorClass *string                              `json:"last_error_class"`
-		LastSeenUid    *int                                 `json:"last_seen_uid"`
+		LastSeenUid    *int64                               `json:"last_seen_uid"`
 		LastSuccessAt  *time.Time                           `json:"last_success_at"`
 		NextAttemptAt  *time.Time                           `json:"next_attempt_at"`
 		UnseenTotal    int                                  `json:"unseen_total"`
@@ -69,7 +69,7 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 			}
 			row.UnseenTotal = st.UnseenTotal
 			if st.LastSeenUID > 0 {
-				u := int(st.LastSeenUID)
+				u := int64(st.LastSeenUID)
 				row.LastSeenUid = &u
 			}
 			if s := st.LastErrorClass; s != "" {
@@ -89,7 +89,7 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 		out.Items = append(out.Items, struct {
 			AgentId        string                               `json:"agent_id"`
 			LastErrorClass *string                              `json:"last_error_class"`
-			LastSeenUid    *int                                 `json:"last_seen_uid"`
+			LastSeenUid    *int64                               `json:"last_seen_uid"`
 			LastSuccessAt  *time.Time                           `json:"last_success_at"`
 			NextAttemptAt  *time.Time                           `json:"next_attempt_at"`
 			UnseenTotal    int                                  `json:"unseen_total"`

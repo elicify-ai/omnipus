@@ -5853,8 +5853,8 @@ export const MailUnavailableError = z.object({
 });
 export const MailMessageSummary: z.ZodType<MailMessageSummary> = z.object({
   message_id: z.string().nullable(),
-  uid: z.number().int(),
-  uidvalidity: z.number().int(),
+  uid: z.number().int().gte(0).lte(4294967295),
+  uidvalidity: z.number().int().gte(0).lte(4294967295),
   folder: z.enum(["inbox", "sent", "drafts"]),
   subject: z.string(),
   from: z.string(),
@@ -5870,7 +5870,7 @@ export const MailMessageSummary: z.ZodType<MailMessageSummary> = z.object({
 export const MailMessagePage: z.ZodType<MailMessagePage> = z.object({
   messages: z.array(MailMessageSummary),
   truncated: z.boolean(),
-  next_before_uid: z.number().int().nullable(),
+  next_before_uid: z.number().int().gte(0).lte(4294967295).nullable(),
 });
 export const MailAttachment: z.ZodType<MailAttachment> = z.object({
   part_index: z.number().int(),
@@ -5880,8 +5880,8 @@ export const MailAttachment: z.ZodType<MailAttachment> = z.object({
 });
 export const MailMessage: z.ZodType<MailMessage> = z.object({
   message_id: z.string().nullable(),
-  uid: z.number().int(),
-  uidvalidity: z.number().int(),
+  uid: z.number().int().gte(0).lte(4294967295),
+  uidvalidity: z.number().int().gte(0).lte(4294967295),
   folder: z.enum(["inbox", "sent", "drafts"]),
   subject: z.string(),
   from: z.string(),
@@ -5911,7 +5911,7 @@ export const MailboxNewMailSummary: z.ZodType<MailboxNewMailSummary> = z.object(
     watcher_state: z.enum(["ok", "error", "backoff"]),
     last_error_class: z.string().nullable(),
     last_success_at: z.string().datetime({ offset: true }).nullable(),
-    last_seen_uid: z.number().int().nullable(),
+    last_seen_uid: z.number().int().gte(0).lte(4294967295).nullable(),
     next_attempt_at: z.string().datetime({ offset: true }).nullable(),
   }
 );
@@ -5945,8 +5945,8 @@ export const MailDraftUpdateRequest: z.ZodType<MailDraftUpdateRequest> =
     bcc: z.array(z.string()).max(50).optional(),
     subject: z.string(),
     body_markdown: z.string(),
-    uidvalidity: z.number().int(),
-    uid: z.number().int(),
+    uidvalidity: z.number().int().gte(0).lte(4294967295),
+    uid: z.number().int().gte(0).lte(4294967295),
     attachments: z.array(MailAttachmentInput).max(10).optional(),
     keep_attachment_parts: z.array(z.number().int()),
   });
@@ -5956,8 +5956,8 @@ export const MailDraftSendRequest = z.object({
   bcc: z.array(z.string()).max(50).optional(),
   subject: z.string(),
   body_markdown: z.string(),
-  uidvalidity: z.number().int(),
-  uid: z.number().int(),
+  uidvalidity: z.number().int().gte(0).lte(4294967295),
+  uid: z.number().int().gte(0).lte(4294967295),
   keep_attachment_parts: z.array(z.number().int()).optional(),
 });
 export const MailHtmlPreviewTokenRequest = z.object({

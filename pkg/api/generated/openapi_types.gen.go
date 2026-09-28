@@ -17793,10 +17793,10 @@ type MailDraftSendRequest struct {
 	To []string `json:"to"`
 
 	// Uid uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
-	Uid int `json:"uid"`
+	Uid int64 `json:"uid"`
 
 	// Uidvalidity uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
-	Uidvalidity int `json:"uidvalidity"`
+	Uidvalidity int64 `json:"uidvalidity"`
 }
 
 // MailDraftUpdateRequest Panel edit of a draft (D12/D23, PUT /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}): the full displayed content plus the staleness precondition (round-2 MAJ-008). The APPEND keeps the draft's Message-ID and \Deleted-flag the old copy (FR-032). Attachment carry-over is by part reference (FR-035): keep_attachment_parts lists the part indices from the current copy's MailMessage.attachments to carry over, and attachments carries new files. Full-replace semantics: keep_attachment_parts is required — the panel lists exactly what will be carried (D28). Audit event + rate limit.
@@ -17832,10 +17832,10 @@ type MailDraftUpdateRequest struct {
 	To []string `json:"to"`
 
 	// Uid uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
-	Uid int `json:"uid"`
+	Uid int64 `json:"uid"`
 
 	// Uidvalidity uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
-	Uidvalidity int `json:"uidvalidity"`
+	Uidvalidity int64 `json:"uidvalidity"`
 }
 
 // MailFolder One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox, as listed live from the mail server. Counts are live IMAP values at request time; the unread count exists for the Inbox only and is null everywhere else (round-1 MIN-005).
@@ -17988,10 +17988,10 @@ type MailMessage struct {
 	To []string `json:"to"`
 
 	// Uid IMAP UID of the message within its folder.
-	Uid int `json:"uid"`
+	Uid int64 `json:"uid"`
 
 	// Uidvalidity IMAP UIDVALIDITY of the folder.
-	Uidvalidity int `json:"uidvalidity"`
+	Uidvalidity int64 `json:"uidvalidity"`
 }
 
 // MailMessageFolder The folder slug the message lives in (MC-5).
@@ -18038,14 +18038,14 @@ type MailMessagePage struct {
 		To []string `json:"to"`
 
 		// Uid IMAP UID of the message within its folder (valid under uidvalidity).
-		Uid int `json:"uid"`
+		Uid int64 `json:"uid"`
 
 		// Uidvalidity IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A changed uidvalidity renumbers uids; the mid: ref form survives that (round-1 MAJ-005, D21).
-		Uidvalidity int `json:"uidvalidity"`
+		Uidvalidity int64 `json:"uidvalidity"`
 	} `json:"messages"`
 
 	// NextBeforeUid The before_uid cursor for the next page when truncated is true; null when this page is the last one.
-	NextBeforeUid *int `json:"next_before_uid"`
+	NextBeforeUid *int64 `json:"next_before_uid"`
 
 	// Truncated Whether more messages exist beyond this page.
 	Truncated bool `json:"truncated"`
@@ -18093,10 +18093,10 @@ type MailMessageSummary struct {
 	To []string `json:"to"`
 
 	// Uid IMAP UID of the message within its folder (valid under uidvalidity).
-	Uid int `json:"uid"`
+	Uid int64 `json:"uid"`
 
 	// Uidvalidity IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A changed uidvalidity renumbers uids; the mid: ref form survives that (round-1 MAJ-005, D21).
-	Uidvalidity int `json:"uidvalidity"`
+	Uidvalidity int64 `json:"uidvalidity"`
 }
 
 // MailMessageSummaryFolder The folder slug the message was listed from (MC-5).
@@ -18176,7 +18176,7 @@ type MailSummaryList struct {
 		LastErrorClass *string `json:"last_error_class"`
 
 		// LastSeenUid Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable.
-		LastSeenUid *int `json:"last_seen_uid"`
+		LastSeenUid *int64 `json:"last_seen_uid"`
 
 		// LastSuccessAt RFC 3339 instant of the last successful watcher cycle; null when no cycle has ever succeeded (round-2 MAJ-019 — ok never lies about blindness).
 		LastSuccessAt *time.Time `json:"last_success_at"`
@@ -18339,7 +18339,7 @@ type MailboxNewMailSummary struct {
 	LastErrorClass *string `json:"last_error_class"`
 
 	// LastSeenUid Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable.
-	LastSeenUid *int `json:"last_seen_uid"`
+	LastSeenUid *int64 `json:"last_seen_uid"`
 
 	// LastSuccessAt RFC 3339 instant of the last successful watcher cycle; null when no cycle has ever succeeded (round-2 MAJ-019 — ok never lies about blindness).
 	LastSuccessAt *time.Time `json:"last_success_at"`
