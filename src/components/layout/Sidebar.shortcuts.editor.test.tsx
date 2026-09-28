@@ -7,15 +7,12 @@
  * editor's Tiptap surface leaks to the sidebar toggle instead of
  * toggling bold (the editor loses the keystroke to a global consumer).
  *
- * This test exercises the exact window-level keydown path that the
- * Sidebar attaches, with a real contenteditable on the page (a portal-
- * mounted element, like Tiptap's EditorContent) — the failing case is
- * the unmitigated code; after the fix the listener short-circuits on
- * `target.closest('[contenteditable="true"], [contenteditable=""]')`
- * (and an editor-data attribute tag for surfaces that proxy their own
- * contenteditable like the chat composer) and the sidebar stays put.
+ * This test exercises the Sidebar's window-level keydown path using
+ * browser-like editable targets outside its own DOM tree. The shared
+ * isEditableEventTarget helper must let text-entry controls keep Mod+B,
+ * without stopping the shortcut on the rest of the page or Escape.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, fireEvent, act, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
@@ -144,6 +141,11 @@ beforeEach(() => {
   })
 })
 
+afterEach(() => {
+  cleanup()
+  document.querySelectorAll('[data-sidebar-shortcut-probe]').forEach((node) => node.remove())
+})
+
 function mount() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -159,7 +161,9 @@ function mountWithContentEditable(): HTMLElement {
   mount()
   const editable = document.createElement('div')
   editable.setAttribute('contenteditable', 'true')
-  editable.setAttribute('data-testid', 'tiptap-surface')
+  // jsdom lacks HTMLElement.isContentEditable; a browser reports true here.
+  Object.defineProperty(editable, 'isContentEditable', { value: true })
+  editable.setAttribute('data-sidebar-shortcut-probe', '')
   document.body.appendChild(editable)
   return editable
 }
@@ -185,10 +189,50 @@ describe('Sidebar — global Cmd+B shortcut ignores editor / contenteditable tar
     expect(useSidebarStore.getState().isOpen).toBe(before)
   })
 
+  it.each([
+    ['textarea', 'metaKey'],
+    ['textarea', 'ctrlKey'],
+    ['input', 'metaKey'],
+    ['select', 'ctrlKey'],
+  ] as const)('does not toggle on Mod+B in %s with %s', (tag, modifier) => {
+    mount()
+    const control = document.createElement(tag)
+    control.setAttribute('data-sidebar-shortcut-probe', '')
+    document.body.appendChild(control)
+
+    fireEvent.keyDown(control, { key: 'b', [modifier]: true })
+
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+
+  it('does not toggle on Cmd+B in a role=textbox editor', () => {
+    mount()
+    const textbox = document.createElement('div')
+    textbox.setAttribute('role', 'textbox')
+    textbox.setAttribute('data-sidebar-shortcut-probe', '')
+    document.body.appendChild(textbox)
+
+    fireEvent.keyDown(textbox, { key: 'b', metaKey: true })
+
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+
+  it('still closes the overlay on Escape when focus is in a textarea', () => {
+    mount()
+    const textarea = document.createElement('textarea')
+    textarea.setAttribute('data-sidebar-shortcut-probe', '')
+    document.body.appendChild(textarea)
+    act(() => useSidebarStore.setState({ isOpen: true }))
+
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+
   it('STILL toggles the sidebar when Cmd+B fires on a plain page element (regression guard)', () => {
     mount()
     const plain = document.createElement('div')
-    plain.setAttribute('data-testid', 'plain-surface')
+    plain.setAttribute('data-sidebar-shortcut-probe', '')
     document.body.appendChild(plain)
 
     const before = useSidebarStore.getState().isOpen

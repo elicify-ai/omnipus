@@ -47,6 +47,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { cn } from '@/lib/utils'
+import { isEditableEventTarget } from '@/lib/isEditableEventTarget'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { GodModeSidebarPill } from './GodModeIndicators'
 
@@ -273,18 +274,11 @@ export function Sidebar() {
   // rich-text editor (Tiptap in the Mail draft editor + Mail compose dialog,
   // AssistantUI's composer, etc.) owns its own keymap (Mod-b = bold,
   // Mod-i = italic, Mod-k = link, ...) and must not lose keystrokes to a
-  // sidebar toggle. We bail before any Mod shortcut when the event targets
-  // an editable surface; non-modifier keys (Escape) still fire so the sidebar
-  // closes from a focused editor the way it closes from any other control.
+  // sidebar toggle. Only the Mod+B branch checks editable targets; Escape
+  // still closes the sidebar from a focused editor or any other control.
   const handleKeydown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey) {
-        const target = e.target as Element | null
-        if (target?.closest('[contenteditable="true"],[contenteditable=""]')) {
-          return
-        }
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b' && !isEditableEventTarget(e.target)) {
         e.preventDefault()
         toggle()
       }
