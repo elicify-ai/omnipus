@@ -440,6 +440,17 @@ func (p *mailPreviewRoutes) servePart(w http.ResponseWriter, r *http.Request, to
 		mailPreviewNotFound(w)
 		return
 	}
+	if len(part.Data) == 0 {
+		// Round-8 F7: an inline part whose bytes are absent at mint (over
+		// the 25 MiB per-part fetch cap, or a decode failure at view time —
+		// the transport leaves Data nil and the mint boundary carries that
+		// as empty Data) must refuse like the attachment download
+		// (rest_mail_read.go's 413), never serve 200 with zero bytes — a
+		// broken image indistinguishable from a corrupt one.
+		jsonErr(w, http.StatusRequestEntityTooLarge,
+			"inline part unavailable: over the 25 MiB per-part fetch cap or failed to decode")
+		return
+	}
 	h := w.Header()
 	h.Set("Content-Type", part.ContentType)
 	h.Set("Content-Length", strconv.Itoa(len(part.Data)))
