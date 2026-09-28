@@ -38,6 +38,7 @@ import {
   fetchMaxToolIterationsLoweringPreview,
   isMaxToolIterationsLoweringConflict,
   isPerformanceReloadFailed,
+  performancePendingApplyMessage,
   getErrorMessage,
   type PerformanceSettingsUpdate,
 } from '@/lib/api'
@@ -220,11 +221,15 @@ export function PerformanceSection(): React.ReactElement {
   const [toolIterError, setToolIterError] = useState<string | null>(null)
   const [lowering, setLowering] = useState<LoweringDialogState | null>(null)
   const [loweredSummary, setLoweredSummary] = useState<string | null>(null)
-  // Saved-but-not-in-force values and the notice explaining them (see
-  // UnappliedValues). Cleared by the next successful save or once GET
-  // /performance catches up.
+  // Saved-but-not-in-force values (see UnappliedValues; cleared by the next
+  // fully applied save or once GET /performance reports them) and this page's
+  // own notice text. The server's pending-apply state (GET /performance
+  // pending_apply, #904) owns whether the notice shows. noticeSince is when
+  // the last not-applied save answered: until GET has answered after it, the
+  // page's own message stands in for the server's state.
   const [unapplied, setUnapplied] = useState<UnappliedValues | null>(null)
   const [unappliedNotice, setUnappliedNotice] = useState<string | null>(null)
+  const [noticeSince, setNoticeSince] = useState(0)
   // Bumped on every edit so a preview answer for a superseded value is dropped.
   const previewSeqRef = useRef(0)
   const toolIterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -266,7 +271,7 @@ export function PerformanceSection(): React.ReactElement {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const goalDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const { data, isLoading, error, refetch, isFetching } = useQuery({
+  const { data, dataUpdatedAt, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['performance-settings'],
     queryFn: fetchPerformanceSettings,
     staleTime: 30_000,
@@ -310,14 +315,17 @@ export function PerformanceSection(): React.ReactElement {
     }
   }, [data, toolIterDirty, unapplied])
 
-  // The gateway reloaded since (GET now reports every saved value): the
-  // saved values are in force, so the notice goes.
+  // GET now reports every saved value: the inputs stop overriding it.
   useEffect(() => {
-    if (data && unapplied && serverCaughtUp(unapplied, data)) {
-      setUnapplied(null)
-      setUnappliedNotice(null)
-    }
+    if (data && unapplied && serverCaughtUp(unapplied, data)) setUnapplied(null)
   }, [data, unapplied])
+
+  // Once GET has answered since the last not-applied save, the server's
+  // pending-apply state decides the notice: absent means everything saved is
+  // in force, so the page's own text goes too.
+  useEffect(() => {
+    if (data && dataUpdatedAt >= noticeSince && !data.pending_apply) setUnappliedNotice(null)
+  }, [data, dataUpdatedAt, noticeSince])
 
   // Clear a dirty flag ONLY for a control a committed PUT actually carried,
   // and only while the user has not re-edited that control since the body was
@@ -353,10 +361,13 @@ export function PerformanceSection(): React.ReactElement {
       updatePerformanceSettings(body, token),
     onSuccess: (result, variables) => {
       setSaveStatus('saved')
-      // A successful PUT re-read config.json into memory: whatever an earlier
-      // failed refresh left unapplied is in force now.
-      setUnapplied(null)
-      setUnappliedNotice(null)
+      // A successful PUT answers with the server's pending-apply state: only
+      // when it is absent is whatever an earlier failed apply left pending in
+      // force now. An unrelated save never clears the notice on its own.
+      if (!result?.pending_apply) {
+        setUnapplied(null)
+        setUnappliedNotice(null)
+      }
       clearCommittedDirty(variables.body)
       reportLowered(result?.max_tool_iterations_lowered_agents)
       // The slot was emptied when the body was handed over (onConfirmed),
@@ -397,8 +408,9 @@ export function PerformanceSection(): React.ReactElement {
         if (!err.inMemoryUpdated) {
           const saved = savedValuesOf(variables.body)
           setUnapplied((prev) => ({ ...prev, ...saved }))
-          setUnappliedNotice(err.userMessage)
         }
+        setUnappliedNotice(err.userMessage)
+        setNoticeSince(Date.now())
         clearCommittedDirty(variables.body)
         addToast({ variant: 'warning', message: err.userMessage, duration: LOWERED_TOAST_DURATION_MS })
         reportLowered(err.loweredAgents)
@@ -795,6 +807,18 @@ export function PerformanceSection(): React.ReactElement {
     !isNaN(inputValueNum) &&
     inputValueNum > PHYSICAL_THREAD_CEILING
 
+  // The not-applied notice (#904): shown while the server reports pending
+  // settings, or — right after a not-applied save, before GET has answered
+  // again — on this page's own failure message. Its text prefers that
+  // message (it carries the server's reason); otherwise, e.g. after a page
+  // reload, it names the settings the server reports as pending.
+  const pendingApply = data?.pending_apply ?? null
+  const awaitingServer = unappliedNotice !== null && dataUpdatedAt < noticeSince
+  const noticeText = unappliedNotice ?? (pendingApply ? performancePendingApplyMessage(pendingApply) : null)
+  const notice = (awaitingServer || pendingApply) && noticeText
+    ? { text: noticeText, fieldsShowSaved: pendingApply?.stage !== 'refresh' || unapplied !== null }
+    : null
+
   const recommendationText =
     typeof recommended === 'number'
       ? `Currently in use: ${recommended} parallel agents`
@@ -811,7 +835,7 @@ export function PerformanceSection(): React.ReactElement {
         <AutoSaveIndicator status={saveStatus} />
       </div>
 
-      {unappliedNotice && (
+      {notice && (
         <Card
           variant="inset"
           role="status"
@@ -821,11 +845,14 @@ export function PerformanceSection(): React.ReactElement {
           <Warning size={14} className="text-[var(--color-warning)] mt-[var(--space-0-5)] shrink-0" aria-hidden />
           <div className="flex-1 min-w-0">
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] leading-relaxed">
-              {unappliedNotice}
+              {notice.text}
             </p>
             <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-              The fields below show the saved values. Until the restart or reload, Omnipus keeps running on the
-              previous ones, and a new change here is checked against what is running.
+              {notice.fieldsShowSaved
+                ? 'The fields below show the saved values. Until the restart or reload, Omnipus keeps running on the previous ones.'
+                : 'The fields below still show the values Omnipus is running on; the saved ones take effect after the restart or reload.'}{' '}
+              A new tool-call limit set here is checked against the saved limit; an agent{'\u2019'}s own limit, set on
+              its profile, is still checked against the running one.
             </p>
           </div>
         </Card>

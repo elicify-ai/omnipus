@@ -32,6 +32,7 @@ import type {
   MaxToolIterationAgentChange,
   ErrorResponse,
   PerformanceReloadFailedDetails,
+  PerformancePendingApply,
   PerformanceReloadFailedError as PerformanceReloadFailedBody,
 } from '@/lib/api/generated/openapi-types'
 import { ApiError, isApiError } from '../api-error'
@@ -444,7 +445,8 @@ export function isMaxToolIterationsLoweringConflict(
  *     shows the new values; only the agents' reload failed. `null`: the body did
  *     not say (malformed or missing details) — treated like `refresh`, the one
  *     reading that never shows a stale value as current.
- *   - `changedFields` is details.changed_fields (empty when unreadable).
+ *   - `changedFields` is details.changed_fields (when unreadable: the settings
+ *     the request carried).
  *   - `loweredAgents` is details.lowered_agents — GET /performance does not
  *     carry them. `loweredUnknown` is true when agents may have been lowered
  *     but the list could not be read (malformed, or missing although the
@@ -478,6 +480,16 @@ function reloadFailedMessage(serverMessage: string, f: PerformanceReloadFailure)
     return `Saved, but not applied yet${text ? `: ${text}` : ' — the running agents keep the old values until a restart or reload.'}`
   }
   return `Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload${text ? `: ${text}` : '.'}`
+}
+
+/**
+ * The "saved, but not applied yet" text for the server's pending-apply state
+ * (GET /performance pending_apply, #904) when this page holds no failure
+ * message of its own — e.g. after a page reload. Same wording as a
+ * PerformanceReloadFailedError with an empty server message.
+ */
+export function performancePendingApplyMessage(p: PerformancePendingApply): string {
+  return reloadFailedMessage('', { stage: p.stage, changedFields: p.changed_fields, loweredAgents: [], loweredUnknown: false })
 }
 
 export class PerformanceReloadFailedError extends ApiError {
@@ -548,8 +560,10 @@ function performanceWriteError(err: unknown, body: PerformanceSettingsUpdate): u
 
 // reloadFailedError reads the body with the generated
 // PerformanceReloadFailedError schema. When it does not match, it salvages
-// what it can (the message, a well-formed lowered list) and reports the rest
-// as unknown rather than guessing.
+// what it can (the message, a well-formed lowered list), names the changed
+// settings from the request the client sent (a malformed body cannot say which
+// it saved, but every setting the PUT carried was written), and reports the
+// rest as unknown rather than guessing.
 function reloadFailedError(err: ApiError, raw: unknown, body: PerformanceSettingsUpdate): PerformanceReloadFailedError {
   const bodyText = err.body ?? ''
   const typed = (PerformanceReloadFailedErrorSchema as ZodType<PerformanceReloadFailedBody>).safeParse(raw)
@@ -568,8 +582,10 @@ function reloadFailedError(err: ApiError, raw: unknown, body: PerformanceSetting
   const lowered = (MaxToolIterationAgentChangeSchema as ZodType<MaxToolIterationAgentChange>).array().safeParse(details.lowered_agents)
   const confirmedLowering = (body.confirmed_lowering?.length ?? 0) > 0
   const loweredUnknown = lowered.success ? false : details.lowered_agents !== undefined || confirmedLowering
+  const sentFields = (Object.keys(CHANGED_FIELD_LABELS) as PerformanceChangedField[]).filter((k) => body[k] !== undefined)
   return new PerformanceReloadFailedError(message, bodyText, err, {
     stage: null,
+    changedFields: sentFields,
     loweredAgents: lowered.success ? lowered.data : [],
     loweredUnknown,
   })

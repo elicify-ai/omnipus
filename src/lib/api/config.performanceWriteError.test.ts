@@ -91,14 +91,26 @@ describe('updatePerformanceSettings — 500 mapping after the review gate', () =
     expect(e.userMessage).not.toMatch(/tool-call/)
   })
 
-  it('a malformed body (no details, empty message) is still a committed save with an unknown stage', async () => {
+  it('a malformed body (no details, empty message) is still a committed save with an unknown stage, naming what the client sent', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     fetchMock.mockResolvedValue(jsonResponse(500, { error: '', code: 'performance_reload_failed' }))
     const e = (await putError()) as PerformanceReloadFailedError
     expect(isPerformanceReloadFailed(e)).toBe(true)
     expect(e.stage).toBeNull()
     expect(e.inMemoryUpdated).toBe(false)
-    expect(e.userMessage).toBe('Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload.')
+    // #904 gate round 3 (#6): the body says nothing, so the changed settings
+    // are named from the request itself.
+    expect(e.changedFields).toEqual(['max_tool_iterations'])
+    expect(e.userMessage).toBe('Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload: the new tool-call limit will be used after a restart or reload')
+  })
+
+  it('a malformed body names every setting the request carried, and nothing it did not (confirmed_lowering is not a setting)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fetchMock.mockResolvedValue(jsonResponse(500, { error: '', code: 'performance_reload_failed', details: 'garbage' }))
+    const e = (await putError({ max_parallel_agents: 4, tools_on_demand: false, goal_max_rounds: 9 })) as PerformanceReloadFailedError
+    expect(e.changedFields).toEqual(['max_parallel_agents', 'tools_on_demand', 'goal_max_rounds'])
+    expect(e.userMessage).toBe('Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload: the new agents running at once, on-demand tool loading, goal tries will be used after a restart or reload')
+    expect(e.userMessage).not.toMatch(/tool-call/)
   })
 
   it('an unknown stage value is not trusted: stage is null', async () => {

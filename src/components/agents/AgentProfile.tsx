@@ -655,7 +655,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // limit — the same effective value real dispatch passes.
   const storedOwnToolIterationLimit = agent?.max_tool_iterations_override ?? null
   const ownToolIterationLimit = maxToolIterationsEdit !== undefined ? maxToolIterationsEdit : storedOwnToolIterationLimit
-  const limitRefusal = useToolIterationLimitRefusal(agentId)
+  const limitRefusal = useToolIterationLimitRefusal(agentId, agent?.name)
   const globalToolIterationLimit = useGlobalToolIterationLimit()
   const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = executor?.cli
     ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_path, executor.cli_args, ownToolIterationLimit ?? undefined)

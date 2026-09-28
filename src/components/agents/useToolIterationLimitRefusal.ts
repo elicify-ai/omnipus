@@ -11,7 +11,11 @@
 //   - editing the limit again clears the refusal, so the next value — even
 //     the same number after the global was raised — is sent normally; a
 //     refusal (and the set of refusal texts the indicator suppresses) belongs
-//     to one agent and never follows the form to another.
+//     to one agent and never follows the form to another;
+//   - a refusal that answers a save after the admin already switched to
+//     another agent is not dropped silently: an error toast names the agent
+//     it belongs to (its name at save time, else its id) and the refused
+//     value, since no field of that agent is on screen to explain it.
 //
 // A refusal is recognised ONLY by the server's structured `field:
 // "max_tool_iterations"` on a 400 (ErrorResponse.field, set on every per-agent
@@ -22,6 +26,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { isApiError } from '@/lib/api'
+import { useUiStore } from '@/store/ui'
 
 interface Refusal {
   agentId: string | null
@@ -60,7 +65,16 @@ export interface ToolIterationLimitRefusal {
   save: <T extends LimitDraft>(draft: T, send: (data: T) => Promise<boolean>) => Promise<void>
 }
 
-export function useToolIterationLimitRefusal(agentId: string | null): ToolIterationLimitRefusal {
+// Long enough to read the agent, the value and the server's reason.
+const OFF_SCREEN_REFUSAL_TOAST_MS = 10_000
+
+function offScreenRefusalText(agentId: string | null, agentName: string | undefined, value: number | null, message: string): string {
+  const who = agentName?.trim() ? agentName.trim() : `Agent ${agentId ?? 'unknown'}`
+  return `${who}: own tool-call limit ${value ?? 'none'} was not saved — ${message}`
+}
+
+export function useToolIterationLimitRefusal(agentId: string | null, agentName?: string): ToolIterationLimitRefusal {
+  const addToast = useUiStore((s) => s.addToast)
   const [state, setRefusal] = useState<Refusal | null>(null)
   // The refusal texts seen for the CURRENT agent only (the indicator hides
   // them because the field explains them).
@@ -80,6 +94,8 @@ export function useToolIterationLimitRefusal(agentId: string | null): ToolIterat
     agentRef.current = agentId
     ref.current = null
   }
+  const nameRef = useRef(agentName)
+  nameRef.current = agentName
   const current = useCallback(
     () => (ref.current && ref.current.agentId === agentRef.current ? ref.current : null),
     [],
@@ -105,16 +121,19 @@ export function useToolIterationLimitRefusal(agentId: string | null): ToolIterat
 
   const save = useCallback(async <T extends LimitDraft>(draft: T, send: (data: T) => Promise<boolean>) => {
     const owner = agentRef.current
+    const ownerName = nameRef.current
     const withoutLimit = { ...draft, max_tool_iterations: undefined }
     const data = withoutRefused(draft)
     try {
       await send(data)
     } catch (err) {
       if (data.max_tool_iterations === undefined || !isToolIterationLimitRefusal(err)) throw err
-      record({ agentId: owner, value: data.max_tool_iterations, message: isApiError(err) ? err.userMessage : String(err) })
+      const refused = { agentId: owner, value: data.max_tool_iterations, message: isApiError(err) ? err.userMessage : String(err) }
+      if (owner === agentRef.current) record(refused)
+      else addToast({ variant: 'error', message: offScreenRefusalText(owner, ownerName, refused.value, refused.message), duration: OFF_SCREEN_REFUSAL_TOAST_MS })
       if (!(await send(withoutLimit))) throw err
     }
-  }, [record, withoutRefused])
+  }, [addToast, record, withoutRefused])
 
   const messageFor = (draft: number | null | undefined) =>
     refusal && draft !== undefined && draft === refusal.value ? refusal.message : null

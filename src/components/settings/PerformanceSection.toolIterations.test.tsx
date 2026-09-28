@@ -407,8 +407,14 @@ describe(SUITE, () => {
     const REFRESH_TEXT = 'performance settings saved but the reload failed; the new tool-iteration limit applies after the next reload or restart'
 
     // Lower 300 → 200 (no agents affected); the PUT answers performance_reload_failed
-    // stage refresh, and every GET afterwards still reports the OLD in-memory 300.
+    // stage refresh, and every GET afterwards still reports the OLD in-memory 300
+    // plus the server's pending-apply state (#904 round 3, PerformancePendingApply).
     async function refreshFailure(extra: Partial<api.PerformanceReloadFailure> = {}) {
+      vi.mocked(api.fetchPerformanceSettings).mockResolvedValueOnce(SETTINGS)
+      vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
+        ...SETTINGS,
+        pending_apply: { stage: 'refresh', changed_fields: ['max_tool_iterations'] },
+      })
       vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockResolvedValue({ value: 200, agents: [] })
       vi.mocked(api.updatePerformanceSettings).mockRejectedValueOnce(
         new api.PerformanceReloadFailedError(REFRESH_TEXT, '{}', null, { stage: 'refresh', changedFields: ['max_tool_iterations'], ...extra }),
@@ -441,12 +447,27 @@ describe(SUITE, () => {
       expect(screen.queryByTestId('performance-max-tool-iterations-save-btn')).not.toBeInTheDocument()
     })
 
+    // #904 gate round 3 (code-reviewer): since a44d21353 a new global limit is
+    // checked against the value SAVED in config.json, while an agent's own
+    // limit is still checked against the running global. The notice says so
+    // and never claims the new change is checked against what is running.
+    it('the notice says a new tool-call limit is checked against the saved value, and agent profiles against the running one', async () => {
+      await refreshFailure()
+      const notice = await screen.findByTestId('performance-unapplied-notice', {}, WAIT)
+      expect(notice).toHaveTextContent(
+        'The fields below show the saved values. Until the restart or reload, Omnipus keeps running on the previous ones. A new tool-call limit set here is checked against the saved limit; an agent\u2019s own limit, set on its profile, is still checked against the running one.',
+      )
+      expect(notice).not.toHaveTextContent(/new change here is checked against what is running/)
+    })
+
     it('the next change is not judged against the stale in-memory global: the stale value is sent via the preview, not skipped as unchanged', async () => {
       await refreshFailure()
       await screen.findByTestId('performance-unapplied-notice', {}, WAIT)
       vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockClear()
       vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockResolvedValue({ value: 300, agents: [] })
       vi.mocked(api.updatePerformanceSettings).mockResolvedValueOnce({ ...SETTINGS, max_tool_iterations: 300 })
+      // The successful PUT applied everything: GET no longer reports pending_apply.
+      vi.mocked(api.fetchPerformanceSettings).mockResolvedValue(SETTINGS)
       // 300 is what GET (stale) reports, but config.json holds 200: a real change.
       fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '300' } })
       await waitFor(() => expect(api.fetchMaxToolIterationsLoweringPreview).toHaveBeenCalledWith(300), WAIT)
