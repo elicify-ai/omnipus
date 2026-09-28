@@ -1091,24 +1091,21 @@ func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (
 // reconstruction"; the symmetric rule this closes is "every EXIT path calls
 // completion".
 //
-// Round-3 finishing-window protocol (issue #1020): the loop is bounded at
-// one drain retry so a persistent delivery failure that re-enqueues on
-// every Deliver() call (a pathological test fixture shape — see
-// TestSteeredTurnDrain1020Round3_DeliveryFailureConsumesLateSteerAsSameGenerationContinuation)
-// cannot loop forever. Real-world deliverers fail zero or once; capping
-// retries at one covers the spec's "the lock is released and a waiting
-// post-finish steer becomes an ordinary same-generation continuation right
-// away" requirement without entering an infinite loop when an artificial
-// deliverer keeps refusing.
+// Round-4 finishing-window protocol (issue #1020): the loop is bounded by
+// the SAME continueDrainMaxRetries the session_worker uses
+// (session_worker.go). When the budget is exhausted the queued items are
+// abandoned loudly via abandonSteeredQueuedSteering (each item reported to
+// the parent transcript) — never silently dropped. Real-world deliverers
+// fail zero or once; the budget exists to bound the artificial-deliverer
+// pathological shape without ever throwing away a caller's accepted
+// instruction.
 func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.LifecycleRecord, gen int, result turnResult, runErr error) {
 	sessionID := rec.SessionID
 	if rec.GoalRef != "" {
 		al.finishSteeredGoalTurn(ts, rec, &result, runErr)
 		return
 	}
-	defer al.resetDrainFinishingOnceForSession(sessionID)
-	const maxDrainAttempts = 1
-	for attempt := 0; ; attempt++ {
+	for attempt := 0; attempt < continueDrainMaxRetries; attempt++ {
 		finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr)
 		if !errors.Is(finishErr, errCompleteSteeringPending) {
 			if finishErr != nil {
@@ -1117,14 +1114,32 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 			}
 			return
 		}
-		if attempt >= maxDrainAttempts {
-			logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — leaving waiting items for boot recovery",
-				map[string]any{"session_id": sessionID, "generation": gen, "attempts": attempt + 1})
-			return
-		}
-
+		// drainSteeredTurn already calls abandonSteeredQueuedSteering when
+		// its OWN internal retry budget (retrySteeringContinuation) is
+		// exhausted, so by the time we get here the queue has either been
+		// drained or loudly abandoned with each item reported to the
+		// transcript. Continue the outer loop: the next completeSteeredTurn
+		// call may now see an empty queue and produce a terminal commit
+		// without errCompleteSteeringPending, in which case we exit above.
 		drainCtx, cancel := steeredTurnRunContext(context.Background(), rec)
 		ts, result, runErr = al.drainSteeredTurn(drainCtx, rec, ts, result, runErr)
 		cancel()
+		if runErr != nil && !errors.Is(runErr, errContinuePostDequeueFailure) {
+			// abandonSteeredQueuedSteering already fired — every queued
+			// item is now reported to the transcript. Returning here
+			// matches the session_worker's same-loop exit posture.
+			logger.WarnCF("agent", "steer: complete: drain-loop abandoned waiting items — reported to the child transcript",
+				map[string]any{"session_id": sessionID, "generation": gen, "error": runErr.Error()})
+			return
+		}
+		if runErr != nil {
+			// errContinuePostDequeueFailure — drainSteeredTurn's own
+			// restore-on-failure branch already restored the queue. Try
+			// one more outer-loop iteration in case it can land
+			// terminally.
+			runErr = nil
+		}
 	}
+	logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — leaving waiting items for boot recovery",
+		map[string]any{"session_id": sessionID, "generation": gen, "attempts": continueDrainMaxRetries})
 }

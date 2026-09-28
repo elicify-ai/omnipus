@@ -102,14 +102,19 @@ type AgentLoop struct {
 	// comment near streamReplay) — these fields had no reader or writer
 	// left anywhere in the repo.
 	sessionActiveAgent sync.Map // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
-	// finishingOnce is the round-3 bounded-drain sentinel (issue #1020):
-	// processFinishingItems sets it true the first time it prepends
-	// finishingItems for a session, so a subsequent prepare failure
-	// (e.g. an always-failing deliverer re-enqueuing on every Deliver
-	// call) drops rather than prepends. Cleared at the end of
-	// disposeSteeredTurnResult via resetDrainFinishingOnceForSession.
-	finishingOnceMu sync.Mutex
-	finishingOnce   map[string]bool
+	// postFinishRevivalMu / postFinishRevival mark a session whose
+	// SPECIFIC generation was JUST created by a post-finish revival
+	// (issue #1020 round-4 correction). The key is the NEW generation
+	// number (rec.Generation+1 at revival time), not the sessionID alone,
+	// so completionMessage for the OLD generation's terminal commit
+	// does NOT consume the stamp — the OLD final carries the pre-late
+	// answer unchanged (round-3 spec item 3's contract). Only the
+	// NEW generation's completionMessage (read-and-clear) adds the
+	// "Follow-up after a late instruction: ..." prefix to its hand-back
+	// — the founder-approved spec's visible signal that the
+	// parent-facing text was triggered by a late steer.
+	postFinishRevivalMu sync.Mutex
+	postFinishRevival   map[string]int
 	// lastSwitchToDefault records, per session, whether the most recent
 	// switch_agent call was a return-to-default (tools.HandoffEvent.ToDefault)
 	// rather than a named-agent hand-off. It exists so the WS agent_switched

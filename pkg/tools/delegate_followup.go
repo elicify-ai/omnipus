@@ -240,10 +240,23 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// EnqueueSteeringMessage mints a server-assigned reference and hands it
 	// back below regardless, so the receipt is always correlatable.
 	requestedCorrelationID, _ := stringArg(args, "correlation_id")
-	resolvedCorrelationID, serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID,
+	resolvedCorrelationID, serr, postFinish := enqueueSteeringWithStatus(t.steering, sessionID, rec.AgentID,
 		providers.Message{Role: "user", Content: text}, requestedCorrelationID)
 	if serr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", serr)).WithError(serr)
+	}
+	if postFinish {
+		// Round-4 correction: a steer that landed in a terminal-transition
+		// finishing window (rather than the main queue) is reported with
+		// the spec's exact wording — "queued; the child is finishing and
+		// will see it next" — so the caller can tell apart the two
+		// outcomes (an ordinary queued steer vs. one the closing hand-off
+		// will revive the child to consume). correlation_id is still
+		// returned so a receipt-based caller (issue #870) can correlate.
+		return NewToolResult(fmt.Sprintf(
+			"queued; the child is finishing and will see it next (correlation_id=%s, session_id=%s).",
+			resolvedCorrelationID, sessionID,
+		))
 	}
 	return NewToolResult(fmt.Sprintf(
 		"Steering message queued for session %s (correlation_id=%s); it will apply at the child's next tool boundary.",
@@ -260,6 +273,55 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 // t.sessionStore below.
 type steerReviver interface {
 	ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error)
+}
+
+// steerSinkWithEnqueueStatus is satisfied by *agent.AgentLoop beyond
+// DelegateSteeringSink's own EnqueueSteeringMessage method. Declared here
+// (not added to DelegateSteeringSink) for the same reason steerReviver
+// stays narrow: the round-4 status (issue #1020 round-4 correction) is
+// only meaningful to executeSteer's caller-facing text, and forcing
+// every DelegateSteeringSink implementer to know about it would couple
+// the interface to a notion that does not exist for non-steering
+// callers (a session_worker enqueue, for example, never lands in a
+// finishing-window buffer — every session_worker enqueue is for an
+// idle session). The status field is an int so pkg/tools does not
+// import pkg/agent's typed carrier; production treats 1 (PostFinish)
+// and any other value (Normal) as the binary signal executeSteer
+// reads. Test fakes that do not implement this interface fall back to
+// EnqueueSteeringMessage and never report the post-finish outcome.
+type steerSinkWithEnqueueStatus interface {
+	EnqueueSteeringMessageWithStatus(scope, agentID string, msg providers.Message, correlationID string) (string, int, error)
+}
+
+// enqueueSteeringWithStatus is executeSteer's adapter: it forwards to the
+// rich return shape when the steering sink exposes it (the production
+// *agent.AgentLoop does), and falls back to the plain DelegateSteeringSink
+// contract for narrower test fakes that do not. postFinish is true when
+// the rich sink reports the item landed in a terminal-transition
+// finishingItems buffer rather than the main queue.
+func enqueueSteeringWithStatus(
+	sink any,
+	scope, agentID string,
+	msg providers.Message,
+	correlationID string,
+) (resolvedID string, err error, postFinish bool) {
+	if rich, ok := sink.(steerSinkWithEnqueueStatus); ok {
+		resolvedID, status, err := rich.EnqueueSteeringMessageWithStatus(scope, agentID, msg, correlationID)
+		if err != nil {
+			return "", err, false
+		}
+		return resolvedID, nil, status == 1 // EnqueueStatusPostFinish
+	}
+	if basic, ok := sink.(interface {
+		EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error)
+	}); ok {
+		resolvedID, err := basic.EnqueueSteeringMessage(scope, agentID, msg, correlationID)
+		if err != nil {
+			return "", err, false
+		}
+		return resolvedID, nil, false
+	}
+	return "", fmt.Errorf("delegate: steer: no steering sink configured"), false
 }
 
 func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
