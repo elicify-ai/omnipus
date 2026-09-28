@@ -202,7 +202,7 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		"attachments": mailAuditAttachments(in.Attachments),
 	})
 	resp := gen.MailMessage{
-		Folder: gen.MailMessageFolderDrafts, Uid: int64(newUID), Uidvalidity: int64(newUV),
+		Folder: gen.MailMessageFolderDrafts, Uid: mailUIDToWire(newUID), Uidvalidity: mailUIDToWire(newUV),
 		Subject: req.Subject, To: mailNonNilSlice(req.To), Cc: mailNonNilSlice(derefStrings(req.Cc)),
 		From: mb.Username, IsOmnipusDraft: cur.IsOmnipusDraft, IsDraft: true,
 		MarkdownLossy: false, HasHtml: true, Seen: false,

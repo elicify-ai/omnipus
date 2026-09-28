@@ -17,6 +17,10 @@ import (
 // write-sized. Declared in rest_mail.go next to its handlers.
 var mailMutationLimiter = newAPIRateLimiter(10, 1*time.Minute)
 
+// mailUIDToWire widens the IMAP uint32 domain into the signed 64-bit wire
+// domain without passing through architecture-sized int.
+func mailUIDToWire(uid uint32) int64 { return int64(uid) }
+
 // handleWorkspaceMail dispatches /api/v1/workspaces/{id}/mail/... from
 // HandleWorkspaces (rest still carries the "/{id}" prefix). The mux has no
 // path wildcards, so this handler IS the mail router. Path segments are

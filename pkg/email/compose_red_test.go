@@ -86,18 +86,25 @@ func TestComposeAttachmentContentTypeRejectsHeaderInjection(t *testing.T) {
 		Markdown: "body",
 	}
 
-	t.Run("CRLF is rejected", func(t *testing.T) {
-		in := base
-		in.Attachments = []Attachment{{
-			Name:        "report.pdf",
-			ContentType: "application/pdf\r\nX-Injected: yes",
-			Data:        []byte("pdf"),
-		}}
-		out, err := Compose(in)
-		if err == nil {
-			t.Fatalf("Compose accepted a MIME content type containing CRLF; output contains injected header=%v", strings.Contains(string(out.Transmitted), "X-Injected: yes"))
-		}
-	})
+	for name, contentType := range map[string]string{
+		"CRLF":             "application/pdf\r\nX-Injected: yes",
+		"lone CR":          "application/pdf\rX-Injected: yes",
+		"lone LF":          "application/pdf\nX-Injected: yes",
+		"malformed syntax": `application/pdf; name="unterminated`,
+	} {
+		t.Run(name+" is rejected", func(t *testing.T) {
+			in := base
+			in.Attachments = []Attachment{{
+				Name:        "report.pdf",
+				ContentType: contentType,
+				Data:        []byte("pdf"),
+			}}
+			out, err := Compose(in)
+			if err == nil {
+				t.Fatalf("Compose accepted invalid MIME content type %q; output contains injected header=%v", contentType, strings.Contains(string(out.Transmitted), "X-Injected: yes"))
+			}
+		})
+	}
 
 	t.Run("valid media type parameters are preserved", func(t *testing.T) {
 		in := base
@@ -112,6 +119,15 @@ func TestComposeAttachmentContentTypeRejectsHeaderInjection(t *testing.T) {
 		}
 		if !strings.Contains(string(out.Transmitted), "Content-Type: application/pdf") {
 			t.Fatalf("composed message lost the valid application/pdf media type:\n%s", out.Transmitted)
+		}
+		var found bool
+		for _, leaf := range mdhComposeLeaves(t, out.Transmitted) {
+			if leaf.ContentType == "application/pdf" && leaf.Filename == "report.pdf" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("parameterized media type did not round-trip as a parseable application/pdf attachment:\n%s", out.Transmitted)
 		}
 	})
 }

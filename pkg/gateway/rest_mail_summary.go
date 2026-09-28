@@ -68,7 +68,7 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 			}
 			row.UnseenTotal = st.UnseenTotal
 			if st.LastSeenUID > 0 {
-				u := int64(st.LastSeenUID)
+				u := mailUIDToWire(st.LastSeenUID)
 				row.LastSeenUid = &u
 			}
 			if s := st.LastErrorClass; s != "" {
