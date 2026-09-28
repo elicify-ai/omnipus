@@ -36,14 +36,23 @@ if [ ! -f "$REPORT_PATH" ] || ! jq -e 'type == "object"' "$REPORT_PATH" >/dev/nu
 fi
 
 # Playwright suites can nest arbitrarily. recurse(.suites[]?) visits the
-# current suite and every descendant; a spec is skipped when any project/test
-# rollup under that spec has status "skipped".
+# current suite and every descendant; the title of a spec is emitted ONCE PER
+# skipped test-run entry under that spec. This matches Playwright's own
+# `.stats.skipped` granularity (spec times project — e.g. the same skip under
+# isolation-chromium/firefox/webkit is three test-runs), so the count cross-
+# check below stays correct in the multi-project case. Do NOT deduplicate
+# before the allow-list loop: a title appearing multiple times is checked
+# (and, when authorized, printed as AUTHORIZED) per occurrence, which keeps
+# `checked` in lockstep with `extracted_count` for free.
 if ! jq -c '
   .suites[]?
   | recurse(.suites[]?)
   | .specs[]?
-  | select(any(.tests[]?; .status == "skipped"))
-  | .title
+  | select(type == "object")
+  | .title as $title
+  | .tests[]?
+  | select(.status == "skipped")
+  | $title
   | select(type == "string")
 ' "$REPORT_PATH" > "$TITLES_FILE"; then
   echo "check-e2e-skip-allowlist: ERROR — could not extract skipped spec titles from: $REPORT_PATH" >&2
