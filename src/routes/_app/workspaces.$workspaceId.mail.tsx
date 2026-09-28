@@ -1,53 +1,32 @@
 import { useEffect } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { MailPanel } from '@/components/workspaces/mail/MailPanel'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
-import { writeMailPanelIntent } from '@/components/workspaces/mail/mailPanelIntent'
 
-// Full-page Mail. Expand includes view=full and renders the same MailPanel
-// core in the split layout. Existing §17 chat links omit that marker and
-// retain their panel-in-chat behavior through WorkspaceMailPanelDeepLink.
+// Retired full-page Mail route (superseded by R10/R11: full screen is now a
+// SHARED shell feature, not a Mail-owned page). This compatibility route
+// never renders Mail — every address, old bookmarks included, is carried
+// straight into the shared side panel via `openPanel('mail', …)` and the
+// browser lands on chat, exactly like a §17 chat_link.
 interface MailRouteSearch {
   mailbox?: string
   folder?: string
   message?: string
-  view?: 'full'
 }
 
 function WorkspaceMailPage() {
   const { workspaceId } = Route.useParams()
   const search = Route.useSearch() as MailRouteSearch
-
-  if (search.view !== 'full') {
-    return <WorkspaceMailPanelDeepLink workspaceId={workspaceId} search={search} />
-  }
-
-  return (
-    <MailPanel
-      workspaceId={workspaceId}
-      mailboxId={search.mailbox}
-      initialFolder={search.folder}
-      initialMessageRef={search.message}
-      layout="split"
-    />
-  )
-}
-
-function WorkspaceMailPanelDeepLink({ workspaceId, search }: {
-  workspaceId: string
-  search: MailRouteSearch
-}) {
   const navigate = useNavigate()
 
   useEffect(() => {
-    writeMailPanelIntent(workspaceId, {
-      agentId: search.mailbox ?? null,
-      folder: search.folder ?? 'inbox',
-      messageRef: search.message ?? null,
-    })
     leaveGateThen(useUiStore.getState().activePanel?.id ?? null, () => {
-      useUiStore.getState().openPanel('mail', { workspaceId })
+      useUiStore.getState().openPanel('mail', {
+        workspaceId,
+        mailboxId: search.mailbox ?? null,
+        folder: (search.folder as 'inbox' | 'sent' | 'drafts' | undefined) ?? null,
+        messageRef: search.message ?? null,
+      })
     })
     void navigate({
       to: '/workspaces/$workspaceId/chat',
@@ -69,7 +48,6 @@ export const Route = createFileRoute('/_app/workspaces/$workspaceId/mail')({
     mailbox: typeof search.mailbox === 'string' ? search.mailbox : undefined,
     folder: typeof search.folder === 'string' ? search.folder : undefined,
     message: typeof search.message === 'string' ? search.message : undefined,
-    view: search.view === 'full' ? 'full' : undefined,
   }),
   component: WorkspaceMailPage,
 })

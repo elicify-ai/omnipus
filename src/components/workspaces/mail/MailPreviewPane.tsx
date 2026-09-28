@@ -3,13 +3,14 @@
 // the draft (US-7). A foreign draft (created outside Omnipus) stays fully
 // editable but carries the D24 formatting-loss statement. Contract-tested by
 // MailDraft.actions.test.tsx.
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { File, PaperPlaneTilt, Trash } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { HistoricalMessageMarkdown } from '@/components/chat/historical-markdown'
 import { MailMarkdownEditor } from './MailMarkdownEditor'
+import { setMailEditorDirty } from './mailUnsavedGuard'
 
 export type MailPreviewState = 'draft' | 'missing' | 'sent' | 'foreign'
 
@@ -31,6 +32,15 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
   const [editSubject, setEditSubject] = useState(subject)
   const [editBody, setEditBody] = useState(bodyMarkdown)
   const editBodyRef = useRef(bodyMarkdown)
+
+  // CRIT-001: report unsaved draft-editor text to the shared Mail leave
+  // guard (mailUnsavedGuard.ts) — dirty only while editing with a change
+  // from the saved draft, clearing on "Back to preview" / Save / unmount.
+  useEffect(() => {
+    const changed = editing && (editTo !== to || editSubject !== subject || editBody !== bodyMarkdown)
+    setMailEditorDirty('draft', changed)
+    return () => setMailEditorDirty('draft', false)
+  }, [editing, editTo, editSubject, editBody, to, subject, bodyMarkdown])
 
   if (state === 'missing') {
     return (
