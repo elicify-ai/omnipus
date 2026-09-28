@@ -18,7 +18,6 @@
 package gateway
 
 import (
-	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -294,7 +293,7 @@ func previewFirstSegmentReserved(p string) bool {
 
 // previewRedirectRefused rewrites the proxied response to a 502 with no
 // Location (DS-2's Verdict column: 502, Location empty). fix6 SF-2: the
-// refusal is recorded server-side — slog.Warn with the refusal reason and
+// refusal is recorded server-side — a Warn-level log (logsafeWarn) with the refusal reason and
 // the REDACTED redirect target. The raw Location never reaches the log:
 // query and fragment are stripped (a redirect target may carry secrets in
 // its query — an OAuth code, a reset token), control characters are
@@ -302,7 +301,7 @@ func previewFirstSegmentReserved(p string) bool {
 // redactRequestPath (a re-rooted target carries the /preview/<agent>/<token>
 // prefix — the token is a live credential).
 func previewRedirectRefused(resp *http.Response, rawLocation, reason string) {
-	slog.Warn("preview: redirect refused (502)",
+	logsafeWarn("preview: redirect refused (502)",
 		"reason", reason,
 		"target", previewRedactedLocation(rawLocation))
 	resp.StatusCode = http.StatusBadGateway

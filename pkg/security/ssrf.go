@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -432,6 +433,14 @@ func schemeDefaultPort(rawURL string) int {
 // stripped), or "" if rawURL has no path at all (e.g. a bare "host:port" or
 // "host:port?query"). Mirrors stripURLToAuthority's manual, allocation-light
 // parsing style rather than pulling in net/url for this narrow use.
+//
+// fix10 (security-lead MINOR): the returned path is NORMALISED — dot
+// segments (".." and ".") and duplicate separators are resolved with
+// path.Clean semantics — so a caller matching a literal prefix such as
+// /preview/ cannot be fooled by /preview/../api/v1/config, which passes the
+// literal check but names the internal API. The trailing slash is preserved
+// (path.Clean discards it), because at the /preview/ prefix boundary the
+// slash is the difference between the preview surface and the bare prefix.
 func extractPath(rawURL string) string {
 	u := rawURL
 	if idx := strings.Index(u, "://"); idx != -1 {
@@ -441,11 +450,15 @@ func extractPath(rawURL string) string {
 	if idx == -1 {
 		return ""
 	}
-	path := u[idx:]
-	if qIdx := strings.IndexAny(path, "?#"); qIdx != -1 {
-		path = path[:qIdx]
+	p := u[idx:]
+	if qIdx := strings.IndexAny(p, "?#"); qIdx != -1 {
+		p = p[:qIdx]
 	}
-	return path
+	cleaned := path.Clean(p)
+	if strings.HasSuffix(p, "/") && !strings.HasSuffix(cleaned, "/") {
+		cleaned += "/"
+	}
+	return cleaned
 }
 
 // CheckIP verifies that an IP address is not in a private/reserved range.

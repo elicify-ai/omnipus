@@ -280,7 +280,7 @@ func (a *restAPI) maybeAuditLabelUnknown(r *http.Request, startedAt time.Time) {
 		return
 	}
 	if suppressed > 0 {
-		slog.Warn("preview.label_unknown: suppression window closed; previous misses were suppressed",
+		logsafeWarn("preview.label_unknown: suppression window closed; previous misses were suppressed",
 			"remote_ip", remoteIP,
 			"suppressed_count", suppressed,
 		)

@@ -229,15 +229,34 @@ func (a *restAPI) serveStaticFile(
 	// no branch here so serveStaticFile's complexity stays put.
 	previewPrefix := middleware.PreviewPathPrefix + url.PathEscape(agentID) + "/" + url.PathEscape(auditToken)
 
+	// Confinement bases, computed once: the registered directory with a
+	// trailing separator, and the same directory symlink-resolved. On macOS,
+	// /var/folders/... resolves to /private/var/folders/..., and on
+	// Linux/Termux /tmp can be a symlink to a real path under /private or
+	// /data — without resolving the base, a symlink-equivalent ancestor (not
+	// an attacker's symlink-escape) causes the safety check to mis-fire and
+	// reject legitimate requests. fix10: computed for EVERY served path, not
+	// only when relPath is non-trivial, because the final confinement guard
+	// below runs unconditionally.
+	dirWithSep := absDir
+	if !strings.HasSuffix(dirWithSep, string(filepath.Separator)) {
+		dirWithSep += string(filepath.Separator)
+	}
+	resolvedBase := absDir
+	resolvedBaseWithSep := dirWithSep
+	if rb, baseErr := filepath.EvalSymlinks(absDir); baseErr == nil {
+		resolvedBase = rb
+		resolvedBaseWithSep = rb
+		if !strings.HasSuffix(resolvedBaseWithSep, string(filepath.Separator)) {
+			resolvedBaseWithSep += string(filepath.Separator)
+		}
+	}
+
 	var absPath string
 	if relPath == "" || relPath == "." {
 		absPath = absDir
 	} else {
 		candidate := filepath.Join(absDir, filepath.FromSlash(relPath))
-		dirWithSep := absDir
-		if !strings.HasSuffix(dirWithSep, string(filepath.Separator)) {
-			dirWithSep += string(filepath.Separator)
-		}
 		cleaned := filepath.Clean(candidate)
 		if cleaned != absDir && !strings.HasPrefix(cleaned, dirWithSep) {
 			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusForbidden, startedAt)
@@ -245,20 +264,6 @@ func (a *restAPI) serveStaticFile(
 			return
 		}
 		if resolved, evalErr := filepath.EvalSymlinks(cleaned); evalErr == nil {
-			// Resolve the registered base too — on macOS, /var/folders/... resolves
-			// to /private/var/folders/..., and on Linux/Termux /tmp can be a symlink
-			// to a real path under /private or /data. Without resolving the base,
-			// a symlink-equivalent ancestor (not an attacker's symlink-escape)
-			// causes the safety check to mis-fire and reject legitimate requests.
-			resolvedBase := absDir
-			resolvedBaseWithSep := dirWithSep
-			if rb, baseErr := filepath.EvalSymlinks(absDir); baseErr == nil {
-				resolvedBase = rb
-				resolvedBaseWithSep = rb
-				if !strings.HasSuffix(resolvedBaseWithSep, string(filepath.Separator)) {
-					resolvedBaseWithSep += string(filepath.Separator)
-				}
-			}
 			if resolved != absDir && resolved != resolvedBase &&
 				!strings.HasPrefix(resolved, dirWithSep) &&
 				!strings.HasPrefix(resolved, resolvedBaseWithSep) {
@@ -275,6 +280,21 @@ func (a *restAPI) serveStaticFile(
 		absPath = cleaned
 	}
 
+	// fix10 (CodeQL go/path-injection, CWE-22): the value reaching the file
+	// operations below is confined on its FINAL form, with the guard shape
+	// the tainted-path query recognises (strings.HasPrefix evaluated true
+	// over the cleaned, symlink-resolved path). Defense in depth — the
+	// checks above already confined candidate and resolved — this proves
+	// absPath is the registered directory itself or beneath it, whatever
+	// reached it.
+	if absPath != absDir && absPath != resolvedBase &&
+		!strings.HasPrefix(absPath, dirWithSep) &&
+		!strings.HasPrefix(absPath, resolvedBaseWithSep) {
+		a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusForbidden, startedAt)
+		jsonErr(w, http.StatusForbidden, "access denied: path is outside the registered directory")
+		return
+	}
+
 	info, err := os.Stat(absPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -282,7 +302,7 @@ func (a *restAPI) serveStaticFile(
 			jsonErr(w, http.StatusNotFound, "file not found")
 			return
 		}
-		slog.Error("rest: serveStaticFile: stat failed", "path", absPath, "error", err)
+		logsafeError("rest: serveStaticFile: stat failed", "path", absPath, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not stat path")
 		return
 	}
@@ -303,7 +323,7 @@ func (a *restAPI) serveStaticFile(
 	if info.Size() <= workspaceStreamingThreshold {
 		data, readErr := os.ReadFile(absPath)
 		if readErr != nil {
-			slog.Error("rest: serveStaticFile: ReadFile failed", "path", absPath, "error", readErr)
+			logsafeError("rest: serveStaticFile: ReadFile failed", "path", absPath, "error", readErr)
 			jsonErr(w, http.StatusInternalServerError, "could not read file")
 			return
 		}
@@ -323,7 +343,7 @@ func (a *restAPI) serveStaticFile(
 
 	f, openErr := os.Open(absPath)
 	if openErr != nil {
-		slog.Error("rest: serveStaticFile: Open failed", "path", absPath, "error", openErr)
+		logsafeError("rest: serveStaticFile: Open failed", "path", absPath, "error", openErr)
 		jsonErr(w, http.StatusInternalServerError, "could not open file")
 		return
 	}
