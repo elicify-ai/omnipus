@@ -5952,6 +5952,40 @@
       ]
     },
     {
+      "id": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/workspaces/mail/MailMarkdownEditor.tsx",
+      "symbol": "overlay:1",
+      "lane": 6,
+      "entry": {
+        "type": "activation",
+        "path": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1"
+      },
+      "verification": [
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1.test.tsx",
+          "test": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1 surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1.test.tsx",
+          "test": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1 surface browser contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
       "id": "workspace-tab:board",
       "kind": "tab",
       "source": "src/components/workspaces/WorkspaceTabBar.tsx",
@@ -7010,6 +7044,10 @@
       "lane": 4
     },
     {
+      "source": "src/components/panel-shell/ListPreviewLayout.tsx",
+      "lane": 8
+    },
+    {
       "source": "src/components/panel-shell/PanelTabPresenceBridge.tsx",
       "lane": 8
     },
@@ -7542,6 +7580,10 @@
       "lane": 6
     },
     {
+      "source": "src/components/workspaces/mail/MailMarkdownEditor.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/workspaces/mail/MailMessageList.tsx",
       "lane": 6
     },
@@ -7551,6 +7593,10 @@
     },
     {
       "source": "src/components/workspaces/mail/MailPreviewPane.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailRecipientInput.tsx",
       "lane": 6
     },
     {
