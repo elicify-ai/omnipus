@@ -1,6 +1,6 @@
 // Omnipus — RED tests for spec "Library views, anywhere"
 // (docs/internal/specs/library-views-anywhere-spec.md), §10 TDD Plan tests
-// 45 (SECURITY), 44 and 47.
+// 45 (SECURITY), 44, 46 and 47.
 //
 // SECURITY CONTEXT (D-PROVENANCE, round 2, resolves R2-CRIT-001/R2-CRIT-002):
 // the spec requires a PIPELINE-OWNED MEMBERSHIP RECORD, not the `derived_from`
@@ -35,6 +35,7 @@
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRederive_IgnoresHandAddedDerivedFromOnForeignFile$' ./pkg/vaultimport/
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRederive_IgnoresCopiedDerivedFromField$' ./pkg/vaultimport/
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRederive_RefusesOccupiedPathNotOwnRecord$' ./pkg/vaultimport/
+//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRederive_TwoFilesClaimingSameDerivedFromAndName$' ./pkg/vaultimport/
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -140,4 +141,21 @@ func TestRederive_RefusesOccupiedPathNotOwnRecord(t *testing.T) {
 			occupiedPath, unrelatedContent, string(got),
 		)
 	}
+}
+
+// TestRederive_TwoFilesClaimingSameDerivedFromAndName is TDD Plan test 46
+// (R2-CRIT-001, Dataset F-10): two files sharing BOTH `derived_from` and
+// `name` (a sync-conflict shape) must be touched by NEITHER re-derivation
+// run — no file may be picked as "the" managed one on ambiguous evidence.
+//
+// BLOCKED: same root cause as tests 44/45 — `derived_from` does not exist on
+// the wire type or anywhere in pkg/vaultimport/pkg/knowledge (see file
+// header grep), so there is no way to construct two files that "share
+// derived_from" at all; records.ParseView's DisallowUnknownFields rejects
+// any file carrying that key before ambiguity could even be evaluated.
+func TestRederive_TwoFilesClaimingSameDerivedFromAndName(t *testing.T) {
+	t.Fatal("BLOCKED: ViewDef.derived_from (contract FR-VA-009a) and the pipeline-owned membership " +
+		"record (D-PROVENANCE, R2-CRIT-001) are not implemented — required before two files sharing " +
+		"both derived_from and name can be shown to be left untouched by re-derivation, per " +
+		"Dataset F-10 / TDD test 46.")
 }
