@@ -204,14 +204,14 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 	})
 	resp := gen.MailMessage{
 		Folder: gen.MailMessageFolderDrafts, Uid: int(newUID), Uidvalidity: int(newUV),
-		Subject: req.Subject, To: req.To, Cc: derefStrings(req.Cc),
+		Subject: req.Subject, To: mailNonNilSlice(req.To), Cc: mailNonNilSlice(derefStrings(req.Cc)),
 		From: mb.Username, IsOmnipusDraft: cur.IsOmnipusDraft, IsDraft: true,
 		MarkdownLossy: false, HasHtml: true, Seen: false,
 		BodyText: req.BodyMarkdown, MessageId: &out.MessageID,
 	}
 	bm := req.BodyMarkdown
 	resp.BodyMarkdown = &bm
-	bcc := derefStrings(req.Bcc)
+	bcc := mailNonNilSlice(derefStrings(req.Bcc))
 	resp.Bcc = &bcc
 	// The listing describes the NEW copy the response returns (ruling: its
 	// uid is in this response; download links are built from it). Parse the
@@ -231,6 +231,7 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 			SizeBytes   int    `json:"size_bytes"`
 		}{ContentType: p.ContentType, Filename: p.Filename, PartIndex: p.PartIndex, SizeBytes: p.SizeBytes})
 	}
+	resp.Attachments = mailNonNilSlice(resp.Attachments)
 	if cleanupWarn != "" {
 		resp.DraftCleanupWarning = &cleanupWarn
 	}
