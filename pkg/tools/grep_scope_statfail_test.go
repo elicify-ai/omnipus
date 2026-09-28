@@ -112,33 +112,88 @@ func TestRefuseNonRegular_NotExistLeftToOpen(t *testing.T) {
 	}
 }
 
+// fix3RedOpenSpy wraps a real fs.FS and records whether Open(name) was ever
+// called for the entry under test — the "the entry must never reach
+// Open/content-read" half of F1/S3's own oracle, restated by fix3's finding
+// N4: a skipped integration test asserts nothing about the LIVE fail-closed
+// branch, so this replaces the fs.Stat-shaped stub (no longer reachable
+// after the A3 os.OpenFile rewrite) with a real on-disk fixture that drives
+// os.OpenFile itself into a genuine, non-ENOENT error and a real fs.FS spy
+// that proves the guarded fsys's own Open was never reached.
+type fix3RedOpenSpy struct {
+	fs.FS
+	opened *bool
+}
+
+func (s fix3RedOpenSpy) Open(name string) (fs.File, error) {
+	*s.opened = true
+	return s.FS.Open(name)
+}
+
 // TestGrepGateFS_Open_StatErrorRefusesWithoutOpening is F1/S3's integration
-// case, through the real production caller: grepGateFS.Open consults
-// refuseNonRegular(g.raw, name) BEFORE calling g.fsys.Open(name). A
-// non-NotExist Stat error on the raw (kind-check) side must refuse without
-// ever reaching the guarded fsys's Open — "grep must not open/read that
-// entry" — and must not crash (a panic here would fail the test process).
+// case, through the real production caller, rewritten for fix3/N4 to drive
+// the LIVE (post-A3) fail-closed branch instead of an fs.FS stub the A3
+// rewrite made unreachable.
 //
-// A3 rewrite (Opus security-lead review): the OLD code did
-// fs.Stat-then-fs.Open. The A3 fix replaces that with
-// os.OpenFile-then-Stat-on-the-opened-file, going directly to the OS
-// (the kind check must use O_NONBLOCK on unix or the Open blocks on a
-// FIFO). The statFailFS stub intercepts fs.FS calls, not OS calls, so
-// it can no longer drive this case. The fail-closed behaviour IS
-// preserved (any non-ENOENT os.OpenFile error fails closed, exactly as
-// F1/S3 required — see TestRefuseNonRegular_FailClosedOnOpaqueStatError,
-// which exercises the same behaviour through the new helper) but the
-// integration test through grepGateFS.Open's specific fs.FS-shaped
-// fixture no longer applies. A parallel os-level test would be the
-// right shape; deferred.
-//
-// The behavioural guarantee F1/S3 required — fail closed on a
-// non-ENOENT open error so the engine never reaches the blocked read —
-// is verified through TestRefuseNonRegular_FailClosedOnOpaqueStatError
-// (the unit test) and TestGrepGateFS_Open_FIFOSwapNeverHangs (the
-// A3 RED test, which exercises the same fail-closed path with a FIFO).
+// ORACLE: a symlink LOOP is a genuine, POSIX-standard, non-ENOENT open
+// failure (syscall.ELOOP) that requires no fs.FS stub and no timing —
+// os.OpenFile(hostAbs, regularReadOpenFlags(), 0) on a self-referential
+// symlink fails deterministically on every platform this repo supports
+// (Hard Constraint: Linux, macOS, Windows), independent of O_NONBLOCK (which
+// only changes FIFO/device open blocking, not symlink-loop detection).
+// refuseNonRegularViaOpen's own non-ENOENT branch (grep_scope.go) must wrap
+// it as fs.ErrPermission and grepGateFS.Open must return that refusal
+// WITHOUT ever calling g.fsys.Open(name) — the spy's opened flag is the
+// direct, non-inferred proof of "never opened".
 func TestGrepGateFS_Open_StatErrorRefusesWithoutOpening(t *testing.T) {
-	t.Skip("A3 rewrite: the fs.Stat-shaped fixture does not apply to the os.OpenFile-based kind check. Fail-closed behaviour is verified at the unit (TestRefuseNonRegular_FailClosedOnOpaqueStatError) and A3-integration (TestGrepGateFS_Open_FIFOSwapNeverHangs) levels.")
+	dir := t.TempDir()
+	loop := filepath.Join(dir, "loop")
+	// A relative self-referential symlink: "loop" -> "loop", resolved
+	// relative to its own directory, i.e. right back to itself.
+	if err := os.Symlink("loop", loop); err != nil {
+		t.Fatalf("create symlink loop: %v", err)
+	}
+
+	var opened bool
+	fsys := fix3RedOpenSpy{FS: os.DirFS(dir), opened: &opened}
+	g := grepGateFS{fsys: fsys, raw: os.DirFS(dir), root: dir, policy: fspolicy.FSPolicy{}}
+
+	_, err := g.Open("loop")
+	if err == nil {
+		t.Fatal("N4: a symlink loop is neither a directory nor a regular file — grepGateFS.Open must refuse it, got nil (ALLOW)")
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("N4: refusal must wrap fs.ErrPermission (the fail-closed branch), got %v", err)
+	}
+	var pathErr *fs.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("N4: refusal must be an *fs.PathError, got %T: %v", err, err)
+	}
+	if opened {
+		t.Fatal("N4: the guarded fsys's own Open was reached — the kind check must refuse BEFORE any content-read Open, not merely alongside it")
+	}
+}
+
+// TestGrepGateFS_Open_ELOOPDiscriminatingControl is the discriminating
+// control for the test above: a genuinely-missing entry (fs.ErrNotExist)
+// must still reach the guarded fsys's Open, exactly as
+// TestGrepGateFS_Open_StatNotExistStillOpens already asserts through the
+// fs.FS-stub shape — this restates it through the real os.OpenFile path so
+// the ELOOP assertion above cannot be satisfied by a fail-closed-on-anything
+// gate that also (wrongly) refuses a plain absence.
+func TestGrepGateFS_Open_ELOOPDiscriminatingControl(t *testing.T) {
+	dir := t.TempDir()
+	var opened bool
+	fsys := fix3RedOpenSpy{FS: os.DirFS(dir), opened: &opened}
+	g := grepGateFS{fsys: fsys, raw: os.DirFS(dir), root: dir, policy: fspolicy.FSPolicy{}}
+
+	_, err := g.Open("gone.txt")
+	if err == nil {
+		t.Fatal("control: gone.txt does not exist on disk; Open must report that, not succeed")
+	}
+	if !opened {
+		t.Fatal("control: a genuinely-missing entry must still reach the guarded fsys's Open (unchanged behaviour) — the kind check must not swallow ENOENT")
+	}
 }
 
 // TestGrepGateFS_Open_StatNotExistStillOpens is the same integration
