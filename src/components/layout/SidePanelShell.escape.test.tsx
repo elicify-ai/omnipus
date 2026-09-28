@@ -66,7 +66,16 @@ function makeDef(
 function renderShell(panels: PanelDefinition[]) {
   render(
     <>
-      <button data-panel-trigger="library">Library trigger</button>
+      {/* A real user trigger: a rendered control whose handler opens the
+          panel — the USER-initiated path US-9 AS-3 speaks of (distinct from
+          a load-time store/deep-link restore, MIN-002). */}
+      <button
+        data-panel-trigger="library"
+        data-testid="panel-trigger-library"
+        onClick={() => usePanelShellStore.getState().openPanel('library')}
+      >
+        Library trigger
+      </button>
       <SidePanelShell
         panels={panels}
         username="dana"
@@ -206,13 +215,38 @@ describe('MIN-208 input-method guards (RED — onShellKeyDown checks only key/di
 })
 
 describe('focus management (US-9 AS-3 / MIN-002)', () => {
-  it('RED — focus moves INTO the panel on open (US-9 AS-3: the panel header receives focus)', async () => {
+  // Batch-7 squad-lead ruling: the old test opened the panel by calling the
+  // store directly — indistinguishable from a RESTORED/deep-link open, which
+  // MIN-002 says must NOT steal focus, while US-9 AS-3's focus-into-panel
+  // applies to a USER-initiated open. The pair below separates the two
+  // paths: a click on a rendered trigger (user action) vs a store call
+  // (restore-style).
+  it('RED — a USER-initiated open (trigger click) moves focus INTO the panel (US-9 AS-3)', async () => {
     renderShell([makeDef('library')])
-    openPanel('library')
+    fireEvent.click(screen.getByTestId('panel-trigger-library'))
     const panel = screen.getByTestId('side-panel')
     await waitFor(() => {
       expect(panel.contains(document.activeElement)).toBe(true)
     })
+  })
+
+  it('a restored/deep-link-style open (store call, no user action) does NOT move focus (MIN-002: never steal focus on load)', async () => {
+    renderShell([makeDef('library')])
+    const trigger = screen.getByTestId('panel-trigger-library')
+    act(() => {
+      trigger.focus()
+    })
+    expect(document.activeElement).toBe(trigger)
+    openPanel('library')
+    // The focus-move, if one wrongly fired, would be async (an effect):
+    // settle before the did-NOT-move claim.
+    for (let i = 0; i < 5; i++) {
+      await act(async () => {
+        await Promise.resolve()
+      })
+    }
+    expect(document.activeElement).toBe(trigger)
+    expect(screen.getByTestId('side-panel').contains(document.activeElement)).toBe(false)
   })
 
   it('focus returns to the opening trigger on close (MIN-002)', async () => {
