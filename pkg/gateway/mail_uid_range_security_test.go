@@ -1,13 +1,16 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -143,6 +146,7 @@ func TestMailUIDWireConversionsAvoidArchitectureSizedInt(t *testing.T) {
 		return true
 	})
 
+	callSites := make(map[string][]string)
 	paths, err := filepath.Glob("rest_mail*.go")
 	if err != nil {
 		t.Fatalf("glob mail REST files: %v", err)
@@ -157,6 +161,15 @@ func TestMailUIDWireConversionsAvoidArchitectureSizedInt(t *testing.T) {
 			t.Fatalf("parse %s: %v", path, parseErr)
 		}
 		ast.Inspect(parsed, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok {
+				if name, isIdent := call.Fun.(*ast.Ident); isIdent && name.Name == "mailUIDToWire" {
+					var argument bytes.Buffer
+					if printErr := printer.Fprint(&argument, fset, call.Args[0]); printErr != nil {
+						t.Fatalf("print mailUIDToWire argument at %s: %v", fset.Position(call.Pos()), printErr)
+					}
+					callSites[path] = append(callSites[path], argument.String())
+				}
+			}
 			field, ok := node.(*ast.KeyValueExpr)
 			if !ok {
 				return true
@@ -180,5 +193,13 @@ func TestMailUIDWireConversionsAvoidArchitectureSizedInt(t *testing.T) {
 	}
 	if wireAssignments == 0 {
 		t.Fatal("no UID response assignments found; conversion guard did not exercise production call sites")
+	}
+	expectedCallSites := map[string][]string{
+		"rest_mail_draft.go":   {"newUID", "newUV"},
+		"rest_mail_read.go":    {"rows[len(rows)-1].UID", "row.UID", "uv", "v.UID", "v.UIDValidity"},
+		"rest_mail_summary.go": {"st.LastSeenUID"},
+	}
+	if !reflect.DeepEqual(callSites, expectedCallSites) {
+		t.Fatalf("mailUIDToWire production call sites changed:\n got: %#v\nwant: %#v", callSites, expectedCallSites)
 	}
 }
