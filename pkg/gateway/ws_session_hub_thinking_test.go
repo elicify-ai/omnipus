@@ -74,6 +74,8 @@ func wpcDecodeFrame(t *testing.T, frame []byte) map[string]any {
 
 func wpcIntPtr(i int) *int { return &i }
 
+func wpcInt64p(v int64) *int64 { return &v }
+
 func wpcFrameType(m map[string]any) string {
 	if v, ok := m["type"].(string); ok {
 		return v
@@ -135,14 +137,14 @@ func TestHub_ThinkingGate_JournalTailSubstitution(t *testing.T) {
 	_, outAnswer := hub.publishMeta(hubFrameMeta{}, []byte(`{"type":"token","content":"answer"}`))
 
 	// Gate-on attach: the journal tail carries the full thinking payload.
-	tailOn := hub.bind(&wpcGateHubConn{show: true}, int64p(0), hubStrp("wpc-boot"), "wpc-boot")
+	tailOn := hub.bind(&wpcGateHubConn{show: true}, wpcInt64p(0), hubStrp("wpc-boot"), "wpc-boot")
 	require.True(t, tailOn.Servable)
 	require.Len(t, tailOn.Tail, 2, "gate-on attach gets both frames")
 	assert.Equal(t, string(outThink), string(tailOn.Tail[0]), "gate-on tail keeps the thinking payload byte-identical")
 	assert.Equal(t, string(outAnswer), string(tailOn.Tail[1]))
 
 	// Gate-off attach: the hidden frame is a content-free skip in the tail.
-	tailOff := hub.bind(&wpcGateHubConn{show: false}, int64p(0), hubStrp("wpc-boot"), "wpc-boot")
+	tailOff := hub.bind(&wpcGateHubConn{show: false}, wpcInt64p(0), hubStrp("wpc-boot"), "wpc-boot")
 	require.True(t, tailOff.Servable)
 	require.Len(t, tailOff.Tail, 2, "the tail keeps every sequence position (contiguity, D29)")
 	skip := wpcDecodeFrame(t, tailOff.Tail[0])
@@ -165,7 +167,7 @@ func TestHub_ThinkingGate_JournalTailContiguity(t *testing.T) {
 	}
 
 	conn := &wpcGateHubConn{show: false}
-	res := hub.bind(conn, int64p(0), hubStrp("wpc-boot"), "wpc-boot")
+	res := hub.bind(conn, wpcInt64p(0), hubStrp("wpc-boot"), "wpc-boot")
 	require.True(t, res.Servable)
 	require.NotEmpty(t, res.Tail)
 
@@ -199,7 +201,7 @@ func TestHub_D31_SupersessionKeepsOneFullPayloadPerEntry(t *testing.T) {
 
 	// Gate-on attach: skips at the two superseded seqs, ONE full payload (the
 	// newest), then the answer - in original sequence order.
-	tailOn := hub.bind(&wpcGateHubConn{show: true}, int64p(0), hubStrp("wpc-boot"), "wpc-boot")
+	tailOn := hub.bind(&wpcGateHubConn{show: true}, wpcInt64p(0), hubStrp("wpc-boot"), "wpc-boot")
 	require.True(t, tailOn.Servable)
 	require.Len(t, tailOn.Tail, 4, "all four sequence positions survive supersession")
 	assert.Equal(t, "seq_skip", wpcFrameType(wpcDecodeFrame(t, tailOn.Tail[0])), "superseded seq 1 becomes a skip")
@@ -209,7 +211,7 @@ func TestHub_D31_SupersessionKeepsOneFullPayloadPerEntry(t *testing.T) {
 	assert.Equal(t, string(answer), string(tailOn.Tail[3]), "answer catch-up stays intact after supersession")
 
 	// Gate-off attach: every thinking position is a skip; the answer survives.
-	tailOff := hub.bind(&wpcGateHubConn{show: false}, int64p(0), hubStrp("wpc-boot"), "wpc-boot")
+	tailOff := hub.bind(&wpcGateHubConn{show: false}, wpcInt64p(0), hubStrp("wpc-boot"), "wpc-boot")
 	require.True(t, tailOff.Servable)
 	require.Len(t, tailOff.Tail, 4)
 	for _, idx := range []int{0, 1, 2} {
@@ -226,7 +228,7 @@ func TestHub_D31_SupersessionKeepsOneFullPayloadPerEntry(t *testing.T) {
 	// A second session's journal is untrimmed by this supersession.
 	hub2 := reg.getOrCreate("wpc-hub-sess-2")
 	_, otherFrame := hub2.publishMeta(hubFrameMeta{}, []byte(`{"type":"token","content":"other"}`))
-	tailOther := hub2.bind(&wpcGateHubConn{show: true}, int64p(0), hubStrp("wpc-boot"), "wpc-boot")
+	tailOther := hub2.bind(&wpcGateHubConn{show: true}, wpcInt64p(0), hubStrp("wpc-boot"), "wpc-boot")
 	require.True(t, tailOther.Servable)
 	require.Len(t, tailOther.Tail, 1)
 	assert.Equal(t, string(otherFrame), string(tailOther.Tail[0]),
