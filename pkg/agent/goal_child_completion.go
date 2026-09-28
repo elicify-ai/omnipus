@@ -362,3 +362,57 @@ func (al *AgentLoop) ackMetVerdictEntry(sessionID, goalID string, round int) {
 			map[string]any{"session_id": sessionID, "goal_id": goalID, "message_id": id, "error": aerr.Error()})
 	}
 }
+
+// wakeMetVerdictEntry re-delivers the already-durable, unacknowledged met
+// verdict without wake suppression when no deterministic final hand-back was
+// stored. Deliver's duplicate handling deliberately re-runs the wake for an
+// unacknowledged wake-eligible entry, so this creates no second inbox row.
+func (al *AgentLoop) wakeMetVerdictEntry(sessionID, goalID string, round int) error {
+	inbox := al.GetMessageInboxStore()
+	lifecycle := al.GetSessionLifecycleStore()
+	deliverer := al.getUpwardDeliverer()
+	if inbox == nil || lifecycle == nil || deliverer == nil {
+		return errors.New("goal: met verdict fallback wake dependencies are not wired")
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return fmt.Errorf("load child lifecycle: %w", err)
+	}
+	if rec == nil || rec.SteeredBy == nil {
+		return errors.New("goal: met verdict fallback wake has no steering edge")
+	}
+	wantID := goalVerdictUpwardMessageID(goalID, round)
+	message, found, err := findUnackedInboxMessage(inbox, deliverOwnerKey(rec), sessionID, wantID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("goal: met verdict %q is not present and unacknowledged", wantID)
+	}
+	event := steer.UpwardEvent{ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: message}
+	delivery, err := deliverer.Deliver(context.Background(), event)
+	if err != nil {
+		return fmt.Errorf("wake stored met verdict: %w", err)
+	}
+	reportUndeliveredWake("goal: met verdict fallback wake", event, steerParentSessionID(rec), rec.Generation, delivery)
+	return nil
+}
+
+func findUnackedInboxMessage(inbox *session.MessageInboxStore, ownerKey, childSessionID, messageID string) (generated.SessionMessage, bool, error) {
+	cursor := ""
+	for {
+		messages, next, more, err := inbox.Drain(ownerKey, childSessionID, cursor, session.DefaultInboxUnackedMax)
+		if err != nil {
+			return generated.SessionMessage{}, false, fmt.Errorf("drain parent inbox: %w", err)
+		}
+		for _, message := range messages {
+			if messageIDOf(message) == messageID {
+				return message, true, nil
+			}
+		}
+		if !more {
+			return generated.SessionMessage{}, false, nil
+		}
+		cursor = next
+	}
+}
