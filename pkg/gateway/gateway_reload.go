@@ -234,6 +234,16 @@ func newReloadTrigger(runningServices *services, agentLoop *agent.AgentLoop) fun
 // alongside the reload's own start-sequence number, so
 // performancePendingApply.clearAfterReload can require both.
 //
+// Round-6 finding: readSeq/firstReadSeq describes only the config this cycle
+// STARTED with. exec (executeReload in production) can swap in a DIFFERENT,
+// more-recently-read config partway through — handleConfigReload's swap-time
+// re-read (reloadConfigForSwap) — and that swapped-in config, not the
+// starting one, is what actually gets applied. runningServices.
+// lastAppliedConfigReadSeq carries that swap-time read's own sequence number
+// back out of exec; when set, it overrides readSeq before finish is called,
+// so clearAfterReload is always told the APPLIED config's provenance, never
+// a stale starting snapshot's.
+//
 // exec runs one reload (executeReload in production) and loadNext re-reads
 // config.json; both are parameters so the coalescing contract can be tested
 // without standing up the full service-restart pipeline.
@@ -315,13 +325,29 @@ func runReloadCycle(
 		// Record the rebuild outcome BEFORE finishReload can clear the
 		// pending flag, so a poller it releases reads this outcome.
 		seq := runningServices.reloadOutcome.begin()
+		// Reset before exec: only a swap-time re-read that runs INSIDE this
+		// exec call (executeReload -> handleConfigReload ->
+		// reloadConfigForSwap) may set this, so a stale value left over
+		// from a PREVIOUS cycle's swap can never leak into this cycle's
+		// finish() call (round-6 finding — see the field's own doc comment
+		// on *services).
+		runningServices.lastAppliedConfigReadSeq = 0
 		execErr := exec(cfg)
 		if execErr != nil {
 			logger.Errorf("Config reload failed: %v", execErr)
 		} else {
 			logger.Info("Config reload completed successfully")
 		}
-		runningServices.reloadOutcome.finish(seq, execErr, readSeq)
+		// The config actually APPLIED is whatever the swap-time re-read
+		// produced, when handleConfigReload ran one this exec call;
+		// otherwise it is exactly the config this cycle started with,
+		// already described by readSeq (round-6 finding: the outer readSeq
+		// alone does not prove the SWAPPED-IN config's own provenance).
+		appliedReadSeq := readSeq
+		if s := runningServices.lastAppliedConfigReadSeq; s != 0 {
+			appliedReadSeq = s
+		}
+		runningServices.reloadOutcome.finish(seq, execErr, appliedReadSeq)
 		if !runningServices.finishReload(agentLoop.ClearReloadPending) {
 			slotHeld = false
 			return
@@ -658,6 +684,19 @@ func lockConfigWrites(runningServices *services) (unlock func()) {
 // prepareReloadConfig, so it carries every write committed before the caller
 // took configMu. Returns loaded unchanged when no swap-time loader is wired.
 // The caller must hold configMu (lockConfigWrites).
+//
+// Round-6 finding: the config this returns is what handleConfigReload
+// actually applies next (its caller assigns `newCfg = swapCfg` immediately
+// after this returns) — so once it has fully passed prepareReloadConfig,
+// this stamps its own config-read sequence number
+// (runningServices.lastAppliedConfigReadSeq, via reloadOutcome.markConfigRead)
+// exactly like every other config-read call site (setupConfigWatcherPolling,
+// runReloadCycle's own loadNext calls) does once ITS read is known-good.
+// Without this stamp, runReloadCycle had no way to tell
+// performancePendingApply.clearAfterReload that the config it actually
+// applied was read from disk strictly after a pending-apply mark, even when
+// the reload cycle's own OUTER read (the `first`/loadNext snapshot, taken
+// before this swap-time re-read ran) predated it.
 func reloadConfigForSwap(runningServices *services, loaded *config.Config) (*config.Config, error) {
 	if runningServices == nil || runningServices.loadConfigForSwap == nil {
 		return loaded, nil
@@ -669,6 +708,7 @@ func reloadConfigForSwap(runningServices *services, loaded *config.Config) (*con
 	if prepErr := prepareReloadConfig(fresh, runningServices); prepErr != nil {
 		return nil, prepErr
 	}
+	runningServices.lastAppliedConfigReadSeq = runningServices.reloadOutcome.markConfigRead()
 	return fresh, nil
 }
 

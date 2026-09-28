@@ -232,7 +232,37 @@ type services struct {
 	// shared with restAPI so PUT /performance can tell a failed rebuild from
 	// an applied one. Nil in test constructions (a nil tracker is a no-op).
 	reloadOutcome *reloadOutcomeTracker
-	credStore     *credentials.Store
+	// lastAppliedConfigReadSeq is reloadOutcomeTracker.markConfigRead's
+	// return value for the config a swap-time re-read
+	// (gateway_reload.go::reloadConfigForSwap) most recently produced
+	// INSIDE THE CURRENT reload cycle's exec call — the config
+	// handleConfigReload actually applies (its caller assigns
+	// `newCfg = swapCfg` immediately after reloadConfigForSwap returns, and
+	// every step after that — createStartupProvider,
+	// al.ReloadProviderAndConfig, restartServices — acts on that swapped-in
+	// config, never on the pre-swap snapshot). Round-6 finding: without this
+	// field, runReloadCycle told reloadOutcomeTracker.finish the reload
+	// cycle's OUTER readSeq (the `first`/loadNext read taken before
+	// handleConfigReload ran), which can predate a write that landed on
+	// disk between that outer read and the swap-time re-read — so a config
+	// that WAS actually applied, and WAS read after a pending-apply mark,
+	// reported as though its provenance predated that mark, and
+	// performancePendingApply.clearAfterReload withheld a clear it should
+	// have granted.
+	//
+	// runReloadCycle resets this to 0 immediately before each exec call and
+	// reads it back immediately after (gateway_reload.go);
+	// reloadConfigForSwap sets it only once its swap-time re-read has fully
+	// passed prepareReloadConfig. Both happen on the same goroutine within
+	// one exec call — the single-flight reload slot (beginReload/
+	// finishReload) serializes every reload cycle process-wide — so no
+	// additional lock is required. Zero (no swap-time re-read ran this exec
+	// call: loadConfigForSwap is unset, which is every test that never
+	// wires it, and the manual-reload path before this cycle's own
+	// handleConfigReload runs) tells runReloadCycle to keep the cycle's own
+	// outer readSeq unchanged.
+	lastAppliedConfigReadSeq uint64
+	credStore                *credentials.Store
 	// toolStore owns the on-disk tool-result offload directory. Exposed here
 	// so RunContext can wire its retentionSweep into the nightly sweep loop.
 	toolStore *toolResultStore

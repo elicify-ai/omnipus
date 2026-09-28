@@ -223,10 +223,13 @@ func (t *reloadOutcomeTracker) startedCount() uint64 {
 // markConfigRead records a fresh config.json read for reload purposes and
 // returns its sequence number (round-4 finding — see the configReads field's
 // doc comment). Called by the file-watcher poller (setupConfigWatcherPolling)
-// once per accepted external edit, and by runReloadCycle once per loadNext
-// read; nil-safe like every other tracker method (a nil tracker records
-// nothing and every stamped read is 0, which never compares greater than any
-// mark).
+// once per accepted external edit, by runReloadCycle once per loadNext read,
+// and by gateway_reload.go::reloadConfigForSwap once per successful
+// swap-time re-read (round-6 finding: the config THAT call stamps is the one
+// handleConfigReload actually applies, which the reload cycle's own outer
+// read can predate); nil-safe like every other tracker method (a nil tracker
+// records nothing and every stamped read is 0, which never compares greater
+// than any mark).
 func (t *reloadOutcomeTracker) markConfigRead() uint64 {
 	if t == nil {
 		return 0
