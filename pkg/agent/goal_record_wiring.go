@@ -150,14 +150,32 @@ func resolveGoalRecordStore() *goal.Store {
 // entirely would be a worse failure than continuing against the older of two
 // records.
 func activeGoalForSession(sessionID string) *goal.Goal {
+	rec, _ := activeGoalForSessionWithError(sessionID)
+	return rec
+}
+
+// activeGoalForSessionWithError is the same lookup but propagates a real
+// error so callers that must fail closed (the Q2=B completion fence,
+// redriveGoalAdjudication's degraded-store path) can refuse the action rather
+// than silently returning nil. The Warn-and-treat-as-nil semantics
+// activeGoalForSession keeps are right for the OLD call sites (a missing
+// record is a common path; a missing store is not) and remain unchanged.
+// errNoActiveGoalForSession is the sentinel returned by
+// activeGoalForSessionWithError when the session is empty / has no active
+// goal — distinct from a real store read error so callers that must fail
+// closed (the Q2=B completion fence) can refuse without conflating "no goal
+// on this session" with "store is unreadable". activeGoalForSession keeps its
+// nil-on-empty contract by collapsing this sentinel back to nil; the
+// explicit-name form is for callers that need to distinguish the two.
+var errNoActiveGoalForSession = errors.New("no active goal on this session")
+
+func activeGoalForSessionWithError(sessionID string) (*goal.Goal, error) {
 	if sessionID == "" {
-		return nil
+		return nil, errNoActiveGoalForSession
 	}
 	active, err := resolveGoalRecordStore().ListActive()
 	if err != nil {
-		logger.WarnCF("agent", "goal: could not list active goal records; treating this session as goal-less",
-			map[string]any{"component": "goal", "session_id": sessionID, "error": err.Error()})
-		return nil
+		return nil, err
 	}
 	var found *goal.Goal
 	for i := range active {
@@ -172,7 +190,10 @@ func activeGoalForSession(sessionID string) *goal.Goal {
 		g := active[i]
 		found = &g
 	}
-	return found
+	if found == nil {
+		return nil, errNoActiveGoalForSession
+	}
+	return found, nil
 }
 
 // bumpGoalRecordActivity moves goalID's own LastActivityAt clock forward —

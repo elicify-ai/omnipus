@@ -448,7 +448,15 @@ func (l *SteerLauncher) launchSteered(
 			// no new child may be published while that claim is waiting on its
 			// existing descendants or being adjudicated. This check is inside
 			// the parent's publication lock and precedes every child record.
-			if l.al.goalCompletionFenceActive(req.SteeringSessionID) {
+			//
+			// Q2=B gate round 1 finding 2 (security-lead + silent-failure-hunter):
+			// an unreadable goal store used to silently map to "no fence" and
+			// let the launch through — the very Judge race the fence exists
+			// to prevent. The fence now returns an error and the launch
+			// refuses the call explicitly when goal authority is unreadable.
+			if fenceActive, fenceErr := l.al.goalCompletionFenceActive(req.SteeringSessionID); fenceErr != nil {
+				return nil, fmt.Errorf("steer: launch: completion fence could not be read: %w", fenceErr)
+			} else if fenceActive {
 				return nil, fmt.Errorf("steer: launch: completion claim is pending for steering session %q", req.SteeringSessionID)
 			}
 			if launchAfterCompletionFenceTestHook != nil {
@@ -851,6 +859,20 @@ func dispatchRefusalError(reason string) error {
 func commitSteeredDispatchState(
 	lifecycle *session.LifecycleStore, sessionID string, gen int, state session.LifecycleState,
 ) (*session.LifecycleRecord, error) {
+	return commitSteeredDispatchStateWithPendingMessage(lifecycle, sessionID, gen, state, "")
+}
+
+// commitSteeredDispatchStateWithPendingMessage is commitSteeredDispatchState
+// plus a pending wake payload stamp (Q2=B gate round 1 silent-failure-hunter
+// finding 1). The wake's content is written into rec.PendingUserMessage in
+// the SAME atomic Mutate that flips the state to LifecycleQueued, so a
+// promoted dispatch always reads the queued wake's prompt back — even when
+// the promotion happens after the wake itself has long since returned. An
+// empty pendingMessage is the same as the plain commitSteeredDispatchState
+// (no field written).
+func commitSteeredDispatchStateWithPendingMessage(
+	lifecycle *session.LifecycleStore, sessionID string, gen int, state session.LifecycleState, pendingMessage string,
+) (*session.LifecycleRecord, error) {
 	var committed *session.LifecycleRecord
 	var refusal error
 	err := lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
@@ -863,6 +885,9 @@ func commitSteeredDispatchState(
 			return refusal
 		}
 		rec.State = state
+		if pendingMessage != "" {
+			rec.PendingUserMessage = pendingMessage
+		}
 		committed = rec
 		return nil
 	})

@@ -265,6 +265,21 @@ type LifecycleRecord struct {
 	LastCheckpointRef     string   `json:"last_checkpoint_ref,omitempty"`
 	UndeliveredMessageIDs []string `json:"undelivered_message_ids,omitempty"`
 
+	// PendingUserMessage is the wake payload (the queued re-evaluation prompt,
+	// or any other wake content) preserved across the steered-turn admission
+	// queue. processSteeredSystemWake stamps it before committing LifecycleQueued
+	// when the wake lands at the admission cap; reconstructSteeredTurn consumes
+	// it on the queued path (wake==nil) so the promoted turn's UserMessage is
+	// the re-evaluation prompt, not the original launch instruction looked up
+	// from the transcript. Cleared on consumption. Crash-safe: the inbox
+	// still holds the wake entry, so a process restart re-runs the wake path
+	// and re-stamps the same field.
+	//
+	// not-wire-format: the internal lifecycle record carries this durable
+	// piece of steered-session bookkeeping; the wire SessionLifecycleRecord
+	// deliberately omits it (this is steering plumbing, not session status).
+	PendingUserMessage string `json:"pending_user_message,omitempty"`
+
 	NeedsInput *NeedsInput `json:"needs_input,omitempty"`
 
 	// FailedReason is set only when State==LifecycleFailed. Left open

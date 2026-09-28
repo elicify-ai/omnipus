@@ -289,16 +289,34 @@ type goalTriggerState struct {
 	blocked map[string]bool
 
 	// completionPhase coordinates a met claim with the goal owner's delegated
-	// subtree. A waiting claim has not reached the Judge; adjudicating fences
-	// new launches until the verdict resolves; reevaluationDispatched records
-	// that the one fresh-claim turn has already been published. Keyed by goal
-	// id and protected by mu with the rest of this process-local trigger state.
+	// subtree. Four values, all process-local and guarded by mu:
+	//   - waiting_descendants: a met claim is pending; the Judge must not run
+	//     until the subtree is quiet, AND launchSteered refuses new child
+	//     launches against this steering session until the claim resolves.
+	//   - adjudicating: a Judge call is in flight against the met claim; new
+	//     launches are still refused until the verdict commits (Waiting
+	//     would re-open the launch race the fence exists to prevent — the
+	//     gap the gate-round-1 finding 2 fix closes by keying on both
+	//     WaitingDescendants and Adjudicating here).
+	//   - reevaluation_dispatched: the one fresh-claim turn has already been
+	//     published to the parent's own session (the keeper's deterministic
+	//     re-evaluation prompt). Reserved so a second claim or restart does
+	//     not double-dispatch.
+	//   - missing entry / goalCompletionNone: no fence; ordinary launches
+	//     are allowed.
+	// All four phase writes go through goalTransitionCompletionPhase (one
+	// critical section; type-design finding 1).
 	completionPhase map[string]goalCompletionPhase
 
-	// steeredCompletionWrites marks a child between upward delivery and its
-	// terminal lifecycle write. The release branch otherwise treats a
-	// running record with no registered turn as idle; this marker preserves
-	// the delivery-before-terminal window as genuinely active work.
+	// steeredCompletionWrites marks a steered child whose terminal lifecycle
+	// write is in progress — between the Deliver (upward delivery) and the
+	// Mutate (terminal state write) inside completeSteeredTurnDurably. The
+	// mark is set right after rec.Terminal() is checked so the release
+	// branch in some paths treats a running record with no registered turn
+	// as idle; this marker preserves the delivery-before-terminal window as
+	// genuinely active work. Cleared via defer at function return, so the
+	// mark spans the WHOLE completeSteeredTurnDurably call — not just the
+	// window between Deliver and Mutate.
 	steeredCompletionWrites map[string]bool
 
 	// claimScanWatermarks is JUDGE-FR-092's own per-goal-id boundary: the
@@ -918,6 +936,14 @@ func (al *AgentLoop) runGoalAdjudication(
 	// changed while the Judge ran. The two conditions are disjoint.
 	if cur, gerr := aa.ag.gstore.Get(aa.ag.rec.GoalID); gerr == nil && cur != nil && !goal.IsActiveState(cur.State) {
 		aa.ag.al.goalMarkIdleSettling(aa.ag.rec.GoalID, false)
+		// Q2=B gate round 1 finding 1 (second half): the goal ended while the
+		// Judge was running — clear any leftover completion phase so a
+		// residual Adjudicating/Waiting marker does not survive on a record
+		// that is no longer ACTIVE. clearGoalWithOutcome (the terminal
+		// writer the /goal clear and pair-end paths use) already runs its
+		// own state reset, but a judge that lost the race to a restate or
+		// a goal-end needs to drop its process-local phase too.
+		aa.ag.al.goalClearCompletionPhase(aa.ag.rec.GoalID)
 		logger.InfoCF("agent", "goal: adjudication outcome discarded — the goal ended while the Judge was running",
 			map[string]any{"component": "goal", "session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID,
 				"state": string(cur.State), "unavailable": jr.Unavailable})
@@ -959,6 +985,15 @@ func (al *AgentLoop) runGoalAdjudication(
 	// existing handling below, which already copes with it.
 	if cur, gerr := aa.ag.gstore.Get(aa.ag.rec.GoalID); gerr == nil && cur != nil && goal.IsActiveState(cur.State) &&
 		strings.TrimSpace(cur.Prompt) != strings.TrimSpace(aa.ag.rec.Prompt) {
+		// Q2=B gate round 1 finding 1 (second half): the restated goal is
+		// now under a new definition — clear the Adjudicating phase so the
+		// revised goal is not wedged at Adjudicating forever, AND so its
+		// completion fence is gone for any descendants the new goal still
+		// needs to launch. goalClearCompletionPhaseFromRestate has already
+		// cleared this from the applyGoalCommandPrompt path; this branch
+		// needs the same belt-and-braces because the restate may have
+		// landed AFTER this adjudicator already promoted the phase.
+		aa.ag.al.goalClearCompletionPhaseFromRestate(aa.ag.rec.GoalID)
 		logger.InfoCF("agent", "goal: verdict discarded — the goal was restated while the Judge was running, so it judged a superseded definition",
 			map[string]any{"component": "goal", "session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "attempt": aa.ag.attempt})
 		aa.ag.al.emitGoalStatusFrame(aa.ag.sessionID, cur.GoalID, cur.Prompt, cur.Round, cur.MaxRounds, cur.LatestReason, goalPillActive)

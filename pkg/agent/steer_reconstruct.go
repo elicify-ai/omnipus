@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -116,14 +117,37 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		UserInitiated: wake == nil,
 	}
 	if wake == nil {
-		entries, readErr := store.ReadTranscript(rec.SessionID)
-		if readErr != nil {
-			return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
-		}
-		for i := len(entries) - 1; i >= 0; i-- {
-			if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
-				opts.UserMessage = entries[i].Content
-				break
+		// Q2=B gate round 1 silent-failure-hunter finding 1: a queued
+		// dispatch's wake payload was stamped onto rec.PendingUserMessage
+		// by commitSteeredDispatchStateWithPendingMessage before the
+		// LifecycleQueued write. Use it as the turn's UserMessage so the
+		// re-evaluation prompt (or any other queued wake content) reaches
+		// the agent instead of the ORIGINAL launch instruction looked up
+		// from the transcript. Cleared here so a subsequent wake on the
+		// SAME record never replays it.
+		if rec.PendingUserMessage != "" {
+			opts.UserMessage = rec.PendingUserMessage
+			rec.PendingUserMessage = ""
+			if persistErr := al.GetSessionLifecycleStore().Mutate(rec.SessionID, func(r *session.LifecycleRecord) error {
+				if r == nil {
+					return nil
+				}
+				r.PendingUserMessage = ""
+				return nil
+			}); persistErr != nil {
+				logger.WarnCF("agent", "steer: could not clear pending wake message after consumption (a duplicate promotion would replay the same content)",
+					map[string]any{"session_id": rec.SessionID, "error": persistErr.Error()})
+			}
+		} else {
+			entries, readErr := store.ReadTranscript(rec.SessionID)
+			if readErr != nil {
+				return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
+			}
+			for i := len(entries) - 1; i >= 0; i-- {
+				if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
+					opts.UserMessage = entries[i].Content
+					break
+				}
 			}
 		}
 	}

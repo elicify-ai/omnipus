@@ -193,6 +193,16 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 				if pe := GetPlanEngine(gl.al); pe != nil {
 					gl.al.cancelGoalVerifierIfAny(pe, gl.sessionID)
 				}
+				// Q2=B gate round 1 finding 1: a successful restate must
+				// invalidate the completion fence so the REVISED goal can
+				// launch needed descendants immediately. Without this the
+				// pre-restate descendants' state continues to fence the new
+				// goal revision until they terminate, and a verdict
+				// discarded mid-adjudication would wedge the phase at
+				// Adjudicating forever. The phase is process-local and
+				// rebuilt by the keeper from durable evidence (a fresh met
+				// claim) when the new subtree is genuinely quiet.
+				gl.al.goalClearCompletionPhaseFromRestate(activeGoal.GoalID)
 				// No goal-status frame here: a prose restate emits none (every
 				// frame reads PlanEngine.Admit for its snapshot, and a restate
 				// must not re-Admit — TestGoalActivation_InstantProsePath). The
@@ -503,6 +513,12 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 			map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
 		return "Could not update the goal (internal error persisting the goal record)."
 	}
+	// Q2=B gate round 1 finding 1: the marker-path restate replaces the
+	// goal's definition/criteria/dod wholesale, exactly like a prose
+	// restate — the same completion-phase invalidation applies. See
+	// goalClearCompletionPhaseFromRestate's doc comment for why clearing
+	// here is safe (process-local phase rebuilt from durable evidence).
+	al.goalClearCompletionPhaseFromRestate(rec.GoalID)
 	// review-round-1 finding #8: route the marker-path restate frame through
 	// the SAME post-write path set_goal(mode:update) uses (afterGoalRecordWrite)
 	// instead of the bare emitGoalStatusFrame — the restated record carries a

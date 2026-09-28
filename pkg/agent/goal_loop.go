@@ -869,7 +869,18 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// tool or marker. Under D13 the Judge is dispatched AFTER this
 		// turn's own answer has been delivered, off the critical path
 		// (runAgentLoop, loop.go) — this function no longer invokes the
-		// Judge itself; it records the DEFERRED work below and returns.
+		// Judge itself.
+		//
+		// Q2 B (the deferred-work arm): a met claim may not schedule
+		// adjudication immediately if the delegated subtree is not quiet
+		// (waiting_descendants install below). On every early return inside
+		// this branch — no lifecycle store, the install-and-promote critical
+		// section refused (second-claim race), subtree quietness check
+		// failed or unreadable, the promote-to-Adjudicating CAS refused
+		// (concurrent terminal writer) — no goalDeferredAdjudication is
+		// recorded. Only the happy path that wins the install AND the
+		// quietness check AND the promote CAS sets the work struct, and it
+		// is the ONLY path that records deferred work.
 		//
 		// JUDGE-FR-101 (open item 3): a second claim arriving while an
 		// adjudication is already in flight for this goal MUST be refused,
@@ -938,8 +949,29 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		}
 		publicationMu := lifecycle.Lock(gl.sessionID)
 		publicationMu.Lock()
-		gl.al.goalSetCompletionPhase(gl.rec.GoalID, goalCompletionWaitingDescendants)
+		// Q2=B gate round 1 type-design finding 1: install-and-promote must
+		// be one critical section. The previous shape called
+		// goalSetCompletionPhase(waiting) then goalPromoteCompletionToAdjudicating
+		// across two lock acquisitions, which let a racing second claim
+		// downgrade an Adjudicating phase back to Waiting — its CAS then
+		// succeeded, the second claim scheduled its own adjudication, and
+		// two Judge calls landed for one goal. The install below uses the
+		// ONE transition primitive (goalInstallWaitingCompletion) and
+		// refuses to downgrade Adjudicating/ReevaluationDispatched; on
+		// refusal, the second claim exits silently so the first claim's
+		// dispatch is the only Judge call.
+		installed := gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
 		publicationMu.Unlock()
+		if !installed {
+			// Either the phase was already Adjudicating (a Judge call is in
+			// flight — this is the second-claim race the type design
+			// finding names) or it was ReevaluationDispatched (a queued
+			// re-evaluation already scheduled the fresh-claim turn).
+			// Either way: the first claim already owns the round; this
+			// second claim returns without recording deferred work. The
+			// stale claim must never reach the Judge as well.
+			return
+		}
 		blocked, blockErr := gl.al.hasRunningOrQueuedDescendant(gl.sessionID)
 		if blockErr != nil || blocked {
 			if blockErr != nil {
