@@ -24,7 +24,7 @@
 //
 // Deep-linking (ADR-067 FR-012, US-3 AS-2/3/4/5): "which workspace, which
 // file" is expressible as an ADDRESS — see `LibraryAddress` below. A caller
-// that can put that address in a URL (the /library pop-out route) passes it
+// that can put that address in a URL (the standalone /library route) passes it
 // in and receives every change back; a caller that cannot (the docked
 // panel) passes neither and this component keeps the same state internally,
 // exactly as before. The addressed mode is deliberately CONTROLLED rather
@@ -196,7 +196,7 @@ export interface LibraryExplorerProps {
    * 'stacked' (default, the docked <aside>): preview BELOW the list. The aside
    * is a narrow column, so a side-by-side split there would leave neither half
    * usable.
-   * 'split' (the fullscreen /#/library tab): preview to the RIGHT, taking 60%
+   * 'split' (a standalone or shell full-screen tab): preview to the RIGHT, taking 60%
    * — a full-width window has the room, and an editor is far more useful tall
    * than wide.
    */
@@ -262,7 +262,7 @@ export function LibraryExplorer({
   // there rather than here). Both Library entry points always keep a
   // LibraryExplorer mounted whenever a navigation guard could fire, so
   // hosting the dialog here (rendered below, alongside the other dialogs)
-  // covers the docked panel AND the /library pop-out route's useBlocker.
+  // covers the docked panel AND the standalone /library route's useBlocker.
   const discardDialogOpen = useSyncExternalStore(subscribeDiscardConfirmDialog, getDiscardConfirmDialogOpen)
   useEffect(() => discardConfirmDialogHostUnmounted, [])
 

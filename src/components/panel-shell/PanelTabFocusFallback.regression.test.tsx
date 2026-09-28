@@ -41,7 +41,7 @@ import { BrowserLivePanel } from '@/components/browser/BrowserLivePanel'
 import { LibraryPanel } from '@/components/library/LibraryPanel'
 import { PanelTabPresenceBridge } from './PanelTabPresenceBridge'
 
-let registeredExpand: (() => boolean) | null = null
+let registeredExpandContext: (() => PanelContentProps['context']) | null = null
 let focusResult: 'absent' | 'failed' = 'absent'
 let existingResult: 'affordance' | null = 'affordance'
 
@@ -60,23 +60,18 @@ function ToastFixture() {
 function shellProps(context: PanelContentProps['context']): PanelContentProps {
   return {
     context,
+    presentation: 'docked',
     close: () => useUiStore.getState().closePanel(),
     expand: () => {},
-    registerExpand: (action) => {
-      registeredExpand = action
+    registerExpandContext: (getter) => {
+      registeredExpandContext = getter
     },
     onWidthSettle: () => {},
   }
 }
 
-function invokeExpandAndClose(): void {
-  act(() => {
-    if (registeredExpand?.()) useUiStore.getState().closePanel()
-  })
-}
-
 beforeEach(() => {
-  registeredExpand = null
+  registeredExpandContext = null
   focusResult = 'absent'
   existingResult = 'affordance'
   useUiStore.setState({ activePanel: null, toasts: [] })
@@ -129,7 +124,7 @@ describe('SP-18 focus fallback', () => {
     expect(screen.queryByRole('button', { name: 'Open here' })).not.toBeInTheDocument()
   })
 
-  it('Library Expand restores its dock only after the other tab is absent', async () => {
+  it('Library supplies its current identity context to the generic shell', async () => {
     act(() => {
       useUiStore.getState().openPanel('library', { workspaceId: 'ws-1' })
     })
@@ -140,19 +135,11 @@ describe('SP-18 focus fallback', () => {
         <ToastFixture />
       </>,
     )
-    await waitFor(() => expect(registeredExpand).not.toBeNull())
-    invokeExpandAndClose()
-    expect(useUiStore.getState().activePanel).toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Switch' }))
-
-    expect(useUiStore.getState().activePanel).toEqual({
-      id: 'library',
-      context: { workspaceId: 'ws-1' },
-    })
+    await waitFor(() => expect(registeredExpandContext).not.toBeNull())
+    expect(registeredExpandContext?.()).toEqual({ workspaceId: 'ws-1' })
   })
 
-  it('Browser Expand restores its dock only after the other tab is absent', async () => {
+  it('Browser supplies its owner context to the generic shell', async () => {
     const context = { sessionId: 'session-1', agentId: 'agent-1' }
     act(() => {
       useUiStore.getState().openPanel('browser', context)
@@ -164,15 +151,7 @@ describe('SP-18 focus fallback', () => {
         <ToastFixture />
       </>,
     )
-    await waitFor(() => expect(registeredExpand).not.toBeNull())
-    invokeExpandAndClose()
-    expect(useUiStore.getState().activePanel).toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Switch' }))
-
-    expect(useUiStore.getState().activePanel).toEqual({
-      id: 'browser',
-      context,
-    })
+    await waitFor(() => expect(registeredExpandContext).not.toBeNull())
+    expect(registeredExpandContext?.()).toEqual(context)
   })
 })

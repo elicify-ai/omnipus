@@ -1,9 +1,7 @@
-// /browser-live — fullscreen pop-out target for the live interactive browser
-// panel (ADR-038 D5). Opened via `window.open('/browser-live?session=..&agent=..')`
-// from BrowserLivePanel.tsx's "Pop out" button. Renders the same shared
-// BrowserLiveView core used by the Sheet overlay, filling the AppShell
-// content area (no separate chrome of its own beyond BrowserLiveView's
-// header) — the frame is a live WebRTC video stream (ADR-047), not an
+// /browser-live — the retained standalone live-browser page for direct
+// entry points. Side-panel Expand is owned by the chrome-less /panel/browser
+// route; this page remains under AppShell. The frame is a live WebRTC video
+// stream (ADR-047), not an
 // embedded copy of the target site, so this stays a main-origin route with
 // no isolated preview origin needed (see ADR-038 "Security" under D6).
 //

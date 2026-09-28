@@ -28,6 +28,7 @@ describe('policy-driven pop-out workspace following', () => {
       lifecycle.registerPanelPopout({
         popoutId: 'mail-popout-1',
         identity: { panelId: 'mail', workspaceId: 'workspace-a' },
+        context: { workspaceId: 'workspace-a' },
         handle: handle as unknown as Window,
         onClosed: vi.fn(),
       })
@@ -60,6 +61,7 @@ describe('policy-driven pop-out workspace following', () => {
       lifecycle.registerPanelPopout({
         popoutId: 'library-popout-app',
         identity: { panelId: 'library' },
+        context: {},
         handle: handle as unknown as Window,
         onClosed,
       })
@@ -73,7 +75,7 @@ describe('policy-driven pop-out workspace following', () => {
       expect(onClosed).toHaveBeenCalledWith({
         panelId: 'library',
         workspaceId: 'workspace-b',
-      })
+      }, { workspaceId: 'workspace-b' })
     } finally {
       stopOwner()
       vi.useRealTimers()

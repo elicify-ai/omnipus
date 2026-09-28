@@ -45,7 +45,7 @@ const library: PanelDefinition = {
   id: 'library',
   title: 'Library',
   content: probe,
-  expandTarget: () => '/library',
+  fullScreen: { toSearch: () => ({}), fromSearch: () => ({}) },
 }
 
 function urlsOf(spy: { mock: { calls: unknown[][] } }): string[] {
@@ -56,7 +56,7 @@ afterEach(() => {
   cleanup()
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })

@@ -11,6 +11,17 @@ import type { PanelContentProps, PanelDefinition } from '../types'
 import { BrowserPanelPlaceholder } from './BrowserPanelPlaceholder'
 import { CalendarPanelStandin, MailPanelStandin, TasksPanelStandin, TeamPanelStandin } from './standins'
 
+const workspaceFullScreen: PanelDefinition['fullScreen'] = {
+  toSearch: ({ workspaceId }) => {
+    const search: Record<string, string> = {}
+    if (workspaceId) search.workspace = workspaceId
+    return search
+  },
+  fromSearch: (search) => typeof search.workspace === 'string'
+    ? { workspaceId: search.workspace }
+    : {},
+}
+
 function LibraryPanelContent({ context }: PanelContentProps) {
   return <LibraryExplorer initialWorkspaceId={context.workspaceId} className="h-full" />
 }
@@ -24,7 +35,7 @@ export const DEMO_PANELS: PanelDefinition[] = [
     id: 'library',
     title: 'Library',
     content: LibraryPanelContent,
-    expandTarget: (context) => `/library?workspace=${context.workspaceId ?? ''}`,
+    fullScreen: workspaceFullScreen,
     // CRIT-001: the existing unsaved-edits guard, reused — the shell awaits
     // it before touching store/URL/content.
     beforeLeave: confirmDiscardLibraryEdits,
@@ -33,30 +44,42 @@ export const DEMO_PANELS: PanelDefinition[] = [
     id: 'browser',
     title: 'Browser',
     content: BrowserPanelContent,
-    expandTarget: () => '/browser',
+    fullScreen: {
+      toSearch: ({ sessionId, agentId }) => {
+        const search: Record<string, string> = {}
+        if (sessionId && agentId) {
+          search.session = sessionId
+          search.agent = agentId
+        }
+        return search
+      },
+      fromSearch: (search) => typeof search.session === 'string' && typeof search.agent === 'string'
+        ? { sessionId: search.session, agentId: search.agent }
+        : null,
+    },
   },
   {
     id: 'mail',
     title: 'Mail',
     content: MailPanelStandin,
-    expandTarget: () => '/mail',
+    fullScreen: workspaceFullScreen,
   },
   {
     id: 'tasks',
     title: 'Tasks',
     content: TasksPanelStandin,
-    expandTarget: () => '/tasks',
+    fullScreen: workspaceFullScreen,
   },
   {
     id: 'team',
     title: 'Team',
     content: TeamPanelStandin,
-    expandTarget: () => '/team',
+    fullScreen: workspaceFullScreen,
   },
   {
     id: 'calendar',
     title: 'Calendar',
     content: CalendarPanelStandin,
-    expandTarget: () => '/calendar',
+    fullScreen: workspaceFullScreen,
   },
 ]

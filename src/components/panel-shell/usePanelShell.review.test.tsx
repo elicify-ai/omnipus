@@ -12,14 +12,14 @@ const library: PanelDefinition = {
   id: 'library',
   title: 'Library',
   content: Probe,
-  expandTarget: () => '/library',
+  fullScreen: { toSearch: () => ({}), fromSearch: () => ({}) },
 }
 
 beforeEach(() => {
   localStorage.clear()
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })
@@ -110,7 +110,10 @@ describe('usePanelShell review regressions', () => {
     })
 
     expect(outcome).toBe('error')
-    expect(error).toHaveBeenCalledWith('[side-panel] Expand failed', expect.any(Error))
+    expect(error).toHaveBeenCalledWith(
+      '[side-panel] Expand failed while opening a tab',
+      expect.any(Error),
+    )
     expect(usePanelShellStore.getState().activePanel?.id).toBe('library')
   })
 })

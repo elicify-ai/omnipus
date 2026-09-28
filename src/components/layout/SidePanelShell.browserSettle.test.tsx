@@ -137,7 +137,10 @@ function makeBrowserDef(): PanelDefinition {
     id: 'browser',
     title: 'Browser',
     content: browserProbe,
-    expandTarget: () => '/browser-live',
+    fullScreen: {
+      toSearch: () => ({ session: 'session-1', agent: 'agent-1' }),
+      fromSearch: () => ({ sessionId: 'session-1', agentId: 'agent-1' }),
+    },
   }
 }
 
@@ -157,7 +160,7 @@ function openDocked() {
 function resetStore() {
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })

@@ -1,35 +1,26 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router'
-import type { PanelContext, PanelId } from './types'
+import type { PanelContentProps, PanelContext, PanelId } from './types'
 
-const { libraryProps, browserProps } = vi.hoisted(() => ({
-  libraryProps: vi.fn(),
-  browserProps: vi.fn(),
+const { renderedPanels } = vi.hoisted(() => ({
+  renderedPanels: vi.fn<(panelId: PanelId, props: PanelContentProps) => void>(),
 }))
 
-vi.mock('@/components/layout/AppShell', async () => {
-  const ReactModule = await vi.importActual<typeof import('react')>('react')
-  const { Outlet } = await vi.importActual<typeof import('@tanstack/react-router')>(
-    '@tanstack/react-router',
-  )
-  return { AppShell: () => ReactModule.createElement(Outlet) }
-})
-
-vi.mock('@/components/chat/ChatScreen', () => ({
-  ChatScreen: () => <div data-testid="chat-screen" />,
+vi.mock('@/components/layout/AppShell', () => ({
+  AppShell: () => <div data-testid="app-shell" />,
 }))
 
-vi.mock('@/components/library/LibraryExplorer', () => ({
-  LibraryExplorer: (props: unknown) => {
-    libraryProps(props)
+vi.mock('@/components/library/LibraryPanel', () => ({
+  LibraryPanel: ({ shellProps }: { shellProps: PanelContentProps }) => {
+    renderedPanels('library', shellProps)
     return <div data-testid="fullscreen-library" />
   },
 }))
 
-vi.mock('@/components/browser/BrowserLiveView', () => ({
-  BrowserLiveView: (props: unknown) => {
-    browserProps(props)
+vi.mock('@/components/browser/BrowserLivePanel', () => ({
+  BrowserLivePanel: ({ shellProps }: { shellProps: PanelContentProps }) => {
+    renderedPanels('browser', shellProps)
     return <div data-testid="fullscreen-browser" />
   },
 }))
@@ -47,43 +38,25 @@ vi.mock('@/lib/panelTabPresence', async (importOriginal) => ({
   announcePanelTabPresence: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
 }))
 
-vi.mock('@/lib/libraryHandoff', () => ({
-  announceLibraryPopoutClosed: vi.fn(),
-  announceLibraryWorkspaceChanged: vi.fn(),
-}))
-
 import { panels } from './registry'
 import { routeTree } from '@/routeTree.gen'
 
 type RouteExpectation = {
   context: PanelContext
-  routeId: string
   surfaceTestId: string
-  assertContext: () => void
 }
 
 const routeExpectations = {
   library: {
-    context: { workspaceId: 'workspace-current' },
-    routeId: '/_app/library',
-    surfaceTestId: 'fullscreen-library',
-    assertContext: () => {
-      expect(libraryProps).toHaveBeenCalledWith(
-        expect.objectContaining({
-          address: expect.objectContaining({ workspaceId: 'workspace-current' }),
-        }),
-      )
+    context: {
+      workspaceId: 'workspace-current',
+      path: 'Projects/Current.md',
     },
+    surfaceTestId: 'fullscreen-library',
   },
   browser: {
     context: { sessionId: 'session-current', agentId: 'agent-current' },
-    routeId: '/_app/browser-live',
     surfaceTestId: 'fullscreen-browser',
-    assertContext: () => {
-      expect(browserProps).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'session-current', agentId: 'agent-current' }),
-      )
-    },
   },
 } satisfies Partial<Record<PanelId, RouteExpectation>>
 
@@ -93,8 +66,20 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('SP-38 registered panel expansion routes', () => {
-  it('opens every registered panel on its own full-screen route without mounting Chat', async () => {
+describe('SP-38 shell-owned full-screen routes', () => {
+  it('round-trips every registered panel context through its search codec', () => {
+    for (const definition of panels) {
+      const expected = routeExpectations[definition.id as keyof typeof routeExpectations]
+      expect(expected, `${definition.id} needs a full-screen route expectation`).toBeDefined()
+      if (!expected) continue
+
+      expect(definition.fullScreen.fromSearch(definition.fullScreen.toSearch(expected.context))).toEqual(
+        expected.context,
+      )
+    }
+  })
+
+  it('renders every registered panel at #/panel/<id> without application chrome', async () => {
     vi.stubGlobal('scrollTo', vi.fn())
 
     for (const definition of panels) {
@@ -102,19 +87,45 @@ describe('SP-38 registered panel expansion routes', () => {
       expect(expected, `${definition.id} needs a full-screen route expectation`).toBeDefined()
       if (!expected) continue
 
-      const target = new URL(definition.expandTarget(expected.context), 'http://localhost')
-      expect(target.hash, `${definition.id} must target the hash router`).toMatch(/^#\//)
-      const history = createMemoryHistory({ initialEntries: [target.hash.slice(1)] })
+      const search = new URLSearchParams(definition.fullScreen.toSearch(expected.context))
+      search.set('popout', `popout-${definition.id}`)
+      const href = `#/panel/${definition.id}?${search.toString()}`
+      expect(href).toMatch(new RegExp(`^#/panel/${definition.id}\\?`))
+
+      const history = createMemoryHistory({ initialEntries: [href.slice(1)] })
       const router = createRouter({ routeTree, history })
       const mounted = render(<RouterProvider router={router} />)
 
       await waitFor(() => expect(router.state.status).toBe('idle'), { timeout: 5_000 })
-      expect(router.state.matches.map((match) => match.routeId)).toContain(expected.routeId)
-      expect(screen.getByTestId(expected.surfaceTestId)).toBeInTheDocument()
-      expect(screen.queryByTestId('chat-screen')).not.toBeInTheDocument()
-      expected.assertContext()
+      expect(router.state.matches.map((match) => match.routeId)).toContain(
+        '/_fullscreen/panel/$panelId',
+      )
+      expect(await screen.findByTestId(expected.surfaceTestId)).toBeInTheDocument()
+      expect(renderedPanels).toHaveBeenCalledWith(
+        definition.id,
+        expect.objectContaining({
+          context: expected.context,
+          presentation: 'fullscreen',
+        }),
+      )
+      expect(screen.queryByTestId('app-shell')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('workspace-top-bar')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('workspace-header-menu')).not.toBeInTheDocument()
+      expect(screen.queryByRole('complementary')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('side-panel-header')).not.toBeInTheDocument()
 
       mounted.unmount()
+      renderedPanels.mockClear()
     }
+  })
+
+  it('shows a visible recovery link for an unknown panel instead of a blank page', async () => {
+    const history = createMemoryHistory({ initialEntries: ['/panel/unknown?popout=unknown-1'] })
+    const router = createRouter({ routeTree, history })
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('heading', { name: /can't open this panel/i })).toBeVisible()
+    expect(screen.getByRole('link', { name: 'Back to Omnipus' })).toBeVisible()
+    expect(screen.queryByTestId('app-shell')).not.toBeInTheDocument()
   })
 })

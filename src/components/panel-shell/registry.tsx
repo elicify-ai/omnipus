@@ -5,6 +5,10 @@ import {
 } from '@/components/library/preview/unsavedGuard'
 import type { PanelContentProps, PanelDefinition, PanelId } from './types'
 
+function optionalSearchString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
 const LibraryPanel = lazy(async () => {
   const module = await import('@/components/library/LibraryPanel')
   return { default: module.LibraryPanel }
@@ -28,8 +32,21 @@ export const panels: readonly PanelDefinition[] = [
     id: 'library',
     title: 'Library',
     content: LibraryPanelContent,
-    expandTarget: ({ workspaceId }) =>
-      `/#/library${workspaceId ? `?workspace=${encodeURIComponent(workspaceId)}` : ''}`,
+    fullScreen: {
+      toSearch: ({ workspaceId, path, folder }) => ({
+        ...(workspaceId ? { workspace: workspaceId } : {}),
+        ...(path ? { path } : folder ? { folder } : {}),
+      }),
+      fromSearch: (search) => {
+        const workspaceId = optionalSearchString(search.workspace)
+        const path = optionalSearchString(search.path)
+        const folder = path === undefined ? optionalSearchString(search.folder) : undefined
+        return {
+          ...(workspaceId ? { workspaceId } : {}),
+          ...(path ? { path } : folder ? { folder } : {}),
+        }
+      },
+    },
     beforeLeave: confirmDiscardLibraryEdits,
     beforeLeaveRequired: isLibraryEditorDirty,
   },
@@ -37,11 +54,16 @@ export const panels: readonly PanelDefinition[] = [
     id: 'browser',
     title: 'Browser',
     content: BrowserPanelContent,
-    expandTarget: ({ sessionId, agentId }) => {
-      const search = new URLSearchParams()
-      if (sessionId) search.set('session', sessionId)
-      if (agentId) search.set('agent', agentId)
-      return `/#/browser-live${search.size > 0 ? `?${search.toString()}` : ''}`
+    fullScreen: {
+      toSearch: ({ sessionId, agentId }) => ({
+        ...(sessionId ? { session: sessionId } : {}),
+        ...(agentId ? { agent: agentId } : {}),
+      }),
+      fromSearch: (search) => {
+        const sessionId = optionalSearchString(search.session)
+        const agentId = optionalSearchString(search.agent)
+        return sessionId && agentId ? { sessionId, agentId } : null
+      },
     },
   },
 ]

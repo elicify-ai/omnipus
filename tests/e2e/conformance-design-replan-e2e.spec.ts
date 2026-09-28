@@ -122,13 +122,19 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
 
   // 900s, not 600s: Step 1's own hold budget below was widened from 120s to
   // 300s (see that constant's comment for the live-shard evidence), and
-  // Step 2's observe loop already budgets a further 420s after Step 1
-  // returns — 300s + 420s = 720s of INTENTIONAL polling alone, before setup
-  // (agent/workspace/plan creation) or teardown assertions run at all. The
+  // Step 2's observe loop already budgeted a further 420s after Step 1
+  // returned — 300s + 420s = 720s of INTENTIONAL polling alone, before setup
+  // (agent/workspace/plan creation) or teardown assertions ran at all. The
   // old 600s ceiling was already tighter than the 720s of polling it was
   // asked to contain; it happened to work only when round-1 finished fast
   // enough that Step 1 returned in a few seconds, not close to its deadline.
-  test.setTimeout(900_000)
+  // WIDENED AGAIN 900s -> 1500s (2026-09-28): Step 1 now budgets 600s after
+  // its 2026-09-17 widening, and Step 2 now budgets 600s after the measured
+  // live-shard exhaustion documented beside observeDeadline. Their combined
+  // 1200s intentional polling budget therefore needs more than the stale 900s
+  // ceiling; 1500s preserves 300s for setup, evidence collection, assertions,
+  // and teardown when both polling stages approach their full budgets.
+  test.setTimeout(1_500_000)
   await startFreshChatWithJim(page)
 
   // Setup: per-test Main agent (chat-target owner + member assignee) in
@@ -353,7 +359,18 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   const allObservedMemberIds = new Set<string>(Object.values(memberIds))
   let finalPlanState = ''
   let finalPlanPhase = ''
-  const observeDeadline = Date.now() + 420_000
+  // BUDGET, widened from 420s to 600s (CI run 36407879088, job 108884271025,
+  // 2026-09-28): attempt 1 ran for 516s and exhausted this full observation
+  // window with the plan still legitimately running/awaiting_supervision and
+  // zero committed plan_correct calls; retry 1 passed with the same code in
+  // 510s. Setup plus Step 1 took only ~96s in both attempts, so Step 2's 420s
+  // ceiling — not the outer timeout or Step 1 — was the measured bottleneck.
+  // The e2e plan runs LLM shards 4-wide by default (E2E_MAX_PARALLEL_LLM), and
+  // all share the same OpenRouter capacity, so the same external LLM/CPU
+  // contention that required Step 1's 300s -> 600s widening applies here too.
+  // 600s adds 43% margin over the exhausted window and matches Step 1's
+  // load-adjusted budget without weakening any correction assertion below.
+  const observeDeadline = Date.now() + 600_000
   const sampleWindowStart = Date.now()
   while (Date.now() < observeDeadline) {
     const [poll, members] = await Promise.all([

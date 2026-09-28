@@ -446,3 +446,150 @@ func TestGoalChildCompletion947_CancelEndsSessionOwnedGoal(t *testing.T) {
 			g.TerminalReason)
 	}
 }
+
+// casRejectionRegistrySpy is the minimal VerifierSessionPublisher double
+// whose Register ALWAYS loses the CAS (ErrVerifierSessionHeld). It does NOT
+// implement the richer VerifierSessionRegistry interface, so
+// runVerifierAdjudication's Lookup pre-check is skipped and the back-off is
+// exercised through the atomic Register rejection itself — the residual
+// check-then-act arm the pre-check cannot close.
+type casRejectionRegistrySpy struct{}
+
+func (s *casRejectionRegistrySpy) Register(unit, verifierSessionID string) error {
+	return ErrVerifierSessionHeld
+}
+
+func (s *casRejectionRegistrySpy) Unregister(unit string) {}
+
+// TestGoalChildCompletion947_ConcurrencyBackoffNeverFailsChild is #984's
+// regression test (the release red on TestConcurrentDeferredClaims_
+// OneJudge_corrMAJOR3): when runGoalAdjudication's Unavailable outcome is
+// the verifier registry's "concurrent adjudication in flight" BACK-OFF
+// (corr-MAJOR-3/G-1) — not a judge outage — the deferred re-drive must stop
+// silently: no retry (the in-flight adjudication resolves the goal), no
+// judge_unavailable pill, and critically NO completeSteeredTurnAfterGoal
+// failure. Pre-fix, the re-drive read every Unavailable as an outage: the
+// losing adjudication waited out the backoff, invoked the Judge a SECOND
+// time once the winner unregistered (violating G-1 exactly-once), and — the
+// false failure this test pins — after goalJudgeRedriveAttempts it failed
+// the child terminal `failed` with "judge unavailable" and sent the parent
+// a wake-eligible error, while the goal record stayed active with the
+// winner's own verdict unmet.
+//
+// Deterministic forcing (no sleeps as mechanism, no goroutine race): each
+// subtest pre-arms the registry so the loser's FIRST attempt is rejected —
+// the Lookup pre-check arm via a held live entry, the CAS Register arm via
+// a spy that always loses the compare-and-set — and judgeSleepFn is
+// substituted with an erroring stub so a regressed re-drive retries
+// immediately instead of waiting out the real 5s/15s/30s schedule. The
+// judge provider counts calls: the loser must never reach it (0 calls),
+// and the child must still be non-terminal `running` with no wake-eligible
+// parent error and an ACTIVE goal record afterwards.
+func TestGoalChildCompletion947_ConcurrencyBackoffNeverFailsChild(t *testing.T) {
+	origSleep := judgeSleepFn
+	t.Cleanup(func() { judgeSleepFn = origSleep })
+	judgeSleepFn = func(context.Context, time.Duration) error {
+		return errors.New("test: no wait between re-drive attempts")
+	}
+
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	wireSteerCompletionDeps(t, al)
+
+	// Unmet verdict: exactly the winner outcome that kept the goal record
+	// active pre-fix, letting the loser's retries continue into the false
+	// child failure. The provider also counts calls — the back-off must stop
+	// the re-drive before the loser ever reaches the Judge (0 calls).
+	judge := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{Content: `{"met": false, "criteria": []}`}, nil
+	}}
+	judgeInst.Provider = judge
+
+	launch := func(t *testing.T, callID string) (*session.LifecycleRecord, string) {
+		t.Helper()
+		parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
+		if err != nil {
+			t.Fatalf("NewSession(parent): %v", err)
+		}
+		rec := launchGoalBearingChild947(t, al, parentMeta.ID, callID)
+		return rec, parentMeta.ID
+	}
+
+	driveAndAssert := func(t *testing.T, rec *session.LifecycleRecord, parentID string) {
+		t.Helper()
+		ts, err := al.reconstructSteeredTurn(rec, nil)
+		if err != nil {
+			t.Fatalf("reconstructSteeredTurn: %v", err)
+		}
+		done := make(chan string, 1)
+		oldDone := goalDeferredAdjudicationDoneFn
+		goalDeferredAdjudicationDoneFn = func(sessionID string) { done <- sessionID }
+		t.Cleanup(func() { goalDeferredAdjudicationDoneFn = oldDone })
+
+		result := turnResult{finalContent: "[goal:evidence] verified the work\nGOAL_STATUS: met"}
+		al.finishSteeredGoalTurn(ts, rec, &result, nil)
+		select {
+		case got := <-done:
+			if got != rec.SessionID {
+				t.Fatalf("adjudicated session = %q, want %q", got, rec.SessionID)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for the deferred adjudication's re-drive to stop")
+		}
+
+		if calls := judge.callCount(); calls != 0 {
+			t.Errorf("judge provider calls = %d, want 0 — a concurrency back-off is a back-off, not an "+
+				"outage: the re-drive must stop instead of re-invoking the Judge", calls)
+		}
+		got, err := lifecycle.Load(rec.SessionID)
+		if err != nil {
+			t.Fatalf("Load(child after back-off): %v", err)
+		}
+		if got.State != session.LifecycleRunning || got.Terminal() {
+			t.Errorf("child state after concurrency back-off = %q (terminal=%v), want still running — "+
+				"a back-off must never fail the child with \"judge unavailable\"", got.State, got.Terminal())
+		}
+		messages, _, _, err := inbox.Drain(parentID, rec.SessionID, "", 10)
+		if err != nil {
+			t.Fatalf("Drain(parent): %v", err)
+		}
+		for _, msg := range messages {
+			class, cerr := session.ClassifySessionMessage(msg)
+			if cerr != nil {
+				t.Fatalf("ClassifySessionMessage: %v", cerr)
+			}
+			if class.Kind == "error" && class.WakeEligible && class.Fatal {
+				t.Errorf("wake-eligible fatal error reached the parent inbox on a concurrency back-off — " +
+					"the parent must not be told the judge failed; this is not an outage")
+			}
+		}
+		g, gerr := resolveGoalRecordStore().Get(rec.GoalRef)
+		if gerr != nil {
+			t.Fatalf("Get(goal): %v", gerr)
+		}
+		if !goal.IsActiveState(g.State) {
+			t.Errorf("goal record state after concurrency back-off = %q, want active — the in-flight "+
+				"adjudication owns the goal's fate; the back-off must not end it", g.State)
+		}
+	}
+
+	t.Run("registry lookup pre-check", func(t *testing.T) {
+		rec, parentID := launch(t, "call-947-concurrent-lookup")
+		// A held LIVE entry stands in for the winner adjudication in flight.
+		unit := verifierUnitForGoal(rec.SessionID)
+		if err := currentVerifierSessionRegistry().Register(unit, "concurrent-winner-in-flight"); err != nil {
+			t.Fatalf("Register(winner placeholder): %v", err)
+		}
+		t.Cleanup(func() { currentVerifierSessionRegistry().Unregister(unit) })
+		driveAndAssert(t, rec, parentID)
+	})
+
+	t.Run("register CAS rejection", func(t *testing.T) {
+		rec, parentID := launch(t, "call-947-concurrent-cas")
+		SetVerifierSessionRegistry(&casRejectionRegistrySpy{})
+		t.Cleanup(func() { SetVerifierSessionRegistry(nil) })
+		driveAndAssert(t, rec, parentID)
+	})
+}

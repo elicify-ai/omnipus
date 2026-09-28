@@ -33,7 +33,7 @@ export type LLMErrorAttribution =
 export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -46,6 +46,7 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   request_too_large: "We built a request that was too large for this model to accept. Try shortening your message, or switch to a model with a larger limit.",
   provider_auth_failed: "The model provider rejected our credentials. Check this provider’s API key in Settings.",
   rate_limited: "The model provider is temporarily overloaded. Wait a moment, then retry.",
+  quota_billing: "The model provider says your account is out of credit.",
   network: "We couldn’t reach the model provider. Check your internet connection and retry.",
   provider_stalled: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details.",
   content_policy: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content.",
@@ -56,6 +57,7 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   agent_not_configured: "This agent isn’t on any workspace yet, so it has nowhere to work. Add it to a workspace team to get started.",
   workspace_unavailable: "This agent’s working folder could not be opened. Check that the disk has space and the folder is writable.",
   model_unavailable: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings.",
+  model_retired: "This model is no longer offered by its provider. Pick a new model in the agent's settings.",
   needs_provider: "Your sign-in for this provider expired. Sign in again under Settings → Providers.",
   model_unassigned: "This agent has no model. Pick one in the agent's settings.",
   turn_canceled: "This turn was stopped before it finished.",
@@ -73,6 +75,7 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   request_too_large: "product",
   provider_auth_failed: "config",
   rate_limited: "provider",
+  quota_billing: "config",
   network: "ambiguous",
   provider_stalled: "provider",
   content_policy: "provider",
@@ -83,6 +86,7 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   agent_not_configured: "config",
   workspace_unavailable: "config",
   model_unavailable: "config",
+  model_retired: "config",
   needs_provider: "user",
   model_unassigned: "config",
   turn_canceled: "user",
@@ -91,4 +95,18 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   context_unrecoverable: "product",
   context_window_unknown: "config",
   unknown: "unknown",
+}
+
+/**
+ * The templated variant of the sentence for codes that carry one (the optional
+ * `provider_message` sibling in x-user-messages, provider-messages spec §6).
+ * A code absent from this map has no template — the catalogue message is the
+ * only copy. Slots come from the closed vocabulary enforced by codegen. The
+ * Go half is LLMErrorProviderMessages in llm_error_messages.gen.go.
+ */
+export const llmErrorProviderMessages: Partial<Record<LLMErrorCode, string>> = {
+  provider_auth_failed: "{provider} rejected the API key. Check the key in Settings → Providers.",
+  rate_limited: "{provider} is busy right now. You can retry the turn.",
+  quota_billing: "{provider} says your account is out of credit.",
+  model_retired: "This model is no longer offered by {provider}. Pick a new model in the agent's settings.",
 }

@@ -25,7 +25,7 @@ import { usePanelUrlHistory } from './usePanelUrlHistory'
 import { useSwipeToClose } from './useSwipeToClose'
 import { usePanelShellStore } from './panelShellStore'
 import { PANEL_MIN_PX, clampPanelWidth, panelDefaultWidth, panelWidthCeiling, isPhoneTakeover } from './panelWidth'
-import type { PanelDefinition } from './types'
+import type { PanelContext, PanelDefinition } from './types'
 import { consumePanelOpenFocus, recordPanelTriggerClick } from './panelFocus'
 
 export interface SidePanelShellProps {
@@ -138,7 +138,10 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
   const def = activePanel === null ? undefined : panels.find((p) => p.id === activePanel.id)
   const panelOpen = activePanel !== null && def !== undefined
   const headerRef = useRef<HTMLDivElement>(null)
-  const expandActionRef = useRef<{ id: PanelDefinition['id']; action: () => boolean } | null>(null)
+  const expandContextRef = useRef<{
+    id: PanelDefinition['id']
+    getter: () => PanelContext
+  } | null>(null)
   const widthSettleListenerRef = useRef<{
     id: PanelDefinition['id']
     listener: (px: number) => void
@@ -150,13 +153,13 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
     }
   }, [activePanel?.id, activePanel?.context, panelOpen])
 
-  const registerExpand = useCallback((action: (() => boolean) | null) => {
+  const registerExpandContext = useCallback((getter: (() => PanelContext) | null) => {
     if (activePanel === null) return
-    if (action === null) {
-      if (expandActionRef.current?.id === activePanel.id) expandActionRef.current = null
+    if (getter === null) {
+      if (expandContextRef.current?.id === activePanel.id) expandContextRef.current = null
       return
     }
-    expandActionRef.current = { id: activePanel.id, action }
+    expandContextRef.current = { id: activePanel.id, getter }
   }, [activePanel])
   const onWidthSettle = useCallback((listener: ((px: number) => void) | null) => {
     if (activePanel === null) return
@@ -171,9 +174,9 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
   const [expandFailure, setExpandFailure] = useState<'blocked' | 'error' | null>(null)
   const handleExpand = async () => {
     setExpandFailure(null)
-    const registered = expandActionRef.current
-    const expandAction = registered !== null && registered.id === activePanel?.id ? registered.action : undefined
-    const result = await shell.requestExpand(expandAction)
+    const registered = expandContextRef.current
+    const getter = registered !== null && registered.id === activePanel?.id ? registered.getter : undefined
+    const result = await shell.requestExpand(getter)
     if (result === 'blocked' || result === 'error') setExpandFailure(result)
   }
 
@@ -255,11 +258,12 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
               <ErrorBoundary key={def.id}>
                 <def.content
                   context={activePanel.context}
+                  presentation="docked"
                   close={() => shell.requestClose('chat')}
                   expand={() => {
                     void handleExpand()
                   }}
-                  registerExpand={registerExpand}
+                  registerExpandContext={registerExpandContext}
                   onWidthSettle={onWidthSettle}
                 />
               </ErrorBoundary>

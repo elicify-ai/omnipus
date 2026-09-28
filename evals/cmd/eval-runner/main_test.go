@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -363,5 +364,204 @@ func TestBootFailureDetailSurvivesAMissingLog(t *testing.T) {
 	got := bootFailureDetail(t.TempDir())
 	if got == "" {
 		t.Error("bootFailureDetail() on a home with no panic log returned an empty string; want a stated reason")
+	}
+}
+
+// ── Central e2e model resolution ──────────────────────────────────────────────
+
+// TestCentralE2EModelReadsTheSingleSourceFile pins the ONE committed source of
+// truth for the real-LLM e2e model id: tests/e2e/e2e-model.json. The returned
+// slug must be provider-prefixed (openrouter/<vendor>/<model>) because the
+// runner's OpenRouter call layer strips exactly that prefix (callJudge), and
+// the workflows' AGENT_MODEL/JUDGE_MODEL convention carries it too.
+func TestCentralE2EModelReadsTheSingleSourceFile(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "tests", "e2e")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir tests/e2e: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(`{"model":"vendor/test-model"}`), 0o600); err != nil {
+		t.Fatalf("write e2e-model.json: %v", err)
+	}
+	t.Chdir(root)
+
+	got, err := centralE2EModel()
+	if err != nil {
+		t.Fatalf("centralE2EModel() error = %v", err)
+	}
+	if got != "openrouter/vendor/test-model" {
+		t.Fatalf("centralE2EModel() = %q, want %q (the runner needs the openrouter/ prefix; callJudge strips it)", got, "openrouter/vendor/test-model")
+	}
+}
+
+// TestCentralE2EModelFailsClosedOnMissingFile: with no flag and no env override,
+// an absent source file must stop the runner loudly instead of silently billing
+// a stale fallback literal.
+func TestCentralE2EModelFailsClosedOnMissingFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	_, err := centralE2EModel()
+	if err == nil {
+		t.Fatal("centralE2EModel() with no tests/e2e/e2e-model.json returned nil error; want a loud failure (no hardcoded fallback exists anymore)")
+	}
+	if !strings.Contains(err.Error(), "AGENT_MODEL") {
+		t.Fatalf("error should name the AGENT_MODEL/JUDGE_MODEL override so the fix is actionable, got: %v", err)
+	}
+}
+
+// TestCentralE2EModelRejectsAnEmptyModelField: an empty "model" value would
+// resolve to the bare slug "openrouter/" — a config corruption that must not
+// silently pass through.
+func TestCentralE2EModelRejectsAnEmptyModelField(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "tests", "e2e")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir tests/e2e: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(`{"model":""}`), 0o600); err != nil {
+		t.Fatalf("write e2e-model.json: %v", err)
+	}
+	t.Chdir(root)
+
+	if _, err := centralE2EModel(); err == nil {
+		t.Fatal("centralE2EModel() with an empty model field returned nil error; want a failure")
+	}
+}
+
+// TestCentralE2EModelRejectsWhitespaceOnlyModelField: a whitespace-only
+// "model" value passes the bare == "" check and would resolve to the slug
+// "openrouter/   " — the same config corruption as an empty field, one step
+// later in the pipeline (finding E2/L2). The value is trimmed before the
+// emptiness check.
+func TestCentralE2EModelRejectsWhitespaceOnlyModelField(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "tests", "e2e")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir tests/e2e: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(`{"model":"   "}`), 0o600); err != nil {
+		t.Fatalf("write e2e-model.json: %v", err)
+	}
+	t.Chdir(root)
+
+	if _, err := centralE2EModel(); err == nil {
+		t.Fatal("centralE2EModel() with a whitespace-only model field returned nil error; want a failure")
+	}
+}
+
+// TestCentralE2EModelRejectsInvalidJSON: a malformed source file is a loud
+// configuration error, never a silent pass-through (finding E1's loader-error
+// tier).
+func TestCentralE2EModelRejectsInvalidJSON(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "tests", "e2e")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir tests/e2e: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(`{"model":`), 0o600); err != nil {
+		t.Fatalf("write e2e-model.json: %v", err)
+	}
+	t.Chdir(root)
+
+	if _, err := centralE2EModel(); err == nil {
+		t.Fatal("centralE2EModel() with malformed JSON returned nil error; want a failure")
+	}
+}
+
+// ── resolveModel — flag > env > file precedence (finding E1) ─────────────────
+
+// TestResolveModelFlagBeatsEnvAndFile: an explicit --agent-model/--judge-model
+// value wins over BOTH the environment override and the central file — and the
+// file loader must never even be consulted.
+func TestResolveModelFlagBeatsEnvAndFile(t *testing.T) {
+	loaderCalled := false
+	loader := func() (string, error) {
+		loaderCalled = true
+		return "openrouter/vendor/from-file", nil
+	}
+	got, source, err := resolveModel("openrouter/vendor/from-flag", "openrouter/vendor/from-env", loader)
+	if err != nil {
+		t.Fatalf("resolveModel() error = %v", err)
+	}
+	if got != "openrouter/vendor/from-flag" {
+		t.Errorf("resolveModel() = %q, want the flag value", got)
+	}
+	if source != "flag" {
+		t.Errorf("source = %q, want %q", source, "flag")
+	}
+	if loaderCalled {
+		t.Error("loader was called even though the flag value was set — the file tier must not be consulted")
+	}
+}
+
+// TestResolveModelEnvBeatsFile: with no flag, AGENT_MODEL/JUDGE_MODEL win over
+// the central file — and a BROKEN file must not matter when the env override
+// decides (the loader is not consulted).
+func TestResolveModelEnvBeatsFile(t *testing.T) {
+	loader := func() (string, error) {
+		return "", errors.New("read tests/e2e/e2e-model.json: should never be called")
+	}
+	got, source, err := resolveModel("", "openrouter/vendor/from-env", loader)
+	if err != nil {
+		t.Fatalf("resolveModel() error = %v", err)
+	}
+	if got != "openrouter/vendor/from-env" {
+		t.Errorf("resolveModel() = %q, want the env value", got)
+	}
+	if source != "env" {
+		t.Errorf("source = %q, want %q", source, "env")
+	}
+}
+
+// TestResolveModelFileWhenBothEmpty: with no flag and no env, the central file
+// decides and the source is reported as "file".
+func TestResolveModelFileWhenBothEmpty(t *testing.T) {
+	loader := func() (string, error) { return "openrouter/vendor/from-file", nil }
+	got, source, err := resolveModel("", "", loader)
+	if err != nil {
+		t.Fatalf("resolveModel() error = %v", err)
+	}
+	if got != "openrouter/vendor/from-file" {
+		t.Errorf("resolveModel() = %q, want the file value", got)
+	}
+	if source != "file" {
+		t.Errorf("source = %q, want %q", source, "file")
+	}
+}
+
+// TestResolveModelAgentAndJudgeResolvedIndependently: the agent knob can come
+// from the flag tier while the judge knob comes from the env tier — the two
+// knobs never share a resolution, which is what lets a development run pick
+// one judge via JUDGE_MODEL while the agent stays central.
+func TestResolveModelAgentAndJudgeResolvedIndependently(t *testing.T) {
+	loader := func() (string, error) { return "openrouter/vendor/from-file", nil }
+
+	gotAgent, srcAgent, err := resolveModel("openrouter/agent/from-flag", "", loader)
+	if err != nil {
+		t.Fatalf("resolveModel(agent) error = %v", err)
+	}
+	if gotAgent != "openrouter/agent/from-flag" || srcAgent != "flag" {
+		t.Errorf("agent knob = (%q, %q), want (flag value, \"flag\")", gotAgent, srcAgent)
+	}
+
+	gotJudge, srcJudge, err := resolveModel("", "openrouter/judge/from-env", loader)
+	if err != nil {
+		t.Fatalf("resolveModel(judge) error = %v", err)
+	}
+	if gotJudge != "openrouter/judge/from-env" || srcJudge != "env" {
+		t.Errorf("judge knob = (%q, %q), want (env value, \"env\")", gotJudge, srcJudge)
+	}
+}
+
+// TestResolveModelPropagatesFileError: with no flag and no env, a loader error
+// aborts loudly — there is no hardcoded fallback model to absorb it.
+func TestResolveModelPropagatesFileError(t *testing.T) {
+	loader := func() (string, error) { return "", errors.New("read tests/e2e/e2e-model.json: no such file") }
+	_, _, err := resolveModel("", "", loader)
+	if err == nil {
+		t.Fatal("resolveModel() with a failing loader returned nil error; want the error propagated")
+	}
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("error should carry the loader's cause, got: %v", err)
 	}
 }

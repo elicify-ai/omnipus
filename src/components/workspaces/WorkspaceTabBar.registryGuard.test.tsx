@@ -13,7 +13,7 @@ vi.mock('@/components/panel-shell/registry', () => ({
         id: 'tasks',
         title: 'Tasks',
         content: () => null,
-        expandTarget: () => '/tasks',
+        fullScreen: { toSearch: () => ({}), fromSearch: () => ({}) },
         beforeLeave,
       }
     : undefined,

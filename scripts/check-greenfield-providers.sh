@@ -172,6 +172,9 @@ GENERIC_EXEMPT_LINES = {
         'return nil, fmt.Errorf("write config for CLI-token migration: %w", writeErr)',
     },
     'pkg/config/config.go': {
+        # ADR-096 web-search roles marker — founder decision 2026-09-27: amend ADR-067
+        # with a narrow exemption for this one marker. Exact-text entries only.
+        'RolesMigratedAt string `json:"roles_migrated_at"          yaml:"-"           env:"-"`',
         'var legacy []string',
         'if err := json.Unmarshal(data, &legacy); err == nil {',
         'out := make(FallbackModelSlice, len(legacy))',
@@ -235,6 +238,35 @@ GENERIC_EXEMPT_LINES = {
         'func MigrateLegacyToolPolicyKeys(cfg *Config) bool {',
         'changed := migrateLegacyToolPolicyMap(cfg.Sandbox.ToolPolicies)',
         'if migrateLegacyToolPolicyMap(agentCfg.Tools.Builtin.Policies) {',
+    },
+    # ADR-096 web-search roles migration — founder decision 2026-09-27 (amend ADR-067,
+    # narrow exemption). Exact-text entries: any other line in this file is still flagged.
+    'pkg/config/web_search_roles.go': {
+        # ADR-096 web-search roles migration (founder 2026-09-27: keep it, amend ADR-067).
+        'func (w *WebToolsConfig) migrationWinnerID() string {',
+        'func MigrateWebSearchRoles(cfg *Config, cfgPath string, onSelfHeal SelfHealWriteHook) {',
+        'logger.WarnF("web-search roles migration could not read config.json; retrying next boot", map[string]any{',
+        'logger.WarnF("web-search roles migration could not parse config.json; retrying next boot", map[string]any{',
+        'logger.WarnCF("config", "web-search roles migration deferred: a keyed search provider is enabled but its key does not resolve; "+',
+        '"hint": "store the credential or disable the provider; the pre-migration selection path keeps working meanwhile",',
+        'winner := web.migrationWinnerID()',
+        'web.RolesMigratedAt = time.Now().UTC().Format(time.RFC3339)',
+        'logger.WarnCF("config", "web-search roles migration: a switched-off DuckDuckGo was the live provider (final fallback branch); turning the flag back on", map[string]any{',
+        'logger.InfoCF("config", "web-search roles migration: a keyed provider with a stored, resolving key was switched off; treating it as the operator\'s default (the UI\'s \'Set active\' never set enabled:true)", map[string]any{',
+        'written, err := writeMigratedConfig(cfgPath, m, w, web, step9, step8, &tavilyDepth, &glmSize)',
+        '"(in-memory state is migrated), but the next boot will retry", map[string]any{',
+        'logger.InfoCF("config", "web-search roles migration wrote tavily.search_depth", map[string]any{',
+        'logger.InfoCF("config", "web-search roles migration wrote glm_search.content_size", map[string]any{',
+        'func writeMigratedConfig(',
+        'return nil, fmt.Errorf("serialize config for web-roles migration: %w", err)',
+        'return nil, fmt.Errorf("write config for web-roles migration: %w", err)',
+        'if marker, present := w["roles_migrated_at"].(string); present && marker != "" {',
+        'logger.WarnF("failed to persist web-search roles migration to config.json; runtime behavior is still correct "+',
+        'w["roles_migrated_at"] = web.RolesMigratedAt',
+    },
+    # ADR-096 web-search roles migration (founder 2026-09-27: keep it, amend ADR-067).
+    'pkg/config/defaults.go': {
+        'RolesMigratedAt:  time.Now().UTC().Format(time.RFC3339),',
     },
 }
 
@@ -613,6 +645,61 @@ const legacyCLIUsername = "cli"
 func migrateSomethingElseEntirely(x string) string { return x }
 GO
   expect "SC-009: an unlisted line in an exempted file still trips the gate" 1
+
+  # ── ADR-096 roles-migration exemption (ADR-067 §8c, founder 2026-09-27) ─────
+  # The exemption must be exact-line and never widen to the migration pattern:
+  # a NEW, unrelated migration marker must still turn the gate red, both inside
+  # the exempted file and anywhere else in pkg/config.
+
+  fixture
+  cat > "$tmp/case/pkg/config/web_search_roles.go" <<'GO'
+package config
+
+func MigrateWebSearchRoles(cfg *Config, cfgPath string, onSelfHeal SelfHealWriteHook) {
+	w["roles_migrated_at"] = web.RolesMigratedAt
+}
+GO
+  expect "ADR-096: the sanctioned roles-migration lines pass clean" 0
+
+  fixture
+  cat > "$tmp/case/pkg/config/web_search_roles.go" <<'GO'
+package config
+
+func MigrateWebSearchRoles(cfg *Config, cfgPath string, onSelfHeal SelfHealWriteHook) {
+	w["roles_migrated_at"] = web.RolesMigratedAt
+}
+
+var provider_migrated_at = ""
+GO
+  expect "ADR-096: a NEW unrelated migration marker in the exempted file is still red" 1
+
+  fixture
+  cat > "$tmp/case/pkg/config/providerstate.go" <<'GO'
+package config
+
+var provider_migrated_at = ""
+GO
+  expect "ADR-096: a NEW unrelated migration marker elsewhere in pkg/config is still red" 1
+
+  fixture
+  cat > "$tmp/case/pkg/config/providerstate.go" <<'GO'
+package config
+
+func init() {
+	w["roles_migrated_at"] = web.RolesMigratedAt
+}
+GO
+  expect "ADR-096: the sanctioned line itself, copied into a non-exempt pkg/config file, is still red" 1
+
+  fixture
+  cat > "$tmp/case/pkg/config/web_search_roles.go" <<'GO'
+package config
+
+func init() {
+	w["roles_migrated_at"]  = web.RolesMigratedAt
+}
+GO
+  expect "ADR-096: a sanctioned line edited by one character is still red" 1
 
   fixture
   mkdir -p "$tmp/case/src/lib/generated"

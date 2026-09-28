@@ -1410,14 +1410,108 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	}
 	defer rt.al.endActiveRequest()
 
-	if len(rt.activeCandidates) > 1 && rt.al.fallback != nil {
-		fbResult, fbErr := rt.al.fallback.Execute(
-			providerCtx,
+	// §7.4 (D3, gate finding F1): a ROOT turn runs the fallback chain even
+	// with a single candidate — the chain owns the §7.4 per-candidate
+	// in-place retry (C-8: 3 total calls, C-9 ceiling, D14 budget, C-12
+	// Stop) and the provider_retry frame. A DELEGATED turn (parentTurnState
+	// set) keeps its own bounded retry in
+	// loop_provider_retry.go::callProvider — §13 keeps the delegated path
+	// dark for provider_retry frames. The single-candidate chain runs on a
+	// throwaway cooldown tracker (WithCooldown): today's plain path marks
+	// nothing, and a shared-tracker MarkFailure would cooldown-skip the only
+	// candidate on a LATER turn — an all-skipped exhaustion whose generic
+	// message would replace the real error.
+	useChain := rt.al.fallback != nil && len(rt.activeCandidates) > 0 && (rt.ts.parentTurnState == nil || len(rt.activeCandidates) > 1)
+	if useChain {
+		// §7.4: carry the D14 per-turn wait budget and the C-11 retry
+		// observer on the provider ctx for this chain call. The budget is
+		// per TURN (lazily created on turnState, shared across iterations —
+		// a per-call budget would multiply the 10-minute cap by the
+		// iteration count); the observer forwards each DECIDED in-place
+		// retry as one provider_retry frame from named fields only
+		// (C-2 — never an error string).
+		retryCtx := providers.WithWaitBudget(providerCtx, rt.ts.turnWaitBudgetForChain())
+		retryCtx = providers.WithRetryObserver(retryCtx, func(info providers.RetryInfo) {
+			rt.al.emitEvent(
+				EventKindProviderRetry,
+				rt.ts.eventMeta("runTurn", "turn.llm.retry"),
+				LLMRetryPayload{
+					Attempt:     info.Attempt,
+					Reason:      info.Reason,
+					Provider:    info.Provider,
+					Model:       info.Model,
+					RetryAt:     info.RetryAt,
+					SentAt:      info.SentAt,
+					MaxAttempts: info.MaxAttempts,
+					SessionID:   string(rt.ts.routingSessionID),
+				},
+			)
+		})
+		retryCtx = providers.WithStreamedBytesCheck(retryCtx, func() int64 {
+			return rt.providerCallStreamedBytes.Load()
+		})
+		// F1 (read paths): one image attach per candidate, reused across the
+		// §7.4 in-place retries of that candidate — the retry must re-send
+		// the same request, and a re-attach re-runs the authorization
+		// recheck per call (the inspection-media boundary test pins
+		// 2 candidates → 2 rechecks, not 4). Scope: THIS provider round
+		// only; every new round (new callProviderOnce) attaches fresh.
+		rt.providerCallAttachCache = make(map[string][]providers.Message)
+		chain := rt.al.fallback
+		if len(rt.activeCandidates) == 1 {
+			// F1: single-candidate root turns run on a throwaway tracker so a
+			// final failure never marks the SHARED chain's tracker (see the
+			// gate comment), and on a budget-free copy of the chain: the
+			// per-candidate budget (120 s default) would clamp a turn ctx
+			// carrying its own longer deadline — JUDGE-FR-049 observed exactly
+			// that (the Judge turn's operator-configured 420 s clipped to
+			// 120 s, the UAT E-14 defect FR-049 exists to prevent). With one
+			// candidate there is nothing to split the budget across, so the
+			// turn's own deadline governs, exactly as the plain path passes
+			// the ctx through. The §7.4 retry loop, its fresh-per-call budget
+			// rule and the C-10 guard are budget-independent and keep
+			// running.
+			chain = rt.al.fallback.WithCooldown(providers.NewCooldownTracker()).WithoutPerCandidateTimeout()
+		}
+		fbResult, fbErr := chain.Execute(
+			retryCtx,
 			rt.activeCandidates,
 			func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
+				if len(rt.activeCandidates) == 1 {
+					// F1: the one candidate IS the active provider (rt sets
+					// activeProvider from the same candidate list selectCandidates
+					// returned), so the attempt runs exactly what today's plain
+					// path runs — same instance, same streaming behavior, same
+					// rt.llmModel. rt.llmModel is what the attempt calls with:
+					// it is activeModel as selected, plus any BeforeLLM hook's
+					// model override (applied just above, at the hook block) —
+					// the chain's `model` parameter would silently drop the
+					// override. FR-007's per-candidate pool lookup only
+					// distinguishes providers when there is more than one
+					// candidate.
+					rt.providerCallStreamedBytes.Store(0) // C-10 counts THIS attempt only
+					return rt.runProviderAttempt(ctx, rt.activeProvider, provider, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes)
+				}
 				cat := rt.al.getCapabilityCatalog()
 				budget := resizeBudgetForModel(cat, provider, model, int(catalog.DefaultResizeLimits.MaxBytes))
-				candidateMessages, imageErr := attachTurnInspectionImagesWithBudget(ctx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, provider, model), budget)
+				// §7.4 (read paths): one attach per candidate, reused across
+				// this candidate's in-place retries — same request re-sent
+				// (cache reset per round in callProviderOnce; see
+				// runProviderAttempt's block for the cache-miss-on-error rule).
+				attachKey := provider + "/" + model
+				candidateMessages, imageErr := func() ([]providers.Message, error) {
+					if cached, ok := rt.providerCallAttachCache[attachKey]; ok {
+						return cached, nil
+					}
+					m, err := attachTurnInspectionImagesWithBudget(ctx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, provider, model), budget)
+					if err != nil {
+						return nil, err
+					}
+					if rt.providerCallAttachCache != nil {
+						rt.providerCallAttachCache[attachKey] = m
+					}
+					return m, nil
+				}()
 				if imageErr != nil {
 					return nil, imageErr
 				}
@@ -1445,6 +1539,10 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					fbResult.Provider, fbResult.Model, len(fbResult.Attempts)+1),
 				map[string]any{"agent_id": rt.ts.agent.ID, "iteration": rt.iteration},
 			)
+			// §7.4 fallback note: emit the provider_fallback frame and
+			// queue the once-per-(session, pair) transcript note (written
+			// at turn end, after the assistant answer — MIN-103).
+			rt.ts.queueProviderFallbackNote(fbResult.Model, fbResult.Attempts)
 		}
 		// Phase 1B FR-013: record the model that actually produced
 		// the response (may differ from the agent's primary model
@@ -1457,116 +1555,5 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	if len(rt.activeCandidates) > 0 {
 		providerName = rt.activeCandidates[0].Provider
 	}
-	var imageErr error
-	cat := rt.al.getCapabilityCatalog()
-	budget := resizeBudgetForModel(cat, providerName, rt.llmModel, int(catalog.DefaultResizeLimits.MaxBytes))
-	messagesForCall, imageErr = attachTurnInspectionImagesWithBudget(providerCtx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, providerName, rt.llmModel), budget)
-	if imageErr != nil {
-		return nil, imageErr
-	}
-	// Use streaming if the provider supports it and we have a streamer for this channel.
-	if sp, ok := rt.activeProvider.(providers.StreamingProvider); ok && rt.al.bus != nil {
-		logger.DebugCF("agent", "Provider supports streaming, checking for streamer", map[string]any{"channel": rt.ts.channel, "chat_id": rt.ts.chatID})
-		if streamer, hasStreamer := rt.al.bus.GetStreamer(providerCtx, rt.ts.channel, rt.ts.chatID, rt.ts.transcriptSessionID); hasStreamer {
-			logger.InfoCF("agent", "Using streaming for response", map[string]any{"channel": rt.ts.channel, "chat_id": rt.ts.chatID})
-			// FIX 5a/5c: stamp the TRUE per-turn producer and this turn's own
-			// ID before any token can flow — see stampStreamerProducerAgentID
-			// and stampStreamerTurnID's doc comments. stampStreamerParentSpawnCallID
-			// additionally stamps this turn's delegation-nesting correlation
-			// (empty for a root turn) so a delegate's own streamed final
-			// response round-trips through Finalize with the same
-			// ParentSpawnCallID its non-streaming siblings carry — see its
-			// own doc comment.
-			rt.ts.stampStreamerProducerAgentID(streamer)
-			rt.ts.stampStreamerTurnID(streamer)
-			rt.ts.stampStreamerParentSpawnCallID(streamer)
-			// #823: mint (or, for an ADR-087 D6 auto-continue round, reuse)
-			// this round's message id BEFORE any token can flow — mirrors the
-			// three stamps immediately above. nextRoundMessageID must run
-			// before the stamp so the freshly-obtained streamer and this
-			// round's later appendIntermediateAssistantTranscript call (if
-			// this round ends in tool calls) agree on the SAME id.
-			rt.ts.nextRoundMessageID()
-			rt.ts.stampStreamerMessageID(streamer)
-			var lastChunk string
-			// Residual native tool-call markup must never reach the
-			// live view. This is not only a rendering concern: the
-			// gateway streamer PERSISTS what it accumulated from these
-			// Update calls (wsStreamer.Finalize prefers its own buffer
-			// over the turn's final content), so anything forwarded
-			// here also lands in transcript.jsonl. Filtering at this
-			// seam is what keeps the live bubble and the persisted
-			// entry identical — and both clean. See
-			// providers.StreamTextFilter.
-			var streamFilter providers.StreamTextFilter
-			resp, streamErr := sp.ChatStream(providerCtx, messagesForCall, toolDefsForCall, rt.llmModel, rt.llmOpts, func(accumulated string) {
-				// B4: if the turn has been abandoned (stuck-goroutine detach),
-				// suppress further frame emits so a zombie goroutine cannot
-				// push frames to disconnected clients.
-				if rt.ts.abandoned.Load() {
-					abandonedWritesSuppressed.Add(1)
-					return
-				}
-				visible := streamFilter.Visible(accumulated)
-				// Send only the new delta (visible minus what we already sent).
-				//
-				// Defensive: this slice panics with index-out-of-range if a
-				// provider ever emits an accumulated string SHORTER than its
-				// predecessor. The contract is monotonic growth, but a provider
-				// bug, a block reorder, or an SDK revision changing accumulation
-				// semantics would otherwise take down the whole turn. Treat a
-				// non-growing value as "nothing new" and skip it. The filter
-				// upholds the same non-shrinking contract on its own output.
-				if len(visible) < len(lastChunk) {
-					logger.DebugCF("agent", "Streaming callback emitted a shorter accumulated string; ignoring", map[string]any{
-						"previous_len": len(lastChunk),
-						"new_len":      len(visible),
-					})
-					return
-				}
-				delta := visible[len(lastChunk):]
-				lastChunk = visible
-				if delta != "" {
-					// This attempt-local counter is independent of the concrete
-					// streamer. Some channels expose no buffer-length method, and
-					// WebSocket creates a fresh streamer per round. Count before
-					// Update so an attempted partial emit fails closed even if the
-					// client disconnects during the write.
-					rt.providerCallStreamedBytes.Add(int64(len(delta)))
-					if err := streamer.Update(providerCtx, delta); err != nil {
-						logger.DebugCF("agent", "Streaming update error (client may have disconnected)", map[string]any{"error": err.Error()})
-					}
-				}
-			}, rt.onToolCallProgress)
-			// Reconcile against the provider's final text. Two things
-			// need this: the few bytes the filter holds back mid-stream
-			// in case they start a marker split across SSE chunks, and
-			// a provider that returned content without ever invoking
-			// the callback. Without it those bytes would be dropped
-			// silently — the streamer's buffer is what gets persisted.
-			if streamErr == nil && resp != nil && !rt.ts.abandoned.Load() {
-				finalVisible := resp.Content
-				if om, isOrphan := providers.DetectOrphanToolCallMarkup(finalVisible); isOrphan {
-					finalVisible = om.Prose
-				}
-				if len(finalVisible) > len(lastChunk) && strings.HasPrefix(finalVisible, lastChunk) {
-					if err := streamer.Update(providerCtx, finalVisible[len(lastChunk):]); err != nil {
-						logger.DebugCF("agent", "Streaming tail flush error (client may have disconnected)", map[string]any{"error": err.Error()})
-					}
-				}
-			}
-			// Do NOT finalize here — the turn may continue with tool calls.
-			// Store the streamer so the turn-level code can finalize once,
-			// after the last LLM call, preventing premature "done" frames
-			// that tell the frontend the response is complete mid-turn.
-			rt.ts.setLastStreamer(streamer)
-			rt.ts.setLastProducedModel(rt.llmModel)
-			// FR-013: also push to the streamer so Finalize stamps the
-			// per-turn Model field on the streamed assistant entry.
-			rt.ts.markLastStreamerProducedModel(rt.llmModel)
-			return resp, streamErr
-		}
-	}
-	rt.ts.setLastProducedModel(rt.llmModel)
-	return rt.activeProvider.Chat(providerCtx, messagesForCall, toolDefsForCall, rt.llmModel, rt.llmOpts)
+	return rt.runProviderAttempt(providerCtx, rt.activeProvider, providerName, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes)
 }
