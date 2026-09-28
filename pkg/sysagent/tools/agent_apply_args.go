@@ -455,8 +455,8 @@ func writeDefaultSingleton(deps *Deps, id string, want bool) error {
 // genuine no-op, exactly what the agent-picker-freshness fix (#1009) needs.
 //
 // WHY WaitForPendingReloadFunc AND NOT WaitForReloadFunc: WaitForReloadFunc's
-// production implementation (pkg/gateway/gateway.go::waitForReload, which
-// delegates to rest_auth.go::waitForReloadOutcome) calls
+// production implementation (pkg/gateway/rest_auth.go::waitForReload, which
+// delegates to that same file's waitForReloadOutcome) calls
 // agentLoop.TriggerReload as its FIRST statement, unconditionally — it does
 // NOT check IsReloadPending before triggering. That shape is correct for
 // delete_agent (AgentDeleteTool.reload, no fast path available, reload must

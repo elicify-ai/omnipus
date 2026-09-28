@@ -1082,12 +1082,15 @@ func (ad *agentDeleteToolExecute) reload() {
 	// ReloadFunc when WaitForReloadFunc is nil (tests/degraded wiring).
 	//
 	// WHY WaitForReloadFunc (TRIGGER-and-wait) AND NOT WaitForPendingReloadFunc
-	// (wait-only): delete has no fast path on the publish side — the closure
-	// above just calls ReloadFunc once and waits for the reload — so we WANT
-	// the reload to actually fire here. WaitForPendingReloadFunc would only
-	// poll IsReloadPending and return immediately, leaving the just-deleted
-	// agent unrouted until whatever other reload was previously pending
-	// happened to finish (which may be never on an idle gateway).
+	// (wait-only): delete has no fast path on the publish side — nothing has
+	// already removed the agent from the live in-memory list the way
+	// UpsertAgentFast does for create/update — so we WANT the reload to
+	// actually fire here. WaitForPendingReloadFunc would only poll
+	// IsReloadPending and return immediately if nothing else happens to be
+	// pending, WITHOUT ever triggering the reload delete actually needs —
+	// leaving the just-deleted agent still ROUTED/listed (reachable) until
+	// some OTHER caller happens to trigger a reload for its own reasons,
+	// which may be never on an idle gateway.
 	// WaitForReloadFunc's production wiring (rest_auth.go::waitForReload,
 	// which calls TriggerReload unconditionally as its first action) is the
 	// right shape here. Compare to publishAgentActivation's comment, which

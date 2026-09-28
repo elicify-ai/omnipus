@@ -549,7 +549,8 @@ func TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands(t *testing.T) {
 	// registry update runs LATER on a goroutine the test unblocks via
 	// releaseReload. WaitForPendingReloadFunc blocks until that goroutine
 	// signals completion — exactly the synchronization the real
-	// gateway.go::waitForPendingReload performs on IsReloadPending.
+	// pkg/gateway/rest_auth.go::waitForPendingReload performs on
+	// IsReloadPending.
 	deps.UpsertAgentFastFunc = func(agentID string) error {
 		reloadStarted.Store(true)
 		// Mirrors the production closure's "enqueue and return nil" shape;
