@@ -955,7 +955,8 @@ func (al *AgentLoop) Stop() {
 }
 
 // WaitForActiveRequests closes request intake and blocks until tracked work
-// completes. Shutdown callers needing a deadline use the context variant.
+// completes. Callers that need a bounded wait should use
+// WaitForActiveRequestsContext instead.
 func (al *AgentLoop) WaitForActiveRequests() {
 	done, _ := al.activeRequests.startWait()
 	<-done
@@ -1242,6 +1243,7 @@ func (al *AgentLoop) waitRecapDrain(budget time.Duration) {
 func (al *AgentLoop) waitActiveRequestsDrain(budget time.Duration) {
 	done, alreadyWaiting := al.activeRequests.startWait()
 	if alreadyWaiting {
+		logger.DebugCF("agent", "Close: active-request drain already attempted; skipping duplicate wait", nil)
 		return
 	}
 	timer := time.NewTimer(budget)
