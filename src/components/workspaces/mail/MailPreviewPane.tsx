@@ -3,13 +3,13 @@
 // the draft (US-7). A foreign draft (created outside Omnipus) stays fully
 // editable but carries the D24 formatting-loss statement. Contract-tested by
 // MailDraft.actions.test.tsx.
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { File, PaperPlaneTilt, Trash } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { HistoricalMessageMarkdown } from '@/components/chat/historical-markdown'
+import { MailMarkdownEditor } from './MailMarkdownEditor'
 
 export type MailPreviewState = 'draft' | 'missing' | 'sent' | 'foreign'
 
@@ -30,6 +30,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
   const [editTo, setEditTo] = useState(to)
   const [editSubject, setEditSubject] = useState(subject)
   const [editBody, setEditBody] = useState(bodyMarkdown)
+  const editBodyRef = useRef(bodyMarkdown)
 
   if (state === 'missing') {
     return (
@@ -80,10 +81,19 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
             <Input value={editSubject} onChange={(e) => setEditSubject(e.target.value)} />
           </Field>
           <Field
-            label="Message (Markdown)"
+            label="Message"
             description="Sent as formatted HTML plus a plain-text copy, with the mailbox signature appended."
           >
-            <Textarea rows={9} value={editBody} onChange={(e) => setEditBody(e.target.value)} />
+            {(controlProps) => (
+              <MailMarkdownEditor
+                {...controlProps}
+                markdown={editBody}
+                onMarkdownChange={(nextBody) => {
+                  editBodyRef.current = nextBody
+                  setEditBody(nextBody)
+                }}
+              />
+            )}
           </Field>
           <div className="flex items-center gap-[var(--space-1)]">
             <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
@@ -93,7 +103,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
             <Button
               size="sm"
               onClick={() => {
-                onSave({ to: editTo, subject: editSubject, bodyMarkdown: editBody })
+                onSave({ to: editTo, subject: editSubject, bodyMarkdown: editBodyRef.current })
                 setEditing(false)
               }}
             >
@@ -134,6 +144,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
             setEditTo(to)
             setEditSubject(subject)
             setEditBody(bodyMarkdown)
+            editBodyRef.current = bodyMarkdown
             setEditing(true)
           }}>
             Edit
