@@ -23,7 +23,9 @@ async function loadPane(): Promise<React.ComponentType<Record<string, unknown>>>
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
     if (detail.startsWith('BLOCKED:')) throw err
-    throw new Error('BLOCKED: MailPreviewPane not implemented — required by spec §16 / US-7. ' + detail)
+    throw new Error('BLOCKED: MailPreviewPane not implemented — required by spec §16 / US-7. ' + detail, {
+      cause: err,
+    })
   }
 }
 

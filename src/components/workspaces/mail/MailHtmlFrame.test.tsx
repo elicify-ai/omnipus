@@ -27,7 +27,9 @@ async function loadFrame(): Promise<React.ComponentType<{ tokenUrl: string; onLo
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
     if (detail.startsWith('BLOCKED:')) throw err
-    throw new Error('BLOCKED: MailHtmlFrame not implemented — required by spec §16 / MC-10. ' + detail)
+    throw new Error('BLOCKED: MailHtmlFrame not implemented — required by spec §16 / MC-10. ' + detail, {
+      cause: err,
+    })
   }
 }
 

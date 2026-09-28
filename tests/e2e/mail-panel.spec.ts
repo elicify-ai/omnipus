@@ -52,7 +52,10 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
   test.beforeAll(async () => {
     mail = await startFakeMail()
     gw = await GatewayProcess.start()
-    const created = await gw.apiFetch<{ id: string }>('POST', '/api/v1/workspaces', { name: `Mail ${Date.now()}` })
+    const created = await gw.apiFetch<{ id: string }>('POST', '/api/v1/workspaces', {
+      name: `Mail ${Date.now()}`,
+      core_team: ['mia'],
+    })
     if (!created.ok) throw new Error(`create workspace ${created.status}: ${created.raw}`)
     workspaceId = created.body.id
     const saved = await gw.apiFetch('PUT', `/api/v1/agents/mia/mailboxes/${workspaceId}`, {

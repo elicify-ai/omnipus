@@ -24,7 +24,9 @@ async function loadCompose(): Promise<React.ComponentType<Record<string, unknown
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
     if (detail.startsWith('BLOCKED:')) throw err
-    throw new Error('BLOCKED: MailComposeDialog not implemented — required by spec §16 / US-5. ' + detail)
+    throw new Error('BLOCKED: MailComposeDialog not implemented — required by spec §16 / US-5. ' + detail, {
+      cause: err,
+    })
   }
 }
 

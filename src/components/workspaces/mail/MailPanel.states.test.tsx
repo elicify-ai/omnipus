@@ -38,7 +38,9 @@ async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
     if (detail.startsWith('BLOCKED:')) throw err
-    throw new Error('BLOCKED: MailPanel not implemented — required by spec §16 / US-3. ' + detail)
+    throw new Error('BLOCKED: MailPanel not implemented — required by spec §16 / US-3. ' + detail, {
+      cause: err,
+    })
   }
 }
 
