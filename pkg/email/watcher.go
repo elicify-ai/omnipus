@@ -125,13 +125,23 @@ func (s *WatcherState) EffectiveState(now time.Time) string {
 }
 
 // WatcherBackoff is the per-mailbox reconnect backoff (MC-33/B-43).
-// auth_failed goes straight to the 15 min cap.
+// auth_failed goes straight to the 15 min cap. The ladder doubles in a loop
+// that stops at the cap (round-8 F1): the old `base << shift` overflowed
+// time.Duration at shift ≥ 28 (attempt 29+), went NEGATIVE — the cap check
+// could not catch a negative — and recordFailure then persisted a
+// NextAttemptAt in the past, so the mailbox dialed on every tick forever.
+// The loop keeps d ≤ 2×cap at every step, so no attempt number can overflow.
 func WatcherBackoff(attempt int, errClass string, randUnit float64) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	shift := attempt - 1
-	d := watcherBackoffBase << shift
+	d := watcherBackoffBase
+	for shift := attempt - 1; shift > 0; shift-- {
+		if d >= watcherBackoffCap {
+			break
+		}
+		d *= 2
+	}
 	if d > watcherBackoffCap || errClass == "auth_failed" {
 		d = watcherBackoffCap
 	}

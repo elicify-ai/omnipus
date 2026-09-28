@@ -71,7 +71,7 @@ func startViewIMAP(t *testing.T, folderOf ...string) (*Client, [][]byte) {
 	_ = appendCl.Close()
 
 	prev := imapDial
-	imapDial = func(addr string, _ *tls.Config) (*imapclient.Client, error) {
+	imapDial = func(_ context.Context, addr string, _ *tls.Config) (*imapclient.Client, error) {
 		return imapclient.DialInsecure(addr, nil)
 	}
 	t.Cleanup(func() { imapDial = prev })
@@ -181,7 +181,7 @@ func startViewIMAPRaw(t *testing.T, msgs []viewMsg, caps imap.CapSet) *Client {
 	_ = appendCl.Close()
 
 	prev := imapDial
-	imapDial = func(addr string, _ *tls.Config) (*imapclient.Client, error) {
+	imapDial = func(_ context.Context, addr string, _ *tls.Config) (*imapclient.Client, error) {
 		return imapclient.DialInsecure(addr, nil)
 	}
 	t.Cleanup(func() { imapDial = prev })

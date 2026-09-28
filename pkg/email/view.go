@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -550,6 +551,13 @@ func viewFromRaw(raw []byte, slug string, uid uint32) *MailView {
 		view.RenderHash = strings.TrimSpace(reader.Header.Get("X-Omnipus-Render-Hash"))
 	}
 	if err != nil {
+		// Round-8 F3 (FR-018): unparseable MIME must not render as a silent
+		// empty view. Mirror decodeBody's loud-degrade contract: the raw
+		// bytes stay readable under the house marker, and the parse failure
+		// is logged.
+		view.TextBody = "[body incomplete: MIME parse error]\n" + capBody(string(raw))
+		slog.Warn("email view: message could not be parsed as MIME; serving raw body with marker",
+			"error", err, "folder", slug, "uid", uid)
 		return view
 	}
 	defer reader.Close()
@@ -621,13 +629,50 @@ func viewFromRaw(raw []byte, slug string, uid uint32) *MailView {
 	return view
 }
 
-// readViewText reads a text part as UTF-8-ish text. Charsets beyond UTF-8
-// fall back to the raw bytes (the transport's decodeBody remains the tool
-// path's authority; this is the panel read path).
+// readViewText reads a text part as UTF-8-ish text with the decodeBody
+// loud-degrade contract (round-8 F3, FR-018): a corrupt transfer-encoding
+// keeps its decoded prefix and carries the "could not be fully decoded"
+// marker — never an empty body indistinguishable from a genuinely empty
+// mail; a body over the 4 MiB view cap truncates with an explicit byte
+// count. Charsets beyond UTF-8 still fall back to the raw bytes (the
+// transport's decodeBody remains the tool path's authority; this is the
+// panel read path).
+const viewTextCapBytes = 4 << 20
+
 func readViewText(r io.Reader) string {
-	data, err := io.ReadAll(io.LimitReader(r, 4<<20))
+	data, err := io.ReadAll(io.LimitReader(r, viewTextCapBytes+1))
 	if err != nil {
-		return ""
+		// Corrupt content-transfer-encoding: go-message returns the bytes
+		// decoded so far plus the error. Keep the decoded prefix, mark the
+		// degrade — the decodeBody family, mirrored on the view path.
+		if len(data) == 0 {
+			return "[body could not be fully decoded: corrupt content-transfer-encoding]"
+		}
+		return string(data) + "\n[body could not be fully decoded: corrupt content-transfer-encoding]"
+	}
+	if len(data) > viewTextCapBytes {
+		// Over the 4 MiB view cap. Drain the rest to count the hidden bytes
+		// so the truncation marker names a true number (the capBody wording
+		// family), never a silent mid-sentence cut.
+		hidden, derr := io.Copy(io.Discard, r)
+		removed := int64(len(data)-viewTextCapBytes) + hidden
+		out := string(data[:viewTextCapBytes])
+		if derr != nil {
+			// The drain failed (hostile stream): the marker still fires with
+			// the count actually observed — the degrade stays loud.
+			return out + fmt.Sprintf("\n…[truncated %d bytes]", removed)
+		}
+		// Back off to a UTF-8 rune boundary at the cut point (capBody rule).
+		for len(out) > 0 {
+			rn, size := utf8.DecodeLastRuneInString(out)
+			if rn == utf8.RuneError && size <= 1 {
+				out = out[:len(out)-1]
+				continue
+			}
+			break
+		}
+		removed = int64(len(data)-viewTextCapBytes) + hidden + int64(len(data[:viewTextCapBytes])-len(out))
+		return out + fmt.Sprintf("\n…[truncated %d bytes]", removed)
 	}
 	return string(data)
 }

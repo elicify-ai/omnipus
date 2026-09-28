@@ -34,6 +34,7 @@ import (
 	"crypto/tls"
 	"net"
 	"strconv"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -62,6 +63,16 @@ func (r *f2StubResolver) LookupHost(_ context.Context, _ string) ([]string, erro
 	return []string{"127.0.0.1"}, nil
 }
 
+type f2AddrResolver struct {
+	calls int
+	addrs []string
+}
+
+func (r *f2AddrResolver) LookupHost(_ context.Context, _ string) ([]string, error) {
+	r.calls++
+	return r.addrs, nil
+}
+
 func f2DNSErr(host, text string) error {
 	return &net.DNSError{Err: text, Name: host, IsNotFound: false}
 }
@@ -76,6 +87,22 @@ func f2SwapResolver(t *testing.T, r Resolver) *f2StubResolver {
 	dialResolver = r
 	t.Cleanup(func() { dialResolver = prev })
 	return stub
+}
+
+func f2SwapAddrResolver(t *testing.T, addrs ...string) *f2AddrResolver {
+	t.Helper()
+	stub := &f2AddrResolver{addrs: addrs}
+	prev := dialResolver
+	dialResolver = stub
+	t.Cleanup(func() { dialResolver = prev })
+	return stub
+}
+
+func f2SwapTCPDial(t *testing.T, dial func(context.Context, string) (net.Conn, error)) {
+	t.Helper()
+	prev := dialTCPContext
+	dialTCPContext = dial
+	t.Cleanup(func() { dialTCPContext = prev })
 }
 
 const (
@@ -179,6 +206,129 @@ func TestDialSMTPRaw_NonDNSDialFailureIsNotRetried(t *testing.T) {
 	require.NotEqual(t, "dns", ClassifyMailError(err), "MC-33: the refused dial keeps its own class - it must never surface as dns (only name-resolution failures are dns-retried)")
 }
 
+func TestDialSMTPRaw_FallsBackAcrossResolvedAddresses(t *testing.T) {
+	ln := f2Listener(t)
+	_, portStr, err := net.SplitHostPort(ln.Addr().String())
+	require.NoError(t, err)
+	stub := f2SwapAddrResolver(t, "::1", "127.0.0.1")
+	realDial := dialTCPContext
+	var attemptedMu sync.Mutex
+	var attempted []string
+	f2SwapTCPDial(t, func(ctx context.Context, addr string) (net.Conn, error) {
+		attemptedMu.Lock()
+		attempted = append(attempted, addr)
+		attemptedMu.Unlock()
+		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil && host == "::1" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return realDial(ctx, addr)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := dialSMTPRaw(ctx, f2SMTPName+":"+portStr)
+
+	require.NoError(t, err, "the SMTP dial must fall back from an unreachable first resolved address to the working second address")
+	require.NotNil(t, conn)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	attemptedMu.Lock()
+	require.Equal(t, []string{net.JoinHostPort("::1", portStr), net.JoinHostPort("127.0.0.1", portStr)}, attempted, "a stalled first address must remain cancellable while the working second address is tried")
+	attemptedMu.Unlock()
+	require.Equal(t, 1, stub.calls, "address fallback reuses one successful DNS answer")
+}
+
+func TestDialSMTPRaw_SlowFirstSuccessSurvivesFailedFallback(t *testing.T) {
+	stub := f2SwapAddrResolver(t, "::1", "127.0.0.1")
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close(); _ = serverConn.Close() })
+	fallbackStarted := make(chan struct{})
+	var attemptedMu sync.Mutex
+	var attempted []string
+	f2SwapTCPDial(t, func(ctx context.Context, addr string) (net.Conn, error) {
+		host, _, _ := net.SplitHostPort(addr)
+		attemptedMu.Lock()
+		attempted = append(attempted, host)
+		attemptedMu.Unlock()
+		if host == "::1" {
+			select {
+			case <-fallbackStarted:
+				return clientConn, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		close(fallbackStarted)
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := dialSMTPRaw(ctx, f2SMTPName+":25")
+
+	require.NoError(t, err, "a slow valid first address must remain eligible after the fallback starts and fails")
+	require.NotNil(t, conn)
+	attemptedMu.Lock()
+	require.Equal(t, []string{"::1", "127.0.0.1"}, attempted, "the fallback must start while the slow primary remains eligible")
+	attemptedMu.Unlock()
+	require.Equal(t, 1, stub.calls, "parallel address fallback must not re-resolve the hostname")
+}
+
+func TestDialSMTPRaw_AllAddressAttemptsShareCallerDeadline(t *testing.T) {
+	stub := f2SwapAddrResolver(t, "::1", "127.0.0.1")
+	var attemptedMu sync.Mutex
+	var attempted []string
+	var deadlines []time.Time
+	var deadlineOK []bool
+	f2SwapTCPDial(t, func(ctx context.Context, addr string) (net.Conn, error) {
+		attemptedMu.Lock()
+		attempted = append(attempted, addr)
+		deadline, ok := ctx.Deadline()
+		deadlines = append(deadlines, deadline)
+		deadlineOK = append(deadlineOK, ok)
+		attemptedMu.Unlock()
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), addressFallbackDelay+150*time.Millisecond)
+	defer cancel()
+	wantDeadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	_, err := dialSMTPRaw(ctx, f2SMTPName+":25")
+
+	require.ErrorIs(t, err, context.DeadlineExceeded, "every SMTP address attempt must stop at the same caller deadline")
+	require.Equal(t, "timeout", ClassifyMailError(err))
+	attemptedMu.Lock()
+	require.Len(t, attempted, 2, "the fallback starts before the shared caller deadline and cannot outlive it")
+	require.Len(t, deadlines, 2)
+	for i, deadline := range deadlines {
+		require.True(t, deadlineOK[i], "every SMTP address attempt must carry the caller deadline")
+		require.True(t, deadline.Equal(wantDeadline), "each SMTP attempt deadline must equal the parent deadline")
+	}
+	attemptedMu.Unlock()
+	require.Equal(t, 1, stub.calls, "parallel address fallback must not re-resolve the hostname")
+}
+
+func TestDialSMTPRaw_AllResolvedAddressesFailWithLastConnectError(t *testing.T) {
+	addr := f2ClosedPort(t)
+	_, portStr, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	stub := f2SwapAddrResolver(t, "::1", "127.0.0.1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = dialSMTPRaw(ctx, f2SMTPName+":"+portStr)
+
+	require.Error(t, err, "all unreachable resolved addresses must fail loudly")
+	require.ErrorIs(t, err, syscall.ECONNREFUSED, "the last connection failure must remain structurally visible")
+	require.Contains(t, err.Error(), net.JoinHostPort("127.0.0.1", portStr), "the returned error must describe the last attempted address")
+	require.Equal(t, "connect_refused", ClassifyMailError(err), "a refused connection after successful resolution must never classify as dns")
+	require.Equal(t, 1, stub.calls, "address fallback reuses one successful DNS answer")
+}
+
 // ---- IMAP dial (transport.go::dialIMAP - panel/tool/watcher path) ----
 
 // f2StartMemIMAPPlain boots the in-tree memserver on a loopback port and
@@ -205,7 +355,7 @@ func f2StartMemIMAPPlain(t *testing.T) *Client {
 	t.Cleanup(func() { _ = srv.Close(); _ = ln.Close() })
 
 	prev := imapDial
-	imapDial = func(addr string, _ *tls.Config) (*imapclient.Client, error) {
+	imapDial = func(_ context.Context, addr string, _ *tls.Config) (*imapclient.Client, error) {
 		return imapclient.DialInsecure(addr, nil)
 	}
 	t.Cleanup(func() { imapDial = prev })
@@ -252,4 +402,117 @@ func TestDialIMAP_AlwaysFailingResolverIsDNSClassWithinBound(t *testing.T) {
 	require.Equal(t, 3, stub.calls, "MC-33: the DNS retry is bounded at 3 attempts on the IMAP dial too, never infinite")
 	require.Less(t, time.Since(start), dialTimeout, "MC-33: the bounded retry sits inside the overall dial bound")
 	require.Equal(t, "dns", ClassifyMailError(err), "MC-33/B-42: the surfaced class is dns (never auth/tls for a name-resolution failure)")
+}
+
+func TestDialIMAP_FallsBackAcrossResolvedAddresses(t *testing.T) {
+	cl := f2StartMemIMAPPlain(t)
+	stub := f2SwapAddrResolver(t, "::1", "127.0.0.1")
+	realDial := imapDial
+	var attemptedMu sync.Mutex
+	var attempted []string
+	var serverNames []string
+	imapDial = func(ctx context.Context, addr string, tlsCfg *tls.Config) (*imapclient.Client, error) {
+		attemptedMu.Lock()
+		attempted = append(attempted, addr)
+		serverNames = append(serverNames, tlsCfg.ServerName)
+		attemptedMu.Unlock()
+		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil && host == "::1" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return realDial(ctx, addr, tlsCfg)
+	}
+	t.Cleanup(func() { imapDial = realDial })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := cl.ReadInbox(ctx, InboxOptions{Limit: 25})
+
+	require.NoError(t, err, "the IMAP dial must fall back from an unreachable first resolved address to the working second address")
+	attemptedMu.Lock()
+	require.Len(t, attempted, 2, "a stalled first address must receive only its fallback window before the working second address is tried")
+	require.Equal(t, []string{f2IMAPName, f2IMAPName}, serverNames, "TLS ServerName must remain the configured hostname across resolved-address fallback")
+	attemptedMu.Unlock()
+	require.Equal(t, 1, stub.calls, "address fallback reuses one successful DNS answer")
+}
+
+func TestDialIMAP_AllResolvedAddressesFailWithLastConnectError(t *testing.T) {
+	cl, err := NewClient(Account{
+		IMAPHost: f2IMAPName,
+		IMAPPort: 993,
+		SMTPHost: f2SMTPName,
+		Username: f2IMAPUser,
+		Password: f2IMAPPass,
+	})
+	require.NoError(t, err)
+	stub := f2SwapAddrResolver(t, "::1", "127.0.0.1")
+	prev := imapDial
+	var attemptedMu sync.Mutex
+	var attempted []string
+	imapDial = func(_ context.Context, addr string, _ *tls.Config) (*imapclient.Client, error) {
+		attemptedMu.Lock()
+		attempted = append(attempted, addr)
+		attemptedMu.Unlock()
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	}
+	t.Cleanup(func() { imapDial = prev })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = cl.ReadInbox(ctx, InboxOptions{Limit: 25})
+
+	require.Error(t, err, "all unreachable resolved addresses must fail loudly")
+	require.ErrorIs(t, err, syscall.ECONNREFUSED, "the last IMAP connection failure must remain structurally visible")
+	require.Contains(t, err.Error(), net.JoinHostPort("127.0.0.1", "993"), "the returned IMAP error must describe the last attempted address")
+	require.Equal(t, "connect_refused", ClassifyMailError(err), "a refused IMAP connection after successful resolution must never classify as dns")
+	attemptedMu.Lock()
+	require.Equal(t, []string{net.JoinHostPort("::1", "993"), net.JoinHostPort("127.0.0.1", "993")}, attempted, "IMAP must try every resolved address in order")
+	attemptedMu.Unlock()
+	require.Equal(t, 1, stub.calls, "address fallback reuses one successful DNS answer")
+}
+
+func TestDialIMAP_AllAddressAttemptsShareCallerDeadline(t *testing.T) {
+	cl, err := NewClient(Account{
+		IMAPHost: f2IMAPName,
+		IMAPPort: 993,
+		SMTPHost: f2SMTPName,
+		Username: f2IMAPUser,
+		Password: f2IMAPPass,
+	})
+	require.NoError(t, err)
+	stub := f2SwapAddrResolver(t, "::1", "127.0.0.1")
+	prev := imapDial
+	var attemptedMu sync.Mutex
+	var attempted []string
+	var deadlines []time.Time
+	var deadlineOK []bool
+	imapDial = func(ctx context.Context, addr string, _ *tls.Config) (*imapclient.Client, error) {
+		attemptedMu.Lock()
+		attempted = append(attempted, addr)
+		deadline, ok := ctx.Deadline()
+		deadlines = append(deadlines, deadline)
+		deadlineOK = append(deadlineOK, ok)
+		attemptedMu.Unlock()
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	t.Cleanup(func() { imapDial = prev })
+
+	ctx, cancel := context.WithTimeout(context.Background(), addressFallbackDelay+150*time.Millisecond)
+	defer cancel()
+	wantDeadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	_, err = cl.ReadInbox(ctx, InboxOptions{Limit: 25})
+
+	require.ErrorIs(t, err, context.DeadlineExceeded, "every IMAP address attempt must stop at the same caller deadline")
+	require.Equal(t, "timeout", ClassifyMailError(err))
+	attemptedMu.Lock()
+	require.Len(t, attempted, 2, "the fallback starts before the shared caller deadline and cannot outlive it")
+	require.Len(t, deadlines, 2)
+	for i, deadline := range deadlines {
+		require.True(t, deadlineOK[i], "every IMAP address attempt must carry the caller deadline")
+		require.True(t, deadline.Equal(wantDeadline), "each IMAP attempt deadline must equal the parent deadline")
+	}
+	attemptedMu.Unlock()
+	require.Equal(t, 1, stub.calls, "parallel address fallback must not re-resolve the hostname")
 }
