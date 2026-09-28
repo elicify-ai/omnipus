@@ -1,11 +1,11 @@
 import { type APIRequestContext, request } from '@playwright/test';
 
 const DEFAULT_PROVIDER_ID = 'openrouter';
-// z-ai/glm-5.2 — the project's standard model for all e2e tests (mirrored in the
+// deepseek/deepseek-v4.1-flash — the project's standard model for all e2e tests (mirrored in the
 // Fly CI runner's runci.sh e2e config). The previous google/gemini-2.5-flash
 // pick degraded on OpenRouter (empty responses + "http2: response body closed"
 // stream drops → turns never completed → Bug-3/Bug-5/T24/media all failed), so
-// it was swapped for glm-5.2, a live, reliable, tool-capable model. Determinism
+// it was swapped for deepseek-v4.1-flash, a live, reliable, tool-capable model. Determinism
 // for "exactly N tool calls" subagent assertions is enforced via the
 // temperature=0 + seed=42 plumbing the suite already passes through to
 // OpenRouter, not by the model alone.
@@ -14,7 +14,7 @@ const DEFAULT_PROVIDER_ID = 'openrouter';
 // evals/cmd/eval-runner/main.go) intentionally stay on z-ai/glm-5-turbo (a LIVE
 // model whose eval baselines depend on it) — the E2E-vs-evals difference is
 // deliberate.
-const DEFAULT_MODEL = 'z-ai/glm-5.2';
+const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
 const DEFAULT_USERNAME = 'admin';
 const DEFAULT_PASSWORD = 'admin123';
 
