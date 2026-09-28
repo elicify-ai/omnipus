@@ -2,12 +2,10 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// #920 RED pack — the real installer for FR-010's test-only seam. Excluded
-// from the default build until GREEN adds grepScopeStatOpenHook /
-// setGrepScopeStatOpenHook; see grep_scope_hook_pending_test.go for the
-// hand-over. Built with `-tags grep_scope_hook` today it fails to compile
-// with "undefined: setGrepScopeStatOpenHook" — that compile error is this
-// file's red evidence.
+// #920 — the installer for FR-010's test-only seam: a one-shot hook into
+// resolveScopedRoot's "existed at the Stat, gone at the open" race
+// (grepScopeStatOpenHook / setGrepScopeStatOpenHook, grep_scope.go), used by
+// the read-boundary tests that drive that race deterministically.
 package tools
 
 import (

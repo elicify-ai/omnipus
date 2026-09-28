@@ -66,8 +66,8 @@ func TestReadBoundary_WalkWithholdsCarveOuts(t *testing.T) {
 // is never set by the tool), so a no-`path` search can never reach it on
 // any code, before or after #920. The subtests below keep S-2.4's oracle —
 // "the match is returned, exactly as read_file would read it" — by naming
-// the shelf folder as `path`, by shorthand (passes today) and by absolute
-// path (red today). The wording conflict is reported as a finding.
+// the shelf folder as `path`, by shorthand and by absolute
+// path. The wording conflict is reported as a finding.
 //
 // Traces: S-2.2, S-2.3, S-2.4; FR-006.
 func TestReadBoundary_SkillsRegistryGate(t *testing.T) {

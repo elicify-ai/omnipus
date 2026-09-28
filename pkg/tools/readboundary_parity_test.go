@@ -212,9 +212,9 @@ func TestReadBoundary_GrepRefusesProtected(t *testing.T) {
 // unchanged, and `path: ""` behaves exactly like an omitted `path`
 // (S-1.13, DS-1 row 24), audit rows included.
 //
-// The first two subtests pass on today's code BY DESIGN: they are the
-// spec's regression pins for D5 ("unchanged") and FR-002 ("as before"). The
-// third is red today because grep writes no path.search_roots row.
+// The first two subtests are the spec's regression pins for D5 ("unchanged")
+// and FR-002 ("as before"); the third pins that grep writes exactly one
+// path.search_roots row per call, omitted and empty path alike.
 //
 // Traces: S-1.5, S-1.6, S-1.13; FR-002, FR-003, FR-021.
 func TestReadBoundary_DefaultAreaAndShorthand(t *testing.T) {

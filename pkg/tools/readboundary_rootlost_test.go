@@ -21,9 +21,6 @@ import (
 // grepScopeStatOpenHook removes <EXT>/gone once, synchronously, after the
 // admission and the existence check and before the root open.
 //
-// Red today with "BLOCKED: grepScopeStatOpenHook ... not implemented" (see
-// grep_scope_hook_pending_test.go for why the seam is isolated that way).
-//
 // Traces: S-1.14; FR-010, FR-021.
 func TestReadBoundary_AbsoluteRootLost(t *testing.T) {
 	f := newRBFixture(t)

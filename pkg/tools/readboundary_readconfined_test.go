@@ -200,7 +200,7 @@ func TestResolvePath_ReadConfinedIgnoresAllowPatterns(t *testing.T) {
 // TestResolvePath_ReadConfinedSendStaysConfined is test 17 (S-4.5, DS-3 row
 // 12, SL-3): a send-operation resolution of a mount file stays refused in a
 // read-confined policy, while the read operation on the same file is
-// admitted (the discriminating control; red today for the read half).
+// admitted (the discriminating control).
 //
 // Traces: S-4.5; FR-015, FR-012.
 func TestResolvePath_ReadConfinedSendStaysConfined(t *testing.T) {
