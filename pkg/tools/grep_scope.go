@@ -327,10 +327,18 @@ func (t *GrepTool) workspaceScopeRoot(policy fspolicy.FSPolicy, realWorkDir, rea
 // swapped for a symlink between ResolvePath and os.OpenRoot is the same
 // class existing mount roots carry. carveOutFS re-judges every entry by
 // string against the secret set.
+//
+// FR-010's seam, fired between the existence check above and the os.OpenRoot
+// below, drives the "swap between resolve and open" race for the absolute
+// root type (resolveScopedRoot already fires the same seam later, after its
+// own existence check — the two together let a single test hook cover both
+// windows with a `sync.Once`). Production: the pointer is nil; the cost is
+// one atomic load and a nil check per scoped absolute root.
 func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, policy fspolicy.FSPolicy, opened *[]*os.Root) (filegrep.Root, int, error) {
 	if _, err := os.Stat(realAbs); err != nil {
 		return filegrep.Root{}, 0, grepAbsoluteStatError(rawPath, realAbs, err)
 	}
+	runGrepScopeStatOpenHook(realAbs)
 	name := grepAbsoluteName(realAbs)
 	lost := func(err error) filegrep.Root {
 		return filegrep.Root{Name: name, FS: unreachableRootFS{err: err}}

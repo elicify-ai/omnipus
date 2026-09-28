@@ -31,3 +31,27 @@ func installGrepScopeLostHook(t *testing.T, target string) {
 	})
 	t.Cleanup(restore)
 }
+
+// installGrepScopeAncestorSwapHook installs a one-shot hook that, when it
+// fires, removes dir and replaces it with a symlink to swapTo. The hook
+// fires from absoluteGrepRoot after os.Stat(realAbs) succeeded and before
+// os.OpenRoot(parent) — exactly the TOCTOU window an attacker who owns the
+// mount can drive (Opus security-lead finding A1). The seam is nil in
+// production; the cost in tests is one atomic load per absoluteGrepRoot
+// call. Restored with t.Cleanup, like installGrepScopeLostHook.
+func installGrepScopeAncestorSwapHook(t *testing.T, dir, swapTo string) {
+	t.Helper()
+	var once sync.Once
+	restore := setGrepScopeStatOpenHook(func(subPath string) {
+		once.Do(func() {
+			if err := os.RemoveAll(dir); err != nil {
+				t.Errorf("grepScopeStatOpenHook: remove %q before swap: %v", dir, err)
+				return
+			}
+			if err := os.Symlink(swapTo, dir); err != nil {
+				t.Errorf("grepScopeStatOpenHook: symlink %q -> %q: %v", dir, swapTo, err)
+			}
+		})
+	})
+	t.Cleanup(restore)
+}

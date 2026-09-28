@@ -266,3 +266,54 @@ func TestResolvePath_ReadConfinedMountAncestorSwap(t *testing.T) {
 		t.Fatalf("S-4.6: the read through a swapped ancestor must fail, got %d bytes and no error", len(data))
 	}
 }
+
+// TestReadBoundary_GrepAbsoluteUnderMountAncestorSwap is A1 from the Opus
+// security-lead review: a Judge grep with an ABSOLUTE path under a mount
+// must NOT follow an ancestor directory swapped for a symlink to a folder
+// outside the mount. read_file is already protected by the newMountRootHandle
+// anchor at the mount's HostPath (TestResolvePath_ReadConfinedMountAncestorSwap,
+// S-4.6); grep's absoluteGrepRoot today calls os.OpenRoot(parent) with a
+// plain path open, which follows the swap — the same TOCTOU class
+// resolvepath.go's package doc claims to close for write/serve. A Judge
+// review turn is the only agent that resolves an absolute path outside the
+// workdir under a mount, so this is the only call site the read-confined
+// posture can leak through.
+//
+// ORACLE (S-4.6 / FR-014, restated for grep): the result must not contain
+// the outside folder's content. The drive:
+//
+//  1. <MNT>/src is a real directory at grep-call time; <MNT>/src/b.md holds
+//     "needle" (so the grep's resolved realpath is admitted by ResolvePath
+//     while <MNT>/src still exists — the seam must fire AFTER admission).
+//  2. <EXT>/ext/b.md holds a distinct sentinel "OUTSIDE-NEEDLE" — different
+//     content from the mount's needle, so a leak is unambiguous.
+//  3. installGrepScopeAncestorSwapHook swaps <MNT>/src for a symlink to
+//     <EXT>/ext between absoluteGrepRoot's os.Stat and its os.OpenRoot.
+//  4. pre-fix: os.OpenRoot(<MNT>/src) follows the symlink and opens
+//     <EXT>/ext as container; resolveScopedRoot walks inside <EXT>/ext and
+//     finds OUTSIDE-NEEDLE. GREEN: absoluteGrepRoot detects realAbs is
+//     inside a mount, anchors os.OpenRoot at the mount's HostPath, and
+//     the os.Root's escape protection keeps the walk inside <MNT> (the
+//     open of "src" via os.Root(<MNT>) fails because the symlink points
+//     outside the bound root, surfaced as lost root).
+func TestReadBoundary_GrepAbsoluteUnderMountAncestorSwap(t *testing.T) {
+	f := newRBFixture(t)
+	// Sentinel inside the mount: admitted by ResolvePath at grep-call time.
+	rbWrite(t, filepath.Join(f.mnt, "src", "b.md"), "needle\n")
+	// Distinct sentinel outside: a leak surfaces this content.
+	rbWrite(t, filepath.Join(f.ext, "ext", "b.md"), "OUTSIDE-NEEDLE\n")
+	jctx := f.judgeCtx(t)
+
+	installGrepScopeAncestorSwapHook(t,
+		filepath.Join(f.mnt, "src"),
+		filepath.Join(f.ext, "ext"),
+	)
+
+	res := f.grep.Execute(jctx, map[string]any{
+		"pattern": "OUTSIDE-NEEDLE",
+		"path":    filepath.Join(f.mnt, "src", "b.md"),
+	})
+	if !res.IsError && strings.Contains(res.ForLLM, "OUTSIDE-NEEDLE") {
+		t.Fatalf("A1: read-confined grep followed a swapped ancestor out of the mount and returned <EXT>'s content:\n%s", res.ForLLM)
+	}
+}
