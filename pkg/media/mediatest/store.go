@@ -7,7 +7,7 @@ import "github.com/elicify-ai/omnipus/pkg/media"
 // CleanupRegistrar is the subset of testing.TB needed by NewFileMediaStore.
 type CleanupRegistrar interface {
 	Helper()
-	Cleanup(func())
+	Cleanup(fn func())
 }
 
 // NewFileMediaStore returns a store whose debounced registry writer is stopped
