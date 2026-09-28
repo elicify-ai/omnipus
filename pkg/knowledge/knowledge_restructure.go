@@ -319,6 +319,25 @@ func (t *RestructureTool) execRenameMove(
 		return t.deps.refuse(op, target, []string{from}, err.Error())
 	}
 	if !folder {
+		// D-MOVE round-2: when new_name is extensionless and the source is
+		// a .view file, the destination has no extension of its own to
+		// consult — it inherits the SOURCE's (test 62, FR-VA-016a).
+		// Run BEFORE the extension-change refusal below so the inherited
+		// extension makes the destination a `.view` path, not a "would
+		// change the extension" target.
+		if IsViewPath(from) && !strings.Contains(path.Base(newName), ".") {
+			to = to + path.Ext(from)
+		}
+		// D-MOVE round-2: a rename that would change a `.view` source's
+		// extension is REFUSED with a dedicated message (test 63,
+		// FR-VA-016a). The check runs AFTER the inherited-extension step
+		// above, so an extensionless new_name does not get caught here.
+		if IsViewPath(from) && !IsViewPath(to) {
+			return t.deps.refuse(op, target, []string{from},
+				fmt.Sprintf("renaming a .view file to a different extension is refused: %s would become %s; "+
+					"`.view` files keep their extension — rename the file's CONTENT if you want a different surface, "+
+					"do not retype the file via rename", from, to))
+		}
 		to = ensureMarkdown(to)
 	}
 
