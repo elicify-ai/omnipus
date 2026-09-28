@@ -17807,6 +17807,7 @@ export interface operations {
                     "application/json": components["schemas"]["ToolRegistryEntry"][];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -17836,6 +17837,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Endpoint removed — use GET /api/v1/tools instead. */
             404: {
                 headers: {
@@ -17973,6 +17975,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -17994,6 +17997,7 @@ export interface operations {
                     "application/json": components["schemas"]["ExecProxyStatus"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -18065,6 +18069,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18128,6 +18133,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18191,6 +18197,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18263,6 +18270,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18322,6 +18330,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuditLogResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -18393,6 +18402,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18456,6 +18466,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18477,6 +18488,7 @@ export interface operations {
                     "application/json": components["schemas"]["RetentionSweepResult"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -18559,6 +18571,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Lowering drift (issue #904, D16) — the agents the new global limit would lower differ from confirmed_lowering, or an agent record changed mid-write (revision conflict; agents already lowered were rolled back). Nothing was written; the body carries the fresh preview. */
             409: {
                 headers: {
@@ -18751,6 +18764,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEntry"][];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -18793,6 +18807,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Instance key already exists. */
             409: {
                 headers: {
@@ -18839,6 +18854,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -18881,6 +18897,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Instance not found. */
             404: {
                 headers: {
@@ -18925,6 +18942,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -18960,6 +18978,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -19013,6 +19032,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -19048,6 +19068,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelTestResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -19348,6 +19369,7 @@ export interface operations {
                     "application/json": components["schemas"]["PendingRestartEntry"][];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -19677,6 +19699,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Key field is required (empty key). */
             422: {
                 headers: {
@@ -19729,6 +19752,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Credential key not found. */
             404: {
                 headers: {
@@ -19786,6 +19810,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Credential store locked. */
             503: {
                 headers: {
@@ -19815,6 +19840,7 @@ export interface operations {
                     "application/json": components["schemas"]["BackupCreateResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -19857,6 +19883,7 @@ export interface operations {
                     }[];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -19907,6 +19934,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Backup file not found. */
             404: {
                 headers: {
@@ -19945,6 +19973,7 @@ export interface operations {
                     "application/json": components["schemas"]["StorageStats"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {
@@ -19974,6 +20003,7 @@ export interface operations {
                     "application/json": components["schemas"]["ClearAllSessionsResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
                 headers: {

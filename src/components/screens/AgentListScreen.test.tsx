@@ -54,7 +54,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgents: vi.fn(), fetchWorkspaces: vi.fn(), updateAgent: vi.fn(), testAgentRunner: vi.fn(), fetchCliDetect: vi.fn() }
+  return { ...actual, fetchAgents: vi.fn(), fetchWorkspaces: vi.fn(), updateAgent: vi.fn(), fetchCliDetect: vi.fn() }
 })
 
 // CreateAgentModal pulls in heavy deps; stub it to keep the screen test focused.

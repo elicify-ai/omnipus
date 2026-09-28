@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/daemon"
+	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -55,14 +56,14 @@ func omnipusGracefulShutdown(
 	// cost.json / session-context writes can outlive RunContext and race
 	// t.TempDir cleanup on macOS APFS. The channel manager (above) is the other
 	// inbound source; together they guarantee no new bus message — hence no new
-	// activeRequests.Add — after this point. Device/health/preview registries
+	// active-request admission — after this point. Device/health/preview registries
 	// have no turn side effects and stop later (step 4).
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
 	// ADR-049 D4: the plan engine dispatches member tasks (which spawn
 	// turns), so it stops alongside CronService — before draining active
-	// turns — for the exact same "no new activeRequests.Add after this
+	// turns — for the exact same "no new active-request admission after this
 	// point" reason the comment above documents for cron.
 	if runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
@@ -109,16 +110,11 @@ func omnipusGracefulShutdown(
 	// Stop() prevents new turns from starting.
 	agentLoop.Stop()
 
-	activeTurnsDone := make(chan struct{})
-	go func() {
-		defer close(activeTurnsDone)
-		agentLoop.WaitForActiveRequests()
-	}()
-
-	select {
-	case <-activeTurnsDone:
+	activeTurnCtx, activeTurnCancel := context.WithTimeout(ctx, time.Duration(activeTurnTimeout)*time.Second)
+	defer activeTurnCancel()
+	if agentLoop.WaitForActiveRequestsContext(activeTurnCtx) {
 		slog.Info("shutdown: all active turns completed before shutdown")
-	case <-time.After(time.Duration(activeTurnTimeout) * time.Second):
+	} else {
 		slog.Warn("shutdown: timeout waiting for active turns — force-canceling",
 			"timeout_seconds", activeTurnTimeout)
 	}
@@ -139,6 +135,9 @@ func omnipusGracefulShutdown(
 		slog.Info("shutdown: agent loop drained cleanly")
 	case <-ctx.Done():
 		slog.Warn("shutdown: timeout waiting for agent loop drain — saving partial state")
+	}
+	if mediaStore, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
+		mediaStore.Stop()
 	}
 
 	slog.Info("shutdown: step 3 — verifying partial state persistence")

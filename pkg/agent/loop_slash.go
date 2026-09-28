@@ -267,7 +267,12 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			return nil
 		},
 		GetActiveTurn: func() any {
-			info := al.GetActiveTurn()
+			// Bug 3 fix (design note Question 2): scope this to the ISSUING
+			// session's own key, not the whole activeTurnStates map — the
+			// global al.GetActiveTurn() could report an unrelated session's
+			// active turn to this session's /tasks command. opts is already
+			// captured by this closure (same pattern as rt.GetModelInfo below).
+			info := al.GetActiveTurnBySession(opts.SessionKey)
 			if info == nil {
 				return nil
 			}

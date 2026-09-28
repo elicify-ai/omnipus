@@ -7605,6 +7605,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: AuditLogResponse,
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -7874,6 +7879,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: BackupCreateResponse,
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -7897,6 +7907,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         .passthrough()
     ),
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -7947,6 +7962,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: z.array(ChannelEntry),
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -7972,6 +7992,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 400,
         description: `Unknown channel type or malformed slug.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -8003,6 +8028,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: z.object({}).partial().passthrough(),
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
         schema: ErrorResponse,
@@ -8028,6 +8058,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 400,
         description: `Malformed channel id.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -8071,6 +8106,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
         schema: ErrorResponse,
@@ -8093,6 +8133,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: ChannelEnabledResponse,
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
         schema: ErrorResponse,
@@ -8114,6 +8159,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
     response: ChannelEnabledResponse,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 404,
         description: `Channel ID not found.`,
@@ -8214,6 +8264,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: ChannelTestResponse,
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
         schema: ErrorResponse,
@@ -8307,6 +8362,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: z.array(PendingRestartEntry),
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -8356,6 +8416,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 422,
         description: `Key field is required (empty key).`,
         schema: ErrorResponse,
@@ -8384,6 +8449,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       .object({ status: z.literal("removed"), key: z.string() })
       .passthrough(),
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 404,
         description: `Credential key not found.`,
@@ -8415,6 +8485,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 400,
         description: `Invalid request (e.g. empty passphrase).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -10611,6 +10686,11 @@ Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 409,
         description: `Lowering drift (issue #904, D16) — the agents the new global limit would lower differ from confirmed_lowering, or an agent record changed mid-write (revision conflict; agents already lowered were rolled back). Nothing was written; the body carries the fresh preview.
 `,
@@ -11422,6 +11502,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Backup file not found.`,
         schema: ErrorResponse,
@@ -11678,6 +11763,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
@@ -11693,6 +11783,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     requestFormat: "json",
     response: ExecProxyStatus,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -11735,6 +11830,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 400,
         description: `Invalid level value.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -11782,6 +11882,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
@@ -11826,6 +11931,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
@@ -11841,6 +11951,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     requestFormat: "json",
     response: RetentionSweepResult,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -11898,6 +12013,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 400,
         description: `Validation error (invalid mode, profile, or path).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -12020,6 +12140,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
@@ -12061,6 +12186,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 400,
         description: `Invalid policy values.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -12387,6 +12517,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     requestFormat: "json",
     response: ClearAllSessionsResponse,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -12759,6 +12894,11 @@ Polled by the SPA StatusBar every 15 seconds.
     requestFormat: "json",
     response: StorageStats,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -13460,6 +13600,11 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     response: z.array(ToolRegistryEntry),
     errors: [
       {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
         schema: ErrorResponse,
@@ -13475,6 +13620,11 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     requestFormat: "json",
     response: ErrorResponse,
     errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 404,
         description: `Endpoint removed — use GET /api/v1/tools instead.

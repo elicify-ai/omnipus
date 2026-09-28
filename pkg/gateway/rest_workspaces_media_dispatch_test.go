@@ -25,7 +25,7 @@ import (
 
 func TestHandleWorkspaces_MediaSubpath_DispatchesToWorkspaceMedia(t *testing.T) {
 	api, _ := newTestRestAPI(t)
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(store)
 	api.mediaStore = store
 
