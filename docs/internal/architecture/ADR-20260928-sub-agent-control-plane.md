@@ -1,6 +1,6 @@
 # ADR-20260928 — The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume
 
-- **Status:** Proposed, corrected — the one `grill-spec` (ADR mode) round returned **BLOCK** (4 critical, 11 major, 10 minor, 3 observations; [review](./ADR-20260928-sub-agent-control-plane-review.md), commit `f746ddb2a`). This is the **one correction round**: every finding is disposed in [Review disposition](#review-disposition); the founder's answers of 2026-09-28 to the review's eight questions are encoded (F1011-Q1 … Q8, [Founder decisions](#founder-decisions)). No second grill runs; what could not be settled is listed under [Still open for the founder](#still-open-for-the-founder).
+- **Status:** Proposed, corrected — the one `grill-spec` (ADR mode) round returned **BLOCK** (4 critical, 11 major, 10 minor, 3 observations; [review](./ADR-20260928-sub-agent-control-plane-review.md), commit `f746ddb2a`). This is the **one correction round**: every finding is disposed in [Review disposition](#review-disposition); the founder's answers of 2026-09-28 to the review's eight questions are encoded (F1011-Q1 … Q8, [Founder decisions](#founder-decisions)). No second grill runs; the four items the correction left open were answered by the founder the same day ([Founder answers to the open items](#founder-answers-to-the-open-items)).
 - **Build gate:** implementation starts only after the #984 follow-up (#1000) and the Q2=B branch have landed on `release/v0.1.1` (founder, 2026-09-28). Restart resume is built **once, here** — Q2=B ships without it (founder Q7 = A, recorded in `coordination/logs/fix890-opus/lc947-defect1-design-note.md`, "Founder ruling Q7 = A").
 - **Date:** 2026-09-28 (draft `12268d405`; correction the same day).
 - **Deciders:** Daniel Piatkowski (founder); architect (draft and this correction).
@@ -9,7 +9,7 @@
 - **Amends:**
   - [ADR-093 — An open conversation must keep the ability to delegate](./ADR-093-open-conversation-must-keep-delegation.md) **D4**: `steer` no longer revives a finished child; only `follow_up` does (D3).
   - [ADR-091 — A sub-agent is a session steered by another session](./ADR-091-steered-sessions-replace-subagents.md) **D5** (action list gains `stop`, `redirect`, `escalate`), **D6** (a parked descendant now holds back its parent's completion — D6b below), **§7** (restart recovery of steered sessions — D8).
-  - `docs/internal/specs/cancel-cross-channel-spec.md` **decision 12** and its **FR-5** ("Chat=/cancel only (no `/stop` alias)"): `/stop` and `/redirect` are added as their own commands (D9, founder F1011-Q1).
+  - `docs/internal/specs/cancel-cross-channel-spec.md` **decision 12** and its **FR-5** ("Chat=/cancel only (no `/stop` alias)"): `/stop` and `/stop-redirect` are added as their own commands (D9, founder F1011-Q1).
   - `docs/internal/specs/unified-goal-plan-subagent-spec.md` **R§8.2 / FR-132 / FR-134**: the owner terminus gets a defined answer path; nothing is loosened (D1).
 - **Related:** #1011 (D1–D5, F1–F4); #1000 (queue ruling); #1020 (steered child has no post-turn steering drain) and #1027 (upward completion wake can repeat after inbox compaction) — D4 must not regress either; the fix-890 squad's Q2=B design note (`coordination/logs/fix890-opus/arch-q2-design.md`) and restart rulings Q5–Q7 (`lc947-defect1-design-note.md`) — both local coordination files, not in the repo.
 
@@ -81,7 +81,7 @@ Rulings given before the draft (2026-09-28), and the founder's answers to the re
 | R-Q5 / Q6=A | After a restart interrupted children are not thrown away; they **keep their goal (paused)**; the top-level parent is told and can resume | D8 |
 | Q7=A | Q2=B ships **without** restart resume; restart resume is built once, in this ADR | Build gate, D8 |
 | R-1000 | "#1000 Q4: done/wake messages never refused; ordinary steers capped at 200" (`coordination/PLAN-2026-09-28.md`, "Founder rulings 2026-09-28 (late)"); implemented in `f040a2a66` for the steering queue | D5 |
-| **F1011-Q1** | **Add `/stop` and `/redirect`** — single sub-agent, non-cascading; `/cancel` and the Stop button keep ending the whole tree. Amends the cross-channel cancel spec's `/stop` ban | D9 |
+| **F1011-Q1** | **Add `/stop` and a redirect command** (named `/stop-redirect` by the founder's follow-up answer, 2026-09-28) — single sub-agent, non-cascading; `/cancel` and the Stop button keep ending the whole tree. Amends the cross-channel cancel spec's `/stop` ban | D9 |
 | **F1011-Q2** | No person at the top (heartbeat / schedule / task): the owner-only question waits until the child's **24-hour limit**, then the child **fails visibly** with "owner could not be reached" | D1.8 |
 | **F1011-Q3** | Restart: **the child decides.** After a restart C is told its worker D was interrupted and resumes / redirects / drops D itself; the system does **not** auto-resume D (overrides the draft's recommendation). Parent-first boot order | D8 |
 | **F1011-Q4** | A child **waiting for an answer holds back** the parent's "done": the parent waits until the question is answered and the child has finished. **Changes ADR-091 D6** (overrides the draft's recommendation) | D6b |
@@ -204,7 +204,7 @@ Any steer that arrives while the redirect is in flight gets `seq > R` and is the
 
 If the paused session had no turn in flight (waiting on descendants), resume flips it to `running` and wakes it only if stored upward messages are pending.
 
-**Who may call them.** Any ancestor and the human operator through `/stop` / `/redirect` (D9). External command-line children (`rec.Is3P`) return a named `not_steerable` result pointing to `cancel` / `follow_up`, like `executeSteer` today.
+**Who may call them.** Any ancestor and the human operator through `/stop` / `/stop-redirect` (D9). External command-line children (`rec.Is3P`) return a named `not_steerable` result pointing to `cancel` / `follow_up`, like `executeSteer` today.
 
 ### D3 — `steer` is for live children only (amends ADR-093 D4)
 
@@ -285,10 +285,10 @@ A dev install replaying old frames that still carry `steering_receipt` must drop
 | `handback` (done) | exempt | exempt — over-long text is stored truncated with a visible truncation marker and the full text stays in the child's transcript (ADR-087 — truncation is an outcome, not a silence) | n/a | exempt (as today) |
 | fatal `error` (failed), `goal_status` | exempt | exempt, same truncation | n/a | exempt (as today) |
 | `question`, `decision_request` | exempt (relays do not add depth, D1.2) | exempt, same truncation | **exempt** | exempt (as today) |
-| `blocker` | applies | applies | applies | exempt (as today) |
+| `blocker` | exempt | exempt, same truncation | **exempt** | exempt (as today) |
 | `progress`, `checkpoint`, `artifact`, non-fatal `error` | applies | applies | n/a | applies |
 
-**Any refusal is a visible error to the sender**, returned as the `message_parent` tool result naming the cap — never a silent drop. `blocker` is not in the founder's list and keeps its limits (see Still open). A child cannot flood questions without limit in practice: a `wait=true` question parks it, and D1.8 expires parks; `wait=false` questions are the residual risk (Consequences).
+**Any refusal is a visible error to the sender**, returned as the `message_parent` tool result naming the cap — never a silent drop. `blocker` is never refused either (founder answer to O3, 2026-09-28). A child cannot flood questions or blockers without limit in practice: a `wait=true` question parks it, and D1.8 expires parks; `wait=false` questions and blockers are the residual risk (Consequences).
 
 ### D6 — A paused child is idle, alive, costs nothing — and counts as unfinished
 
@@ -318,7 +318,7 @@ Mechanism unchanged (`CancelSubtree` / `StopSubtree`):
 - Ends the cancelled sessions' own goals (FD1=A), never an ancestor's; pinned by #1000's `pkg/agent/goal_ancestor_guard_984_test.go`. Only `/goal clear` (`pkg/agent/goal_outcome.go::clearGoalByUser`) ends a parent's goal.
 - **On an interrupted child** (terminal with a kept goal) `cancel` is the **drop**: it ends the kept goal, removes the `restart_interrupt` note's "unfinished" effect, and cascades the drop to that child's interrupted descendants; receipt `applied`, reason `dropped`. This replaces `executeCancel`'s "already terminal — no action" for that one case.
 - Supersedes every pending control on the sessions it reaches.
-- `stop`, `redirect`, `/stop`, `/redirect` never cascade.
+- `stop`, `redirect`, `/stop`, `/stop-redirect` never cascade.
 
 ### D8 — Restart: interrupted children keep their goal, the top-level parent is told, each child decides about its own workers (amends ADR-091 §7)
 
@@ -346,18 +346,20 @@ Built once, here (Q7=A); follows the founder's Q5 / Q6 = A rulings with F1011-Q3
 
 **8. Housekeeping.** No automatic deletion is introduced; "housekeeping" in the draft referred to nothing that exists and is withdrawn. A never-resumed interrupted tree stays until cancelled or deleted with its chat (ADR-093 D7).
 
-### D9 — Chat commands `/stop` and `/redirect` (F1011-Q1; amends the cross-channel cancel spec)
+### D9 — Chat commands `/stop` and `/stop-redirect` (F1011-Q1; amends the cross-channel cancel spec)
 
-**Amendment, stated explicitly:** `docs/internal/specs/cancel-cross-channel-spec.md` decision 12 ("Chat=/cancel only (no `/stop` alias)") and its FR-5 are amended by the founder's answer: `/stop` and `/redirect <instruction>` are added as **their own commands** — not aliases of `/cancel`. `/cancel` keeps FR-5's "no aliases" rule. The `cmd_cancel.go` comment and the spec's registration test (exact-set assertion, review F-20 of that spec) are updated in the same change.
+**The founder's model (2026-09-28):** *steer* sends an instruction without stopping; *redirect* stops first, then gives the new instruction. The chat command for redirect is therefore named **`/stop-redirect`** so the difference is obvious in chat; the tool action stays `redirect`. `/stop` remains its own command. There is **no `/steer` alias** (founder answer to O4).
+
+**Amendment, stated explicitly:** `docs/internal/specs/cancel-cross-channel-spec.md` decision 12 ("Chat=/cancel only (no `/stop` alias)") and its FR-5 are amended by the founder's answer: `/stop` and `/stop-redirect <instruction>` are added as **their own commands** — not aliases of `/cancel`. `/cancel` keeps FR-5's "no aliases" rule. The `cmd_cancel.go` comment and the spec's registration test (exact-set assertion, review F-20 of that spec) are updated in the same change.
 
 | Command | Where | Effect |
 |---|---|---|
 | `/stop` | typed in a **sub-agent's** (steered) session | D2 `stop` on that one session; no cascade |
-| `/redirect <instruction>` | same | D2 `redirect` on that one session; no cascade |
-| either, typed in a root conversation | — | Reply: "`/stop` and `/redirect` act on one sub-agent — open it first. `/cancel` or the Stop button ends this conversation's whole tree." |
+| `/stop-redirect <instruction>` | same | D2 `redirect` on that one session; no cascade |
+| either, typed in a root conversation | — | Reply: "`/stop` and `/stop-redirect` act on one sub-agent — open it first. `/cancel` or the Stop button ends this conversation's whole tree." |
 | `/cancel`, the Stop button | anywhere | Unchanged: end the whole tree (`handleCancel`) |
 
-The commands are conversation-scoped (#955) and run with the human principal of the signed-in owner (the same `Who` rule as D1.4), writing to the control plane directly, not through the agent's `delegate` tool. `/goal stop` keeps meaning "clear the goal": it is an argument of `/goal` (`GoalClearAliases`), while `/stop` is a separate top-level command, so the parser never confuses them (MIN-010). No `/steer` alias is added (see Still open).
+The commands are conversation-scoped (#955) and run with the human principal of the signed-in owner (the same `Who` rule as D1.4), writing to the control plane directly, not through the agent's `delegate` tool. `/goal stop` keeps meaning "clear the goal": it is an argument of `/goal` (`GoalClearAliases`), while `/stop` is a separate top-level command, so the parser never confuses them (MIN-010). No `/steer` alias is added (founder answer to O4).
 
 ### D10 — Rollback is out of scope
 
@@ -390,11 +392,11 @@ Undo/rewind will not be built (#1011 F4). Resumability covers "continue from her
 ### Negative
 
 - **Residual R§8.2 risk:** the root agent still chooses which owner message to cite when the owner wrote the question code; the runtime copies the owner's words, so the worst case is the owner's own words applied to the question they named. The draft's claim that R§8.2 is "stronger than before" is withdrawn as unqualified.
-- **Owner answers need a gateway identity:** a channel conversation (Telegram, Discord, …) has no `GatewayUserID`, so an owner-only question from a channel-rooted tree can only be answered by the owner in the web app (in the child's session) or it expires at 24 h. A dev install running without authentication has an empty owner identity and **cannot** answer owner-only questions (fail-closed). Both listed under Still open.
+- **Owner answers need a gateway identity:** a channel conversation (Telegram, Discord, …) has no `GatewayUserID`, so an owner-only question from a channel-rooted tree can only be answered by the owner in the web app (in the child's session) or it expires at 24 h. A dev install running without authentication has an empty owner identity and **cannot** answer owner-only questions (fail-closed). Both accepted by the founder (2026-09-28): see [Founder answers to the open items](#founder-answers-to-the-open-items).
 - A new durable artefact (the ledger) with its own crash rules and compaction.
 - `paused` gets its first writer; readers must check the `pause` note.
 - A paused child's background shells keep running.
-- `wait=false` questions are exempt from every upward cap and could be used to flood a parent's inbox.
+- `wait=false` questions and blockers are exempt from every upward cap and could be used to flood a parent's inbox.
 - A parked grandchild can now hold a whole tree's "done" for up to 24 hours (D6b).
 - Interrupted children keep their goal as terminal records with a note — two meanings of `failed` that readers must separate by the note.
 - Wire changes in seven schemas plus three new action schemas; new SPA work to render receipts and question codes.
@@ -444,11 +446,12 @@ Undo/rewind will not be built (#1011 F4). Resumability covers "continue from her
 | `pkg/agent/boot_sweep.go` | Edge-order recovery; interrupted = `failed(interrupted)` + note + goal kept; skip `paused`-with-note; root notice once per boot per tree; `PlanEngine.bootSweep` leaves steered records to `SteerBootRecovery`; park-expiry check |
 | `pkg/agent/revive_inbound.go::runInboundTurnWithRevival` | Owner message into a `needs_input` session answers it (D1.4 b); owner message into a paused session resumes it |
 | park-expiry sweep (new, periodic + boot) | D1.8 |
-| `pkg/audit` | Owner answers and human `/stop` / `/redirect` / `/cancel` |
-| `pkg/commands` | `/stop`, `/redirect`; `cmd_cancel.go` comment; exact-set registration test |
+| `pkg/audit` | Owner answers and human `/stop` / `/stop-redirect` / `/cancel` |
+| `pkg/commands` | `/stop`, `/stop-redirect`; `cmd_cancel.go` comment; exact-set registration test |
 | `contracts/`, `pkg/gateway/inboundschemas/SubagentStateFrame.yaml` | D4 wire table (backend-lead edits and regenerates) |
-| SPA | Render control receipts and question codes; `/stop`, `/redirect` in the web command surface |
+| SPA | Render control receipts and question codes; `/stop`, `/stop-redirect` in the web command surface |
 | `docs/internal/specs/cancel-cross-channel-spec.md` | Decision 12 / FR-5 amendment note |
+| User docs (owner-only questions) | State that owner-only questions are answered by the signed-in owner in the web app, and that without sign-in they cannot be answered and expire after 24 hours (O2) |
 
 ## Review disposition
 
@@ -485,14 +488,22 @@ Every finding of the [grill review](./ADR-20260928-sub-agent-control-plane-revie
 | OBS-002 three runtime-started turns | **Accepted** | The automatic worker cascade is gone (F1011-Q3); two remain (D6 notice, D8 root notice) |
 | OBS-003 replay of old frames | **Accepted** | D4 last paragraph — spec checks the replay path |
 
-## Still open for the founder
+## Founder answers to the open items
 
-| # | Item | Why it is not settled | Recommendation |
+The correction round left four items open; the founder answered them on 2026-09-28. Recorded here — this is not a further correction round.
+
+| # | Item | Founder's answer | Where it lands |
 |---|---|---|---|
-| O1 | Owner answers from channel conversations (Telegram, Discord, …) | Strict identity (F1011-Q5) needs a gateway identity that channel messages do not carry, so owner-only questions from channel-rooted trees can only be answered in the web app | Accept for now; bind channel accounts to the owner later |
-| O2 | Dev installs without authentication | Empty owner identity → owner-only questions can never be answered, only expire | Accept (fail-closed); document |
-| O3 | `blocker` messages | Not named in F1011-Q7; kept under the limits | Treat like questions (never refused) — needs a yes |
-| O4 | A `/steer` alias for `/redirect` (#1011 F1 asked for it) | The founder's answer named only `/stop` and `/redirect`, and "steer" means advisory elsewhere | Do not add |
+| O1 | Owner answers from channel conversations (Telegram, Discord, …) have no gateway identity | **Accept for now.** Owner-only questions in Telegram/Discord-rooted trees are answered in the web app (D1.4 path (b), in the child's session). Linking channel accounts to the owner is a **follow-up item** (FU-1 below) | D1.4, Consequences |
+| O2 | A dev install without sign-in has an empty owner identity | **Accept fail-closed, and document it**: the user docs for owner-only questions must state that without sign-in these questions cannot be answered and expire after 24 hours | D1.4, Affected components (docs) |
+| O3 | `blocker` messages were not in F1011-Q7 | **Blockers are also never refused**, like questions | D5 cap table |
+| O4 | `/steer` alias for the redirect command | **No `/steer` alias.** Founder's model: steer = instruction without stopping; redirect = stop first, then the new instruction. The chat command is **`/stop-redirect`**; the tool action stays `redirect`; `/stop` stays its own command | D9 |
+
+### Follow-up items
+
+| # | Item | Owner |
+|---|---|---|
+| FU-1 | Link a channel account (Telegram, Discord, …) to the signed-in owner so owner-only questions can be answered from the channel conversation under the same Who/When/Which/Once rules (D1.4) | team-lead to file an issue; design by architect |
 
 ## Evidence
 
