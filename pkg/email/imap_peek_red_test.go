@@ -131,7 +131,7 @@ func startCaptureIMAP(t *testing.T, msgs [][]byte, seenUIDs map[int]bool, reject
 	appendRaw(t, ln.Addr().String(), msgs, seenUIDs)
 
 	prev := imapDial
-	imapDial = func(addr string, _ *tls.Config) (*imapclient.Client, error) {
+	imapDial = func(_ context.Context, addr string, _ *tls.Config) (*imapclient.Client, error) {
 		return imapclient.DialInsecure(addr, nil)
 	}
 	t.Cleanup(func() { imapDial = prev })

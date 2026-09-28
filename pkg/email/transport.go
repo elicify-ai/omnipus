@@ -73,18 +73,30 @@ const (
 )
 
 // imapDial dials the IMAP server: implicit TLS everywhere except a loopback
-// host, which dials plaintext (LOGIN included). The D36 built-in fake server
+// configured host, which dials plaintext (LOGIN included). The D36 built-in fake server
 // (spec §7) and the D37 GreenMail UAT instance are loopback servers on
-// dynamic ports, so the local sink is identified by ADDRESS - traffic to it
-// never leaves the machine, and a name- or port-based exception could not
-// carry a dynamic port. It is a package-level var only so tests can point
+// dynamic ports, so the local sink is identified by the configured hostname,
+// not a DNS result. It is a package-level var only so tests can point
 // dialIMAP at an in-memory server over a plaintext connection; production
 // code never reassigns it.
-var imapDial = func(addr string, tlsCfg *tls.Config) (*imapclient.Client, error) {
-	if isLoopbackAddr(addr) {
-		return imapclient.DialInsecure(addr, nil)
+var imapDial = func(ctx context.Context, addr string, tlsCfg *tls.Config) (*imapclient.Client, error) {
+	dialer := &net.Dialer{}
+	if isLoopbackAddr(addr) && isLoopbackAddr(tlsCfg.ServerName) {
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		return imapclient.New(conn, nil), nil
 	}
-	return imapclient.DialTLS(addr, &imapclient.Options{TLSConfig: tlsCfg})
+	config := tlsCfg.Clone()
+	if config.NextProtos == nil {
+		config.NextProtos = []string{"imap"}
+	}
+	conn, err := (&tls.Dialer{NetDialer: dialer, Config: config}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	return imapclient.New(conn, &imapclient.Options{TLSConfig: config}), nil
 }
 
 // isLoopbackAddr reports whether addr's host part is a loopback IP or
@@ -348,39 +360,30 @@ func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.Select
 	// Bounded DNS retry inside the overall dial bound (round-8 F2,
 	// FR-037/MC-33/B-42): the hostname resolves through the dialResolver seam
 	// (3 lookups, 250/500 ms backoff on failure) and the dial targets the
-	// RESOLVED address; tlsCfg.ServerName above keeps the ORIGINAL hostname
-	// so the TLS handshake still validates the name the user configured. IP
-	// literals skip resolution entirely (the loopback test servers are
-	// unaffected). A resolution failure surfaces a dns-class error and spends
-	// no dial attempt.
+	// RESOLVED addresses in order; tlsCfg.ServerName above keeps the ORIGINAL
+	// hostname so the TLS handshake still validates the name the user
+	// configured. IP literals skip resolution entirely (the loopback test
+	// servers are unaffected). A resolution failure surfaces a dns-class error
+	// and spends no dial attempt.
+	targets := []string{addr}
 	if host, port, serr := net.SplitHostPort(addr); serr == nil && !isIPLiteral(host) {
 		resolved, rerr := resolveHostBounded(dialCtx, dialResolver, host)
 		if rerr != nil {
 			return nil, nil, rerr
 		}
-		addr = net.JoinHostPort(resolved, port)
+		targets = make([]string, 0, len(resolved))
+		for _, resolvedAddr := range resolved {
+			targets = append(targets, net.JoinHostPort(resolvedAddr, port))
+		}
 	}
 
-	// imapDial does not take a context; guard the dial with a timeout goroutine
-	// so an unreachable server cannot block past dialTimeout.
-	type dialResult struct {
-		cl  *imapclient.Client
-		err error
-	}
-	ch := make(chan dialResult, 1)
-	go func() {
-		cl, err := imapDial(addr, tlsCfg)
-		ch <- dialResult{cl, err}
-	}()
-	var client *imapclient.Client
-	select {
-	case <-dialCtx.Done():
-		return nil, nil, fmt.Errorf("email transport: dial %s: %w", addr, dialCtx.Err())
-	case res := <-ch:
-		if res.err != nil {
-			return nil, nil, fmt.Errorf("email transport: dial TLS %s: %w", addr, res.err)
-		}
-		client = res.cl
+	client, err := dialAddressCandidates(dialCtx, targets, "dial TLS", func(ctx context.Context, target string) (*imapclient.Client, error) {
+		return imapDial(ctx, target, tlsCfg)
+	}, func(client *imapclient.Client) {
+		_ = client.Close()
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 
 	if _, err := runIMAP(ctx, "login", func() (struct{}, error) {
