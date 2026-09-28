@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import type { OpenPanel, PanelDefinition, PanelContext, PanelId } from './types'
-import { usePanelShellStore, PANEL_WIDTH_UNSET } from './panelShellStore'
+import { usePanelShellStore } from './panelShellStore'
 import { readPanelWidth, writePanelWidth, deletePanelWidth, panelWidthScope } from './panelWidthMemory'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
 import { focusPanelTriggerOrigin } from './panelFocus'
@@ -21,6 +21,8 @@ import { focusPanelTriggerOrigin } from './panelFocus'
 export { PANEL_TRIGGER_ATTR } from './panelFocus'
 
 export type PanelFocusReturnReason = 'trigger' | 'chat'
+
+let panelWidthPersistenceWarned = false
 
 function restoreFocusToChat(): void {
   const focus = (): boolean => {
@@ -54,9 +56,9 @@ function usePanelWidthHydration(
   useEffect(() => {
     const current = usePanelShellStore.getState().activePanel
     if (current === null) return
-    usePanelShellStore.getState().setPanelWidth(
-      readPanelWidth(username, current.id, current.context) ?? PANEL_WIDTH_UNSET,
-    )
+    const width = readPanelWidth(username, current.id, current.context)
+    if (width === null) usePanelShellStore.getState().resetPanelWidth()
+    else usePanelShellStore.getState().setPanelWidth(width)
   }, [username, widthScope])
 }
 
@@ -249,7 +251,10 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
       const { activePanel } = usePanelShellStore.getState()
       if (activePanel === null) return
       setPanelWidthInStore(px)
-      writePanelWidth(username, activePanel.id, activePanel.context, px)
+      if (!writePanelWidth(username, activePanel.id, activePanel.context, px) && !panelWidthPersistenceWarned) {
+        panelWidthPersistenceWarned = true
+        console.warn('[side-panel] Panel width could not be persisted; using session memory only.')
+      }
     },
     [username],
   )

@@ -7,10 +7,8 @@
 // importing `usePanelShellStore` from here, which is now the ui store
 // instance — one store, one truth, no parallel slice (SC-005).
 //
-// `ActivePanel` and `PANEL_WIDTH_UNSET` moved to ./types (the shape-level
-// contract module) so both stores and the shell import one definition.
+// `ActivePanel` lives in ./types so the store and shell import one definition.
 
-export { PANEL_WIDTH_UNSET } from './types'
 export type { ActivePanel } from './types'
 
 import type { StoreApi, UseBoundStore } from 'zustand'

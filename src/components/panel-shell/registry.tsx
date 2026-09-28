@@ -1,6 +1,9 @@
 import { lazy } from 'react'
-import { confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
-import type { PanelContentProps, PanelDefinition } from './types'
+import {
+  confirmDiscardLibraryEdits,
+  isLibraryEditorDirty,
+} from '@/components/library/preview/unsavedGuard'
+import type { PanelContentProps, PanelDefinition, PanelId } from './types'
 
 const LibraryPanel = lazy(async () => {
   const module = await import('@/components/library/LibraryPanel')
@@ -28,6 +31,7 @@ export const panels: readonly PanelDefinition[] = [
     expandTarget: ({ workspaceId }) =>
       `/#/library${workspaceId ? `?workspace=${encodeURIComponent(workspaceId)}` : ''}`,
     beforeLeave: confirmDiscardLibraryEdits,
+    beforeLeaveRequired: isLibraryEditorDirty,
   },
   {
     id: 'browser',
@@ -41,3 +45,8 @@ export const panels: readonly PanelDefinition[] = [
     },
   },
 ]
+
+/** Resolve the single production definition for an external transition. */
+export function getPanelDefinition(id: PanelId): PanelDefinition | undefined {
+  return panels.find((panel) => panel.id === id)
+}

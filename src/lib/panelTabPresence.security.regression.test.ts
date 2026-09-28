@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { PanelId } from '@/components/panel-shell/types'
 
 type PresenceApi = typeof import('./panelTabPresence') & {
   acceptPanelPresenceMessage?: (value: unknown) => boolean
@@ -82,7 +81,7 @@ describe('panel-tab presence security boundaries', () => {
 
   it('returns false and forgets an app handle whose focus throws', async () => {
     const api = await loadFresh()
-    const identity = { panelId: 'library' as PanelId, workspaceId: 'ws-1' }
+    const identity = { panelId: 'library', workspaceId: 'ws-1' } as const
     const handle = {
       closed: false,
       focus: vi.fn(() => {
@@ -119,7 +118,7 @@ describe('panel-tab presence security boundaries', () => {
 
   it('returns a detached read-only registry view rather than the live Map', async () => {
     const api = await loadFresh()
-    const identity = { panelId: 'library' as PanelId, workspaceId: 'ws-1' }
+    const identity = { panelId: 'library', workspaceId: 'ws-1' } as const
     const handle = { closed: false, focus: vi.fn() } as unknown as Window
     api.registerPanelTabHandle(identity, handle)
 

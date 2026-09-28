@@ -4,6 +4,8 @@ import {
   onLibraryPopoutClosed,
   onLibraryWorkspaceChanged,
 } from './libraryHandoff'
+import { PANEL_POLICIES, isWorkspaceScopedPanel } from '@/components/panel-shell/types'
+import type { PanelId } from '@/components/panel-shell/types'
 import {
   forgetPanelTabHandle,
   panelIdentityKey,
@@ -40,10 +42,10 @@ function ownershipKey(registration: PanelPopoutRegistration): string {
     : `identity:${panelIdentityKey(registration.identity)}`
 }
 
-function findOwnedLibraryPopout(popoutId: string): OwnedPanelPopout | undefined {
+function findOwnedPanelPopout(panelId: PanelId, popoutId: string): OwnedPanelPopout | undefined {
   const direct = ownedPopouts.get(`popout:${popoutId}`)
-  if (direct?.identity.panelId === 'library') return direct
-  if (popoutId !== LEGACY_LIBRARY_HANDOFF_ID) return undefined
+  if (direct?.identity.panelId === panelId) return direct
+  if (panelId !== 'library' || popoutId !== LEGACY_LIBRARY_HANDOFF_ID) return undefined
   const libraries = [...ownedPopouts.values()].filter((entry) => entry.identity.panelId === 'library')
   return libraries.length === 1 ? libraries[0] : undefined
 }
@@ -87,6 +89,19 @@ function moveOwned(entry: OwnedPanelPopout, identity: PanelIdentity): void {
   registerPanelTabHandle(identity, entry.handle)
 }
 
+/** Re-key an owned workspace pop-out according to its central switch policy. */
+export function updatePanelPopoutWorkspace(
+  panelId: PanelId,
+  popoutId: string,
+  workspaceId?: string,
+): void {
+  const entry = findOwnedPanelPopout(panelId, popoutId)
+  const follows = PANEL_POLICIES[panelId].switchFollows
+  if (!entry || follows === 'never' || !isWorkspaceScopedPanel(panelId)) return
+  if (follows === 'when-scoped' && entry.identity.workspaceId === undefined) return
+  moveOwned(entry, { panelId, workspaceId })
+}
+
 function closeAllOwned(): void {
   const entries = [...ownedPopouts.values()]
   ownedPopouts.clear()
@@ -104,14 +119,12 @@ function closeAllOwned(): void {
 function ensureInfrastructure(): void {
   if (stopLibraryWorkspace === null) {
     stopLibraryWorkspace = onLibraryWorkspaceChanged((popoutId, workspaceId) => {
-      const entry = findOwnedLibraryPopout(popoutId)
-      if (!entry) return
-      moveOwned(entry, { panelId: 'library', workspaceId })
+      updatePanelPopoutWorkspace('library', popoutId, workspaceId)
     })
   }
   if (stopLibraryClosed === null) {
     stopLibraryClosed = onLibraryPopoutClosed((popoutId, workspaceId) => {
-      const entry = findOwnedLibraryPopout(popoutId)
+      const entry = findOwnedPanelPopout('library', popoutId)
       if (!entry) return
       finishOwned(entry, { panelId: 'library', workspaceId })
     })

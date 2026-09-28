@@ -8,19 +8,10 @@
 //     content:       React component (receives close/expand callbacks via props)
 //     expandTarget:  (context) => route location    // full-page route + params
 //     beforeLeave?:  () => Promise<boolean>         // CRIT-001 transition gate
+//     beforeLeaveRequired?: () => boolean            // optional synchronous fast path
 //   }
 //
 import type { ReactNode } from 'react'
-
-/**
- * Sentinel: "no width chosen yet — derive at open". Not a real px value.
- * Lives here (the shape-level contract module) rather than next to the store
- * because BOTH the real ui store (src/store/ui.ts, wave 1) and the wave-0
- * demo shim (panelShellStore.ts) need it, and zustand runs the store
- * initializer eagerly at module evaluation — the sentinel must already be
- * initialized (a TDZ ReferenceError otherwise).
- */
-export const PANEL_WIDTH_UNSET = -1
 
 /** The registered panel ids (§8.1; §8.2: valid `?panel=` values are the REGISTERED ids). */
 export type PanelId = 'library' | 'browser' | 'mail' | 'tasks' | 'team' | 'calendar'
@@ -141,4 +132,10 @@ export interface PanelDefinition {
    * panel is still mounted. False cancels the transition.
    */
   beforeLeave?: () => Promise<boolean>
+  /**
+   * Optional synchronous fast-path predicate for external transition
+   * triggers. False means no leave decision is needed and the transition
+   * may preserve its same-tick behavior; absent means the guard must run.
+   */
+  beforeLeaveRequired?: () => boolean
 }
