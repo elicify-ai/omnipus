@@ -4,6 +4,8 @@
 - **Spec:** 6 of 6 (v0.1.0 Foundation)
 - **Source ADR:** [ADR-019](../architecture/ADR-019-v01-workspaces-foundation.md) — FR-9 (skills) + FR-10 (plugins/marketplaces shape) + FR-11 (protocols) + FR-12 (integrations + auth)
 - **Status:** Draft → pending `/grill-spec` (GATE C)
+
+Status: Draft
 - **Cross-spec (Phase 3.5):** ACP bidirectional-runner hook = **Spec-4**; A2A agent-reference + Card-projectable identity = **Spec-3/4**; skill tools use the renamed `system.workspace.*` namespace convention (Spec-1); the Workspace key (Spec-1) scopes skills.
 - **Lessons pre-applied:** ground hard; contract-first; CI-authority; new deps = ADR; freeze persisted shapes; consent-gated writes (Spec-1); the skill tools are **stubs** (verified earlier this session).
 

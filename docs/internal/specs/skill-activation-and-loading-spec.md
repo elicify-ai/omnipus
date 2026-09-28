@@ -2,6 +2,8 @@
 
 **Created**: 2026-09-01
 **Status**: Draft (rev 5) — revised against the adversarial review (`…-spec-review.md`, REVISE: 3 CRITICAL, 5 MAJOR, 4 MINOR, 2 OBSERVATION). Three findings were design changes and landed in **ADR-072 r4** (D10.2, D6.1.1, D1.2).
+
+Status: Draft
 **Source**: [ADR-072 r6](../architecture/ADR-072-skill-activation-and-loading.md) (Accepted), answering
 [elicify-ai/omnipus#663](https://github.com/elicify-ai/omnipus/issues/663)
 **Phase**: Workspaces-class at drafting (routing rule then in force — issue #156; the v0.3 release label was retired 2026-09-25)

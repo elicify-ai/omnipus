@@ -1,5 +1,7 @@
 # Unified Library Search & Grep Engine — Implementation Spec
 
+Status: Implemented
+
 - **Source ADR:** `docs/internal/architecture/ADR-081-unified-library-search-and-grep-engine.md`.
 - **Codebase:** branch `integrate/library-improvements-v0.1.1`. Pin lineage (one
   first-parent line): ADR validated @ `f37346338`; draft @ `f23f18ffb`; round-1 review

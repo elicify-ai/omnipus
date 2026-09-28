@@ -4,6 +4,8 @@
 - **Date:** 2026-07-02
 - **Release phase:** was v0.3 (the binding shipped on the v0.1.1 line; the v0.3 release label was retired 2026-09-25)
 - **Scope decision (operator-confirmed):** **Full feature** — routing/binding/UX slice **and** multi-instance (N-per-type). Binding model: **1 instance → 1 workspace → 1 mandatory member agent** (a workspace may own many instances; unbound instances retain today's default routing). Drift policy: **drop + alert** (never global default).
+Status: Draft
+
 - **Status:** Revised after grill-spec round 1 (review: `…-spec-review.md`; 0 CRITICAL, 8 MAJOR + minors folded in, all re-verified against source). Ready for `/taskify`.
 - **Locked decisions (were deferred; grill-spec required locking now):**
   - **Instance-key grammar (A-1):** `<type>.<slug>` — delimiter **`.`** (dot: filesystem-safe on Windows unlike `:`, legal as a JSON credential-store key, and no channel type contains a dot so the key is unambiguously splittable). `slug = [a-z0-9-]{1,32}`, **lowercase enforced (uppercase → 422)**. `Type` stored explicitly; `normalizeChannelMap` derives/validates Type from the pre-dot segment. Bare-type keys (`whatsapp`) remain valid for legacy single instances.
