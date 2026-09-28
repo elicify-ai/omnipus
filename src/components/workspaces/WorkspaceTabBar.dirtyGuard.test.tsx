@@ -55,7 +55,7 @@ vi.mock('@tanstack/react-router', () => ({
     to: string
     params?: Record<string, string>
     'data-testid'?: string
-    'aria-current'?: string
+    'aria-current'?: React.HTMLAttributes<HTMLAnchorElement>['aria-current']
     'aria-label'?: string
   }) => {
     const href = params ? to.replace('$workspaceId', params.workspaceId) : to
@@ -94,7 +94,7 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 
 import { WorkspaceTabBar } from './WorkspaceTabBar'
 
-function activePanel(): { id: string; context?: Record<string, unknown> } | null {
+function activePanel() {
   return useUiStore.getState().activePanel ?? null
 }
 
