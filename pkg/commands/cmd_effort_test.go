@@ -245,14 +245,20 @@ func TestEffortCommand_WebchatRequestNeverWritesSessionField(t *testing.T) {
 	reg, rt, store, sid, spy := newEffortFixture(t)
 
 	ex := NewExecutor(reg, rt)
-	var reply string
+	// Reply: nil is deliberate — the executor substitutes a no-op sink for a
+	// nil Reply (executor.go::executeDefinition nil-guard), and this test's
+	// oracle is the untouched session field plus the zero spy count, not the
+	// reply text (D23/D30 says nothing about what the server replies).
 	res := ex.Execute(context.Background(), Request{
 		Channel: "webchat",
 		Text:    "/effort high",
-		Reply:   func(text string) error { reply = text; return nil },
+		Reply:   nil,
 	})
 	if res.Outcome != OutcomeHandled {
 		t.Fatalf("webchat /effort high: outcome=%v, want %v", res.Outcome, OutcomeHandled)
+	}
+	if res.Err != nil {
+		t.Fatalf("webchat /effort high: handler error %v — the webchat branch must reply and succeed", res.Err)
 	}
 	got, err := store.GetMeta(sid)
 	if err != nil {
