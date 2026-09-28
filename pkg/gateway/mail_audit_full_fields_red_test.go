@@ -127,7 +127,7 @@ func TestMailAuditFullFields(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, "send must succeed (loopback SMTP); body: "+rec.Body.String())
 
 		require.Equal(t, 1, countAuditEvents(t, auditDir, "mail.panel.send"))
-		details := findAuditEvent(t, auditDir, "mail.panel.send")["details"].(map[string]any)
+		details := requireAuditDetails(t, findAuditEvent(t, auditDir, "mail.panel.send"))
 
 		requireRecipients(t, details,
 			"to1@example.test", "to2@example.test", "cc1@example.test", "bcc-hidden@example.test")
@@ -181,7 +181,7 @@ func TestMailAuditFullFields_DraftPaths(t *testing.T) {
 				`"subject":"s","body_markdown":"send it"}`)
 		require.Equal(t, http.StatusOK, rec.Code, "body: "+rec.Body.String())
 
-		details := findAuditEvent(t, auditDir, "mail.panel.draft_sent")["details"].(map[string]any)
+		details := requireAuditDetails(t, findAuditEvent(t, auditDir, "mail.panel.draft_sent"))
 		require.Equal(t, 1, countAuditEvents(t, auditDir, "mail.panel.draft_sent"))
 		requireRecipients(t, details, "human-a@example.test", "human-c@example.test", "human-b@example.test")
 		require.Equal(t, "agent-draft", details["origin"], "MIN-006/MC-19: the acted-on draft is an Omnipus draft")
@@ -196,7 +196,7 @@ func TestMailAuditFullFields_DraftPaths(t *testing.T) {
 			`{"uid":1,"uidvalidity":`+utoa(uv)+`,"to":["owner@example.test"],"subject":"s","body_markdown":"send"}`)
 		require.Equal(t, http.StatusOK, rec.Code, "body: "+rec.Body.String())
 
-		details := findAuditEvent(t, auditDir, "mail.panel.draft_sent")["details"].(map[string]any)
+		details := requireAuditDetails(t, findAuditEvent(t, auditDir, "mail.panel.draft_sent"))
 		requireRecipients(t, details, "owner@example.test")
 		require.Equal(t, "owner-draft", details["origin"], "MIN-006: a panel send of a FOREIGN draft")
 		requireArgHash(t, details)
@@ -209,7 +209,7 @@ func TestMailAuditFullFields_DraftPaths(t *testing.T) {
 				`"bcc":["edit-b@example.test"],"subject":"edited","body_markdown":"new body"}`)
 		require.Less(t, rec.Code, 300, "body: "+rec.Body.String())
 
-		details := findAuditEvent(t, auditDir, "mail.panel.draft_updated")["details"].(map[string]any)
+		details := requireAuditDetails(t, findAuditEvent(t, auditDir, "mail.panel.draft_updated"))
 		requireRecipients(t, details, "edit-a@example.test", "edit-b@example.test")
 		require.Equal(t, "agent-draft", details["origin"])
 		requireArgHash(t, details)
@@ -221,7 +221,7 @@ func TestMailAuditFullFields_DraftPaths(t *testing.T) {
 		rec := mailDo(env.mux, http.MethodDelete, draftRefPath(uv, 1), nextMailIP(), true, "")
 		require.Equal(t, http.StatusNoContent, rec.Code, "body: "+rec.Body.String())
 
-		details := findAuditEvent(t, auditDir, "mail.panel.draft_discarded")["details"].(map[string]any)
+		details := requireAuditDetails(t, findAuditEvent(t, auditDir, "mail.panel.draft_discarded"))
 		// No request args exist for a discard: the recipients are the draft's
 		// own stored addresses (the fixture draft's To header).
 		requireRecipients(t, details, "owner-addr@example.test")

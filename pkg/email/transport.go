@@ -386,11 +386,11 @@ func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.Select
 		return nil, nil, err
 	}
 
-	if _, err := runIMAP(ctx, "login", func() (struct{}, error) {
+	if _, loginErr := runIMAP(ctx, "login", func() (struct{}, error) {
 		return struct{}{}, client.Login(c.acct.Username, c.acct.Password).Wait()
-	}); err != nil {
+	}); loginErr != nil {
 		client.Close()
-		return nil, nil, fmt.Errorf("email transport: login failed: %w", err)
+		return nil, nil, fmt.Errorf("email transport: login failed: %w", loginErr)
 	}
 	selData, err := runIMAP(ctx, "select INBOX", func() (*imap.SelectData, error) {
 		return client.Select("INBOX", nil).Wait()

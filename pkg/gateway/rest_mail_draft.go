@@ -139,15 +139,15 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 			jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names no such part")
 			return
 		}
-		att, err := mailCarryAttachment(*p)
+		att, carry, err := mailCarryAttachment(*p)
 		if err != nil {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if att == nil {
+		if !carry {
 			continue
 		}
-		in.Attachments = append(in.Attachments, *att)
+		in.Attachments = append(in.Attachments, att)
 	}
 	for _, at := range derefAttSlice(req.Attachments) {
 		ct := at.ContentType
@@ -317,7 +317,7 @@ func mailDraftStaleness(cur *email.MailView, bodyUID, bodyUV int) (int, string, 
 // mailCarryAttachment converts one draft view part into the attachment one
 // carry path carries forward — the single availability check shared by the
 // draft update's explicit keep loop and the send path's default carry-all and
-// explicit keep loops. It returns (nil, nil) for the draft's own body
+// explicit keep loops. Its carry result is false for the draft's own body
 // bookkeeping part (mailViewDraftBodyPart — the X-Omnipus-Part: draft-body
 // marker header, never the name/type pair): skipped silently, never a
 // rejection, even when a keep list names its own stable index. It returns a
@@ -325,18 +325,18 @@ func mailDraftStaleness(cur *email.MailView, bodyUID, bodyUV int) (int, string, 
 // static message, PRE-DIAL, so a listed-but-unavailable part is never
 // transmitted as an empty attachment — on the default carry-all path exactly
 // as on the explicit keep path.
-func mailCarryAttachment(p email.MailPart) (*email.Attachment, error) {
+func mailCarryAttachment(p email.MailPart) (email.Attachment, bool, error) {
 	if mailViewDraftBodyPart(p) {
-		return nil, nil
+		return email.Attachment{}, false, nil
 	}
 	if p.DataUnavailable {
-		return nil, errors.New("keep_attachment_parts names an unavailable part")
+		return email.Attachment{}, false, errors.New("keep_attachment_parts names an unavailable part")
 	}
 	ct := p.ContentType
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
-	return &email.Attachment{Name: p.Filename, ContentType: ct, Data: p.Data}, nil
+	return email.Attachment{Name: p.Filename, ContentType: ct, Data: p.Data}, true, nil
 }
 
 func (a *restAPI) handleMailDraftSend(w http.ResponseWriter, r *http.Request, workspaceID, agentID, ref string) {
@@ -435,15 +435,15 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		// exactly like the explicit keep path (pre-dial 400), never an empty
 		// attachment on the wire.
 		for _, p := range cur.Attachments {
-			att, err := mailCarryAttachment(p)
+			att, carry, err := mailCarryAttachment(p)
 			if err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			if att == nil {
+			if !carry {
 				continue
 			}
-			in.Attachments = append(in.Attachments, *att)
+			in.Attachments = append(in.Attachments, att)
 		}
 	} else {
 		for _, idx := range keepParts {
@@ -455,15 +455,15 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 				jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names no such part")
 				return
 			}
-			att, err := mailCarryAttachment(*p)
+			att, carry, err := mailCarryAttachment(*p)
 			if err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			if att == nil {
+			if !carry {
 				continue
 			}
-			in.Attachments = append(in.Attachments, *att)
+			in.Attachments = append(in.Attachments, att)
 		}
 	}
 	// MC-32 (same trio as the manual send): carried-over parts count toward

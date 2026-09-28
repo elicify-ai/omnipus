@@ -115,6 +115,15 @@ func auditDebugLines(t *testing.T, auditDir string) string {
 	return strings.Join(out, "\n---\n")
 }
 
+func requireAuditDetails(t *testing.T, event map[string]any) map[string]any {
+	t.Helper()
+	raw, ok := event["details"]
+	require.True(t, ok, "audit event must carry details: %v", event)
+	details, ok := raw.(map[string]any)
+	require.True(t, ok, "audit details must be an object, got %T", raw)
+	return details
+}
+
 func TestMailAuditEvents(t *testing.T) {
 	t.Run("draft update emits mail.panel.draft_updated", func(t *testing.T) {
 		env := newMailRedEnv(t)
@@ -135,7 +144,7 @@ func TestMailAuditEvents(t *testing.T) {
 			t.Fatalf("exactly one draft_updated event for one PUT, got %d; lines:\n%s", n, auditDebugLines(t, auditDir))
 		}
 		ev := findAuditEvent(t, auditDir, "mail.panel.draft_updated")
-		details := ev["details"].(map[string]any)
+		details := requireAuditDetails(t, ev)
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
 		require.Equal(t, "<audit-draft@example.test>", details["message_id"], "bracketed Message-ID of the edited draft")
@@ -171,7 +180,7 @@ func TestMailAuditEvents(t *testing.T) {
 		require.Equal(t, 1, countAuditEvents(t, auditDir, "mail.panel.draft_discarded"),
 			"exactly one audit event for one draft discard")
 		ev := findAuditEvent(t, auditDir, "mail.panel.draft_discarded")
-		details := ev["details"].(map[string]any)
+		details := requireAuditDetails(t, ev)
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
 		require.Equal(t, "<audit-draft@example.test>", details["message_id"])
@@ -208,7 +217,7 @@ func TestMailAuditEvents(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, "draft send must succeed against the loopback sink; body: "+rec.Body.String())
 		require.Equal(t, 1, countAuditEvents(t, auditDir, "mail.panel.draft_sent"))
 		ev := findAuditEvent(t, auditDir, "mail.panel.draft_sent")
-		details := ev["details"].(map[string]any)
+		details := requireAuditDetails(t, ev)
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
 		require.Equal(t, "<audit-draft@example.test>", details["message_id"])
@@ -238,7 +247,7 @@ func TestMailAuditEvents(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, "manual send must succeed against the loopback sink; body: "+rec.Body.String())
 		require.Equal(t, 1, countAuditEvents(t, auditDir, "mail.panel.send"))
 		ev := findAuditEvent(t, auditDir, "mail.panel.send")
-		details := ev["details"].(map[string]any)
+		details := requireAuditDetails(t, ev)
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
 		// Closed-set drift guard at the post-D46 baseline (F4).

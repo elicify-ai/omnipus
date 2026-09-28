@@ -107,8 +107,8 @@ func assertSigServedSanitized(t *testing.T, html string) {
 		}
 	}
 	for _, kept := range []string{
-		`style="color:#333"`, // inline style kept (FR-003)
-		"Elicify GmbH",       // the styled paragraph's text rode along
+		`style="color:#333"`,       // inline style kept (FR-003)
+		"Elicify GmbH",             // the styled paragraph's text rode along
 		"<table>", "<td>cell</td>", // tables kept (FR-003)
 	} {
 		if !strings.Contains(html, kept) {

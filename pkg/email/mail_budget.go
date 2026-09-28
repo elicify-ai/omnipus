@@ -272,7 +272,7 @@ func call[T any](b *MailBudget, ctx context.Context, req MailBudgetRequest, fn f
 		// Per-caller bail-out: ONLY this caller's own context ends its wait;
 		// the shared flight itself continues for the others.
 		var zero T
-		return zero, fmt.Errorf("%w: %v", ErrMailBusy, ctx.Err())
+		return zero, fmt.Errorf("%w: %w", ErrMailBusy, ctx.Err())
 	}
 }
 
@@ -321,7 +321,7 @@ func runDialValue[T any](g *mailAccountGate, ctx context.Context, fn func(contex
 		defer func() { <-g.slots }()
 		return fn(ctx)
 	case <-ctx.Done():
-		return zero, fmt.Errorf("%w: %v", ErrMailBusy, ctx.Err())
+		return zero, fmt.Errorf("%w: %w", ErrMailBusy, ctx.Err())
 	}
 }
 
