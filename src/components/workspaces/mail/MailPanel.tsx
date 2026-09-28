@@ -388,7 +388,13 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
             aria-label="Mailbox"
             className="h-8 w-[220px] shrink-0 text-[length:var(--type-body-compact-size)]"
           >
-            <SelectValue placeholder={mailboxesQuery.isLoading ? 'Loading mailboxes…' : 'Choose a mailbox'} />
+            <SelectValue
+              placeholder={
+                mailboxId === null || !mailboxesQuery.isLoading
+                  ? 'Choose a mailbox'
+                  : 'Loading mailboxes…'
+              }
+            />
           </SelectTrigger>
           <SelectContent>
             {workspaceMailboxes.map((mb) => (
