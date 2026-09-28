@@ -27,6 +27,7 @@ import {
   discardPanelPopout,
   registerPanelPopout,
 } from '@/lib/panelPopoutLifecycle'
+import { leaveGateThen } from './leaveGate'
 
 export { PANEL_TRIGGER_ATTR } from './panelFocus'
 
@@ -161,8 +162,13 @@ async function expandActivePanel(options: {
       handle: openedPopup,
       onClosed: (_finalIdentity, finalContext) => {
         const store = usePanelShellStore.getState()
-        if (store.activePanel !== null) return
-        ;(store.openPanel as (id: PanelId, context?: PanelContext) => void)(definition.id, finalContext)
+        const outgoingPanelId = store.activePanel?.id ?? null
+        if (outgoingPanelId !== null && outgoingPanelId !== definition.id) return
+        leaveGateThen(outgoingPanelId, () => {
+          const latest = usePanelShellStore.getState()
+          if (latest.activePanel !== null && latest.activePanel.id !== definition.id) return
+          ;(latest.openPanel as (id: PanelId, context?: PanelContext) => void)(definition.id, finalContext)
+        })
       },
     })
     flushSync(() => finishClose(activePanel.id, 'chat'))

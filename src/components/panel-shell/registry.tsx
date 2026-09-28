@@ -46,8 +46,8 @@ export const panels: readonly PanelDefinition[] = [
         }
       },
     },
-    beforeLeave: confirmDiscardLibraryEdits,
-    beforeLeaveRequired: isLibraryEditorDirty,
+    beforeLeave: () => confirmDiscardLibraryEdits(),
+    beforeLeaveRequired: () => isLibraryEditorDirty(),
   },
   {
     id: 'browser',
