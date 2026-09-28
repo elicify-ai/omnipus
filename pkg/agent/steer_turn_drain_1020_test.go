@@ -10,16 +10,18 @@ package agent
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -428,24 +430,47 @@ func TestSteeredTurnDrain1020_TwoItemsPersistentPreDequeueFailureAreAllAbandoned
 	originalBackoff := continueDrainBackoff
 	continueDrainBackoff = []time.Duration{0, 0, 0}
 	t.Cleanup(func() { continueDrainBackoff = originalBackoff })
-	persistentErr := errors.New("issue 1020 persistent pre-dequeue failure")
-	policyCalls := 0
-	_, attempts, retryErr := retrySteeringContinuation(context.Background(), func() (string, error) {
-		policyCalls++
-		return "", persistentErr
-	}, nil)
-	if !errors.Is(retryErr, persistentErr) {
-		t.Fatalf("retry error = %v, want persistent failure", retryErr)
+	logPath := filepath.Join(t.TempDir(), "steered-drain-abandonment.jsonl")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
 	}
-	if attempts != continueDrainMaxRetries || policyCalls != continueDrainMaxRetries {
-		t.Fatalf("bounded retry attempts = %d and calls = %d, want %d each", attempts, policyCalls, continueDrainMaxRetries)
-	}
+	t.Cleanup(logger.DisableFileLogging)
 
 	blocker := &turnState{turnID: "issue-1020-pre-dequeue-blocker", sessionKey: child.SessionID}
 	al.activeTurnStates.Store(child.SessionID, blocker)
 	discardSteeredTurnDrain1020(al.drainSteeredTurn(
 		context.Background(), snapshot, ts, turnResult{finalContent: "initial response"}, nil))
 	al.activeTurnStates.Delete(child.SessionID)
+	logger.DisableFileLogging()
+
+	logData, logErr := os.ReadFile(logPath)
+	if logErr != nil {
+		t.Fatalf("ReadFile(drain abandonment log): %v", logErr)
+	}
+	matchedAbandonment := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(logData)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var entry map[string]any
+		if decodeErr := json.Unmarshal([]byte(line), &entry); decodeErr != nil {
+			t.Fatalf("decode drain abandonment log line: %v; line=%q", decodeErr, line)
+		}
+		if entry["message"] != "steer: persistent Continue failure — abandoning queued steering" ||
+			entry["session_id"] != child.SessionID {
+			continue
+		}
+		matchedAbandonment++
+		if entry["attempts"] != float64(continueDrainMaxRetries) {
+			t.Errorf("drain-reported retry attempts = %v, want exactly %d", entry["attempts"], continueDrainMaxRetries)
+		}
+		if entry["queue_depth"] != float64(2) {
+			t.Errorf("drain-reported abandoned queue depth = %v, want exactly 2", entry["queue_depth"])
+		}
+	}
+	if matchedAbandonment != 1 {
+		t.Errorf("matching drain abandonment log entries = %d, want exactly 1", matchedAbandonment)
+	}
 
 	if got := al.pendingSteeringCountForScope(child.SessionID); got != 0 {
 		t.Errorf("pending steering count after abandoning two items = %d, want 0", got)
@@ -460,8 +485,8 @@ func TestSteeredTurnDrain1020_TwoItemsPersistentPreDequeueFailureAreAllAbandoned
 			reports++
 		}
 	}
-	if reports == 0 {
-		t.Error("abandonment produced no error report in the child transcript")
+	if reports != 2 {
+		t.Errorf("abandonment error reports = %d, want exactly 2 (one per queued item)", reports)
 	}
 
 	if mutateErr := lifecycle.Mutate(child.SessionID, func(rec *session.LifecycleRecord) error {
