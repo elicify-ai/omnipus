@@ -119,7 +119,7 @@ func (p *performancePendingApply) clearIfEpoch(epoch uint64) {
 func (p *performancePendingApply) clearAfterReload(seq uint64, readSeq uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.stage != "" && seq > p.markedAtReload {
+	if p.stage != "" && seq > p.markedAtReload && readSeq > p.markedAtConfigRead {
 		p.clearLocked()
 	}
 }
