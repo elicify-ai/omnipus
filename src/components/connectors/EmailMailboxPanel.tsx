@@ -71,6 +71,8 @@ import {
   fetchWorkspaces,
   isWorker,
   isApiError,
+  ApiError,
+  mintMailSignaturePreviewToken,
 } from '@/lib/api'
 import type { Mailbox, MailboxConfigureRequest } from '@/lib/api'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
@@ -327,44 +329,93 @@ function focusFirstInvalidField(errors: FieldErrors) {
  * today, potentially anything after a bad save — gets no code execution, no
  * same-origin powers, no forms), referrerPolicy no-referrer, an empty
  * permissions `allow`, and NO srcdoc (srcdoc documents inherit the parent
- * origin's URL; a served/blob document gets the opaque-origin sandbox).
+ * origin's URL; a served document gets the opaque-origin sandbox).
  *
- * The content rides a blob: URL created here per keystroke. MEASURED in
- * Chromium (session experiment, 2026-09-28): a blob: document LOADS in a
- * sandboxed opaque-origin frame (only CSP blocks it) — the gateway SPA CSP
- * is frame-src 'self', which BLOCKS blob: frames, so the live preview
- * renders against the dev server and is CSP-blanked in production until the
- * gateway policy widens frame-src for same-origin blob: (backend-owned;
- * reported to team-lead). srcdoc renders everywhere but is explicitly
- * out — the MC-10 posture forbids it for this frame.
+ * The frame never renders raw editor HTML: the editor's current HTML is
+ * POSTed to the signature mint (POST /api/v1/mail/signature-preview-token,
+ * debounced ~500 ms per edit — architect decision 2026-09-28, option B) and
+ * the returned token builds a same-origin `/mail-preview/html/<token>` src.
+ * NEVER blob: — the gateway SPA CSP (frame-src 'self') blanks blob: frames
+ * in production (measured, session experiment 2026-09-28) — never data:,
+ * never srcdoc.
  *
- * jsdom guard: URL.createObjectURL does not exist there; the tests assert
- * the frame's attributes, so a null src is the correct degradation.
+ * MC-44: a 429 from the mint is an EXPLICIT state — a visible "preview is
+ * out of date" notice with Retry; never a silent stale frame. A 400 (over
+ * the MC-1 16,384 bound) needs no preview-side state: the field's
+ * validation error already names the bound. Any other failure keeps the
+ * last good frame — never a blank panel.
  */
+const SIGNATURE_PREVIEW_DEBOUNCE_MS = 500
+
 function SignaturePreviewFrame({ html }: { html: string }) {
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [src, setSrc] = useState<string | null>(null)
+  const [stale, setStale] = useState(false)
+  // Retry bumps this to re-run the mint effect (fresh debounce → mint).
+  const [retryTick, setRetryTick] = useState(0)
 
   useEffect(() => {
-    if (typeof URL.createObjectURL !== 'function') return undefined
-    const url = URL.createObjectURL(
-      new Blob([`<!doctype html><html><body>${html}</body></html>`], { type: 'text/html' }),
-    )
-    setPreviewUrl(url)
-    return () => {
-      URL.revokeObjectURL(url)
-      setPreviewUrl(null)
+    // The mint bounds signature_html at 1..16384 characters: an empty
+    // signature has nothing to preview and would mint a guaranteed 400.
+    if (html.trim().length === 0) {
+      setSrc(null)
+      setStale(false)
+      return undefined
     }
-  }, [html])
+    let cancelled = false
+    const timer = setTimeout(() => {
+      mintMailSignaturePreviewToken({ signature_html: html })
+        .then((res) => {
+          if (cancelled) return
+          setSrc(`/mail-preview/html/${res.token}`)
+          setStale(false)
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return
+          if (err instanceof ApiError && err.status === 429) {
+            // MC-44: explicit stale state — never a silent stale frame.
+            setStale(true)
+          } else if (!(err instanceof ApiError && err.status === 400)) {
+            // 400 (over the MC-1 bound) is the field error's job — the
+            // panel's validation already names the bound. Anything else
+            // (transport, 5xx) keeps the last good frame — never a blank
+            // panel — but must not vanish without telemetry.
+            logError({
+              event: 'mailboxSignaturePreviewMintFailed',
+              status: err instanceof ApiError ? err.status : 0,
+              message: err instanceof Error ? err.message : String(err),
+            })
+          }
+        })
+    }, SIGNATURE_PREVIEW_DEBOUNCE_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [html, retryTick])
 
   return (
-    <iframe
-      title="Signature preview"
-      sandbox="allow-popups allow-popups-to-escape-sandbox"
-      referrerPolicy="no-referrer"
-      allow=""
-      src={previewUrl ?? undefined}
-      className="h-40 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-primary)]"
-    />
+    <>
+      <iframe
+        title="Signature preview"
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
+        referrerPolicy="no-referrer"
+        allow=""
+        src={src ?? undefined}
+        className="h-40 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-primary)]"
+      />
+      {stale && (
+        <p
+          data-testid="signature-preview-stale"
+          className="mt-[var(--space-1)] flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+        >
+          <Warning size={14} className="shrink-0" />
+          Signature preview is out of date.
+          <Button variant="link" onClick={() => setRetryTick((t) => t + 1)}>
+            Retry
+          </Button>
+        </p>
+      )}
+    </>
   )
 }
 

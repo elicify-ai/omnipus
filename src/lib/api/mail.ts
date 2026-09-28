@@ -27,6 +27,7 @@ import {
   MailSummaryList as MailSummaryListSchema,
   MailSendResponse as MailSendResponseSchema,
   MailHtmlPreviewTokenResponse as MailHtmlPreviewTokenResponseSchema,
+  MailSignaturePreviewTokenResponse as MailSignaturePreviewTokenResponseSchema,
 } from './generated/schemas'
 import type {
   MailFolderList,
@@ -39,6 +40,8 @@ import type {
   MailDraftSendRequest,
   MailHtmlPreviewTokenRequest,
   MailHtmlPreviewTokenResponse,
+  MailSignaturePreviewTokenRequest,
+  MailSignaturePreviewTokenResponse,
 } from './generated/openapi-types'
 
 /** Percent-encode one path segment (mid: refs contain < > @ characters). */
@@ -247,6 +250,26 @@ export async function mintMailHtmlPreviewToken(
     '/mail/html-preview-token',
     { method: 'POST', body: JSON.stringify(body) },
     MailHtmlPreviewTokenResponseSchema as ZodType<MailHtmlPreviewTokenResponse>,
+  )
+  return res
+}
+
+/**
+ * POST /api/v1/mail/signature-preview-token — mint the sandboxed-frame token
+ * for the mailbox signature editor's live preview (MC-10 §5.3; architect
+ * decision 2026-09-28, option B). Unlike the message mint this NEVER dials
+ * IMAP and NEVER persists: the signature HTML is sanitized at mint and held
+ * in memory for the 2-minute MailSignaturePreviewTokenTTL. The frame's src
+ * is the same-origin `/mail-preview/html/{token}`. Rate-limited per IP
+ * (MC-44): 429 carries Retry-After.
+ */
+export async function mintMailSignaturePreviewToken(
+  body: MailSignaturePreviewTokenRequest,
+): Promise<MailSignaturePreviewTokenResponse> {
+  const res = await request<MailSignaturePreviewTokenResponse>(
+    '/mail/signature-preview-token',
+    { method: 'POST', body: JSON.stringify(body) },
+    MailSignaturePreviewTokenResponseSchema as ZodType<MailSignaturePreviewTokenResponse>,
   )
   return res
 }
