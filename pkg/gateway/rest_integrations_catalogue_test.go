@@ -102,3 +102,46 @@ func TestCatalogueWalk_AppendedProviderIsListable(t *testing.T) {
 		t.Fatalf("searchRefSectionByID(testprov) = %q, %v — the save path cannot store the appended provider", section, ok)
 	}
 }
+
+// The fallback save's "is it switched on?" pre-check (searchProviderEnabled)
+// must derive from the catalogue too (FR-035): an appended provider that is
+// enabled must read as enabled, or a valid fallback save is rejected 400
+// ("switch it on first") for a provider that is on. Gate round 2 (TD-1).
+func TestCatalogueWalk_AppendedProviderEnabledForFallbackSave(t *testing.T) {
+	saved := config.SearchProviderCatalogue
+	grown := make([]config.SearchProviderDef, 0, len(saved)+1)
+	grown = append(grown, saved...)
+	grown = append(grown, config.SearchProviderDef{
+		ID:         "testprov",
+		Section:    "testprov",
+		Keyed:      true,
+		Enabled:    func(w *config.WebToolsConfig) bool { return w.Exa.Enabled },
+		SetEnabled: func(w *config.WebToolsConfig, on bool) { w.Exa.Enabled = on },
+	})
+	config.SearchProviderCatalogue = grown
+	t.Cleanup(func() { config.SearchProviderCatalogue = saved })
+
+	web := &config.WebToolsConfig{}
+	web.Exa.Enabled = true
+	if !searchProviderEnabled(web, "testprov") {
+		t.Fatal("searchProviderEnabled(testprov) = false for an ENABLED appended provider — the fallback pre-check is not catalogue-derived")
+	}
+	web.Exa.Enabled = false
+	if searchProviderEnabled(web, "testprov") {
+		t.Fatal("searchProviderEnabled(testprov) = true for a DISABLED appended provider")
+	}
+	for _, def := range saved {
+		w := &config.WebToolsConfig{}
+		def.SetEnabled(w, true)
+		if !searchProviderEnabled(w, def.ID) {
+			t.Fatalf("searchProviderEnabled(%s) = false after SetEnabled(true)", def.ID)
+		}
+		def.SetEnabled(w, false)
+		if searchProviderEnabled(w, def.ID) {
+			t.Fatalf("searchProviderEnabled(%s) = true after SetEnabled(false)", def.ID)
+		}
+	}
+	if searchProviderEnabled(web, "no-such-provider") || searchProviderEnabled(nil, config.SearchProviderTavily) {
+		t.Fatal("unknown id or nil config must read as not enabled")
+	}
+}
