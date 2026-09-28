@@ -359,6 +359,48 @@ func TestRefreshLoop_StartupFailureRetriesBeforeTicker(t *testing.T) {
 	}
 }
 
+func TestRefreshLoop_StartupFailureWarnIncludesAttempt(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "catalog-startup-retry.log")
+	prevLevel := logger.GetLevel()
+	logger.SetLevel(logger.DEBUG)
+	require.NoError(t, logger.EnableFileLogging(logFile))
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+
+	home := t.TempDir()
+	puller := newRecoveringPuller(
+		testDocument(t, fmt.Sprintf("v%d.1.1", time.Now().UTC().Year()+1)),
+		1,
+	)
+	cat := catalog.Boot(
+		context.Background(),
+		catalog.EmbeddedSnapshot,
+		puller,
+		catalog.NewFileStore(home),
+		nil,
+	)
+
+	startCatalogRefreshLoopForTest(t, cat, catalog.NewFileStore(home), time.Hour, 5*time.Second, 0)
+	require.Eventually(t, func() bool { return puller.hitCount() == 2 },
+		5*time.Second, 10*time.Millisecond,
+		"one failed startup pull must be followed by one successful retry")
+
+	data, err := os.ReadFile(logFile)
+	require.NoError(t, err)
+	var failureLine string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "gateway: catalog startup refresh failed; served document retained") {
+			failureLine = line
+			break
+		}
+	}
+	require.NotEmpty(t, failureLine, "startup failure WARN must reach the file log")
+	assert.Contains(t, failureLine, `"level":"warn"`)
+	assert.Contains(t, failureLine, `"attempt":1`)
+}
+
 func TestCatalogStartupRefreshPolicy(t *testing.T) {
 	t.Run("transient failures recover within the bound", func(t *testing.T) {
 		calls := 0
