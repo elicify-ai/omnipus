@@ -3192,7 +3192,7 @@ jobs:
           echo "Playwright stats: expected=$expected skipped=$skipped flaky=$flaky unexpected=$unexpected"
           rc=0
           if [ "$skipped" -gt 0 ]; then
-            if ! bash scripts/check-e2e-skip-allowlist.sh /tmp/pw-results.json test-results/skip-manifest.json; then
+            if ! bash scripts/check-e2e-skip-allowlist.sh /tmp/pw-results.json test-results/skip-manifest.json "$skipped"; then
               rc=1
             fi
           fi

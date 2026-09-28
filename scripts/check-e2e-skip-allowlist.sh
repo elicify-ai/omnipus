@@ -7,20 +7,28 @@
 # Missing or malformed inputs fail closed whenever the report contains skips.
 #
 # Usage:
-#   bash scripts/check-e2e-skip-allowlist.sh <playwright-json> <skip-manifest-json>
+#   bash scripts/check-e2e-skip-allowlist.sh <playwright-json> <skip-manifest-json> <expected-skipped-count>
 
-set -u
+set -euo pipefail
 
-if [ "$#" -ne 2 ]; then
-  echo "Usage: $0 <playwright-json> <skip-manifest-json>" >&2
+if [ "$#" -ne 3 ]; then
+  echo "Usage: $0 <playwright-json> <skip-manifest-json> <expected-skipped-count>" >&2
   exit 2
 fi
 
 REPORT_PATH="$1"
 MANIFEST_PATH="$2"
+EXPECTED_SKIPPED="$3"
 TODAY_UTC="$(date -u +%Y-%m-%d)"
 TITLES_FILE="$(mktemp /tmp/check-e2e-skip-allowlist.XXXXXX)"
 trap 'rm -f "$TITLES_FILE"' EXIT
+
+case "$EXPECTED_SKIPPED" in
+  ''|*[!0-9]*)
+    echo "check-e2e-skip-allowlist: ERROR — expected skipped count must be a plain non-negative integer (got: '$EXPECTED_SKIPPED')" >&2
+    exit 2
+    ;;
+esac
 
 if [ ! -f "$REPORT_PATH" ] || ! jq -e 'type == "object"' "$REPORT_PATH" >/dev/null 2>&1; then
   echo "check-e2e-skip-allowlist: ERROR — Playwright JSON report is missing or unparseable: $REPORT_PATH" >&2
@@ -30,20 +38,25 @@ fi
 # Playwright suites can nest arbitrarily. recurse(.suites[]?) visits the
 # current suite and every descendant; a spec is skipped when any project/test
 # rollup under that spec has status "skipped".
-if ! jq -r '
+if ! jq -c '
   .suites[]?
   | recurse(.suites[]?)
   | .specs[]?
   | select(any(.tests[]?; .status == "skipped"))
   | .title
   | select(type == "string")
-  | @base64
 ' "$REPORT_PATH" > "$TITLES_FILE"; then
   echo "check-e2e-skip-allowlist: ERROR — could not extract skipped spec titles from: $REPORT_PATH" >&2
   exit 1
 fi
 
-if [ ! -s "$TITLES_FILE" ]; then
+extracted_count="$(jq -s 'length' "$TITLES_FILE")"
+if [ "$extracted_count" -ne "$EXPECTED_SKIPPED" ]; then
+  echo "check-e2e-skip-allowlist: ERROR — Playwright stats report $EXPECTED_SKIPPED skipped test(s), but extracted $extracted_count skipped spec title(s); refusing incomplete skip validation" >&2
+  exit 1
+fi
+
+if [ "$extracted_count" -eq 0 ]; then
   echo "check-e2e-skip-allowlist: OK — no skipped Playwright spec titles found"
   exit 0
 fi
@@ -56,9 +69,8 @@ fi
 
 checked=0
 unauthorized=0
-while IFS= read -r encoded_title; do
-  [ -z "$encoded_title" ] && continue
-  title="$(jq -nr --arg encoded "$encoded_title" '$encoded | @base64d')"
+while IFS= read -r json_title; do
+  title="$(jq -r 'if type == "string" then . else error("skipped spec title is not a string") end' <<<"$json_title")"
   checked=$((checked + 1))
 
   if [ "$manifest_valid" -ne 1 ]; then
