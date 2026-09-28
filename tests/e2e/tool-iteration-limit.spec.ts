@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { E2E_MODEL } from './fixtures/e2e-model';
 
 /**
  * #904 — tool iteration limit, spec test-plan row 17
@@ -88,7 +89,7 @@ test.describe('#904 tool iteration limit', () => {
         name: agentName,
         soul: 'Tool iteration limit e2e soul',
         type: 'Main',
-        model: 'openrouter/google/gemini-2.0-flash-001',
+        model: E2E_MODEL,
         max_tool_iterations: 50,
       },
     });
