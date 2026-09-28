@@ -1,11 +1,12 @@
 // MailPanel.tsx — the workspace Mail panel CONTENT (email-mail-view-spec.md
 // §16, US-3..US-8): folder rail, message list, reading pane, compose, the
 // watcher banner and per-state error surfaces. It plugs into the shared
-// side-panel shell (SP-8): the docked host (MailPanelHost, separate file)
-// renders this component when the ui store's activePanel is 'mail' — Mail is
-// panel CONTENT, never a shell edit.
+// side-panel shell (SP-8): the shell renders it through Mail's
+// PanelDefinition (mailPanelDefinition.tsx — registered in the production
+// registry at wave 2, §10) — Mail is panel CONTENT, never a shell edit.
 //
-// Oracle contract (MailPanel.states.test.tsx): props { workspaceId }; reads
+// Oracle contract (MailPanel.states.test.tsx): props { workspaceId,
+// mailboxId? }; reads
 // fetchMailboxes/fetchMailFolders/fetchMailMessages/fetchMailSummary from
 // '@/lib/api'; folders refetch every 30s while mounted, never after unmount
 // (D25); error shows the error CLASS (e.g. connect_refused) + Retry, never
@@ -88,13 +89,24 @@ function fileToBase64(file: File): Promise<string> {
 
 export interface MailPanelProps {
   workspaceId: string
+  /**
+   * The shell's mailbox directive (SP-23, via mailPanelDefinition ← panel
+   * context): string = land on that mailbox (`?panel=mail&agent=…`);
+   * null = EXPLICIT choose-a-mailbox — the deep link named `panel=mail` with
+   * no agent, so no mailbox is auto-selected and Mail starts nothing costly
+   * (§8.2 Mail bullet, §12 row 8); undefined = no directive (tab-strip
+   * toggle, plain opens) — the panel keeps its own posture: a valid session
+   * intent wins, else a single configured mailbox opens live (US-3 AS-1),
+   * else the picker faces the user (US-3 AS-3).
+   */
+  mailboxId?: string | null
 }
 
 const FOLDERS_KEY = ['mail-folders'] as const
 const MESSAGES_KEY = ['mail-messages'] as const
 const DETAIL_KEY = ['mail-detail'] as const
 
-export function MailPanel({ workspaceId }: MailPanelProps) {
+export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
 
@@ -115,12 +127,20 @@ export function MailPanel({ workspaceId }: MailPanelProps) {
     readMailPanelIntent(workspaceId),
   )
   const agentId = useMemo(() => {
+    // SP-23's explicit choose directive: the deep link named panel=mail with
+    // no agent — the picker faces the user, nothing costly starts, and a
+    // stored selection does not override the link's directive.
+    if (mailboxId === null) return null
+    if (typeof mailboxId === 'string') {
+      const named = workspaceMailboxes.find((mb) => mb.agent_id === mailboxId)
+      if (named !== undefined) return mailboxId
+    }
     if (intent.agentId !== null) {
       const stored = workspaceMailboxes.find((mb) => mb.agent_id === intent.agentId)
       if (stored !== undefined) return intent.agentId
     }
     return workspaceMailboxes[0]?.agent_id ?? null
-  }, [intent.agentId, workspaceMailboxes])
+  }, [mailboxId, intent.agentId, workspaceMailboxes])
   const folder: string = intent.folder ?? 'inbox'
   // The open message ref — session state, not persisted (a fresh panel opens
   // with the list, not a message). Reset when folder/mailbox changes.

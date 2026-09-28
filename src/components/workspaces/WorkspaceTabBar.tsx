@@ -28,15 +28,15 @@ import { cn } from '@/lib/utils'
 // OR, for a REGISTERED side panel, a toggle button with aria-pressed.
 // Chat is the default landing tab and the panel-host route.
 //
-// Entry kinds (wave 1, side-panel-shell-spec.md §10 / MAJ-007 / MAJ-012):
+// Entry kinds (side-panel-shell-spec.md §10 / MAJ-007 / MAJ-012):
 //   - workspace name → settings button (chrome, not a view; aria-current
 //     when the settings route is the page)
 //   - Chat → the panel-host page: a button that navigates to the chat route
 //     and carries aria-current="page" while it IS the underlying page
-//   - Library ('media' segment) → REGISTERED panel toggle: aria-pressed,
-//     opens/closes the panel scoped to this workspace via the leave gate —
-//     NO navigation (US-5 AS-1/AS-2)
-//   - Tasks/Calendar/Team → unregistered panels (waves 2-3): ordinary
+//   - Library ('media', wave 1) and Mail ('mail', wave 2) → REGISTERED
+//     panel toggles: aria-pressed, opens/closes the panel scoped to this
+//     workspace via the leave gate — NO navigation (US-5 AS-1/AS-2)
+//   - Tasks/Calendar/Team → unregistered panels (wave 3): ordinary
 //     navigation Links, no aria-pressed (MAJ-012 mixed mode)
 //
 // ADR-051 D1 — "Tasks" screen: Board/List/Graph collapse into ONE screen
@@ -59,9 +59,13 @@ export const WORKSPACE_TABS = [
   // (§8.2), so an old link never dead-ends on a page with no content of its
   // own.
   { segment: 'media', label: 'Library', Icon: Files },
-  // Mail (email-mail-view-spec.md US-3): the workspace Mail panel. Like the
-  // Library entry above, this is a Link to a redirect-stub route — the route
-  // opens the Mail side panel (leave-gated) and lands back on Chat.
+  // Mail (email-mail-view-spec.md US-3): the workspace Mail panel. Wave 2
+  // (side-panel-shell-spec.md §10 + §15 item 1): a REGISTERED panel toggle
+  // exactly like Library — aria-pressed, leave-gated open/close, no
+  // navigation. The route itself (routes/_app/workspaces.$workspaceId.mail.tsx)
+  // remains the expand target and the bookmarked-/draft-link stub: it
+  // consumes the §17 params into the panel intent and retargets to
+  // chat?panel=mail (§8.2).
   { segment: 'mail', label: 'Mail', Icon: Tray },
   { segment: 'team', label: 'Team', Icon: UsersThree },
   // NOTE: workspace settings is deliberately NOT a tab — settings is chrome,
@@ -70,12 +74,15 @@ export const WORKSPACE_TABS = [
   // Notion-style. The /settings route still exists.
 ] as const
 
-/** Wave-1 registered-panel strip entries: strip segment → panel id. Library
- * ('media') is the only one in wave 1 (§10); waves 2-3 register Tasks/
- * Calendar/Team, at which point those segments move from the Link path to
- * the toggle path (their routes stay as the expand targets, MAJ-012). */
+/** Registered-panel strip entries: strip segment → panel id. Wave 1:
+ * Library ('media') only; wave 2 adds Mail (side-panel-shell-spec.md §10 +
+ * §15 item 1 — "Mail joins in wave 2"); waves 2-3 leave Tasks/Calendar/
+ * Team on the Link path until registered (MAJ-012 mixed mode), at which
+ * point those segments move here too (their routes stay as the expand
+ * targets). */
 const PANEL_TOGGLE_SEGMENTS: Partial<Record<TabSegment, WorkspacePanelId>> = {
   media: 'library',
+  mail: 'mail',
 }
 
 /** Every real WORKSPACE_TABS segment — derived from the array itself (not a

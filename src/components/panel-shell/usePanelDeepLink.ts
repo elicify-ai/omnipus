@@ -6,14 +6,15 @@
 // navigation replaces it (US-7 AS-4: the drop must be visible).
 //
 //   1. ADOPTION (URL -> store), fresh landings only. `?panel=library` opens
-//      the Library panel workspace-scoped (US-7 AS-1). Replacing a DIFFERENT
-//      open panel goes through the leave gate (CRIT-001 lists deep-link
-//      replace). A param that is not library — `browser` (SP-21 + SP-28) or
-//      any unknown/unregistered id (US-7 AS-4) — is a "no panel" verdict:
-//      the URL is replaced and an open panel closes through the gate, so
-//      "just the chat renders" (US-7 AS-5). An ABSENT param does not close:
-//      in-app opens project the URL themselves, and closing on absence would
-//      undo them.
+//      the Library panel workspace-scoped (US-7 AS-1); `?panel=mail` opens
+//      Mail the same way, with the SP-23 mailbox directive in the context
+//      (§10 wave 2). Replacing a DIFFERENT open panel goes through the leave
+//      gate (CRIT-001 lists deep-link replace). A param that is not
+//      adoptable — `browser` (SP-21 + SP-28) or any unknown/unregistered id
+//      (US-7 AS-4) — is a "no panel" verdict: the URL is replaced and an open
+//      panel closes through the gate, so "just the chat renders" (US-7 AS-5).
+//      An ABSENT param does not close: in-app opens project the URL
+//      themselves, and closing on absence would undo them.
 //   2. EVERY replace sets dropped keys to `undefined` (the encoder omits
 //      them). Spreading the previous search keeps `session` and friends,
 //      which is exactly the shareable-link leak SP-28 forbids. `agent`
@@ -27,7 +28,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useBlocker, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from './leaveGate'
-import { isWorkspaceScopedPanel, WAVE_1_PANEL_IDS } from './types'
+import { isWorkspaceScopedPanel, WAVE_2_PANEL_IDS } from './types'
 import type { ActivePanel, WorkspacePanelContext, WorkspacePanelId } from './types'
 import {
   confirmDiscardLibraryEdits,
@@ -38,7 +39,7 @@ type SearchRecord = Record<string, unknown>
 
 function rawPanel(search: SearchRecord): WorkspacePanelId | undefined {
   if (typeof search.panel !== 'string') return undefined
-  if (!(WAVE_1_PANEL_IDS as readonly string[]).includes(search.panel)) return undefined
+  if (!(WAVE_2_PANEL_IDS as readonly string[]).includes(search.panel)) return undefined
   const id = search.panel as WorkspacePanelId
   return isWorkspaceScopedPanel(id) ? id : undefined
 }
@@ -67,8 +68,23 @@ function gatedCloseIfOpen(): void {
 
 function projectedPanel(activePanel: ActivePanel | null): WorkspacePanelId | undefined {
   if (activePanel === null) return undefined
-  if (!(WAVE_1_PANEL_IDS as readonly string[]).includes(activePanel.id)) return undefined
+  if (!(WAVE_2_PANEL_IDS as readonly string[]).includes(activePanel.id)) return undefined
   return isWorkspaceScopedPanel(activePanel.id) ? activePanel.id : undefined
+}
+
+/**
+ * Adoption context per panel (§8.1: context carries what the panel needs).
+ * Mail (SP-23): the URL's `agent` param is the mailbox directive — present,
+ * land on that mailbox; absent, the link names `panel=mail` with NO mailbox,
+ * an explicit choose-a-mailbox directive (null — the picker faces the user
+ * and Mail starts nothing costly). Library needs only the workspace.
+ */
+function adoptionContext(id: WorkspacePanelId, workspaceId: string, search: SearchRecord): WorkspacePanelContext {
+  const context: WorkspacePanelContext = workspaceId ? { workspaceId } : {}
+  if (id === 'mail') {
+    context.mailboxId = typeof search.agent === 'string' ? search.agent : null
+  }
+  return context
 }
 
 export function usePanelDeepLink(workspaceId: string, panel: string | undefined): void {
@@ -128,7 +144,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
       if (hasForeignKey(rawSearch)) replaceSearch(named)
       const { activePanel: current, openPanel } = useUiStore.getState()
       if (current?.id === named) return
-      const context: WorkspacePanelContext = workspaceId ? { workspaceId } : {}
+      const context = adoptionContext(named, workspaceId, rawSearch)
       if (current !== null) {
         leaveGateThen(current.id, () => {
           const { activePanel: still, openPanel: open } = useUiStore.getState()

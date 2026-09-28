@@ -1,5 +1,6 @@
 import { lazy } from 'react'
 import { confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
+import { mailPanelDefinition } from '@/components/workspaces/mail/mailPanelDefinition'
 import type { PanelContentProps, PanelDefinition } from './types'
 
 const LibraryPanel = lazy(async () => {
@@ -40,6 +41,11 @@ export const panels: PanelDefinition[] = [
       return `/#/browser-live${search.size > 0 ? `?${search.toString()}` : ''}`
     },
   },
+  // Wave 2 (side-panel-shell-spec.md §10 "Mail adopts the shell" + FR-014):
+  // Mail's §8.1 PanelDefinition — the payload (id/title/expandTarget/no
+  // beforeLeave) is owned by the mail module (mailPanelDefinition.tsx, pinned
+  // by its own pack). One entry, no shell change (SP-4's test).
+  mailPanelDefinition,
 ]
 
 export const PANEL_REGISTRY = panels

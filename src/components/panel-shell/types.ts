@@ -49,14 +49,16 @@ export function isWorkspaceScopedPanel(id: PanelId): id is WorkspacePanelId {
 }
 
 /**
- * The ids with a shell REGISTRATION in wave 1 (MAJ-012, §10). The chat route's
- * `validateSearch` accepts exactly these as `?panel=` values; every other
- * PanelId (`mail`, `tasks`, `team`, `calendar`) is unregistered yet and is
- * dropped exactly like an unknown id (US-7 AS-4, §12 dataset row 7). Static
- * values (not derived from `PanelId`) because the schema needs RUNTIME
- * membership; the `satisfies` keeps the list from drifting off the union.
+ * The ids with a shell REGISTRATION at wave 2 (MAJ-012, §10: wave 1 shipped
+ * library + browser; wave 2 "Mail adopts the shell" adds mail — FR-014). The
+ * chat route's `validateSearch` accepts exactly these as `?panel=` values,
+ * and usePanelDeepLink adopts/projects exactly these; every other PanelId
+ * (`tasks`, `team`, `calendar`) is unregistered yet and is dropped exactly
+ * like an unknown id (US-7 AS-4, §12 dataset row 7 — wave 3). Static values
+ * (not derived from `PanelId`) because the schema needs RUNTIME membership;
+ * the `satisfies` keeps the list from drifting off the union.
  */
-export const WAVE_1_PANEL_IDS = ['library', 'browser'] as const satisfies readonly PanelId[]
+export const WAVE_2_PANEL_IDS = ['library', 'browser', 'mail'] as const satisfies readonly PanelId[]
 
 /**
  * What a panel needs to render its content (§8.1: "context carries what the
@@ -65,8 +67,22 @@ export const WAVE_1_PANEL_IDS = ['library', 'browser'] as const satisfies readon
 export interface WorkspacePanelContext {
   /** Library / Tasks / Team / Calendar / Mail scope (undefined = virtual root → `app` bucket). */
   workspaceId?: string
-  /** Mail's mailbox context (per the email spec, wave 2). */
-  mailboxId?: string
+  /**
+   * Mail's mailbox context (§8.1: "mailbox context per the email spec";
+   * SP-23). Three states, because the deep link's agent param is a DIRECTIVE:
+   *   - string     — land on that mailbox (`?panel=mail&agent=…`)
+   *   - null       — EXPLICIT choose-a-mailbox: the link named `panel=mail`
+   *                  with no agent, so the picker faces the user and Mail
+   *                  starts nothing costly (§8.2 Mail bullet, §12 row 8)
+   *   - undefined  — no mailbox directive (tab-strip toggle, plain opens):
+   *                  the panel keeps its own default-selection posture
+   *                  (US-3: a single configured mailbox is opened live).
+   * Folder/message focus never travels here — it rides the per-workspace
+   * sessionStorage intent (src/components/workspaces/mail/mailPanelIntent.ts,
+   * MC-31a) because a shareable chat-link must not pin a message ref (§8.2:
+   * no foreign keys survive on the chat URL).
+   */
+  mailboxId?: string | null
   sessionId?: never
   agentId?: never
 }

@@ -4,26 +4,18 @@ import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { writeMailPanelIntent } from '@/components/workspaces/mail/mailPanelIntent'
 
-// Mail tab — deep-linkable entry that opens the Mail side panel (SP-8: one
-// shared panel surface; the panel itself is docked beside the chat). The
-// tab-strip entry (WorkspaceTabBar WORKSPACE_TABS) is a Link here, exactly
-// like the Library tab's Link to the media route stub. Opening goes through
-// the CRIT-001 leave gate (leaveGateThen — a dirty outgoing Library panel
-// prompts before the replace), then the route redirects to the workspace's
-// Chat tab so the URL never dead-ends on a page with no content of its own
-// (same shape as the media/Library redirect stub).
-//
-// Deep links (email-mail-view-spec.md §17): the create_email_draft result's
-// chat_link is /#/workspaces/{ws}/mail?mailbox={agent}&folder=drafts&message=
-// {ref}. This route consumes those params into the panel's per-workspace
-// intent (mailPanelIntent.ts — messageRef is consume-once), so the panel
-// opens directly on that draft.
-//
-// NOTE: the chat route's ?panel= search contract is the shell squad's
-// pending wave-1 work (-workspaces.$workspaceId.chat.panelSearch.test.ts is
-// their RED). Until it lands, this route is the URL entry that opens Mail;
-// when their search-restore lands, the two converge (both write the same
-// activePanel value).
+// Mail tab — deep-linkable entry that opens the Mail side panel (SP-8: ONE
+// shared panel surface; the panel itself is shell CONTENT since wave 2 —
+// side-panel-shell-spec.md §10 registers Mail's PanelDefinition in the
+// production registry, and the workspace tab-strip entry is a registered
+// panel toggle, not a Link here). This route survives as the EXPAND target
+// and the bookmarked-URL stub: it consumes the §17 draft-link params into
+// the panel's per-workspace intent (mailPanelIntent.ts — messageRef is
+// consume-once), opens the panel through the CRIT-001 leave gate (the
+// OUTGOING panel's guard — a dirty Library asks before it is replaced), then
+// retargets to the deep-link form /workspaces/{id}/chat?panel=mail (replace)
+// — §8.2's media-stub pattern — so the URL never dead-ends on a page with no
+// content of its own and the registered panel param survives a reload.
 interface MailRouteSearch {
   mailbox?: string
   folder?: string
@@ -41,12 +33,13 @@ function WorkspaceMailRedirect() {
       folder: search.folder ?? 'inbox',
       messageRef: search.message ?? null,
     })
-    leaveGateThen(() => {
+    leaveGateThen(useUiStore.getState().activePanel?.id ?? null, () => {
       useUiStore.getState().openPanel('mail', { workspaceId })
     })
     void navigate({
       to: '/workspaces/$workspaceId/chat',
       params: { workspaceId },
+      search: { panel: 'mail' },
       replace: true,
     })
   }, [workspaceId, search.mailbox, search.folder, search.message, navigate])
