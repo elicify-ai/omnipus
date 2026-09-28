@@ -52,7 +52,7 @@ vi.mock('@tanstack/react-router', () => ({
     onClick?: () => void
     className?: string
   } & Record<string, unknown>) => (
-    <a href={to} onClick={onClick} className={className} {...rest}>{children}</a>
+    <a href={to} onClick={onClick} {...rest} data-fixture-class={className ? 'present' : undefined}>{children}</a>
   ),
 }))
 
@@ -113,26 +113,29 @@ vi.mock('@/store/notifications', () => ({
   },
 }))
 
-vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuItem: ({ children, onSelect }: { children: React.ReactNode; onSelect?: () => void }) => (
-    <button onClick={onSelect}>{children}</button>
-  ),
-  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuSeparator: () => <hr />,
-}))
+vi.mock('@/components/ui/dropdown-menu', async () => {
+  const { Button } = await vi.importActual<typeof import('@/components/ui/button')>('@/components/ui/button')
+  return {
+    DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DropdownMenuItem: ({ children, onSelect }: { children: React.ReactNode; onSelect?: () => void }) => (
+      <Button variant="ghost" onClick={onSelect}>{children}</Button>
+    ),
+    DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DropdownMenuSeparator: () => <hr />,
+  }
+})
 
 vi.mock('@/components/workspaces/NewWorkspaceSlideOver', () => ({ NewWorkspaceSlideOver: () => null }))
 
 vi.mock('framer-motion', () => ({
   motion: {
     aside: ({ children, className, ...rest }: React.HTMLAttributes<HTMLElement>) => (
-      <aside className={className} {...rest}>{children}</aside>
+      <aside {...rest} data-fixture-class={className ? 'present' : undefined}>{children}</aside>
     ),
     div: ({ children, className, onClick, ...rest }: React.HTMLAttributes<HTMLDivElement>) => (
-      <div className={className} onClick={onClick} {...rest}>{children}</div>
+      <div onClick={onClick} {...rest} data-fixture-class={className ? 'present' : undefined}>{children}</div>
     ),
   },
   AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,

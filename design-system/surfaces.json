@@ -6870,6 +6870,10 @@
       "lane": 4
     },
     {
+      "source": "src/components/panel-shell/PanelTabPresenceBridge.tsx",
+      "lane": 8
+    },
+    {
       "source": "src/components/panel-shell/SidePanelShell.tsx",
       "lane": 8
     },
@@ -6898,7 +6902,19 @@
       "lane": 8
     },
     {
+      "source": "src/components/panel-shell/leaveGate.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelFocus.ts",
+      "lane": 8
+    },
+    {
       "source": "src/components/panel-shell/panelShellStore.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelTabSwitch.ts",
       "lane": 8
     },
     {
@@ -6910,7 +6926,15 @@
       "lane": 8
     },
     {
+      "source": "src/components/panel-shell/registry.tsx",
+      "lane": 8
+    },
+    {
       "source": "src/components/panel-shell/types.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/usePanelDeepLink.ts",
       "lane": 8
     },
     {
@@ -6918,7 +6942,15 @@
       "lane": 8
     },
     {
+      "source": "src/components/panel-shell/usePanelUrlHistory.ts",
+      "lane": 8
+    },
+    {
       "source": "src/components/panel-shell/useSwipeToClose.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/workspaceSwitch.ts",
       "lane": 8
     },
     {
@@ -7123,6 +7155,10 @@
     },
     {
       "source": "src/components/shared/CriteriaBreakdown.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/shared/ErrorBoundary.tsx",
       "lane": 7
     },
     {
@@ -7399,6 +7435,10 @@
     },
     {
       "source": "src/routes/-login-local.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/routes/-loginReturn.ts",
       "lane": 7
     },
     {

@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ToastContainer } from '@/components/ui/toast-container'
+import { Button } from '@/components/ui/button'
 import {
   announcePanelTabPresence,
   getPanelTabPresence,
@@ -9,6 +9,18 @@ import {
 } from '@/lib/panelTabPresence'
 import { useUiStore } from '@/store/ui'
 import { PanelTabPresenceBridge } from './PanelTabPresenceBridge'
+
+function ToastFixture() {
+  const toasts = useUiStore((state) => state.toasts)
+  return toasts.map((toast) => (
+    <div key={toast.id}>
+      {toast.message}
+      {toast.action && (
+        <Button variant="ghost" onClick={toast.action.onClick}>{toast.action.label}</Button>
+      )}
+    </div>
+  ))
+}
 
 afterEach(() => {
   cleanup()
@@ -21,7 +33,7 @@ describe('advisory panel-tab presence', () => {
     render(
       <>
         <PanelTabPresenceBridge />
-        <ToastContainer />
+        <ToastFixture />
       </>,
     )
     const announcement = announcePanelTabPresence({ panelId: 'library', workspaceId: 'ws-1' })
@@ -64,7 +76,7 @@ describe('advisory panel-tab presence', () => {
     render(
       <>
         <PanelTabPresenceBridge />
-        <ToastContainer />
+        <ToastFixture />
       </>,
     )
     const identity = { panelId: 'library', workspaceId: 'ws-1' } as const
@@ -91,7 +103,7 @@ describe('advisory panel-tab presence', () => {
     render(
       <>
         <PanelTabPresenceBridge />
-        <ToastContainer />
+        <ToastFixture />
       </>,
     )
     const identity = { panelId: 'library', workspaceId: 'ws-1' } as const

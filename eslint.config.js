@@ -96,6 +96,13 @@ export default tseslint.config(
     files: ['**/*.cjs'],
     languageOptions: { globals: { module: 'readonly', exports: 'readonly' } },
   },
+  {
+    // This diagnostic fixture deliberately logs only when a WebRTC probe
+    // fails. Keep no-console enabled here so its three narrow suppressions
+    // are checked rather than reported as unused directives.
+    files: ['tests/e2e/fixtures/webrtc-debug.ts'],
+    rules: { 'no-console': 'error' },
+  },
   // Node-run scripts and harnesses execute under Node, not in a browser, so
   // `process`/`console`/`fetch`/`AbortSignal` are legitimately defined there.
   // Without this, the base `no-undef` rule judges them by browser globals and

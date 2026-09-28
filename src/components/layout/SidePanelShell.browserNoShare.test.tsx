@@ -65,10 +65,6 @@ class AttachWebSocket {
 }
 const originalWS = window.WebSocket
 
-/** The shell's chat-input focus target (GREEN returns header-close focus
- * here; the shell test needs it mounted). */
-const originalMatchMedia = window.matchMedia
-
 /** MIN-001: the shell measures its row via ResizeObserver — stubbed with a
  * controllable double, as in the other shell packs. */
 class RowRO {

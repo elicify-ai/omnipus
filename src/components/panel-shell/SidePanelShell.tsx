@@ -18,7 +18,7 @@ import { ArrowsOutSimple, ArrowLeft, SpinnerGap, X } from '@phosphor-icons/react
 import { cn } from '@/lib/utils'
 import { IconButton } from '@/components/ui/icon-button'
 import { ResizeSeparator } from '@/components/ui/resize-separator'
-import { ErrorBoundary } from '@/components/ui/error-boundary'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
 import { usePanelShell, usePanelShellHistory } from './usePanelShell'
 import { usePanelUrlHistory } from './usePanelUrlHistory'

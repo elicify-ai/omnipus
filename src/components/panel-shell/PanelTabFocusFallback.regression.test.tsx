@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ToastContainer } from '@/components/ui/toast-container'
+import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
 import type { PanelContentProps } from './types'
 
@@ -45,6 +45,18 @@ let registeredExpand: (() => boolean) | null = null
 let focusResult: 'absent' | 'failed' = 'absent'
 let existingResult: 'affordance' | null = 'affordance'
 
+function ToastFixture() {
+  const toasts = useUiStore((state) => state.toasts)
+  return toasts.map((toast) => (
+    <div key={toast.id}>
+      {toast.message}
+      {toast.action && (
+        <Button variant="ghost" onClick={toast.action.onClick}>{toast.action.label}</Button>
+      )}
+    </div>
+  ))
+}
+
 function shellProps(context: PanelContentProps['context']): PanelContentProps {
   return {
     context,
@@ -81,7 +93,7 @@ describe('SP-18 focus fallback', () => {
     render(
       <>
         <PanelTabPresenceBridge />
-        <ToastContainer />
+        <ToastFixture />
       </>,
     )
     act(() => {
@@ -103,7 +115,7 @@ describe('SP-18 focus fallback', () => {
     render(
       <>
         <PanelTabPresenceBridge />
-        <ToastContainer />
+        <ToastFixture />
       </>,
     )
     act(() => {
@@ -125,7 +137,7 @@ describe('SP-18 focus fallback', () => {
       <>
         <PanelTabPresenceBridge />
         <LibraryPanel shellProps={shellProps({ workspaceId: 'ws-1' })} />
-        <ToastContainer />
+        <ToastFixture />
       </>,
     )
     await waitFor(() => expect(registeredExpand).not.toBeNull())
@@ -149,7 +161,7 @@ describe('SP-18 focus fallback', () => {
       <>
         <PanelTabPresenceBridge />
         <BrowserLivePanel shellProps={shellProps(context)} />
-        <ToastContainer />
+        <ToastFixture />
       </>,
     )
     await waitFor(() => expect(registeredExpand).not.toBeNull())

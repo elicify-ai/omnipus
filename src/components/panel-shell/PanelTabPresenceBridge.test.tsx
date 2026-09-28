@@ -1,13 +1,25 @@
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ToastContainer } from '@/components/ui/toast-container'
+import { Button } from '@/components/ui/button'
 import {
   announcePanelTabPresence,
   getPanelTabPresence,
 } from '@/lib/panelTabPresence'
 import { useUiStore } from '@/store/ui'
 import { PanelTabPresenceBridge } from './PanelTabPresenceBridge'
+
+function ToastFixture() {
+  const toasts = useUiStore((state) => state.toasts)
+  return toasts.map((toast) => (
+    <div key={toast.id}>
+      {toast.message}
+      {toast.action && (
+        <Button variant="ghost" onClick={toast.action.onClick}>{toast.action.label}</Button>
+      )}
+    </div>
+  ))
+}
 
 describe('PanelTabPresenceBridge', () => {
   afterEach(() => {
@@ -23,7 +35,7 @@ describe('PanelTabPresenceBridge', () => {
     render(
       <>
         <PanelTabPresenceBridge />
-        <ToastContainer />
+        <ToastFixture />
       </>,
     )
     const announcement = announcePanelTabPresence({ panelId: 'library', workspaceId: 'ws-1' })

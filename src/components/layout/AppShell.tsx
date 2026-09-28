@@ -9,7 +9,7 @@ import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspace
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
 import { SearchModal } from '@/components/search/SearchModal'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
-import { ErrorBoundary } from '@/components/ui/error-boundary'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { GodModeCornerDot } from './GodModeIndicators'
 import { queryClient } from '@/lib/queryClient'
 import { fetchTasks, fetchAgents, fetchAppState, fetchNotifications } from '@/lib/api'

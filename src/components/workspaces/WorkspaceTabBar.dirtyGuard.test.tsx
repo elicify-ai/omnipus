@@ -73,24 +73,23 @@ vi.mock('framer-motion', () => ({
   },
 }))
 
-vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
-    asChild ? <>{children}</> : <div>{children}</div>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuItem: ({
-    children,
-    onClick,
-    ...rest
-  }: {
-    children: React.ReactNode
-    onClick?: () => void
-  } & Record<string, unknown>) => (
-    <button type="button" onClick={onClick} {...rest}>
-      {children}
-    </button>
-  ),
-}))
+vi.mock('@/components/ui/dropdown-menu', async () => {
+  const { Button } = await vi.importActual<typeof import('@/components/ui/button')>('@/components/ui/button')
+  return {
+    DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DropdownMenuTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
+      asChild ? <>{children}</> : <div>{children}</div>,
+    DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DropdownMenuItem: ({ children, onClick, className, ...rest }: {
+      children: React.ReactNode
+      onClick?: () => void
+      className?: string
+    } & Record<string, unknown>) => {
+      void className
+      return <Button variant="ghost" onClick={onClick} {...rest}>{children}</Button>
+    },
+  }
+})
 
 import { WorkspaceTabBar } from './WorkspaceTabBar'
 

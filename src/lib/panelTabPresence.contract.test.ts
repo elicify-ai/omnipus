@@ -49,6 +49,7 @@ async function load(): Promise<Api> {
   } catch (importErr) {
     throw new Error(
       `BLOCKED: already-open-tab module not implemented — required by side-panel-shell-spec.md §8.3/§12 test #14 (import of ${MODULE_PATH} failed: ${importErr instanceof Error ? importErr.message : String(importErr)})`,
+      { cause: importErr },
     )
   }
   const api = mod as Partial<Api>

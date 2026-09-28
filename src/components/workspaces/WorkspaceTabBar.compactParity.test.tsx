@@ -12,14 +12,18 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('framer-motion', () => ({
   motion: { div: ({ children, ...props }: React.HTMLAttributes<HTMLDivElement>) => <div {...props}>{children}</div> },
 }))
-vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuItem: ({ children, onClick, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button type="button" onClick={onClick} {...props}>{children}</button>
-  ),
-}))
+vi.mock('@/components/ui/dropdown-menu', async () => {
+  const { Button } = await vi.importActual<typeof import('@/components/ui/button')>('@/components/ui/button')
+  return {
+    DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DropdownMenuItem: ({ children, onClick, className, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => {
+      void className
+      return <Button variant="ghost" onClick={onClick} {...props}>{children}</Button>
+    },
+  }
+})
 
 import { WorkspaceTabBar } from './WorkspaceTabBar'
 

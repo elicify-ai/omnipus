@@ -41,6 +41,7 @@ async function loadRegistry(): Promise<{ panels: PanelDefinition[] }> {
   } catch (importErr) {
     throw new Error(
       `BLOCKED: production panel registry module not implemented — required by side-panel-shell-spec.md §8.1/§12 test #1 (import of ${MODULE_PATH} failed: ${importErr instanceof Error ? importErr.message : String(importErr)})`,
+      { cause: importErr },
     )
   }
   const panels = (mod as { panels?: PanelDefinition[] }).panels ??

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PanelContentProps, PanelDefinition } from './types'
 import { SidePanelShell } from './SidePanelShell'
 import { usePanelShellStore } from './panelShellStore'
+import { Button } from '@/components/ui/button'
 
 class RowResizeObserver {
   constructor(private readonly callback: ResizeObserverCallback) {}
@@ -36,12 +37,13 @@ const library: PanelDefinition = {
 function renderShell() {
   render(
     <>
-      <button
+      <Button
+        variant="ghost"
         data-panel-trigger="library"
         onClick={() => usePanelShellStore.getState().openPanel('library')}
       >
         Library trigger
-      </button>
+      </Button>
       <SidePanelShell
         panels={[library]}
         username="dana"

@@ -21,10 +21,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
 import { usePanelShellStore } from '@/components/panel-shell/panelShellStore'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
-import type {
-  PanelDefinition,
-  PanelContentProps,
-} from '@/components/panel-shell/types'
+import { Button } from '@/components/ui/button'
+import type { PanelDefinition } from '@/components/panel-shell/types'
 
 vi.mock('@/components/library/preview/unsavedGuard', () => ({
   getDiscardConfirmDialogOpen: vi.fn(() => false),
@@ -49,7 +47,7 @@ class RowRO {
 }
 vi.stubGlobal('ResizeObserver', RowRO)
 
-function probeContent(_props: PanelContentProps) {
+function probeContent() {
   return <div data-testid="probe-content">probe</div>
 }
 
@@ -73,13 +71,14 @@ function renderShell(panels: PanelDefinition[]) {
           panel — the USER-initiated path US-9 AS-3 speaks of (distinct from
           a load-time store/deep-link restore, MIN-002). `data-panel-trigger`
           is the attribute the shell's focus return reads back on close. */}
-      <button
+      <Button
+        variant="ghost"
         data-panel-trigger="library"
         data-testid="panel-trigger-library"
         onClick={() => usePanelShellStore.getState().openPanel('library')}
       >
         Library trigger
-      </button>
+      </Button>
       <SidePanelShell
         panels={panels}
         username="dana"

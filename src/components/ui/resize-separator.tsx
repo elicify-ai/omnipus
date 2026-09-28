@@ -138,7 +138,7 @@ export const ResizeSeparator = function ResizeSeparator({
   // `latest` above, so a new interaction steps from the prop.
   const handleKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const value = latest.current?.px ?? valueRef.current
-    let next: number | null = null
+    let next: number
     let source: ResizeSeparatorSource = 'keyboard'
     if (e.key === 'ArrowLeft') {
       // Panel on the right: ArrowLeft widens it (the border moves left).
