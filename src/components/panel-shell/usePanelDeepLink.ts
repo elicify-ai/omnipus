@@ -23,7 +23,7 @@
 //      does not adopt or close. Panel toggles are not pages.
 //   4. Our own replaces set a suppress flag so the search change they cause
 //      is not adopted again (no loop, no fight with projection).
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useBlocker, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from './leaveGate'
@@ -80,13 +80,16 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     enableBeforeUnload: false,
   })
 
-  const replaceSearch = (desired: 'library' | undefined) => {
-    selfWriteRef.current = true
-    navigate({
-      search: ((prev: SearchRecord) => cleanedSearch(prev, desired)) as never,
-      replace: true,
-    })
-  }
+  const replaceSearch = useCallback(
+    (desired: 'library' | undefined): void => {
+      selfWriteRef.current = true
+      navigate({
+        search: ((prev: SearchRecord) => cleanedSearch(prev, desired)) as never,
+        replace: true,
+      })
+    },
+    [navigate],
+  )
 
   useEffect(() => {
     const onPopState = () => {
@@ -96,10 +99,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
-    // replaceSearch closes over the latest navigate; popstate is re-bound
-    // with it. The flag refs are stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigate])
+  }, [replaceSearch])
 
   useEffect(() => {
     if (backForwardRef.current) {
@@ -132,7 +132,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     // A named non-library param is a "no panel" verdict (US-7 AS-4/AS-5).
     // An absent param is not: in-app panel opens must survive projection.
     if (named !== undefined) gatedCloseIfOpen()
-  }, [rawSearch, workspaceId, navigate])
+  }, [rawSearch, workspaceId, replaceSearch])
 
   // PROJECTION (store -> URL, SP-22 REPLACE). The mount pass records a
   // baseline and writes nothing — a store a mount STARTS with is not a
@@ -148,5 +148,5 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     const validated = panel === 'library' ? 'library' : undefined
     if (desired === validated) return
     replaceSearch(desired)
-  }, [activePanel, panel, navigate])
+  }, [activePanel, panel, replaceSearch])
 }
