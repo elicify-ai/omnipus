@@ -1,11 +1,15 @@
 package gateway
 
 import (
-	"fmt"
+	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/url"
 	"testing"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/email"
 )
 
@@ -88,7 +92,51 @@ func TestMailUIDToWirePreservesUint32Maximum(t *testing.T) {
 	if got := mailUIDToWire(^uint32(0)); got != want {
 		t.Fatalf("mailUIDToWire(max uint32) = %d, want %d", got, want)
 	}
-	if got := fmt.Sprintf("%d", mailUIDToWire(^uint32(0))); got != "4294967295" {
-		t.Fatalf("serialized max uint32 = %q, want 4294967295", got)
+
+	payload, err := json.Marshal(gen.MailMessage{
+		Uid:         mailUIDToWire(^uint32(0)),
+		Uidvalidity: mailUIDToWire(^uint32(0)),
+	})
+	if err != nil {
+		t.Fatalf("marshal generated mail response: %v", err)
 	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		t.Fatalf("decode generated mail response: %v", err)
+	}
+	for _, field := range []string{"uid", "uidvalidity"} {
+		if got := string(wire[field]); got != "4294967295" {
+			t.Fatalf("serialized %s = %q, want 4294967295", field, got)
+		}
+	}
+}
+
+func TestMailUIDToWireAvoidsArchitectureSizedInt(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "rest_mail.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse rest_mail.go: %v", err)
+	}
+	var target *ast.FuncDecl
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "mailUIDToWire" {
+			target = fn
+			break
+		}
+	}
+	if target == nil {
+		t.Fatal("mailUIDToWire declaration not found")
+	}
+
+	ast.Inspect(target.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		conversion, ok := call.Fun.(*ast.Ident)
+		if ok && conversion.Name == "int" {
+			t.Error("mailUIDToWire passes through architecture-sized int")
+		}
+		return true
+	})
 }
