@@ -470,7 +470,7 @@ func TestRequestPathRedaction_EveryLoggingSite(t *testing.T) {
 
 // redactionRecordingSite names one place in pkg/gateway that writes a request path into
 // a log record or an audit entry. This inventory is the FR-003e claim written
-// down: eight sites, all redacted.
+// down: ten sites, all redacted.
 type redactionRecordingSite struct {
 	file string
 	what string
@@ -481,8 +481,10 @@ var expectedRedactionSites = []redactionRecordingSite{
 	{file: "gateway_boot.go", what: "CSRF mismatch reporter: slog fallback when no audit logger is wired"},
 	{file: "gateway_boot.go", what: "CSRF mismatch reporter: the AUDIT entry (HMAC-chained, outlives log rotation)"},
 	{file: "rest_preview_audit.go", what: "emitPreviewAuditEntry: details[\"sanitized_path\"]"},
+	{file: "preview_response_policy.go", what: "previewRedirectRefused: redirect-refused 502 warning (gate wave-2 SF-2, via previewRedactedLocation)"},
 	{file: filepath.Join("middleware", "bypass_gate.go"), what: "RequireNotBypass: 503 forensic warning"},
 	{file: filepath.Join("middleware", "csrf.go"), what: "CSRFMiddleware: safe-method cookie re-mint failure"},
+	{file: filepath.Join("middleware", "planted_cookie.go"), what: "PlantedCookieGuard: duplicated reserved cookie names warning (gate wave-2 SF-1)"},
 	{file: "rest_signin_copilot.go", what: "handleCopilotSignInStatus: probe-refused 429 warning"},
 	{file: "rest_knowledge.go", what: "allowKnowledgeRetrieval: knowledge rate-limit 429 warning (2026-09-14 limiter fix)"},
 }
@@ -495,8 +497,8 @@ const redactionImplFile = "preview_path_redact.go"
 // scanned so a new raw site in either package fails the build.
 var redactionScannedDirs = []string{".", "middleware"}
 
-// TestRequestPathRedaction_SourceInventory fails when a ninth recording site
-// appears, and fails when an existing one stops redacting.
+// TestRequestPathRedaction_SourceInventory fails when an uninventoried
+// recording site appears, and fails when an existing one stops redacting.
 //
 // Two independent properties, because each catches what the other misses:
 //
@@ -530,15 +532,18 @@ func TestRequestPathRedaction_SourceInventory(t *testing.T) {
 				"or the audit chain (FR-003e).\ninventory: %+v", expectedRedactionSites)
 	})
 
-	t.Run("inventory_is_eight_sites", func(t *testing.T) {
+	t.Run("inventory_is_ten_sites", func(t *testing.T) {
 		// FR-003e counted six; a seventh (rest_signin_copilot.go's probe-refused
-		// 429 warning) was added during the release/v0.1.1 merge, and an
-		// eighth (rest_knowledge.go's knowledge rate-limit 429 warning) during
-		// the 2026-09-14 limiter fix. If the product grows a ninth, this is
-		// the line that says so out loud rather than letting the number drift.
-		assert.Len(t, expectedRedactionSites, 8,
-			"FR-003e-era inventory plus the rest_signin_copilot.go and rest_knowledge.go "+
-				"sites enumerates eight request-path recording sites")
+		// 429 warning) was added during the release/v0.1.1 merge, an eighth
+		// (rest_knowledge.go's knowledge rate-limit 429 warning) during the
+		// 2026-09-14 limiter fix, and the ninth and tenth (preview_response_policy.go's
+		// redirect-refusal warning and middleware/planted_cookie.go's
+		// planted-cookie warning) with #798's gate wave-2 hardening. If the
+		// product grows an eleventh, this is the line that says so out loud
+		// rather than letting the number drift.
+		assert.Len(t, expectedRedactionSites, 10,
+			"FR-003e-era inventory plus the rest_signin_copilot.go, rest_knowledge.go, and "+
+				"#798 gate wave-2 sites enumerates ten request-path recording sites")
 	})
 }
 

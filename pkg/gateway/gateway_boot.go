@@ -1199,20 +1199,21 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		planStore:              stg.planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
 		credStore:              stg.credStore,
 		mediaStore:             stg.runningServices.MediaStore,
-		ssrfChecker:            agent.GetSSRFChecker(stg.agentLoop), // SEC-24: nil when SSRF disabled
-		sandboxResult:          stg.sandboxResult,                   // immutable post-boot snapshot
-		appliedConfig:          mustDeepCopyConfig(stg.cfg),         // boot-time snapshot for pending-restart diff
-		servedSubdirs:          stg.runningServices.servedSubdirs,   // web_serve static-mode token registry
-		devServers:             stg.runningServices.devServers,      // web_serve dev-mode process registry
-		approvalReg:            stg.approvalReg,                     // in-process tool-approval registry (FR-016)
-		builtinRegistry:        stg.builtinReg,                      // M16: central builtin registry (FR-001)
-		mcpRegistry:            stg.mcpReg,                          // M16: central MCP registry (FR-001)
-		skillRegistry:          skillRegistry,                       // ClawHub marketplace (search + install-by-slug)
-		allowGodMode:           stg.allowGodMode,                    // god-mode latch (2)
-		notifStore:             stg.runningServices.notifStore,      // #264: notification center
-		auditor:                stg.agentLoop.AuditLogger(),         // shared audit logger for REST mutations
-		selfWriteReg:           selfWriteReg,                        // suppress watcher reload on app-initiated writes
-		taskLock:               task.TaskFileLock,                   // shared striped lock for board task RMW
+		ssrfChecker:            agent.GetSSRFChecker(stg.agentLoop),                                 // SEC-24: nil when SSRF disabled
+		sandboxResult:          stg.sandboxResult,                                                   // immutable post-boot snapshot
+		appliedConfig:          mustDeepCopyConfig(stg.cfg),                                         // boot-time snapshot for pending-restart diff
+		servedSubdirs:          stg.runningServices.servedSubdirs,                                   // web_serve static-mode token registry
+		devServers:             stg.runningServices.devServers,                                      // web_serve dev-mode process registry
+		labelLimiters:          &previewLabelLimiter{buckets: make(map[string]*previewLabelBucket)}, // fix4: this gateway's own preview limiter (FR-027)
+		approvalReg:            stg.approvalReg,                                                     // in-process tool-approval registry (FR-016)
+		builtinRegistry:        stg.builtinReg,                                                      // M16: central builtin registry (FR-001)
+		mcpRegistry:            stg.mcpReg,                                                          // M16: central MCP registry (FR-001)
+		skillRegistry:          skillRegistry,                                                       // ClawHub marketplace (search + install-by-slug)
+		allowGodMode:           stg.allowGodMode,                                                    // god-mode latch (2)
+		notifStore:             stg.runningServices.notifStore,                                      // #264: notification center
+		auditor:                stg.agentLoop.AuditLogger(),                                         // shared audit logger for REST mutations
+		selfWriteReg:           selfWriteReg,                                                        // suppress watcher reload on app-initiated writes
+		taskLock:               task.TaskFileLock,                                                   // shared striped lock for board task RMW
 	}
 	stg.api.cronService.Store(stg.runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
 	// D-107: the Library REST write handlers broadcast a library_changed WS
@@ -1413,6 +1414,27 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, bool, error
 	)
 	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(csrfMW); stg.err != nil {
 		return nil, true, fmt.Errorf("wrapping HTTP handler with CSRF: %w", stg.err)
+	}
+
+	// ADR-094 preview isolation — the outer three wraps, in execution order
+	// dispatcher → navigation guard → planted-cookie guard (outermost-LAST:
+	// each later wrap sits outside the previous one). The dispatcher claims
+	// <label>.localhost:<canonical-port> Hosts for the preview-host mux,
+	// structurally bypassing everything wrapped below it (FR-028/MIN-007:
+	// the exemption is scoped by dispatch, not by path); the guards below it
+	// run only on the main branch. PlantedCookieGuard sits OUTSIDE the CSRF
+	// gate so a planted-cookie hit writes its own typed 403 envelope instead
+	// of CSRF's generic one (DS-5), and its context marker makes
+	// ResolveUserFromCookie fail closed on the GET branch (401, not a
+	// half-authenticated request).
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(middleware.PlantedCookieGuard(middleware.WithPlantedCookieAuditLog(stg.api.agentLoop.AuditLogger()))); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler with planted-cookie guard: %w", stg.err)
+	}
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(middleware.NavigationGuard()); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler with navigation guard: %w", stg.err)
+	}
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(stg.api.previewHostDispatchMW); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler with preview host dispatch: %w", stg.err)
 	}
 
 	// Wire the /reload trigger BEFORE StartAll launches the HTTP listener.

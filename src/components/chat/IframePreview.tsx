@@ -213,10 +213,31 @@ export function IframePreview(props: IframePreviewProps) {
     ? Number(window.location.port)
     : defaultPortForProtocol(protocol)
 
-  const resolved = result
+  // ADR-094 FR-023/FR-025: resolve TWICE —
+  //   • `selectedResolved` is the link the user clicks: the Mode 1
+  //     `*.localhost` URL when present+valid AND the engine supports it,
+  //     else the Mode 2 same-origin path URL (resolvePreviewHref does both
+  //     the validation and the engine gating).
+  //   • `fallbackResolved` (no isolated_url ⇒ always Mode 2) is the WARMUP
+  //     PROBE target. The SPA's CSP connect-src 'self' would block a
+  //     cross-origin HEAD to the label host, and FR-025 forbids probing it
+  //     (S-8.4): readiness is signalled by the same-origin Mode 2 URL even
+  //     when the rendered link is the Mode 1 host.
+  const fallbackResolved = result
     ? resolvePreviewHref({ path: result.path, url: result.url, origin, hostname, port })
     : null
-  const href = resolved && 'href' in resolved ? resolved.href : null
+  const selectedResolved = result
+    ? resolvePreviewHref({
+        path: result.path,
+        url: result.url,
+        isolated_url: result.isolated_url,
+        origin,
+        hostname,
+        port,
+      })
+    : null
+  const href = selectedResolved && 'href' in selectedResolved ? selectedResolved.href : null
+  const probeHref = fallbackResolved && 'href' in fallbackResolved ? fallbackResolved.href : null
 
   // ── Warmup polling (same-origin HEAD fetch — no iframe, no CORS needed) ──
 
@@ -262,18 +283,20 @@ export function IframePreview(props: IframePreviewProps) {
     }, 2000)
   }, [maxProbes, probeOnce, stopPolling, toolName])
 
-  // Start polling once the href resolves (dev mode only).
+  // Start polling once the probe target resolves (dev mode only). The probe
+  // target is the Mode 2 URL (FR-025, S-8.4) — see the resolution comment
+  // above — NEVER the Mode 1 label host.
   useEffect(() => {
-    if (isWarmupRequired && href && warmupPhase === 'starting') {
-      startPolling(href)
+    if (isWarmupRequired && probeHref && warmupPhase === 'starting') {
+      startPolling(probeHref)
     }
     return () => stopPolling()
-    // Run once per href resolution; re-triggered by the Retry handler below.
+    // Run once per probe-target resolution; re-triggered by Retry below.
      
-  }, [href])
+  }, [probeHref])
 
   function handleRetry() {
-    if (href) startPolling(href)
+    if (probeHref) startPolling(probeHref)
   }
 
   async function handleCopy() {
@@ -315,7 +338,7 @@ export function IframePreview(props: IframePreviewProps) {
   // Path validation failed on both `path` and `url` — fall back to the raw
   // legacy `url` (if any) so old/malformed transcripts still surface
   // something actionable rather than a dead end (FR-019 replay safety).
-  if (!resolved || 'error' in resolved) {
+  if (!selectedResolved || 'error' in selectedResolved) {
     if (result.url) {
       return <LinkOnlyFallback href={result.url} label="Preview" />
     }

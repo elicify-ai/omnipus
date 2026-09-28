@@ -66,8 +66,15 @@ func buildProductionMiddlewareChain(api *restAPI, mux http.Handler) http.Handler
 	csrfMW := middleware.CSRFMiddleware()
 	// Inner-first: configSnapshotMiddleware wraps mux, THEN csrfMW wraps
 	// that — matching WrapHTTPHandler(configSnapshotMiddleware) being called
-	// before WrapHTTPHandler(csrfMW) in gateway.go.
-	return csrfMW(api.configSnapshotMiddleware(mux))
+	// before WrapHTTPHandler(csrfMW) in gateway.go. ADR-094 adds three more
+	// outer layers in the same wrap order as gateway_boot.go: the
+	// planted-cookie guard, the navigation guard, and the Mode 1 host
+	// dispatcher outermost — execution order is dispatcher → nav → planted →
+	// csrf → configSnapshot → mux.
+	inner := csrfMW(api.configSnapshotMiddleware(mux))
+	guarded := middleware.PlantedCookieGuard()(inner)
+	navigated := middleware.NavigationGuard()(guarded)
+	return api.previewHostDispatchMW(navigated)
 }
 
 // newWiredPreviewRealMux builds a real *http.ServeMux populated by the
