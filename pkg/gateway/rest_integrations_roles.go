@@ -527,6 +527,9 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 			return
 		}
 	}
+	// The same FR-033 post-reload judgment for the FALLBACK role (G4): a key sent
+	// with this request only resolves after the reload above, so the fallback is
+	// judged here, not before the write; the write is kept and the 400 names the step.
 	if write.fallbackSet && write.fallbackOn && !postReloadCfg.Tools.Web.UsableSearchProvider(id) {
 		if def.requiresKey {
 			jsonErr(w, http.StatusBadRequest,

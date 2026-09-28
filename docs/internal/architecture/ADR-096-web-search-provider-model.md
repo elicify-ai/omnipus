@@ -93,7 +93,7 @@ Both are plain `string`, JSON `default_provider` / `fallback_provider`, `yaml:"-
 
 The precedent for the write technique is `pkg/config/cli_token_migration.go::migrateCLITokenOutOfUsers`, not `VideoEmbedHosts`. Round 1 caught the mis-citation: `pkg/config/config.go::VideoEmbedHosts` is a `*[]string` **with** `omitempty` — a pointer, the opposite technique, chosen for a three-state problem we do not have. And `migrateCLITokenOnDisk` does not "patch the bytes": it unmarshals into a `map[string]any`, mutates that map, and re-emits with `json.MarshalIndent`. Whitespace, key order and number formatting are re-emitted; what the technique actually preserves is **unmodelled keys**, which is the property we need. Describe it that way.
 
-`none` is a value of the fallback, not a third setting. It means "no second try", and the screen shows it as a real choice labelled "No fallback". Absent (the key is missing) is a different state: the file has not chosen. The catalogue ids are `glm` and `baidu`; the config objects stay `glm_search` and `baidu_search` (`searchRefKeyByID` already maps them that way).
+`none` is a value of the fallback, not a third setting. It means "no second try", and the screen shows it as a real choice labelled "No fallback". Absent (the key is missing) is a different state: the file has not chosen. The catalogue ids are `glm` and `baidu`; the config objects stay `glm_search` and `baidu_search` (`searchRefSectionByID (derived from the provider catalogue)` already maps them that way).
 
 **The rows below are evaluated in order. The first row whose condition holds wins.** Round 1 found that R1, R2 and R3 can all be true at once and nothing said which applied; this sentence is the fix, and it is as load-bearing as any row.
 
@@ -623,7 +623,7 @@ WP-5 is contract-first. The order is in the spec, and the regenerated `pkg/gatew
 - **Tool:** `pkg/tools/web.go::NewWebSearchTool`, `WebSearchTool`, `WebSearchToolOptions`, `enabledButKeylessSearchProviders`, each `Search` method named above, `pkg/agent/loop_wire.go::registerCoreTools`. `pkg/tools/general_builtin_catalog.go::GeneralBuiltinMetadata` stays a non-executed metadata instance and, with a static `Description`, no longer diverges from the live one.
 - **Credentials:** `pkg/credentials/inject.go::nonChannelRefsFor` — named explicitly. Exa joins it. This ADR does not redesign injection.
 - **Boot and reload:** `pkg/gateway/gateway_boot_credentials.go::bootCredentials` (the migration's new home), `pkg/gateway/gateway_reload.go::executeReload` (the mirror, plus the self-write registration).
-- **Gateway:** `pkg/gateway/rest_integrations_auth.go::activeSearchProviderID`, `applySearchIntegration`, `buildIntegrationResponse`, `handleIntegrationProviderUpdate`; `pkg/gateway/rest_config.go::storeCredential`, `safeUpdateConfigJSON`, `refreshConfigAndRewireServices`; `pkg/gateway/video_embed_hosts.go::validVideoEmbedHosts` (its rule set mirrored by `pkg/tools/web_search.go::normalizeSearchDomains` for the search tool's site filters).
+- **Gateway:** `pkg/gateway/rest_integrations_auth.go::integrationCatalogue`, `searchRefSectionByID`; `pkg/gateway/rest_integrations_roles.go::buildIntegrationResponse`, `handleIntegrationProviderUpdate`, `applySearchIntegrationRoles` (the pre-ADR `activeSearchProviderID` and `applySearchIntegration` were removed); `pkg/gateway/rest_config.go::storeCredential`, `safeUpdateConfigJSON`, `refreshConfigAndRewireServices`; `pkg/gateway/video_embed_hosts.go::validVideoEmbedHosts` (its rule set mirrored by `pkg/tools/web_search.go::normalizeSearchDomains` for the search tool's site filters).
 - **SPA:** `src/components/settings/IntegrationsSection.tsx`; `src/components/chat/tools/WebSearchResult.tsx::WebSearchResultUI`; `src/components/chat/OmnipusRuntimeProvider.tsx` (the `search_web` registration).
 - **Contracts:** `contracts/components/schemas/IntegrationProvider.yaml` (search rows gain role and usability fields; the `id` becomes an enum) and `IntegrationProviderUpdateRequest.yaml` (D18's shape), plus the regenerated `pkg/gateway/inboundschemas/`.
 
@@ -651,6 +651,16 @@ Each of these is a real decision this ADR deliberately did not make on the found
 | Q2 | Should the agent's choice of provider be restricted by an operator allow-set, and should there be a per-turn cap on search calls (D20)? | (A) Neither now; the depth ceiling and the per-call record are enough. (B) Add an allow-set. (C) Add both | **A**, with the record in place so the exposure is measurable before policy is added |
 | Q3 | R3's automatic DuckDuckGo fallback is reachable only through a hand-edited file, since migration and the shipped defaults both write `none`. Keep it? | (A) Keep — cheap, and it is a settled decision. (B) Delete R3, `fallback_automatic`, the "Automatic fallback" label and its two tests; absent means `none` | **B** on simplicity grounds, but it reverses a decision the founder settled, so it is a question and not a change |
 | Q4 | A migrated Tavily object keeps `advanced` depth, which is what the code sends today (D11's cost note). Is preserving the bill the right call, or should migration take the install down to `basic` and tell the operator? | (A) Preserve `advanced`, log it, surface it in Settings. (B) Write `basic` and log a deliberate cheapening | **A** — silently changing what an operator's searches cost, in either direction, is the thing this ADR exists to stop |
+
+
+## Amendment — 2026-09-28 (gate round 1/2 fixes on PR #944)
+
+Text changed after the review gates, to match the shipped code; no decision was reversed:
+
+- D9: hostname validation MIRRORS the `pkg/gateway/video_embed_hosts.go` rule set in `pkg/tools` (it cannot reuse the unexported function across packages).
+- D20: the per-call record exists on every search path (default and named provider); it does not carry request-correlation fields (`pkg/logger` has no context-aware variant) — a known limitation. The consecutive-empty-DuckDuckGo warning fires after 3 empty results in a row (`ddgEmptyWarnThreshold`).
+- D15/FR-035: `pkg/config/search_provider_catalogue.go` is the single provider catalogue; symbol references in this ADR and the spec updated to the current names.
+- R3: the automatic DuckDuckGo fallback requires a usable default (the third conjunct is enforced); an unusable default with an absent fallback is R7 (nobody is called).
 
 ## Changelog — round 2 corrections
 

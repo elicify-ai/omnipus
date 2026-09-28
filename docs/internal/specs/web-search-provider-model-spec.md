@@ -198,7 +198,7 @@ Correct the in-memory config even if the disk write fails, and log the write fai
 | `fallback_provider` | one of those ids, `none`, or absent | Who is tried second. `none` is "No fallback". Absent is "not chosen" |
 | `roles_migrated_at` | RFC 3339 timestamp | The migration marker. Idempotency keys off **this**, not off `default_provider`'s presence, so a later corrective pass can tell whether this migration ran. `config.CurrentVersion` cannot express it: it has always been `1`, the load switch accepts only `CurrentVersion` and hard-fails everything else, and there is no `case 0` branch |
 
-Catalogue ids are `glm` and `baidu`. The config objects stay `glm_search` and `baidu_search`, which is the mapping `applySearchIntegration` already uses (`searchRefKeyByID`).
+Catalogue ids are `glm` and `baidu`. The config objects stay `glm_search` and `baidu_search`, which is the mapping the gateway derives from the provider catalogue (`pkg/gateway/rest_integrations_auth.go::searchRefSectionByID`).
 
 Provider objects keep their current fields. New fields are only the depth defaults in [Depth](#depth) and the Exa object in [Exa](#exa). Secrets stay in the credential store. Config holds references only.
 
@@ -1363,7 +1363,7 @@ Not for the implementer's unit suite. For a person checking the finished product
 | `search_web` is the tool agents call. `web_search` is a legacy card name | `WebSearchTool.Name`. **The runtime provider's comment claims both names are registered; only `web_search` is** — issue #898, closed for search by FR-034 |
 | The migration can compute the winner once credentials are injected | `bootCredentials`' documented order. It cannot do so during config load, and it cannot read the vault there (`config.CredentialStore` is `Set`-only) |
 | This feature is reachable on the operator's install | Only where native model search is not in effect. `PreferNative` ships `true` and `pkg/agent/loop_run_turn.go` removes `search_web` for OpenAI, Azure and Codex-with-web-search providers (FR-031) |
-| Catalogue ids `glm` and `baidu` stay, while config objects stay `glm_search` and `baidu_search` | `searchRefKeyByID` |
+| Catalogue ids `glm` and `baidu` stay, while config objects stay `glm_search` and `baidu_search` | `pkg/gateway/rest_integrations_auth.go::searchRefSectionByID` (catalogue-derived) |
 | The agent's prompt is given the tool `registerCoreTools` registers, not the catalogue instance | `RegisterReplacing` and the catalogue comment that the instance is never executed. A test locks this (test 33) |
 
 ## What this task could not establish
