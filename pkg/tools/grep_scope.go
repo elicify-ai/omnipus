@@ -139,13 +139,88 @@ func grepShorthandCandidate(scope string) (string, bool) {
 	return normalizeGrepScope(slashed), true
 }
 
-// resolveGrepRoots is FR-001's dispatch. "" searches the workspace and every
-// mount (D5, unchanged). A non-empty scope is, in this order: (1) refused if
-// it carries a NUL byte; (2) the mount-name shorthand when it is a relative,
-// ".."-free path whose first segment names a mount (lexical, no I/O); (3)
-// otherwise decided by ResolvePath(FSOpList) — relative, absolute and ".."
-// paths alike — exactly as list_directory decides it. There is no lexical
-// first attempt with a fall-through (spec FR-001, round-1 MIN-002).
+// resolveGrepRoots resolves the fs.FS roots one call searches. With no scope
+// that is the calling agent's own effective working directory (policy.WorkDir
+// — its fixed home, or the per-turn Workspace re-root when it is a CoreTeam
+// member) plus every mount on that SAME workspace (D5). A scope naming a
+// mount by its name searches that mount; any other scope is admitted or
+// refused by ResolvePath exactly as list_directory would judge it — FR-001's
+// dispatch, in this order: (1) refused if it carries a NUL byte; (2) the
+// mount-name shorthand when it is a relative, ".."-free path whose first
+// segment names a mount (lexical, no I/O); (3) otherwise decided by
+// ResolvePath(FSOpList) — relative, absolute and ".." paths alike — exactly
+// as list_directory decides it. There is no lexical first attempt with a
+// fall-through (spec FR-001, round-1 MIN-002). It never consults an argument
+// named workspace_id — there is no such argument.
+//
+// # Resolving which workspace's mounts apply
+//
+// Mirrors ResolveTurnFSPolicy's own mount resolution (turn-carried
+// ToolWorkspaceID, else workspace.FindForAgentPreferring) rather than
+// calling through it, for the same reason ListMountsTool
+// (pkg/tools/list_mounts.go) duplicates it locally: policy.AllowedRoots
+// already carries the resolved host paths, but discards their NAMES, and a
+// filegrep.Root needs a Name to prefix every reported hit with (matching how
+// the Library addresses a mounted entry: "<mount>/<rel>"). Re-deriving the
+// same workspace id the same way — rather than reusing policy.AllowedRoots
+// directly — keeps this in lock-step with every other mount-consuming tool;
+// see ResolveTurnFSPolicy's own doc comment for why the two resolutions must
+// never disagree.
+//
+// The entries themselves come from workspace.LoadMounts, which is the
+// VALIDATING reader: loadMountStore runs Mount.Validate over every entry and
+// drops the failures with a WARN before returning any of them, so a
+// hand-edited or partially-migrated record cannot contribute a search root
+// here any more than it can contribute a write grant through
+// workspace.AllowedMountRoots (itself LoadMounts plus a repeat of that same
+// check). AllowedMountRoots is not used here only because it discards the
+// mount NAMES a filegrep.Root needs. That the two readers return the same set
+// is asserted in grep_mountvalidation_test.go, not assumed.
+//
+// # scope
+//
+// "" searches the whole workspace: the root plus every mount, each its own
+// filegrep.Root. A non-empty scope opens ONE further-confined os.Root via
+// (*os.Root).OpenRoot — pruning the walk itself, not just filtering after
+// the fact — and returns a single Root whose Name is the resolved prefix:
+// workspace-relative inside the workspace, the mount name for the
+// shorthand, and the absolute forward-slash location anywhere else (#920
+// FR-004). A relative, ".."-free scope's first path segment is matched
+// against the workspace's mount names FIRST (an exact segment match, never a
+// prefix of a longer name); anything else goes through ResolvePath.
+//
+// # A broken mount is never silently dropped
+//
+// A mount whose host folder cannot be opened right now (unplugged drive,
+// renamed folder) still contributes a Root — backed by unreachableRootFS,
+// which fails filegrep.Search's own fs.Stat(root.FS, ".") check and turns
+// into Result.Truncated + filegrep.ReasonRootLost (FR-021) through that
+// single existing code path, rather than a quiet reduction in coverage or a
+// second, tool-local notion of "root lost".
+//
+// # The secret set is subtracted from every root
+//
+// An os.Root confines the walk to one host directory; it says nothing about
+// WHICH files inside it an agent may see. Every root handed to the engine is
+// therefore wrapped in carveOutFS (and, on top of it, grepGateFS — the
+// skills-registry gate, the metadata guard and D13, this file), which
+// applies fspolicy.IsCarveOut — the
+// same predicate ResolvePath consults before it looks at a mount at all — to
+// every entry the engine can list, name-match, or open. Without it a mount on
+// an ANCESTOR of $OMNIPUS_HOME (warn-and-allow per workspace.CheckMountTarget,
+// which hard-refuses only a target inside $OMNIPUS_HOME) makes credentials.json,
+// master.key, cli.token, the config backups and system/audit.jsonl greppable —
+// every one of them refused to read_file on the same turn, and every one of
+// them covered by the warning CheckMountTarget prints when the operator creates
+// that mount ("the installation's own secrets remain protected independently of
+// this mount").
+//
+// grepRootSet.ancestorUnreadable is the total LoadAncestorIgnore "unreadable"
+// count summed across every root this resolves (finding L11) — zero whenever
+// scope=="", since that path never preloads an ancestor chain (the walk root
+// already is the search scope). See resolveScopedRoot's doc comment for why
+// this cannot be folded into filegrep.Stats until after filegrep.Search
+// runs; Execute performs that fold.
 func (t *GrepTool) resolveGrepRoots(ctx context.Context, policy fspolicy.FSPolicy, scope string) (grepRootSet, func(), error) {
 	var opened []*os.Root
 	closeAll := func() { closeGrepRoots(opened) }
@@ -197,21 +272,18 @@ func (t *GrepTool) resolvedScopeRoot(ctx context.Context, policy fspolicy.FSPoli
 				"use read_file to read a named file there", scope)
 	}
 
-	var set grepRootSet
 	realWorkDir, wdErr := resolveRealpathUnderWorkDir(policy.WorkDir, "")
+	var root filegrep.Root
+	var n int
 	if wdErr == nil && isWithinWorkspace(realAbs, realWorkDir) {
-		root, n, err := t.workspaceScopeRoot(policy, realWorkDir, realAbs, opened)
-		if err != nil {
-			return grepRootSet{}, err
-		}
-		set.add(root, realAbs)
-		set.ancestorUnreadable = n
-		return set, nil
+		root, n, err = t.workspaceScopeRoot(policy, realWorkDir, realAbs, opened)
+	} else {
+		root, n, err = t.absoluteGrepRoot(scope, realAbs, policy, opened)
 	}
-	root, n, err := t.absoluteGrepRoot(scope, realAbs, policy, opened)
 	if err != nil {
 		return grepRootSet{}, err
 	}
+	var set grepRootSet
 	set.add(root, realAbs)
 	set.ancestorUnreadable = n
 	return set, nil
@@ -350,8 +422,8 @@ func grepAbsoluteStatError(rawPath, realAbs string, err error) error {
 	}
 }
 
-// grepMounts resolves the calling turn's workspace mounts — see grepRoots'
-// doc comment ("Resolving which workspace's mounts apply").
+// grepMounts resolves the calling turn's workspace mounts — see
+// resolveGrepRoots' doc comment ("Resolving which workspace's mounts apply").
 func grepMounts(ctx context.Context) []workspace.Mount {
 	home := config.OmnipusHomeDir()
 	mountWorkspaceID := ToolWorkspaceID(ctx)
