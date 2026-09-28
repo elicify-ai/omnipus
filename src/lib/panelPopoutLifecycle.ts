@@ -1,5 +1,11 @@
 import { watchPopoutClosed } from './browserLiveHandoff'
-import { onLibraryPopoutClosed, onLibraryWorkspaceChanged } from './libraryHandoff'
+import {
+  LEGACY_LIBRARY_HANDOFF_ID,
+  onLibraryPopoutClosed,
+  onLibraryWorkspaceChanged,
+} from './libraryHandoff'
+import { PANEL_POLICIES, isWorkspaceScopedPanel } from '@/components/panel-shell/types'
+import type { PanelId } from '@/components/panel-shell/types'
 import {
   forgetPanelTabHandle,
   panelIdentityKey,
@@ -8,6 +14,8 @@ import {
 } from './panelTabPresence'
 
 type OwnedPanelPopout = { // not-wire-format: in-memory app-tab ownership record; never serialized or sent to the gateway
+  ownershipKey: string
+  popoutId?: string
   identity: PanelIdentity
   handle: Window
   scopeUpdated: boolean
@@ -16,6 +24,7 @@ type OwnedPanelPopout = { // not-wire-format: in-memory app-tab ownership record
 }
 
 export type PanelPopoutRegistration = { // not-wire-format: in-memory lifecycle registration from panel content to the stable app owner
+  popoutId?: string
   identity: PanelIdentity
   handle: Window
   onClosed: (identity: PanelIdentity) => void
@@ -27,8 +36,18 @@ let stopLibraryClosed: (() => void) | null = null
 let stopLibraryWorkspace: (() => void) | null = null
 let pagehideListening = false
 
-function latestOwnedPanel(panelId: PanelIdentity['panelId']): OwnedPanelPopout | undefined {
-  return [...ownedPopouts.values()].reverse().find((entry) => entry.identity.panelId === panelId)
+function ownershipKey(registration: PanelPopoutRegistration): string {
+  return registration.popoutId
+    ? `popout:${registration.popoutId}`
+    : `identity:${panelIdentityKey(registration.identity)}`
+}
+
+function findOwnedPanelPopout(panelId: PanelId, popoutId: string): OwnedPanelPopout | undefined {
+  const direct = ownedPopouts.get(`popout:${popoutId}`)
+  if (direct?.identity.panelId === panelId) return direct
+  if (panelId !== 'library' || popoutId !== LEGACY_LIBRARY_HANDOFF_ID) return undefined
+  const libraries = [...ownedPopouts.values()].filter((entry) => entry.identity.panelId === 'library')
+  return libraries.length === 1 ? libraries[0] : undefined
 }
 
 function findOwned(identity: PanelIdentity, handle: Window): OwnedPanelPopout | undefined {
@@ -42,8 +61,7 @@ function isOwned(entry: OwnedPanelPopout): boolean {
 }
 
 function removeOwned(entry: OwnedPanelPopout): void {
-  const key = panelIdentityKey(entry.identity)
-  if (ownedPopouts.get(key) === entry) ownedPopouts.delete(key)
+  if (ownedPopouts.get(entry.ownershipKey) === entry) ownedPopouts.delete(entry.ownershipKey)
   entry.stopWatching()
   forgetPanelTabHandle(entry.identity, entry.handle)
 }
@@ -65,12 +83,23 @@ function moveOwned(entry: OwnedPanelPopout, identity: PanelIdentity): void {
     entry.scopeUpdated = true
     return
   }
-  if (ownedPopouts.get(previousKey) === entry) ownedPopouts.delete(previousKey)
   forgetPanelTabHandle(entry.identity, entry.handle)
   entry.identity = identity
   entry.scopeUpdated = true
-  ownedPopouts.set(nextKey, entry)
   registerPanelTabHandle(identity, entry.handle)
+}
+
+/** Re-key an owned workspace pop-out according to its central switch policy. */
+export function updatePanelPopoutWorkspace(
+  panelId: PanelId,
+  popoutId: string,
+  workspaceId?: string,
+): void {
+  const entry = findOwnedPanelPopout(panelId, popoutId)
+  const follows = PANEL_POLICIES[panelId].switchFollows
+  if (!entry || follows === 'never' || !isWorkspaceScopedPanel(panelId)) return
+  if (follows === 'when-scoped' && entry.identity.workspaceId === undefined) return
+  moveOwned(entry, { panelId, workspaceId })
 }
 
 function closeAllOwned(): void {
@@ -89,15 +118,13 @@ function closeAllOwned(): void {
 
 function ensureInfrastructure(): void {
   if (stopLibraryWorkspace === null) {
-    stopLibraryWorkspace = onLibraryWorkspaceChanged((workspaceId) => {
-      const entry = latestOwnedPanel('library')
-      if (!entry) return
-      moveOwned(entry, { panelId: 'library', workspaceId })
+    stopLibraryWorkspace = onLibraryWorkspaceChanged((popoutId, workspaceId) => {
+      updatePanelPopoutWorkspace('library', popoutId, workspaceId)
     })
   }
   if (stopLibraryClosed === null) {
-    stopLibraryClosed = onLibraryPopoutClosed((workspaceId) => {
-      const entry = latestOwnedPanel('library')
+    stopLibraryClosed = onLibraryPopoutClosed((popoutId, workspaceId) => {
+      const entry = findOwnedPanelPopout('library', popoutId)
       if (!entry) return
       finishOwned(entry, { panelId: 'library', workspaceId })
     })
@@ -136,7 +163,7 @@ export function startPanelPopoutLifecycleOwner(): () => void {
 export function registerPanelPopout(registration: PanelPopoutRegistration): void {
   ensureInfrastructure()
   registerPanelTabHandle(registration.identity, registration.handle)
-  const key = panelIdentityKey(registration.identity)
+  const key = ownershipKey(registration)
   const previous = ownedPopouts.get(key)
   if (previous) {
     removeOwned(previous)
@@ -150,6 +177,7 @@ export function registerPanelPopout(registration: PanelPopoutRegistration): void
   }
   const entry: OwnedPanelPopout = {
     ...registration,
+    ownershipKey: key,
     scopeUpdated: false,
     stopWatching: () => {},
   }

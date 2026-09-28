@@ -1,12 +1,9 @@
 import { PANEL_POLICIES, isWorkspaceScopedPanel } from '@/components/panel-shell/types'
-import type { PanelId } from '@/components/panel-shell/types'
+import type { PanelId, WorkspacePanelId } from '@/components/panel-shell/types'
 
-export type PanelIdentity = { // not-wire-format: SPA-local identity; only its SHA-256 key is shared between tabs, never sent to the gateway
-  panelId: PanelId
-  workspaceId?: string
-  sessionId?: string
-  agentId?: string
-}
+export type PanelIdentity = // not-wire-format: SPA-local identity; only its SHA-256 key is shared between tabs, never sent to the gateway
+  | { panelId: 'browser'; sessionId: string; agentId: string; workspaceId?: never }
+  | { panelId: WorkspacePanelId; workspaceId?: string; sessionId?: never; agentId?: never }
 
 type PanelWindowHandle = Pick<Window, 'closed' | 'focus'>
 
@@ -24,13 +21,14 @@ const PRESENCE_HEARTBEAT_MS = 1_000
 const PRESENCE_STALE_MS = 3_500
 
 type PanelPresenceMessage = // not-wire-format: same-origin browser-tab lifecycle signal; never crosses the gateway or persists
-  | { type: 'presence'; tabId: string; identityKey: string; sentAt: number }
+  | { type: 'presence'; tabId: string; identityKey: string; focusNonce: string; sentAt: number }
   | { type: 'leave'; tabId: string }
   | { type: 'request' }
-  | { type: 'focus'; tabId: string }
+  | { type: 'focus'; tabId: string; focusNonce: string }
 
 type PresenceEntry = { // not-wire-format: in-memory same-origin presence cache entry, never serialized or sent to the gateway
   identityKey: string
+  focusNonce: string
   seenAt: number
 }
 
@@ -48,6 +46,7 @@ let monitorChannel: BroadcastChannel | null = null
 let monitorConsumers = 0
 let monitorSweep: ReturnType<typeof setInterval> | null = null
 let broadcastUnavailableWarned = false
+let invalidIdentityWarned = false
 
 const SHA256_INITIAL = [
   0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -150,17 +149,27 @@ function warnBroadcastUnavailable(): void {
   console.warn('Panel tab presence is unavailable because BroadcastChannel could not be opened.')
 }
 
+function warnInvalidIdentity(): void {
+  if (invalidIdentityWarned) return
+  invalidIdentityWarned = true
+  console.warn('Panel tab presence ignored an invalid panel identity.')
+}
+
 export function acceptPanelPresenceMessage(value: unknown): value is PanelPresenceMessage {
   if (!isRecord(value) || typeof value.type !== 'string') return false
   if (value.type === 'request') return Object.keys(value).length === 1
-  if (value.type === 'leave' || value.type === 'focus') {
+  if (value.type === 'leave') {
     return Object.keys(value).length === 2 && isTabId(value.tabId)
+  }
+  if (value.type === 'focus') {
+    return Object.keys(value).length === 3 && isTabId(value.tabId) && isFocusNonce(value.focusNonce)
   }
   return (
     value.type === 'presence' &&
-    Object.keys(value).length === 4 &&
+    Object.keys(value).length === 5 &&
     isTabId(value.tabId) &&
     isOpaqueIdentityKey(value.identityKey) &&
+    isFocusNonce(value.focusNonce) &&
     typeof value.sentAt === 'number' &&
     Number.isFinite(value.sentAt) &&
     value.sentAt >= 0
@@ -187,6 +196,7 @@ function handleMonitorMessage(event: MessageEvent<unknown>): void {
   if (message.type === 'presence') {
     presenceByTab.set(message.tabId, {
       identityKey: message.identityKey,
+      focusNonce: message.focusNonce,
       seenAt: Date.now(),
     })
     notifyPresenceSubscribers()
@@ -237,23 +247,37 @@ export function startPanelTabPresenceMonitor(onChange?: () => void): () => void 
 
 /** Announce one full-page panel until its route unmounts or the page leaves. */
 export function announcePanelTabPresence(initialIdentity: PanelIdentity): PanelPresenceAnnouncement {
-  if (!acceptPresence(initialIdentity)) return { update: () => {}, stop: () => {} }
+  if (!acceptPresence(initialIdentity)) {
+    warnInvalidIdentity()
+    return { update: () => {}, stop: () => {} }
+  }
   const channel = openPresenceChannel()
   if (!channel) return { update: () => {}, stop: () => {} }
 
   const tabId = createTabId()
+  const focusNonce = createTabId()
   let identity = initialIdentity
   let identityKey = panelPresenceKey(initialIdentity)
   localIdentityByOpaqueKey.set(identityKey, initialIdentity)
   let stopped = false
   const publish = () => {
-    channel.postMessage({ type: 'presence', tabId, identityKey, sentAt: Date.now() } satisfies PanelPresenceMessage)
+    channel.postMessage({
+      type: 'presence',
+      tabId,
+      identityKey,
+      focusNonce,
+      sentAt: Date.now(),
+    } satisfies PanelPresenceMessage)
   }
   const onMessage = (event: MessageEvent<unknown>) => {
     const message = event.data
     if (!acceptPanelPresenceMessage(message)) return
     if (message.type === 'request') publish()
-    if (message.type === 'focus' && message.tabId === tabId) {
+    if (
+      message.type === 'focus' &&
+      message.tabId === tabId &&
+      message.focusNonce === focusNonce
+    ) {
       try {
         window.focus()
       } catch {
@@ -340,7 +364,11 @@ export function focusPanelTab(identity: PanelIdentity): boolean {
     .filter(([, entry]) => entry.identityKey === opaqueKey)
     .sort((a, b) => b[1].seenAt - a[1].seenAt)[0]
   if (!match || !monitorChannel) return false
-  monitorChannel.postMessage({ type: 'focus', tabId: match[0] } satisfies PanelPresenceMessage)
+  monitorChannel.postMessage({
+    type: 'focus',
+    tabId: match[0],
+    focusNonce: match[1].focusNonce,
+  } satisfies PanelPresenceMessage)
   return true
 }
 
@@ -359,7 +387,7 @@ export function resolveExistingPanelTab(identity: PanelIdentity): 'focused' | 'a
 
 export function panelIdentityKey(identity: PanelIdentity): string {
   if (identity.panelId === 'browser') {
-    return `browser:${identity.sessionId ?? ''}:${identity.agentId ?? ''}`
+    return `browser:${identity.sessionId}:${identity.agentId}`
   }
   return `${identity.panelId}:${identity.workspaceId ?? 'app'}`
 }
@@ -429,7 +457,7 @@ export function resolveRegisteredPanelOpen(input: {
   })
 }
 
-export function acceptPresence(message: unknown): boolean {
+export function acceptPresence(message: unknown): message is PanelIdentity {
   if (!isRecord(message)) return false
 
   const keys = Object.keys(message)
@@ -471,4 +499,8 @@ function isOpaqueIdentityKey(value: unknown): value is string {
 
 function isTabId(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9-]{8,128}$/.test(value)
+}
+
+function isFocusNonce(value: unknown): value is string {
+  return isTabId(value)
 }

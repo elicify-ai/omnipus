@@ -1,7 +1,10 @@
 import { lazy } from 'react'
-import { confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
+import {
+  confirmDiscardLibraryEdits,
+  isLibraryEditorDirty,
+} from '@/components/library/preview/unsavedGuard'
 import { mailPanelDefinition } from '@/components/workspaces/mail/mailPanelDefinition'
-import type { PanelContentProps, PanelDefinition } from './types'
+import type { PanelContentProps, PanelDefinition, PanelId } from './types'
 
 const LibraryPanel = lazy(async () => {
   const module = await import('@/components/library/LibraryPanel')
@@ -29,6 +32,7 @@ export const panels: readonly PanelDefinition[] = [
     expandTarget: ({ workspaceId }) =>
       `/#/library${workspaceId ? `?workspace=${encodeURIComponent(workspaceId)}` : ''}`,
     beforeLeave: confirmDiscardLibraryEdits,
+    beforeLeaveRequired: isLibraryEditorDirty,
   },
   {
     id: 'browser',
@@ -47,3 +51,8 @@ export const panels: readonly PanelDefinition[] = [
   // by its own pack). One entry, no shell change (SP-4's test).
   mailPanelDefinition,
 ]
+
+/** Resolve the single production definition for an external transition. */
+export function getPanelDefinition(id: PanelId): PanelDefinition | undefined {
+  return panels.find((panel) => panel.id === id)
+}

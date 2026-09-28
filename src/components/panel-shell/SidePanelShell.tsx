@@ -23,7 +23,7 @@ import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsave
 import { usePanelShell, usePanelShellHistory } from './usePanelShell'
 import { usePanelUrlHistory } from './usePanelUrlHistory'
 import { useSwipeToClose } from './useSwipeToClose'
-import { usePanelShellStore, PANEL_WIDTH_UNSET } from './panelShellStore'
+import { usePanelShellStore } from './panelShellStore'
 import { PANEL_MIN_PX, clampPanelWidth, panelDefaultWidth, panelWidthCeiling, isPhoneTakeover } from './panelWidth'
 import type { PanelDefinition } from './types'
 import { consumePanelOpenFocus, recordPanelTriggerClick } from './panelFocus'
@@ -101,7 +101,7 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
   const defaultWidth = useMemo(() => panelDefaultWidth(rowWidth, sidebarWidth), [rowWidth, sidebarWidth])
   const ceiling = useMemo(() => panelWidthCeiling(rowWidth, sidebarWidth), [rowWidth, sidebarWidth])
   const appliedWidth =
-    storedWidth === PANEL_WIDTH_UNSET ? defaultWidth : clampPanelWidth(storedWidth, rowWidth, sidebarWidth)
+    storedWidth === null ? defaultWidth : clampPanelWidth(storedWidth, rowWidth, sidebarWidth)
 
   // Live width moves (drag + keyboard) go to a CSS custom property on the
   // row — bypassing React state so a 60fps drag never re-renders the panel
@@ -235,7 +235,7 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
               size="sm"
               aria-label={`Close ${def.title}`}
               data-testid="panel-close"
-              onClick={() => shell.requestClose()}
+              onClick={() => shell.requestClose('chat')}
             >
               <X weight="bold" className="h-4 w-4" />
             </IconButton>
@@ -255,7 +255,7 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
               <ErrorBoundary key={def.id}>
                 <def.content
                   context={activePanel.context}
-                  close={shell.requestClose}
+                  close={() => shell.requestClose('chat')}
                   expand={() => {
                     void handleExpand()
                   }}

@@ -8,8 +8,8 @@
 // §7, CRIT-001).
 //
 // Wave 1 has exactly ONE guard in the registry — the Library's unsaved-edit
-// confirmation (unsavedGuard.ts::confirmDiscardLibraryEdits). The gate is
-// therefore the dirty-flag check itself:
+// confirmation. The registry also supplies its optional synchronous
+// `beforeLeaveRequired` predicate:
 //
 //   - Clean (no unsaved Library edits — the flag can only be true while a
 //     LibraryExplorer editor is mounted, i.e. while the Library panel is
@@ -24,11 +24,10 @@
 //     mounted until the guard resolves, so Cancel leaves the store and URL
 //     untouched.
 //
-// When waves 2/3 register panels with their own beforeLeave, this helper
-// becomes registry-driven (look up the OUTGOING panel's definition and await
-// its guard); the synchronous-clean-path shape stays.
+// Waves 2/3 add their guards through the same definition; this helper has no
+// panel-specific branch.
 
-import { isLibraryEditorDirty, confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
+import { getPanelDefinition } from './registry'
 import type { PanelId } from './types'
 
 /**
@@ -37,11 +36,13 @@ import type { PanelId } from './types'
  * dialog round-trip when the outgoing Library has unsaved edits.
  */
 export function leaveGateThen(outgoingPanelId: PanelId | null, go: () => void): void {
-  if (outgoingPanelId !== 'library' || !isLibraryEditorDirty()) {
+  const definition = outgoingPanelId === null ? undefined : getPanelDefinition(outgoingPanelId)
+  const guard = definition?.beforeLeave
+  if (guard === undefined || definition?.beforeLeaveRequired?.() === false) {
     go()
     return
   }
-  void confirmDiscardLibraryEdits().then((allowed) => {
-    if (allowed) go()
-  })
+  void (async () => {
+    if (await guard()) go()
+  })()
 }

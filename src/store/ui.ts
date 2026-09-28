@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import { generateId } from '@/lib/constants'
 import type { WizardCli, WizardType } from '@/components/agents/wizard/types'
-import { PANEL_WIDTH_UNSET } from '@/components/panel-shell/types'
 import type { ActivePanel, OpenPanel, PanelOpenArgs } from '@/components/panel-shell/types'
 import { capturePanelTriggerOrigin } from '@/components/panel-shell/panelFocus'
 
@@ -13,6 +12,11 @@ export interface Toast {
   testId?: string
   /** Optional primary action rendered inside the toast. */
   action?: {
+    label: string
+    onClick: () => void
+  }
+  /** Optional second action, used when a remote-tab hint must remain advisory. */
+  secondaryAction?: {
     label: string
     onClick: () => void
   }
@@ -161,7 +165,7 @@ interface UiStore {
   // A cancelled phone Back restores historyPushed=true; leaving takeover or
   // an external close collapses that entry and returns both flags to false.
   activePanel: ActivePanel | null
-  panelWidth: number
+  panelWidth: number | null
   guardPending: boolean
   historyPushed: boolean
   openPanel: OpenPanel
@@ -263,7 +267,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   closeMediaLightbox: () => set({ mediaLightbox: null }),
 
   activePanel: null,
-  panelWidth: PANEL_WIDTH_UNSET,
+  panelWidth: null,
   guardPending: false,
   historyPushed: false,
   openPanel: (...args: PanelOpenArgs) => {
@@ -275,13 +279,13 @@ export const useUiStore = create<UiStore>((set, get) => ({
       // Opening a DIFFERENT panel re-reads that panel's own width (its stored
       // value for its own scope, or the SP-17 default). Same panel re-open =
       // keep the current width (a context refresh must not jump the divider).
-      panelWidth: state.activePanel?.id === id ? state.panelWidth : PANEL_WIDTH_UNSET,
+      panelWidth: state.activePanel?.id === id ? state.panelWidth : null,
     }))
   },
   closePanel: () =>
-    set({ activePanel: null, panelWidth: PANEL_WIDTH_UNSET, guardPending: false, historyPushed: false }),
+    set({ activePanel: null, panelWidth: null, guardPending: false, historyPushed: false }),
   setPanelWidth: (px) => set({ panelWidth: px }),
-  resetPanelWidth: () => set({ panelWidth: PANEL_WIDTH_UNSET }),
+  resetPanelWidth: () => set({ panelWidth: null }),
   setGuardPending: (pending) => set({ guardPending: pending }),
   setHistoryPushed: (pushed) => set({ historyPushed: pushed }),
 }))

@@ -97,6 +97,13 @@ export function BrowserLivePanel({ shellProps }: BrowserLivePanelProps = {}) {
       return false
     }
     if (outcome.kind === 'affordance') {
+      const openHere = () => {
+        armPanelFocusFallback(identity)
+        useUiStore.getState().openPanel('browser', {
+          sessionId: browserPanel.sessionId,
+          agentId: browserPanel.agentId,
+        })
+      }
       useUiStore.getState().addToast({
         message: 'The Browser is already open in another tab — switch.',
         variant: 'default',
@@ -104,15 +111,10 @@ export function BrowserLivePanel({ shellProps }: BrowserLivePanelProps = {}) {
         action: {
           label: 'Switch',
           onClick: () => {
-            if (!focusPanelTab(identity)) {
-              armPanelFocusFallback(identity)
-              useUiStore.getState().openPanel('browser', {
-                sessionId: browserPanel.sessionId,
-                agentId: browserPanel.agentId,
-              })
-            }
+            if (!focusPanelTab(identity)) openHere()
           },
         },
+        secondaryAction: { label: 'Open here', onClick: openHere },
       })
       return true
     }
