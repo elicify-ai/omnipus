@@ -14,13 +14,14 @@ import { MailPreviewPane } from './MailPreviewPane'
 
 describe('MailPreviewPane — draft edit form layout (R3 compact compose parity)', () => {
   it('uses the compact label-beside-field rows + recipient chips in the draft editor', () => {
+    const onSave = vi.fn()
     render(
       <MailPreviewPane
         state="draft"
         subject="Existing draft"
         bodyMarkdown="## Existing heading"
         to="ada@example.test, bob@example.test"
-        onSave={vi.fn()}
+        onSave={onSave}
         onSend={vi.fn()}
         onDiscard={vi.fn()}
       />,
@@ -33,17 +34,20 @@ describe('MailPreviewPane — draft edit form layout (R3 compact compose parity)
     // compose dialog: a `data-compose-header-row` element with a two-column
     // grid (label / field) and `space-y-0` (no vertical gap between rows).
     for (const name of ['To', 'Subject']) {
-      const field = screen.getByText(new RegExp(`^${name}$`), { selector: 'label' }).closest('label')?.parentElement
-      expect(field, `${name} label must wrap a shared row`).not.toBeNull()
-      expect(field).toHaveAttribute('data-compose-header-row')
+      const input = screen.getByRole('textbox', { name: new RegExp(`^${name}$`, 'i') })
+      const field = input.closest('[data-compose-header-row]')
+      const label = screen.getByText(new RegExp(`^${name}$`), { selector: 'label' })
+      expect(field, `${name} field must share a compact header row`).not.toBeNull()
       expect(field).toHaveClass(
+        'mail-compose-header-row',
         'grid',
         'grid-cols-[var(--space-8)_minmax(0,1fr)]',
         'items-center',
         'space-y-0',
         'py-[var(--space-0-5)]',
       )
-      expect(field?.children[0]).toHaveTextContent(name)
+      expect(field?.children[0]).toBe(label)
+      expect(field?.children[1]).toContainElement(input)
     }
 
     // To row uses the recipient-chip input, not a bare <input> — chips for
@@ -65,9 +69,21 @@ describe('MailPreviewPane — draft edit form layout (R3 compact compose parity)
     fireEvent.change(screen.getByRole('textbox', { name: /message/i }), {
       target: { value: '## Updated draft' },
     })
-    const onSave = vi.fn()
-    // re-render with a fresh onSave so we can capture the save payload
+    fireEvent.change(toInput, { target: { value: 'cora@example.test' } })
+    fireEvent.keyDown(toInput, { key: 'Enter' })
+    expect(screen.getAllByTestId('recipient-chip')).toHaveLength(3)
+    fireEvent.change(screen.getByRole('textbox', { name: /^subject$/i }), {
+      target: { value: 'Updated subject' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    void onSave
+    expect(onSave).toHaveBeenCalledTimes(1)
+    const { bodyMarkdown, ...headers } = onSave.mock.calls[0][0]
+    expect(headers).toEqual({
+      to: 'ada@example.test, bob@example.test, cora@example.test',
+      subject: 'Updated subject',
+    })
+    // The Markdown editor serializes trailing blank lines; as in R5, only
+    // that incidental whitespace is normalized, not the message content.
+    expect(bodyMarkdown.trim()).toBe('## Updated draft')
   })
 })
