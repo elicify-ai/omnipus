@@ -1635,14 +1635,32 @@ type IntegrationProvidersResponse = {
   voice: Array<IntegrationProvider>;
   active_search?: string | undefined;
   active_voice?: string | undefined;
+  default_search?: string | undefined;
+  fallback_search?: (string | null) | undefined;
+  fallback_ignored_reason?: string | undefined;
+  native_search_in_effect?: boolean | undefined;
 };
 type IntegrationProvider = {
-  id: string;
+  id:
+    | "brave"
+    | "tavily"
+    | "perplexity"
+    | "duckduckgo"
+    | "searxng"
+    | "glm"
+    | "baidu"
+    | "exa"
+    | "elevenlabs"
+    | "groq"
+    | "audio-model";
   kind: "search" | "voice";
   display_name: string;
   configured: boolean;
   requires_key: boolean;
   active?: boolean | undefined;
+  usable?: boolean | undefined;
+  fallback?: boolean | undefined;
+  fallback_automatic?: boolean | undefined;
 };
 type Skill = {
   revision: ConfigurationRevision;
@@ -2911,12 +2929,27 @@ export const ReAuthResponse = z.object({
   expires_in: z.number().int(),
 });
 export const IntegrationProvider: z.ZodType<IntegrationProvider> = z.object({
-  id: z.string(),
+  id: z.enum([
+    "brave",
+    "tavily",
+    "perplexity",
+    "duckduckgo",
+    "searxng",
+    "glm",
+    "baidu",
+    "exa",
+    "elevenlabs",
+    "groq",
+    "audio-model",
+  ]),
   kind: z.enum(["search", "voice"]),
   display_name: z.string(),
   configured: z.boolean(),
   requires_key: z.boolean(),
   active: z.boolean().optional(),
+  usable: z.boolean().optional(),
+  fallback: z.boolean().optional(),
+  fallback_automatic: z.boolean().optional(),
 });
 export const IntegrationProvidersResponse: z.ZodType<IntegrationProvidersResponse> =
   z.object({
@@ -2924,11 +2957,16 @@ export const IntegrationProvidersResponse: z.ZodType<IntegrationProvidersRespons
     voice: z.array(IntegrationProvider),
     active_search: z.string().optional(),
     active_voice: z.string().optional(),
+    default_search: z.string().optional(),
+    fallback_search: z.string().nullish(),
+    fallback_ignored_reason: z.string().optional(),
+    native_search_in_effect: z.boolean().optional(),
   });
 export const IntegrationProviderUpdateRequest = z.object({
   kind: z.enum(["search", "voice"]),
   api_key: z.string().optional(),
   active: z.boolean().optional(),
+  fallback: z.boolean().optional(),
 });
 export const TranscribeResponse = z.object({
   text: z.string(),
@@ -8534,7 +8572,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/integrations/providers",
     alias: "getIntegrationProviders",
-    description: `Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+    description: `Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. ADR-096: the response also carries the resolved web-search roles (default_search, fallback_search) and each search row reports usable and its fallback flags, built from post-reload state. Requires authentication.
 `,
     requestFormat: "json",
     response: IntegrationProvidersResponse,
@@ -8555,7 +8593,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/integrations/providers/:id",
     alias: "updateIntegrationProvider",
-    description: `Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
+    description: `Stores an API key and/or assigns the provider its role (FR-12.1). ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none (&quot;No fallback&quot;), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 (&quot;needs an API key&quot;). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
 `,
     requestFormat: "json",
     parameters: [
