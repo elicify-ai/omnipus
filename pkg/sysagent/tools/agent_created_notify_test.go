@@ -505,14 +505,14 @@ func TestAgentCreate_HeartbeatWriteFailure_DoesNotNotifyAgentCreated(t *testing.
 // step — the live, in-memory cfg.Agents.List + registry repopulation the
 // real reload goroutine performs — runs LATER on a goroutine, gated by a
 // channel the test controls. Without the Finding-1 fix (publishAgentActivation
-// calling deps.WaitForReloadFunc after the publish hook's nil return), the
-// notify would fire the instant the publish hook returns — i.e. before the
-// goroutine has actually applied the reload, which the test observes by
+// calling deps.WaitForPendingReloadFunc after the publish hook's nil return),
+// the notify would fire the instant the publish hook returns — i.e. before
+// the goroutine has actually applied the reload, which the test observes by
 // checking al.GetConfig().Agents.List from INSIDE the notify callback
 // itself: it would be empty there.
 //
-// With the fix, publishAgentActivation's WaitForReloadFunc call blocks until
-// the goroutine has actually applied the reload, so the notify sees the
+// With the fix, publishAgentActivation's WaitForPendingReloadFunc call blocks
+// until the goroutine has actually applied the reload, so the notify sees the
 // freshly-listed agent — the property the gate inside publishAndRespond
 // promises.
 //
@@ -547,9 +547,9 @@ func TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands(t *testing.T) {
 	// UpsertAgentFastFunc returns nil IMMEDIATELY (mirroring production's
 	// fire-and-forget reloadTrigger), and the actual cfg.Agents.List +
 	// registry update runs LATER on a goroutine the test unblocks via
-	// releaseReload. WaitForReloadFunc blocks until that goroutine
+	// releaseReload. WaitForPendingReloadFunc blocks until that goroutine
 	// signals completion — exactly the synchronization the real
-	// gateway.go::waitForReload performs on IsReloadPending.
+	// gateway.go::waitForPendingReload performs on IsReloadPending.
 	deps.UpsertAgentFastFunc = func(agentID string) error {
 		reloadStarted.Store(true)
 		// Mirrors the production closure's "enqueue and return nil" shape;
@@ -566,14 +566,24 @@ func TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands(t *testing.T) {
 				cfg.SkippedAgentIDs = skipped
 				return nil
 			}); err != nil {
+				// MutateConfig failure here would otherwise be silently
+				// dropped — reloadApplied.Store(true) below would still
+				// fire, the test would proceed to assert the notify saw the
+				// agent listable, and the failure would surface as a
+				// misleading "ordering" message instead of naming the real
+				// cause. t.Errorf is safe in this goroutine because the
+				// outer test blocks on resultCh / select-with-timeout
+				// before returning, so the goroutine finishes before the
+				// test function does.
+				t.Errorf("test double: MutateConfig failed: %v", err)
 				return
 			}
 			_, _ = al.UpsertAgentFast(al.GetConfig(), agentID)
 		}()
 		return nil
 	}
-	deps.WaitForReloadFunc = func() error {
-		// Mirror the production waitForReload contract: block until the
+	deps.WaitForPendingReloadFunc = func() error {
+		// Mirror the production waitForPendingReload contract: block until the
 		// queued reload has actually landed (the goroutine above closes
 		// releaseReload, then sets reloadApplied). The receive below
 		// returns exactly when the reload finishes; if the channel is
@@ -630,8 +640,8 @@ func TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands(t *testing.T) {
 		}
 	}()
 
-	// Wait briefly for Execute to reach WaitForReloadFunc — without the
-	// Finding-1 fix, the notify would have already fired by now.
+	// Wait briefly for Execute to reach WaitForPendingReloadFunc — without
+	// the Finding-1 fix, the notify would have already fired by now.
 	// 100ms is generous enough to cover scheduler jitter on a quiet box
 	// and short enough to keep the test fast.
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -646,7 +656,7 @@ func TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands(t *testing.T) {
 			"this is the test's precondition, not the gate under test")
 	}
 	if notifyCalls != 0 {
-		t.Fatalf("NotifyAgentCreated fired BEFORE the async reload landed — notify must wait for WaitForReloadFunc; "+
+		t.Fatalf("NotifyAgentCreated fired BEFORE the async reload landed — notify must wait for WaitForPendingReloadFunc; "+
 			"got %d call(s) before release. This is the #1009 async-reload race the Finding-1 fix closes.", notifyCalls)
 	}
 
@@ -658,7 +668,7 @@ func TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands(t *testing.T) {
 	case exec = <-resultCh:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Execute did not return within 5s after the reload was released — " +
-			"publishAgentActivation may not be calling WaitForReloadFunc, or WaitForReloadFunc is not signalling completion")
+			"publishAgentActivation may not be calling WaitForPendingReloadFunc, or WaitForPendingReloadFunc is not signalling completion")
 	}
 	if exec.result.IsError {
 		t.Fatalf("create_agent failed: %s", exec.result.ForLLM)

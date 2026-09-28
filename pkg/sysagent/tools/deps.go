@@ -131,7 +131,45 @@ type Deps struct {
 	// tools the same guarantee. The gateway wires this to a closure built on
 	// AgentLoop.TriggerReload + AgentLoop.IsReloadPending polling (the same
 	// primitive backing restAPI.triggerReloadAndWait).
+	//
+	// NOT safe for the create/update publish path (publishAgentActivation): the
+	// production wiring's FIRST action is an unconditional TriggerReload, so on
+	// the fast-path-success branch — where UpsertAgentFastFunc already
+	// updated the live registry inline with NOTHING queued — calling this
+	// field kicks off a fresh, full reload cycle (channels/cron/plan-engine/
+	// scheduler restart cascade, the exact ~60s-under-load mechanism issue
+	// #571 exists to avoid) just to wait for it. The create/update publish
+	// path uses WaitForPendingReloadFunc below instead, which only polls
+	// the pending flag and never triggers.
 	WaitForReloadFunc func() error
+	// WaitForPendingReloadFunc BLOCKS until any reload already queued by a
+	// prior publish hook (UpsertAgentFastFunc / ReloadFunc) has actually
+	// landed in memory, OR returns an error after reloadWaitTimeout elapses.
+	// Unlike WaitForReloadFunc above it does NOT call TriggerReload — it
+	// only polls AgentLoop.IsReloadPending. Safe to call from the sysagent
+	// create/update publish path (publishAgentActivation) after a publish
+	// hook has returned nil, because by that point any actually-queued
+	// reload is already visible as pending: the gateway's
+	// UpsertAgentFastFunc closure that fell back to the async reloadTrigger
+	// reaches pkg/gateway/gateway_reload.go::beginReload, which marks the
+	// pending flag (under its own mutex) BEFORE returning on either the
+	// "owns the cycle" or the "request recorded, served by the owning cycle"
+	// branch — so by the time publishAgentActivation reaches this call, the
+	// flag accurately reflects whether a reload is actually pending.
+	//
+	// On the fast-path-success branch (UpsertAgentFastFunc updated the live
+	// registry inline with nothing queued) the flag is already clear, so this
+	// returns IMMEDIATELY — a genuine no-op, not just claimed to be one. That
+	// is the whole point of this field's existence: WaitForReloadFunc would
+	// NOT be safe in the same position because it unconditionally calls
+	// TriggerReload as its first action.
+	//
+	// Nil in tests or when not wired: publishAgentActivation falls back to
+	// the old behaviour of trusting the publish hook's nil return at face
+	// value (the test wiring either stubs the fast path to update inline or
+	// uses a synchronous ReloadFunc stand-in). Production always wires this
+	// field alongside WaitForReloadFunc above.
+	WaitForPendingReloadFunc func() error
 	// ReconcileMCP triggers live MCP reconciliation (connect/disconnect servers
 	// and re-sync every agent's tool registry plus the central MCPRegistry)
 	// after a config mutation that adds, removes, or edits an MCP server.

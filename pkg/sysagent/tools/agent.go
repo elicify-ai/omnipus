@@ -549,13 +549,20 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 	// after publishAgentActivation reports ActivationActive — i.e. only once
 	// the live, in-memory config/registry that pkg/gateway/rest_agents.go::
 	// listAgents reads actually contains the new agent. publishAgentActivation
-	// now BLOCKS on deps.WaitForReloadFunc after the publish hook's nil
+	// BLOCKS on deps.WaitForPendingReloadFunc after the publish hook's nil
 	// return to close the async-reload race the production wiring leaves open
 	// (the gateway's UpsertAgentFastFunc closure falls back to the async
 	// reloadTrigger on any failure, and the plain ReloadFunc is also
 	// fire-and-forget — see publishAgentActivation's own doc comment for the
-	// mechanism), so a nil return there is a genuine "agent is live and
-	// listable" rather than "agent was queued for publication". Both
+	// mechanism and why it uses the wait-only WaitForPendingReloadFunc rather
+	// than WaitForReloadFunc, whose production wiring calls TriggerReload
+	// unconditionally as its first action and would therefore kick off a fresh
+	// full reload cycle on every fast-path success). On the queued-reload
+	// branch this blocks until the queued reload has actually rebuilt the
+	// registry; on the fast-path branch (no reload queued) the pending flag is
+	// already clear so the call returns IMMEDIATELY. A nil return from
+	// publishAgentActivation is now a genuine "agent is live and listable"
+	// rather than "agent was queued for publication". Both
 	// ActivationFailed (the call ran but errored — publishWarning above) and
 	// ActivationNotAttempted (neither hook wired — degraded/test deps) leave
 	// the agent NOT listable, so notifying on either would recreate the exact
@@ -569,8 +576,10 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 	// (emitAgentCreated, pkg/gateway/rest_agents_create.go::createAgent) is
 	// called only after persistAgent's withToolPolicyCoverageGuard has
 	// already refilled the in-memory list via refreshConfigAndRewireServices
-	// AND waited it out via triggerReloadAndWait (the same
-	// IsReloadPending-poll primitive WaitForReloadFunc is built on).
+	// AND waited it out via triggerReloadAndWait (the trigger-and-wait
+	// counterpart to WaitForPendingReloadFunc's wait-only shape; AgentDeleteTool
+	// uses the same WaitForPendingReloadFunc's sibling WaitForReloadFunc for
+	// its own delete_agent → list_agents ghost-listing race).
 	if activation == agentstore.ActivationActive {
 		if fn := ac.t.deps.NotifyAgentCreated; fn != nil {
 			fn(ac.finalID)
@@ -1071,6 +1080,20 @@ func (ad *agentDeleteToolExecute) reload() {
 	// same turn must not still see the deleted agent because the reload was
 	// only queued, not yet applied. Falls back to the fire-and-forget
 	// ReloadFunc when WaitForReloadFunc is nil (tests/degraded wiring).
+	//
+	// WHY WaitForReloadFunc (TRIGGER-and-wait) AND NOT WaitForPendingReloadFunc
+	// (wait-only): delete has no fast path on the publish side — the closure
+	// above just calls ReloadFunc once and waits for the reload — so we WANT
+	// the reload to actually fire here. WaitForPendingReloadFunc would only
+	// poll IsReloadPending and return immediately, leaving the just-deleted
+	// agent unrouted until whatever other reload was previously pending
+	// happened to finish (which may be never on an idle gateway).
+	// WaitForReloadFunc's production wiring (rest_auth.go::waitForReload,
+	// which calls TriggerReload unconditionally as its first action) is the
+	// right shape here. Compare to publishAgentActivation's comment, which
+	// uses WaitForPendingReloadFunc because that path's publish hook is the
+	// fast path that ALREADY updated the live registry when it succeeds
+	// inline — triggering again would be the bug #571 closed.
 
 	if ad.t.deps.WaitForReloadFunc != nil {
 		if err := ad.t.deps.WaitForReloadFunc(); err != nil {

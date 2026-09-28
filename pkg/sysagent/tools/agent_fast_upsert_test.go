@@ -6,10 +6,12 @@ package systools_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -115,6 +117,31 @@ func newSysagentFastUpsertDeps(
 		},
 		SaveConfigLocked: func(*config.Config) error { return nil },
 		ReloadFunc:       reloadFunc,
+		// agent-picker-freshness fix (#1009, round 4): exercises the SAME
+		// publish-wait publishAgentActivation uses in production. NOT the
+		// trigger-and-wait WaitForReloadFunc (whose production wiring calls
+		// TriggerReload as its first action and would unconditionally fire a
+		// full reload on every fast-path success — the bug the round-3 fix
+		// shipped). The wait-only shape mirrors the new
+		// pkg/gateway/rest_auth.go::waitForPendingReload exactly: poll the
+		// pending flag until it clears, return immediately if it is already
+		// clear (the fast-path-success branch — the property the
+		// DoesNotTriggerFullReload test guards). If we wired WaitForReloadFunc
+		// here instead, this regression guard would have caught the round-3
+		// bug: the test would observe an extra reload call on every plain
+		// create/update. See agent_created_notify_test.go::
+		// TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands for the
+		// async-reload half of the same proof.
+		WaitForPendingReloadFunc: func() error {
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				if !al.IsReloadPending() {
+					return nil
+				}
+				time.Sleep(time.Millisecond)
+			}
+			return errors.New("test double: IsReloadPending did not clear within 2s")
+		},
 		UpsertAgentFastFunc: func(agentID string) error {
 			if al.IsReloadPending() {
 				return reloadFunc()

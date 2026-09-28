@@ -1301,6 +1301,21 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// exactly as long as REST's DELETE /api/v1/agents/{id} does before
 		// either call reports success.
 		WaitForReloadFunc: func() error { return waitForReload(rc.agentLoop) },
+		// WaitForPendingReloadFunc (agent-picker-freshness fix, #1009): the
+		// wait-only IsReloadPending poll for the create/update publish path
+		// (publishAgentActivation). NEVER calls TriggerReload / reloadTrigger
+		// — on the fast-path-success branch (UpsertAgentFastFunc updated the
+		// live registry inline, nothing queued) this returns immediately,
+		// where WaitForReloadFunc above would unconditionally kick off a
+		// fresh, unnecessary full reload cycle (channels/cron/plan-engine/
+		// scheduler restart cascade, the exact ~60s-under-load mechanism
+		// issue #571 exists to avoid). On the fallback-reload branch (the
+		// closure above fell back to rc.reloadTrigger()), beginReload has
+		// already marked the pending flag under its own mutex before this
+		// is reached, so the poll waits out the actually-queued reload. See
+		// systools.Deps.WaitForPendingReloadFunc's doc comment for the full
+		// safety argument and the round-3-vs-round-4 distinction.
+		WaitForPendingReloadFunc: func() error { return waitForPendingReload(rc.agentLoop) },
 		// UpsertAgentFastFunc (issue #571, sysagent half): mirrors rest.go's
 		// fastAgentUpsert so system.agent.create/update (an agent creating or
 		// updating another agent) gets the same fast-path publish REST
