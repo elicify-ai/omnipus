@@ -3149,9 +3149,9 @@ jobs:
 
       - name: Fail on skipped or flaky Playwright tests
         # Two ways this suite went green without being green:
-        #  * skipped>0 — two tests were silently skipped in the last green
-        #    run. `npx playwright test` does not fail on a skip; it's not a
-        #    Playwright "failure" by definition.
+        #  * skipped>0 — `npx playwright test` does not fail on a skip; each
+        #    skipped spec title must exactly match a non-expired entry in the
+        #    skip manifest. Missing or malformed allowlist data fails closed.
         #  * flaky>0 — retries: 3 (playwright.config.ts) turned a real
         #    failure green last Saturday: a test that fails once and then
         #    passes on retry is reported as "flaky", not "unexpected", and
@@ -3192,8 +3192,9 @@ jobs:
           echo "Playwright stats: expected=$expected skipped=$skipped flaky=$flaky unexpected=$unexpected"
           rc=0
           if [ "$skipped" -gt 0 ]; then
-            echo "::error::$skipped Playwright test(s) were skipped — coverage silently shrank. See docs/internal/false-green-patterns.md." >&2
-            rc=1
+            if ! bash scripts/check-e2e-skip-allowlist.sh /tmp/pw-results.json test-results/skip-manifest.json; then
+              rc=1
+            fi
           fi
           if [ "$flaky" -gt 0 ]; then
             echo "::error::$flaky Playwright test(s) only passed after a retry (flaky) — retries: 3 masked a real failure. See docs/internal/false-green-patterns.md." >&2
