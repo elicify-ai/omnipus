@@ -111,13 +111,18 @@ func (c AutoApproveClass) String() string {
 	}
 }
 
+// AutoVerdictClass is the typed spelling of an AutoVerdict/AutoPin's Class
+// field (T1, pkg/tools/auto_approve.go review): the four values below are
+// the only legal members, so a stray literal no longer type-checks as one.
+type AutoVerdictClass string
+
 // Verdict class strings recorded on AutoVerdict.Class (and so in the
 // tool.auto_approved audit row).
 const (
-	AutoVerdictClassRuns              = "runs"
-	AutoVerdictClassRunsIfArgs        = "runs_if_args"
-	AutoVerdictClassMCPNotDestructive = "mcp_not_destructive"
-	AutoVerdictClassAsks              = "asks"
+	AutoVerdictClassRuns              AutoVerdictClass = "runs"
+	AutoVerdictClassRunsIfArgs        AutoVerdictClass = "runs_if_args"
+	AutoVerdictClassMCPNotDestructive AutoVerdictClass = "mcp_not_destructive"
+	AutoVerdictClassAsks              AutoVerdictClass = "asks"
 )
 
 // autoApproveClasses is the §3 table, transcribed one-for-one from the
@@ -301,7 +306,7 @@ type PinnedPath struct {
 // Paths is set only by the RUNS-IF file tools, for the pin and the audit.
 type AutoVerdict struct {
 	Run    bool
-	Class  string
+	Class  AutoVerdictClass
 	Reason string
 	Paths  []PinnedPath
 }
@@ -457,7 +462,7 @@ func autoWorkspaceVerdict(
 // had before the field existed.
 type AutoPin struct {
 	Tool  string
-	Class string
+	Class AutoVerdictClass
 	Paths []PinnedPath
 }
 

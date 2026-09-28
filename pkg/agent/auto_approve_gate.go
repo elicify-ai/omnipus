@@ -119,6 +119,6 @@ func (al *AgentLoop) emitToolAutoApprovedAudit(ctx context.Context, ts *turnStat
 	for _, p := range verdict.Paths {
 		paths = append(paths, p.Real)
 	}
-	audit.EmitToolAutoApproved(ctx, al.auditLogger, ts.agentID, ts.sessionKey, toolName, verdict.Class, verdict.Reason, paths,
+	audit.EmitToolAutoApproved(ctx, al.auditLogger, ts.agentID, ts.sessionKey, toolName, string(verdict.Class), verdict.Reason, paths,
 		sandbox.TurnPolicyBaseInstalled())
 }
