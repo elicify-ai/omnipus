@@ -7,13 +7,17 @@
 //
 // Rules enforced:
 //
-//	Rule A: An assistant message with blank Content AND no ToolCalls is dropped
-//	        (empty/no-op assistant turn that confuses strict providers).
+//	Rule A: An assistant message with blank Content AND no ToolCalls AND no
+//	        ThinkingBlocks is dropped (empty/no-op assistant turn that confuses
+//	        strict providers). A blocks-carrying entry — a signature-only or
+//	        thinking-only round — is NOT dropped: its blocks must round-trip
+//	        (ADR-095 D6/D8, no strip step, ever).
 //
 //	Rule B: Two CONSECUTIVE same-role messages are merged ONLY when BOTH roles
 //	        are user, assistant, or system AND NEITHER carries ToolCalls AND
 //	        NEITHER is role "tool". When merging, Content is joined with "\n"
-//	        and Media, ReasoningContent, SystemParts are preserved.
+//	        and Media, ReasoningContent, SystemParts, ThinkingBlocks are
+//	        preserved (blocks: first-non-empty wins, mirroring ReasoningContent).
 //
 //	Rule C: An assistant message carrying ToolCalls passes through verbatim —
 //	        never merged, never dropped.
@@ -39,6 +43,8 @@
 //     holds, now generalised: the declared set is accumulated across all preceding
 //     assistant messages, not just the immediately preceding one).
 //   - The allocation-free fast path avoids any heap work on valid histories.
+//   - ADR-095 D8: ThinkingBlocks survive every rule byte-exact and order-stable
+//     — normalization must never become a thinking-material strip step.
 
 package agent
 
@@ -77,8 +83,10 @@ func normalizeMessagesForProvider(msgs []providers.Message) []providers.Message 
 	for _, m := range msgs {
 		switch m.Role {
 		case "assistant":
-			// Rule A: drop an empty/no-op assistant (blank Content, no ToolCalls).
-			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 {
+			// Rule A: drop an empty/no-op assistant (blank Content, no
+			// ToolCalls, no ThinkingBlocks). A blocks-carrying entry survives —
+			// signature-only or thinking-only rounds must round-trip (D6/D8).
+			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 && len(m.ThinkingBlocks) == 0 {
 				droppedEmptyAssistant++
 				continue
 			}
@@ -177,6 +185,11 @@ func appendOrMergePlainText(out []providers.Message, m providers.Message) []prov
 	if m.ReasoningContent != "" && last.ReasoningContent == "" {
 		last.ReasoningContent = m.ReasoningContent
 	}
+	// Same first-non-empty rule for the signed thinking blocks (D8: preserve
+	// byte-exact, order-stable; the predecessor's list wins when both carry).
+	if len(m.ThinkingBlocks) > 0 && len(last.ThinkingBlocks) == 0 {
+		last.ThinkingBlocks = m.ThinkingBlocks
+	}
 	if len(m.SystemParts) > 0 && len(last.SystemParts) == 0 {
 		// Clone before append for the same aliasing reason as Media above.
 		last.SystemParts = append(append([]providers.ContentBlock(nil), last.SystemParts...), m.SystemParts...)
@@ -195,8 +208,8 @@ func needsNormalization(msgs []providers.Message) bool {
 	for _, m := range msgs {
 		switch m.Role {
 		case "assistant":
-			// Rule A: empty assistant.
-			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 {
+			// Rule A: empty assistant (blocks-carrying entries are NOT empty).
+			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 && len(m.ThinkingBlocks) == 0 {
 				return true
 			}
 			// Rule B: consecutive plain-text assistants.

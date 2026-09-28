@@ -13,6 +13,7 @@ type (
 	LLMResponse            = protocoltypes.LLMResponse
 	UsageInfo              = protocoltypes.UsageInfo
 	Message                = protocoltypes.Message
+	ThinkingBlock          = protocoltypes.ThinkingBlock
 	ToolDefinition         = protocoltypes.ToolDefinition
 	ToolFunctionDefinition = protocoltypes.ToolFunctionDefinition
 	ExtraContent           = protocoltypes.ExtraContent

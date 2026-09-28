@@ -25,6 +25,7 @@ type (
 	LLMResponse            = protocoltypes.LLMResponse
 	UsageInfo              = protocoltypes.UsageInfo
 	Message                = protocoltypes.Message
+	ThinkingBlock          = protocoltypes.ThinkingBlock
 	ToolDefinition         = protocoltypes.ToolDefinition
 	ToolFunctionDefinition = protocoltypes.ToolFunctionDefinition
 )
@@ -143,9 +144,11 @@ func (p *Provider) Chat(
 // progress, nothing to distinguish a model still working from one that had
 // hung. Delegated workers were killed on that ambiguity.
 //
-// onReasoning is accepted to satisfy providers.StreamingProvider but IGNORED
-// for now: real Anthropic thinking-text capture is its own work package
-// (WP-E/D5b) landing after this one.
+// onReasoning receives the ACCUMULATED thinking display text on every
+// thinking_delta — display text only, never signature or redacted data
+// (ADR-095 D7: signatures are captured at parseResponse, where both the
+// streaming and non-streaming paths funnel; they never ride a streaming
+// callback). Nil-safe like the other callbacks.
 func (p *Provider) ChatStream(
 	ctx context.Context,
 	messages []Message,
@@ -173,7 +176,7 @@ func (p *Provider) ChatStream(
 		return nil, err
 	}
 
-	return p.streamWithCallbacks(ctx, params, opts, onChunk, onProgress)
+	return p.streamWithCallbacks(ctx, params, opts, onChunk, onProgress, onReasoning)
 }
 
 func (p *Provider) chatStreaming(
@@ -181,7 +184,7 @@ func (p *Provider) chatStreaming(
 	params anthropic.MessageNewParams,
 	opts []option.RequestOption,
 ) (*LLMResponse, error) {
-	return p.streamWithCallbacks(ctx, params, opts, nil, nil)
+	return p.streamWithCallbacks(ctx, params, opts, nil, nil, nil)
 }
 
 // streamWithCallbacks consumes the SSE stream, accumulating into a Message
@@ -204,6 +207,7 @@ func (p *Provider) streamWithCallbacks(
 	opts []option.RequestOption,
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
+	onReasoning func(accumulated string),
 ) (*LLMResponse, error) {
 	stall := p.effectiveStreamStallTimeout()
 
@@ -241,6 +245,7 @@ func (p *Provider) streamWithCallbacks(
 	var msg anthropic.Message
 	var lastTextLen int
 	var lastReasoningLen int
+	var lastReasoningTextLen int
 	lastArgsLen := map[int]int{}
 
 	for stream.Next() {
@@ -248,13 +253,14 @@ func (p *Provider) streamWithCallbacks(
 		if err := msg.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("claude streaming accumulate: %w", err)
 		}
-		if onChunk == nil && onProgress == nil {
+		if onChunk == nil && onProgress == nil && onReasoning == nil {
 			continue
 		}
 
 		// One pass to measure, then emit — so TotalArgsBytes is the true
 		// total across all blocks rather than a running partial.
 		var text strings.Builder
+		var reasoningText strings.Builder
 		argsLen := make(map[int]int, len(msg.Content))
 		names := make(map[int]string, len(msg.Content))
 		totalArgs := 0
@@ -286,6 +292,7 @@ func (p *Provider) streamWithCallbacks(
 				// 2026-09-14): minutes of thinking with no text or tool
 				// bytes must not read as a hung call. Length only.
 				reasoning += len(block.Thinking)
+				reasoningText.WriteString(block.Thinking)
 			case "redacted_thinking":
 				reasoning += len(block.Data)
 			}
@@ -301,6 +308,15 @@ func (p *Provider) streamWithCallbacks(
 		if onChunk != nil && text.Len() > lastTextLen {
 			lastTextLen = text.Len()
 			onChunk(text.String())
+		}
+		// ADR-095 D5b/D7: the thinking display text streams to the same
+		// accumulated-string contract the text callback has — growth-only,
+		// one call per thinking-bearing event, DISPLAY TEXT ONLY. The
+		// signature arrives as its own signature_delta and is captured at
+		// parseResponse instead; it never rides this callback.
+		if onReasoning != nil && reasoningText.Len() > lastReasoningTextLen {
+			lastReasoningTextLen = reasoningText.Len()
+			onReasoning(reasoningText.String())
 		}
 		if onProgress != nil {
 			// Same growth-only rule as text and arguments.
@@ -431,6 +447,15 @@ func buildParams(
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
 				var blocks []anthropic.ContentBlockParamUnion
+				// ADR-095 D6/D8: echo this turn's signed thinking blocks
+				// byte-exact and in order, BEFORE the text/tool_use blocks —
+				// Anthropic rejects a thinking-enabled continuation whose
+				// assistant tool_use turn does not start with its thinking
+				// blocks. The echo is unconditional (D8.5 one-directional):
+				// existing blocks round-trip whether or not THIS request asks
+				// for new thinking; only the thinking REQUEST below depends
+				// on the resolved effort.
+				blocks = appendThinkingBlocks(blocks, msg.ThinkingBlocks)
 				if msg.Content != "" {
 					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 				}
@@ -472,8 +497,16 @@ func buildParams(
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {
+				// Plain-text assistant turn — same D6 echo, blocks preceding
+				// the text block. When there are neither blocks nor content
+				// the historical single-empty-text-block shape is kept.
+				var blocks []anthropic.ContentBlockParamUnion
+				blocks = appendThinkingBlocks(blocks, msg.ThinkingBlocks)
+				if msg.Content != "" || len(blocks) == 0 {
+					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
+				}
 				anthropicMessages = append(anthropicMessages,
-					anthropic.NewAssistantMessage(anthropic.NewTextBlock(msg.Content)),
+					anthropic.NewAssistantMessage(blocks...),
 				)
 			}
 		case "tool":
@@ -510,11 +543,102 @@ func buildParams(
 		params.Tools = translateTools(tools)
 	}
 
-	// WP-F adds the real D32 Anthropic effort-request mapping here, keyed on
-	// the reasoning_effort option; until then no thinking request is ever
-	// sent (D24: an unset effort means the provider default applies).
+	// ADR-095 D9/D24/D32: the effort-request mapping, keyed on the
+	// reasoning_effort option the C5 resolver sets. A recognized named level
+	// requests Anthropic's ADAPTIVE thinking mode (thinking.type = "adaptive",
+	// never the older budget_tokens mechanism) paired with the named level on
+	// output_config.effort; absent / "default" / unrecognized sends NEITHER
+	// field — the provider default applies, no thinking request at all.
+	// D18: whenever thinking is requested the display pin is "summarized",
+	// unconditionally — the per-login show_thinking toggle gates DISPLAY and
+	// never enters the adapter's options.
+	if effort, ok := options["reasoning_effort"].(string); ok && effortLevelToOutputConfig(effort) != "" {
+		if historyCarriesAssistantThinkingBlocks(messages) {
+			params.Thinking = anthropic.ThinkingConfigParamUnion{
+				OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
+					Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
+				},
+			}
+			params.OutputConfig = anthropic.OutputConfigParam{
+				Effort: anthropic.OutputConfigEffort(effort),
+			}
+		} else {
+			// ADR-095 D8.5 availability guard: a pre-feature / cross-provider /
+			// hook-edited history has an assistant tool_use turn with no
+			// thinking blocks to echo; Anthropic would reject the request.
+			// Omit the thinking config — graceful degradation, never a failed
+			// turn — and log the omission under one named field so it is
+			// never silent (spec Section 16 test 13).
+			logger.InfoCF("anthropic", "thinking requested but history has no assistant thinking blocks; omitting thinking config", map[string]any{
+				"thinking_omitted": true,
+				"reason":           "assistant_tool_use_without_thinking_blocks",
+				"reasoning_effort": effort,
+				"model":            apiModel,
+			})
+		}
+	}
 
 	return params, nil
+}
+
+// recognizedEffortLevels are the named levels the C5 resolver's catalog
+// carries, mapped to Anthropic's output_config.effort enum (five levels —
+// low/medium/high/xhigh/max). Anything else is treated as unset (D24: never
+// guess an effort from an unrecognized value).
+var recognizedEffortLevels = map[string]bool{
+	"low":    true,
+	"medium": true,
+	"high":   true,
+	"xhigh":  true,
+	"max":    true,
+}
+
+// effortLevelToOutputConfig returns the level unchanged when it is one of the
+// recognized named levels, "" otherwise (so callers can treat any non-empty
+// result as "thinking requested this turn").
+func effortLevelToOutputConfig(level string) string {
+	if recognizedEffortLevels[level] {
+		return level
+	}
+	return ""
+}
+
+// historyCarriesAssistantThinkingBlocks reports whether every assistant
+// message in the request that could need its thinking blocks echoed actually
+// carries them. Anthropic requires the assistant tool_use turn of a
+// thinking-enabled request to start with the thinking blocks it produced; a
+// history where such a turn has none (pre-feature session, cross-provider
+// fallback, hook edit) cannot take a thinking-enabled request, so the adapter
+// degrades by omitting the thinking config (ADR-095 D8.5).
+func historyCarriesAssistantThinkingBlocks(messages []Message) bool {
+	for _, msg := range messages {
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 && len(msg.ThinkingBlocks) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// appendThinkingBlocks rebuilds the carrier's blocks into Anthropic's wire
+// params, byte-exact and in order: "thinking" carries text + signature,
+// "redacted_thinking" its opaque data (ADR-095 D6/D8 — the wholesale
+// round-trip, no strip step).
+func appendThinkingBlocks(blocks []anthropic.ContentBlockParamUnion, tbs []ThinkingBlock) []anthropic.ContentBlockParamUnion {
+	for _, tb := range tbs {
+		if tb.Type == "redacted_thinking" {
+			blocks = append(blocks, anthropic.ContentBlockParamUnion{
+				OfRedactedThinking: &anthropic.RedactedThinkingBlockParam{Data: tb.Data},
+			})
+			continue
+		}
+		blocks = append(blocks, anthropic.ContentBlockParamUnion{
+			OfThinking: &anthropic.ThinkingBlockParam{
+				Thinking:  tb.Thinking,
+				Signature: tb.Signature,
+			},
+		})
+	}
+	return blocks
 }
 
 func anthropicToolResult(msg Message) anthropic.ContentBlockParamUnion {
@@ -617,13 +741,36 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 		CacheWriteTokens: cacheWrite,
 		CacheReadTokens:  cacheRead,
 		TotalTokens:      total,
+		// ThinkingTokens is Anthropic's output_tokens_details.thinking_tokens —
+		// a subset of output_tokens, never added on top. Stays 0 when the
+		// provider does not report it (never a guessed default).
+		ThinkingTokens: int(resp.Usage.OutputTokensDetails.ThinkingTokens),
 	}
 
+	// ADR-095 D6/D7: capture every signed thinking block byte-exact and in
+	// response order — "thinking" with its signature, "redacted_thinking" with
+	// its opaque data. The display copy below stays untouched; this is the
+	// round-trip carrier the turn loop copies onto the assistant history
+	// Message. Capture happens HERE only: both the streaming and non-streaming
+	// paths funnel through parseResponse, and signatures never ride a
+	// streaming callback (D7).
+	var thinkingBlocks []ThinkingBlock
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "thinking":
 			tb := block.AsThinking()
+			thinkingBlocks = append(thinkingBlocks, ThinkingBlock{
+				Type:      "thinking",
+				Thinking:  tb.Thinking,
+				Signature: tb.Signature,
+			})
 			reasoning.WriteString(tb.Thinking)
+		case "redacted_thinking":
+			rb := block.AsRedactedThinking()
+			thinkingBlocks = append(thinkingBlocks, ThinkingBlock{
+				Type: "redacted_thinking",
+				Data: rb.Data,
+			})
 		case "text":
 			tb := block.AsText()
 			content.WriteString(tb.Text)
@@ -672,11 +819,12 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	}
 
 	return &LLMResponse{
-		Content:      content.String(),
-		Reasoning:    reasoning.String(),
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
-		Usage:        usage,
+		Content:        content.String(),
+		Reasoning:      reasoning.String(),
+		ToolCalls:      toolCalls,
+		FinishReason:   finishReason,
+		Usage:          usage,
+		ThinkingBlocks: thinkingBlocks,
 	}, nil
 }
 

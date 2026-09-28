@@ -24,6 +24,19 @@ type FunctionCall struct {
 	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
+// ThinkingBlock is one signed reasoning block from Anthropic's Messages API
+// (ADR-095 D6): "thinking" carries the display text plus the signature the
+// provider requires on the next request; "redacted_thinking" carries only
+// opaque data. Every field serializes — D8 forbids a json:"-" strip step here
+// (explicitly unlike ToolCall.ThoughtSignature, whose precedent must NOT be
+// copied): a block that lost its signature could never round-trip.
+type ThinkingBlock struct {
+	Type      string `json:"type"`
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"`
+}
+
 type LLMResponse struct {
 	Content          string            `json:"content"`
 	ReasoningContent string            `json:"reasoning_content,omitempty"`
@@ -32,6 +45,11 @@ type LLMResponse struct {
 	Usage            *UsageInfo        `json:"usage,omitempty"`
 	Reasoning        string            `json:"reasoning"`
 	ReasoningDetails []ReasoningDetail `json:"reasoning_details"`
+	// ThinkingBlocks carries the signed thinking/redacted_thinking blocks
+	// exactly as the provider returned them (byte-exact, order-stable) so the
+	// turn loop can copy them onto the assistant history Message for the next
+	// request's round-trip (ADR-095 D6/D7). Empty when the response had none.
+	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
 }
 
 type ReasoningDetail struct {
@@ -95,6 +113,11 @@ type Message struct {
 	SystemParts      []ContentBlock `json:"system_parts,omitempty"` // structured system blocks for cache-aware adapters
 	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`
+	// ThinkingBlocks carries the signed thinking blocks this assistant turn
+	// produced (Anthropic). They serialize wholesale — no strip step (D8) —
+	// and round-trip to the provider on the next request byte-exact and in
+	// order, thinking blocks preceding text/tool_use blocks (D6).
+	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
 }
 
 type ToolDefinition struct {
