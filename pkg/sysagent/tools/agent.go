@@ -223,6 +223,17 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 		return r0
 	}
 
+	// agent-picker-freshness fix (#1009): the new agent is now durably
+	// persisted (persistAndJoin returned success) — notify so every
+	// connected tab's Agent Picker drops its stale ['agents'] listing. See
+	// Deps.NotifyAgentCreated's doc comment for why this tool needs its own
+	// hook: it persists straight to the entity store and never reaches the
+	// gateway's REST createAgent handler, which is the only OTHER place this
+	// broadcast fires.
+	if fn := ac.t.deps.NotifyAgentCreated; fn != nil {
+		fn(ac.finalID)
+	}
+
 	return ac.publishAndRespond()
 }
 

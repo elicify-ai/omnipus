@@ -81,7 +81,8 @@ export type WsFrameType =
   | "library_changed"
   | "session_snapshot"
   | "catch_up_complete"
-  | "user_message";
+  | "user_message"
+  | "agent_created";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -1108,6 +1109,11 @@ export interface UserMessageFrame {
   seq?: number;
 }
 
+export interface AgentCreatedFrame {
+  type: "agent_created";
+  agent_id: string;
+}
+
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
@@ -1186,7 +1192,8 @@ export type WsFrame =
   | BrowserInputControlAckFrame
   | SessionSnapshotFrame
   | CatchUpCompleteFrame
-  | UserMessageFrame;
+  | UserMessageFrame
+  | AgentCreatedFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -1275,4 +1282,5 @@ export type ServerFrame =
   | BrowserInputControlAckFrame
   | SessionSnapshotFrame
   | CatchUpCompleteFrame
-  | UserMessageFrame;
+  | UserMessageFrame
+  | AgentCreatedFrame;

@@ -1345,6 +1345,19 @@ func (rc *runContextWithOptions) wireSystemTools() {
 			}
 			return nil
 		},
+		// agent-picker-freshness fix (#1009): create_agent's own counterpart
+		// to the REST createAgent handler's emitAgentCreated call — see
+		// systools.Deps.NotifyAgentCreated's doc comment. restAPIRef is
+		// already populated by setupAndStartServices (rc.startServices,
+		// called above this method) by the time wireSystemTools runs;
+		// emitAgentCreated is itself nil-safe (agentCreatedBroadcast not
+		// yet wired), so the extra nil check here only guards a restAPIRef
+		// that a test harness constructed without going through boot at all.
+		NotifyAgentCreated: func(agentID string) {
+			if rc.runningServices != nil && rc.runningServices.restAPIRef != nil {
+				rc.runningServices.restAPIRef.emitAgentCreated(agentID)
+			}
+		},
 		SkillsLoader:    rc.sysSkillsLoader,
 		RegistryManager: rc.sysRegistryManager,
 		SkillInstaller:  rc.sysSkillInstaller,

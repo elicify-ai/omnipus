@@ -1229,6 +1229,11 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// tests that never wire it.
 	libraryChangeFn := func(f gen.LibraryChangedFrame) { stg.wsHandler.broadcastLibraryChange(f) }
 	stg.api.libraryChangeBroadcast.Store(&libraryChangeFn)
+	// agent-picker-freshness fix (#1009): the analogous cross-tab
+	// invalidation hook for the Agent Picker's ['agents'] query — see
+	// agent_created_broadcast.go's doc comment.
+	agentCreatedFn := func(f gen.AgentCreatedFrame) { stg.wsHandler.broadcastAgentCreated(f) }
+	stg.api.agentCreatedBroadcast.Store(&agentCreatedFn)
 	// ADR-067 FR-037 (T067-11): a catalog refresh invalidates the
 	// entitlement cache — the intersection behind every cached answer was
 	// computed against a document that is no longer the served one.

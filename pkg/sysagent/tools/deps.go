@@ -193,6 +193,20 @@ type Deps struct {
 	// case, never a silent no-op. The production gateway wires this next to
 	// ReloadFunc; see gateway.go where sysAgentDeps is constructed.
 	UpsertAgentFastFunc func(agentID string) error
+	// NotifyAgentCreated is the agent-picker-freshness fix (#1009): called
+	// by AgentCreateTool after the new agent is durably persisted, so an
+	// agent creating another agent mid-conversation reaches the SAME
+	// agent_created WS broadcast pkg/gateway/rest_agents_create.go's REST
+	// createAgent handler already fans out — otherwise the tab watching
+	// this conversation would never see the new agent appear in its Agent
+	// Picker until the query's 30s staleTime elapsed or a reload happened,
+	// because this creation path never touches the gateway's HTTP handler
+	// at all. The gateway wires this to a closure over the restAPI's
+	// nil-safe emitAgentCreated (see gateway.go's wireSystemTools).
+	//
+	// Nil in tests or when not wired: AgentCreateTool must nil-check before
+	// calling, exactly like every other optional Deps callback field.
+	NotifyAgentCreated func(agentID string)
 	// SkillsLoader provides access to the locally installed skills tree
 	// (workspace, global, and builtin skill directories). Nil in tests or when
 	// not wired — callers must nil-check before use.
