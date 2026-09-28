@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/mail"
 	"net/smtp"
@@ -596,6 +597,17 @@ func (c *Client) fetchMessages(ctx context.Context, client *imapclient.Client, n
 	out := make([]Message, 0, len(fetched))
 	for _, m := range fetched {
 		if m == nil || m.Envelope == nil {
+			// Round-8 F5 (FR-018/FR-036): a buffer without its envelope
+			// cannot render a row, but the drop must never be invisible —
+			// ReadFolderPage's own comment promises "the page never silently
+			// drops rows". One WARN per dropped row naming the condition;
+			// the shrunk page and the TotalMatches desync become audible.
+			uid := uint32(0)
+			if m != nil {
+				uid = uint32(m.UID)
+			}
+			slog.Warn("email transport: fetched row without envelope dropped from page",
+				"uid", uid)
 			continue
 		}
 		out = append(out, bufferToMessage(m, withBody))
