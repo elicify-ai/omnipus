@@ -7,6 +7,8 @@ import (
 	"go/token"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -111,8 +113,9 @@ func TestMailUIDToWirePreservesUint32Maximum(t *testing.T) {
 	}
 }
 
-func TestMailUIDToWireAvoidsArchitectureSizedInt(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "rest_mail.go", nil, 0)
+func TestMailUIDWireConversionsAvoidArchitectureSizedInt(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "rest_mail.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse rest_mail.go: %v", err)
 	}
@@ -139,4 +142,43 @@ func TestMailUIDToWireAvoidsArchitectureSizedInt(t *testing.T) {
 		}
 		return true
 	})
+
+	paths, err := filepath.Glob("rest_mail*.go")
+	if err != nil {
+		t.Fatalf("glob mail REST files: %v", err)
+	}
+	wireAssignments := 0
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		parsed, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", path, parseErr)
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			field, ok := node.(*ast.KeyValueExpr)
+			if !ok {
+				return true
+			}
+			key, ok := field.Key.(*ast.Ident)
+			if !ok || (key.Name != "Uid" && key.Name != "Uidvalidity") {
+				return true
+			}
+			wireAssignments++
+			call, ok := field.Value.(*ast.CallExpr)
+			if !ok {
+				t.Errorf("%s must route %s through mailUIDToWire", fset.Position(field.Pos()), key.Name)
+				return true
+			}
+			conversion, isIdent := call.Fun.(*ast.Ident)
+			if !isIdent || conversion.Name != "mailUIDToWire" {
+				t.Errorf("%s must route %s through mailUIDToWire", fset.Position(field.Pos()), key.Name)
+			}
+			return true
+		})
+	}
+	if wireAssignments == 0 {
+		t.Fatal("no UID response assignments found; conversion guard did not exercise production call sites")
+	}
 }
