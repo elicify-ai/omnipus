@@ -55,3 +55,27 @@ func installGrepScopeAncestorSwapHook(t *testing.T, dir, swapTo string) {
 	})
 	t.Cleanup(restore)
 }
+
+// installGrepScopePostOpenSwapHook installs a one-shot hook that fires
+// AFTER absoluteGrepRoot's os.OpenRoot has bound its file descriptor
+// (Opus security-lead finding A2): removing dir and replacing it with a
+// symlink now leaves the bound fd pointing at the original inode, while
+// os.Stat(anchor) follows the symlink — the SameFile check the A2 fix
+// adds detects the discrepancy and surfaces a lost root (FR-021,
+// truncated root_lost). Nil in production; one atomic load per open.
+func installGrepScopePostOpenSwapHook(t *testing.T, dir, swapTo string) {
+	t.Helper()
+	var once sync.Once
+	restore := setGrepAbsolutePostOpenHook(func(anchor string) {
+		once.Do(func() {
+			if err := os.RemoveAll(dir); err != nil {
+				t.Errorf("grepAbsolutePostOpenHook: remove %q before swap: %v", dir, err)
+				return
+			}
+			if err := os.Symlink(swapTo, dir); err != nil {
+				t.Errorf("grepAbsolutePostOpenHook: symlink %q -> %q: %v", dir, swapTo, err)
+			}
+		})
+	})
+	t.Cleanup(restore)
+}

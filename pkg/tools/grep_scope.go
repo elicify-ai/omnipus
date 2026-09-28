@@ -65,6 +65,33 @@ func runGrepScopeStatOpenHook(subPath string) {
 	}
 }
 
+// grepAbsolutePostOpenHook is the same seam pattern for the post-open
+// window — fires AFTER absoluteGrepRoot's os.OpenRoot(parent) (and the
+// mount-anchored os.OpenRoot(mount.HostPath)) returns and BEFORE the
+// SameFile check the A2 fix adds. A test sets it to swap the location
+// AFTER the open has bound its file descriptor, so the bound fd points
+// to the pre-swap inode while os.Stat(anchor) follows the post-swap
+// symlink — the two stats differ and the SameFile check catches the
+// discrepancy as root_lost. Production: nil, same one-atomic-load cost.
+var grepAbsolutePostOpenHook atomic.Pointer[func(anchor string)]
+
+// setGrepAbsolutePostOpenHook installs fn (nil clears it) and returns a
+// func that restores the previous hook.
+func setGrepAbsolutePostOpenHook(fn func(anchor string)) (restore func()) {
+	var next *func(string)
+	if fn != nil {
+		next = &fn
+	}
+	prev := grepAbsolutePostOpenHook.Swap(next)
+	return func() { grepAbsolutePostOpenHook.Store(prev) }
+}
+
+func runGrepAbsolutePostOpenHook(anchor string) {
+	if hook := grepAbsolutePostOpenHook.Load(); hook != nil {
+		(*hook)(anchor)
+	}
+}
+
 // grepPathRefusalError marks an error as a refusal of the `path` argument by
 // the single read decision (or by grep's own NUL pre-check): Execute audits it
 // as path.access_denied (FR-020) and returns a permission-denied result.
@@ -357,7 +384,14 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 	if _, err := os.Stat(realAbs); err != nil {
 		return filegrep.Root{}, 0, grepAbsoluteStatError(rawPath, realAbs, err)
 	}
-	runGrepScopeStatOpenHook(realAbs)
+	// (No pre-open seam fire here. The existing grepScopeStatOpenHook
+	// inside resolveScopedRoot fires for any TOCTOU that affects the
+	// walk's own stat — the absoluteGrepRoot-level stat is best-effort
+	// and an additional fire there caused TestReadBoundary_AbsoluteRootLost
+	// to regress: the test removes the anchor between Stat and Open, so
+	// firing the lost hook in absoluteGrepRoot surfaces "anc does not
+	// exist" before resolveScopedRoot's own Stat-fires-hook window can
+	// convert it to a lost root.)
 	name := grepAbsoluteName(realAbs)
 	lost := func(err error) filegrep.Root {
 		return filegrep.Root{Name: name, FS: unreachableRootFS{err: err}}
@@ -387,6 +421,21 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 			return lost(mErr), 0, nil
 		}
 		*opened = append(*opened, mr)
+		// A2 seam (post-open): a test installs a hook here to swap the
+		// mount root AFTER the open has bound its fd, driving the
+		// post-open SameFile race the A2 fix catches.
+		runGrepAbsolutePostOpenHook(m.HostPath)
+		// Security A2: the bound root's "." must be the same directory
+		// the opened path (mount root here) still resolves to. A swap
+		// landing between the open above and this check leaves the fd
+		// bound at the pre-swap inode while os.Stat(mountRoot) follows
+		// the swap — the two stats differ via os.SameFile, and the
+		// mismatch surfaces as a lost root (FR-021, truncated
+		// root_lost), the same carrier the pre-existing stat-then-open
+		// race uses.
+		if same, sErr := sameFileCheck(mr, m.HostPath); sErr == nil && !same {
+			return lost(fmt.Errorf("absolute root %q was lost after admission (post-open)", m.HostPath)), 0, nil
+		}
 		rel, relErr := filepath.Rel(m.HostPath, realAbs)
 		if relErr != nil {
 			return filegrep.Root{}, 0, fmt.Errorf("path %s could not be made relative to its mount %q: %w", rawPath, m.Name, relErr)
@@ -406,6 +455,17 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 		return lost(err), 0, nil
 	}
 	*opened = append(*opened, container)
+	// A2 seam (post-open): same shape, fires after the unanchored
+	// os.OpenRoot(parent) too — a swap of parent (the opened path)
+	// drives the same race.
+	runGrepAbsolutePostOpenHook(parent)
+	// Security A2 (unanchored): same SameFile check, anchor is parent
+	// (the opened path) — not realAbs, which is a sub-path the bound
+	// fd legitimately doesn't name (parent and realAbs are different
+	// directories, not the same).
+	if same, sErr := sameFileCheck(container, parent); sErr == nil && !same {
+		return lost(fmt.Errorf("absolute root %q was lost after admission (post-open)", parent)), 0, nil
+	}
 	label := fmt.Sprintf("folder %q", grepAbsoluteName(parent))
 	root, n, err := t.resolveScopedRoot(container, parent, filepath.Base(realAbs), grepAbsoluteName(parent), label, policy, opened)
 	if err != nil {
@@ -669,4 +729,26 @@ func (r regularOnlyFS) Open(name string) (fs.File, error) {
 		return nil, err
 	}
 	return r.fsys.Open(name)
+}
+
+// sameFileCheck reports whether the *os.Root bound at root still names the
+// same directory anchor currently resolves to. anchor is expected to be
+// already realpath-resolved by the caller (ResolvePath returns it that
+// way); on a swap landing between os.OpenRoot and this check, anchor
+// now follows the symlink and resolves to a different inode. os.SameFile
+// compares inode (and dev) pairs; a mismatch surfaces a stale fd to the
+// caller as a lost root (FR-021). Returns (true, nil) when the two paths
+// agree, (false, nil) on mismatch, and (false, err) when either stat
+// itself failed — the latter is treated as "check did not run" by the
+// callers, never as a green (a missing check must not silently pass).
+func sameFileCheck(root *os.Root, anchor string) (bool, error) {
+	rootInfo, err := root.Stat(".")
+	if err != nil {
+		return false, err
+	}
+	anchorInfo, err := os.Stat(anchor)
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(rootInfo, anchorInfo), nil
 }

@@ -313,7 +313,62 @@ func TestReadBoundary_GrepAbsoluteUnderMountAncestorSwap(t *testing.T) {
 		"pattern": "OUTSIDE-NEEDLE",
 		"path":    filepath.Join(f.mnt, "src", "b.md"),
 	})
-	if !res.IsError && strings.Contains(res.ForLLM, "OUTSIDE-NEEDLE") {
-		t.Fatalf("A1: read-confined grep followed a swapped ancestor out of the mount and returned <EXT>'s content:\n%s", res.ForLLM)
+	// Oracle: the grep must NOT match any file INSIDE the swapped-in
+	// folder. rbHitPaths returns the match paths the engine reports;
+	// pre-fix those come from <EXT>/ext/b.md, post-fix none do (the
+	// walk never reaches outside content). ForLLM echoes the pattern
+	// string itself, so a plain strings.Contains check would always
+	// fire — match paths is the strict oracle.
+	for _, p := range rbHitPaths(res.ForLLM) {
+		if strings.HasPrefix(p, rbSlash(filepath.Join(f.ext, "ext"))) || strings.HasPrefix(p, filepath.Join(f.ext, "ext")) {
+			t.Fatalf("A1: read-confined grep matched a path inside the swapped-in folder %q:\n%s", p, res.ForLLM)
+		}
+	}
+}
+
+// TestReadBoundary_GrepAbsolutePostOpenSwap is A2 from the Opus
+// security-lead review: after os.OpenRoot(parent) returns, the bound fd
+// points at the directory it opened. A swap landing AFTER the open
+// (between the open and the engine's read) does NOT affect the bound
+// fd — the engine still walks inside the ORIGINAL inode — but a naive
+// implementation that does NOT verify the bound fd matches the anchor
+// silently returns a stale result. The SameFile check (root.Stat(".")
+// vs os.Stat(anchor)) makes the discrepancy observable and surfaces it
+// as a lost root (FR-021, truncated root_lost).
+//
+// ORACLE (A2 / FR-021, restated for grep): when the OPENED path (parent
+// here) was swapped for a symlink AFTER the open, the search must
+// report root_lost and must NOT walk inside the original (now stale)
+// inode. pre-fix: the search walks inside the original inode and
+// matches content there (the bound fd does not see the swap). GREEN:
+// the post-open SameFile check catches the drift and returns lost(...).
+//
+// This is the ordinary-turn shape (NOT a read-confined Judge turn), as
+// the brief specifies. The unanchored absoluteGrepRoot path is
+// exercised — a directory under <EXT>, outside the workspace and mounts.
+func TestReadBoundary_GrepAbsolutePostOpenSwap(t *testing.T) {
+	f := newRBFixture(t)
+	// Parent dir: <EXT>, holds a sub-path the user wants to search.
+	// <EXT>/anc/hit.md is the "needle" hit; a stale-root walk would
+	// match it.
+	rbWrite(t, filepath.Join(f.ext, "anc", "hit.md"), "needle\n")
+	// Swap target: a SIBLING of <EXT> that does not live under <EXT>
+	// itself — the symlink <EXT> → <WS> stays acyclic, so os.Stat(<EXT>)
+	// resolves the symlink without a loop and the SameFile check sees
+	// the inode mismatch the A2 fix expects.
+	swapTo := f.ws
+	rbWrite(t, filepath.Join(swapTo, "needle.md"), "OUTSIDE-SWAPPED-CONTENT\n")
+
+	installGrepScopePostOpenSwapHook(t, f.ext, swapTo)
+
+	res := f.grep.Execute(f.ctx, map[string]any{
+		"pattern": "needle",
+		"path":    filepath.Join(f.ext, "anc"),
+	})
+	if res.IsError {
+		t.Fatalf("A2: post-open swap was NOT caught — expected truncated root_lost, got a hard error: %s", res.ForLLM)
+	}
+	if reason := rbTruncation(res.ForLLM); reason != "root_lost" {
+		t.Fatalf("A2: post-open swap was NOT caught — expected truncation reason root_lost, got %q:\n%s", reason, res.ForLLM)
 	}
 }
