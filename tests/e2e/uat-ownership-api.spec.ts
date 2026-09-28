@@ -608,11 +608,19 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
   // workspaces must be showing DIFFERENT pages at the moment of the crossing,
   // or "it showed httpbin" cannot tell A's browser from B's and the case proves
   // nothing while still going green.
+  // Row 55 UAT-SEC: this collect window was 20_000ms, shorter than UAT-CTRL's
+  // structurally-identical navigate-to-PAGE_A operation above (28_000ms) for
+  // no evident reason. markA/markB.tabs is a snapshot captured when the
+  // collect window closes — a navigation still in flight because a slow
+  // external site (the-internet.herokuapp.com) hadn't committed yet reads as
+  // the tab never having moved (the exact failure this row is about: the
+  // tab caught showing a leftover page from an earlier test). Matching
+  // UAT-CTRL's window gives the same slow-navigation class the same runway.
   const markA = await attachRetryingMemory(fx.chatA1, fx.agentA, [
     { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
     { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: PAGE_A } },
     { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
-  ], 20_000);
+  ], 28_000);
   if (isMemoryRefusal(markA.error)) throw new Error(`BLOCKED by the memory ceiling: ${markA.error}`);
   expect(markA.tabs.map((t) => t.url).join(','), 'workspace A must be marked before the crossing').toContain('the-internet');
 
@@ -620,7 +628,7 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
     { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
     { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: PAGE_B } },
     { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
-  ], 20_000);
+  ], 28_000);
   if (isMemoryRefusal(markB.error)) throw new Error(`BLOCKED by the memory ceiling: ${markB.error}`);
   expect(markB.tabs.map((t) => t.url).join(','), 'workspace B must be marked before the crossing').toContain('example.com');
 
