@@ -204,8 +204,12 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
   }, [workspaceId, agentId, folder])
 
   useEffect(() => {
+    // Before the mailbox list resolves, agentId is only a loading placeholder.
+    // Reporting it as null would overwrite a deep link's requested mailbox
+    // while the full-screen shell registers its live context getter.
+    if (!mailboxesQuery.isSuccess) return
     onLocationChange?.({ mailboxId: agentId, folder, messageRef: selectedRef })
-  }, [agentId, folder, selectedRef, onLocationChange])
+  }, [agentId, folder, selectedRef, onLocationChange, mailboxesQuery.isSuccess])
 
   // ── Queries ───────────────────────────────────────────────────────────
   // Human-initiated dialing (D29/R2-9, MC-33): a human gesture that must
