@@ -360,6 +360,11 @@ ever being named or exported, a copy-to-clipboard handler re-typed in each file.
 currently scans for cross-file markup duplication; that gap is closed by the grep step
 above, done by whoever is about to add the Nth instance of a job, not by CI.
 
+## 15. Avoid inline styles
+
+Avoid inline styles (`style={...}` in JSX, `style="..."` in markup) in Omnipus's own app
+code. Use design-system classes and tokens instead.
+
 ## Escape hatches, all of them
 
 | Situation | Escape hatch | Condition |
