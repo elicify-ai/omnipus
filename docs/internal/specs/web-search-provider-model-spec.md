@@ -1,7 +1,9 @@
 # Feature Specification: Web search default, fallback, and provider capabilities
 
 **Created**: 2026-09-26
-**Status**: Draft, revised 2026-09-26 against founder decisions, then again the same day (round 2) to follow the ADR's corrections after the adversarial review. The decision record is [ADR-096 — Web search: a default, a fallback, and an honest tool](../architecture/ADR-096-web-search-provider-model.md), whose changelog lists every round-2 change and the four questions still open for the founder. This file is the build instructions. Where an earlier draft disagreed, the later revision wins: see [What changed from the first draft](#what-changed-from-the-first-draft) and [What changed in round 2](#what-changed-in-round-2).
+**Status:** Draft
+
+Revised 2026-09-26 against founder decisions, then again the same day (round 2) to follow the ADR's corrections after the adversarial review. The decision record is [ADR-096 — Web search: a default, a fallback, and an honest tool](../architecture/ADR-096-web-search-provider-model.md), whose changelog lists every round-2 change and the four questions still open for the founder. This file is the build instructions. Where an earlier draft disagreed, the later revision wins: see [What changed from the first draft](#what-changed-from-the-first-draft) and [What changed in round 2](#what-changed-in-round-2).
 **Input**: Founder decisions F1–F10 for the feature that follows the web-search credential fix, which landed as commit `07a75c104` and is this spec's evidence baseline. Issue [#47](https://github.com/elicify-ai/omnipus/issues/47) is background only.
 
 ---

@@ -25,6 +25,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -69,7 +70,7 @@ func (a *restAPI) readIntegrationRolesFileState() integrationRolesFileState {
 	var state integrationRolesFileState
 	raw, err := os.ReadFile(a.configPath())
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			// Fresh install: the shipped defaults are the decision.
 			state.decided = true
 			return state
