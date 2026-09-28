@@ -351,25 +351,26 @@ func defaultGrepRoots(policy fspolicy.FSPolicy, mounts []workspace.Mount, opened
 // behaviour): the mount itself, or a sub-path of it.
 func (t *GrepTool) mountScopeRoot(m workspace.Mount, rest string, policy fspolicy.FSPolicy, opened *[]*os.Root) (grepRootSet, error) {
 	var set grepRootSet
-	real := grepRootRealpath(filepath.Join(m.HostPath, filepath.FromSlash(rest)))
+	realPath := grepRootRealpath(filepath.Join(m.HostPath, filepath.FromSlash(rest)))
 	mr, mErr := os.OpenRoot(m.HostPath)
 	if mErr != nil {
 		// FR-021: a dead mount is root_lost, not a request error — same
 		// unreachableRootFS carrier the default full-workspace search uses
-		// for the identical failure.
-		set.add(filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: mErr}}, real)
-		return set, nil
+		// for the identical failure. The error is intentionally carried as
+		// a data field on unreachableRootFS, not returned to the caller.
+		set.add(filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: mErr}}, realPath)
+		return set, nil //nolint:nilerr // see comment above: error is packed into the unreachableRootFS root
 	}
 	*opened = append(*opened, mr)
 	if rest == "" {
-		set.add(filegrep.Root{Name: m.Name, FS: guardGrepRoot(m.HostPath, mr.FS(), policy)}, real)
+		set.add(filegrep.Root{Name: m.Name, FS: guardGrepRoot(m.HostPath, mr.FS(), policy)}, realPath)
 		return set, nil
 	}
 	r, n, rErr := t.resolveScopedRoot(mr, m.HostPath, rest, m.Name, fmt.Sprintf("mount %q", m.Name), policy, opened)
 	if rErr != nil {
 		return grepRootSet{}, rErr
 	}
-	set.add(r, real)
+	set.add(r, realPath)
 	set.ancestorUnreadable = n
 	return set, nil
 }
@@ -381,7 +382,7 @@ func (t *GrepTool) mountScopeRoot(m workspace.Mount, rest string, policy fspolic
 // shape read_file returns; anything else (not found, not a directory, a
 // kernel pseudo-folder) is a plain error that writes no denial row.
 func (t *GrepTool) grepRootsError(ctx context.Context, scope string, err error) *ToolResult {
-	var refusal *grepPathRefusal
+	var refusal *grepPathRefusalError
 	if errors.As(err, &refusal) {
 		emitPathAccessDeniedCorrelated(ctx, t.auditLogger, t.Name(), scope, refusal.err, 0)
 		detail := fmt.Sprintf("grep cannot search %s: %v", filepath.ToSlash(scope), refusal.err)

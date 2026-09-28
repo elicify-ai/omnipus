@@ -65,15 +65,15 @@ func runGrepScopeStatOpenHook(subPath string) {
 	}
 }
 
-// grepPathRefusal marks an error as a refusal of the `path` argument by the
-// single read decision (or by grep's own NUL pre-check): Execute audits it
+// grepPathRefusalError marks an error as a refusal of the `path` argument by
+// the single read decision (or by grep's own NUL pre-check): Execute audits it
 // as path.access_denied (FR-020) and returns a permission-denied result.
-// Every other resolveGrepRoots error (not found, not a directory, cannot open the
-// workspace) is a plain error and writes no denial row.
-type grepPathRefusal struct{ err error }
+// Every other resolveGrepRoots error (not found, not a directory, cannot open
+// the workspace) is a plain error and writes no denial row.
+type grepPathRefusalError struct{ err error }
 
-func (r *grepPathRefusal) Error() string { return r.err.Error() }
-func (r *grepPathRefusal) Unwrap() error { return r.err }
+func (r *grepPathRefusalError) Error() string { return r.err.Error() }
+func (r *grepPathRefusalError) Unwrap() error { return r.err }
 
 // grepScopeLostError is resolveScopedRoot's "existed at the Stat, could not
 // be opened right after" failure. The absolute root type turns it into an
@@ -98,9 +98,9 @@ type grepRootSet struct {
 	ancestorUnreadable int
 }
 
-func (s *grepRootSet) add(root filegrep.Root, real string) {
+func (s *grepRootSet) add(root filegrep.Root, realPath string) {
 	s.roots = append(s.roots, root)
-	s.real = append(s.real, real)
+	s.real = append(s.real, realPath)
 }
 
 // grepRootRealpath is the realpath of a root's host folder for the audit
@@ -232,7 +232,7 @@ func (t *GrepTool) resolveGrepRoots(ctx context.Context, policy fspolicy.FSPolic
 		return set, closeAll, err
 	}
 	if strings.IndexByte(scope, 0) != -1 {
-		return grepRootSet{}, closeAll, &grepPathRefusal{
+		return grepRootSet{}, closeAll, &grepPathRefusalError{
 			err: fmt.Errorf("%w: `path` contains an embedded NUL byte", ErrPathInvalid),
 		}
 	}
@@ -256,7 +256,7 @@ func (t *GrepTool) resolveGrepRoots(ctx context.Context, policy fspolicy.FSPolic
 func (t *GrepTool) resolvedScopeRoot(ctx context.Context, policy fspolicy.FSPolicy, scope string, opened *[]*os.Root) (grepRootSet, error) {
 	handle, err := ResolvePath(ctx, policy, t.Name(), "", FSOpList, scope)
 	if err != nil {
-		return grepRootSet{}, &grepPathRefusal{err: err}
+		return grepRootSet{}, &grepPathRefusalError{err: err}
 	}
 	// ADR-081 D4 design step 2: grep needs the resolved location, not the
 	// handle's own I/O, so the handle is closed at once (FR-032).
