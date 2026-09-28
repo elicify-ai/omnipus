@@ -39,6 +39,7 @@ import {
   discardMailDraft,
   mintMailHtmlPreviewToken,
   fetchMailAttachment,
+  mailUidRef,
 } from '@/lib/api/mail'
 import type {
   MailboxNewMailSummary,
@@ -524,7 +525,7 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
                   <MailMessageList
                     messages={messagesQuery.data.messages}
                     selectedRef={selectedRef}
-                    onSelect={(message) => setSelectedRef(`uid:${message.uid}`)}
+                    onSelect={(message) => setSelectedRef(mailUidRef(message.uidvalidity, message.uid))}
                   />
                 )}
               </>

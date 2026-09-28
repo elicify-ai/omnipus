@@ -97,7 +97,17 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     const page = await mailPage(browser)
     await openMail(page)
     await expect(page.getByText('Quarterly')).toBeVisible()
-    await page.getByText('Quarterly').click()
+    const [detailResponse] = await Promise.all([
+      page.waitForResponse((response) => {
+        const url = new URL(response.url())
+        return response.request().method() === 'GET'
+          && /\/folders\/inbox\/messages\/[^/]+$/.test(url.pathname)
+      }),
+      page.getByText('Quarterly').click(),
+    ])
+    const messageRef = decodeURIComponent(new URL(detailResponse.url()).pathname.split('/').at(-1) ?? '')
+    expect(messageRef).toMatch(/^uid:\d+:\d+$/)
+    expect(detailResponse.status()).toBe(200)
     await expect(page.getByText('The numbers are in.')).toBeVisible()
   })
 

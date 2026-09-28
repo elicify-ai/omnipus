@@ -12,15 +12,25 @@
  */
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, act } from '@testing-library/react'
+import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const { fetchAgents, fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailSummary } = vi.hoisted(() => ({
+const {
+  fetchAgents,
+  fetchMailboxes,
+  fetchMailFolders,
+  fetchMailMessages,
+  fetchMailMessage,
+  fetchMailSummary,
+  markMailSeen,
+} = vi.hoisted(() => ({
   fetchAgents: vi.fn(),
   fetchMailboxes: vi.fn(),
   fetchMailFolders: vi.fn(),
   fetchMailMessages: vi.fn(),
+  fetchMailMessage: vi.fn(),
   fetchMailSummary: vi.fn(),
+  markMailSeen: vi.fn(),
 }))
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -30,7 +40,14 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 vi.mock('@/lib/api/mail', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/mail')>()
-  return { ...actual, fetchMailFolders, fetchMailMessages, fetchMailSummary }
+  return {
+    ...actual,
+    fetchMailFolders,
+    fetchMailMessages,
+    fetchMailMessage,
+    fetchMailSummary,
+    markMailSeen,
+  }
 })
 
 async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>> {
@@ -69,14 +86,18 @@ describe('Mail panel states (US-3, US-6, D25)', () => {
     fetchMailboxes.mockReset()
     fetchMailFolders.mockReset()
     fetchMailMessages.mockReset()
+    fetchMailMessage.mockReset()
     fetchMailSummary.mockReset()
+    markMailSeen.mockReset()
     fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])
     fetchMailFolders.mockResolvedValue(folders)
     fetchMailMessages.mockResolvedValue({ messages: [], truncated: false, next_before_uid: null })
+    fetchMailMessage.mockImplementation(() => new Promise(() => {}))
     fetchMailSummary.mockResolvedValue({ items: [] })
+    markMailSeen.mockResolvedValue(undefined)
   })
 
   afterEach(() => cleanup())
@@ -113,6 +134,43 @@ describe('Mail panel states (US-3, US-6, D25)', () => {
     expect(await screen.findByText('Handled')).toBeInTheDocument()
     const tags = screen.getAllByText(/read by agent/i)
     expect(tags).toHaveLength(1)
+  })
+
+  it('opens a list message with its uidvalidity-scoped server ref', async () => {
+    fetchMailMessages.mockResolvedValue({
+      messages: [{
+        message_id: '<quarterly@example.test>',
+        uid: 42,
+        uidvalidity: 777,
+        folder: 'inbox',
+        subject: 'Quarterly',
+        from: 'ada@example.test',
+        from_name: 'Ada',
+        to: ['mia@example.test'],
+        cc: [],
+        date: '2026-09-28T10:00:00Z',
+        seen: true,
+        is_draft: false,
+        is_omnipus_draft: false,
+        read_by_agent: false,
+      }],
+      truncated: false,
+      next_before_uid: null,
+    })
+
+    const MailPanel = await loadPanel()
+    renderPanel(<MailPanel workspaceId="ws-1" />)
+    fireEvent.click(await screen.findByRole('button', { name: /Quarterly/ }))
+
+    await waitFor(() => {
+      expect(fetchMailMessage).toHaveBeenCalledWith(
+        'ws-1',
+        'mia',
+        'inbox',
+        'uid:777:42',
+        { retry: false },
+      )
+    })
   })
 
   it('shows retrying-at when the watcher is backing off (D29/R2-8)', async () => {

@@ -15,6 +15,7 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 import { openMailDeepLink } from '@/components/workspaces/mail/mailDeepLink'
+import { mailUidRef } from '@/lib/api/mail'
 import { useUiStore } from '@/store/ui'
 import { stripUntrustedContentWrapper } from '@/lib/untrustedToolContent'
 
@@ -102,7 +103,7 @@ export function DraftLinkBlock({
     const ws = args.workspace_id ?? currentWorkspaceId()
     const agent = args.agent_id
     if (ws !== null && agent !== undefined && parsed.uid !== undefined && parsed.uidvalidity !== undefined) {
-      const messageRef = `uid:${parsed.uidvalidity}:${parsed.uid}`
+      const messageRef = mailUidRef(parsed.uidvalidity, parsed.uid)
       window.location.hash = `/workspaces/${ws}/mail?mailbox=${encodeURIComponent(agent)}&folder=drafts&message=${encodeURIComponent(messageRef)}`
       return
     }
