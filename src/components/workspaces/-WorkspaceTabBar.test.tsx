@@ -74,15 +74,18 @@ beforeEach(() => {
 })
 
 describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
-  it('renders the five strip entries — links carry hrefs, Chat and Library are buttons (MAJ-007)', () => {
+  it('renders the strip entries — registered panels are toggle buttons, unregistered entries are links (MAJ-007; wave 2 per side-panel-shell-spec.md §15 item 1: "Mail joins in wave 2")', () => {
     mockPathname = '/workspaces/ws-1/chat'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
 
     for (const tab of WORKSPACE_TABS) {
       const els = screen.getAllByTestId(`workspace-tab-${tab.segment}`)
       expect(els.length).toBe(1)
-      if (tab.segment === 'media') {
-        // Registered panel (US-5): a toggle button — no href, aria-pressed.
+      if (tab.segment === 'media' || tab.segment === 'mail') {
+        // Registered panels (US-5): toggle buttons — no href, aria-pressed.
+        // WAVE 2: mail joins media as a registered toggle (§15 item 1 —
+        // "Tasks / Calendar / Library / Team entries toggle panels (Mail
+        // joins in wave 2)"); at wave 1 it was a plain link.
         expect(els[0].tagName).toBe('BUTTON')
         expect(els[0].getAttribute('href')).toBeNull()
         expect(els[0].getAttribute('aria-pressed')).toBe('false')
@@ -125,11 +128,16 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
   })
 
   it('tab order matches the canonical WORKSPACE_TABS order', () => {
+    // 'mail' sits between media and team in the canonical strip (email spec
+    // §16 route row: the mail segment landed as the Mail tab's redirect-stub
+    // route, commit 5524ef853) — the pin below previously omitted it and was
+    // stale-red against the production array.
     expect(WORKSPACE_TABS.map((t) => t.segment)).toEqual([
       'chat',
       'board',
       'calendar',
       'media',
+      'mail',
       'team',
     ])
   })

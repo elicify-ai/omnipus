@@ -24,6 +24,18 @@
 // all three waves, not wave-1 behaviour specifically — deferred, noted in
 // the RED report rather than asserted here as a wave-1 requirement).
 //
+// WAVE 2 AMENDMENT (2026-09-28, RED): side-panel-shell-spec.md §10 "Wave 2 —
+// Mail adopts the shell" + FR-014 register mail, so §12's dataset row 8
+// ("`mail`, no agent selected | Mail panel opens on 'choose a mailbox'
+// (SP-23, wave 2) | §8.2") and §8.2's Mail bullet ("`panel=mail` with no
+// agent/mailbox selected opens the Mail panel on its 'choose a mailbox'
+// state") now apply AT THE SCHEMA LEVEL: `panel=mail` is a REGISTERED panel
+// id and must be KEPT by validateSearch — dropped-with-a-replace is the
+// treatment for unknown AND unregistered ids only (US-7 AS-4). The `agent`
+// key stays "meaningful only with panel=mail" (SP-23). New tests below; the
+// wave-1 assertions above are unchanged (they were correct then and remain
+// true now: `tasks`/`team`/`calendar` are still unregistered at wave 2).
+//
 // RED evidence (2026-09-27, read
 // src/routes/_app/workspaces.$workspaceId.chat.tsx in full): the route
 // declares NO `validateSearch` at all — `createFileRoute(...)({ component:
@@ -72,11 +84,26 @@ describe('workspaces/$workspaceId/chat — panel search schema (§8.2, wave 1)',
   })
 
   it('declares the `agent` param, meaningful only with panel=mail (SP-23) — accepted alongside panel=mail', () => {
-    // Wave 1 doesn't register Mail, so `panel=mail` itself is dropped (like
-    // `tasks`/`bogus`) — but `agent` must still be a DECLARED search key on
-    // this route today (SP-23's contract), not a param this schema throws
-    // out entirely just because it's unrecognised.
+    // Wave 1 dropped `panel=mail` itself (Mail was unregistered then); at
+    // wave 2 the schema KEEPS it — asserted by the wave-2 test below. This
+    // test's own oracle is unchanged: `agent` is a DECLARED search key on
+    // this route (SP-23's contract), kept even on its own.
     const result = validate({ agent: 'agent-1' }) as Record<string, unknown>
     expect(result.agent).toBe('agent-1')
+  })
+
+  // ── Wave 2 (spec §10 "Wave 2 — Mail adopts the shell", §8.2 Mail bullet,
+  //    §12 dataset row 8, FR-014): mail is a REGISTERED panel id. ────────
+  describe('wave 2 — mail is registered (SP-23, dataset row 8)', () => {
+    it('keeps a registered panel id — mail (§12 dataset row 8; §8.2 Mail bullet)', () => {
+      expect(validate({ panel: 'mail' })).toMatchObject({ panel: 'mail' })
+    })
+
+    it('keeps `agent` alongside panel=mail — the SP-23 landing param is schema-valid (§8.2: "`agent`, meaningful only with panel=mail")', () => {
+      expect(validate({ panel: 'mail', agent: 'agent-1' })).toMatchObject({
+        panel: 'mail',
+        agent: 'agent-1',
+      })
+    })
   })
 })

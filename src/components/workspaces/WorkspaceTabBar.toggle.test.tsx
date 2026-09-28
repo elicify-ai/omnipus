@@ -178,3 +178,54 @@ describe('WorkspaceTabBar — toggle ARIA model (MAJ-007, wave 1)', () => {
     expect(activePanel()).toBeNull()
   })
 })
+
+// ── Wave 2 (side-panel-shell-spec.md §10 "Wave 2 — Mail adopts the shell" +
+//    §15 item 1: "Tasks / Calendar / Library / Team entries toggle panels
+//    (Mail joins in wave 2)"): the Mail strip entry is a registered-panel
+//    toggle, exactly like Library's — aria-pressed model, leave-gated
+//    open/close, no navigation (US-5 AS-1/AS-2, SP-7 for the replace case).
+//    At wave 1 the mail entry is a plain navigation Link to the /mail
+//    redirect stub, so every assertion below fails on HEAD: the entry is an
+//    <a> with an href, carries no aria-pressed, and clicking it navigates
+//    instead of touching panel state. ─────────────────────────────────────
+describe('WorkspaceTabBar — Mail entry toggle (wave 2, §15 item 1 / US-5)', () => {
+  it('the Mail entry is a toggle button with aria-pressed, not a navigation link', () => {
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    const mailEntry = screen.getByTestId('workspace-tab-mail')
+    expect(mailEntry.tagName).toBe('BUTTON')
+    expect(mailEntry.getAttribute('href')).toBeNull()
+    expect(mailEntry.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('clicking the Mail entry opens the Mail panel scoped to this workspace WITHOUT navigating (US-5 AS-1)', () => {
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    const mailEntry = screen.getByTestId('workspace-tab-mail')
+    fireEvent.click(mailEntry)
+
+    expect(activePanel()).toEqual({ id: 'mail', context: { workspaceId: 'ws-1' } })
+    // No navigation: the chat route stays the page underneath (the /mail
+    // route remains only the expand target + bookmarked-URL stub).
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('a second click on the Mail entry closes the panel (US-5 AS-2, SP-11)', () => {
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    const mailEntry = screen.getByTestId('workspace-tab-mail')
+    fireEvent.click(mailEntry)
+    // Intermediate assertion, deliberately (same vacuous-pass guard as the
+    // Library test above): pin the open state after click 1.
+    expect(activePanel()).toEqual({ id: 'mail', context: { workspaceId: 'ws-1' } })
+
+    fireEvent.click(mailEntry)
+    expect(activePanel()).toBeNull()
+  })
+
+  it('opening Mail while Library is open REPLACES it — one panel at a time (SP-7)', () => {
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    fireEvent.click(screen.getByTestId('workspace-tab-media'))
+    expect(activePanel()).toEqual({ id: 'library', context: { workspaceId: 'ws-1' } })
+
+    fireEvent.click(screen.getByTestId('workspace-tab-mail'))
+    expect(activePanel()).toEqual({ id: 'mail', context: { workspaceId: 'ws-1' } })
+  })
+})

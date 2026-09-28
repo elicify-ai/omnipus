@@ -1,0 +1,46 @@
+// mailPanelDefinition.test.tsx — wave-2 RED pack for Mail's §8.1
+// PanelDefinition payload (side-panel-shell-spec.md §10 "Wave 2 — Mail
+// adopts the shell": "satisfied by registering a Mail PanelDefinition — no
+// shell change. Mail's expand target follows the email spec").
+//
+// Oracle — side-panel-shell-spec.md §1 panel inventory, mail row:
+//   "| mail | Mail | Mail panel (feature/email-mail, D11) | Mail full page
+//    (per email spec) |"
+// with the email spec naming the full page:
+//   email-mail-view-spec.md §17 (chat_link row): "the chat_link URL scheme:
+//   …/#/workspaces/{wsId}/mail?mailbox={agentId}&folder=drafts&message=…"
+//   and its router row: "The SPA router uses hash history (verified) — deep
+//   links carry #/…".
+//
+// The `/#/` prefix is derived, not observed: the shell's Expand does
+// window.open(expandTarget(context)) (src/components/panel-shell/
+// usePanelShell.ts), and in a hash-history SPA a new-tab URL without the
+// hash fragment names a GATEWAY path, not the SPA route — Library's and
+// Browser's registry entries both carry it for exactly this reason. A
+// expand target without `/#/` opens a dead tab.
+//
+// Also pinned: no beforeLeave (§8.1: "beforeLeave is supplied ONLY by
+// panels with unsaved-edit risk — Library, in wave 1"; Mail keeps no
+// unsaved-edit state outside its compose dialog, same posture as Browser).
+
+import { describe, it, expect } from 'vitest'
+import { mailPanelDefinition } from './mailPanelDefinition'
+
+describe('Mail PanelDefinition payload (§10 Wave 2, §1 mail row, email spec §17)', () => {
+  it('registers id "mail" with title "Mail" (§1 panel inventory mail row)', () => {
+    expect(mailPanelDefinition.id).toBe('mail')
+    expect(mailPanelDefinition.title).toBe('Mail')
+  })
+
+  it('expand target is the Mail full page, hash-router form (email spec §17 chat_link scheme; §1 "Mail full page")', () => {
+    const target = mailPanelDefinition.expandTarget({ workspaceId: 'ws-1' })
+    const s = typeof target === 'string' ? target : String((target as unknown as { to?: string }).to)
+    // The SPA route lives in the hash fragment (createHashHistory) — a
+    // pop-out URL without `/#/` is a gateway path, not the Mail page.
+    expect(s).toContain('/#/workspaces/ws-1/mail')
+  })
+
+  it('carries NO beforeLeave — the CRIT-001 unsaved-edits guard is Library-only (§8.1)', () => {
+    expect(mailPanelDefinition.beforeLeave).toBeUndefined()
+  })
+})

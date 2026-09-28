@@ -24,6 +24,16 @@
 // the beforeLeave rule from §8.1 ("beforeLeave is supplied ONLY by panels
 // with unsaved-edit risk — Library, in wave 1"), the exactly-two rule from
 // SC-002 + §9 wave-1 scope.
+//
+// WAVE 2 AMENDMENT (2026-09-28, RED): side-panel-shell-spec.md §10 "Wave 2 —
+// Mail adopts the shell" + FR-014 move mail INTO the registry ("Adding Mail
+// (wave 2) ... MUST require only a new panel registration plus per-panel
+// narrow layouts — no shell modification"), and §1's panel table already
+// names the mail row: title "Mail", expand target "Mail full page (per email
+// spec)". The wave-1 pins below ("exactly library and browser"; "mail is
+// unregistered") were correct for wave 1 and are WRONG at wave 2 — this
+// commit moves them to the wave-2 state per the spec. tasks/team/calendar
+// stay unregistered (wave 3) and still resolve NOTHING (MAJ-012).
 
 import { describe, expect, it } from 'vitest'
 import type { PanelDefinition } from '@/components/panel-shell/types'
@@ -66,9 +76,13 @@ describe('panel registry — wave-1 registrations (§12 #1, SC-002)', () => {
     expect(panels).not.toBeNull()
   })
 
-  it('registers exactly wave-1 panels: library and browser (SC-002: exactly two real registrations in production wave-1 code)', async () => {
+  it('registers exactly the registered panels — library, browser and mail at wave 2 (spec §10 Wave 2 + FR-014; supersedes the wave-1 exactly-two pin)', async () => {
+    // WAVE 2 (spec §10 "Wave 2 — Mail adopts the shell" + FR-014): mail
+    // joins the production registry as a third registration — no shell
+    // modification. The wave-1 exactly-two pin is superseded by the wave-2
+    // exactly-three state; tasks/team/calendar remain wave 3 (tested below).
     const { panels } = await loadRegistry()
-    expect(panels.map((p) => p.id).sort()).toEqual(['browser', 'library'])
+    expect(panels.map((p) => p.id).sort()).toEqual(['browser', 'library', 'mail'])
   })
 
   it('library resolves: title "Library", and its expand target names the /library pop-out route (§1 panel inventory)', async () => {
@@ -105,9 +119,20 @@ describe('panel registry — wave-1 registrations (§12 #1, SC-002)', () => {
     expect(browser?.beforeLeave).toBeUndefined()
   })
 
-  it('unregistered ids resolve NOTHING — mail/tasks/team/calendar are wave 2/3 (§9 wave-1 scope; an unregistered id is dropped, MAJ-012)', async () => {
+  it('mail resolves: title "Mail", expand target names the Mail full page with the workspace (§1 mail row — "Mail full page (per email spec)"; email spec §17); no beforeLeave (§8.1 — the guard is Library-only)', async () => {
     const { panels } = await loadRegistry()
-    for (const id of ['mail', 'tasks', 'team', 'calendar']) {
+    const mail = panels.find((p) => p.id === 'mail')
+    expect(mail).toBeDefined()
+    expect(mail?.title).toBe('Mail')
+    const target = mail?.expandTarget({ workspaceId: 'ws-1' })
+    const s = typeof target === 'string' ? target : String((target as unknown as { to?: string }).to)
+    expect(s).toContain('/workspaces/ws-1/mail')
+    expect(mail?.beforeLeave).toBeUndefined()
+  })
+
+  it('unregistered ids resolve NOTHING — tasks/team/calendar are wave 3 (MAJ-012: an unregistered id is dropped exactly like an unknown one)', async () => {
+    const { panels } = await loadRegistry()
+    for (const id of ['tasks', 'team', 'calendar']) {
       expect(panels.find((p) => p.id === id)).toBeUndefined()
     }
   })
