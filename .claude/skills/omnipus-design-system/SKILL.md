@@ -390,6 +390,11 @@ controls and no matching boundary fires `new-debt` (CI's "Design system lock aud
 before that job existed, PR #912 was exactly this); a folder/wildcard boundary path fires `blanket-directory`;
 `npm run lint:design-system-locks` runs the scanner half locally.
 
+## 16. Avoid inline styles
+
+Avoid inline styles (`style={...}` in JSX, `style="..."` in markup) in Omnipus's own app
+code. Use design-system classes and tokens instead.
+
 ## Escape hatches, all of them
 
 | Situation | Escape hatch | Condition |
