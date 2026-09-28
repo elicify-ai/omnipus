@@ -59,10 +59,17 @@ func setPreviewStaticHeaders(w http.ResponseWriter, mode1 bool, mainOrigin, pref
 // prefix (no trailing slash), wsOrigin the ws:// form of the same authority.
 // This function IS the static tripwire — do not reformat, reorder, or
 // "normalize" it; the trailing "\n" per directive is part of the template.
+//
+// style-src carries 'unsafe-inline' per the founder ruling of 2026-09-28:
+// "omnipus must not have inline styles, however content that can be previewed
+// on the preview address can" — a previewed document's inline <style> elements
+// and style= attributes are previewed content, not Omnipus app chrome. Every
+// other directive is unchanged. Omnipus's own app CSP (the SPA embed) keeps
+// its own, separate style policy.
 func buildPreviewCSP(origin, wsOrigin, prefix string) string {
 	return "default-src 'none';\n" +
 		"script-src " + origin + prefix + " 'unsafe-inline' 'unsafe-eval';\n" +
-		"style-src " + origin + prefix + ";\n" +
+		"style-src " + origin + prefix + " 'unsafe-inline';\n" +
 		"img-src " + origin + prefix + " data:;\n" +
 		"font-src " + origin + prefix + " data:;\n" +
 		"media-src " + origin + prefix + ";\n" +

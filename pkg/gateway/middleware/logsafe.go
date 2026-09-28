@@ -10,6 +10,7 @@
 package middleware
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 )
@@ -25,16 +26,24 @@ func safeLogString(value string) string {
 // user-driven log sink today. Extend level by level as sites convert.
 func logsafeWarn(msg string, args ...any) { slog.Warn(msg, safeLogArgs(args)...) }
 
-// safeLogArgs escapes string and error values, keeping other kinds
-// machine-readable.
+// safeLogArgs makes request-derived values safe for structured logs: strings,
+// errors, []string slices, and fmt.Stringer values all end in safeLogString —
+// no user-supplied value can forge a log record ending (fix11, CodeQL
+// go/log-injection) — while numbers and booleans stay machine-readable.
 func safeLogArgs(args ...any) []any {
 	safe := make([]any, 0, len(args))
 	for _, arg := range args {
 		switch value := arg.(type) {
+		case nil:
+			safe = append(safe, value)
 		case string:
 			safe = append(safe, safeLogString(value))
 		case error:
 			safe = append(safe, safeLogString(value.Error()))
+		case []string:
+			safe = append(safe, safeLogString(strings.Join(value, ", ")))
+		case fmt.Stringer:
+			safe = append(safe, safeLogString(value.String()))
 		default:
 			safe = append(safe, value)
 		}
