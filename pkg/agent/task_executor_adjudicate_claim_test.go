@@ -526,3 +526,68 @@ func TestLegacyCriterialessTaskStillRuns_GOALFR023(t *testing.T) {
 		})
 	}
 }
+
+// TestTaskExecutor_AdjudicateClaim_ConcurrencyBackoffStandsDownWithoutRetry
+// is the #989 task-scope follow-up (#989 final report, Notes 1): the retry
+// loop in adjudicateRunClaim used to treat ANY Unavailable — including a
+// verifier concurrency back-off — as retryable, burning retries and
+// false-failing the task after judgeUnavailableRetryBound consecutive
+// back-offs. A back-off is contention, not an outage: another adjudication
+// for this unit is in flight and will resolve the task, so the loop must
+// stand down at the FIRST back-off — no retry (G-1: a second Judge
+// invocation for the same claim would be a second pipeline), no bound
+// counting, no try consumed, task stays in_progress with a visible reason.
+func TestTaskExecutor_AdjudicateClaim_ConcurrencyBackoffStandsDownWithoutRetry(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{
+			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
+		}, nil
+	}}
+	judgeInst.Provider = fake
+
+	// Every Register call rejects — stands in for a concurrent winner
+	// adjudication holding the verifier unit.
+	SetVerifierSessionRegistry(&casRejectionRegistrySpy{})
+	t.Cleanup(func() { SetVerifierSessionRegistry(nil) })
+
+	taskStore := GetTaskStore(al)
+	tk := &task.Task{
+		ID: "t-backoff-standdown", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "back-off stand-down",
+		Status:   task.StatusInProgress,
+		Criteria: []task.AcceptanceCriterion{proseCriterion("c1", "must do X")},
+	}
+	if err := taskStore.Create(tk); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	state := &taskRunState{}
+	step, _, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "I finished the thing", nil, state)
+
+	// G-1: the Judge must never be re-invoked for a backed-off claim — the
+	// rejection happens before the provider call, and no retry may follow.
+	if fake.callCount() != 0 {
+		t.Fatalf("judge provider calls = %d, want 0 — a back-off stands down, never retries", fake.callCount())
+	}
+	final, err := taskStore.Get(tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != task.StatusInProgress {
+		t.Fatalf("task status = %q (%q), want in_progress — a concurrency back-off is contention, not "+
+			"an outage: it must never false-fail the task after judgeUnavailableRetryBound tries",
+			final.Status, final.Result)
+	}
+	if step != runStepEnded {
+		t.Fatalf("step = %v, want ended — the claim stands down for this run step", step)
+	}
+	if !strings.Contains(final.Result, "Another adjudication") {
+		t.Errorf("task reason = %q, want it to name the contention so the card does not read like a judge outage", final.Result)
+	}
+	if strings.Contains(final.Result, "could not check this task") {
+		t.Errorf("task reason = %q, must not read like the bound-exhausted judge-outage failure", final.Result)
+	}
+	if redispatch != "" {
+		t.Fatalf("redispatch = %q, want empty — no re-drive follows a stand-down", redispatch)
+	}
+}

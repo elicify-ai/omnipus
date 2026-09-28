@@ -537,6 +537,20 @@ func (te *TaskExecutor) adjudicateRunClaim(
 		if !result.Unavailable {
 			break
 		}
+		if result.ConcurrencyBackoff {
+			// #989 task-scope follow-up: a back-off is contention, not an
+			// outage. Another adjudication for this unit is in flight and will
+			// resolve the task, so stand down at the FIRST back-off: no retry
+			// (G-1 exactly-once — a second Judge invocation for the same claim
+			// is a second pipeline), no judgeUnavailableRetryBound counting,
+			// no try consumed, and the task stays in_progress with a visible
+			// reason — never the false "could not check after N tries" failure.
+			logger.InfoCF("task_executor", "goal: verifier contention — the claim stands down, the in-flight adjudication resolves the task",
+				map[string]any{"task_id": t.ID, "judge_try": judgeTry})
+			te.writeTaskReason(t, "Another adjudication for this work is in flight (verifier contention). "+
+				"This claim stands down without consuming a try; the in-flight adjudication resolves the task.")
+			return runStepEnded, "", ""
+		}
 		if !te.taskVerdictStillApplicable(t.ID) {
 			return runStepEnded, "", "" // a Stop ended the task while the Judge was out
 		}
