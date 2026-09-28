@@ -15,8 +15,9 @@
  * reply already showed must still be rendered after the steer lands (pre-fix
  * they collapsed to 0 within one frame) and at turn end.
  *
- * Real-model spec: needs OPENROUTER_API_KEY_CI (UAT provider/model ruling:
- * openrouter + z-ai/glm-5.3-flash; Omnipus sends tools every request), and is
+ * Real-model spec: needs OPENROUTER_API_KEY_CI (model = the central e2e
+ * setting, OMNIPUS_E2E_MODEL — see fixtures/e2e-model.ts; Omnipus sends tools
+ * every request), and is
  * long-running, so it rides the opt-in `e2e` CI gate, not the default map.
  */
 

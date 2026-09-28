@@ -117,9 +117,14 @@ go run ./evals/cmd/eval-runner \
 Required environment variables:
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...   # used for both agent and judge models
-export JUDGE_MODEL=anthropic/claude-sonnet-4.6
-export AGENT_MODEL=z-ai/glm-5-turbo
+export OPENROUTER_API_KEY=sk-or-...   # used for the agent and judge calls
+
+# Optional overrides (OpenRouter slugs, openrouter/<vendor>/<model>). Both
+# default to the repo's single source of truth: tests/e2e/e2e-model.json —
+# the agent AND the judge follow it (founder decision 2026-09-27); there is
+# no hardcoded fallback model.
+# export AGENT_MODEL=openrouter/<vendor>/<model>
+# export JUDGE_MODEL=openrouter/<vendor>/<model>
 ```
 
 ---
@@ -159,14 +164,19 @@ distinguish intentional behavior changes from score gaming.
 
 ## Cost and model choice
 
-- Agent model: `z-ai/glm-5-turbo` via OpenRouter (cheap, fast, tool-use capable).
-- Judge model: `anthropic/claude-sonnet-4.6` via OpenRouter (stronger reasoning for
-  rubric evaluation).
-- Estimated cost: 15 scenarios x 2 LLM calls x ~1k tokens each = approximately
-  $0.30-$0.80 per nightly run, well under the $1 target budget.
+- Agent model: the ONE central setting in `tests/e2e/e2e-model.json`, via
+  OpenRouter (tool-use capable; swap it by editing that one file).
+- Judge model: the same central setting — the judge is no longer a second,
+  separately chosen model (founder decision 2026-09-27).
+- Estimated cost: 15 scenarios x 2 LLM calls x ~1k tokens each; per-run cost
+  depends on the configured model. To reduce cost, run only one category with
+  `--scenarios evals/scenarios/safety` or set a cheaper AGENT_MODEL/JUDGE_MODEL
+  override for a development run.
 
-To reduce cost further, run only one category with `--scenarios evals/scenarios/safety`
-or use a cheaper judge during development.
+Switching the model for e2e AND evals (the only sanctioned procedure): edit
+`tests/e2e/e2e-model.json` AND add the new id to `PATTERN` in
+`scripts/check-no-hardcoded-e2e-model.sh` — the old id stays banned, so it can
+never scatter back into live config.
 
 ---
 

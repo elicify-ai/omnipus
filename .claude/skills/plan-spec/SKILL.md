@@ -13,7 +13,7 @@ allowed-tools: Read, Grep, Glob, Bash, Write, Edit
 
 # Plan & Spec (plan-spec)
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-09-27
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (§7.1, the
 feature-size flow); founder decisions:
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`.
@@ -229,10 +229,13 @@ here is an incomplete spec — fill it before finishing.
    `Approved`, `Implemented`, `Superseded`. A new spec starts `Draft`; plan-spec sets it
    to `In review` once the file is written and ready for grill-spec (the field moves to
    `Approved`/`Implemented`/`Superseded` later, by spec-sync).
-3. If an ADR exists for this feature, the second line links it by title:
-   `ADR: [ADR-NNN — Title](../architecture/ADR-NNN-title.md)`. If no design decision was
-   open, state that plainly instead of a placeholder: `ADR: none — no open design
-   decision`.
+3. If an ADR exists for this feature, the second line links it: the ADR's own
+   filename and title, cited by title, not number alone (root `CLAUDE.md`).
+   architect's file (`.claude/agents/architect.md`, the "ADR naming" bullet)
+   states the current naming rule — cite whatever the ADR is actually named,
+   old-numbered or new-date-based, never invent a placeholder pattern here.
+   If no design decision was open, state that plainly instead of a
+   placeholder: `ADR: none — no open design decision`.
 4. Write the file to `docs/internal/specs/<name>-spec.md`, `<name>` in kebab-case from
    the feature name.
 5. Report to whoever dispatched this skill: the spec path, section counts (user stories,

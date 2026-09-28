@@ -40,7 +40,7 @@ record() {
 LEDGER="$TMP/coordination"
 mkdir -p "$LEDGER/squads"
 
-COMMON_ENV="DEV_CAPACITY_CPU_SAMPLES=1 DEV_CAPACITY_LEDGER_DIR=$LEDGER"
+COMMON_ENV="DEV_CAPACITY_CPU_SAMPLES=1 DEV_CAPACITY_LEDGER_DIR=$LEDGER DEV_CAPACITY_LOAD5_OVERRIDE=0.1"
 
 # ---- case: loose thresholds -> OK ------------------------------------------
 out="$(env $COMMON_ENV \
@@ -95,6 +95,15 @@ record "commented-out row does not raise the in-flight count above the real 3" "
 rm -f "$LEDGER/squads/commented-only.md"
 
 # ---- case: an unmeasurable hard signal exits 2, not a false OK -------------
+# Overload (hard, founder 2026-09-28): a 5-min load above 4x cores holds by itself,
+# and a busy-but-normal load does not.
+out="$(env $COMMON_ENV DEV_CAPACITY_MIN_FREE_MEM_GB=0 DEV_CAPACITY_MIN_FREE_DISK_GB=0 DEV_CAPACITY_MAX_DISPATCHES=999999 DEV_CAPACITY_LOAD5_OVERRIDE=999999 "$SCRIPT" 2>&1)"
+record "overload holds by itself" HOLD "$out"
+printf '%s' "$out" | grep -q "overload: 5-min load" \
+  && echo "PASS: overload reason named" || { echo "FAIL: overload reason missing"; fail_count=$((fail_count+1)); fail=1; }
+out="$(env $COMMON_ENV DEV_CAPACITY_MIN_FREE_MEM_GB=0 DEV_CAPACITY_MIN_FREE_DISK_GB=0 DEV_CAPACITY_MAX_DISPATCHES=999999 DEV_CAPACITY_LOAD5_OVERRIDE=0.5 "$SCRIPT" 2>&1)"
+record "normal load does not hold" OK "$out"
+
 out="$(env $COMMON_ENV DEV_CAPACITY_OS_OVERRIDE=UnknownTestOS "$SCRIPT" 2>&1)"
 code=$?
 if [ "$code" -eq 2 ]; then

@@ -1531,9 +1531,11 @@ components:
       description: >
         Response from GET /api/v1/integrations/providers. Lists every
         configurable search and voice-input integration provider (FR-12.1),
-        plus which provider is currently active for each kind. Defined inline so
-        the search/voice arrays reference the shared IntegrationProvider
-        component (a relative file $ref would inline as anonymous structs).
+        plus which provider is currently active for each kind. ADR-096: search
+        rows additionally carry the resolved web-search roles — the default, the
+        resolved fallback, and each row's usability. Defined inline so the
+        search/voice arrays reference the shared IntegrationProvider component
+        (a relative file $ref would inline as anonymous structs).
       required:
         - search
         - voice
@@ -1551,12 +1553,48 @@ components:
             $ref: '#/components/schemas/IntegrationProvider'
         active_search:
           type: string
-          description: id of the currently active search provider, when one is selected.
+          description: >
+            id of the currently active search provider, when one is selected.
+            ADR-096: for search rows this mirrors default_search — kept so an
+            older client still has the field.
           example: "brave"
         active_voice:
           type: string
           description: id of the currently active voice transcriber, when one is configured.
           example: "elevenlabs"
+        default_search:
+          type: string
+          description: >
+            id of the web-search default — the provider tried first (ADR-096 D4).
+            Absent when the roles are not yet decided (the migration has not run,
+            e.g. it deferred on an ambiguous install).
+          example: "tavily"
+        fallback_search:
+          type: string
+          nullable: true
+          description: >
+            id of the resolved web-search fallback, or null when there is none
+            ("No fallback", or the stored value is absent with no automatic
+            fallback). Absent when the roles are not yet decided.
+          example: "duckduckgo"
+        fallback_ignored_reason:
+          type: string
+          description: >
+            Present only when the stored fallback was ignored at resolution time;
+            value `same_as_default` when the stored fallback names the default and
+            the R5 rule healed the file's interpretation without a write (ADR-096
+            D4 R5).
+          example: "same_as_default"
+        native_search_in_effect:
+          type: boolean
+          description: >
+            True when the active model's native search is in effect (prefer_native
+            is set and the active provider reports native search). The search
+            group's role settings are then not deciding who answers, and the UI
+            must state that and name no provider as the answerer (ADR-096 D19,
+            FR-031). WS-CX lane addition: FR-031/test 52 require this state on the
+            payload but the spec's Contract shape section does not define it.
+          example: false
     IntegrationProviderUpdateRequest:
       $ref: ./components/schemas/IntegrationProviderUpdateRequest.yaml
     TranscribeResponse:
@@ -2420,7 +2458,7 @@ paths:
     get:
       operationId: getIntegrationProviders
       summary: List configurable search and voice-input integration providers
-      description: 'Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+      description: 'Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. ADR-096: the response also carries the resolved web-search roles (default_search, fallback_search) and each search row reports usable and its fallback flags, built from post-reload state. Requires authentication.
 
         '
       tags:
@@ -2442,7 +2480,7 @@ paths:
     put:
       operationId: updateIntegrationProvider
       summary: Configure a search or voice-input integration provider
-      description: 'Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
+      description: 'Stores an API key and/or assigns the provider its role (FR-12.1). ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none ("No fallback"), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 ("needs an API key"). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
 
         '
       tags:

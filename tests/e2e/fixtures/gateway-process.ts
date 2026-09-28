@@ -39,8 +39,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { request, type APIRequestContext } from '@playwright/test';
 import { getFreePort, waitForHealth, DEFAULT_OMNIPUS_BINARY } from '../setup.js';
-
-const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
+import { E2E_MODEL } from './e2e-model.js';
 
 export interface ApiResult<T> {
   ok: boolean;
@@ -54,6 +53,17 @@ export interface GatewayProcessOptions {
   adminUsername?: string;
   adminPassword?: string;
   model?: string;
+  /**
+   * provider-messages row 20: explicit provider base URL passed through to
+   * onboarding as `provider.endpoint` (the OnboardingProviderApiKey wire
+   * field — contracts/components/schemas/OnboardingProviderApiKey.yaml).
+   * The onboarding key probe (rest_onboarding.go: probeBase resolves
+   * variant.Endpoint ahead of the catalog default) then goes to THIS base
+   * instead of the real vendor, so a spec can point the whole install at a
+   * local mock provider. Omitted → behaviour identical to before (no
+   * endpoint sent).
+   */
+  apiBase?: string;
   /** Extra gateway args (default: ['--sandbox=off'], mirroring setup.ts —
    * this is an isolated throwaway OMNIPUS_HOME, never the developer's real
    * one, so a permissive sandbox is safe and keeps the boot-sweep proof
@@ -86,6 +96,8 @@ export class GatewayProcess {
   readonly baseURL: string;
   readonly adminUsername: string;
   readonly adminPassword: string;
+  /** provider-messages row 20: api_base passed to onboarding ('' = not set). */
+  readonly apiBase: string;
 
   private readonly binary: string;
   private readonly extraArgs: string[];
@@ -96,13 +108,14 @@ export class GatewayProcess {
   private csrfToken = '';
 
   private constructor(
-    opts: { binary: string; adminUsername: string; adminPassword: string; model: string; extraArgs: string[]; extraEnv: Record<string, string> },
+    opts: { binary: string; adminUsername: string; adminPassword: string; model: string; apiBase: string; extraArgs: string[]; extraEnv: Record<string, string> },
     homeDir: string,
     port: number,
   ) {
     this.binary = opts.binary;
     this.adminUsername = opts.adminUsername;
     this.adminPassword = opts.adminPassword;
+    this.apiBase = opts.apiBase;
     this.model = opts.model;
     this.extraArgs = opts.extraArgs;
     this.extraEnv = opts.extraEnv;
@@ -135,7 +148,8 @@ export class GatewayProcess {
         binary,
         adminUsername: opts.adminUsername ?? 'admin',
         adminPassword: opts.adminPassword ?? 'admin1234',
-        model: opts.model ?? DEFAULT_MODEL,
+        model: opts.model ?? E2E_MODEL,
+        apiBase: opts.apiBase ?? '',
         extraArgs: opts.extraArgs ?? ['--sandbox=off'],
         extraEnv: opts.env ?? {},
       },
@@ -205,7 +219,19 @@ export class GatewayProcess {
     try {
       const res = await onboardCtx.post('/api/v1/onboarding/complete', {
         data: {
-          provider: { auth_method: 'api_key', id: 'openrouter', api_key: apiKey, model: this.model },
+          provider: {
+            auth_method: 'api_key',
+            id: 'openrouter',
+            api_key: apiKey,
+            model: this.model,
+            // provider-messages row 20: an explicit endpoint rides the same
+            // onboarding contract (OnboardingProviderApiKey.endpoint —
+            // contracts/components/schemas/OnboardingProviderApiKey.yaml;
+            // rest_onboarding.go reads variant.Endpoint and persists it as
+            // the provider entry's api_base; probeBase prefers it) — when
+            // set, the key probe AND every later chat call go to this base.
+            ...(this.apiBase ? { endpoint: this.apiBase } : {}),
+          },
           admin: { username: this.adminUsername, password: this.adminPassword },
         },
       });

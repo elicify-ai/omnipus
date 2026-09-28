@@ -350,6 +350,17 @@ func executeReload(
 		markDegraded(err)
 		return err
 	}
+	// ADR-096 D11 / FR-030: mirror bootCredentials' migration after
+	// InjectFromConfig has made provider keys visible and before the agent
+	// loop rebuilds its tools. Register the migration write so the config
+	// watcher recognizes it as internal and does not trigger another reload.
+	if runningServices != nil && runningServices.restAPIRef != nil {
+		config.MigrateWebSearchRoles(
+			newCfg,
+			runningServices.restAPIRef.configPath(),
+			selfHealWriteHook(runningServices.selfWriteReg),
+		)
+	}
 	if err := handleConfigReload(
 		ctx,
 		agentLoop,

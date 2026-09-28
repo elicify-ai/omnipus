@@ -133,8 +133,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
    * scan with early-exit, strictly dominated by the getMessages() O(N)
    * build already happening here.
    */
-  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null } {
-    const rest = omitKeys(bucket, ['messageOrder', 'trimmedCount', 'spanBySpanId', 'pendingSpanUpdatesBySpanId', 'toolCallOwnerMessageId'] as const)
+  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId' | 'providerFallbackPairsSeen'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null } {
+    const rest = omitKeys(bucket, ['messageOrder', 'trimmedCount', 'spanBySpanId', 'pendingSpanUpdatesBySpanId', 'toolCallOwnerMessageId', 'providerFallbackPairsSeen'] as const)
     return {
       ...rest,
       messages: getMessages(bucket),
@@ -783,7 +783,7 @@ export function syncChatForeground(): void {
     const fg = (activeSid ? state.sessionsById[activeSid] : null) ?? EMPTY_BUCKET
     // Project messageOrder+messagesById → messages for foreground consumers
     // (messagesById itself passes through as-is — see bucketToForeground).
-    const rest = omitKeys(fg, ['messageOrder', 'trimmedCount', 'spanBySpanId', 'pendingSpanUpdatesBySpanId', 'toolCallOwnerMessageId'] as const)
+    const rest = omitKeys(fg, ['messageOrder', 'trimmedCount', 'spanBySpanId', 'pendingSpanUpdatesBySpanId', 'toolCallOwnerMessageId', 'providerFallbackPairsSeen'] as const)
     return { ...rest, messages: getMessages(fg) }
   })
 }

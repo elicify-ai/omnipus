@@ -12,8 +12,11 @@ Add each secret under **Settings > Secrets and variables > Actions > Repository 
 Used by the Playwright E2E job to start the Omnipus gateway with a live LLM
 backend so that chat and agent tests receive real (not mocked) responses.
 
-**Recommended model:** `z-ai/glm-5-turbo` or `google/gemini-2.5-flash` via
-OpenRouter — both support tool use and cost well under $0.01 per Playwright run.
+**Recommended model:** not set here anymore — the model is centralized in
+`tests/e2e/e2e-model.json` (one committed source of truth, currently a DeepSeek
+model; the guard `scripts/check-no-hardcoded-e2e-model.sh` bans model-id
+literals in live config). Changing the model is a one-line change to that file.
+Tool-use capability and per-run cost should be re-checked when it changes.
 
 **Suggested monthly cap:** $5. Set a usage limit in your OpenRouter dashboard
 under the key's settings to prevent runaway spend if a CI job loops.
@@ -28,11 +31,13 @@ reuse a key that has billing-write or organisation-admin scope.
 ### `OPENROUTER_API_KEY_EVAL`
 
 Used by the nightly eval runner for two calls per scenario: one to the agent
-model (`z-ai/glm-5-turbo` or `google/gemini-2.5-flash`) and one to the judge
-model (`anthropic/claude-sonnet-4.6`). 15 scenarios per run ≈ $0.30–$0.80/night.
+model and one to the judge model — both follow the ONE central setting in
+`tests/e2e/e2e-model.json` (currently a DeepSeek model), as does the Playwright
+e2e job. Cost depends on the configured model; the runner fails the workflow
+above $2.00 in a single run.
 
 This can be the same key as `OPENROUTER_API_KEY_CI` or a separate key with a
-higher monthly cap (suggested: $25) to accommodate the stronger judge model.
+higher monthly cap (suggested: $25).
 
 ### `OMNIPUS_MASTER_KEY_EVAL`
 
@@ -51,9 +56,9 @@ Copy the output (exactly 64 hex chars, 0-9 / a-f) into the secret value.
 
 ### Budget
 
-The nightly eval run is designed to cost $0.30–$0.80 per run against the
-default 15 scenarios. The runner exits non-zero and fails the workflow if
-cost exceeds $2.00 in a single run.
+The nightly eval runs the default 15 scenarios with two LLM calls each; the
+runner exits non-zero and fails the workflow if cost exceeds $2.00 in a single
+run. Per-run cost depends on the model configured in `tests/e2e/e2e-model.json`.
 
 ---
 

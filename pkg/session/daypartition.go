@@ -37,6 +37,12 @@ const (
 	EntryTypeSystem EntryType = "system"
 	// EntryTypeToolCall marks a tool invocation entry.
 	EntryTypeToolCall EntryType = "tool_call"
+	// EntryTypeProviderFallback marks the §7.4 fallback-model note entry:
+	// the once-per-(session, pair) "Answered by the Fallback model ..." note
+	// persisted after the assistant answer (MIN-103), with the pair facts
+	// (unavailable/answered models, unavailable_code) the replay carrier
+	// (replay_provider_fallback) renders back on session reload.
+	EntryTypeProviderFallback EntryType = "provider_fallback"
 	// EntryTypeTurnCancelled marks the JSONL entry written when a turn is canceled
 	// mid-stream. Written once per fired cancel to transcript.jsonl (FR-15).
 	EntryTypeTurnCancelled EntryType = "turn_canceled"
@@ -273,6 +279,21 @@ type TranscriptEntry struct {
 	ErrorCode string `json:"error_code,omitempty"`
 	// ErrorRetryable is the translated LLMError.retryable flag.
 	ErrorRetryable bool `json:"error_retryable,omitempty"`
+	// UnavailableModel / UnavailableCode carry the §7.4 fallback-note pair
+	// facts on an EntryTypeProviderFallback entry (unavailable_code gates
+	// the D12 pick-a-new-model hint; the models name the §6 note's slots).
+	// Empty on every other entry type.
+	UnavailableModel string `json:"unavailable_model,omitempty"`
+	UnavailableCode  string `json:"unavailable_code,omitempty"`
+	// ProviderMessage is the provider-messages spec §12/MAJ-104/C-14
+	// persisted marker: true when this error entry's content is the §6
+	// assembled sentence (a §6 template applied with the failing
+	// attempt's identity). Written by the agent's provider stage
+	// (pkg/agent/turn_transcript.go::persistErrorTranscript) and
+	// round-tripped by the replay path (pkg/gateway/replay.go::
+	// buildReplayErrorFrame) so the SPA renders the persisted entry
+	// exactly like the live frame.
+	ProviderMessage bool `json:"provider_message,omitempty"`
 	// CacheReadTokens and CacheWriteTokens carry the provider cache split for
 	// this assistant turn. Both are 0 for non-assistant entries and for legacy
 	// entries written before Wave 1 token tracking. Used to accumulate

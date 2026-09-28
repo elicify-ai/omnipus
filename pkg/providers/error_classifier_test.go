@@ -117,11 +117,15 @@ func TestClassifyError_OverloadedPatterns(t *testing.T) {
 }
 
 func TestClassifyError_BillingPatterns(t *testing.T) {
+	// C-5 vocabulary (spec §7.3, MAJ-106): exactly these unambiguous
+	// account-state phrases. "plans & billing" was deliberately dropped from
+	// billingPatterns — it is a substring of OpenAI's rate-limit quota prose
+	// ("check your plan and billing details" is a RATE LIMIT), not a billing
+	// marker (dataset D2's B-2 negative row).
 	patterns := []string{
 		"payment required",
 		"insufficient credits",
 		"credit balance too low",
-		"plans & billing page",
 		"insufficient balance",
 	}
 
@@ -135,6 +139,13 @@ func TestClassifyError_BillingPatterns(t *testing.T) {
 		if result.Reason != FailoverBilling {
 			t.Errorf("pattern %q: reason = %q, want billing", msg, result.Reason)
 		}
+	}
+
+	// The dropped phrase alone carries no billing marker and no rate-limit
+	// marker: ClassifyError must not read it as billing (B-2 negative).
+	err := errors.New("plans & billing page")
+	if result := ClassifyError(err, "openai", "gpt-4"); result != nil {
+		t.Errorf("dropped phrase %q must not classify as billing, got %+v", "plans & billing page", result)
 	}
 }
 
@@ -308,26 +319,31 @@ func TestClassifyError_ConnectionDropTriggersInlineRetry(t *testing.T) {
 	}
 }
 
-func TestClassifyError_NoEndpointsFoundStillFatal(t *testing.T) {
-	// "404 No endpoints found" is a genuinely-fatal routing error (model/route
-	// missing). It must NOT be reclassified as retriable by the new connection-drop
-	// patterns. It carries no error-context word before 404, so extractHTTPStatus
-	// returns 0 and no message pattern matches → nil (loop breaks, no retry).
+// TestClassifyError_Status404Routing covers both 404 forms after the D12
+// decision (provider-messages spec): the bare "404 No endpoints found" form —
+// no error-context word before the number — still extracts no status and
+// matches no message pattern → nil, the loop breaks without retry (its
+// "genuinely-fatal routing error" premise is intact). The explicit
+// "status: 404" form now routes FailoverUnknown (retriable) so the chain
+// falls back to the configured Fallback model on a retired-model 404
+// instead of aborting ("every 404 now falls back ... intended", spec D12).
+func TestClassifyError_Status404Routing(t *testing.T) {
+	// Bare form: still fatal (nil) — no status extraction, no pattern match.
 	err := errors.New("404 No endpoints found for z-ai/glm-5-turbo")
 	result := ClassifyError(err, "openrouter", "z-ai/glm-5-turbo")
 	if result != nil {
-		t.Errorf("expected nil (fatal, non-retriable), got %+v", result)
+		t.Errorf("bare 404 form must stay fatal (nil), got %+v", result)
 	}
 
-	// The explicit "status: 404" form: 404 is not in classifyByStatus and matches
-	// no message pattern, so it classifies as nil (loop breaks — non-retriable).
-	// The new connection-drop set must not change that to a retriable timeout.
-	// Assert the result is strictly nil (the prior `!= nil && ... == FailoverTimeout`
-	// form passed vacuously when result2 was nil).
+	// Explicit "status: 404" form: retriable FailoverUnknown (D12) so the
+	// chain falls back instead of aborting.
 	err2 := errors.New("status: 404 model not found")
 	result2 := ClassifyError(err2, "openrouter", "z-ai/glm-5-turbo")
-	if result2 != nil {
-		t.Errorf("status:404 must be non-retriable (nil), got %+v", result2)
+	if result2 == nil {
+		t.Fatalf("status:404 must classify FailoverUnknown (D12), got nil")
+	}
+	if result2.Reason != FailoverUnknown {
+		t.Errorf("status:404 reason = %q, want unknown (retriable, D12)", result2.Reason)
 	}
 }
 

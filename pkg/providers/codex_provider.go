@@ -29,11 +29,27 @@ type CodexProvider struct {
 const defaultCodexInstructions = "You are Codex, a coding assistant."
 
 func NewCodexProvider(token, accountID string) *CodexProvider {
+	return newCodexProviderWithBaseURL(token, accountID, "https://chatgpt.com/backend-api/codex")
+}
+
+// newCodexProviderWithBaseURL is the construction seam behind
+// NewCodexProvider: every shared client option lives here — including D13's
+// option.WithMaxRetries(0) — so the retry posture cannot drift between the
+// production constructor and a test pointing the provider at a local
+// request-counting server. apiBase is the Codex backend base URL verbatim.
+func newCodexProviderWithBaseURL(token, accountID, apiBase string) *CodexProvider {
 	opts := []option.RequestOption{
-		option.WithBaseURL("https://chatgpt.com/backend-api/codex"),
+		option.WithBaseURL(apiBase),
 		option.WithAPIKey(token),
 		option.WithHeader("originator", "codex_cli_rs"),
 		option.WithHeader("OpenAI-Beta", "responses=experimental"),
+		// D13: the chain owns every retry decision (§7.4's in-chain
+		// rate-limit loop reads the provider's own retry-after fact). An
+		// SDK-internal retry would double-attack a rate-limited candidate
+		// and hide the boundary error whose headers carry the retry-after
+		// fact — so the SDK's default 2 retries are disabled here and the
+		// boundary error reaches the chain verbatim.
+		option.WithMaxRetries(0),
 	}
 	if accountID != "" {
 		opts = append(opts, option.WithHeader("Chatgpt-Account-Id", accountID))

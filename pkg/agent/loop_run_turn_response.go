@@ -225,6 +225,39 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 	// the normal ClassifyError → isTimeoutError retry path below.
 	var exhaustedErr *providers.FallbackExhaustedError
 	if errors.As(cr.rr.rq.ri.rf.err, &exhaustedErr) {
+		// F1 interaction (§7.4): the chain's in-place retry is rate-limit-only
+		// (C-8), so a single-candidate chain concludes ANY timeout-class
+		// failure — a real deadline, a GOAWAY, an http2 body-closed drop — as
+		// FallbackExhaustedError after one marked attempt. On release/v0.1.1
+		// this error reached classifyFailure as the RAW transport error and
+		// the loop's inline timeout recovery owned it (FR-019 recall-span
+		// eviction, the retry event, the BoundaryRetryNotice audience
+		// decision, and the timed_out turn classification). Unwrap to the
+		// underlying transport error and let that machinery run exactly as it
+		// would have without the chain. Multi-candidate chains keep the
+		// exhaustion semantics below — the chain DID try every candidate.
+		if len(cr.rr.rq.ri.rf.rt.activeCandidates) == 1 {
+			var lastTimeoutErr error
+			allTimeout := len(exhaustedErr.Attempts) > 0
+			for _, a := range exhaustedErr.Attempts {
+				if a.Skipped {
+					// A cooldown/D14 skip is not a transport timeout; the
+					// exhaustion conclusion did not rest on a real attempt.
+					allTimeout = false
+					break
+				}
+				fe := providers.ClassifyError(a.Error, a.Provider, a.Model)
+				if fe == nil || fe.Reason != providers.FailoverTimeout {
+					allTimeout = false
+					break
+				}
+				lastTimeoutErr = a.Error
+			}
+			if allTimeout && lastTimeoutErr != nil {
+				cr.rr.rq.ri.rf.err = lastTimeoutErr
+				return agentLoopRunTurnResponseCallLLMWithRetriesNext
+			}
+		}
 		// Check whether every failed attempt was a transient stream reset.
 		// Skipped-cooldown entries (Skipped==true) are not counted as
 		// streaming failures; we only need all *attempted* calls to have
@@ -685,9 +718,12 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 			},
 		)
 		// FR-002: persist the translated provider error to the transcript
-		// (write choke point — ADR-051 §RD5). pe threaded through so the
-		// classifier sees status/body, not the stringified err.
-		rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+		// through the provider stage — the trusted set entry {"provider",
+		// "error"} preserves the ASSEMBLED §6 sentence verbatim
+		// (MAJ-001/C-13) and persistErrorTranscript flags the entry
+		// (MAJ-104/C-14). pe threaded through so the classifier sees
+		// status/body, not the stringified err.
+		rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "provider", llm)
 		logger.ErrorCF("agent", "LLM call failed",
 			map[string]any{
 				"agent_id":  rr.rq.ri.rf.rt.ts.agent.ID,

@@ -145,6 +145,22 @@ const (
 	// exactly like EventKindSubagentMessage.
 	EventKindSubagentState
 
+	// EventKindProviderRetry (provider-messages spec §7.4, C-8/MAJ-102) is
+	// emitted by the fallback chain's per-candidate retry loop every time
+	// it is ABOUT to re-call the same candidate after a rate-limit class
+	// failure. The hub forwards it as a provider_retry frame built from
+	// the payload's named fields only (C-2/MAJ-015: never the raw error
+	// text — LLMRetryPayload.Error stays log-only).
+	EventKindProviderRetry
+
+	// EventKindProviderFallback (provider-messages spec §7.4, MIN-102/
+	// MIN-103/C-18) is emitted when a fallback candidate ANSWERED after
+	// the primary was unavailable — including the cooldown-skip path
+	// (C-18). The hub forwards it as a provider_fallback frame and the
+	// transcript note is persisted once per session per (unavailable,
+	// answered) pair (derived from the transcript, per-turn scoped).
+	EventKindProviderFallback
+
 	eventKindCount
 )
 
@@ -187,6 +203,8 @@ var eventKindNames = [...]string{
 	"judge_verdict",
 	"subagent_message",
 	"subagent_state",
+	"provider_retry",
+	"provider_fallback",
 }
 
 // String returns the stable string form of an EventKind.
@@ -347,6 +365,18 @@ type LLMRetryPayload struct {
 	Reason     string
 	Error      string
 	Backoff    time.Duration
+
+	// Provider-messages spec §7.2/§7.4 (C-11/MAJ-108): the failing
+	// attempt's identity, the wall-clock times the retry frame renders,
+	// the per-turn attempt cap, and the session the frame is scoped to.
+	// Additive — existing producers keep zero values and the delegated
+	// path stays dark (§13: no provider_retry frame for it).
+	Provider    string
+	Model       string
+	RetryAt     time.Time
+	SentAt      time.Time
+	MaxAttempts int
+	SessionID   string
 }
 
 // ContextCompressReason identifies why emergency compression ran.
@@ -917,6 +947,20 @@ type SubagentMessagePayload struct {
 	MessageID string
 	// Frame is the wire shape itself, identical to the persisted entry's.
 	Frame generated.SubagentMessageFrame
+}
+
+// ProviderFallbackPayload is EventKindProviderFallback's payload
+// (provider-messages spec §7.4): the fallback candidate answered after the
+// primary candidate was unavailable. AnsweredModel/UnavailableModel are
+// model ids; UnavailableCode is "rate_limited" or "model_retired" (the two
+// unavailable-classes the frame's contract allows). SessionID is the
+// session the frame and the transcript note are scoped to.
+type ProviderFallbackPayload struct {
+	SessionID        string
+	TurnID           string
+	AnsweredModel    string
+	UnavailableModel string
+	UnavailableCode  string
 }
 
 // SubagentStatePayload is EventKindSubagentState's payload: one lifecycle

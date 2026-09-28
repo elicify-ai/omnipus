@@ -1,20 +1,20 @@
 import { type APIRequestContext, request } from '@playwright/test';
+import { E2E_MODEL } from './e2e-model.js';
 
 const DEFAULT_PROVIDER_ID = 'openrouter';
-// deepseek/deepseek-v4.1-flash — the project's standard model for all e2e tests (mirrored in the
-// Fly CI runner's runci.sh e2e config). The previous google/gemini-2.5-flash
-// pick degraded on OpenRouter (empty responses + "http2: response body closed"
-// stream drops → turns never completed → Bug-3/Bug-5/T24/media all failed), so
-// it was swapped for deepseek-v4.1-flash, a live, reliable, tool-capable model. Determinism
+// The model all e2e tests run on is the ONE central setting,
+// tests/e2e/e2e-model.json, threaded through fixtures/e2e-model.ts (mirrored
+// in the Fly CI runner's runci.sh e2e config). Determinism
 // for "exactly N tool calls" subagent assertions is enforced via the
 // temperature=0 + seed=42 plumbing the suite already passes through to
 // OpenRouter, not by the model alone.
 //
 // NOTE: the nightly evals (.github/workflows/evals-nightly.yml +
-// evals/cmd/eval-runner/main.go) intentionally stay on z-ai/glm-5-turbo (a LIVE
-// model whose eval baselines depend on it) — the E2E-vs-evals difference is
-// deliberate.
-const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
+// evals/cmd/eval-runner/main.go) follow the SAME central setting: both the
+// evals agent and the judge derive AGENT_MODEL/JUDGE_MODEL from
+// tests/e2e/e2e-model.json (founder decision 2026-09-27, wired in
+// evals-nightly's "Read central e2e model" step), so tests and evals
+// cannot drift apart on which model they run.
 const DEFAULT_USERNAME = 'admin';
 const DEFAULT_PASSWORD = 'admin123';
 
@@ -89,7 +89,7 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
           auth_method: 'api_key',
           id: opts.providerID ?? DEFAULT_PROVIDER_ID,
           api_key: apiKey,
-          model: opts.model ?? DEFAULT_MODEL,
+          model: opts.model ?? E2E_MODEL,
         },
         admin: {
           username: opts.username ?? DEFAULT_USERNAME,

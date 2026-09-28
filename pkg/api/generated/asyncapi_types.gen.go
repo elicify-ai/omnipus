@@ -717,16 +717,26 @@ type KnowledgeIndexProgressFrame struct {
 type LLMError struct {
 	Code string `json:"code"`
 	// Live-only technical detail; never persisted or replayed.
-	Detail    *string `json:"detail,omitempty"`
-	Message   string  `json:"message"`
-	Retryable bool    `json:"retryable"`
+	Detail *string `json:"detail,omitempty"`
+	// Structured facts about the FAILING attempt, assembled server-side (provider-messages spec §7.1 item 1). All fields optional — facts absent means the catalogue sentence renders. Deliberately closed to provider/model/request_id ONLY — no retry_after_seconds, no retry_at, no attempts, no max_attempts (OBS-103 — the SPA has no consumer for retry facts on the error frame; retry timing lives on the provider_retry frame, whose consumer is the indicator), no billing_url (D6), no error_id (no fetch path — §5/D1).
+	Facts *struct {
+		Model     *string `json:"model,omitempty"`
+		Provider  *string `json:"provider,omitempty"`
+		RequestId *string `json:"request_id,omitempty"`
+	} `json:"facts,omitempty"`
+	Message string `json:"message"`
+	// Server-authored subtype/trust flag (MAJ-104, C-14) — when true, `message` carries the server-assembled provider-message sentence and the SPA renders it; when absent or false, the SPA keeps today's catalogue-copy rendering keyed on `code` (e.g. the own-limiter's internal rate_limited text — RG-2). Set at write time by the agent's assembly path; the replay shape carries the same flag so a reloaded session renders identically.
+	ProviderMessage *bool `json:"provider_message,omitempty"`
+	Retryable       bool  `json:"retryable"`
 }
 
 // LLMErrorReplay — Replay-safe translated provider/LLM error with live-only detail omitted.
 type LLMErrorReplay struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	// Server-authored subtype/trust flag (MAJ-104, C-14), replay twin of the live LLMError flag — when true, `message` carries the persisted provider-message sentence and the SPA renders it after reload; when absent or false, catalogue copy keyed on `code`, byte-identical to today (RG-2). No `facts` object on the replay shape (§7.1 item 3 — the persisted message itself carries the provider naming, C-13).
+	ProviderMessage *bool `json:"provider_message,omitempty"`
+	Retryable       bool  `json:"retryable"`
 }
 
 // LibraryChangedFrame — Server → client (D-107, cross-tab listing invalidation). Emitted by the Library REST write handlers after a mutation has landed, so every OTHER connected tab can drop its stale folder listing and refetch. Scope is deliberately coarse: clients invalidate every cached listing query for the named workspace; `path` and `reason` are informational (debugging, future refinement), never a scoping instruction. Broadcast, not addressed — the originating tab receives it too, where its own local invalidation makes the redundant one a no-op.
@@ -852,6 +862,47 @@ type PlanStatusFrame struct {
 // PongFrame — Server → client heartbeat acknowledgement. Emitted in response to every client PingFrame so the SPA's "any frame received recently" liveness check observes a server frame during idle and does not force-close after 60 s of silence.
 type PongFrame struct {
 	Type string `json:"type"`
+}
+
+// ProviderFallbackFrame — Server → client (provider-messages spec §7.1 item 3). Announces that a turn was answered by the fallback model because another candidate could not answer — the frame itself does NOT distinguish hard provider trouble from a cooldown skip (that distinction lives only in the once-per-pair note rate and the session transcript, C-18/MIN-103). No raw error text and no `reason` field (OBS-103) — unavailable_code is the one field that varies rendered text (D12 hint gate). Keep in sync by hand with contracts/components/schemas/ProviderFallbackFrame.yaml.
+type ProviderFallbackFrame struct {
+	AnsweredModel string `json:"answered_model"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ProviderFallbackFrame.yaml.
+	Seq              *int64 `json:"seq,omitempty"`
+	SessionId        string `json:"session_id"`
+	TurnId           string `json:"turn_id"`
+	Type             string `json:"type"`
+	UnavailableCode  string `json:"unavailable_code"`
+	UnavailableModel string `json:"unavailable_model"`
+}
+
+// ProviderFallbackNote — Server → client. Replay carrier for a persisted fallback-model note (provider-messages spec §7.1 item 2, MAJ-010/C-17) — the note is persisted to the session transcript after the assistant answer (MIN-103/FB-2) and must not be a live-only orphan; on session reload the replay path emits this frame so the reloaded session renders the same note. The LIVE announcement is the separate provider_fallback frame. No seq (ReplayErrorFrame/ReplayMessageFrame pattern). Keep in sync by hand with contracts/components/schemas/ProviderFallbackNote.yaml.
+type ProviderFallbackNote struct {
+	AnsweredModel    *string `json:"answered_model,omitempty"`
+	EntryId          string  `json:"entry_id"`
+	Message          string  `json:"message"`
+	SessionId        string  `json:"session_id"`
+	Timestamp        string  `json:"timestamp"`
+	Type             string  `json:"type"`
+	UnavailableCode  *string `json:"unavailable_code,omitempty"`
+	UnavailableModel *string `json:"unavailable_model,omitempty"`
+}
+
+// ProviderRetryFrame — Server → client (provider-messages spec §7.1 item 3). Announces an automatic provider rate-limit retry inside the turn's fallback-chain execution — the candidate about to be re-called, when it will be called (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the #711 closure constraint) — built from NAMED FIELDS ONLY, never an `error` field or raw provider text; the countdown is computed from retry_at and sent_at client-side (C-11). Keep in sync by hand with contracts/components/schemas/ProviderRetryFrame.yaml.
+type ProviderRetryFrame struct {
+	Attempt           int    `json:"attempt"`
+	ErrorCode         string `json:"error_code"`
+	MaxAttempts       int    `json:"max_attempts"`
+	Model             string `json:"model"`
+	Provider          string `json:"provider"`
+	RetryAfterSeconds int    `json:"retry_after_seconds"`
+	RetryAt           string `json:"retry_at"`
+	SentAt            string `json:"sent_at"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ProviderRetryFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	TurnId    string `json:"turn_id"`
+	Type      string `json:"type"`
 }
 
 // RateLimitFrame — Server → client rate limit applied (SEC-26). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (c) per the ADR-057 W5 audit (FR-089) — a DOCUMENTED PRE-EXISTING GAP, audited and recorded here rather than fixed (operator decision 11): the underlying RateLimitPayload (pkg/agent/events.go) carries no SessionID field at all; this frame's session_id is reconstructed downstream from the connection's chat→session map at serialization time.
@@ -1318,7 +1369,10 @@ const (
 	WsFrameTypeTaskRunStatus            WsFrameType = "task_run_status"
 	WsFrameTypeReplayMessage            WsFrameType = "replay_message"
 	WsFrameTypeReplayError              WsFrameType = "replay_error"
+	WsFrameTypeReplayProviderFallback   WsFrameType = "replay_provider_fallback"
 	WsFrameTypeRateLimit                WsFrameType = "rate_limit"
+	WsFrameTypeProviderRetry            WsFrameType = "provider_retry"
+	WsFrameTypeProviderFallback         WsFrameType = "provider_fallback"
 	WsFrameTypeMedia                    WsFrameType = "media"
 	WsFrameTypeAgentSwitched            WsFrameType = "agent_switched"
 	WsFrameTypeToolApprovalRequired     WsFrameType = "tool_approval_required"

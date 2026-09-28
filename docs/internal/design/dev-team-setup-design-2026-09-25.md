@@ -426,7 +426,7 @@ Status updates are **event-driven** (Round 12): they fire when something lands, 
 
 | Signal | Role | Proposed HOLD threshold | Why this signal |
 |---|---|---|---|
-| Memory | **hard** | Available RAM below ~4 GB, or swap-in activity rising | Parallel agents and build caches OOM the machine, not just one lane |
+| Memory | **hard** | Available RAM below ~3 GB (founder, 2026-09-27; was 4 GB), or swap-in activity rising | Parallel agents and build caches OOM the machine, not just one lane |
 | Disk | **hard** | Free space on the workspace volume below ~20 GB | Worktrees, node_modules and Go caches grow fast |
 | CPU load | advisory — feeds the verdict, never holds alone | sustained 1-minute load above ~80% of logical cores over two samples ~30 s apart | One spike is noise; sustained load means lanes already compete |
 | Active dispatches | advisory — counted from the ledger's in-flight rows across all squad files | more than ~12 in-flight rows | The work-in-flight measure that replaces the deleted agent-process count; the ceiling is founder-adjustable |
@@ -735,6 +735,8 @@ team-lead's two-line report: "code correct and tested" /
 Routing rules inside the flow: the architect's cross-cutting pass never adjudicates a finding against a design the architect authored — those escalate to the founder (the recusal rule, 4.1); every finding is dispatched to the lead owning the tree it sits in; a CHECK verdict of BLOCK sends the feature back to GREEN (or RED, if the tests themselves were the problem) — it never proceeds to the gate. Gate findings follow the Round 14 format: every finding carries a failure scenario, evidence, severity and certainty — a style preference with no failure scenario is not a finding and does not gate; a claim a reviewer cannot verify is marked UNVERIFIED, a warning team-lead adjudicates (verify itself, dispatch a verification, or accept with the gap stated) before the gate is called clean — it never blocks alone (4.5). Cross-stack work runs in a fixed order (Round 8): **contract first** (architect decides the shape, backend-lead lands the spec and regenerates), **then backend-lead and frontend-lead in parallel**, **then one combined review** — the gate above runs once over the combined diff, never once per stack. For RED lanes, the `isolation: worktree` frontmatter field (verified to exist — a temporary isolated worktree per subagent) is a candidate replacement for manual worktree setup; evaluate it before rollout.
 
 The small-fixes carve-out this section used to carry is now the **small** row of the sizes table above — Round 6 generalised it from a carve-out into one of three sizes. Landing rules (5.7) are unchanged by size: every size lands only after its gate and the founder's yes in chat.
+
+**Fix/re-review rounds on a gate (founder, 2026-09-28).** A review gate gets at most **5** fix/re-review rounds; a finding still open after round 5 stops and escalates to the founder through team-lead — there is never a round 6. Each re-review round re-dispatches **only** the reviewer(s) whose findings that round fixed, never the whole gate — the gate's first pass still runs every reviewer for that size (small: 1, standard: 3, feature: 8). This is unchanged for the whole-epic gate that runs on the integration branch before the `main` merge. The round count is recorded in the squad's ledger row (5.9, coordination-ledger knowledge file).
 
 ### 7.2 Failure handling (replaces the ci-triage role — founder decision)
 

@@ -58,6 +58,14 @@ const (
 	// opened — disk, permissions, or a home that could not be created
 	// (CodeWorkspaceUnavailable).
 	operatorFixWorkDirUnavailable
+	// operatorFixQuotaBilling (C-5/D15): the account is out of credit
+	// (CodeQuotaBilling) — waiting and retrying clear nothing; the
+	// operator tops up the account or swaps providers.
+	operatorFixQuotaBilling
+	// operatorFixModelRetired (C-24/D15): the model has been withdrawn
+	// (CodeModelRetired) — the operator picks a new model in the agent's
+	// settings.
+	operatorFixModelRetired
 )
 
 // classifyOperatorOnlyTurnError reports err's translated code and, when only an
@@ -90,6 +98,10 @@ func classifyOperatorOnlyTurnError(err error) (LLMErrorCode, operatorFixCause) {
 		return code, operatorFixAgentNotOnWorkspace
 	case CodeWorkspaceUnavailable:
 		return code, operatorFixWorkDirUnavailable
+	case CodeQuotaBilling:
+		return code, operatorFixQuotaBilling
+	case CodeModelRetired:
+		return code, operatorFixModelRetired
 	}
 	return code, operatorFixNone
 }

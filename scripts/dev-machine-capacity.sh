@@ -24,6 +24,12 @@
 #                            HOLD, because that is the case where sustained
 #                            CPU pressure plus a hold both describe real
 #                            contention rather than a stray spike.
+#   - Overload (hard, founder 2026-09-28) — the 5-minute load average above
+#                            DEV_CAPACITY_OVERLOAD_FACTOR x logical cores
+#                            (default 4x, i.e. 32 on an 8-core Mac) -> HOLD by
+#                            itself. Normal busy periods never reach it; it
+#                            exists for the load-700 spikes that made the
+#                            1-minute advisory signal above meaningless.
 #   - Active dispatches (advisory) — counted from the coordination ledger's
 #     squads/*.md files: rows with status=in-flight, NOT a process count
 #     (design: "no process sniffing: the ledger knows what is actually
@@ -51,10 +57,12 @@
 # verdict cannot be trusted in that case, so treat exit 2 as a HOLD.
 #
 # ENV OVERRIDES (all optional; defaults are the design's proposed numbers)
-#   DEV_CAPACITY_MIN_FREE_MEM_GB          default 4
+#   DEV_CAPACITY_MIN_FREE_MEM_GB          default 3 (founder, 2026-09-27; was 4)
 #   DEV_CAPACITY_MIN_FREE_DISK_GB         default 20
 #   DEV_CAPACITY_WORKSPACE_DIR            default /Users/danielpiatkowski/AI-Agent-Workspace
 #   DEV_CAPACITY_CPU_THRESHOLD_PCT        default 80
+#   DEV_CAPACITY_OVERLOAD_FACTOR          default 4 (x logical cores, 5-min load)
+#   DEV_CAPACITY_LOAD5_OVERRIDE           test hook: use this 5-min load value
 #   DEV_CAPACITY_CPU_SAMPLES              default 2
 #   DEV_CAPACITY_CPU_SAMPLE_INTERVAL_SEC  default 30
 #   DEV_CAPACITY_MAX_DISPATCHES           default 12
@@ -70,11 +78,12 @@
 
 set -u
 
-MIN_FREE_MEM_GB="${DEV_CAPACITY_MIN_FREE_MEM_GB:-4}"
+MIN_FREE_MEM_GB="${DEV_CAPACITY_MIN_FREE_MEM_GB:-3}"
 MIN_FREE_DISK_GB="${DEV_CAPACITY_MIN_FREE_DISK_GB:-20}"
 WORKSPACE_DIR="${DEV_CAPACITY_WORKSPACE_DIR:-/Users/danielpiatkowski/AI-Agent-Workspace}"
 CPU_THRESHOLD_PCT="${DEV_CAPACITY_CPU_THRESHOLD_PCT:-80}"
 CPU_SAMPLES="${DEV_CAPACITY_CPU_SAMPLES:-2}"
+OVERLOAD_FACTOR="${DEV_CAPACITY_OVERLOAD_FACTOR:-4}"
 CPU_SAMPLE_INTERVAL_SEC="${DEV_CAPACITY_CPU_SAMPLE_INTERVAL_SEC:-30}"
 MAX_DISPATCHES="${DEV_CAPACITY_MAX_DISPATCHES:-12}"
 LEDGER_DIR="${DEV_CAPACITY_LEDGER_DIR:-/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination}"
@@ -151,6 +160,18 @@ read_loadavg_1m() {
   fi
 }
 
+read_loadavg_5m() {
+  if [ -n "${DEV_CAPACITY_LOAD5_OVERRIDE:-}" ]; then
+    echo "$DEV_CAPACITY_LOAD5_OVERRIDE"
+  elif [ "$os" = "Darwin" ]; then
+    sysctl -n vm.loadavg 2>/dev/null | awk '{print $3}'
+  elif [ -r /proc/loadavg ]; then
+    awk '{print $2}' /proc/loadavg
+  fi
+}
+load5="$(read_loadavg_5m)"
+overload_limit="$(awk -v c="$logical_cores" -v f="$OVERLOAD_FACTOR" 'BEGIN { printf "%.1f", c*f }')"
+
 cpu_samples_pct=()
 i=1
 while [ "$i" -le "$CPU_SAMPLES" ]; do
@@ -204,6 +225,14 @@ if [ "$disk_free_gb" != "unknown" ]; then
   fi
 fi
 
+overload_hold="false"
+if [ -n "${load5:-}" ]; then
+  if awk -v l="$load5" -v m="$overload_limit" 'BEGIN { exit !(l > m) }'; then
+    overload_hold="true"
+    reasons+=("overload: 5-min load ${load5} > ${overload_limit} (${OVERLOAD_FACTOR}x ${logical_cores} logical cores)")
+  fi
+fi
+
 dispatch_over="false"
 if [ "$in_flight_count" -gt "$MAX_DISPATCHES" ] 2>/dev/null; then
   dispatch_over="true"
@@ -233,6 +262,7 @@ if [ "${#cpu_samples_pct[@]}" -gt 0 ]; then
 else
   echo "  cpu load: unavailable"
 fi
+echo "  load (5 min): ${load5:-unavailable} (hold above ${overload_limit})"
 echo "  active dispatches (ledger, in-flight): ${in_flight_count} (ceiling ${MAX_DISPATCHES}) [ledger: ${LEDGER_DIR}]"
 
 if [ "${#reasons[@]}" -gt 0 ]; then

@@ -418,6 +418,21 @@ type turnState struct {
 	transcriptSessionID string
 	transcriptStore     *session.UnifiedStore
 
+	// pendingFallbackNotes holds this turn's queued fallback-note transcript
+	// entries (provider-messages §7.4): queued by
+	// queueProviderFallbackNote (once per (session, pair)), written at turn
+	// end AFTER the assistant answer entry (MIN-103/FB-2) by
+	// writePendingFallbackNotes, whose defer registration in runTurn sits
+	// before finalizeStreamer's so LIFO runs it after the streamer's write.
+	pendingFallbackNotes []session.TranscriptEntry
+
+	// turnWaitBudget is the D14 per-turn wait budget (10 min total), shared
+	// by every fallback-chain call of this turn — a per-iteration budget
+	// would multiply the cap by the iteration count. Lazily created by
+	// turnWaitBudgetOnce under ts.mu; read by the chain through the ctx
+	// carrier (providers.WithWaitBudget).
+	turnWaitBudget *providers.WaitBudget
+
 	// routingSessionID is ADR-057's D2 identity split (FR-011): the id that
 	// answers "which open chat does this turn belong to", inherited VERBATIM
 	// through an entire delegation subtree — for a grandchild it equals the

@@ -272,6 +272,16 @@ type JudgeCriteriaResult struct {
 	// holds the unit. See verifier_adjudication.go's "Judge-unavailable
 	// classification" section (UAT E-7).
 	Unavailable bool
+	// ConcurrencyBackoff, when true alongside Unavailable, marks the verdict
+	// as the verifier registry's "concurrent adjudication in flight" BACK-OFF
+	// (corr-MAJOR-3/G-1, reason VerifierConcurrencyBackoffReason) rather than
+	// a judge outage: another adjudication for the same unit already holds
+	// the registry entry and WILL resolve the unit, so callers must NOT retry
+	// it, must not surface judge-unavailability to the user, and must not
+	// fail the work item (#984's release red: the goal re-drive treated this
+	// back-off as an outage, re-invoked the Judge a second time and then
+	// false-failed the child). Neutral for every availability streak.
+	ConcurrencyBackoff bool
 	// Reason is a short, human-readable cause (unavailability cause, or a
 	// summary of the produced verdict).
 	Reason string
@@ -528,15 +538,20 @@ func (jc *agentLoopJudgeCriteria) runProseRungAndFinalize() JudgeCriteriaResult 
 			jc.ctx, jc.in, jc.proseCriteria, jc.evidence, diffText,
 		)
 		if unavailable {
-			// The verifier turn MECHANISM could not run (provider/SEC-26/ctx).
-			// Round not consumed, re-run next turn (unchanged D7 contract; the
+			// The verifier turn MECHANISM could not run (provider/SEC-26/ctx),
+			// OR this is the registry's concurrency back-off
+			// (VerifierConcurrencyBackoffReason — a back-off, not an outage;
+			// surfaced distinctly in ConcurrencyBackoff so callers can stop
+			// instead of retrying, #984). Round not consumed, re-run next turn
+			// (unchanged D7 contract for genuine outages; the
 			// persistent-Judge-down case is escalated by the separate
-			// verifierUnavailabilityStreak, sign-off finding 1). Deliberately
+			// verifierUnavailabilityStreak, sign-off finding 1 — which the
+			// back-off itself never feeds, verifier_adjudication.go). Deliberately
 			// do NOT advance the diff boundary here — see
 			// resolveVerifierDiffText's own doc comment for why a retried
 			// call must still see the same cumulative diff, not a
 			// spuriously-empty one.
-			return JudgeCriteriaResult{Unavailable: true, Reason: reason}
+			return JudgeCriteriaResult{Unavailable: true, Reason: reason, ConcurrencyBackoff: reason == VerifierConcurrencyBackoffReason}
 		}
 		// ADR-084 D9 prerequisite 3 / FR-054 (this wave): a post-progress
 		// failure comes back unavailable=FALSE with every prose criterion
