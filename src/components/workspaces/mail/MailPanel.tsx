@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/select'
 import {
   fetchMailboxes,
+  fetchAgents,
   fetchMailFolders,
   fetchMailMessages,
   fetchMailMessage,
@@ -116,11 +117,20 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
     queryFn: fetchMailboxes,
     staleTime: 60_000,
   })
+  const agentsQuery = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    staleTime: 60_000,
+  })
   const workspaceMailboxes = useMemo(() => {
     const list = mailboxesQuery.data
     if (!list) return []
     return list.filter((mb) => mb.enabled && mb.configured && mb.workspace_id === workspaceId)
   }, [mailboxesQuery.data, workspaceId])
+  const agentNamesById = useMemo(
+    () => new Map((agentsQuery.data ?? []).map((agent) => [agent.id, agent.name])),
+    [agentsQuery.data],
+  )
 
   // Per-workspace intent (FR-010): sessionStorage-backed selection.
   const [intent, setIntent] = useState<MailPanelIntent>(() =>
@@ -381,7 +391,7 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
     <div data-testid="mail-panel" className="flex h-full min-h-0 w-full flex-col bg-[var(--color-surface-0)]">
       <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
         <Select
-          value={agentId ?? undefined}
+          value={agentId ?? ''}
           onValueChange={(next) => { setIntent((prev) => ({ ...prev, agentId: next })); setSelectedRef(null) }}
         >
           <SelectTrigger
@@ -399,7 +409,8 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
           <SelectContent>
             {workspaceMailboxes.map((mb) => (
               <SelectItem key={mb.agent_id} value={mb.agent_id}>
-                {mb.username ?? mb.agent_id}
+                {agentNamesById.get(mb.agent_id) ?? mb.agent_id}
+                {mb.username === undefined ? '' : ` · ${mb.username}`}
               </SelectItem>
             ))}
           </SelectContent>

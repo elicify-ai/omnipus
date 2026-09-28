@@ -15,7 +15,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const { fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailSummary } = vi.hoisted(() => ({
+const { fetchAgents, fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailSummary } = vi.hoisted(() => ({
+  fetchAgents: vi.fn(),
   fetchMailboxes: vi.fn(),
   fetchMailFolders: vi.fn(),
   fetchMailMessages: vi.fn(),
@@ -24,7 +25,7 @@ const { fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailSummary } 
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailSummary }
+  return { ...actual, fetchAgents, fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailSummary }
 })
 
 async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>> {
@@ -59,10 +60,12 @@ const folders = {
 
 describe('Mail panel states (US-3, US-6, D25)', () => {
   beforeEach(() => {
+    fetchAgents.mockReset()
     fetchMailboxes.mockReset()
     fetchMailFolders.mockReset()
     fetchMailMessages.mockReset()
     fetchMailSummary.mockReset()
+    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

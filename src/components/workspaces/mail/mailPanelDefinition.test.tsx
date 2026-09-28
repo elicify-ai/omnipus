@@ -23,7 +23,23 @@
 // panels with unsaved-edit risk — Library, in wave 1"; Mail keeps no
 // unsaved-edit state outside its compose dialog, same posture as Browser).
 
-import { describe, it, expect } from 'vitest'
+import { Suspense } from 'react'
+import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+
+const { mailPanelModuleLoaded } = vi.hoisted(() => ({
+  mailPanelModuleLoaded: vi.fn(),
+}))
+
+vi.mock('./MailPanel', () => {
+  mailPanelModuleLoaded()
+  return {
+    MailPanel: ({ workspaceId }: { workspaceId: string }) => (
+      <div>Loaded Mail for {workspaceId}</div>
+    ),
+  }
+})
+
 import { mailPanelDefinition } from './mailPanelDefinition'
 
 describe('Mail PanelDefinition payload (§10 Wave 2, §1 mail row, email spec §17)', () => {
@@ -42,5 +58,25 @@ describe('Mail PanelDefinition payload (§10 Wave 2, §1 mail row, email spec §
 
   it('carries NO beforeLeave — the CRIT-001 unsaved-edits guard is Library-only (§8.1)', () => {
     expect(mailPanelDefinition.beforeLeave).toBeUndefined()
+  })
+
+  it('loads Mail panel code only when the registered content is rendered', async () => {
+    expect(mailPanelModuleLoaded).not.toHaveBeenCalled()
+
+    const Content = mailPanelDefinition.content
+    render(
+      <Suspense fallback={<div>Loading Mail…</div>}>
+        <Content
+          context={{ workspaceId: 'ws-1' }}
+          close={() => undefined}
+          expand={() => undefined}
+          registerExpand={() => undefined}
+          onWidthSettle={() => undefined}
+        />
+      </Suspense>,
+    )
+
+    expect(await screen.findByText('Loaded Mail for ws-1')).toBeInTheDocument()
+    expect(mailPanelModuleLoaded).toHaveBeenCalledTimes(1)
   })
 })
