@@ -566,6 +566,25 @@ See "Edge Cases" under User Stories (single list, not duplicated).
   the rest of the table unchanged (golden copy).
 - **MV-6** `scripts/check-docs-reference.sh` exits 0 after regeneration.
 - **MV-7** Read-confined refusal text contains `read-confined`.
+- **MV-8** Kernel pseudo-folder / non-regular-file skip (D13): on Linux, `grep`'s walk never
+  enters `/proc`, `/sys` or `/dev`, and a `path` naming a location inside one of them is
+  refused, naming "kernel pseudo-folder" in the refusal; on every platform, `grep` never opens
+  a non-regular, non-directory entry (a FIFO, device file or socket) met during a walk or
+  named directly by `path`. `read_file` of a named file there is unchanged.
+
+> **Correction (2026-09-27, founder decision D13,
+> `read-boundary-consistency-interview.md`):** RED found that a volume-root search on Linux
+> (S-1.10, DS-1 row 23) enters `/proc`, where some reads never return and the shared 10 s
+> deadline cannot interrupt them — one of the two shared walk slots would be pinned
+> indefinitely. Decided after this spec's Approval and after both grill rounds, so it carries
+> no FR number: `grep`'s walk always skips the Linux kernel pseudo-folders `/proc`, `/sys` and
+> `/dev`, and never content-reads device files, pipes or sockets; `read_file` of a named file
+> there is unchanged. security-lead reviewed. Traced in the Traceability Matrix (row "D13")
+> and MV-8 above; tests `TestGrepTool_SkipsKernelPseudoFolders`
+> (`pkg/tools/grep_pseudofs_linux_test.go`, Linux-only) and
+> `TestGrepTool_ScopeSingleFile_NonRegularKindIsHonest`
+> (`pkg/tools/grep_singlefile_unix_test.go`); implementation
+> `grep_scope.go::isKernelPseudoPath`, `refuseNonRegular`, `grepGateFS.withheld`.
 
 ## Integration Boundaries
 
@@ -1708,13 +1727,16 @@ not at workspace A. The rewrite MUST:
 | FR-030 | US-1 | S-4.9 (seed with read_file denied) | 20, 27 | policy compositor (unchanged); docs |
 | FR-031 | US-7 | S-7.1 | 28 | `.github/workflows/cross-platform.yml` new job `windows-tools-tests` + header comment; `docs/operations/platform-support.md` |
 | FR-032 | US-1 | S-5.6, S-1.14 | 32 (Linux), 32a (all platforms) | `grep.go::GrepTool.Execute` (`defer closeRoots()`), `grepRoots` `opened`/`closeAll` |
+| D13 | US-1, US-2 | — (decided post-approval, no numbered BDD scenario; see the Correction note above) | `TestGrepTool_SkipsKernelPseudoFolders`, `TestGrepTool_ScopeSingleFile_NonRegularKindIsHonest` | `grep_scope.go::isKernelPseudoPath`, `refuseNonRegular`, `grepGateFS.withheld` |
 
 **Completeness check**: every FR-001..FR-032 has at least one test (FR-028/FR-029 by the
 unchanged-suite and contract gates); every scenario S-1.1..S-7.2 appears in at least one row
 above (S-1.11 via FR-020; S-1.12 via FR-004; S-1.13 via FR-003/FR-021; S-1.14 via
 FR-010/FR-021/FR-032; S-3.8 via FR-019; S-2.x via FR-005..FR-008; S-3.x via
 FR-017..FR-019; S-4.x via FR-012..FR-016; S-5.x via FR-020..FR-023; S-6.x via FR-024..FR-027;
-S-7.x via FR-002/FR-009/FR-031).
+S-7.x via FR-002/FR-009/FR-031). D13 (kernel pseudo-folder / non-regular-file skip) is a
+founder decision added after Approval (see the Correction note above); it carries no FR
+number and is traced here and in MV-8 only.
 
 ---
 
