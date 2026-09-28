@@ -547,9 +547,15 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 
 	// agent-picker-freshness fix (#1009), corrected ordering: notify ONLY
 	// after publishAgentActivation reports ActivationActive — i.e. only once
-	// UpsertAgentFastFunc or ReloadFunc has actually run and succeeded, which
-	// is the point the new agent is genuinely present in the live, in-memory
-	// config/registry that pkg/gateway/rest_agents.go::listAgents reads. Both
+	// the live, in-memory config/registry that pkg/gateway/rest_agents.go::
+	// listAgents reads actually contains the new agent. publishAgentActivation
+	// now BLOCKS on deps.WaitForReloadFunc after the publish hook's nil
+	// return to close the async-reload race the production wiring leaves open
+	// (the gateway's UpsertAgentFastFunc closure falls back to the async
+	// reloadTrigger on any failure, and the plain ReloadFunc is also
+	// fire-and-forget — see publishAgentActivation's own doc comment for the
+	// mechanism), so a nil return there is a genuine "agent is live and
+	// listable" rather than "agent was queued for publication". Both
 	// ActivationFailed (the call ran but errored — publishWarning above) and
 	// ActivationNotAttempted (neither hook wired — degraded/test deps) leave
 	// the agent NOT listable, so notifying on either would recreate the exact
@@ -562,7 +568,9 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 	// that path is already correct here because its own equivalent
 	// (emitAgentCreated, pkg/gateway/rest_agents_create.go::createAgent) is
 	// called only after persistAgent's withToolPolicyCoverageGuard has
-	// already refilled the in-memory list via refreshConfigAndRewireServices.
+	// already refilled the in-memory list via refreshConfigAndRewireServices
+	// AND waited it out via triggerReloadAndWait (the same
+	// IsReloadPending-poll primitive WaitForReloadFunc is built on).
 	if activation == agentstore.ActivationActive {
 		if fn := ac.t.deps.NotifyAgentCreated; fn != nil {
 			fn(ac.finalID)

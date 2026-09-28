@@ -420,16 +420,68 @@ func writeDefaultSingleton(deps *Deps, id string, want bool) error {
 	})
 }
 
+// publishAgentActivation publishes id into the live, in-memory config/registry
+// that pkg/gateway/rest_agents.go::listAgents reads, and returns the resulting
+// activation status. It must NEVER report ActivationActive while the agent
+// might still be missing from that live list — see publishAndRespond's gate for
+// the caller-side enforcement; this function's job is to block until publication
+// has actually landed so that gate has a real, observable signal to trust.
+//
+// The fast path (UpsertAgentFastFunc, issue #571 sysagent half) is what
+// AgentCreateTool/AgentUpdateTool prefer, but the production wired
+// implementation (pkg/gateway/gateway.go's closure) DOES NOT promise a
+// synchronous live-list update on its nil return: it re-derives
+// cfg.Agents.List via MutateConfig first, then calls
+// agentLoop.UpsertAgentFast — and on any step's failure (IsReloadPending at
+// entry, MutateConfig error, or UpsertAgentFast error) it falls back to
+// rc.reloadTrigger(), which is ASYNCHRONOUS (it only enqueues onto
+// manualReloadChan / claims the coalescing slot and returns nil — the actual
+// registry rebuild happens on a separate goroutine, see
+// pkg/gateway/gateway_reload.go::newReloadTrigger). A nil return from
+// UpsertAgentFastFunc therefore means "publication was accepted, but may still
+// be in flight on the reload goroutine" — NOT "the agent is already live in
+// the registry". The fallback ReloadFunc below is also fire-and-forget for the
+// same reason.
+//
+// Closing that race: after the publish hook returns nil, call
+// deps.WaitForReloadFunc when wired — the same synchronous reload-wait the
+// gateway uses for delete_agent (pkg/sysagent/tools/agent.go::reload, and
+// pkg/gateway/rest_auth.go::waitForReload), which polls IsReloadPending until
+// it clears or a bounded deadline elapses. This blocks until the queued reload
+// has actually rebuilt the live registry the gate consults, so a nil return
+// from THIS function is now a genuine "agent is live and listable" — not just
+// "agent was queued for publication". The fast path on its own does NOT
+// guarantee liveness either when no reload was queued (the closure's
+// MutateConfig + UpsertAgentFast succeeds inline), so the wait is a no-op in
+// that case but a real block in the queued-reload case — exactly what the
+// agent-picker-freshness fix (#1009) needs.
+//
+// WaitForReloadFunc is nil in tests / degraded wiring where there is no real
+// reload to wait on (those tests either stub the fast path itself to update
+// the registry inline, or use ReloadFunc as a synchronous stand-in). When it
+// is nil, fall back to the old behaviour: the publish hook's nil return is
+// taken at face value — adequate for the test wiring, and explicitly NOT
+// claimed as safe in production (the production gateway always wires both).
 func publishAgentActivation(deps *Deps, id string) (agentstore.ActivationStatus, string) {
 	if deps != nil && deps.UpsertAgentFastFunc != nil {
 		if err := deps.UpsertAgentFastFunc(id); err != nil {
 			return agentstore.ActivationFailed, err.Error()
+		}
+		if deps.WaitForReloadFunc != nil {
+			if err := deps.WaitForReloadFunc(); err != nil {
+				return agentstore.ActivationFailed, err.Error()
+			}
 		}
 		return agentstore.ActivationActive, ""
 	}
 	if deps != nil && deps.ReloadFunc != nil {
 		if err := deps.ReloadFunc(); err != nil {
 			return agentstore.ActivationFailed, err.Error()
+		}
+		if deps.WaitForReloadFunc != nil {
+			if err := deps.WaitForReloadFunc(); err != nil {
+				return agentstore.ActivationFailed, err.Error()
+			}
 		}
 		return agentstore.ActivationActive, ""
 	}
