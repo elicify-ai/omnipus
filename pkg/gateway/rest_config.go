@@ -329,16 +329,32 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 // non-reentrant sync.Mutex. See createAgent, updateAgent, updateAgentTools
 // (this file) and putToolPolicies (rest_tool_policies.go) for the pattern.
 func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) error {
+	out, err := a.writeConfigJSONLocked(mutate)
+	if err != nil {
+		return err
+	}
+	return a.applyWrittenConfigLocked(out)
+}
+
+// writeConfigJSONLocked is updateConfigJSONLocked's write phase: read
+// config.json, apply mutate, stamp the version, write it atomically and
+// return the bytes written. Its errors are the mutate function's own or a
+// read / parse / serialize / write failure of config.json — never a
+// refresh or credential-resolution failure, which only
+// applyWrittenConfigLocked can return. PUT /performance (#904) relies on
+// that split to log a write failure's real cause without ever logging
+// credential-derived text. Called while a.configMu is held.
+func (a *restAPI) writeConfigJSONLocked(mutate func(m map[string]any) error) ([]byte, error) {
 	raw, err := os.ReadFile(a.configPath())
 	if err != nil {
-		return fmt.Errorf("read config: %w", err)
+		return nil, fmt.Errorf("read config: %w", err)
 	}
 	var m map[string]any
 	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
-		return fmt.Errorf("parse config: %w", unmarshalErr)
+		return nil, fmt.Errorf("parse config: %w", unmarshalErr)
 	}
 	if mutateErr := mutate(m); mutateErr != nil {
-		return mutateErr
+		return nil, mutateErr
 	}
 	// Ensure "version" is always stamped before writing back, mirroring
 	// config.SaveConfig's own version-stamping for the struct-based save path.
@@ -352,11 +368,20 @@ func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) er
 	}
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return fmt.Errorf("serialize config: %w", err)
+		return nil, fmt.Errorf("serialize config: %w", err)
 	}
 	if writeErr := fileutil.WriteFileAtomic(a.configPath(), out, 0o600); writeErr != nil {
-		return writeErr
+		return nil, writeErr
 	}
+	return out, nil
+}
+
+// applyWrittenConfigLocked is updateConfigJSONLocked's apply phase, run
+// after config.json was durably written with out: register the write with
+// the file watcher, refresh the in-memory config (a failure is returned as
+// *configRefreshError — the write stands on disk) and invalidate the cached
+// system-prompt preambles. Called while a.configMu is held.
+func (a *restAPI) applyWrittenConfigLocked(out []byte) error {
 	// Register the content hash of what we just wrote so the config file
 	// watcher knows this is an app-initiated write and does not trigger a
 	// full service reload (channels disconnect/reconnect, cron lanes canceled).
@@ -504,6 +529,10 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 		// secrets to re-arm in the replacer.
 		newCfg, err := config.LoadConfig(configPath)
 		if err != nil {
+			// The loader never resolves credentials (loadConfigInternal does
+			// not use the store), so its error carries no credential text.
+			logsafeError("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+				"config load failed (no credential store variant)", "error", err)
 			return fmt.Errorf("load config (no store): %w", err)
 		}
 		if rosterErr := a.populateAgentsListFromStore(newCfg); rosterErr != nil {
@@ -520,6 +549,11 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	}
 	newCfg, err := config.LoadConfigWithStore(configPath, a.credStore)
 	if err != nil {
+		// Runs before credential resolution, and the loader never resolves
+		// credentials itself (loadConfigInternal does not use the store), so
+		// the error carries no credential text.
+		logsafeError("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+			"config load failed", "error", err)
 		return fmt.Errorf("load config: %w", err)
 	}
 	if rosterErr := a.populateAgentsListFromStore(newCfg); rosterErr != nil {

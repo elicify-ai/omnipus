@@ -1500,6 +1500,8 @@ components:
       $ref: ./components/schemas/PerformanceReloadFailedDetails.yaml
     PerformanceReloadFailedError:
       $ref: ./components/schemas/PerformanceReloadFailedError.yaml
+    PerformancePendingApply:
+      $ref: ./components/schemas/PerformancePendingApply.yaml
     Provider:
       $ref: ./components/schemas/Provider.yaml
     ProviderDependent:
@@ -4121,6 +4123,8 @@ paths:
       description: >
         Returns the max-parallel-agents cap and the effective (resolved,
         auto-detected or explicit) value currently in use.
+        pending_apply is present while saved settings are not in force
+        yet (see PerformancePendingApply).
       tags:
         - Settings
       responses:
@@ -4189,6 +4193,12 @@ paths:
         details.changed_fields lists the settings this request changed and
         details.lowered_agents the agents it lowered (GET /performance does
         not carry them).
+        A registry reload whose rebuild itself fails (not only one that
+        cannot start or times out) is the reload stage too. After any
+        performance_reload_failed answer, GET /performance (and every later
+        PUT response) carries pending_apply until a later refresh AND
+        registry reload both succeed; while it is set, a later PUT always
+        reloads the agent registry, whatever fields it changes.
       tags:
         - Settings
       requestBody:

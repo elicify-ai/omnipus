@@ -333,6 +333,10 @@ type performanceWriteOutcome struct {
 	// failed: the caller answers performance_reload_failed, like a failed
 	// registry reload, and nothing is rolled back.
 	notApplied error
+	// appliedEpoch is the pending-apply epoch the successful in-memory
+	// refresh covered (performancePendingApply.epochNow under configMu);
+	// meaningful only when notApplied is nil.
+	appliedEpoch uint64
 }
 
 // performanceWriteError is a fully-formed HTTP failure from the locked write.
@@ -506,9 +510,11 @@ func (a *restAPI) auditMaxToolIterationsChange(ctx context.Context, resource str
 // configMu: the deciding drift/revision check before any write, the agents
 // lowered first, then config.json (the global plus any other performance
 // fields in this request) written once. A failure after writes began rolls
-// the agents back and leaves the global unchanged.
+// the agents back and leaves the global unchanged. A failed in-memory
+// refresh after the write marks the changed fields pending apply (stage
+// refresh) under the same lock.
 func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterationsGlobalUpdate,
-	mutate func(m map[string]any) error,
+	changed []gen.PerformanceReloadFailedDetailsChangedFields, mutate func(m map[string]any) error,
 ) (performanceWriteOutcome, *performanceWriteError) {
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
@@ -535,33 +541,42 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 	if err != nil {
 		return out, a.loweringFailure(ctx, store, defaults, upd, done, failing, err)
 	}
-	if writeErr := a.updateConfigJSONLocked(mutate); writeErr != nil {
-		// config.json is already written when only the refresh failed: the
-		// save is committed, so rolling the agents back would contradict
-		// the written global and "nothing was changed" would be false.
-		// The raw writeErr is never logged or returned here: a refresh
-		// failure's text can carry a credential reference NAME (from
-		// refreshConfigAndRewireServices' credential resolution; CodeQL
-		// clear-text-logging on PR #932). Only a fixed stage / cause class
-		// leaves this function; refreshConfigAndRewireServices logs its
-		// roster and credential causes itself (not a config load failure).
-		var refreshErr *configRefreshError
-		if errors.As(writeErr, &refreshErr) {
-			logsafeError("rest: PUT /performance: config.json written but the in-memory refresh failed; "+
-				"keeping the lowered agents (roster/credential causes are logged by refreshConfigAndRewireServices)",
-				"stage", "refresh", "lowered_agents", len(done))
-			out.notApplied = errPerformanceRefreshFailed
-			a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
-			return out, nil
-		}
+	written, writeErr := a.writeConfigJSONLocked(mutate)
+	if writeErr != nil {
+		// writeConfigJSONLocked only fails reading, parsing, serializing or
+		// writing config.json (a filesystem or JSON error — no refresh or
+		// credential text can reach it), so the real cause is logged here
+		// for the operator while the response keeps the fixed cause class.
 		cause := configWriteFailure(writeErr)
+		logsafeError("rest: PUT /performance: could not write config.json",
+			"cause", cause.Error(), "error", writeErr)
 		if len(done) > 0 {
 			return out, a.loweringFailure(ctx, store, defaults, upd, done, "", cause)
 		}
-		logsafeError("rest: PUT /performance: could not write config.json", "cause", cause.Error())
 		return out, &performanceWriteError{status: http.StatusInternalServerError,
 			body: gen.ErrorResponse{Error: "could not update performance settings: " + cause.Error()}}
 	}
+	if refreshErr := a.applyWrittenConfigLocked(written); refreshErr != nil {
+		// config.json is already written: the save is committed, so rolling
+		// the agents back would contradict the written global and "nothing
+		// was changed" would be false. refreshErr is never logged or
+		// returned here: its text can carry a credential reference NAME
+		// (from refreshConfigAndRewireServices' credential resolution;
+		// CodeQL clear-text-logging on PR #932). Only the fixed stage leaves
+		// this function; refreshConfigAndRewireServices logs its load,
+		// roster and credential causes itself.
+		logsafeError("rest: PUT /performance: config.json written but the in-memory refresh failed; "+
+			"keeping the lowered agents (load/roster/credential causes are logged by refreshConfigAndRewireServices)",
+			"stage", "refresh", "lowered_agents", len(done))
+		out.notApplied = errPerformanceRefreshFailed
+		a.pendingApply.mark(gen.PerformanceReloadFailedDetailsStageRefresh, changed, a.reloadOutcome.startedCount())
+		a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
+		return out, nil
+	}
+	// The running config now reflects everything on disk: remember the
+	// pending-apply epoch it covers, so a registry reload that succeeds
+	// afterwards may clear a pending_apply marked no later than this.
+	out.appliedEpoch = a.pendingApply.epochNow()
 	a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
 	return out, nil
 }

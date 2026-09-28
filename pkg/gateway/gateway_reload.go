@@ -289,11 +289,16 @@ func runReloadCycle(
 			}
 			cfg = loaded
 		}
-		if err := exec(cfg); err != nil {
-			logger.Errorf("Config reload failed: %v", err)
+		// Record the rebuild outcome BEFORE finishReload can clear the
+		// pending flag, so a poller it releases reads this outcome.
+		seq := runningServices.reloadOutcome.begin()
+		execErr := exec(cfg)
+		if execErr != nil {
+			logger.Errorf("Config reload failed: %v", execErr)
 		} else {
 			logger.Info("Config reload completed successfully")
 		}
+		runningServices.reloadOutcome.finish(seq, execErr)
 		if !runningServices.finishReload(agentLoop.ClearReloadPending) {
 			slotHeld = false
 			return
