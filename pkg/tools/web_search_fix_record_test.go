@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -122,5 +123,62 @@ func TestFixK5_ConsecutiveEmptyDDGWarning(t *testing.T) {
 	})
 	if got := countLines(log, "duckduckgo returned no results repeatedly"); got < 2 {
 		t.Fatalf("want the consecutive-empty warning from run 3 onward (>=2 occurrences in 4 runs), got %d in:\n%s", got, log)
+	}
+}
+
+// D20 / spec test 50: EVERY search emits one record naming who served, in
+// which role, and the failure class — the named-provider ("chosen") path
+// included. Gate round 2 (silent-failure N1): the chosen hop and hard-fail
+// branches left the record empty (served:"", hop:false, class:"").
+func TestFixK5_ChosenHopRecordNamesFallback(t *testing.T) {
+	f := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
+		c.Brave = config.BraveConfig{Enabled: true, APIKeyRef: envRefBrave}
+	}, nil)
+	f.setHandler("brave", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	log := captureSearchLogFile(t, func() {
+		res := f.run(map[string]any{"query": "golang", "provider": "brave"})
+		if res.IsError {
+			t.Fatalf("expected the fallback to answer the named provider's failure: %s", res.ForLLM)
+		}
+	})
+	for _, want := range []string{
+		`"message":"web search call"`,
+		`"served":"duckduckgo"`,
+		`"role":"fallback"`,
+		`"hop":true`,
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("chosen-hop record missing %s, log:\n%s", want, log)
+		}
+	}
+	if !regexp.MustCompile(`"class":"[a-z_]+"`).MatchString(log) {
+		t.Fatalf("chosen-hop record must carry the named provider's failure class, log:\n%s", log)
+	}
+}
+
+func TestFixK5_ChosenHardFailRecordCarriesClass(t *testing.T) {
+	f := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
+		c.FallbackProvider = config.SearchProviderPerplexity
+		c.Perplexity = config.PerplexityConfig{Enabled: true, APIKeyRef: envRefPerplexity}
+	}, nil)
+	f.setHandler("perplexity", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	log := captureSearchLogFile(t, func() {
+		res := f.run(map[string]any{"query": "golang", "provider": "perplexity", "include_domains": []any{"example.com"}})
+		if !res.IsError {
+			t.Fatalf("expected a hard fail: %s", res.ForLLM)
+		}
+	})
+	if !strings.Contains(log, `"message":"web search call"`) {
+		t.Fatalf("no record emitted, log:\n%s", log)
+	}
+	if !regexp.MustCompile(`"class":"[a-z_]+"`).MatchString(log) {
+		t.Fatalf("chosen hard-fail record must carry the failure class, log:\n%s", log)
+	}
+	if strings.Contains(log, `"hop":true`) {
+		t.Fatalf("a capability use never hops, but the record says hop:true, log:\n%s", log)
 	}
 }
