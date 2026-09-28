@@ -1,7 +1,9 @@
 # Feature Specification: Web search default, fallback, and provider capabilities
 
 **Created**: 2026-09-26
-**Status:** Draft
+**Status:** Implemented
+
+**Correction (2026-09-28):** Synced against the code that landed in PR #944 (merge `faaddc6e6`, ADR-096). The gate rounds' fixes are in the ADR's own "Amendment — 2026-09-28" section; this pass carries the same facts into the build instructions and closes a few citation and contract gaps the ADR amendment did not cover. See the dated correction lines below.
 
 Revised 2026-09-26 against founder decisions, then again the same day (round 2) to follow the ADR's corrections after the adversarial review. The decision record is [ADR-096 — Web search: a default, a fallback, and an honest tool](../architecture/ADR-096-web-search-provider-model.md), whose changelog lists every round-2 change and the four questions still open for the founder. This file is the build instructions. Where an earlier draft disagreed, the later revision wins: see [What changed from the first draft](#what-changed-from-the-first-draft) and [What changed in round 2](#what-changed-in-round-2).
 **Input**: Founder decisions F1–F10 for the feature that follows the web-search credential fix, which landed as commit `07a75c104` and is this spec's evidence baseline. Issue [#47](https://github.com/elicify-ai/omnipus/issues/47) is background only.
@@ -81,6 +83,8 @@ SearXNG is descoped by the founder for this feature. One line, here, so it is no
 GitNexus was not available in this session (no GitNexus tools in the tool list). The impact rows are from a direct search of callers, not from a graph run. Certainty for those rows is **Inferred**.
 
 Citations below were read from commit `07a75c104`, and in the round-2 pass their **content** was re-read, not only their existence. There are no uncommitted edits in `pkg/tools/web.go` or `pkg/credentials/inject.go` on this tree; the only modified files are `pkg/tools/web_test.go` and an unrelated evidence JSON.
+
+**Correction (2026-09-28):** The table below cites everything as living in `pkg/tools/web.go`, because that was true at the writing baseline `07a75c104`. What actually shipped split most of ADR-096's new logic into sibling files, and this spec never names them: `pkg/tools/web_search.go` (the resolver, the R-table ladder, `normalizeSearchDomains`, the capability refusals, the per-call `searchCallRecord`, `sanitizeProviderMessage`'s redact-and-truncate, `ddgEmptyWarnThreshold`), `pkg/tools/web_search_keys.go` (per-provider key/base-URL plumbing for the dynamic path), `pkg/config/search_provider_catalogue.go` (the single catalogue FR-035 requires), `pkg/config/web_search_roles.go` (the D11/FR-030 migration, `MigrateWebSearchRoles`), and `pkg/gateway/rest_integrations_roles.go` (the new gateway handlers — `buildIntegrationResponse`, `handleIntegrationProviderUpdate`, `applySearchIntegrationRoles` — which replace the `activeSearchProviderID` / `applySearchIntegration` row below; those two symbols are confirmed removed from `pkg/gateway/rest_integrations_auth.go`, not merely superseded in place). `pkg/tools/web.go` keeps the per-provider `Search` methods and the legacy single-provider chain (used only when `Roles` is nil). Code wins; the symbol names in the table below are still correct, only their file is not, in these cases.
 
 ### Symbols involved
 
@@ -385,6 +389,8 @@ Two rules on every provider message that reaches this text:
 | It passes through the registered sensitive values before it is returned or logged | `TavilySearchProvider.Search` sends `"api_key": apiKey` in the **JSON request body**, so an upstream 4xx from a provider, proxy or WAF that echoes the payload has a path into the model's context and the transcript. `cfg.RegisterSensitiveValues` (boot step 6) already holds every resolved plaintext — this invokes an existing mitigation rather than building one |
 | It is truncated to 300 characters | An unbounded upstream string in a per-turn result is both a cost and a leak surface |
 
+**Correction (2026-09-28): a second, narrower redaction layer that this section never described.** `pkg/tools/web.go::redactURLUserinfo` strips a `user:password@` segment from any message that names a URL, before that message reaches `buildDynamicSearchProviders`'s constructor-failure log and the `not usable: <cause>` text a call surfaces (comment cites "gate round 2, security NEW-1"). This is a different secret class than the row above: `RegisterSensitiveValues` redacts *resolved API keys* it already knows about; a credentialed URL (for example a malformed SearXNG or Exa `base_url` with embedded basic-auth) is never registered there, and Go's own `url.Parse` error quotes the whole offending input, including the password, verbatim. Both layers now apply: registered-secret redaction plus truncation for provider *messages*, and this regex-based redaction for URL userinfo specifically, wherever a URL can appear in a constructor error. No FR named this; it is added to FR-036's evidence rather than reopened as a new requirement, since it strengthens the same "no secret reaches the transcript" property FR-036 already states.
+
 | Rule | |
 |---|---|
 | Every provider that was called is listed, with its class and message | |
@@ -484,6 +490,8 @@ Send `temperature: 0` on every Perplexity search request. Do not send `0.2`. The
 | `exclude_domains` | list of hostnames, at most 10 | omit |
 
 **Hostname is defined by reference, not by adjective.** The repository already owns the validator: `pkg/gateway/video_embed_hosts.go::validVideoEmbedHosts`, which normalises, validates and de-duplicates while dropping syntactically invalid entries. Its rules apply here, so two implementers cannot write two validators:
+
+**Correction (2026-09-28):** `pkg/tools` cannot import `pkg/gateway`, so the search tool does not call `validVideoEmbedHosts` directly. It **mirrors** the rule set in its own `pkg/tools/web_search.go::validSearchHostname` / `normalizeSearchDomains` (same validity test, normalisation, per-entry 253-character cap and 10-entry count cap), as ADR-096's 2026-09-28 amendment already states. One behaviour is deliberately **not** mirrored: `validVideoEmbedHosts` drops an invalid entry and keeps going (it validates an operator-set config list at load time). `normalizeSearchDomains` rejects the whole call on the first invalid entry — matching this section's own rule below ("A value that fails validation is rejected. No search is attempted") — because these are agent-supplied call arguments, not a config list. The "Its rules apply here" sentence above means the hostname-validity rules, not the drop-vs-reject behaviour.
 
 | Question | Answer |
 |---|---|
@@ -590,6 +598,8 @@ So: the migration runs inside `bootCredentials`, **after step 4 and before the a
 
 It runs once, when the marker `tools.web.roles_migrated_at` is absent. Removing only `fallback_provider` later is R3 (unset), not a second migration.
 
+**Correction (2026-09-28):** This migration needed, and got, a founder-approved carve-out from an unrelated standing rule. `docs/internal/architecture/ADR-067-registry-fed-catalog-and-provider-identity.md`, §8c ("Amendment 2026-09-27") records a **narrow exemption** for the `roles_migrated_at` token from the 2026-09-15 greenfield ruling that otherwise bans migration/alias machinery in `pkg/config` and `pkg/providers` (`pkg/providers/greenfield_test.go::TestGreenfield_NoAliasMachinery`, `scripts/check-greenfield-providers.sh`). The exemption is scoped to the literal token `roles_migrated_at`, only in `pkg/config/config.go` and `pkg/config/web_search_roles.go`, and does not extend to provider-identity migrations generally. Neither this spec nor ADR-096 cited it; it belongs here because a reader following "why does a migration exist at all under the greenfield rule" needs this pointer.
+
 1. Compute the winner with the usable test — the provider `NewWebSearchTool` would construct at this moment, including the final DuckDuckGo branch that runs even when `duckduckgo.enabled` is false.
 2. **Defer if the install is ambiguous.** If any keyed provider is `enabled: true` with a non-empty `api_key_ref` whose key does not resolve, write nothing, log it, and retry on the next boot. Recording `duckduckgo` is wrong for that operator whether the cause is a missing key or a broken one, and deferring is safe because the pre-migration path still works. It is the same state `enabledButKeylessSearchProviders` already detects and warns about.
 3. Set `default_provider` to the winner's catalogue id (`glm_search` → `glm`; `baidu_search` → `baidu`).
@@ -640,7 +650,11 @@ Settings → Integrations, the Web Search group (`IntegrationsSection`). Voice r
 | Native model search in effect | The group states that the active model searches natively and that these settings are not currently deciding who answers, and names **no** provider as the one that answers (FR-031). Without this, a screen saying "Default: DuckDuckGo" is confidently naming a provider that is not being used |
 | Depth | The row shows the provider's configured depth, so an operator who inherited `advanced` from migration can see it and change it |
 
+**Correction (2026-09-28):** The Depth row above did not ship. `src/components/settings/WebSearchGroup.tsx` states this deliberately in its own header comment: "Depth and site-filter controls are deliberately absent: the landed contract carries no depth or capability field, so any control here would offer a value nothing would read — exactly what US-5 forbids." Neither `IntegrationProvider.yaml` nor `IntegrationProvidersResponse` carries a depth field, so there is nothing for a Settings row to read. An operator who inherited `advanced` from migration currently has no way to see it in Settings; they can still change it by hand-editing `tools.web.tavily.search_depth`. This is a real gap against this spec's own text, not an open design question — flagged for the founder as a follow-up, not fixed here, because adding the field is a contract change (five-step process) this pass did not make.
+
 `configured` on the wire may still mean "the secret is in the vault". It is not the badge.
+
+**Correction (2026-09-28):** The top-level `active_search` field (in [Contract shape](#contract-shape) below) gets the same treatment as the per-row `active` field: `pkg/gateway/rest_integrations_roles.go::buildIntegrationResponse` sets it to mirror `default_search` — the same stored id, no chain derivation — per its own comment ("active_search mirrors default_search … same stored id, no chain derivation"). The spec's Contract shape table documents this for the per-row `active` field but never mentions `active_search` by name; this is the same fact, restated for completeness.
 
 ---
 
@@ -666,6 +680,12 @@ Settings → Integrations, the Web Search group (`IntegrationsSection`). Voice r
 | `fallback_search` | string or null | The resolved fallback, or null when there is none |
 | `fallback_mode` is **not** added | — | The first draft had this. It is not a stored mode |
 | `fallback_ignored_reason` | string, optional | `same_as_default` when R5 healed a file |
+| `native_search_in_effect` | boolean | True when `prefer_native` is in effect for the active model (D19/FR-031). Not in the first two drafts of this table — added below |
+
+**Correction (2026-09-28), two gaps closed:**
+
+1. **`native_search_in_effect` was missing from this table entirely.** It shipped on `IntegrationProvidersResponse` (`contracts/openapi.yaml`, `pkg/api/generated/openapi_types.gen.go::IntegrationProvidersResponse.NativeSearchInEffect`) to satisfy FR-031/D19/test 52, and the contract's own doc comment flags the very gap this correction closes. It is always present (not optional): true when the active model's native search is in effect, false otherwise.
+2. **`default_search` and `fallback_search` have a third wire state this table did not name.** Both are `*string` with `omitempty` in the generated Go type, so a nil pointer omits the key — Go's `omitempty` cannot emit a literal JSON `null`. The three states actually served are: key **absent** (roles not yet decided — migration hasn't run or deferred), key **present with a string** (a role is set), and for `fallback_search` only, key **present with JSON `null`** (roles decided, no fallback). The third state does not come from the generated struct: `pkg/gateway/rest_integrations_roles.go::writeIntegrationResponse` does a documented post-marshal step — it marshals normally, then re-injects a literal `null` for `fallback_search` specifically when the roles are decided and no fallback was resolved, because "No fallback" must be distinguishable on the wire from "not decided yet". The generated wire struct itself is never hand-edited (Hard Constraint #8); this is a narrow, commented exception layered on top of it, not a parallel type.
 
 `IntegrationProviderUpdateRequest` needs more than one new field. Today it has `additionalProperties: false` and exactly three properties — `kind`, `api_key`, `active` — and the handler computes `makeActive := body.Active != nil && *body.Active`, so `active: false` is accepted and silently does nothing. The SPA offers only "Set active" and "Save & activate", so there is no way to store a key without activating and no way to deactivate.
 
@@ -1278,7 +1298,7 @@ The old "first match in the priority list wins" tests, if any encode that list a
 - **FR-033**: `PUT /api/v1/integrations/providers/{id}` MUST make its writes live in the same request by routing through `triggerReloadAndWaitOutcome`, which re-runs `InjectFromConfig` and rebuilds the tools. Usability MUST be judged after that reload, never before it. The response MUST be built from post-reload state. A reload failure MUST NOT undo the persisted writes and MUST be reported separately.
 - **FR-034**: `search_web` MUST have a production tool-UI registration, and the card MUST render for a tool call named `search_web` — the name the backend emits. The `list_directory` half of issue #898 is out of scope.
 - **FR-035**: One `searchProviderCatalogue` MUST be the single source of provider ids, config-section names, credential refs, keyed-or-keyless and capabilities, and every consumer MUST derive from it, including the contract's `id` enum. Adding a provider to it and nothing else MUST make that provider storable, injectable, selectable, warnable and listable.
-- **FR-036**: Every provider message included in a tool result or a log MUST pass through the registered sensitive values and MUST be truncated to 300 characters.
+- **FR-036**: Every provider message included in a tool result or a log MUST pass through the registered sensitive values and MUST be truncated to 300 characters. **Correction (2026-09-28):** a URL appearing in such a message MUST also have any `user:password@` userinfo redacted (`pkg/tools/web.go::redactURLUserinfo`), independent of whether that credential is a registered sensitive value — see [What the tool returns](#what-the-tool-returns).
 - **FR-037**: One `search_web` call MUST fit a 45-second wall-clock budget; a fallback that cannot fit MUST be skipped with the stated reason. The operator's configured depth MUST be a ceiling, and an agent `depth` above it MUST be clamped with a note. Every search call MUST emit one structured record naming the resolved default, the resolved fallback, the provider that answered, its role, the depth sent, and the failure class or hop/refusal/skip. A run of consecutive `empty` results from DuckDuckGo MUST produce a warning.
 
 ## Success criteria
@@ -1408,3 +1428,4 @@ Reachable by a user or an agent, with three claims that are checked separately a
 | Whether `prefer_native` should keep its `true` default | ADR-096 Q1 |
 | Whether R3's automatic DuckDuckGo fallback is worth keeping, given that nothing but a hand-edit produces an absent `fallback_provider` | ADR-096 Q3 |
 | The `list_directory` half of issue #898 | That issue |
+| **(2026-09-28, found in spec-sync)** A Settings depth-display row, so an operator who inherited `advanced` from migration can see and change it without a hand-edit | [Settings screen](#settings-screen) Depth row correction. Not shipped: the contract carries no depth field. Flagged for the founder rather than fixed here, because adding it is a contract change |
