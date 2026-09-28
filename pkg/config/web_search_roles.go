@@ -85,13 +85,13 @@ func (w *WebToolsConfig) UsableSearchProvider(id string) bool {
 // webRolesKeyedChainIDs derives the keyed subset of the PRE-ADR selection
 // chain — the tie-break order migration step 9 uses when more than one keyed
 // provider is switched off with a resolving ref. Derived from the catalogue's
-// LegacyChainPos values (D15), so the migration and the catalogue cannot
-// drift: a provider absent from the pre-ADR chain (Exa, LegacyChainPos 0)
+// PreADRChainPos values (D15), so the migration and the catalogue cannot
+// drift: a provider absent from the pre-ADR chain (Exa, PreADRChainPos 0)
 // never enters it, and DuckDuckGo is absent (keyless, never part of the
 // keyed tie-break).
 func webRolesKeyedChainIDs() []string {
 	var ids []string
-	for _, def := range legacyChainDefs() {
+	for _, def := range preADRChainDefs() {
 		if def.Keyed {
 			ids = append(ids, def.ID)
 		}
@@ -99,15 +99,15 @@ func webRolesKeyedChainIDs() []string {
 	return ids
 }
 
-// migrationWinnerChain returns the FULL PRE-ADR selection chain — the order
+// preADRChainIDs returns the FULL PRE-ADR selection chain — the order
 // pkg/tools/web.go::NewWebSearchTool evaluated before ADR-096 roles
 // (Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu > GLM). The
 // migration mirrors it verbatim (D11); Exa is correctly absent (it did not
 // exist pre-ADR, so a test-appended catalogue entry must not enter it
 // either).
-func (w *WebToolsConfig) migrationWinnerChain() []string {
+func (w *WebToolsConfig) preADRChainIDs() []string {
 	ids := make([]string, 0, len(SearchProviderCatalogue))
-	for _, def := range legacyChainDefs() {
+	for _, def := range preADRChainDefs() {
 		ids = append(ids, def.ID)
 	}
 	return ids
@@ -118,13 +118,13 @@ func (w *WebToolsConfig) migrationWinnerChain() []string {
 // spec's step 1: "including the final DuckDuckGo branch that runs even when
 // duckduckgo.enabled is false".
 //
-// Derived from the catalogue's LegacyChainPos order (D15), evaluated with the
+// Derived from the catalogue's PreADRChainPos order (D15), evaluated with the
 // same UsableSearchProvider test every other consumer uses. The final
 // fallback stays a literal DuckDuckGo: it mirrors the live constructor's
 // unconditional fallback branch, which is constructor logic — not a
 // catalogue property.
 func (w *WebToolsConfig) migrationWinnerID() string {
-	for _, def := range legacyChainDefs() {
+	for _, def := range preADRChainDefs() {
 		if w.UsableSearchProvider(def.ID) {
 			return def.ID
 		}

@@ -85,7 +85,7 @@ func TestSearchProviderCatalogue_ShippedContentPinned(t *testing.T) {
 	}
 	wantLegacy := []string{SearchProviderPerplexity, SearchProviderBrave, SearchProviderSearXNG, SearchProviderTavily, SearchProviderDuckDuckGo, SearchProviderBaidu, SearchProviderGLM}
 	w := &DefaultConfig().Tools.Web
-	if got := w.migrationWinnerChain(); !slices.Equal(got, wantLegacy) {
+	if got := w.preADRChainIDs(); !slices.Equal(got, wantLegacy) {
 		t.Errorf("migration legacy chain = %v, want %v", got, wantLegacy)
 	}
 }

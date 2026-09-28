@@ -49,13 +49,13 @@ type SearchProviderDef struct {
 	// Perplexity and Exa.
 	HonoursDepth       bool
 	HonoursSiteFilters bool
-	// LegacyChainPos is the provider's 1-based position in the PRE-ADR
+	// PreADRChainPos is the provider's 1-based position in the PRE-ADR
 	// selection chain (Perplexity > Brave > SearXNG > Tavily > DuckDuckGo >
 	// Baidu > GLM) that the roles migration mirrors verbatim (D11); 0 for
 	// providers absent from that chain (Exa). The migration is a backward
 	// fix: it records who the OLD chain would have picked, so new providers
 	// correctly never enter it.
-	LegacyChainPos int
+	PreADRChainPos int
 
 	// Accessors bind the def to its WebToolsConfig section. They are the
 	// ONE place the per-provider config fields are named; every derivation
@@ -78,7 +78,7 @@ var SearchProviderCatalogue = []SearchProviderDef{
 		ID: SearchProviderPerplexity, Section: "perplexity", DisplayName: "Perplexity",
 		Keyed: true, CredRef: "PERPLEXITY_API_KEY",
 		HonoursDepth: true, HonoursSiteFilters: true,
-		LegacyChainPos: 1,
+		PreADRChainPos: 1,
 		Enabled:        func(w *WebToolsConfig) bool { return w.Perplexity.Enabled },
 		SetEnabled:     func(w *WebToolsConfig, on bool) { w.Perplexity.Enabled = on },
 		APIKeyRef:      func(w *WebToolsConfig) string { return w.Perplexity.APIKeyRef },
@@ -87,7 +87,7 @@ var SearchProviderCatalogue = []SearchProviderDef{
 	{
 		ID: SearchProviderBrave, Section: "brave", DisplayName: "Brave Search",
 		Keyed: true, CredRef: "BRAVE_API_KEY",
-		LegacyChainPos: 2,
+		PreADRChainPos: 2,
 		Enabled:        func(w *WebToolsConfig) bool { return w.Brave.Enabled },
 		SetEnabled:     func(w *WebToolsConfig, on bool) { w.Brave.Enabled = on },
 		APIKeyRef:      func(w *WebToolsConfig) string { return w.Brave.APIKeyRef },
@@ -96,7 +96,7 @@ var SearchProviderCatalogue = []SearchProviderDef{
 	{
 		ID: SearchProviderSearXNG, Section: "searxng", DisplayName: "SearXNG",
 		RequiresBaseURL: true,
-		LegacyChainPos:  3,
+		PreADRChainPos:  3,
 		Enabled:         func(w *WebToolsConfig) bool { return w.SearXNG.Enabled },
 		SetEnabled:      func(w *WebToolsConfig, on bool) { w.SearXNG.Enabled = on },
 		BaseURL:         func(w *WebToolsConfig) string { return w.SearXNG.BaseURL },
@@ -105,7 +105,7 @@ var SearchProviderCatalogue = []SearchProviderDef{
 		ID: SearchProviderTavily, Section: "tavily", DisplayName: "Tavily",
 		Keyed: true, CredRef: "TAVILY_API_KEY",
 		HonoursDepth: true, HonoursSiteFilters: true,
-		LegacyChainPos: 4,
+		PreADRChainPos: 4,
 		Enabled:        func(w *WebToolsConfig) bool { return w.Tavily.Enabled },
 		SetEnabled:     func(w *WebToolsConfig, on bool) { w.Tavily.Enabled = on },
 		APIKeyRef:      func(w *WebToolsConfig) string { return w.Tavily.APIKeyRef },
@@ -113,14 +113,14 @@ var SearchProviderCatalogue = []SearchProviderDef{
 	},
 	{
 		ID: SearchProviderDuckDuckGo, Section: "duckduckgo", DisplayName: "DuckDuckGo",
-		LegacyChainPos: 5,
+		PreADRChainPos: 5,
 		Enabled:        func(w *WebToolsConfig) bool { return w.DuckDuckGo.Enabled },
 		SetEnabled:     func(w *WebToolsConfig, on bool) { w.DuckDuckGo.Enabled = on },
 	},
 	{
 		ID: SearchProviderBaidu, Section: "baidu_search", DisplayName: "Baidu Search",
 		Keyed: true, CredRef: "BAIDU_API_KEY",
-		LegacyChainPos: 6,
+		PreADRChainPos: 6,
 		Enabled:        func(w *WebToolsConfig) bool { return w.BaiduSearch.Enabled },
 		SetEnabled:     func(w *WebToolsConfig, on bool) { w.BaiduSearch.Enabled = on },
 		APIKeyRef:      func(w *WebToolsConfig) string { return w.BaiduSearch.APIKeyRef },
@@ -133,7 +133,7 @@ var SearchProviderCatalogue = []SearchProviderDef{
 		// GLM's depth axis has no low value and its site-filter wire shape
 		// is unverified — D9 refuses site filters on GLM entirely.
 		HonoursSiteFilters: false,
-		LegacyChainPos:     7,
+		PreADRChainPos:     7,
 		Enabled:            func(w *WebToolsConfig) bool { return w.GLMSearch.Enabled },
 		SetEnabled:         func(w *WebToolsConfig, on bool) { w.GLMSearch.Enabled = on },
 		APIKeyRef:          func(w *WebToolsConfig) string { return w.GLMSearch.APIKeyRef },
@@ -143,7 +143,7 @@ var SearchProviderCatalogue = []SearchProviderDef{
 		ID: SearchProviderExa, Section: "exa", DisplayName: "Exa",
 		Keyed: true, CredRef: "EXA_API_KEY",
 		HonoursSiteFilters: true,
-		LegacyChainPos:     0, // not in the PRE-ADR chain — it did not exist
+		PreADRChainPos:     0, // not in the PRE-ADR chain — it did not exist
 		Enabled:            func(w *WebToolsConfig) bool { return w.Exa.Enabled },
 		SetEnabled:         func(w *WebToolsConfig, on bool) { w.Exa.Enabled = on },
 		APIKeyRef:          func(w *WebToolsConfig) string { return w.Exa.APIKeyRef },
@@ -162,18 +162,18 @@ func SearchProviderDefByID(id string) (SearchProviderDef, bool) {
 	return SearchProviderDef{}, false
 }
 
-// legacyChainDefs returns the catalogue defs that sit on the PRE-ADR
+// preADRChainDefs returns the catalogue defs that sit on the PRE-ADR
 // selection chain, in that chain's order — the order the roles migration
 // must mirror (D11) and the tie-break order its step 9 uses.
-func legacyChainDefs() []SearchProviderDef {
+func preADRChainDefs() []SearchProviderDef {
 	sorted := make([]SearchProviderDef, 0, len(SearchProviderCatalogue))
 	for _, def := range SearchProviderCatalogue {
-		if def.LegacyChainPos > 0 {
+		if def.PreADRChainPos > 0 {
 			sorted = append(sorted, def)
 		}
 	}
 	slices.SortStableFunc(sorted, func(a, b SearchProviderDef) int {
-		return a.LegacyChainPos - b.LegacyChainPos
+		return a.PreADRChainPos - b.PreADRChainPos
 	})
 	return sorted
 }
