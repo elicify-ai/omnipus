@@ -40,12 +40,13 @@
  * ROOT CAUSE (still accurate, now closed by the #1009 fix above): the
  * AgentPicker's `['agents']` react-query cache (src/hooks/useChatAgents.ts)
  * is prefetched once per page load by AppShell.tsx and, before the #1009
- * fix, had no websocket-driven invalidation for agent creation. The ONLY
- * real-product path that creates an agent — src/components/agents/
+ * fix, had no websocket-driven invalidation for agent creation. The only
+ * UI path that creates an agent — src/components/agents/
  * CreateAgentModal.tsx — calls `queryClient.invalidateQueries({ queryKey:
  * ['agents'] })` right after a successful create, so a real user's own tab
  * always sees their own new agent immediately THROUGH THAT PATH; every
- * other path relied on the 30s global staleTime (src/lib/queryClient.ts)
+ * other path — including the create_agent tool (#1009's other real-user
+ * vector) — relied on the 30s global staleTime (src/lib/queryClient.ts)
  * elapsing, or a focus/visibility event, before #1009's push-half frame
  * closed the gap directly. browser-live-video.spec.ts's `beforeEach`
  * navigates to "/" ONCE (populating the cache with the agents that existed
