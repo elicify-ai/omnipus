@@ -628,6 +628,15 @@ type PathHandle struct {
 	// classifySkillsGatePath. WriteFile below emits the D6.1.1/FR-071 audit
 	// record from it AFTER the write actually succeeds, never before.
 	skillsWriteAudit *skillsWriteAuditFields
+
+	// readOnly makes the "this handle only ever reads" invariant a type-level
+	// property instead of caller discipline (T2, type-design-analyzer finding
+	// on the 8-reviewer #920 gate). Set only by readConfinedMountHandle,
+	// below — the Judge's read-confined FSOpRead/FSOpList reach into a
+	// workspace mount. Every write-capable method (WriteFile, MkdirAll —
+	// PathHandle's only two) checks it first and returns ErrHandleReadOnly
+	// immediately, before doing any I/O.
+	readOnly bool
 }
 
 // recheckUnrestrictedCarveOut re-resolves h.abs (following any symlink that
@@ -683,6 +692,9 @@ func (h *PathHandle) ReadFile() ([]byte, error) {
 // sandboxFs.WriteFile used for the confined (root-backed) case, and
 // fileutil.WriteFileAtomic's contract for the unrestricted (host) case.
 func (h *PathHandle) WriteFile(data []byte) error {
+	if h.readOnly {
+		return ErrHandleReadOnly
+	}
 	if h.root == nil {
 		if err := h.recheckUnrestrictedCarveOut(); err != nil {
 			return err
@@ -786,6 +798,9 @@ func (h *PathHandle) OpenRegularNonBlocking() (fs.File, error) {
 
 // MkdirAll creates the handle's target directory (and any missing parents).
 func (h *PathHandle) MkdirAll(perm os.FileMode) error {
+	if h.readOnly {
+		return ErrHandleReadOnly
+	}
 	if h.root == nil {
 		if err := h.recheckUnrestrictedCarveOut(); err != nil {
 			return err
@@ -1280,6 +1295,14 @@ func (rp *resolvePath) readConfinedMountHandle(realAbs string) (*PathHandle, boo
 		return nil, false, nil
 	}
 	handle, err := newMountRootHandle(root, realAbs, realAbs, rp.policy)
+	if handle != nil {
+		// T2: this is the ONLY call site that ever resolves FSOpRead/
+		// FSOpList for a mount handle (the guard at the top of this
+		// function) — mark it read-only at the type level rather than
+		// relying on that guard alone. newMountRootHandle's FSOpWrite/
+		// FSOpServe call site (resolveValidatedPath, below) never sets this.
+		handle.readOnly = true
+	}
 	return handle, true, err
 }
 

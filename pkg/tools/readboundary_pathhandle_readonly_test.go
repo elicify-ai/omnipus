@@ -22,6 +22,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,6 +61,8 @@ func TestPathHandle_ReadConfinedMountHandleRefusesWriteFile(t *testing.T) {
 
 	if writeErr := h.WriteFile([]byte("tampered\n")); writeErr == nil {
 		t.Fatal("T2: WriteFile on a read-confined mount handle must fail at the type level")
+	} else if !errors.Is(writeErr, ErrHandleReadOnly) {
+		t.Fatalf("T2: want ErrHandleReadOnly, got %v", writeErr)
 	}
 
 	onDisk, err := os.ReadFile(mountFile)
@@ -94,6 +97,8 @@ func TestPathHandle_ReadConfinedMountHandleRefusesMkdirAll(t *testing.T) {
 
 	if mkErr := h.MkdirAll(0o755); mkErr == nil {
 		t.Fatal("T2: MkdirAll on a read-confined mount handle must fail at the type level")
+	} else if !errors.Is(mkErr, ErrHandleReadOnly) {
+		t.Fatalf("T2: want ErrHandleReadOnly, got %v", mkErr)
 	}
 
 	if _, statErr := os.Stat(newDir); statErr == nil {
