@@ -147,18 +147,41 @@ afterEach(() => {
 
 describe('pop-out re-dock no-clobber and opener-only (§12 #8c, #19)', () => {
   it('RED — a pop-out close does NOT re-dock while a DIFFERENT panel is open (MAJ-006)', async () => {
-    render(<LibraryPanel />)
+    // F-B1 (CHECK part B): the MAJ-208 ownership guard absorbs the broadcast
+    // unless THIS TAB is the opener — without opener-ness the no-clobber
+    // checks are unreachable and a mutant deleting both stayed green. This
+    // test therefore establishes opener-ness FIRST (same flow as the
+    // same-panel scenario below): only MAJ-006 can now keep the docked
+    // DIFFERENT panel in place.
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({ closed: false, close: () => {} } as unknown as Window)
+    act(() => {
+      s81().openPanel('library', { workspaceId: 'ws-current' })
+    })
+    render(<ShellHostedLibraryPanel {...makeShellProps({ workspaceId: 'ws-current' })} />)
+    await waitFor(() => expect(registeredExpand).not.toBeNull())
+
+    // Establish THIS TAB as the opener: Expand through the shell's
+    // registerExpand path; the docked panel closes (US-6/SP-12) and the
+    // window handle exists HERE.
+    const opened = invokeShellExpand()
+    expect(opened).toBe(true)
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(s81().activePanel).toBeNull()
+
+    // The operator docks a DIFFERENT panel while the pop-out lives.
     act(() => {
       s81().openPanel('browser', { sessionId: 'sess-1', agentId: 'mia' })
     })
 
+    // The pop-out tab closes.
     act(() => {
-      announceLibraryPopoutClosed('ws-99')
+      announceLibraryPopoutClosed('ws-other')
     })
-    // BroadcastChannel delivery is async. Wait long enough for today's
-    // unconditional re-dock to land, then assert it did not.
+    // BroadcastChannel delivery is async. Wait long enough for a would-be
+    // re-dock to land, then assert the Browser was NOT clobbered.
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(s81().activePanel).toEqual({ id: 'browser', context: { sessionId: 'sess-1', agentId: 'mia' } })
+    openSpy.mockRestore()
   })
 
   it('RED — a tab that never opened the pop-out (no window handle) does not re-dock (MAJ-208)', async () => {

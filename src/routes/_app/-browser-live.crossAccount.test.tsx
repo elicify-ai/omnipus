@@ -1,6 +1,9 @@
 // -browser-live.crossAccount.test.tsx — side-panel-shell-spec.md §12 #17
-// (MIN-009 shared-link authorization, re-scoped to the full-page route per
-// SP-28).
+// (MIN-009: the owner's full-page /browser-live link reaching ANOTHER
+// account — a copied or leaked URL, not a share: SP-37 rules the Browser
+// panel is not shareable, so the panel offers no share or copy-link
+// affordance and the full-page expand is the owner's own navigation.
+// Re-scoped to the full-page route per SP-28).
 //
 // INTEGRATION pack, mounted through the REAL routeTree + a real
 // memory-history router (same technique as the chat deep-link pack), with
@@ -155,7 +158,9 @@ async function flushViaTimers() {
 describe('§12 #17 — cross-account denial on the full-page /browser-live route (MIN-009, SP-28 re-scope)', () => {
   function mountOwnerLink() {
     const client = makeClient()
-    // The owner's shareable link, opened by a second account (this test's
+    // The owner's full-page link — reaching a second account as a copied or
+    // leaked URL (SP-37: the Browser panel is NOT shareable; there is no
+    // share/copy-link affordance to hand it over) (this test's
     // session cookie belongs to whoever the gateway authenticates it as —
     // the fake gateway denies the attach).
     const router = createRouter({
