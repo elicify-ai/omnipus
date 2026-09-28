@@ -736,6 +736,8 @@ Routing rules inside the flow: the architect's cross-cutting pass never adjudica
 
 The small-fixes carve-out this section used to carry is now the **small** row of the sizes table above — Round 6 generalised it from a carve-out into one of three sizes. Landing rules (5.7) are unchanged by size: every size lands only after its gate and the founder's yes in chat.
 
+**Fix/re-review rounds on a gate (founder, 2026-09-28).** A review gate gets at most **5** fix/re-review rounds; a finding still open after round 5 stops and escalates to the founder through team-lead — there is never a round 6. Each re-review round re-dispatches **only** the reviewer(s) whose findings that round fixed, never the whole gate — the gate's first pass still runs every reviewer for that size (small: 1, standard: 3, feature: 8). This is unchanged for the whole-epic gate that runs on the integration branch before the `main` merge. The round count is recorded in the squad's ledger row (5.9, coordination-ledger knowledge file).
+
 ### 7.2 Failure handling (replaces the ci-triage role — founder decision)
 
 There is no ci-triage role. The founder asked why "is this failure ours?" should matter; the answer is that it should not — asking it invites "not mine" closures, exactly what Hard Constraint #7 forbids ("pre-existing / not mine / broken on main too are NEVER acceptable closure paths"). Decision: **every failure is fixed, whatever its origin; coordination is the orchestrator's job.**
