@@ -53,11 +53,30 @@ type steeringQueue struct {
 	closedGenerations map[string]int
 	terminalizing     map[string]*steeringTerminalTransition
 	mode              SteeringMode
+	// lastFinishingMu / lastFinishingScope thread the round-3 finishing-
+	// window flag from pushItemScopeChecked into the caller-facing
+	// EnqueueStatus return shape. lastFinishingScope is cleared on every
+	// read so it never lingers past a single enqueue.
+	lastFinishingMu    sync.Mutex
+	lastFinishingScope string
 }
 
 type steeringTerminalTransition struct {
-	done       chan struct{}
+	done chan struct{}
+	// committing is set when runTerminalTransition has cleared the main
+	// queue and is about to call the durable transition closure — items
+	// arriving after this point are refused (the scope has lost its
+	// consumer). Deprecated by round-3: items arriving BEFORE committing
+	// (the finishing window) now land in finishingItems below and are
+	// returned to runTerminalTransition's caller, never silently refused.
 	committing bool
+	// finishingItems captures steers/wakes that arrive after
+	// runTerminalTransition has taken its open-scope lock but before the
+	// durable terminal commit has fully landed. The closing hand-off
+	// (completeSteeredTurn, issue #1020 round-3) revives the child into a
+	// new generation carrying these items, never refuses them and never
+	// strands them on a now-terminal record.
+	finishingItems []steeringQueueItem
 }
 
 type steeringQueueItem struct {
@@ -108,58 +127,119 @@ func (sq *steeringQueue) pushScope(scope string, msg providers.Message) error {
 }
 
 func (sq *steeringQueue) pushItemScope(scope string, item steeringQueueItem) error {
-	return sq.pushItemScopeChecked(scope, item, nil)
+	_, err := sq.pushItemScopeChecked(scope, item, nil)
+	return err
 }
 
 // pushItemScopeChecked serializes enqueue with a lifecycle terminal
-// transition. An enqueue joins during delivery, but is refused once the
-// empty scope has been handed to the durable terminal write.
-func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueItem, checkOpen func() error) error {
+// transition (issue #1020 round-3). The protocol has two windows:
+//
+//  1. An open terminal transition is in flight (runTerminalTransition has
+//     installed one for this scope and is running prepare() / transition()
+//     underneath the closing hand-off). Items arrive into transition.
+//     finishingItems — they are NOT refused, NOT appended to the main
+//     queue (which would deadlock the closing hand-off's own recheck), and
+//     are drained by the hand-off via drainFinishingItems before the
+//     deferred finish() drops the transition. Round-3 turns this into the
+//     revival / drop / continue-from-queue contract completeSteeredTurn
+//     and reportSteeredSessionTerminalUpward implement.
+//  2. No open transition. Items join the main queue under the usual scope
+//     check (terminal record refusal via checkOpen, MaxQueueSize cap).
+//
+// The boolean return is the round-3 finishing-window flag the internal
+// enqueueSteeringItemWithStatus uses to record EnqueueStatusPostFinish on
+// the caller's return shape. False on every other path.
+func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueItem, checkOpen func() error) (finishing bool, err error) {
 	scope = normalizeSteeringScope(scope)
 	sq.mu.Lock()
 	if transition := sq.terminalizing[scope]; transition != nil {
-		if transition.committing {
+		// Round-3 finishing window: accept the item into the transition's
+		// own buffer rather than the main queue. The closing hand-off
+		// (runTerminalTransition / completeSteeredTurn) reads this buffer
+		// on exit and either revives the child into a new generation
+		// (post-finish steer) or drops it durably (post-finish wake on a
+		// now-terminal record). The pre-round-3 "committing" refusal was
+		// deleted: it stranded items pushed by hooks running inside
+		// commitSteeredTerminal itself, the exact regression S1 covers.
+		if len(transition.finishingItems) >= MaxQueueSize {
 			sq.mu.Unlock()
-			return fmt.Errorf("%w: %s", errSteeringScopeClosed, scope)
+			return false, fmt.Errorf("steering queue is full")
 		}
-		queue := sq.queues[scope]
-		if len(queue) >= MaxQueueSize {
-			sq.mu.Unlock()
-			return fmt.Errorf("steering queue is full")
-		}
-		sq.queues[scope] = append(queue, item)
+		transition.finishingItems = append(transition.finishingItems, item)
 		sq.mu.Unlock()
-		return nil
+		sq.lastFinishingMu.Lock()
+		sq.lastFinishingScope = scope
+		sq.lastFinishingMu.Unlock()
+		return true, nil
 	}
 	if _, closed := sq.closedGenerations[scope]; closed {
 		sq.mu.Unlock()
-		return fmt.Errorf("%w: %s", errSteeringScopeClosed, scope)
+		return false, fmt.Errorf("%w: %s", errSteeringScopeClosed, scope)
 	}
 	if checkOpen != nil {
 		if err := checkOpen(); err != nil {
 			sq.mu.Unlock()
-			return err
+			return false, err
 		}
 	}
 	queue := sq.queues[scope]
 	if len(queue) >= MaxQueueSize {
 		sq.mu.Unlock()
-		return fmt.Errorf("steering queue is full")
+		return false, fmt.Errorf("steering queue is full")
 	}
 	sq.queues[scope] = append(queue, item)
 	sq.mu.Unlock()
-	return nil
+	return false, nil
+}
+
+// lastEnqueueWasFinishing returns true when the previous pushItemScopeChecked
+// call landed an item in a terminal-transition finishingItems buffer. The
+// flag is per-queue and single-shot: any subsequent main-queue push clears
+// it. Used by enqueueSteeringItemWithStatus to thread the round-3
+// EnqueueStatusPostFinish status into the caller's return shape.
+func (sq *steeringQueue) lastEnqueueWasFinishing(scope string) bool {
+	if sq == nil {
+		return false
+	}
+	sq.lastFinishingMu.Lock()
+	defer sq.lastFinishingMu.Unlock()
+	was := sq.lastFinishingScope == scope
+	sq.lastFinishingScope = ""
+	return was
 }
 
 // runTerminalTransition runs prepare while a still-live enqueue can join the
-// scope, then atomically hands an empty scope to transition. Enqueues that
-// arrive during prepare abort the handoff and retain a consumer; enqueues
-// arriving during the durable terminal write are refused so they cannot be
-// accepted after the scope has lost its consumer.
+// scope, then atomically hands an empty scope to transition (issue #1020
+// round-3). Enqueues that arrive during prepare or transition land in the
+// transition's finishingItems buffer; the transition() callback (which is
+// the only path with line-of-sight to the buffer mid-run) is expected to
+// call drainFinishingItems to claim them before returning. Items left in
+// the buffer after runTerminalTransition returns are dropped (their only
+// producer-visible state was the accepted push, and the durable write has
+// already committed by the time finishTerminalTransition clears the
+// transition entry).
 func (sq *steeringQueue) runTerminalTransition(
 	scope string,
 	prepare func() error,
 	transition func() (bool, error),
+) (started bool, terminal bool, err error) {
+	return sq.runTerminalTransitionWithFinishing(scope, prepare, transition, nil)
+}
+
+// runTerminalTransitionWithFinishing is runTerminalTransition's
+// round-3 sibling (issue #1020): onFinishing is invoked exactly once at
+// the close of runTerminalTransition (after prepare, after the durable
+// transition, after the deferred finish), with every item captured in
+// the open transition's finishingItems buffer. completeSteeredTurn uses
+// this to either revive a post-finish steer into a new generation or
+// prepend a refused-commit steer to the main queue so the existing
+// retry loop drains it as a same-generation continuation. Pass nil for
+// the pre-round-3 behaviour (items in the buffer are GC'd at finish).
+func (sq *steeringQueue) runTerminalTransitionWithFinishing(
+	scope string,
+	prepare func() error,
+	transition func() (bool, error),
+	onFinishing func(items []steeringQueueItem),
 ) (started bool, terminal bool, err error) {
 	scope = normalizeSteeringScope(scope)
 	for {
@@ -186,8 +266,20 @@ func (sq *steeringQueue) runTerminalTransition(
 		}
 		defer finish()
 
-		if err = prepare(); err != nil {
-			return true, false, err
+		// prepare runs while the open transition accepts new items into
+		// finishingItems; round-3 wants every accepted item claimed by
+		// the caller via the onFinishing closure, so we snapshot items
+		// both on the prepare-error path and after the durable transition
+		// returns.
+		if prepareErr := prepare(); prepareErr != nil {
+			sq.mu.Lock()
+			items := current.finishingItems
+			current.finishingItems = nil
+			sq.mu.Unlock()
+			if onFinishing != nil {
+				onFinishing(items)
+			}
+			return true, false, prepareErr
 		}
 
 		sq.mu.Lock()
@@ -199,8 +291,83 @@ func (sq *steeringQueue) runTerminalTransition(
 		sq.mu.Unlock()
 
 		terminal, err = transition()
+		sq.mu.Lock()
+		items := current.finishingItems
+		current.finishingItems = nil
+		sq.mu.Unlock()
+		if onFinishing != nil {
+			onFinishing(items)
+		}
 		return true, terminal, err
 	}
+}
+
+// drainFinishingItems atomically drains the open transition's
+// finishingItems buffer (if any) under the steering mutex. Used by
+// completeSteeredTurn's transition() callback to claim items accepted
+// during the finishing window right before commitSteeredTerminal writes
+// the durable terminal state — those items are then either revived into
+// a new generation (a post-finish steer) or prepended to the main queue
+// so the retry loop drains them as a same-generation continuation
+// (round-3 protocol).
+//
+// Returns nil when no transition is open for scope, so callers can use
+// this method unconditionally as part of their transition closure.
+func (sq *steeringQueue) drainFinishingItems(scope string) []steeringQueueItem {
+	if sq == nil {
+		return nil
+	}
+	scope = normalizeSteeringScope(scope)
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	transition := sq.terminalizing[scope]
+	if transition == nil {
+		return nil
+	}
+	items := transition.finishingItems
+	transition.finishingItems = nil
+	return items
+}
+
+// takeFinishingItems atomically drains the open transition's finishingItems
+// buffer (if any) and clears the transition's commit gate so subsequent
+// pushes are refused. Used by reportSteeredSessionTerminalUpward (S4) to
+// recover items accepted while a Stop cascade was writing the terminal
+// state without the steering mutex: the items are routed to durable storage
+// (a steer can be revived, a wake is already in the inbox) and the
+// in-memory queue ends empty.
+func (sq *steeringQueue) takeFinishingItems(scope string) []steeringQueueItem {
+	scope = normalizeSteeringScope(scope)
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	transition := sq.terminalizing[scope]
+	if transition == nil {
+		return nil
+	}
+	items := transition.finishingItems
+	transition.finishingItems = nil
+	return items
+}
+
+// finishAndClearFinishing is reportSteeredSessionTerminalUpward's
+// terminal-clear path: take the steering mutex, fail-soft-clear the open
+// transition's finishing buffer, refuse any subsequent push by flipping the
+// commit gate, and clear the transition entry. Returning false leaves the
+// terminal writer to refuse (a concurrent commit in progress wins the
+// ordering). Used exclusively by the S4 Stop-race path.
+func (sq *steeringQueue) finishAndClearFinishing(scope string) {
+	scope = normalizeSteeringScope(scope)
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	transition := sq.terminalizing[scope]
+	if transition == nil {
+		return
+	}
+	transition.committing = true
+	transition.finishingItems = nil
+	delete(sq.terminalizing, scope)
+	delete(sq.closedGenerations, scope)
+	close(transition.done)
 }
 
 func (sq *steeringQueue) finishTerminalTransition(scope string, transition *steeringTerminalTransition) {
@@ -372,7 +539,7 @@ func (al *AgentLoop) Steer(msg providers.Message) error {
 		scope = ts.sessionKey
 		agentID = ts.agentID
 	}
-	_, err := al.enqueueSteeringMessage(scope, agentID, msg, "")
+	_, _, err := al.enqueueSteeringMessage(scope, agentID, msg, "")
 	return err
 }
 
@@ -411,7 +578,7 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Content: msg.Content,
 		Media:   append([]string(nil), msg.Media...),
 	}
-	_, err = al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg, "")
+	_, _, err = al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg, "")
 	return err
 }
 
@@ -629,23 +796,71 @@ func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction st
 // server-assigned reference"). The resolved id is always returned so the
 // caller (the delegate tool's steer action) can hand it back to whoever
 // steered, to match a later receipt to this instruction.
+//
+// Status is the round-3 typed carrier the delegate tool maps onto its
+// caller-facing result text (issue #1020 round-3): a "post-finish" status
+// means the item landed in a terminal-transition's finishingItems buffer
+// rather than the main queue, and the closing hand-off (completeSteeredTurn)
+// will either revive the child into a new generation carrying it (steer) or
+// drop it durably (wake on a now-terminal record). A normal status means
+// the item joined the main queue as before.
 func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
-	return al.enqueueSteeringMessage(scope, agentID, msg, correlationID)
+	resolved, _, err := al.enqueueSteeringMessage(scope, agentID, msg, correlationID)
+	return resolved, err
 }
 
-func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
+// EnqueueSteeringMessageStatus is the rich return shape of the internal
+// enqueueSteeringMessage. pkg/agent-internal callers that need to react to
+// the round-3 post-finish status read this directly; the public
+// EnqueueSteeringMessage wrapper above strips the status to keep the
+// pkg/tools DelegateSteeringSink interface unchanged.
+func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
 	correlationID = strings.TrimSpace(correlationID)
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
-	if err := al.enqueueSteeringItem(scope, agentID, steeringQueueItem{message: msg, correlationID: correlationID}); err != nil {
-		return "", err
+	status := EnqueueStatusNormal
+	item := steeringQueueItem{message: msg, correlationID: correlationID}
+	st, err := al.enqueueSteeringItemWithStatus(scope, agentID, item, func() EnqueueStatus {
+		// Capture the post-finish status from the closing hand-off's
+		// transition buffer (the only path that lands an item during a
+		// terminal transition with non-refusal).
+		status = EnqueueStatusPostFinish
+		return status
+	})
+	if err != nil {
+		return "", status, err
 	}
-	return correlationID, nil
+	if st == EnqueueStatusPostFinish {
+		status = EnqueueStatusPostFinish
+	}
+	return correlationID, status, nil
 }
+
+// EnqueueStatus is the typed carrier for the round-3 finishing-window
+// outcome (issue #1020 round-3, founder ruling Q10 "the subagent decide
+// what to do"). pkg/tools's delegate-steer action maps this onto a
+// caller-facing text ("queued; the child is finishing and will see it
+// next") so a late steer is never silently accepted AND silently dropped.
+type EnqueueStatus int
+
+const (
+	// EnqueueStatusNormal: the item joined the main queue; it will be
+	// consumed by the child's next steering-poll at the next tool boundary.
+	EnqueueStatusNormal EnqueueStatus = iota
+	// EnqueueStatusPostFinish: the item arrived while the closing hand-off
+	// had the scope locked for terminal delivery. It was held in the
+	// transition's finishingItems buffer rather than refused; the closing
+	// hand-off either revives the child into a new generation carrying it
+	// (a steer) or drops it durably (a wake on a now-terminal record).
+	EnqueueStatusPostFinish
+)
 
 // EnqueueSteeringWake queues an upward wake into an already-live turn while
 // retaining the inbox message identity needed by I-3's consumed marker.
+// Returns (true, nil) when the wake was accepted into a terminal-transition
+// finishingItems buffer (round-3 finishing-window protocol, S3/S4); the
+// (false, nil) form means it joined the main queue as before.
 func (al *AgentLoop) EnqueueSteeringWake(scope, agentID, transcriptSessionID, messageID string, msg providers.Message) error {
 	if strings.TrimSpace(transcriptSessionID) == "" || strings.TrimSpace(messageID) == "" {
 		return fmt.Errorf("steering wake requires transcript session id and message id")
@@ -661,14 +876,27 @@ func (al *AgentLoop) EnqueueSteeringWake(scope, agentID, transcriptSessionID, me
 }
 
 func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQueueItem) error {
+	_, err := al.enqueueSteeringItemWithStatus(scope, agentID, item, nil)
+	return err
+}
+
+// enqueueSteeringItemWithStatus is enqueueSteeringItem's round-3 sibling:
+// when the underlying pushItemScopeChecked lands the item in a terminal-
+// transition finishingItems buffer (rather than refusing it or joining the
+// main queue), onPostFinish is invoked so the caller can record the
+// post-finish status in its return shape. The onPostFinish hook is nil-safe
+// for callers that don't care (every existing caller except the internal
+// post-finish-revival path).
+func (al *AgentLoop) enqueueSteeringItemWithStatus(scope, agentID string, item steeringQueueItem, onPostFinish func() EnqueueStatus) (EnqueueStatus, error) {
 	if al.steering == nil {
-		return fmt.Errorf("steering queue is not initialized")
+		return EnqueueStatusNormal, fmt.Errorf("steering queue is not initialized")
 	}
 
+	var status EnqueueStatus
 	// Pushed via pushItemScope directly, not pushScope/pushWakeScope: those
 	// two rebuild a steeringQueueItem from only message+wake, which would
 	// silently drop correlationID (issue #870) on every enqueue.
-	err := al.steering.pushItemScopeChecked(scope, item, func() error {
+	finishing, err := al.steering.pushItemScopeChecked(scope, item, func() error {
 		lifecycle := al.GetSessionLifecycleStore()
 		if lifecycle == nil {
 			return nil
@@ -685,13 +913,20 @@ func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQue
 			return nil
 		}
 	})
+	// Round-3 finishing-window flag: when pushItemScopeChecked lands the
+	// item in a terminal-transition finishingItems buffer (rather than
+	// refusing it or joining the main queue), record the post-finish
+	// status on the caller's return shape via onPostFinish.
+	if err == nil && finishing && onPostFinish != nil {
+		status = onPostFinish()
+	}
 	if err != nil {
 		logger.WarnCF("agent", "Failed to enqueue steering message", map[string]any{
 			"error": err.Error(),
 			"role":  item.message.Role,
 			"scope": normalizeSteeringScope(scope),
 		})
-		return err
+		return status, err
 	}
 
 	queueDepth := al.steering.lenScope(scope)
@@ -701,6 +936,7 @@ func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQue
 		"media_count": len(item.message.Media),
 		"queue_len":   queueDepth,
 		"scope":       normalizeSteeringScope(scope),
+		"status":      int(status),
 	})
 
 	meta := EventMeta{
@@ -737,7 +973,7 @@ func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQue
 		},
 	)
 
-	return nil
+	return status, nil
 }
 
 // SteeringMode returns the current steering mode.
@@ -1756,7 +1992,7 @@ func (al *AgentLoop) DeliverSessionMessage(_ context.Context, childSessionKey, c
 		if strings.TrimSpace(env.Text) == "" {
 			return fmt.Errorf("agent: session message: kind %q: empty text", kind)
 		}
-		_, enqErr := al.enqueueSteeringMessage(childSessionKey, childAgentID, providers.Message{
+		_, _, enqErr := al.enqueueSteeringMessage(childSessionKey, childAgentID, providers.Message{
 			Role:    "user",
 			Content: env.Text,
 		}, "")

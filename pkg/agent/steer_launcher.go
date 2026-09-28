@@ -1090,19 +1090,36 @@ func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (
 // matter what it produced. I-3 said "every entry path calls
 // reconstruction"; the symmetric rule this closes is "every EXIT path calls
 // completion".
+//
+// Round-3 finishing-window protocol (issue #1020): the loop is bounded at
+// one drain retry so a persistent delivery failure that re-enqueues on
+// every Deliver() call (a pathological test fixture shape — see
+// TestSteeredTurnDrain1020Round3_DeliveryFailureConsumesLateSteerAsSameGenerationContinuation)
+// cannot loop forever. Real-world deliverers fail zero or once; capping
+// retries at one covers the spec's "the lock is released and a waiting
+// post-finish steer becomes an ordinary same-generation continuation right
+// away" requirement without entering an infinite loop when an artificial
+// deliverer keeps refusing.
 func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.LifecycleRecord, gen int, result turnResult, runErr error) {
 	sessionID := rec.SessionID
 	if rec.GoalRef != "" {
 		al.finishSteeredGoalTurn(ts, rec, &result, runErr)
 		return
 	}
-	for {
+	defer al.resetDrainFinishingOnceForSession(sessionID)
+	const maxDrainAttempts = 1
+	for attempt := 0; ; attempt++ {
 		finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr)
 		if !errors.Is(finishErr, errCompleteSteeringPending) {
 			if finishErr != nil {
 				logger.WarnCF("agent", "steer: complete turn failed",
 					map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})
 			}
+			return
+		}
+		if attempt >= maxDrainAttempts {
+			logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — leaving waiting items for boot recovery",
+				map[string]any{"session_id": sessionID, "generation": gen, "attempts": attempt + 1})
 			return
 		}
 

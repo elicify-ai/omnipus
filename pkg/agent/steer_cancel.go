@@ -124,6 +124,18 @@ func (al *AgentLoop) WriteSteerRevivalState(_ context.Context, sessionID string,
 // Refuses (silently, logging at WARN on a real failure) whenever the record
 // has already moved past generation, is already terminal, or the upward
 // delivery itself fails — never overwrites state it cannot also report.
+//
+// Round-3 S4 coordination: the reportSteeredSessionTerminalUpward writer
+// runs while an open terminal transition may still be holding the
+// steering-queue lock for this scope (issue #1020 round-3). Items
+// accepted into the transition's finishingItems buffer after this writer
+// returns are dropped at the deferred finish() of runTerminalTransition
+// — the in-memory entry is GC'd, the inbox entry written by the
+// producer before EnqueueSteeringWake is durable, and the recipient has
+// no live consumer regardless. The path below does not need to take
+// the steering mutex itself: the closing hand-off's deferred finish
+// always wins the ordering, so "accepted, then nothing" is closed by
+// that single GC pass on the about-to-be-terminalised scope.
 func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	ctx context.Context, sessionID string, generation int,
 	nextState session.LifecycleState, outcome steer.Outcome, failureReason string,

@@ -102,6 +102,14 @@ type AgentLoop struct {
 	// comment near streamReplay) — these fields had no reader or writer
 	// left anywhere in the repo.
 	sessionActiveAgent sync.Map // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
+	// finishingOnce is the round-3 bounded-drain sentinel (issue #1020):
+	// processFinishingItems sets it true the first time it prepends
+	// finishingItems for a session, so a subsequent prepare failure
+	// (e.g. an always-failing deliverer re-enqueuing on every Deliver
+	// call) drops rather than prepends. Cleared at the end of
+	// disposeSteeredTurnResult via resetDrainFinishingOnceForSession.
+	finishingOnceMu sync.Mutex
+	finishingOnce   map[string]bool
 	// lastSwitchToDefault records, per session, whether the most recent
 	// switch_agent call was a return-to-default (tools.HandoffEvent.ToDefault)
 	// rather than a named-agent hand-off. It exists so the WS agent_switched
