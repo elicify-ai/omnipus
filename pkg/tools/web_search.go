@@ -966,12 +966,16 @@ func (t *WebSearchTool) executeChosen(
 		rec.role = "chosen"
 		return successText(text, id, "chosen", t.excludeNote(entries, id, req))
 	}
+	// D20: the record carries the class of the attempt that ended the call,
+	// on this path exactly as on executeDefaultPath (gate round 2).
+	rec.class = spErr.class
 	// A capability use never hops (US-4); usesCap was computed on entry. A
 	// plain named call hops only when the fallback passes the SAME
 	// eligibility gate as the default path (K4): site filters and the D17a
 	// time budget.
 	if hopClass(spErr.class) && !usesCap {
 		if reason := t.fallbackEligibility(entries, req, start); reason != "" {
+			rec.skip = reason
 			return ErrorResult(strings.Join([]string{
 				"search failed",
 				t.failureLine(id, "chosen", spErr.class, spErr.msg),
@@ -981,9 +985,13 @@ func (t *WebSearchTool) executeChosen(
 		if entries.usable[entries.fallbackID] {
 			text2, spErr2 := t.runProvider(ctx, start, entries.fallbackID, req)
 			if spErr2 == nil {
+				rec.servedID = entries.fallbackID
+				rec.role = "fallback"
+				rec.hop = true
 				return successText(text2, entries.fallbackID, "fallback",
 					[]string{t.hopNote(id, "chosen", spErr.class, spErr.msg)})
 			}
+			rec.class = spErr2.class
 			return ErrorResult(strings.Join([]string{"search failed",
 				t.failureLine(id, "chosen", spErr.class, spErr.msg),
 				t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}, "\n"))
