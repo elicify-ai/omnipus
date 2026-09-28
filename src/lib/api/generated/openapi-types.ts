@@ -10307,7 +10307,7 @@ export interface components {
              */
             display_name: string;
             /**
-             * @description True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+             * @description Search rows: true when this provider's credential entry resolves in the credential store (the vault test, ADR-096 D13) — and, for the keyless rows, when their prerequisite holds (duckduckgo always; searxng when base_url is set). It says nothing about runtime usability: a configured provider can still be switched off or fail to have its key reach search. For whether search can use the provider right now, see usable. Voice rows: true when the provider's credential resolves; audio-model when voice.model_name is set.
              * @example true
              */
             configured: boolean;
@@ -10322,12 +10322,12 @@ export interface components {
              */
             active?: boolean;
             /**
-             * @description Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
+             * @description Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on — or, for SearXNG, switched on with a non-empty base_url. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
              * @example true
              */
             usable?: boolean;
             /**
-             * @description Search rows only; unset on voice rows. True when this provider is the resolved web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17).
+             * @description Search rows only; unset on voice rows. True when this provider is the resolved web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17). True does not by itself mean the provider will be called: a known-but-unusable fallback (R4b) keeps the fallback role and is never called — the payload lists it under not called with its reason.
              * @example false
              */
             fallback?: boolean;

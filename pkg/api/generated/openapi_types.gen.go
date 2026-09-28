@@ -16690,13 +16690,13 @@ type IntegrationProvider struct {
 	// Active True when this provider is the one currently selected for its kind. Voice rows: unchanged — the active transcriber. Search rows: true only when this row is the web-search default (ADR-096 D13 — no longer "whoever the old priority list picked"); kept so an older client still has the field. The Default/Fallback badges are built from default_search, fallback_search and the row's own usable flag instead.
 	Active *bool `json:"active,omitempty"`
 
-	// Configured True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+	// Configured Search rows: true when this provider's credential entry resolves in the credential store (the vault test, ADR-096 D13) — and, for the keyless rows, when their prerequisite holds (duckduckgo always; searxng when base_url is set). It says nothing about runtime usability: a configured provider can still be switched off or fail to have its key reach search. For whether search can use the provider right now, see usable. Voice rows: true when the provider's credential resolves; audio-model when voice.model_name is set.
 	Configured bool `json:"configured"`
 
 	// DisplayName Human-readable provider name for UI presentation.
 	DisplayName string `json:"display_name"`
 
-	// Fallback Search rows only; unset on voice rows. True when this provider is the resolved web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17).
+	// Fallback Search rows only; unset on voice rows. True when this provider is the resolved web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17). True does not by itself mean the provider will be called: a known-but-unusable fallback (R4b) keeps the fallback role and is never called — the payload lists it under not called with its reason.
 	Fallback *bool `json:"fallback,omitempty"`
 
 	// FallbackAutomatic Search rows only; unset on voice rows. True when this row is the fallback because the stored fallback value is absent and the automatic rule (R3) resolved it to DuckDuckGo — not because the operator picked the fallback radio. Set together with fallback: true.
@@ -16711,7 +16711,7 @@ type IntegrationProvider struct {
 	// RequiresKey Whether this provider needs an API key to function.
 	RequiresKey bool `json:"requires_key"`
 
-	// Usable Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
+	// Usable Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on — or, for SearXNG, switched on with a non-empty base_url. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
 	Usable *bool `json:"usable,omitempty"`
 }
 
