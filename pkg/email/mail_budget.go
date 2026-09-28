@@ -159,9 +159,18 @@ func (b *MailBudget) backoffRefusal(req MailBudgetRequest) *MailBackoffError {
 	}
 	st, err := LoadWatcherState(b.stateDir, req.AgentID, req.WorkspaceID)
 	if err != nil {
-		// No state yet (the normal case) or an unreadable file: not in
-		// backoff. The gate's job is politeness, not correctness — the
-		// dial itself surfaces any real problem.
+		// No state yet (ErrNoWatcherState — the normal never-ran case) stays
+		// silent. Any OTHER failure (corrupt JSON, permission) still fails
+		// open — the accepted stance, the gate's job is politeness — but the
+		// fail-open must be observable (round-8 F4, FR-018/FR-036): a corrupt
+		// email-watch/<pair>.json silently removes ALL MC-33 politeness
+		// gating while every surface renders normal. One WARN naming the
+		// unreadable state, mirroring the summary endpoint's state_unreadable
+		// family; the returned nil is unchanged.
+		if !errors.Is(err, ErrNoWatcherState) {
+			slog.Warn("mail budget: watcher state unreadable — backoff check fail-open",
+				"error", err, "operation", req.Operation, "state", "unreadable")
+		}
 		return nil
 	}
 	if st.EffectiveState(time.Now()) == "backoff" {
