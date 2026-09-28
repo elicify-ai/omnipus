@@ -357,15 +357,15 @@ func buildConverseRequest(messages []Message, tools []ToolDefinition, model stri
 // pkg/agent from pkg/providers would be an import cycle.
 const reasoningEffortUnsetToken = "default"
 
-// bedrockAnthropicEffortBudgets maps the named effort levels the
-// Anthropic-family effort control recognizes (catalog dataset row 11 — low,
-// medium, high) to a deterministic fixed thinking budget per level. Budgets
-// are internal constants: the spec bans an exposed budget_tokens or
-// "adaptive" control (D32), so no level ever maps to mode "adaptive".
-var bedrockAnthropicEffortBudgets = map[string]int{
-	"low":    2048,
-	"medium": 8192,
-	"high":   16384,
+// bedrockAnthropicEffortLevels is the named-level set the Anthropic-family
+// effort control recognizes (catalog dataset row 11 — low, medium, high).
+// The levels map to Anthropic's wire-level adaptive thinking type: the spec's
+// banned control (D6, §6 AS8, MIN-005) is a user-facing raw budget_tokens
+// input, not this request-side value — named levels never surface a budget.
+var bedrockAnthropicEffortLevels = map[string]struct{}{
+	"low":    {},
+	"medium": {},
+	"high":   {},
 }
 
 // bedrockNovaEffortLevels is the named-level set Nova's
@@ -380,17 +380,20 @@ var bedrockNovaEffortLevels = map[string]struct{}{
 // (WP-G's C5 output, pkg/agent/loop_run_turn.go::prepareLLMRequest) into the
 // model-family-shaped additionalModelRequestFields payload (D32, spec test
 // 43): Anthropic-family models (catalog ids prefixed "anthropic.") get the
-// current Anthropic request shape — thinking (type "enabled" with the level's
-// fixed budget) plus output_config.effort — while Nova-family models (catalog
-// ids prefixed "amazon.nova-") get reasoningConfig.maxReasoningEffort. The
-// unset token "default", an empty string, a wrong-typed value, and a level the
-// target family does not recognize (including "none" — the Converse default
-// for both families already is no reasoning) all return nil, which omits the
-// ENTIRE additionalModelRequestFields key from the wire (D9 — never an empty
-// object); an unrecognized level must degrade to the provider default, never
-// block the turn with a validation error (T1/SC-007). Vendor prefix is the
-// only family signal this adapter has — there is no family-detection helper
-// to reuse.
+// current Anthropic request shape — thinking (type "adaptive", display
+// "summarized") plus output_config.effort (the SDK's ThinkingConfigAdaptiveParam;
+// ADR-095 D18 pins the summarized display) — while Nova-family models (catalog
+// ids prefixed "amazon.nova-") get reasoningConfig.maxReasoningEffort. Adaptive
+// is the named-level effort mechanism, not the banned control: spec §6 AS8 and
+// MIN-005 disambiguate — the D6 ban is a user-facing raw budget_tokens input,
+// never surfaced here. The unset token "default", an empty string, a
+// wrong-typed value, and a level the target family does not recognize
+// (including "none" — the Converse default for both families already is no
+// reasoning) all return nil, which omits the ENTIRE additionalModelRequestFields
+// key from the wire (D9 — never an empty object); an unrecognized level must
+// degrade to the provider default, never block the turn with a validation error
+// (T1/SC-007). Vendor prefix is the only family signal this adapter has —
+// there is no family-detection helper to reuse.
 func effortAdditionalModelRequestFields(model string, options map[string]any) json.RawMessage {
 	effort, ok := options["reasoning_effort"].(string)
 	if !ok || effort == "" || effort == reasoningEffortUnsetToken {
@@ -400,12 +403,11 @@ func effortAdditionalModelRequestFields(model string, options map[string]any) js
 	var fields map[string]any
 	switch {
 	case strings.HasPrefix(model, "anthropic."):
-		budget, ok := bedrockAnthropicEffortBudgets[effort]
-		if !ok {
+		if _, ok := bedrockAnthropicEffortLevels[effort]; !ok {
 			return nil
 		}
 		fields = map[string]any{
-			"thinking":      map[string]any{"type": "enabled", "budget_tokens": budget},
+			"thinking":      map[string]any{"type": "adaptive", "display": "summarized"},
 			"output_config": map[string]any{"effort": effort},
 		}
 	case strings.HasPrefix(model, "amazon.nova-"):

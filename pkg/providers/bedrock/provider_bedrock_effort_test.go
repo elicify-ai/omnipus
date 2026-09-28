@@ -10,10 +10,14 @@
 // model-family-shaped additionalModelRequestFields exactly:
 //
 //   - Anthropic-family Bedrock models (catalog ids prefixed "anthropic.",
-//     e.g. anthropic.claude-opus-4-6-v1): a "thinking" object plus
+//     e.g. anthropic.claude-opus-4-6-v1): a "thinking" object of exactly
+//     {"type": "adaptive", "display": "summarized"} plus
 //     "output_config.effort" set to the level — the current Anthropic
-//     request shape (thinking + output_config.effort) passed through as
-//     model-native fields, per AWS's Converse additionalModelRequestFields.
+//     request shape (adaptive thinking + output_config.effort; SDK
+//     v1.48.0 ThinkingConfigAdaptiveParam) passed through as model-native
+//     fields, per AWS's Converse additionalModelRequestFields. The spec's
+//     ban (D6, AS8) is a user-facing raw budget_tokens input, not this
+//     wire-level thinking type — spec MIN-005.
 //   - Nova-family models (catalog ids prefixed "amazon.", e.g.
 //     amazon.nova-lite-v1:0): a "reasoningConfig" object whose
 //     "maxReasoningEffort" is the level.
@@ -27,8 +31,9 @@
 // The two positive rows use DIFFERENT named levels ("high" vs "low") so a
 // hardcoded single-level mapping dies on one family or the other.
 //
-// Expected RED: buildConverseRequest has no additionalModelRequestFields at
-// all today, so both positive rows fail with the key absent on the wire.
+// RED for the adaptive-shape fix: the adapter still sent the legacy
+// {"type": "enabled", "budget_tokens": N} thinking object, so the
+// Anthropic-family positive rows fail on exact-shape equality.
 package bedrock
 
 import (
@@ -151,15 +156,14 @@ func TestConverseRequest_EffortAdditionalModelRequestFields(t *testing.T) {
 
 			switch tc.family {
 			case "anthropic":
-				require.Contains(t, fields, "thinking",
-					"Anthropic-family models must carry thinking in additionalModelRequestFields (D32)")
 				thinking, ok := fields["thinking"].(map[string]any)
-				require.True(t, ok, "thinking must be a JSON object, got %T", fields["thinking"])
-				require.NotNil(t, thinking, "thinking must not be null")
+				require.True(t, ok, "Anthropic-family models must carry thinking in additionalModelRequestFields (D32), got %T", fields["thinking"])
+				assert.Equal(t, map[string]any{"type": "adaptive", "display": "summarized"}, thinking,
+					"thinking must be exactly {type: adaptive, display: summarized} (D32/D18, spec MIN-005) — no budget_tokens, no other keys")
 				outputConfig, ok := fields["output_config"].(map[string]any)
 				require.True(t, ok, "output_config must be a JSON object, got %T", fields["output_config"])
-				assert.Equal(t, tc.level, outputConfig["effort"],
-					"output_config.effort must carry the selected level exactly")
+				assert.Equal(t, map[string]any{"effort": tc.level}, outputConfig,
+					"output_config must be exactly {effort: <level>}")
 			case "nova":
 				reasoningConfig, ok := fields["reasoningConfig"].(map[string]any)
 				require.True(t, ok, "Nova models must carry reasoningConfig in additionalModelRequestFields (D32), got %T", fields["reasoningConfig"])
