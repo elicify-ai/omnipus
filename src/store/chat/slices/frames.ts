@@ -2338,25 +2338,11 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           scheduleLibraryChangedInvalidate(frame.workspace_id)
           break
 
-        // agent_created (2026-09-28, second half of the agent-picker
-        // freshness fix, GitHub issue #1009): a new agent was created —
-        // via POST /api/v1/agents OR an agent's own create_agent tool call,
-        // from ANY connected tab. Deliberately coarse (no full Agent payload
-        // on the wire, matching library_changed's D-107 pattern just above):
-        // invalidate the whole ['agents'] query rather than splicing one row
-        // into the cache.
-        //
-        // Unlike library_changed, NOT routed through
-        // scheduleLibraryChangedInvalidate's debounce/coalesce machinery: a
-        // library write can legitimately burst (bulk trash, a multi-file
-        // upload), agent creation does not burst the same way — it is one
-        // operator action or one create_agent tool call at a time. A direct
-        // invalidate here matches the other single-shot invalidates already
-        // in this switch (task_status_changed above, task_run_status below)
-        // rather than introducing debounce state this frame doesn't need.
-        // Broadcast is fan-out to every connected client (including the tab
-        // that triggered the create) — that tab's redundant invalidate is a
-        // no-op, same as library_changed's.
+        // agent_created (issue #1009): new agent, any connected tab —
+        // coarse invalidate of ['agents'], matching library_changed's
+        // D-107 shape just above. Not debounced like library_changed:
+        // creates don't burst, so a direct invalidate matches the other
+        // single-shot cases here (task_status_changed/task_run_status).
         case 'agent_created':
           queryClient.invalidateQueries({ queryKey: ['agents'] })
           break
