@@ -1762,6 +1762,20 @@ shape from round 1.
 
 ---
 
+### Accepted residual risk (team-lead decision, 2026-09-29; security-lead confirms in the gate)
+
+- **Unique-claimant identity match after an external move.** If an external (non-Omnipus) move
+  removed a managed view's original file and a single file with the same `name` and the same
+  `derived_from` then appears anywhere in the collection, the pipeline treats it as that managed
+  view (identity-in-record + `derived_from`, the architect ruling on external moves) and may
+  re-derive or delete it on the next `.base` change. **Accepted because:** planting that file
+  requires write access to the collection, which already allows deleting or overwriting those
+  bytes directly — the match grants no new privilege; Omnipus is single-owner (no cross-account
+  writer in the same collection); two or more claimants are refused outright (Dataset F-10 / test
+  46: neither touched). **Explicitly rejected:** content-hash authority (it would reopen the
+  copied-marker hole, R2-CRIT-001). The gate's security-lead review must confirm this risk
+  acceptance.
+
 ## 10. TDD Plan
 
 | Order | Test Name | Level | Traces to | Description |
