@@ -828,7 +828,11 @@ const (
 // judge round could not run at all — the D7 judge_unavailable arm, where no
 // round was consumed and no verdict exists. The re-drive wrapper
 // (goal_child_completion.go::redriveGoalAdjudication) re-drives exactly that
-// arm; every other false is final for this adjudication.
+// arm; every other false is final for this adjudication. A registry
+// concurrency back-off (JudgeCriteriaResult.ConcurrencyBackoff, #984) is NOT
+// unavailable for re-drive purposes: it is resolved here to (false, false) —
+// silent stop, no retry, no child failure — because the in-flight
+// adjudication it backed off from resolves the goal.
 func (al *AgentLoop) runGoalAdjudication(
 	ctx context.Context,
 	agentInst *AgentInstance,
@@ -902,6 +906,9 @@ func (al *AgentLoop) runGoalAdjudication(
 	}
 
 	if jr.Unavailable {
+		if jr.ConcurrencyBackoff {
+			return aa.ag.reportConcurrencyBackoff(jr.Reason)
+		}
 		// (c) #947 defect 1: report the unavailability to the caller — the
 		// deferred dispatch's re-drive wrapper (goal_child_completion.go::
 		// redriveGoalAdjudication) retries a bounded number of times and then
@@ -1074,6 +1081,26 @@ func (ag *agentLoopRunGoalAdjudication) reportJudgeUnavailable(reason string) {
 	logger.WarnCF("agent", "goal trigger: judge unavailable, round not consumed",
 		map[string]any{"session_id": ag.sessionID, "reason": reason, "claim_text_len": len(ag.claimText)})
 	ag.al.emitGoalStatusFrame(ag.sessionID, ag.rec.GoalID, ag.rec.Prompt, ag.rec.Round, ag.rec.MaxRounds, reason, goalPillJudgeUnavailable)
+}
+
+// reportConcurrencyBackoff is runGoalAdjudication's #984 arm for the
+// verifier registry's concurrency back-off (JudgeCriteriaResult.
+// ConcurrencyBackoff, corr-MAJOR-3/G-1): a BACK-OFF, not an outage. Another
+// adjudication for this unit is in flight and will resolve the goal, so:
+// no judge_unavailable pill (the user would read a false outage — the goal
+// card stays on the judging pill the winner's flow owns), no WARN, no round
+// consumed, and unavailable=false so the re-drive wrapper
+// (goal_child_completion.go::redriveGoalAdjudication) stops here — no retry
+// (which would invoke the Judge a second time, violating G-1 exactly-once)
+// and no completion-tail child failure (a back-off is not a judge failure).
+// The idleSettling marker is cleared exactly as the genuine-unavailable arm
+// does (corr-MAJOR-2), so a back-off can never wedge the quiet-window
+// re-arm either.
+func (ag *agentLoopRunGoalAdjudication) reportConcurrencyBackoff(reason string) (met, unavailable bool) {
+	ag.al.goalMarkIdleSettling(ag.rec.GoalID, false)
+	logger.InfoCF("agent", "goal: adjudication backed off — a concurrent adjudication is in flight for this unit and resolves the goal",
+		map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID, "reason": reason})
+	return false, false
 }
 
 // advanceUnmetGoal persists an unmet adjudication round and delivers its follow-up steer.
