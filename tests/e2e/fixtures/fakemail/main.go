@@ -254,7 +254,7 @@ func run(cfg config, out io.Writer) (*fakeServer, error) {
 		_ = imapLn.Close()
 		return nil, err
 	}
-	sink := &smtpSink{}
+	sink := &smtpSink{users: append([]mailUser(nil), users...)}
 	if cfg.deliver {
 		sink.deliver = func(rcpt, raw string) {
 			mu, ok := userHandles[strings.ToLower(rcpt)]
@@ -465,8 +465,9 @@ func handleInject(w http.ResponseWriter, r *http.Request, userHandles map[string
 }
 
 type smtpSink struct {
-	mu   sync.Mutex
-	msgs []string
+	mu    sync.Mutex
+	msgs  []string
+	users []mailUser
 	// deliver, when non-nil, is called for every completed DATA payload and
 	// known recipient. It stays nil in no-flag mode, so the sink behaves
 	// exactly as before.
@@ -491,6 +492,8 @@ func (s *smtpSink) one(c net.Conn) {
 	var msg strings.Builder
 	var rcpts []string
 	reading := false
+	authState := ""
+	authUser := ""
 	for {
 		n, err := c.Read(tmp)
 		if n > 0 {
@@ -503,6 +506,29 @@ func (s *smtpSink) one(c net.Conn) {
 			}
 			line := string(buf[:i])
 			buf = buf[i+2:]
+			if authState != "" {
+				switch authState {
+				case "plain":
+					s.writeAuthResult(c, s.authenticatePlain(line))
+					authState = ""
+				case "login-user":
+					var ok bool
+					authUser, ok = decodeSMTPAuth(line)
+					if !ok {
+						s.writeAuthResult(c, false)
+						authState = ""
+					} else {
+						authState = "login-pass"
+						_, _ = io.WriteString(c, "334 UGFzc3dvcmQ6\r\n")
+					}
+				case "login-pass":
+					password, ok := decodeSMTPAuth(line)
+					s.writeAuthResult(c, ok && s.authenticate(authUser, password))
+					authState = ""
+					authUser = ""
+				}
+				continue
+			}
 			upper := strings.ToUpper(line)
 			switch {
 			case strings.HasPrefix(upper, "DATA"):
@@ -524,6 +550,33 @@ func (s *smtpSink) one(c net.Conn) {
 			case reading:
 				msg.WriteString(line)
 				msg.WriteString("\n")
+			case upper == "EHLO" || strings.HasPrefix(upper, "EHLO "):
+				_, _ = io.WriteString(c, "250-fakemail\r\n250-AUTH PLAIN LOGIN\r\n250 ok\r\n")
+			case upper == "HELO" || strings.HasPrefix(upper, "HELO "):
+				_, _ = io.WriteString(c, "250 ok\r\n")
+			case upper == "AUTH PLAIN":
+				authState = "plain"
+				_, _ = io.WriteString(c, "334 \r\n")
+			case strings.HasPrefix(upper, "AUTH PLAIN "):
+				fields := strings.Fields(line)
+				s.writeAuthResult(c, len(fields) == 3 && s.authenticatePlain(fields[2]))
+			case upper == "AUTH LOGIN":
+				authState = "login-user"
+				_, _ = io.WriteString(c, "334 VXNlcm5hbWU6\r\n")
+			case strings.HasPrefix(upper, "AUTH LOGIN "):
+				fields := strings.Fields(line)
+				if len(fields) != 3 {
+					s.writeAuthResult(c, false)
+					break
+				}
+				var ok bool
+				authUser, ok = decodeSMTPAuth(fields[2])
+				if !ok {
+					s.writeAuthResult(c, false)
+					break
+				}
+				authState = "login-pass"
+				_, _ = io.WriteString(c, "334 UGFzc3dvcmQ6\r\n")
 			case strings.HasPrefix(upper, "QUIT"):
 				_, _ = io.WriteString(c, "221 bye\r\n")
 				return
@@ -540,6 +593,37 @@ func (s *smtpSink) one(c net.Conn) {
 			return
 		}
 	}
+}
+
+func (s *smtpSink) authenticatePlain(response string) bool {
+	decoded, ok := decodeSMTPAuth(response)
+	if !ok {
+		return false
+	}
+	parts := strings.Split(decoded, "\x00")
+	return len(parts) == 3 && s.authenticate(parts[1], parts[2])
+}
+
+func decodeSMTPAuth(response string) (string, bool) {
+	decoded, err := base64.StdEncoding.DecodeString(response)
+	return string(decoded), err == nil
+}
+
+func (s *smtpSink) authenticate(user, password string) bool {
+	for _, candidate := range s.users {
+		if strings.EqualFold(candidate.addr, user) && candidate.password == password {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *smtpSink) writeAuthResult(w io.Writer, ok bool) {
+	if ok {
+		_, _ = io.WriteString(w, "235 2.7.0 Authentication successful\r\n")
+		return
+	}
+	_, _ = io.WriteString(w, "535 5.7.8 Authentication failed\r\n")
 }
 
 // extractRcpt pulls the address out of an SMTP "RCPT TO:<a@b>" line.
