@@ -53,6 +53,8 @@ import type { MailComposeBody } from './MailComposeDialog'
 import { readMailPanelIntent, writeMailPanelIntent } from './mailPanelIntent'
 import type { MailPanelIntent } from './mailPanelIntent'
 import { formatMailDate, formatMailTime, formatMailBytes } from './mail-format'
+import { ListPreviewLayout, ListPreviewRegion } from '@/components/panel-shell/ListPreviewLayout'
+import type { ListPreviewLayoutMode } from '@/components/panel-shell/ListPreviewLayout'
 
 /** Folders refetch cadence — D25: while mounted only (refetchInterval is
  * observer-bound, so unmount stops it). */
@@ -103,13 +105,27 @@ export interface MailPanelProps {
    * else the picker faces the user (US-3 AS-3).
    */
   mailboxId?: string | null
+  /** Full-page routes use split; the docked panel defaults to Library's stacked layout. */
+  layout?: ListPreviewLayoutMode
+  /** URL-provided initial folder for the full-page route. */
+  initialFolder?: string
+  /** URL-provided initial message for the full-page route. */
+  initialMessageRef?: string
+  /** Reports the live address so the shell's Expand action carries it over. */
+  onLocationChange?: (location: MailPanelLocation) => void
+}
+
+export interface MailPanelLocation {
+  mailboxId: string | null
+  folder: string
+  messageRef: string | null
 }
 
 const FOLDERS_KEY = ['mail-folders'] as const
 const MESSAGES_KEY = ['mail-messages'] as const
 const DETAIL_KEY = ['mail-detail'] as const
 
-export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
+export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialFolder, initialMessageRef, onLocationChange }: MailPanelProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
 
@@ -135,9 +151,10 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
   )
 
   // Per-workspace intent (FR-010): sessionStorage-backed selection.
-  const [intent, setIntent] = useState<MailPanelIntent>(() =>
-    readMailPanelIntent(workspaceId),
-  )
+  const [intent, setIntent] = useState<MailPanelIntent>(() => {
+    const stored = readMailPanelIntent(workspaceId)
+    return { ...stored, folder: initialFolder ?? stored.folder }
+  })
   const agentId = useMemo(() => {
     // SP-23's explicit choose directive: the deep link named panel=mail with
     // no agent — the picker faces the user, nothing costly starts, and a
@@ -159,7 +176,7 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
   // The open message ref — `uid:…` from a list click, or a deep-link ref
   // (uid:… / mid:…) consumed ONCE from the per-workspace intent at mount.
   const [selectedRef, setSelectedRef] = useState<string | null>(() =>
-    readMailPanelIntent(workspaceId).messageRef,
+    initialMessageRef ?? readMailPanelIntent(workspaceId).messageRef,
   )
 
   // Persist the per-workspace intent whenever mailbox/folder selection moves
@@ -170,6 +187,10 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
     // message on the panel's next open (FR-010 intent must not replay).
     writeMailPanelIntent(workspaceId, { agentId, folder, messageRef: null })
   }, [workspaceId, agentId, folder])
+
+  useEffect(() => {
+    onLocationChange?.({ mailboxId: agentId, folder, messageRef: selectedRef })
+  }, [agentId, folder, selectedRef, onLocationChange])
 
   // ── Queries ───────────────────────────────────────────────────────────
   // Human-initiated dialing (D29/R2-9, MC-33): a human gesture that must
@@ -465,13 +486,20 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
         </div>
       )}
       {agentId !== null && (
-        <div className="flex min-h-0 flex-1">
-          <MailFolderRail
-            folders={foldersQuery.data?.folders ?? []}
-            active={folder}
-            onFolderChange={(slug) => { setIntent((prev) => ({ ...prev, folder: slug })); setSelectedRef(null) }}
-          />
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="mail-list-zone">
+        <ListPreviewLayout layout={layout} testId="mail-list-preview-layout">
+          <ListPreviewRegion
+            layout={layout}
+            region="list"
+            previewVisible
+            surface="mail-list"
+            testId="mail-list-region"
+          >
+            <MailFolderRail
+              folders={foldersQuery.data?.folders ?? []}
+              active={folder}
+              onFolderChange={(slug) => { setIntent((prev) => ({ ...prev, folder: slug })); setSelectedRef(null) }}
+            />
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="mail-list-zone">
             {foldersQuery.isError ? (
               <div
                 role="alert"
@@ -529,8 +557,15 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
                 )}
               </>
             )}
-          </div>
-          <div className="hidden min-h-0 min-w-0 flex-1 md:flex" data-testid="mail-reading-zone">
+            </div>
+          </ListPreviewRegion>
+          <ListPreviewRegion
+            layout={layout}
+            region="preview"
+            previewVisible
+            surface="mail-preview"
+            testId="mail-reading-zone"
+          >
             {selectedRef === null && (
               <div className="flex flex-1 items-center justify-center p-[var(--space-5)]">
                 <p className="text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
@@ -627,8 +662,8 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
                 )}
               </div>
             )}
-          </div>
-        </div>
+          </ListPreviewRegion>
+        </ListPreviewLayout>
       )}
       <MailComposeDialog
         open={compose !== null}

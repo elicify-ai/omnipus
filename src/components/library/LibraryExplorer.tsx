@@ -96,6 +96,7 @@ import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { LibrarySearchBar } from './search/LibrarySearchBar'
 import { useLibraryCrossTabRefresh } from './useLibraryCrossTabRefresh'
+import { ListPreviewLayout, ListPreviewRegion } from '@/components/panel-shell/ListPreviewLayout'
 import {
   confirmDiscardLibraryEdits,
   discardConfirmDialogHostUnmounted,
@@ -298,7 +299,6 @@ export function LibraryExplorer({
   // ongoing sync.
   const [browsedDir, setBrowsedDir] = useState(address?.path ? parentDirOf(address.path) : address?.folder ?? '')
   const [includeHidden, setIncludeHidden] = useState(false)
-  const isSplit = layout === 'split'
   const [renameTarget, setRenameTarget] = useState<LibraryEntry | null>(null)
   const [renameError, setRenameError] = useState<string>()
   const [deleteTarget, setDeleteTarget] = useState<LibraryEntry | null>(null)
@@ -1157,16 +1157,13 @@ export function LibraryExplorer({
           Stacked in the docked aside, side-by-side in the fullscreen tab. In
           BOTH the list stays visible and clickable while a file is open, which
           is the in-app navigation path confirmDiscardLibraryEdits() guards. */}
-      <div className={cn('flex min-h-0 flex-1', isSplit ? 'flex-row' : 'flex-col')}>
+      <ListPreviewLayout layout={layout}>
       {/* Body */}
-      <div
-        className={cn(
-          'min-h-0 min-w-0 overflow-y-auto p-[var(--space-2)] relative',
-          // Preview open: it takes the larger share (60% split / 55% stacked —
-          // the stacked figure is the old even split plus the 10% the operator
-          // asked for). Closed: the list has the whole box to itself.
-          !previewOpen ? 'flex-1' : isSplit ? 'flex-[40]' : 'flex-[45]',
-        )}
+      <ListPreviewRegion
+        layout={layout}
+        region="list"
+        previewVisible={previewOpen}
+        surface="library-list"
       >
         {workspaceId === null ? (
           // US-4 AS-2: the bar renders in EVERY Library location, disabled at
@@ -1272,16 +1269,15 @@ export function LibraryExplorer({
               ))}
           </LibrarySearchBar>
         )}
-      </div>
+      </ListPreviewRegion>
 
       {/* ── Preview / edit pane (library-spec.md D-5) ─────────────────────── */}
       {previewOpen && (
-        <div
-          className={cn(
-            'min-h-0 min-w-0 border-[var(--color-border)]',
-            isSplit ? 'flex-[60] border-l' : 'flex-[55] border-t',
-          )}
-          data-testid="library-preview-pane-wrapper"
+        <ListPreviewRegion
+          layout={layout}
+          region="preview"
+          previewVisible={previewOpen}
+          testId="library-preview-pane-wrapper"
         >
           <LibraryPreviewPane
             workspaceId={workspaceId}
@@ -1300,9 +1296,9 @@ export function LibraryExplorer({
               goTo(workspaceId, workspacePath)
             }}
           />
-        </div>
+        </ListPreviewRegion>
       )}
-      </div>
+      </ListPreviewLayout>
 
       {/* ── Rename dialog ────────────────────────────────────────────────── */}
       <LibraryRenameDialog

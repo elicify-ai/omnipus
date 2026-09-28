@@ -1,30 +1,43 @@
 import { useEffect } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { MailPanel } from '@/components/workspaces/mail/MailPanel'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { writeMailPanelIntent } from '@/components/workspaces/mail/mailPanelIntent'
 
-// Mail tab — deep-linkable entry that opens the Mail side panel (SP-8: ONE
-// shared panel surface; the panel itself is shell CONTENT since wave 2 —
-// side-panel-shell-spec.md §10 registers Mail's PanelDefinition in the
-// production registry, and the workspace tab-strip entry is a registered
-// panel toggle, not a Link here). This route survives as the EXPAND target
-// and the bookmarked-URL stub: it consumes the §17 draft-link params into
-// the panel's per-workspace intent (mailPanelIntent.ts — messageRef is
-// consume-once), opens the panel through the CRIT-001 leave gate (the
-// OUTGOING panel's guard — a dirty Library asks before it is replaced), then
-// retargets to the deep-link form /workspaces/{id}/chat?panel=mail (replace)
-// — §8.2's media-stub pattern — so the URL never dead-ends on a page with no
-// content of its own and the registered panel param survives a reload.
+// Full-page Mail. Expand includes view=full and renders the same MailPanel
+// core in the split layout. Existing §17 chat links omit that marker and
+// retain their panel-in-chat behavior through WorkspaceMailPanelDeepLink.
 interface MailRouteSearch {
   mailbox?: string
   folder?: string
   message?: string
+  view?: 'full'
 }
 
-function WorkspaceMailRedirect() {
+function WorkspaceMailPage() {
   const { workspaceId } = Route.useParams()
   const search = Route.useSearch() as MailRouteSearch
+
+  if (search.view !== 'full') {
+    return <WorkspaceMailPanelDeepLink workspaceId={workspaceId} search={search} />
+  }
+
+  return (
+    <MailPanel
+      workspaceId={workspaceId}
+      mailboxId={search.mailbox}
+      initialFolder={search.folder}
+      initialMessageRef={search.message}
+      layout="split"
+    />
+  )
+}
+
+function WorkspaceMailPanelDeepLink({ workspaceId, search }: {
+  workspaceId: string
+  search: MailRouteSearch
+}) {
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -56,6 +69,7 @@ export const Route = createFileRoute('/_app/workspaces/$workspaceId/mail')({
     mailbox: typeof search.mailbox === 'string' ? search.mailbox : undefined,
     folder: typeof search.folder === 'string' ? search.folder : undefined,
     message: typeof search.message === 'string' ? search.message : undefined,
+    view: search.view === 'full' ? 'full' : undefined,
   }),
-  component: WorkspaceMailRedirect,
+  component: WorkspaceMailPage,
 })

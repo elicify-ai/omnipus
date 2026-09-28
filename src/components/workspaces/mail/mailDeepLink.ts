@@ -2,13 +2,17 @@
 // (email-mail-view-spec.md §17): the create_email_draft result's chat_link
 // is an absolute http(s) URL whose hash carries the SPA path
 // /#/workspaces/{ws}/mail?mailbox={agent}&folder={slug}&message={ref}.
-// Because the SPA is hash-routed, "navigating in place" is one hash write:
-// the /mail route stub consumes the params into the panel intent, opens the
-// panel leave-gated, and lands on chat. Pattern-matched on the SPA path —
+// Because the SPA's /mail route is now the full-page surface, chat links are
+// handled here: carry their address into the panel intent, replace the active
+// panel through the shared leave gate, and keep the conversation on screen.
+// Pattern-matched on the SPA path —
 // origin equality is deliberately NOT required (public_url-derived links
 // may name a different host than the one the browser is on; only the hash
 // matters to a hash router). Safe-scheme gating rides isSafeHref.
 import { isSafeHref } from '@/lib/url-safe'
+import { useUiStore } from '@/store/ui'
+import { leaveGateThen } from '@/components/panel-shell/leaveGate'
+import { writeMailPanelIntent } from './mailPanelIntent'
 
 /** The SPA path a chat_link's hash must carry for in-place navigation. */
 const MAIL_PATH_RE = /^\/workspaces\/[^/]+\/mail(\?|$)/
@@ -40,6 +44,22 @@ export function mailDeepLinkTarget(href: string): string | null {
 export function openMailDeepLink(href: string): boolean {
   const target = mailDeepLinkTarget(href)
   if (target === null) return false
-  window.location.hash = target
+
+  const url = new URL(target, window.location.origin)
+  const segments = url.pathname.split('/').filter(Boolean)
+  const workspaceId = segments[1]
+  if (segments.length !== 3 || segments[0] !== 'workspaces' || segments[2] !== 'mail' || !workspaceId) {
+    return false
+  }
+
+  const mailboxId = url.searchParams.get('mailbox')
+  const folder = url.searchParams.get('folder') ?? 'inbox'
+  const messageRef = url.searchParams.get('message')
+  const outgoing = useUiStore.getState().activePanel?.id ?? null
+  leaveGateThen(outgoing, () => {
+    writeMailPanelIntent(workspaceId, { agentId: mailboxId, folder, messageRef })
+    useUiStore.getState().openPanel('mail', { workspaceId })
+    window.location.hash = `/workspaces/${encodeURIComponent(workspaceId)}/chat?panel=mail`
+  })
   return true
 }
