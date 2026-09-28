@@ -134,3 +134,95 @@ func TestGoal1000_ConsumedWakeIDCanBeQueuedAgain(t *testing.T) {
 		t.Fatalf("queued wakes after reusing consumed id = %d, want 1", got)
 	}
 }
+
+func TestGoal1000_MarkerFailureRestoreCoalescesConcurrentWakeByID(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	al.steering = newSteeringQueue(SteeringAll)
+
+	const (
+		scope     = "parent"
+		messageID = "wake-marker-failure-retry"
+	)
+	original := steeringQueueItem{
+		message: providers.Message{Role: "user", Content: "original delivery"},
+		wake: &steeringWake{
+			messageID:           messageID,
+			transcriptSessionID: "missing-transcript",
+			agentID:             "mia",
+		},
+	}
+	if err := al.steering.pushItemScope(scope, original); err != nil {
+		t.Fatalf("push original wake: %v", err)
+	}
+
+	actualScope, dequeued := al.steering.dequeueItemsScope(scope)
+	if len(dequeued) != 1 {
+		t.Fatalf("dequeued wakes = %d, want 1", len(dequeued))
+	}
+	retry := original
+	retry.message.Content = "concurrent retry"
+	if err := al.steering.pushItemScope(scope, retry); err != nil {
+		t.Fatalf("push concurrent retry: %v", err)
+	}
+
+	msgs, correlationIDs, consumedItems := al.consumeDequeuedSteering(actualScope, dequeued)
+	if len(msgs) != 0 || len(correlationIDs) != 0 || len(consumedItems) != 0 {
+		t.Fatalf("marker-failed consume = (%d messages, %d correlation ids, %d items), want all zero",
+			len(msgs), len(correlationIDs), len(consumedItems))
+	}
+
+	al.steering.mu.Lock()
+	queued := append([]steeringQueueItem(nil), al.steering.queues[scope]...)
+	al.steering.mu.Unlock()
+	if len(queued) != 1 {
+		t.Fatalf("queued wakes after marker-failure restore = %d, want 1", len(queued))
+	}
+	if queued[0].wake == nil || queued[0].wake.messageID != messageID {
+		t.Fatalf("queued wake = %+v, want message id %q", queued[0].wake, messageID)
+	}
+	if queued[0].message.Content != retry.message.Content {
+		t.Fatalf("queued wake content = %q, want queue-resident retry %q",
+			queued[0].message.Content, retry.message.Content)
+	}
+}
+
+func TestGoal1000_MarkerFailureRestorePreservesDistinctWakeFIFO(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	al.steering = newSteeringQueue(SteeringAll)
+
+	const scope = "parent"
+	for i := 0; i < 3; i++ {
+		messageID := fmt.Sprintf("wake-restore-%d", i)
+		if err := al.steering.pushItemScope(scope, steeringQueueItem{
+			message: providers.Message{Role: "user", Content: messageID},
+			wake: &steeringWake{
+				messageID:           messageID,
+				transcriptSessionID: "missing-transcript",
+				agentID:             "mia",
+			},
+		}); err != nil {
+			t.Fatalf("push distinct wake %d: %v", i, err)
+		}
+	}
+
+	actualScope, dequeued := al.steering.dequeueItemsScope(scope)
+	if len(dequeued) != 3 {
+		t.Fatalf("dequeued wakes = %d, want 3", len(dequeued))
+	}
+	al.consumeDequeuedSteering(actualScope, dequeued)
+
+	al.steering.mu.Lock()
+	queued := append([]steeringQueueItem(nil), al.steering.queues[scope]...)
+	al.steering.mu.Unlock()
+	if len(queued) != 3 {
+		t.Fatalf("restored distinct wakes = %d, want 3", len(queued))
+	}
+	for i, item := range queued {
+		wantID := fmt.Sprintf("wake-restore-%d", i)
+		if item.wake == nil || item.wake.messageID != wantID {
+			t.Fatalf("restored wake %d = %+v, want message id %q", i, item.wake, wantID)
+		}
+	}
+}
