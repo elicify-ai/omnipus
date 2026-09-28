@@ -3,9 +3,10 @@ package agent
 // Fix-round-1 RED coverage for founder ruling Q2 B.
 //
 // Oracle source: coordination/logs/fix890-opus/arch-q2-design.md, especially
-// "Re-trigger behavior", "Invariants", and "Tests required". Boot recovery
-// expectations also derive from the design's durable-claim reconstruction
-// rule. No expected value below was copied from observed implementation output.
+// "Re-trigger behavior", "Invariants", and "Tests required". Restart
+// expectations derive from founder ruling Q7=A and boot_sweep.go's documented
+// failed(interrupted) boot behavior. No expected value below was copied from
+// observed implementation output.
 
 import (
 	"context"
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -200,35 +202,89 @@ func TestGoalQ2B_QuietnessReadFailureFailsClosed(t *testing.T) {
 	}
 }
 
-func TestGoalQ2B_BootPreservesPendingOwnerUntilDescendantFinishesThenHandsBackOnce(t *testing.T) {
+// Restart resume is intentionally deferred to ADR-20260928-sub-agent-control-plane D8.
+func TestGoalQ2B_RestartFailsPendingOwnerAsInterrupted(t *testing.T) {
 	h := newQ2BHarness(t, "q2b-boot-pending-owner")
 	descendant := q2bPendingClaimWithRunningDescendant(t, h, "q2b-boot-pending-descendant")
-	resetGoalTriggerStateForTest()
-	t.Cleanup(resetGoalTriggerStateForTest)
 
 	recovery := q2bBootRecoveryForHarness(h)
 	notice := func(string, string) {}
 	recovery.recoverSteered(context.Background(), h.child.SessionID, notice)
-	owner, err := h.lifecycle.Load(h.child.SessionID)
-	if err != nil {
-		t.Fatalf("Load(pending goal owner after boot): %v", err)
-	}
-	if owner.Terminal() || owner.State != session.LifecycleRunning {
-		t.Fatalf("pending goal owner after boot = %q, want running while descendant remains live", owner.State)
+	recovery.recoverSteered(context.Background(), descendant.SessionID, notice)
+
+	for label, sessionID := range map[string]string{
+		"pending goal owner": h.child.SessionID,
+		"running descendant": descendant.SessionID,
+	} {
+		record, err := h.lifecycle.Load(sessionID)
+		if err != nil {
+			t.Fatalf("Load(%s after restart): %v", label, err)
+		}
+		if record.State != session.LifecycleFailed || record.FailedReason != "interrupted" {
+			t.Errorf("%s after restart = state %q reason %q, want failed/interrupted", label, record.State, record.FailedReason)
+		}
 	}
 
-	recovery.recoverSteered(context.Background(), descendant.SessionID, notice)
-	q2bAssertExactlyOneReevaluation(t, h)
-	fresh := h.claimMet("fresh claim after boot recovered the descendant handback")
-	if fresh.goalDeferredAdjudication == nil {
-		t.Fatal("fresh post-boot claim did not schedule adjudication")
+	endedGoal := h.goalRecord()
+	if endedGoal.State != generated.GoalStateCleared {
+		t.Errorf("pending owner's goal after restart = %q, want cleared", endedGoal.State)
 	}
-	h.al.dispatchDeferredGoalAdjudication(fresh.goalDeferredAdjudication)
-	if calls := h.judge.callCount(); calls != 1 {
-		t.Fatalf("Judge calls after fresh post-boot claim = %d, want 1", calls)
+	if !strings.Contains(endedGoal.TerminalReason, "interrupted") {
+		t.Errorf("pending owner's terminal reason = %v, want an interruption reason", endedGoal.TerminalReason)
 	}
-	if wakes := h.parentWakeEvents(); len(wakes) != 1 || wakes[0].SourceKind != "message_parent:handback" {
-		t.Fatalf("parent wakes after boot recovery = %+v, want exactly one final handback", wakes)
+
+	parentMessages := h.parentMessages()
+	if len(parentMessages) != 1 {
+		t.Fatalf("parent messages from pending owner after restart = %d, want exactly 1", len(parentMessages))
+	}
+	parentEnvelope, err := decodeBootMessage(parentMessages[0])
+	if err != nil {
+		t.Fatalf("decode parent interruption: %v", err)
+	}
+	if parentEnvelope.Kind != "error" || !parentEnvelope.Fatal || !strings.HasPrefix(parentEnvelope.Text, "interrupted:") {
+		t.Errorf("parent entry for pending owner = %+v, want one fatal interrupted error", parentEnvelope)
+	}
+
+	descendantMessagesAtParent, _, _, err := h.inbox.Drain(h.parentID, descendant.SessionID, "", 32)
+	if err != nil {
+		t.Fatalf("Drain(parent, descendant): %v", err)
+	}
+	if len(descendantMessagesAtParent) != 0 {
+		t.Errorf("descendant reports delivered directly to top-level parent = %d, want 0", len(descendantMessagesAtParent))
+	}
+	descendantMessagesAtOwner, _, _, err := h.inbox.Drain(h.child.SessionID, descendant.SessionID, "", 32)
+	if err != nil {
+		t.Fatalf("Drain(pending owner, descendant): %v", err)
+	}
+	if len(descendantMessagesAtOwner) != 1 {
+		t.Fatalf("descendant reports delivered to its direct owner = %d, want exactly 1", len(descendantMessagesAtOwner))
+	}
+	descendantEnvelope, err := decodeBootMessage(descendantMessagesAtOwner[0])
+	if err != nil {
+		t.Fatalf("decode descendant interruption: %v", err)
+	}
+	if descendantEnvelope.Kind != "error" || !descendantEnvelope.Fatal || !strings.HasPrefix(descendantEnvelope.Text, "interrupted:") {
+		t.Errorf("descendant entry for direct owner = %+v, want one fatal interrupted error", descendantEnvelope)
+	}
+
+	if got := q2bCountReevaluations(h.dispatches.all(), h.child.SessionID); got != 0 {
+		t.Errorf("Q2=B re-evaluations after restart = %d, want 0", got)
+	}
+	if calls := h.judge.callCount(); calls != 0 {
+		t.Errorf("Judge calls after restart = %d, want 0", calls)
+	}
+	for _, wake := range h.parentWakeEvents() {
+		if wake.SourceKind == "message_parent:handback" {
+			t.Errorf("completion handback reached the parent after restart: %+v", wake)
+		}
+	}
+
+	triggerState := goalTriggers()
+	triggerState.mu.Lock()
+	completionPhase, phasePresent := triggerState.completionPhase[h.child.GoalRef]
+	triggerState.mu.Unlock()
+	if phasePresent || completionPhase != goalCompletionNone {
+		t.Errorf("process-local completion phase after restart = %v (present=%v), want cleared", completionPhase, phasePresent)
 	}
 }
 
