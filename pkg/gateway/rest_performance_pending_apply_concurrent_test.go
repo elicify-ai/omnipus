@@ -234,12 +234,18 @@ func TestPerformancePendingApply_ConcurrentOverlappingSaves_CoalescedFailureThen
 	}, pending.ChangedFields, "both A and B changed max_tool_iterations; the union is that one field")
 
 	// --- Phase 2: a later, definitely-separate successful reload must
-	// clear it — reloadOutcomeTracker.onSuccess (pendingApply.clearAfterReload)
-	// fires from the reload-cycle goroutine, asynchronously from this PUT's
-	// own handler goroutine, exactly as it does in production. ---
-	w := mtiPutPerf(t, api, `{"goal_max_rounds":9}`)
-	require.Equal(t, http.StatusOK, w.Code,
-		"a later PUT whose own reload succeeds must clear the pending failure; body: %s", w.Body.String())
-	assert.Nil(t, r4DecodePending(t, w.Body.Bytes()), "the successful PUT's own response carries no pending_apply")
+	// clear it. This is deliberately a bare reload trigger
+	// (waitForReloadOrRebuildFailure, as TestPerformancePendingApply_
+	// ClearedByLaterSuccessfulReload already uses), NOT a further PUT: a
+	// PUT's own success path ALSO calls pendingApply.clearIfEpoch
+	// unconditionally (rest_performance.go::putPerformance, right after the
+	// reload-or-not branch) using the epoch ITS OWN refresh captured, which
+	// would trivially clear this test's state on its own and mask whether
+	// the async onSuccess hook (reloadOutcomeTracker.onSuccess ->
+	// pendingApply.clearAfterReload, wired at boot — the thing this test
+	// exists to exercise under real concurrency) did any work at all. A
+	// bare reload has no PUT, hence no clearIfEpoch call: clearAfterReload
+	// is the ONLY path that can clear pendingApply here.
+	require.NoError(t, waitForReloadOrRebuildFailure(api), "the later reload must succeed")
 	assert.Nil(t, r4Pending(t, api), "GET after the later successful reload: nothing pending")
 }
