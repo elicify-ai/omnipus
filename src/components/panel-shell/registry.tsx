@@ -20,7 +20,7 @@ function BrowserPanelContent(props: PanelContentProps) {
   return <BrowserLivePanel shellProps={props} />
 }
 
-export const panels: PanelDefinition[] = [
+export const panels: readonly PanelDefinition[] = [
   {
     id: 'library',
     title: 'Library',
@@ -41,5 +41,3 @@ export const panels: PanelDefinition[] = [
     },
   },
 ]
-
-export const PANEL_REGISTRY = panels

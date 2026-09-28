@@ -1,3 +1,4 @@
+import { PANEL_POLICIES, isWorkspaceScopedPanel } from '@/components/panel-shell/types'
 import type { PanelId } from '@/components/panel-shell/types'
 
 export type PanelIdentity = { // not-wire-format: SPA-local identity; only its SHA-256 key is shared between tabs, never sent to the gateway
@@ -17,14 +18,6 @@ type PanelOpenOutcome =
   | { kind: 'affordance' }
   | { kind: 'opened' }
   | { kind: 'blocked' }
-
-const WORKSPACE_SCOPED_PANELS = new Set<PanelId>([
-  'library',
-  'mail',
-  'tasks',
-  'team',
-  'calendar',
-]) satisfies ReadonlySet<PanelId>
 
 const PRESENCE_CHANNEL_NAME = 'omnipus-panel-tab-presence'
 const PRESENCE_HEARTBEAT_MS = 1_000
@@ -455,7 +448,7 @@ export function acceptPresence(message: unknown): boolean {
     )
   }
 
-  if (!WORKSPACE_SCOPED_PANELS.has(panelId)) return false
+  if (!isWorkspaceScopedPanel(panelId)) return false
   if ('sessionId' in message || 'agentId' in message) return false
   return message.workspaceId === undefined || isNonEmptyString(message.workspaceId)
 }
@@ -469,7 +462,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isPanelId(value: unknown): value is PanelId {
-  return value === 'library' || value === 'browser' || value === 'mail' || value === 'tasks' || value === 'team' || value === 'calendar'
+  return typeof value === 'string' && value in PANEL_POLICIES
 }
 
 function isOpaqueIdentityKey(value: unknown): value is string {

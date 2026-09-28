@@ -30,7 +30,7 @@ import { hasPanelTriggerOrigin } from './panelFocus'
 
 export interface SidePanelShellProps {
   /** The registered panels (§8.1 registry — adding a panel is one entry). */
-  panels: PanelDefinition[]
+  panels: readonly PanelDefinition[]
   /**
    * Width-memory user bucket (SP-13's per-user key). The demo passes a
    * fixed demo user; wave 1 passes the signed-in user's identity.

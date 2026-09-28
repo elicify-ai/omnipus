@@ -10,7 +10,7 @@
 //     beforeLeave?:  () => Promise<boolean>         // CRIT-001 transition gate
 //   }
 //
-import type { ComponentType } from 'react'
+import type { ReactNode } from 'react'
 
 /**
  * Sentinel: "no width chosen yet — derive at open". Not a real px value.
@@ -112,6 +112,13 @@ export interface PanelContentProps {
   onWidthSettle: (listener: ((px: number) => void) | null) => void
 }
 
+/** Registry content receives the complete shell contract. The bivariant
+ *  call signature also accepts probes/components that refine an optional
+ *  prop without weakening the props the shell supplies at the call site. */
+export type PanelContentComponent = {
+  bivarianceHack(props: PanelContentProps): ReactNode
+}['bivarianceHack']
+
 /** What the store holds for the at-most-one open panel (§8.1, verbatim). */
 export type ActivePanel = PanelOpenSpec
 
@@ -125,7 +132,7 @@ export interface PanelDefinition {
   /** Shell header title. */
   title: string
   /** The panel's content, rendered inside the shell below the header. */
-  content: ComponentType<PanelContentProps>
+  content: PanelContentComponent
   /** The full-page route (URL) this panel expands to. */
   expandTarget: (context: PanelContext) => string
   /**

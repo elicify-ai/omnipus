@@ -1,21 +1,31 @@
 const LOGIN_RETURN_KEY = 'omnipus_login_return'
 
-function safeAppPath(value: unknown): string | null {
-  if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) {
+function validatedAppPath(value: unknown): string | null {
+  if (
+    typeof value !== 'string' ||
+    !value.startsWith('/') ||
+    value.startsWith('//') ||
+    value.includes('\\')
+  ) {
     return null
   }
   if (value === '/login' || value.startsWith('/login?')) return null
   return value
 }
 
+/** Return a same-origin app path, or the app root for an unsafe target. */
+export function safeAppPath(value: unknown): string {
+  return validatedAppPath(value) ?? '/'
+}
+
 function currentHashPath(): string | null {
   if (typeof window === 'undefined' || !window.location.hash.startsWith('#/')) return null
-  return safeAppPath(window.location.hash.slice(1))
+  return validatedAppPath(window.location.hash.slice(1))
 }
 
 /** Preserve the router's internal path before the auth gate redirects. */
 export function captureLoginReturn(path: unknown): void {
-  const target = safeAppPath(path)
+  const target = validatedAppPath(path)
   if (target === null || typeof window === 'undefined') return
   try {
     window.sessionStorage.setItem(LOGIN_RETURN_KEY, target)
@@ -34,5 +44,5 @@ export function consumeLoginReturn(): string | null {
   } catch {
     // The hash fallback still covers a login form mounted over the target.
   }
-  return safeAppPath(stored) ?? currentHashPath()
+  return validatedAppPath(stored) ?? currentHashPath()
 }

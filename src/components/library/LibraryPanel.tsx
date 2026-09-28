@@ -164,7 +164,7 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
         isolatedCleanupRef.current = null
         const current = useUiStore.getState().activePanel
         if (current !== null && current.id !== 'library') return
-        leaveGateThen(() => {
+        leaveGateThen(current?.id ?? null, () => {
           const latest = useUiStore.getState().activePanel
           if (latest !== null && latest.id !== 'library') return
           useUiStore.getState().openPanel('library', {
