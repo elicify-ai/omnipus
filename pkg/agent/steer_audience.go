@@ -103,7 +103,16 @@ func isTerminalOutcome(o steer.Outcome) bool {
 	}
 }
 
+// validateOutcomeMessage rejects an UpwardEvent whose Outcome and message
+// kind disagree. OutcomeCheckpoint accepts two kinds: checkpoint, and
+// artifact — pkg/tools/message_parent.go::outcomeForKind deliberately maps
+// artifact onto OutcomeCheckpoint (no dedicated Outcome: neither terminal
+// nor wake-eligible), so refusing that pairing rejected every artifact
+// report (issue #1011 D1).
 func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageDeliveryClass) error {
+	if outcome == steer.OutcomeCheckpoint && class.Kind == "artifact" {
+		return nil
+	}
 	var wantKind string
 	var wantFatal bool
 	switch outcome {
