@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -103,40 +104,55 @@ func isTerminalOutcome(o steer.Outcome) bool {
 	}
 }
 
+// outcomeAllowedKinds lists, per deliverable Outcome, every SessionMessage
+// kind that may carry it. Most outcomes have exactly one kind. Two carry a
+// second, because pkg/tools/message_parent.go::outcomeForKind deliberately
+// maps them there (issue #1011 D1 — each pairing used to be refused):
+//   - OutcomeCheckpoint also carries artifact (no dedicated Outcome: neither
+//     terminal nor wake-eligible, exactly like checkpoint);
+//   - OutcomeBlocker also carries a NON-final handback (mode=pause: wake-
+//     eligible, not terminal). A final handback stays OutcomeFinalAnswer's
+//     alone — it needs the terminal deterministic id Deliver stamps only for
+//     terminal outcomes; validateOutcomeMessage enforces the mode.
+var outcomeAllowedKinds = map[steer.Outcome][]string{ //nolint:gochecknoglobals
+	steer.OutcomeFinalAnswer:     {"handback"},
+	steer.OutcomeEmptyAnswer:     {"error"},
+	steer.OutcomeInterrupted:     {"error"},
+	steer.OutcomeTimedOut:        {"error"},
+	steer.OutcomeFailed:          {"error"},
+	steer.OutcomeParkedQuestion:  {"question"},
+	steer.OutcomeBlocker:         {"blocker", "handback"},
+	steer.OutcomeGoalVerdict:     {"goal_status"},
+	steer.OutcomeProgress:        {"progress"},
+	steer.OutcomeCheckpoint:      {"checkpoint", "artifact"},
+	steer.OutcomeLifecycleNotice: {"error"},
+}
+
 // validateOutcomeMessage rejects an UpwardEvent whose Outcome and message
-// kind disagree. OutcomeCheckpoint accepts two kinds: checkpoint, and
-// artifact — pkg/tools/message_parent.go::outcomeForKind deliberately maps
-// artifact onto OutcomeCheckpoint (no dedicated Outcome: neither terminal
-// nor wake-eligible), so refusing that pairing rejected every artifact
-// report (issue #1011 D1).
-func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageDeliveryClass) error {
-	if outcome == steer.OutcomeCheckpoint && class.Kind == "artifact" {
-		return nil
-	}
-	var wantKind string
-	var wantFatal bool
-	switch outcome {
-	case steer.OutcomeFinalAnswer:
-		wantKind = "handback"
-	case steer.OutcomeEmptyAnswer, steer.OutcomeInterrupted, steer.OutcomeTimedOut, steer.OutcomeFailed:
-		wantKind, wantFatal = "error", true
-	case steer.OutcomeParkedQuestion:
-		wantKind = "question"
-	case steer.OutcomeBlocker:
-		wantKind = "blocker"
-	case steer.OutcomeGoalVerdict:
-		wantKind = "goal_status"
-	case steer.OutcomeProgress:
-		wantKind = "progress"
-	case steer.OutcomeCheckpoint:
-		wantKind = "checkpoint"
-	case steer.OutcomeLifecycleNotice:
-		wantKind = "error"
-	default:
+// kind disagree (outcomeAllowedKinds). Error-kind outcomes additionally pin
+// Fatal: true for the four terminal failures, false for a lifecycle notice.
+// A handback under OutcomeBlocker must be non-final.
+func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageDeliveryClass, msg generated.SessionMessage) error {
+	allowed, ok := outcomeAllowedKinds[outcome]
+	if !ok {
 		return fmt.Errorf("outcome %q has no deliverable message variant", outcome)
 	}
-	if class.Kind != wantKind || (wantKind == "error" && class.Fatal != wantFatal) {
-		return fmt.Errorf("outcome %q does not match message kind %q (fatal=%v)", outcome, class.Kind, class.Fatal)
+	mismatch := fmt.Errorf("outcome %q does not match message kind %q (fatal=%v)", outcome, class.Kind, class.Fatal)
+	if !slices.Contains(allowed, class.Kind) {
+		return mismatch
+	}
+	switch class.Kind {
+	case "error":
+		if class.Fatal != (outcome != steer.OutcomeLifecycleNotice) {
+			return mismatch
+		}
+	case "handback":
+		if outcome == steer.OutcomeBlocker {
+			hb, err := msg.AsSessionMessageHandback()
+			if err != nil || hb.Mode == generated.SessionMessageHandbackModeFinal {
+				return fmt.Errorf("outcome %q does not match a final handback", outcome)
+			}
+		}
 	}
 	return nil
 }
@@ -321,7 +337,8 @@ func withDeterministicMessageID(msg generated.SessionMessage, id string) (genera
 // deliverySummary renders a short human-readable summary for the wake's
 // content field, extending pkg/tools/message_parent.go's
 // summarizeForWake with the two kinds only a turn-outcome event (never the
-// message_parent tool) ever produces: error and goal_status.
+// message_parent tool) ever produces: error and goal_status. artifact is
+// rendered too, so its paths and note reach the side-panel line (#1011).
 func deliverySummary(msg generated.SessionMessage) string {
 	kind, _ := msg.Discriminator()
 	switch kind {
@@ -344,6 +361,14 @@ func deliverySummary(msg generated.SessionMessage) string {
 	case "goal_status":
 		if v, err := msg.AsSessionMessageGoalStatus(); err == nil {
 			return fmt.Sprintf("A delegated session's goal verdict: %s", v.Condition)
+		}
+	case "artifact":
+		if v, err := msg.AsSessionMessageArtifact(); err == nil {
+			out := "A delegated session shared artifacts: " + strings.Join(v.Paths, ", ")
+			if v.Note != nil && strings.TrimSpace(*v.Note) != "" {
+				out += " (" + *v.Note + ")"
+			}
+			return out
 		}
 	}
 	return "A delegated session sent a message."
@@ -385,7 +410,7 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	if classErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: classify message: %w", classErr)
 	}
-	if matchErr := validateOutcomeMessage(event.Outcome, class); matchErr != nil {
+	if matchErr := validateOutcomeMessage(event.Outcome, class, msg); matchErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: %w", matchErr)
 	}
 	if isTerminalOutcome(event.Outcome) {
@@ -441,6 +466,11 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	// (steer_frames.go). Best-effort — see deliverSubagentMessage/State's
 	// own doc comments for why a failure here never fails Deliver itself.
 	if kind := subagentMessageKindForOutcome(event.Outcome); kind != "" {
+		if event.Outcome == steer.OutcomeCheckpoint {
+			// checkpoint or artifact (outcomeAllowedKinds) — both are
+			// SubagentMessageFrame kinds, so an artifact shows as one (#1011).
+			kind = class.Kind
+		}
 		al.deliverSubagentMessage(ownerKey, childRec, kind, deliverySummary(msg), nil)
 	}
 	if state := subagentStateForOutcome(event.Outcome); state != "" {
