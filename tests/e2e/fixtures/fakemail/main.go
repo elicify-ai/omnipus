@@ -2,11 +2,42 @@
 // panel end-to-end spec. It speaks plaintext IMAP (the same imapmemserver
 // startMemIMAP uses) plus a sink that records SMTP, and a small control API
 // the spec uses to seed messages. One JSON line on stdout gives the ports.
+//
+// With no flags it behaves exactly as the D36 spec server always has: the
+// single user mailbox@test.local / s3cret with INBOX, Sent and Drafts, three
+// ephemeral loopback ports, and a first stdout line carrying exactly the
+// five JSON keys the consumer fixtures/fake-mail-server.ts parses
+// (imap, smtp, control, user, password).
+//
+// The optional flags exist for founder local review of the email feature
+// (send and receive test mail without a real mail account):
+//
+//	-imap 127.0.0.1:1143     IMAP listen address (default 127.0.0.1:0)
+//	-smtp 127.0.0.1:1025     SMTP listen address (default 127.0.0.1:0)
+//	-control 127.0.0.1:1180  control API listen address (default 127.0.0.1:0)
+//	-users "agent@test.local:s3cret,alice@test.local:s3cret"
+//	-deliver                 also append SMTP mail to a known local user's INBOX
+//
+// Every listen address must be loopback: Omnipus allows plaintext IMAP/SMTP
+// only to loopback, and the review defaults keep that true. -users users get
+// INBOX, Sent, Drafts and Trash; the default user keeps exactly the D36
+// folder set (INBOX, Sent, Drafts). Control API:
+//
+//	POST /append {mailbox, raw_base64, flags} -> {uid}  (first user's mailboxes)
+//	POST /store  {mailbox, uid, flags}        -> {ok}  (first user's mailboxes)
+//	GET  /smtp                                -> {count, messages} (sink)
+//	POST /inject {user, mailbox?, subject?, from?, text?, raw_base64?}
+//	    -> {uid}  append a sample inbound message to any known user's mailbox
+//
+// /append and /store stay bound to the first user in the list (the default
+// user when -users is absent), matching today's contract.
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +45,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -21,44 +53,240 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 )
 
-func main() {
-	mem := imapmemserver.New()
-	user := imapmemserver.NewUser("mailbox@test.local", "s3cret")
-	for _, name := range []string{"INBOX", "Sent", "Drafts"} {
-		if err := user.Create(name, nil); err != nil {
-			fatal(err)
+const defaultListenAddr = "127.0.0.1:0"
+
+// defaultUser is the user the D36 spec has always provisioned.
+var defaultUser = mailUser{addr: "mailbox@test.local", password: "s3cret"}
+
+// defaultFolders is the folder set the fixture has always created;
+// reviewFolders is what -users mode provisions (adds Trash).
+var (
+	defaultFolders = []string{"INBOX", "Sent", "Drafts"}
+	reviewFolders  = []string{"INBOX", "Sent", "Drafts", "Trash"}
+)
+
+type mailUser struct {
+	addr     string
+	password string
+}
+
+type config struct {
+	imapAddr string
+	smtpAddr string
+	ctrlAddr string
+	users    []mailUser
+	// usersFlagGiven separates no-flag mode (byte-identical behaviour) from
+	// -users mode (adds Trash, emits the "users" output key).
+	usersFlagGiven bool
+	deliver        bool
+}
+
+// fakeServer is the running fixture; Stop closes the listeners (tests).
+type fakeServer struct {
+	imapAddr, smtpAddr, ctrlAddr string
+	primary                      *imapclient.Client
+
+	imapLn, smtpLn, ctrlLn net.Listener
+}
+
+// Stop closes the three listeners and the primary control client. Best
+// effort: the fixture process normally just exits.
+func (s *fakeServer) Stop() {
+	for _, ln := range []net.Listener{s.imapLn, s.smtpLn, s.ctrlLn} {
+		if ln != nil {
+			_ = ln.Close()
 		}
 	}
-	mem.AddUser(user)
+	if s.primary != nil {
+		_ = s.primary.Close()
+	}
+}
+
+func main() {
+	cfg, err := parseFlags(os.Args[1:])
+	if err != nil {
+		fatal(err)
+	}
+	if _, err := run(cfg, os.Stdout); err != nil {
+		fatal(err)
+	}
+	select {}
+}
+
+func parseFlags(args []string) (config, error) {
+	fs := flag.NewFlagSet("fakemail", flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // stdout must stay pure: the one JSON line
+	imapAddr := fs.String("imap", defaultListenAddr, "IMAP listen address, loopback only")
+	smtpAddr := fs.String("smtp", defaultListenAddr, "SMTP listen address, loopback only")
+	ctrlAddr := fs.String("control", defaultListenAddr, "control API listen address, loopback only")
+	usersSpec := fs.String("users", "", `mail users "addr:password,addr:password"`)
+	deliver := fs.Bool("deliver", false, "also append SMTP mail to a known local user's INBOX")
+	if err := fs.Parse(args); err != nil {
+		return config{}, err
+	}
+	if fs.NArg() > 0 {
+		return config{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
+	}
+	users, err := parseUsers(*usersSpec)
+	if err != nil {
+		return config{}, err
+	}
+	return config{
+		imapAddr:       *imapAddr,
+		smtpAddr:       *smtpAddr,
+		ctrlAddr:       *ctrlAddr,
+		users:          users,
+		usersFlagGiven: *usersSpec != "",
+		deliver:        *deliver,
+	}, nil
+}
+
+// parseUsers parses the -users spec ("addr:password,addr:password"). An
+// empty spec yields the single default user, exactly as today.
+func parseUsers(spec string) ([]mailUser, error) {
+	if spec == "" {
+		return []mailUser{defaultUser}, nil
+	}
+	var users []mailUser
+	seen := map[string]bool{}
+	for _, part := range strings.Split(spec, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, fmt.Errorf("empty user entry in -users %q", spec)
+		}
+		addr, pass, ok := strings.Cut(part, ":")
+		if !ok || addr == "" || pass == "" {
+			return nil, fmt.Errorf("user %q must be address:password", part)
+		}
+		if !strings.Contains(addr, "@") {
+			return nil, fmt.Errorf("user address %q must contain @", addr)
+		}
+		key := strings.ToLower(addr)
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate user address %q", addr)
+		}
+		seen[key] = true
+		users = append(users, mailUser{addr: addr, password: pass})
+	}
+	return users, nil
+}
+
+// checkLoopback enforces the loopback-only rule: Omnipus allows plaintext
+// IMAP/SMTP only to loopback, so the fixture refuses to listen anywhere
+// else. An empty host (":port") means all interfaces and is refused.
+func checkLoopback(what, addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%s listen address %q: %w", what, addr, err)
+	}
+	if host == "" {
+		return fmt.Errorf("%s listen address %q must be loopback (empty host means all interfaces)", what, addr)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		ra, err := net.ResolveIPAddr("ip", host)
+		if err != nil {
+			return fmt.Errorf("%s listen address %q: cannot resolve host: %w", what, addr, err)
+		}
+		ip = ra.IP
+	}
+	if !ip.IsLoopback() {
+		return fmt.Errorf("%s listen address %q must be loopback (Omnipus allows plaintext IMAP/SMTP only to loopback)", what, addr)
+	}
+	return nil
+}
+
+// run validates the config, starts the three servers and prints the one
+// JSON line to out. In no-flag mode the line is byte-identical to what the
+// fixture has always printed; run also defaults empty addresses and the
+// empty user list so a zero-value config means today's mode.
+func run(cfg config, out io.Writer) (*fakeServer, error) {
+	addrs := map[string]string{
+		"imap": cfg.imapAddr, "smtp": cfg.smtpAddr, "control": cfg.ctrlAddr,
+	}
+	for _, what := range []string{"imap", "smtp", "control"} {
+		addr := addrs[what]
+		if addr == "" {
+			addr = defaultListenAddr
+			addrs[what] = addr
+		}
+		if err := checkLoopback(what, addr); err != nil {
+			return nil, err
+		}
+	}
+
+	users := cfg.users
+	if len(users) == 0 {
+		users = []mailUser{defaultUser}
+	}
+	folders := defaultFolders
+	if cfg.usersFlagGiven {
+		folders = reviewFolders
+	}
+
+	mem := imapmemserver.New()
+	userHandles := make(map[string]*imapmemserver.User)
+	for _, u := range users {
+		mu := imapmemserver.NewUser(u.addr, u.password)
+		for _, name := range folders {
+			if err := mu.Create(name, nil); err != nil {
+				return nil, fmt.Errorf("create mailbox %s for %s: %w", name, u.addr, err)
+			}
+		}
+		mem.AddUser(mu)
+		userHandles[strings.ToLower(u.addr)] = mu
+	}
+
 	imapSrv := imapserver.New(&imapserver.Options{
 		NewSession: func(*imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
 			return mem.NewSession(), nil, nil
 		},
 		InsecureAuth: true,
 	})
-	imapLn, err := net.Listen("tcp", "127.0.0.1:0")
+	imapLn, err := net.Listen("tcp", addrs["imap"])
 	if err != nil {
-		fatal(err)
+		return nil, err
 	}
 	go func() { _ = imapSrv.Serve(imapLn) }()
 
-	smtpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	smtpLn, err := net.Listen("tcp", addrs["smtp"])
 	if err != nil {
-		fatal(err)
+		_ = imapLn.Close()
+		return nil, err
 	}
 	sink := &smtpSink{}
+	if cfg.deliver {
+		sink.deliver = func(rcpt, raw string) {
+			mu, ok := userHandles[strings.ToLower(rcpt)]
+			if !ok {
+				return
+			}
+			if _, err := appendRaw(mu, "INBOX", []byte(raw)); err != nil {
+				fmt.Fprintf(os.Stderr, "fakemail: deliver to %s INBOX: %v\n", rcpt, err)
+			}
+		}
+	}
 	go sink.serve(smtpLn)
 
-	ctrlLn, err := net.Listen("tcp", "127.0.0.1:0")
+	ctrlLn, err := net.Listen("tcp", addrs["control"])
 	if err != nil {
-		fatal(err)
+		_ = imapLn.Close()
+		_ = smtpLn.Close()
+		return nil, err
 	}
 	cl, err := imapclient.DialInsecure(imapLn.Addr().String(), nil)
 	if err != nil {
-		fatal(err)
+		_ = imapLn.Close()
+		_ = smtpLn.Close()
+		_ = ctrlLn.Close()
+		return nil, err
 	}
-	if err = cl.Login("mailbox@test.local", "s3cret").Wait(); err != nil {
-		fatal(err)
+	if err = cl.Login(users[0].addr, users[0].password).Wait(); err != nil {
+		_ = imapLn.Close()
+		_ = smtpLn.Close()
+		_ = ctrlLn.Close()
+		_ = cl.Close()
+		return nil, err
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/append", func(w http.ResponseWriter, r *http.Request) { handleAppend(w, r, cl) })
@@ -66,17 +294,40 @@ func main() {
 	mux.HandleFunc("/smtp", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, sink.snapshot())
 	})
+	mux.HandleFunc("/inject", func(w http.ResponseWriter, r *http.Request) { handleInject(w, r, userHandles) })
 	go func() { _ = http.Serve(ctrlLn, mux) }()
 
-	out := map[string]string{
+	outLine := map[string]any{
 		"imap": imapLn.Addr().String(), "smtp": smtpLn.Addr().String(),
-		"control": ctrlLn.Addr().String(), "user": "mailbox@test.local", "password": "s3cret",
+		"control": ctrlLn.Addr().String(), "user": users[0].addr, "password": users[0].password,
 	}
-	enc := json.NewEncoder(os.Stdout)
-	if err := enc.Encode(out); err != nil {
-		fatal(err)
+	if cfg.usersFlagGiven {
+		names := make([]string, len(users))
+		for i, u := range users {
+			names[i] = u.addr
+		}
+		outLine["users"] = names
 	}
-	select {}
+	if err := json.NewEncoder(out).Encode(outLine); err != nil {
+		return nil, err
+	}
+
+	return &fakeServer{
+		imapAddr: imapLn.Addr().String(), smtpAddr: smtpLn.Addr().String(),
+		ctrlAddr: ctrlLn.Addr().String(), primary: cl,
+		imapLn: imapLn, smtpLn: smtpLn, ctrlLn: ctrlLn,
+	}, nil
+}
+
+// appendRaw appends raw to a memserver user's mailbox directly (no IMAP
+// round-trip) -- used by -deliver and /inject. The options pointer must be
+// non-nil: the memserver dereferences it unconditionally.
+func appendRaw(mu *imapmemserver.User, mailbox string, raw []byte) (imap.UID, error) {
+	data, err := mu.Append(mailbox, struct{ *bytes.Reader }{bytes.NewReader(raw)}, &imap.AppendOptions{})
+	if err != nil {
+		return 0, err
+	}
+	return data.UID, nil
 }
 
 func handleAppend(w http.ResponseWriter, r *http.Request, cl *imapclient.Client) {
@@ -143,9 +394,83 @@ func handleStore(w http.ResponseWriter, r *http.Request, cl *imapclient.Client) 
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
+// handleInject appends a sample inbound message to a known user's mailbox
+// (default INBOX) -- the injection path for users other than the first (who
+// /append reaches) and the convenient one for review seeding.
+func handleInject(w http.ResponseWriter, r *http.Request, userHandles map[string]*imapmemserver.User) {
+	var req struct {
+		User    string `json:"user"`
+		Mailbox string `json:"mailbox"`
+		Subject string `json:"subject"`
+		From    string `json:"from"`
+		Text    string `json:"text"`
+		RawB64  string `json:"raw_base64"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.User == "" {
+		http.Error(w, "user is required", http.StatusBadRequest)
+		return
+	}
+	mu, ok := userHandles[strings.ToLower(req.User)]
+	if !ok {
+		http.Error(w, fmt.Sprintf("unknown user %q", req.User), http.StatusNotFound)
+		return
+	}
+	mailbox := req.Mailbox
+	if mailbox == "" {
+		mailbox = "INBOX"
+	}
+	var raw []byte
+	if req.RawB64 != "" {
+		b, err := base64.StdEncoding.DecodeString(req.RawB64)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		raw = b
+	} else {
+		from := req.From
+		if from == "" {
+			from = "someone@example.test"
+		}
+		subject := req.Subject
+		if subject == "" {
+			subject = "Sample message"
+		}
+		text := req.Text
+		if text == "" {
+			text = "Sample inbound message injected by fakemail."
+		}
+		raw = []byte(strings.Join([]string{
+			"From: " + from,
+			"To: " + req.User,
+			"Subject: " + subject,
+			"Date: " + time.Now().Format("Mon, 02 Jan 2006 15:04:05 -0700"),
+			"MIME-Version: 1.0",
+			"Content-Type: text/plain; charset=utf-8",
+			"",
+			text,
+			"",
+		}, "\r\n"))
+	}
+	uid, err := appendRaw(mu, mailbox, raw)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]any{"uid": uid})
+}
+
 type smtpSink struct {
 	mu   sync.Mutex
 	msgs []string
+	// deliver, when non-nil, is called for every completed DATA payload and
+	// known recipient. It stays nil in no-flag mode, so the sink behaves
+	// exactly as before.
+	deliver func(rcpt, raw string)
 }
 
 func (s *smtpSink) serve(ln net.Listener) {
@@ -164,6 +489,7 @@ func (s *smtpSink) one(c net.Conn) {
 	buf := make([]byte, 0, 4096)
 	tmp := make([]byte, 1024)
 	var msg strings.Builder
+	var rcpts []string
 	reading := false
 	for {
 		n, err := c.Read(tmp)
@@ -184,9 +510,15 @@ func (s *smtpSink) one(c net.Conn) {
 				_, _ = io.WriteString(c, "354 go\r\n")
 			case reading && line == ".":
 				reading = false
+				raw := msg.String()
 				s.mu.Lock()
-				s.msgs = append(s.msgs, msg.String())
+				s.msgs = append(s.msgs, raw)
 				s.mu.Unlock()
+				if s.deliver != nil {
+					for _, rcpt := range rcpts {
+						s.deliver(rcpt, raw)
+					}
+				}
 				msg.Reset()
 				_, _ = io.WriteString(c, "250 ok\r\n")
 			case reading:
@@ -196,6 +528,11 @@ func (s *smtpSink) one(c net.Conn) {
 				_, _ = io.WriteString(c, "221 bye\r\n")
 				return
 			default:
+				// RCPT TO is remembered for -deliver but answered exactly
+				// as before: every unknown command and recipient gets 250.
+				if strings.HasPrefix(upper, "RCPT TO:") {
+					rcpts = append(rcpts, extractRcpt(line))
+				}
 				_, _ = io.WriteString(c, "250 ok\r\n")
 			}
 		}
@@ -203,6 +540,17 @@ func (s *smtpSink) one(c net.Conn) {
 			return
 		}
 	}
+}
+
+// extractRcpt pulls the address out of an SMTP "RCPT TO:<a@b>" line.
+func extractRcpt(line string) string {
+	i := strings.Index(line, ":")
+	if i < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(line[i+1:])
+	rest = strings.TrimPrefix(rest, "<")
+	return strings.TrimSuffix(rest, ">")
 }
 
 func (s *smtpSink) snapshot() map[string]any {
