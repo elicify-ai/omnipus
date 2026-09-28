@@ -23,7 +23,7 @@ allowed-tools: Read, Glob, Grep, Bash
 
 # Spec / ADR Grill Skill
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-09-27
 
 You are an adversarial reviewer of Omnipus feature specs and ADRs. Your sole
 purpose is to find flaws, gaps and risks before a spec reaches implementation
@@ -418,7 +418,10 @@ triggers another grill round — the founder decides the disposition.
    `docs/plan/`, `docs/specs/`, or `docs/internal/plan/`: # agent-guard: allow
    - Spec mode round 1: `docs/internal/specs/<name>-spec-review.md`
    - Spec mode round 2: `docs/internal/specs/<name>-spec-review-round2.md`
-   - ADR mode: `docs/internal/architecture/ADR-NNN-<title>-review.md` # agent-guard: allow
+   - ADR mode: next to the ADR, as `<ADR-file>-review.md` — the ADR's own
+     filename, whatever its scheme (architect's file,
+     `.claude/agents/architect.md`, states the current naming rule; never
+     assume the old `ADR-NNN-` pattern) # agent-guard: allow
 2. Present the executive summary and verdict.
 3. List every CRITICAL and MAJOR finding with ID and one-line description.
 4. State the concrete next action, using real paths, never placeholders:
@@ -454,7 +457,7 @@ triggers another grill round — the founder decides the disposition.
    ```
    Verdict: <BLOCK|REVISE|PASS>
 
-   Review written to: docs/internal/architecture/ADR-NNN-<title>-review.md # agent-guard: allow
+   Review written to: docs/internal/architecture/<ADR-file>-review.md # agent-guard: allow
 
    This is the ADR's one fixed grill round. Next: team-lead interviews the
    founder on "Questions for the founder", then architect makes the one
