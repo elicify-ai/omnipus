@@ -601,6 +601,19 @@ test.describe('UAT Group C — the live browser panel', () => {
     // capture, so "scrolling changed nothing" was the TEST being wrong, not the
     // product. /large is the plan's own host and is several screens deep.
     await navigateLiveBrowser(page, `${HEROKU}/large`);
+    // Row 55 bug B: confirm the navigation actually landed before trusting
+    // anything downstream. navigateLiveBrowser only fires the omnibox Enter
+    // key — it does not wait for the CDP navigation to succeed. Without this,
+    // a slow/unavailable HEROKU_HOST left the panel showing its PRIOR page
+    // (or an error page) while decodedFrames(video) — cumulative since the
+    // panel opened, not scoped to this navigation, see its own docstring
+    // below — and lum > 8 (near-black is the only thing that guard rejects; a
+    // near-white blank/error page, luminance ~243 as observed in the actual
+    // failure, sails through it) both passed anyway. The scroll-fps
+    // measurement then legitimately found nothing moving, because /large
+    // never actually loaded. Same confirmation UAT-14 already uses at its own
+    // navigation, a few lines below.
+    await expect(addressBar(page)).toHaveValue(/herokuapp\.com\/large\/?$/, { timeout: 45_000 });
     await waitForViewportInput(page);
     // The viewport handoff text clearing means input resumed — it says
     // nothing about the decode pipeline. UAT-13 flaked on CI (job
