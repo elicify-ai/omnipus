@@ -456,7 +456,7 @@ func TestMailDraftPanelUpdate_KeepNamingMarkerPartIsAcceptedAndSkipped(t *testin
 	rawDraft := appendLeakDraft(t, cl)
 	uv := draftUIDValidity(t, cl)
 
-	realIdx := leakFreshDraftKeep(t, env, uv)      // download-route probe (contract addressing authority)
+	realIdx := leakFreshDraftKeep(t, env, uv)            // download-route probe (contract addressing authority)
 	markerIdx := draftBodyMarkerStableIndex(t, rawDraft) // raw-MIME leaf walk (independent)
 	require.NotContains(t, realIdx, markerIdx,
 		"instrument: the derived marker index collides with the real attachment's index — the keep list would not actually name the marker")

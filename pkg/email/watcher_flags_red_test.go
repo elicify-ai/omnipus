@@ -53,29 +53,29 @@ var watcherMutatingVerbs = []string{
 
 func TestWatcher_NeverMutatesFlags(t *testing.T) {
 	const marker = "watcher-body-marker-77f3c1"
-	cap := startCaptureIMAP(t, [][]byte{watcherMsgRaw("m1@example.test", marker)}, nil, false)
+	capture := startCaptureIMAP(t, [][]byte{watcherMsgRaw("m1@example.test", marker)}, nil, false)
 	// The harness seeds INBOX through its own client on the same DebugWriter
 	// before the watcher exists; only the transcript after seeding is the
 	// watcher's.
-	seedLen := len(cap.log.String())
+	seedLen := len(capture.log.String())
 	dir := t.TempDir()
 	const agentID, wsID = "agent-a", "ws-a"
-	w, err := NewWatcher(WatcherConfig{AgentID: agentID, WorkspaceID: wsID, Transport: cap.cl, StateDir: dir})
+	w, err := NewWatcher(WatcherConfig{AgentID: agentID, WorkspaceID: wsID, Transport: capture.cl, StateDir: dir})
 	if err != nil {
 		t.Fatalf("NewWatcher: %v", err)
 	}
 	ctx := context.Background()
-	if err := w.Cycle(ctx); err != nil {
-		t.Fatalf("watcher cycle 1: %v", err)
+	if cycleErr := w.Cycle(ctx); cycleErr != nil {
+		t.Fatalf("watcher cycle 1: %v", cycleErr)
 	}
-	if err := w.Cycle(ctx); err != nil {
-		t.Fatalf("watcher cycle 2: %v", err)
+	if cycleErr := w.Cycle(ctx); cycleErr != nil {
+		t.Fatalf("watcher cycle 2: %v", cycleErr)
 	}
 
 	// Instrument check: the cycle actually reached the harness. Without a
 	// read command in the transcript the no-STORE assertion below would be
 	// vacuously green.
-	full := cap.log.String()
+	full := capture.log.String()
 	watcherLog := ""
 	if len(full) >= seedLen {
 		watcherLog = full[seedLen:]
@@ -134,9 +134,9 @@ func TestWatcher_NeverMutatesFlags(t *testing.T) {
 // STORE against the capture harness is visible to storeCommands, so the
 // no-STORE assertions above could have seen a violation.
 func TestWatcherHarness_StoreDetectsCommands(t *testing.T) {
-	cap := startCaptureIMAP(t, [][]byte{watcherMsgRaw("m1@example.test", "instr")}, nil, false)
-	before := len(storeCommands(cap.log.String()))
-	cl, err := imapclient.DialInsecure(cap.addr, nil)
+	capture := startCaptureIMAP(t, [][]byte{watcherMsgRaw("m1@example.test", "instr")}, nil, false)
+	before := len(storeCommands(capture.log.String()))
+	cl, err := imapclient.DialInsecure(capture.addr, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -151,23 +151,23 @@ func TestWatcherHarness_StoreDetectsCommands(t *testing.T) {
 	if err := cl.Store(imap.SeqSetNum(1), setFlags, nil).Close(); err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	after := storeCommands(cap.log.String())
+	after := storeCommands(capture.log.String())
 	if len(after) != before+1 {
 		t.Fatalf("instrument: planted STORE not detected (before=%d after=%d) — storeCommands cannot see client STOREs, so TestWatcher_NeverMutatesFlags would be vacuous", before, len(after))
 	}
 }
 
 func TestWatcher_KeyedOnUIDNotUnseen(t *testing.T) {
-	cap := startCaptureIMAP(t, [][]byte{watcherMsgRaw("m1@example.test", "k1")}, nil, false)
+	capture := startCaptureIMAP(t, [][]byte{watcherMsgRaw("m1@example.test", "k1")}, nil, false)
 	dir := t.TempDir()
 	const agentID, wsID = "agent-b", "ws-b"
-	w, err := NewWatcher(WatcherConfig{AgentID: agentID, WorkspaceID: wsID, Transport: cap.cl, StateDir: dir})
+	w, err := NewWatcher(WatcherConfig{AgentID: agentID, WorkspaceID: wsID, Transport: capture.cl, StateDir: dir})
 	if err != nil {
 		t.Fatalf("NewWatcher: %v", err)
 	}
 	ctx := context.Background()
-	if err := w.Cycle(ctx); err != nil {
-		t.Fatalf("watcher cycle 1: %v", err)
+	if cycleErr := w.Cycle(ctx); cycleErr != nil {
+		t.Fatalf("watcher cycle 1: %v", cycleErr)
 	}
 	st, err := LoadWatcherState(dir, agentID, wsID)
 	if err != nil {
@@ -181,28 +181,28 @@ func TestWatcher_KeyedOnUIDNotUnseen(t *testing.T) {
 	}
 
 	// Another session marks message 1 \Seen; a new message arrives (uid 2).
-	other, err := imapclient.DialInsecure(cap.addr, nil)
+	other, err := imapclient.DialInsecure(capture.addr, nil)
 	if err != nil {
 		t.Fatalf("dial other session: %v", err)
 	}
 	defer other.Close()
-	if err := other.Login(testIMAPUser, testIMAPPass).Wait(); err != nil {
-		t.Fatalf("login other session: %v", err)
+	if loginErr := other.Login(testIMAPUser, testIMAPPass).Wait(); loginErr != nil {
+		t.Fatalf("login other session: %v", loginErr)
 	}
-	if _, err := other.Select("INBOX", nil).Wait(); err != nil {
-		t.Fatalf("select other session: %v", err)
+	if _, selectErr := other.Select("INBOX", nil).Wait(); selectErr != nil {
+		t.Fatalf("select other session: %v", selectErr)
 	}
 	setFlags := &imap.StoreFlags{Op: imap.StoreFlagsAdd, Flags: []imap.Flag{imap.FlagSeen}}
-	if err := other.Store(imap.SeqSetNum(1), setFlags, nil).Close(); err != nil {
-		t.Fatalf("other session marks \\Seen: %v", err)
+	if storeErr := other.Store(imap.SeqSetNum(1), setFlags, nil).Close(); storeErr != nil {
+		t.Fatalf("other session marks \\Seen: %v", storeErr)
 	}
-	appendRaw(t, cap.addr, [][]byte{watcherMsgRaw("m2@example.test", "k2")}, nil)
+	appendRaw(t, capture.addr, [][]byte{watcherMsgRaw("m2@example.test", "k2")}, nil)
 
 	// MAJ-019: the cycle still advances the UID state even though the unseen
 	// count is unchanged (1 before, 1 after) — keying on UNSEEN would see
 	// "nothing new".
-	if err := w.Cycle(ctx); err != nil {
-		t.Fatalf("watcher cycle 2: %v", err)
+	if cycleErr := w.Cycle(ctx); cycleErr != nil {
+		t.Fatalf("watcher cycle 2: %v", cycleErr)
 	}
 	st2, err := LoadWatcherState(dir, agentID, wsID)
 	if err != nil {
@@ -220,11 +220,11 @@ func TestWatcher_KeyedOnUIDNotUnseen(t *testing.T) {
 
 	// The watcher's cycles must not have touched any flags: msg 1 keeps
 	// exactly \\Seen (set by the other session), msg 2 keeps none.
-	f1 := inboxFlags(t, cap.addr, 1)
+	f1 := inboxFlags(t, capture.addr, 1)
 	if len(f1) != 1 || !flagPresent(f1, imap.FlagSeen) {
 		t.Fatalf("msg 1 flags after two watcher cycles = %v, want exactly [\\Seen] — the watcher must not add or remove flags", f1)
 	}
-	f2 := inboxFlags(t, cap.addr, 2)
+	f2 := inboxFlags(t, capture.addr, 2)
 	if len(f2) != 0 {
 		t.Fatalf("msg 2 flags after a watcher cycle = %v, want none", f2)
 	}

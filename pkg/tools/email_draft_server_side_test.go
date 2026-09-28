@@ -85,7 +85,7 @@ func fetchDraftsRow(t *testing.T, addr string) ([]imap.Flag, []byte, uint32) {
 	if len(raw) == 0 {
 		t.Fatal("instrument: fetched Drafts row has an empty body section - the fetch cannot see message bytes, so the header assertion would be vacuous")
 	}
-	return d.Flags, raw, uint32(sel.UIDValidity)
+	return d.Flags, raw, sel.UIDValidity
 }
 
 func TestCreateEmailDraft_LandsInDraftsWithDraftFlag(t *testing.T) {

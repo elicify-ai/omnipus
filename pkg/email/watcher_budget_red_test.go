@@ -46,7 +46,7 @@ func (s *budgetSkipStubTransport) Search(ctx context.Context, query string, opts
 	return SearchResult{}, nil
 }
 func (s *budgetSkipStubTransport) ReadMessage(ctx context.Context, uid uint32) (*Message, error) {
-	return nil, nil
+	return nil, errWatcherStubReadMessage
 }
 func (s *budgetSkipStubTransport) Send(ctx context.Context, req SendRequest) error { return nil }
 func (s *budgetSkipStubTransport) MarkSeen(ctx context.Context, uid uint32) error  { return nil }

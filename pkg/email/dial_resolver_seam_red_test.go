@@ -58,7 +58,6 @@ func (r *f2StubResolver) LookupHost(_ context.Context, _ string) ([]string, erro
 	idx := r.calls - 1
 	if idx < len(r.answers) && r.answers[idx] != nil {
 		return nil, r.answers[idx]
-
 	}
 	return []string{"127.0.0.1"}, nil
 }

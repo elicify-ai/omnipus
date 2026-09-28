@@ -28,7 +28,10 @@ import (
 
 func TestMailPreviewPart_UnavailableDataRefusedLikeAttachmentDownload(t *testing.T) {
 	useFreshMailPreviewServeLimiter(t)
-	_, store, _, srv, _ := newProductionMailPreviewChain(t)
+	fixture, store, token, srv, apiHits := newProductionMailPreviewChain(t)
+	require.NotNil(t, fixture)
+	require.NotEmpty(t, token)
+	require.Zero(t, apiHits.Load())
 
 	tokOK, merr := store.mint("c:qa-part-ok", mailPreviewGrant{
 		HTML: mailSanitizePreviewHTML("<p>ctrl</p>", nil, nil),

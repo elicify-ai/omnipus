@@ -7,6 +7,7 @@ package email
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -23,6 +24,8 @@ type cycleStubTransport struct {
 	readInbox atomic.Int32
 }
 
+var errWatcherStubReadMessage = errors.New("unexpected watcher stub ReadMessage call")
+
 func (s *cycleStubTransport) ReadInbox(ctx context.Context, opts InboxOptions) ([]Message, error) {
 	s.readInbox.Add(1)
 	return nil, nil
@@ -31,7 +34,7 @@ func (s *cycleStubTransport) Search(ctx context.Context, query string, opts Sear
 	return SearchResult{}, nil
 }
 func (s *cycleStubTransport) ReadMessage(ctx context.Context, uid uint32) (*Message, error) {
-	return nil, nil
+	return nil, errWatcherStubReadMessage
 }
 func (s *cycleStubTransport) Send(ctx context.Context, req SendRequest) error { return nil }
 func (s *cycleStubTransport) MarkSeen(ctx context.Context, uid uint32) error  { return nil }
