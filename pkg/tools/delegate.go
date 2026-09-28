@@ -59,6 +59,13 @@ type delegateSessionIDCtxKey struct{}
 // own turn context, so a child's OWN tool calls (message_parent, and any
 // future session-aware tool) can resolve their own durable identity without
 // conflating it with the shared transcript session id.
+//
+// GUARD: the "" no-op is silence, not a clean stamp — a turn's base ctx must
+// never already carry the delegate-session-id key from a DIFFERENT
+// turn/session, or an unstamped turn (id "") would silently INHERIT the base
+// ctx's id: a wrong delegate-session-id, not an absent one, and nothing
+// would error. Every production turn's base ctx is detached
+// (Background-derived) before turn-context construction stamps it.
 func WithDelegateSessionID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
@@ -235,6 +242,15 @@ type DelegateTool struct {
 	// lifecycle is the durable S2 session-lifecycle store (pkg/session).
 	// Required for every action beyond legacy run/status.
 	lifecycle MessageParentLifecycleStore
+	// unified is the shared UnifiedStore holding every delegate child's
+	// chat-transcript meta.json (SteerLauncher mints it there — both
+	// launchOrdinaryRoot's NewSession and launchSteered's
+	// CreateSessionWithID read the same al.GetSessionStore() instance), so
+	// transitionLifecycle can mirror terminal transitions onto it (issue
+	// #947 defect 2). Unset (nil, the pre-#947 state) skips the mirror —
+	// the same "no chat-transcript meta" tolerance
+	// session.TransitionSession already defines for nil.
+	unified *session.UnifiedStore
 	// inbox is the durable S3 child->parent message inbox (D16, pkg/session).
 	inbox DelegateInboxStore
 	// steering delivers a parent->child steer/respond into the child's
@@ -342,6 +358,15 @@ func NewDelegateTool(_ string, _ int, _ float64) *DelegateTool {
 // actions return a clear "not configured" error when this is unset.
 func (t *DelegateTool) SetLifecycleStore(store MessageParentLifecycleStore) {
 	t.lifecycle = store
+}
+
+// SetUnifiedStore installs the shared UnifiedStore whose sessions/<id>/meta.json
+// transitionLifecycle mirrors terminal transitions onto (issue #947 defect 2).
+// Wired by wireSessionMessagingForAgent next to SetLifecycleStore. A nil store
+// (an unwired tool, or a harness that never constructed the shared store) keeps
+// the pre-#947 behaviour: the lifecycle write proceeds, the mirror is skipped.
+func (t *DelegateTool) SetUnifiedStore(us *session.UnifiedStore) {
+	t.unified = us
 }
 
 // SetMessageInbox installs the durable S3 child->parent message inbox.

@@ -14,7 +14,7 @@ import (
 	basechannels "github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 )
 
 // weixinMediaTestServer fakes the getuploadurl, CDN /upload, and sendmessage
@@ -223,7 +223,7 @@ func TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning(t *testing.T) {
 
 	srv := &weixinMediaTestServer{}
 	ch := newWeixinMediaTestChannel(t, srv)
-	ch.SetMediaStore(media.NewFileMediaStore())
+	ch.SetMediaStore(mediatest.NewFileMediaStore(t))
 
 	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "chat-1",

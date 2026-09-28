@@ -108,6 +108,12 @@ export function resolveDiscardConfirmDialog(result: boolean): void {
   for (const resolve of resolvers) resolve(result)
 }
 
+/** LibraryExplorer's unmount cleanup: no transition may wait on a vanished host. */
+export function discardConfirmDialogHostUnmounted(): void {
+  if (!open && pendingResolvers.length === 0) return
+  resolveDiscardConfirmDialog(false)
+}
+
 // beforeunload (tab close / reload / browser back-forward-cache navigation):
 // registered once at module load — this module is only ever imported by the
 // Library preview/editor code path, so the listener existing is itself a

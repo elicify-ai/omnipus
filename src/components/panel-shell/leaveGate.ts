@@ -29,14 +29,24 @@
 // its guard); the synchronous-clean-path shape stays.
 
 import { isLibraryEditorDirty, confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
+import type { PanelId } from './types'
 
 /**
  * Run the outgoing panel's leave gate, then `go()` if it allows the
  * transition. Synchronous on the clean path (see module comment); async
  * dialog round-trip when the outgoing Library has unsaved edits.
  */
-export function leaveGateThen(go: () => void): void {
-  if (!isLibraryEditorDirty()) {
+export function leaveGateThen(outgoingPanelId: PanelId | null, go: () => void): void
+/** @deprecated Compatibility for area FA's in-flight Library pop-out branch. */
+export function leaveGateThen(go: () => void): void
+export function leaveGateThen(
+  outgoingPanelIdOrGo: PanelId | null | (() => void),
+  next?: () => void,
+): void {
+  const outgoingPanelId = typeof outgoingPanelIdOrGo === 'function' ? 'library' : outgoingPanelIdOrGo
+  const go = typeof outgoingPanelIdOrGo === 'function' ? outgoingPanelIdOrGo : next
+  if (!go) return
+  if (outgoingPanelId !== 'library' || !isLibraryEditorDirty()) {
     go()
     return
   }

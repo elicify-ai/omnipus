@@ -43,7 +43,15 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 	// blanket refusal that used to sit here left such a child `running` for
 	// ever — nothing reached the parent, and hasRunningOrQueuedDescendant
 	// kept the parent from completing either.
-	if rec.GoalRef != "" && !session.IsTerminalLifecycleState(nextState) {
+	// (a) #947 defect 1: the deferral gate keys on an ACTIVE goal record, not
+	// the historical GoalRef stamp. A child whose goal decision is already
+	// settled (met, exhausted, idle-expired — or a judge-unavailable re-drive
+	// that just failed it) completes through the tail below; a child with a
+	// LIVE deferred adjudication still defers here. The old stamp-based gate
+	// kept deferring after the goal had ended: the verdict was delivered, the
+	// goal record closed, and the child stayed `running` for ever — the exact
+	// #947 hang.
+	if activeGoalForSession(rec.SessionID) != nil && !session.IsTerminalLifecycleState(nextState) {
 		return nil
 	}
 
@@ -181,6 +189,12 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 	})
 	switch {
 	case mutateErr == nil:
+		// (e)① #947 defect 1 — the pair ends together (FD1=A): the terminal
+		// write just landed, so the child's ACTIVE session-owned goal ends
+		// with its session, the outcome recording why. Idempotent (no active
+		// goal, no action), and it never speaks for a task-owned goal.
+		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
+			goalEndingForTerminalState(nextState), goalSessionEndedReasonForState(nextState))
 		return nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
@@ -590,6 +604,43 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 		}
 	}
 	return false, nil
+}
+
+// completeSteeredTurnAfterGoal is the ONE completion tail the goal path's
+// terminal arms call once the goal-record transition has landed (design-note
+// decision (b)) — and the one entry the judge-unavailable re-drive uses to
+// fail the child visibly (decision (c)). It reuses completeSteeredTurn
+// wholesale: the disposition derives the outcome from runErr (nil → the
+// child's answer as a normal final-answer completion; non-nil → a failed
+// child whose reason names the judge), Deliver runs first, the terminal
+// write carries the existing sentinels, and the Mutate-success path's
+// pair-end (e)① circled-one ends the goal when the write lands with the goal
+// still active.
+//
+// Every error here is logged and swallowed: the goal decision is already
+// settled at this point, so a delivery or persist failure is a repairable
+// gap (Deliver-first means boot recovery repairs a delivered-but-not-terminal
+// record), never a reason to unwind the caller's own completed transition.
+func (al *AgentLoop) completeSteeredTurnAfterGoal(ctx context.Context, sessionID, answer string, runErr error) {
+	if al == nil || sessionID == "" {
+		return
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		logger.WarnCF("agent", "goal: completion tail skipped — lifecycle store is not wired",
+			map[string]any{"session_id": sessionID})
+		return
+	}
+	snapshot, err := lifecycle.Load(sessionID)
+	if err != nil || snapshot == nil {
+		logger.WarnCF("agent", "goal: completion tail skipped — the child record is unreadable",
+			map[string]any{"session_id": sessionID, "error": errString(err)})
+		return
+	}
+	if err := al.completeSteeredTurn(ctx, snapshot, turnResult{finalContent: answer}, runErr); err != nil {
+		logger.WarnCF("agent", "goal: completion tail failed — boot recovery repairs a delivered-but-not-terminal gap",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+	}
 }
 
 func (al *AgentLoop) parkedQuestions(ownerID string) ([]string, error) {

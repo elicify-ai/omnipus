@@ -19,9 +19,9 @@ import type { Provider } from '@/lib/api/generated/openapi-types'
  * field is the wire value 1:1. The display name is layered separately
  * (UI-only) at render time.
  *
- * @param providers — full providers list as returned by `fetchProviders`.
- *   `status === 'connected'` filters are applied by the caller (the
- *   fallback editor only ever sees connected providers anyway).
+ * @param providers — the caller's already-filtered provider list
+ *   (`providerStatus.isProviderUsable` — connected OR signed_in; the
+ *   fallback editor only ever sees usable providers).
  * @returns A `useMemo`-stable `Record<model, providerId>` plus a small
  *   lookup helper for single-model queries.
  */
@@ -30,7 +30,7 @@ export interface ModelToProviderResult { // not-wire-format: hook return shape (
    *  map only contains entries that resolved to a non-empty id). */
   byModel: Record<string, string>
   /** Convenience lookup: returns the provider id for a model or `''`
-   *  if no connected provider advertises it. */
+   *  if no usable provider advertises it. */
   lookup: (model: string) => string
 }
 

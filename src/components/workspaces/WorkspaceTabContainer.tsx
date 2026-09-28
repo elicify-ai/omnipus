@@ -12,6 +12,8 @@ import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
 import { clearLibraryAttachments } from '@/lib/library-attachment'
 import { confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
 import { resolveWorkspaceSwitch } from '@/components/panel-shell/workspaceSwitch'
+import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
+import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 import { ChatControls } from '@/components/chat/ChatControls'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { Button } from '@/components/ui/button'
@@ -123,8 +125,10 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
 
       const latest = useUiStore.getState().activePanel
       if (latest !== activePanel) return
+      if (!isWorkspaceScopedPanel(activePanel.id)) return
+      const context = activePanel.context as WorkspacePanelContext
       useUiStore.getState().openPanel(activePanel.id, {
-        ...activePanel.context,
+        ...context,
         workspaceId: decision.workspaceId,
       })
     })

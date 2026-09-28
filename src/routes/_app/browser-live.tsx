@@ -13,9 +13,11 @@
 // same-origin `window.open`'d tab inherits automatically — no token hand-off
 // is needed.
 
+import { useEffect } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { z } from 'zod'
 import { BrowserLiveView } from '@/components/browser/BrowserLiveView'
+import { announcePanelTabPresence } from '@/lib/panelTabPresence'
 
 const browserLiveSearchSchema = z.object({
   session: z.string().min(1).optional(),
@@ -31,6 +33,11 @@ function BrowserLiveRoute() {
   const { session, agent } = Route.useSearch()
   const navigate = useNavigate()
 
+  useEffect(() => {
+    if (!session || !agent) return undefined
+    const announcement = announcePanelTabPresence({ panelId: 'browser', sessionId: session, agentId: agent })
+    return announcement.stop
+  }, [agent, session])
 
   if (!session || !agent) {
     return (

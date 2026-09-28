@@ -64,6 +64,7 @@
 | SP-33 | Calendar panel narrow layout (wave 3) | Same rule as SP-32: below the width threshold the panel shows the existing PHONE view of Calendar; the full desktop day/week/month views render only full-screen (Expand) or when the panel is wide enough to cross the threshold | Founder | 2026-09-27 |
 | SP-34 | Team panel content (wave 3) | The Team panel shows a LIST WITH SEARCH (agents, not the graph); the full agent-relationship graph stays a full-page-only view (Expand) | Founder | 2026-09-27 |
 | SP-35 | Delegation-graph editing (parked, out of scope) | Founder raised "how to edit the delegation graph" as a new, separate open design topic — NOT part of this feature; tracked by team-lead outside this spec | Founder | 2026-09-27 |
+| SP-36 | Team panel on workspace switch (closes SP-29's gap, raised by the wave-1 architect gate pass) | When the workspace switches while the Team panel is open, the panel FOLLOWS the switch and shows the new workspace's team. Built in wave 3 (Team becomes a panel then), not wave 1 | Founder | 2026-09-28 |
 
 ## Open points — resolved (SP-11..SP-14); plan-spec raises any NEW unclear point as a founder question
 

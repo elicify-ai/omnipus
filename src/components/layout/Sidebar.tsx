@@ -741,12 +741,13 @@ export function Sidebar() {
         <Button
           variant="ghost"
           data-testid="sidebar-library-button"
+          data-panel-trigger="library"
           aria-label="Library"
           onClick={() => {
             // CRIT-001: opening Library REPLACES whatever panel is open
             // (SP-7), so the outgoing panel's leave gate runs first. Virtual
             // root scope (no workspaceId → the `app` width/identity bucket).
-            leaveGateThen(() => {
+            leaveGateThen(useUiStore.getState().activePanel?.id ?? null, () => {
               useUiStore.getState().openPanel('library', {})
             })
             if (!effectivelyPinned) close()

@@ -46,20 +46,31 @@ func TestBootSweep_NonTerminalToFailedInterrupted(t *testing.T) {
 	h := newBootSweepHarness(t)
 
 	// A running session stranded by a crash, with a checkpoint + undelivered
-	// messages that MUST be carried into the failed record.
+	// messages that MUST be carried into the failed record. ADR-093 D3:
+	// standing roots (no SteeredBy edge) are now exempt from this sweep, so
+	// this fixture is stamped as a steered WORKER (SteeredBy set) — exactly
+	// the shape D3's own text names as still-honest to sweep ("a worker left
+	// running at boot has no turn behind it") — to keep testing the sweep
+	// MECHANISM itself (checkpoint/undelivered carry-through, hook firing,
+	// generation preservation) rather than the D3 exemption boundary, which
+	// the dedicated D3/standing-root tests cover.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-running", Generation: 1, State: session.LifecycleRunning,
 		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind:        session.OwnerScopeHuman,
+		Origin:                &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy:             &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		LastCheckpointRef:     "ckpt-abc",
 		UndeliveredMessageIDs: []string{"msg-1", "msg-2"},
 		CreatedAt:             time.Now().Add(-1 * time.Hour),
 	})
-	// A queued session — also non-terminal, also swept.
+	// A queued session — also non-terminal, also swept. Same D3 note above.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-queued", Generation: 1, State: session.LifecycleQueued,
 		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
+		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 	})
 	// A terminal session — MUST be left alone.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
@@ -237,10 +248,19 @@ func TestBootSweep_PausedOwnerNotAwaitingCorrection_Swept(t *testing.T) {
 		ID: "plan-2", Title: "plan-2", WorkspaceID: "ws", OwnerAgentID: "owner-agent",
 		State: plan.StateRunning, PlanPhase: plan.PhaseDispatching, // not awaiting-correction
 	})
+	// ADR-093 D3: a standing root (no SteeredBy) is now exempt from the
+	// sweep outright, which would make this narrow-exemption-(b) case
+	// exempt for the wrong reason (D3, not (b)) and stop testing what this
+	// test is for. Stamped as a steered worker (SteeredBy set) so the paths
+	// stay distinct: exemption (b) still doesn't apply (plan not
+	// awaiting-correction) and D3 doesn't apply either (not a standing
+	// root), so the record reaches the sweep for the reason this test names.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-owner-2", Generation: 1, State: session.LifecyclePaused,
 		WorkspaceID: "ws", AgentID: "owner-agent",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-2",
+		Origin:    &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-2", RootSessionID: "parent-2"},
 	})
 
 	res := h.pe.runBootSweep(context.Background())
@@ -443,11 +463,16 @@ func TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart(t *testing.T) {
 		WorkspaceID: "ws", AgentID: "owner",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-rs",
 	})
-	// A stranded running session (no plan) that SHOULD be swept.
+	// A stranded running session (no plan) that SHOULD be swept — stamped as
+	// a steered worker (ADR-093 D3: a standing root/no-SteeredBy record is
+	// now exempt from the sweep, so an unrelated "still gets processed
+	// normally" control needs a shape D3 does not also exempt).
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "stray", Generation: 1, State: session.LifecycleRunning,
 		WorkspaceID: "ws", AgentID: "a",
 		OwnerScopeKind: session.OwnerScopeHuman,
+		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-rs", RootSessionID: "parent-rs"},
 	})
 
 	res := h.pe.runBootSweep(context.Background())
@@ -468,11 +493,17 @@ func TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart(t *testing.T) {
 func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 	h := newBootSweepHarness(t)
 	// A goal-bearing session. With no versioner wired, it is "unversioned"
-	// -> swept normally (the mechanism is armed but no version is recorded yet).
+	// -> swept normally (the mechanism is armed but no version is recorded
+	// yet). Stamped as a steered worker (ADR-093 D3: a standing root/no-
+	// SteeredBy record is now exempt from the sweep outright — this fixture
+	// needs to reach the sweep to test N-15's "unversioned -> normal path"
+	// case rather than D3's exemption).
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "goal-unversioned", Generation: 1, State: session.LifecycleRunning,
 		WorkspaceID: "ws", AgentID: "a",
 		OwnerScopeKind: session.OwnerScopeHuman, GoalRef: "goal-1",
+		Origin:    &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-g1", RootSessionID: "parent-g1"},
 	})
 	res := h.pe.runBootSweep(context.Background())
 	if len(res.RebaselinedGoals) != 0 {
@@ -512,11 +543,14 @@ func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 	}
 
 	// A current-version goal is NOT re-baselined (swept normally, since it is
-	// a stranded running session with no live turn).
+	// a stranded running session with no live turn) — same D3 fixture note
+	// as goal-unversioned above.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "goal-current", Generation: 1, State: session.LifecycleRunning,
 		WorkspaceID: "ws", AgentID: "a",
 		OwnerScopeKind: session.OwnerScopeHuman, GoalRef: "goal-3",
+		Origin:    &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-g3", RootSessionID: "parent-g3"},
 	})
 	h.pe.SetGoalSemanticsVersioner(func(sid string) int { return 3 })
 	res3 := h.pe.runBootSweep(context.Background())

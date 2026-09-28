@@ -3,20 +3,20 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { useUiStore } from '@/store/ui'
-import { watchPopoutClosed } from '@/lib/browserLiveHandoff'
 import type { PanelContentProps } from '@/components/panel-shell/types'
-import { panelIdentityKey, resolvePanelOpen } from '@/lib/panelTabPresence'
+import {
+  armPanelFocusFallback,
+  focusPanelTab,
+  resolveExistingPanelTab,
+  resolveRegisteredPanelOpen,
+  type PanelIdentity,
+} from '@/lib/panelTabPresence'
+import {
+  discardPanelPopout,
+  registerPanelPopout,
+  releasePanelPopoutWithoutAppOwner,
+} from '@/lib/panelPopoutLifecycle'
 import { BrowserLiveView } from './BrowserLiveView'
-
-type OwnedPopout = {
-  window: Window
-  identityKey: string
-  sessionId: string
-  agentId: string
-  stop: () => void
-}
-
-const browserPopoutHandles = new Map<string, Window>()
 
 export interface BrowserLivePanelProps {
   shellProps?: PanelContentProps
@@ -25,51 +25,31 @@ export interface BrowserLivePanelProps {
 export function BrowserLivePanel({ shellProps }: BrowserLivePanelProps = {}) {
   const activePanel = useUiStore((s) => s.activePanel)
   const closePanel = useUiStore((s) => s.closePanel)
-  const ownedPopout = useRef<OwnedPopout | null>(null)
+  const isolatedCleanupRef = useRef<{
+    identity: PanelIdentity
+    handle: Window
+  } | null>(null)
 
   useEffect(() => {
-    // Subscribe synchronously so Open browser cannot briefly mount another
-    // viewer before an effect redirects it to the already-owned popout.
+    // The app-level bridge owns this in production. Keep the same synchronous
+    // protection for isolated mounts (component tests and embedders).
     const unsubscribe = useUiStore.subscribe((state) => {
       if (state.activePanel?.id !== 'browser') return
       const { sessionId, agentId } = state.activePanel.context
       if (!sessionId || !agentId) return
-      const identityKey = panelIdentityKey({
+      const identity = {
         panelId: 'browser',
         sessionId,
         agentId,
-      })
-      const handle = browserPopoutHandles.get(identityKey)
-      if (!handle) return
-      if (handle.closed) {
-        browserPopoutHandles.delete(identityKey)
-        if (ownedPopout.current?.identityKey === identityKey) {
-          ownedPopout.current.stop()
-          ownedPopout.current = null
-        }
-        return
-      }
+      } as const
+      if (resolveExistingPanelTab(identity) !== 'focused') return
       state.closePanel()
-      try {
-        handle.focus()
-      } catch {
-        // Window focus is best-effort; do not duplicate a live viewer.
-      }
     })
-    const closeOwned = () => {
-      const owned = ownedPopout.current
-      ownedPopout.current = null
-      if (owned) {
-        browserPopoutHandles.delete(owned.identityKey)
-        owned.stop()
-        owned.window.close()
-      }
-    }
-    window.addEventListener('pagehide', closeOwned)
     return () => {
       unsubscribe()
-      window.removeEventListener('pagehide', closeOwned)
-      closeOwned()
+      const owned = isolatedCleanupRef.current
+      if (owned) releasePanelPopoutWithoutAppOwner(owned.identity, owned.handle)
+      isolatedCleanupRef.current = null
     }
   }, [])
 
@@ -88,20 +68,19 @@ export function BrowserLivePanel({ shellProps }: BrowserLivePanelProps = {}) {
     // A trusted blank tab preserves the synchronous user gesture and gives
     // the owner a reload-safe handle. Sever the child's opener immediately;
     // remote web content is still only video inside our same-origin route.
-    const identity = {
+    const identity: PanelIdentity = {
       panelId: 'browser',
       sessionId: browserPanel.sessionId,
       agentId: browserPanel.agentId,
     }
-    const identityKey = panelIdentityKey(identity)
     let popupCreationThrew = false
-    const outcome = resolvePanelOpen({
+    let openedPopup: Window | null = null
+    const outcome = resolveRegisteredPanelOpen({
       identity,
-      handles: browserPopoutHandles,
-      presence: [],
       open: () => {
         try {
-          return window.open('about:blank', '_blank')
+          openedPopup = window.open('about:blank', '_blank')
+          return openedPopup
         } catch (error) {
           popupCreationThrew = true
           throw error
@@ -117,50 +96,66 @@ export function BrowserLivePanel({ shellProps }: BrowserLivePanelProps = {}) {
       })
       return false
     }
-    if (outcome.kind === 'focused' || outcome.kind === 'affordance') {
+    if (outcome.kind === 'affordance') {
+      useUiStore.getState().addToast({
+        message: 'The Browser is already open in another tab — switch.',
+        variant: 'default',
+        duration: 10_000,
+        action: {
+          label: 'Switch',
+          onClick: () => {
+            if (!focusPanelTab(identity)) {
+              armPanelFocusFallback(identity)
+              useUiStore.getState().openPanel('browser', {
+                sessionId: browserPanel.sessionId,
+                agentId: browserPanel.agentId,
+              })
+            }
+          },
+        },
+      })
+      return true
+    }
+    if (outcome.kind === 'focused') {
       return true
     }
 
-    const popup = browserPopoutHandles.get(identityKey)
+    const popup = openedPopup as Window | null
     if (!popup) return false
-    const owned: OwnedPopout = {
-      window: popup,
-      identityKey,
-      ...browserPanel,
-      stop: () => {},
-    }
     try {
       popup.opener = null
-      ownedPopout.current = owned
+      isolatedCleanupRef.current = { identity, handle: popup }
+      registerPanelPopout({
+        identity,
+        handle: popup,
+        onClosed: () => {
+          isolatedCleanupRef.current = null
+          if (useUiStore.getState().activePanel === null) {
+            useUiStore.getState().openPanel('browser', {
+              sessionId: browserPanel.sessionId,
+              agentId: browserPanel.agentId,
+            })
+          }
+        },
+      })
       // Commit unmount and its synchronous socket/peer cleanup BEFORE the
       // child navigates to a route that can create its own live viewer.
       flushSync(closePanel)
-      owned.stop = watchPopoutClosed(popup, () => {
-        if (ownedPopout.current !== owned) return
-        ownedPopout.current = null
-        browserPopoutHandles.delete(owned.identityKey)
-        if (useUiStore.getState().activePanel === null) {
-          useUiStore.getState().openPanel('browser', {
-            sessionId: owned.sessionId,
-            agentId: owned.agentId,
-          })
-        }
-      })
       const params = new URLSearchParams({
-        session: owned.sessionId,
-        agent: owned.agentId,
+        session: browserPanel.sessionId,
+        agent: browserPanel.agentId,
       })
       popup.location.replace(`/#/browser-live?${params.toString()}`)
       document.querySelector<HTMLTextAreaElement>('[data-testid="chat-input"]')?.focus()
       return true
-    } catch {
-      owned.stop()
-      ownedPopout.current = null
-      browserPopoutHandles.delete(owned.identityKey)
+    } catch (error) {
+      console.error('Browser pop-out handover failed.', error)
+      discardPanelPopout(identity, popup)
+      isolatedCleanupRef.current = null
       popup.close()
       useUiStore.getState().openPanel('browser', {
-        sessionId: owned.sessionId,
-        agentId: owned.agentId,
+        sessionId: browserPanel.sessionId,
+        agentId: browserPanel.agentId,
       })
       useUiStore.getState().addToast({
         message: 'The popout could not open. The browser remains here.',
@@ -184,21 +179,10 @@ export function BrowserLivePanel({ shellProps }: BrowserLivePanelProps = {}) {
     return () => shellProps.onWidthSettle(null)
   }, [shellProps])
 
-  const existingBrowserPopout = browserPanel
-    ? browserPopoutHandles.get(
-        panelIdentityKey({
-          panelId: 'browser',
-          sessionId: browserPanel.sessionId,
-          agentId: browserPanel.agentId,
-        }),
-      )
-    : undefined
-
   if (
     !browserPanel ||
     (shellProps && activePanel?.id !== 'browser') ||
-    popoutRoute ||
-    (existingBrowserPopout && !existingBrowserPopout.closed)
+    popoutRoute
   )
     return null
 

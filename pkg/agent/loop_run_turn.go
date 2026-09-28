@@ -182,6 +182,22 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTranscriptSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID)
+	// Delegate-session-id carrier (ADR-053): the session's OWN durable id
+	// for a steered/delegated turn, sourced from
+	// processOptions.SteeredSessionID (steer_reconstruct.go::
+	// reconstructSteeredTurn sets it, gated on rec.SteeredBy != nil). The
+	// call is deliberately unconditional: tools.WithDelegateSessionID is a
+	// no-op on "" — every root, heartbeat, scheduled and task turn stays
+	// unstamped, and message_parent's structural refusal keeps firing for
+	// them.
+	// GUARD: that no-op is only safe because every production turn's base
+	// ctx is detached (Background-derived) before this turn's own context
+	// construction runs — a turn's base ctx must never already carry the
+	// delegate-session-id key from a DIFFERENT turn/session. WithDelegate
+	// SessionID no-ops on "", so an unstamped turn would otherwise silently
+	// INHERIT the base ctx's id — a wrong delegate-session-id, not an
+	// absent one, and nothing would error.
+	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithDelegateSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.SteeredSessionID)
 	// ADR-085 BROWSER-FR-021: stamp the ROOT chat session id (ADR-057
 	// routingSessionID, inherited verbatim through a whole delegation
 	// subtree) so pkg/tools/browser/tools.go::controlledResult can evaluate
@@ -1381,8 +1397,18 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		rt.ts.clearProviderCancel(providerCancel)
 	}()
 
-	rt.al.activeRequests.Add(1)
-	defer rt.al.activeRequests.Done()
+	if !rt.al.beginActiveRequest() {
+		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
+			"site":        "callProviderOnce",
+			"channel":     rt.ts.channel,
+			"chat_id":     rt.ts.chatID,
+			"session_id":  rt.ts.opts.TranscriptSessionID,
+			"session_key": rt.ts.sessionKey,
+			"agent_id":    rt.ts.agent.ID,
+		})
+		return nil, context.Canceled
+	}
+	defer rt.al.endActiveRequest()
 
 	if len(rt.activeCandidates) > 1 && rt.al.fallback != nil {
 		fbResult, fbErr := rt.al.fallback.Execute(

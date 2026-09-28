@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -1156,7 +1157,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 		},
 	}
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	pngPath := filepath.Join(tmpDir, "steer.png")
 	// Real 1x1 RGBA PNG bytes (Go image/png encoder output). The previous
 	// hand-rolled byte block was a malformed PNG that the normalizer

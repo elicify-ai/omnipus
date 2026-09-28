@@ -4,7 +4,11 @@
  * WRITTEN, NOT EXECUTED in the RED pass. Parse is proved with
  * `npx playwright test --list`. The rows need the wave-1 shell in the running app.
  *
- * W1  ?panel=calendar restores the Calendar panel.
+ * W1  ?panel=library restores the Library panel.
+ *     (squad-lead ruling, batch 2: calendar is NOT a registered panel until
+ *     wave 3 — spec §8.2/§10 and §12 dataset row 7 drop it in wave 1 — so
+ *     wave 1 runs this row against `library`; the Calendar variant re-runs in
+ *     wave 3.)
  * W2  ?panel=bogus and ?panel=tasks (unregistered in wave 1) are dropped.
  * W3  ?panel=browser, bare or with session/agent, is always dropped (SP-28).
  */
@@ -46,11 +50,14 @@ test.afterAll(async () => {
   if (workspaceId) await deleteWorkspace(workspaceId)
 })
 
-test('W1 — ?panel=calendar restores the Calendar panel', async ({ page }) => {
-  await page.goto(`/#/workspaces/${workspaceId}/chat?panel=calendar`)
+// squad-lead ruling (batch 2): calendar is unregistered until wave 3
+// (§8.2/§10, §12 dataset row 7) — wave 1 exercises W1 with the registered
+// `library` panel; re-run with ?panel=calendar in wave 3.
+test('W1 — ?panel=library restores the Library panel', async ({ page }) => {
+  await page.goto(`/#/workspaces/${workspaceId}/chat?panel=library`)
   await expect(page.getByTestId('side-panel')).toBeVisible()
-  await expect(page.getByTestId('side-panel-header')).toContainText('Calendar')
-  await expect(page).toHaveURL(/panel=calendar/)
+  await expect(page.getByTestId('side-panel-header')).toContainText('Library')
+  await expect(page).toHaveURL(/panel=library/)
 })
 
 test('W2 — unknown and unregistered panel ids are dropped', async ({ page }) => {
