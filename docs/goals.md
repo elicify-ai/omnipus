@@ -19,7 +19,7 @@ When the working agent believes it is done, it claims completion. Only then does
 
 ### The Judge, in plain language
 
-The Judge is its own agent, under **System** on the Agents screen. You do not chat with it and cannot delegate to it. Its tools are read-only — open files, list folders, read session records — and it cannot write, run commands or go online. Only its model and its written instructions are yours to change.
+The Judge is its own agent, under **System** on the Agents screen. You do not chat with it and cannot delegate to it. Its tools are read-only — open files, list folders, search files, read session records — and it cannot write, run commands or go online. During a review it reads only the workspace under review and the folders mounted into it; anything outside them is refused. Only its model and its written instructions are yours to change.
 
 It reads work like a human reviewer: opens the artifact a criterion names, looks at what the agent did, forms a view. A criterion is met when the Judge is persuaded — never because a machine check passed. Each criterion gets its own verdict, met or unmet, with a reason.
 
