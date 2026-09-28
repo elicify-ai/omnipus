@@ -34,6 +34,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/filegrep"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -572,12 +573,30 @@ func (g grepGateFS) ReadDir(name string) ([]fs.DirEntry, error) {
 
 // refuseNonRegular refuses to open anything that is neither a directory nor
 // a regular file (D13): opening a FIFO for reading blocks until a writer
-// appears, and a device read may never return. A Stat failure is left to the
-// Open that follows, which reports it truthfully.
+// appears, and a device read may never return. fs.ErrNotExist is left to the
+// Open that follows, which reports the absence truthfully — unchanged.
+//
+// Any OTHER Stat error (F1/S3, 8-reviewer gate: silent-failure-hunter and
+// security-lead) means this function cannot establish what kind of entry
+// `name` is at all — a permission error on an ancestor, a transient fs.FS-
+// specific I/O failure, anything not-ENOENT. The pre-fix code treated "Stat
+// failed" as "nothing to refuse" and let the entry through to Open — a
+// fail-OPEN gate. Fail closed instead: refuse it, exactly as an unreadable
+// kind would be refused, with the original Stat error folded into the
+// message so the refusal is diagnosable, and log it once at warn level
+// (component "tool", the walk-relative name only — never file content) via
+// the repo's structured logger.WarnCF, the same log-safe shape
+// guardCarveOuts already uses for its own refusal (grep.go).
 func refuseNonRegular(fsys fs.FS, name string) error {
 	info, err := fs.Stat(fsys, name)
 	if err != nil {
-		return nil
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		logger.WarnCF("tool", "grep: could not determine an entry's kind before opening it — refusing it (fail closed)", map[string]any{
+			"path": name, "error": err.Error(),
+		})
+		return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("entry kind could not be determined, refusing to open it: %w: %w", fs.ErrPermission, err)}
 	}
 	if info.IsDir() || info.Mode().IsRegular() {
 		return nil
