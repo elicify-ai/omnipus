@@ -43,7 +43,6 @@ vi.mock('framer-motion', () => ({
     {
       get:
         (_: object, prop: string) =>
-        // eslint-disable-next-line react/display-name
         React.forwardRef(({ children, ...props }: Record<string, unknown>, ref: React.Ref<unknown>) =>
           React.createElement(prop as string, { ...props, ref }, children as React.ReactNode)),
     },

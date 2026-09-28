@@ -1,7 +1,8 @@
 # Feature Specification: Workspace side-panel shell (shared, resizable)
 
 **Created**: 2026-09-26
-**Status:** **Approved** (2026-09-26 — fix round 2 applied; the final round of the fixed two-round grill process)
+**Status:** Approved
+**Approved on**: 2026-09-26 — fix round 2 applied; the final round of the fixed two-round grill process. Wave 1 built on feat/resizable-side-panels (not yet landed).
 **Input**: Founder interview output — `docs/internal/specs/spec-side-panel-shell.md` (request verbatim + Decisions Log SP-1..SP-31). Process order (founder, verbatim): "capture the requirements and update the design documents first, after another demo — let's do it properly." Requirements → this spec → clickable demo reviewed by the founder in a real browser (SP-10, split per SP-31) → spec review rounds → build.
 
 **Review-fix round 1 (2026-09-26)**: grill-spec round 1 returned BLOCK

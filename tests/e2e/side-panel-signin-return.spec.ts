@@ -15,7 +15,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { chromium, expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { loginAs } from './fixtures/login'
+import { completeLoginForm, loginAs } from './fixtures/login'
 import { newAdminApiContext } from './fixtures/admin-api'
 
 const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
@@ -73,7 +73,7 @@ test.afterAll(async () => {
 test('W11 — sign-in returns to the opened panel link, not /', async ({ page }) => {
   const target = `/#/workspaces/${workspaceId}/chat?panel=library`
   await page.goto(target)
-  await loginAs(page, 'admin', 'admin123')
+  await completeLoginForm(page, { username: 'admin', password: 'admin123' })
   await expect(page).toHaveURL(new RegExp(`/workspaces/${workspaceId}/chat`))
   await expect(page).toHaveURL(/panel=library/)
   await expect(page).not.toHaveURL(/#\/$/)

@@ -27,15 +27,18 @@ func TestMultiKeyFailover(t *testing.T) {
 	cooldown := NewCooldownTracker()
 	chain := NewFallbackChain(cooldown)
 
-	// Mock run function: first call fails with 429, second succeeds
+	// Mock run function: the first key rate-limits on every call. §7.4
+	// (C-8/MAJ-101) retries THIS candidate in place up to 3 total calls,
+	// marks it failed once after its last failure, then the chain moves to
+	// the second key, which succeeds.
 	callCount := 0
 	mockRun := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
 		callCount++
-		if callCount == 1 {
-			// First call: simulate rate limit
+		if callCount <= 3 {
+			// First key: rate limit on all three §7.4 in-place attempts.
 			return nil, errors.New("http error: status 429 - rate limit exceeded")
 		}
-		// Second call: success
+		// Second key: success
 		return &LLMResponse{
 			Content: "Hello from key2!",
 		}, nil
@@ -55,13 +58,19 @@ func TestMultiKeyFailover(t *testing.T) {
 		t.Errorf("expected response from key2, got: %s", result.Response.Content)
 	}
 
-	if callCount != 2 {
-		t.Errorf("expected 2 calls (1 fail + 1 success), got %d", callCount)
+	// §7.4: 3 in-place rate-limit calls on key1 + 1 success on key2.
+	if callCount != 4 {
+		t.Errorf("expected 4 calls (3 rate-limited on key1 + 1 success on key2), got %d", callCount)
 	}
 
-	// Verify first attempt was recorded
+	// The first key is marked failed exactly once, after its last failure;
+	// the in-place retries themselves record no attempts.
 	if len(result.Attempts) != 1 {
-		t.Errorf("expected 1 failed attempt recorded, got %d", len(result.Attempts))
+		t.Fatalf("expected 1 failed attempt recorded (key1 marked once), got %d", len(result.Attempts))
+	}
+
+	if result.Attempts[0].Model != "glm-4.7" {
+		t.Errorf("expected failed attempt to name key1 (glm-4.7), got: %s", result.Attempts[0].Model)
 	}
 
 	if result.Attempts[0].Reason != FailoverRateLimit {
@@ -102,8 +111,11 @@ func TestMultiKeyFailoverAllFail(t *testing.T) {
 		t.Errorf("expected nil result on failure, got: %v", result)
 	}
 
-	if callCount != 3 {
-		t.Errorf("expected 3 calls (all fail), got %d", callCount)
+	// provider-messages amendment (2026-09-27): under §7.4 C-8 every
+	// rate-limited candidate retries in place up to 3 calls: 3 candidates
+	// x 3 calls = 9 calls, each candidate marked once after its last failure.
+	if callCount != 9 {
+		t.Errorf("expected 9 calls (3 per candidate x 3 candidates), got %d", callCount)
 	}
 
 	// Verify error type
@@ -265,25 +277,23 @@ func TestMultiKeyWithModelFallback(t *testing.T) {
 	cooldown := NewCooldownTracker()
 	chain := NewFallbackChain(cooldown)
 
-	// Mock run function: first two fail, third succeeds (model fallback)
+	// provider-messages amendment (2026-09-27): §7.4 C-8 retries a rate-limited
+	// candidate IN PLACE (up to 3 calls) before moving on, so the mock keys its
+	// behavior to the CANDIDATE, not to the call number. Call order under §7.4:
+	// k1 x3 (in-place cap), k2 x3 (in-place cap), minimax x1 — 7 calls.
 	callCount := 0
 	calledModels := []string{}
 	mockRun := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
 		callCount++
 		calledModels = append(calledModels, provider+"/"+model)
 
-		switch callCount {
-		case 1:
-			// k1: rate limit
-			return nil, errors.New("status: 429 - rate limit")
-		case 2:
-			// k2: also rate limit (all zhipu keys exhausted)
-			return nil, errors.New("status: 429 - rate limit")
-		case 3:
-			// minimax: success
+		switch provider {
+		case "minimax":
+			// minimax: success on its first call
 			return &LLMResponse{Content: "success from minimax"}, nil
 		default:
-			return nil, errors.New("unexpected call")
+			// k1/k2: rate limit on every call (§7.4 retries each in place ×3)
+			return nil, errors.New("status: 429 - rate limit")
 		}
 	}
 
@@ -292,8 +302,10 @@ func TestMultiKeyWithModelFallback(t *testing.T) {
 		t.Fatalf("expected success after failover to model fallback, got error: %v", err)
 	}
 
-	if callCount != 3 {
-		t.Errorf("expected 3 calls (k1 fail + k2 fail + minimax success), got %d", callCount)
+	// §7.4 C-8: k1 and k2 each exhaust their 3-call in-place cap before
+	// minimax runs. 3 + 3 + 1 = 7 calls.
+	if callCount != 7 {
+		t.Errorf("expected 7 calls (k1 x3 + k2 x3 + minimax x1), got %d", callCount)
 	}
 
 	if result.Response.Content != "success from minimax" {
@@ -301,17 +313,19 @@ func TestMultiKeyWithModelFallback(t *testing.T) {
 	}
 
 	// Verify call order
-	if len(calledModels) != 3 {
-		t.Fatalf("expected 3 called models, got %d", len(calledModels))
+	if len(calledModels) != 7 {
+		t.Fatalf("expected 7 called models, got %d", len(calledModels))
 	}
 	if calledModels[0] != "zhipu/glm-4.7" {
 		t.Errorf("expected first call to zhipu/glm-4.7, got: %s", calledModels[0])
 	}
-	if calledModels[1] != "zhipu/glm-4.7__key_1" {
-		t.Errorf("expected second call to zhipu/glm-4.7__key_1, got: %s", calledModels[1])
+	// §7.4 C-8: k1 in-place calls occupy indices 0-2; k2 starts at index 3.
+	if calledModels[3] != "zhipu/glm-4.7__key_1" {
+		t.Errorf("expected 4th call (k2 first) to be zhipu/glm-4.7__key_1, got: %s", calledModels[3])
 	}
-	if calledModels[2] != "minimax/minimax" {
-		t.Errorf("expected third call to minimax/minimax, got: %s", calledModels[2])
+	// §7.4 C-8: minimax succeeds at index 6 (after k1 x3 + k2 x3).
+	if calledModels[6] != "minimax/minimax" {
+		t.Errorf("expected 7th call (minimax success) to be minimax/minimax, got: %s", calledModels[6])
 	}
 
 	// Verify 2 failed attempts recorded
@@ -339,20 +353,24 @@ func TestMultiKeyFailoverMixedErrors(t *testing.T) {
 	cooldown := NewCooldownTracker()
 	chain := NewFallbackChain(cooldown)
 
-	// Mock run function: different errors for each key
+	// provider-messages amendment (2026-09-27): §7.4 C-8 retries a rate-limited
+	// candidate IN PLACE (up to 3 calls) before moving on, so the mock keys its
+	// behavior to the CANDIDATE MODEL, not to the call number. Under §7.4:
+	// key0 ×3 in-place (cap), key_1 timeout → mark+fallback, key_2 success —
+	// 5 calls, attempts = [rate_limit, timeout] (reason order preserved).
 	callCount := 0
 	mockRun := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
 		callCount++
-		switch callCount {
-		case 1:
-			// First: rate limit (retriable)
+		switch model {
+		case "glm-4.7":
+			// key0: rate limit — retried in place under §7.4 C-8
 			return nil, errors.New("status: 429 - rate limit")
-		case 2:
-			// Second: timeout (retriable)
+		case "glm-4.7__key_1":
+			// key_1: timeout (retriable → straight to mark+fallback)
 			return nil, errors.New("context deadline exceeded")
-		case 3:
-			// Third: success
-			return &LLMResponse{Content: "success from key3"}, nil
+		case "glm-4.7__key_2":
+			// key_2: success on its first call
+			return &LLMResponse{Content: "success from key_2"}, nil
 		default:
 			return nil, errors.New("unexpected call")
 		}
@@ -363,8 +381,10 @@ func TestMultiKeyFailoverMixedErrors(t *testing.T) {
 		t.Fatalf("expected success after 2 failovers, got error: %v", err)
 	}
 
-	if callCount != 3 {
-		t.Errorf("expected 3 calls, got %d", callCount)
+	// provider-messages amendment (2026-09-27): under §7.4 C-8 key0 exhausts
+	// its 3-call in-place cap before key_1 (timeout) and key_2 (success) run.
+	if callCount != 5 {
+		t.Errorf("expected 5 calls (key0 x3 in-place + key_1 timeout + key_2 success), got %d", callCount)
 	}
 
 	// Verify both failed attempts were recorded

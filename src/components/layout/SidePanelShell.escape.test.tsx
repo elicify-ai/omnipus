@@ -11,17 +11,18 @@
 // Oracles: side-panel-shell-spec.md §2/§5 — Escape closes the focused panel
 // unless the Browser panel (SP-19) or the discard dialog holds it; input
 // methods that already consumed the event are ignored; focus enters the
-// panel on open and returns to the trigger on close.
+// panel on open (US-9 AS-3); on close, focus follows the US-9 per-case
+// rules: Close/Expand in the shell header return to the CHAT INPUT
+// ("matching the Browser's existing behaviour"), an Escape close returns to
+// the panel's invoking toggle, and a deep-link restore moves NO focus.
 
 import { cleanup, fireEvent, render, screen, act, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
 import { usePanelShellStore } from '@/components/panel-shell/panelShellStore'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
-import type {
-  PanelDefinition,
-  PanelContentProps,
-} from '@/components/panel-shell/types'
+import { Button } from '@/components/ui/button'
+import type { PanelDefinition } from '@/components/panel-shell/types'
 
 vi.mock('@/components/library/preview/unsavedGuard', () => ({
   getDiscardConfirmDialogOpen: vi.fn(() => false),
@@ -46,7 +47,7 @@ class RowRO {
 }
 vi.stubGlobal('ResizeObserver', RowRO)
 
-function probeContent(_props: PanelContentProps) {
+function probeContent() {
   return <div data-testid="probe-content">probe</div>
 }
 
@@ -58,7 +59,12 @@ function makeDef(
     id,
     title: id === 'library' ? 'Library' : 'Browser',
     content: probeContent,
-    expandTarget: () => (id === 'library' ? '/library' : '/browser-live'),
+    fullScreen: {
+      toSearch: () => ({}),
+      fromSearch: () => id === 'browser'
+        ? { sessionId: 'session-1', agentId: 'agent-1' }
+        : {},
+    },
     ...(beforeLeave ? { beforeLeave } : {}),
   }
 }
@@ -68,18 +74,21 @@ function renderShell(panels: PanelDefinition[]) {
     <>
       {/* A real user trigger: a rendered control whose handler opens the
           panel — the USER-initiated path US-9 AS-3 speaks of (distinct from
-          a load-time store/deep-link restore, MIN-002). */}
-      <button
+          a load-time store/deep-link restore, MIN-002). `data-panel-trigger`
+          is the attribute the shell's focus return reads back on close. */}
+      <Button
+        variant="ghost"
         data-panel-trigger="library"
         data-testid="panel-trigger-library"
         onClick={() => usePanelShellStore.getState().openPanel('library')}
       >
         Library trigger
-      </button>
+      </Button>
       <SidePanelShell
         panels={panels}
         username="dana"
-        chat={<div data-testid="chat-probe">chat</div>}
+        /* The US-9 close-focus target: the shell's chat input. */
+        chat={<textarea data-testid="chat-input" defaultValue="chat" />}
       />
     </>,
   )
@@ -94,7 +103,7 @@ function openPanel(id: 'library' | 'browser', context: Record<string, unknown> =
 function resetStore() {
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })
@@ -249,16 +258,73 @@ describe('focus management (US-9 AS-3 / MIN-002)', () => {
     expect(screen.getByTestId('side-panel').contains(document.activeElement)).toBe(false)
   })
 
-  it('focus returns to the opening trigger on close (MIN-002)', async () => {
+  // US-9 per-case close rules (batch-9 item 1 — gate-round-2 finding: the
+  // old test asserted trigger-return on a HEADER CLOSE, which the spec
+  // reserves for toggle/Escape closes; it passed only because the fixture
+  // had no chat input for the real rule to target).
+  it('RED — header Close returns focus to the CHAT INPUT (US-9 per-case rule)', async () => {
     renderShell([makeDef('library')])
-    const trigger = screen.getByText('Library trigger')
+    const trigger = screen.getByTestId('panel-trigger-library')
     act(() => {
       trigger.focus()
     })
     openPanel('library')
     fireEvent.click(screen.getByRole('button', { name: 'Close Library' }))
     await waitFor(() => {
+      expect(usePanelShellStore.getState().activePanel).toBeNull()
+    })
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByTestId('chat-input'))
+    })
+    // The trigger-return rule belongs to toggle/Escape closes; the header
+    // Close must NOT land there.
+    expect(document.activeElement).not.toBe(trigger)
+  })
+  it('RED — header Expand returns focus to the CHAT INPUT (US-9 per-case rule)', async () => {
+    // The pop-out opens cleanly (the process edge — the real jsdom
+    // window.open refuses), so the wave-0 failure states the MISSING
+    // close-on-success coupling, not a popup-block artifact.
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockReturnValue({
+        closed: false,
+        close: () => {},
+        focus: () => {},
+        opener: null,
+        location: { replace: () => {} },
+      } as unknown as Window)
+    renderShell([makeDef('library')])
+    openPanel('library')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Library panel' }))
+    await waitFor(() => {
+      expect(usePanelShellStore.getState().activePanel).toBeNull()
+    })
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByTestId('chat-input'))
+    })
+    openSpy.mockRestore()
+  })
+  it('RED — an Escape close returns focus to the panel\'s INVOKING TOGGLE (US-9 per-case rule)', async () => {
+    renderShell([makeDef('library')])
+    const trigger = screen.getByTestId('panel-trigger-library')
+    act(() => {
+      trigger.focus()
+    })
+    openPanel('library')
+    // Focus INSIDE the panel first: the close must MOVE focus back to the
+    // invoking toggle. (Without this the wave-0 tree passes vacuously — it
+    // never moves focus at all, so the untouched trigger "matches".)
+    act(() => {
+      screen.getByTestId('panel-close').focus()
+    })
+    fireEvent.keyDown(screen.getByTestId('side-panel'), { key: 'Escape' })
+    await waitFor(() => {
+      expect(usePanelShellStore.getState().activePanel).toBeNull()
+    })
+    // The panel's invoking toggle — NOT the chat input (the header rule).
+    await waitFor(() => {
       expect(document.activeElement).toBe(trigger)
     })
+    expect(document.activeElement).not.toBe(screen.getByTestId('chat-input'))
   })
 })

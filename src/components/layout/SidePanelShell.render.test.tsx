@@ -52,7 +52,7 @@ const LIBRARY_DEF: PanelDefinition = {
   id: 'library',
   title: 'Library',
   content: probeContent,
-  expandTarget: () => '/library',
+  fullScreen: { toSearch: () => ({}), fromSearch: () => ({}) },
 }
 
 function renderShell(extra?: PanelDefinition[]) {
@@ -74,7 +74,7 @@ function openLibrary(context: Record<string, unknown> = { workspaceId: 'ws-1' })
 beforeEach(() => {
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })
@@ -85,7 +85,7 @@ afterEach(() => {
   cleanup()
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })

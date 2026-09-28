@@ -43,6 +43,10 @@ export function leaveGateThen(outgoingPanelId: PanelId | null, go: () => void): 
     return
   }
   void (async () => {
-    if (await guard()) go()
+    try {
+      if (await guard()) go()
+    } catch (error) {
+      console.error('[side-panel] Leave guard failed; transition cancelled.', error)
+    }
   })()
 }

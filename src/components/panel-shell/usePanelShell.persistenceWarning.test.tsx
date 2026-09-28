@@ -8,7 +8,7 @@ const library: PanelDefinition = {
   id: 'library',
   title: 'Library',
   content: () => null,
-  expandTarget: () => '/library',
+  fullScreen: { toSearch: () => ({}), fromSearch: () => ({}) },
 }
 
 beforeEach(() => {

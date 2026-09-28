@@ -1022,6 +1022,74 @@
       }
     },
     {
+      "id": "_fullscreen",
+      "kind": "route",
+      "source": "src/routes/_fullscreen.tsx",
+      "symbol": "Route",
+      "lane": 8,
+      "verification": [
+        {
+          "checkId": "surface:fullscreen:unit",
+          "file": "tests/design-system/surfaces/fullscreen.test.tsx",
+          "test": "_fullscreen surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:fullscreen:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:fullscreen:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/"
+      }
+    },
+    {
+      "id": "_fullscreen.panel.$panelId",
+      "kind": "route",
+      "source": "src/routes/_fullscreen.panel.$panelId.tsx",
+      "symbol": "Route",
+      "lane": 8,
+      "verification": [
+        {
+          "checkId": "surface:fullscreen-panel:unit",
+          "file": "src/components/panel-shell/panelExpandRoutes.test.tsx",
+          "test": "SP-38 shell-owned full-screen routes",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:fullscreen-panel:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen.panel.$panelId surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:fullscreen-panel:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen.panel.$panelId surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/panel/:panelId"
+      }
+    },
+    {
       "id": "landing",
       "kind": "route",
       "source": "src/routes/landing.tsx",
@@ -6528,6 +6596,14 @@
       "lane": 6
     },
     {
+      "source": "src/components/chat/ProviderFallbackNoteLine.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ProviderRetryIndicator.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/RateLimitIndicator.tsx",
       "lane": 3
     },
@@ -6621,6 +6697,10 @@
     },
     {
       "source": "src/components/chat/tools/GoalSetupFailureLine.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/HistoricalToolCallBlock.tsx",
       "lane": 3
     },
     {
@@ -7092,6 +7172,10 @@
       "lane": 8
     },
     {
+      "source": "src/components/panel-shell/panelTabSwitch.ts",
+      "lane": 8
+    },
+    {
       "source": "src/components/panel-shell/panelWidth.ts",
       "lane": 8
     },
@@ -7316,6 +7400,10 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/WebSearchGroup.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/settings/useReAuthGate.tsx",
       "lane": 6
     },
@@ -7329,6 +7417,10 @@
     },
     {
       "source": "src/components/shared/CriteriaBreakdown.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/shared/ErrorBoundary.tsx",
       "lane": 7
     },
     {
@@ -7652,6 +7744,10 @@
       "lane": 7
     },
     {
+      "source": "src/routes/-authenticatedBeforeLoad.ts",
+      "lane": 7
+    },
+    {
       "source": "src/routes/-login-local.tsx",
       "lane": 7
     },
@@ -7666,6 +7762,14 @@
     {
       "source": "src/routes/_app.tsx",
       "lane": 7
+    },
+    {
+      "source": "src/routes/_fullscreen.panel.$panelId.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/routes/_fullscreen.tsx",
+      "lane": 8
     },
     {
       "source": "src/routes/_app/admin.chat.tsx",

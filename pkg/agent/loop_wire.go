@@ -576,6 +576,19 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 		BaiduSearchEnabled:    rw.cfg.Tools.Web.BaiduSearch.Enabled,
 		Proxy:                 rw.cfg.Tools.Web.Proxy,
 		SSRFChecker:           rw.rs.al.ssrfChecker, // SEC-24: nil when SSRF disabled
+		// ADR-096 WS-TOOL: the roles surface. Roles nil would keep the tool
+		// on the legacy single-provider path; wiring it here is what makes
+		// search_web reachable with provider failover, capability arguments
+		// and honest refusals (spec "Definition of done").
+		Roles:                 func() *config.WebToolsConfig { return &rw.cfg.Tools.Web },
+		TavilySearchDepth:     rw.cfg.Tools.Web.Tavily.SearchDepth,
+		GLMContentSize:        rw.cfg.Tools.Web.GLMSearch.ContentSize,
+		PerplexityContextSize: rw.cfg.Tools.Web.Perplexity.SearchContextSize,
+		ExaAPIKey:             rw.cfg.Tools.Web.Exa.APIKey(),
+		ExaAPIKeyRef:          rw.cfg.Tools.Web.Exa.APIKeyRef,
+		ExaEnabled:            rw.cfg.Tools.Web.Exa.Enabled,
+		ExaBaseURL:            rw.cfg.Tools.Web.Exa.BaseURL,
+		Redact:                rw.cfg.FilterSensitiveData,
 	})
 	if err != nil {
 		logger.ErrorCF("agent", "Failed to create web search tool", map[string]any{"error": err.Error()})

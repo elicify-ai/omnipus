@@ -1,7 +1,6 @@
-// /library — fullscreen pop-out target for the Library panel (library-spec.md
-// D-4). Opened via `window.open('/#/library?workspace=..')` from
-// LibraryPanel.tsx's pop-out button. Renders the same LibraryExplorer core
-// the docked panel uses, filling the AppShell content area.
+// /library — the retained standalone Library page used by bookmarks,
+// backlinks, and direct entry points. Side-panel Expand is owned by the
+// chrome-less /panel/library route; this page remains under AppShell.
 //
 // Nested under `/_app` so it reuses the existing onboarding/auth guard
 // (`_app.tsx`'s beforeLoad). Auth rides the same-origin `omnipus-session`

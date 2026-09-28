@@ -15,11 +15,6 @@ export interface Toast {
     label: string
     onClick: () => void
   }
-  /** Optional second action, used when a remote-tab hint must remain advisory. */
-  secondaryAction?: {
-    label: string
-    onClick: () => void
-  }
 }
 
 interface UiStore {
@@ -165,6 +160,8 @@ interface UiStore {
   // A cancelled phone Back restores historyPushed=true; leaving takeover or
   // an external close collapses that entry and returns both flags to false.
   activePanel: ActivePanel | null
+  /** Monotonic token invalidating delayed work after any newer panel intent. */
+  panelIntentRevision: number
   panelWidth: number | null
   guardPending: boolean
   historyPushed: boolean
@@ -267,6 +264,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   closeMediaLightbox: () => set({ mediaLightbox: null }),
 
   activePanel: null,
+  panelIntentRevision: 0,
   panelWidth: null,
   guardPending: false,
   historyPushed: false,
@@ -276,6 +274,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
     capturePanelTriggerOrigin(id)
     set((state) => ({
       activePanel: { id, context } as ActivePanel,
+      panelIntentRevision: state.panelIntentRevision + 1,
       // Opening a DIFFERENT panel re-reads that panel's own width (its stored
       // value for its own scope, or the SP-17 default). Same panel re-open =
       // keep the current width (a context refresh must not jump the divider).
@@ -283,7 +282,13 @@ export const useUiStore = create<UiStore>((set, get) => ({
     }))
   },
   closePanel: () =>
-    set({ activePanel: null, panelWidth: null, guardPending: false, historyPushed: false }),
+    set((state) => ({
+      activePanel: null,
+      panelIntentRevision: state.panelIntentRevision + 1,
+      panelWidth: null,
+      guardPending: false,
+      historyPushed: false,
+    })),
   setPanelWidth: (px) => set({ panelWidth: px }),
   resetPanelWidth: () => set({ panelWidth: null }),
   setGuardPending: (pending) => set({ guardPending: pending }),

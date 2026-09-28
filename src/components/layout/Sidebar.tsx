@@ -737,7 +737,7 @@ export function Sidebar() {
         {/* Library — NOT a route Link like the items above: it opens the
             docked LibraryPanel (mounted once in AppShell) at the virtual
             root, same as clicking a workspace opens it scoped (D-3). The
-            /_app/library ROUTE exists only for the panel's pop-out button. */}
+            /_app/library route remains available for standalone links. */}
         <Button
           variant="ghost"
           data-testid="sidebar-library-button"
