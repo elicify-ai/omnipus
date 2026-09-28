@@ -329,11 +329,15 @@ func (al *AgentLoop) deliverGoalParkUpward(sessionID string, blocked bool, text 
 // restart, which is exactly the re-entry Q1=A removes.
 //
 // Best-effort by design: the tail (completeSteeredTurnAfterGoal) runs FIRST
-// so a crash between delivery and this ack leaves both entries unacked for
-// boot recovery to re-deliver (the same posture as every other crash window
-// in the pair-end design); this ack runs AFTER the tail returns, so it never
-// races the tail's own Deliver. No parent edge → nothing to ack (a task-owned
-// goal has no steered edge and its verdict wake is load-bearing).
+// so a crash before the hand-back wake leaves both entries unacked for boot
+// recovery to re-deliver. Once the hand-back has woken, acknowledging the
+// wake-suppressed verdict is crash-safe because the deterministic hand-back
+// is itself durable and remains unacknowledged until the parent's normal
+// consumption marker retires it; a crash before consumption therefore makes
+// boot recovery re-deliver that hand-back as the one durable wake carrier.
+// This ack runs AFTER the tail returns, so it never races the tail's Deliver.
+// No parent edge → nothing to ack (a task-owned goal has no steered edge and
+// its verdict wake is load-bearing).
 func (al *AgentLoop) ackMetVerdictEntry(sessionID, goalID string, round int) {
 	inbox := al.GetMessageInboxStore()
 	if inbox == nil {
@@ -367,9 +371,12 @@ func (al *AgentLoop) ackMetVerdictEntry(sessionID, goalID string, round int) {
 // verdict without wake suppression when no deterministic final hand-back
 // woke the parent. Deliver's duplicate handling deliberately re-runs the wake
 // for an unacknowledged wake-eligible entry, so this creates no second inbox
-// row. A successful wake consumes the verdict immediately; a missing or
-// stopped parent produces DeliveryStoredNotWoken, returns an error, and leaves
-// the entry unacknowledged for boot recovery.
+// row. Publishing or queueing is not consumption: every outcome leaves the
+// verdict unacknowledged until processSteeredSystemWake or
+// consumeDequeuedSteering writes the parent's normal consumed marker. That
+// preserves boot recovery's ability to re-deliver after a crash between wake
+// publication and actual consumption. A missing or stopped parent produces
+// DeliveryStoredNotWoken and returns an error under the same durable posture.
 func (al *AgentLoop) wakeMetVerdictEntry(sessionID, goalID string, round int) error {
 	inbox := al.GetMessageInboxStore()
 	lifecycle := al.GetSessionLifecycleStore()
@@ -400,9 +407,6 @@ func (al *AgentLoop) wakeMetVerdictEntry(sessionID, goalID string, round int) er
 	reportUndeliveredWake("goal: met verdict fallback wake", event, steerParentSessionID(rec), rec.Generation, delivery)
 	if !deliveryWokeRecipient(delivery.Outcome) {
 		return fmt.Errorf("wake stored met verdict: delivery outcome %q did not wake the parent", delivery.Outcome)
-	}
-	if err := inbox.Ack(deliverOwnerKey(rec), []string{wantID}); err != nil {
-		return fmt.Errorf("acknowledge woken met verdict %q: %w", wantID, err)
 	}
 	return nil
 }

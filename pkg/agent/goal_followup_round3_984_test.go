@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -55,7 +57,7 @@ func TestGoal984_StoredNotWokenHandbackFallsBackToOneVerdictWake(t *testing.T) {
 	if len(gotWakeIDs) != 1 || gotWakeIDs[0] != verdictID {
 		t.Fatalf("parent wakes = %v, want exactly verdict %q", gotWakeIDs, verdictID)
 	}
-	assertUnackedMessageIDs(t, inbox, parentID, child.SessionID)
+	assertUnackedMessageIDs(t, inbox, parentID, child.SessionID, verdictID)
 }
 
 func TestGoal984_WakeMetVerdictLeavesEntryUnackedWhenParentStopped(t *testing.T) {
@@ -279,6 +281,74 @@ func TestGoal984_CompletionFlightsRemovedOnEveryExit(t *testing.T) {
 				t.Fatalf("completion flight retained after %s", tt.name)
 			}
 		})
+	}
+}
+
+func TestGoal984_DeliveredFinalRetriesTerminalWriteWithoutSecondWake(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	wireSteerCompletionDeps(t, al)
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	child := launchRunningChild(t, al, parentID, "call-f4-terminal-write-retry")
+	lifecycle := al.GetSessionLifecycleStore()
+
+	var wakeMu sync.Mutex
+	var wakeIDs []string
+	al.asyncNotifier.registerObserver(func(event AsyncNotifyEvent) {
+		wakeMu.Lock()
+		defer wakeMu.Unlock()
+		wakeIDs = append(wakeIDs, fmt.Sprint(event.Metadata["steer_message_id"]))
+	})
+
+	lifecyclePath := filepath.Join(lifecycle.Dir(), child.SessionID+".jsonl")
+	backupPath := lifecyclePath + ".write-failure"
+	var injectErr error
+	completeStateWriteTestHook = func(sessionID string) {
+		if sessionID != child.SessionID {
+			return
+		}
+		completeStateWriteTestHook = nil
+		if err := os.Rename(lifecyclePath, backupPath); err != nil {
+			injectErr = fmt.Errorf("rename lifecycle record: %w", err)
+			return
+		}
+		if err := os.Mkdir(lifecyclePath, 0o700); err != nil {
+			injectErr = fmt.Errorf("replace lifecycle record with directory: %w", err)
+		}
+	}
+	t.Cleanup(func() { completeStateWriteTestHook = nil })
+
+	firstErr := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "finished"}, nil)
+	if injectErr != nil {
+		t.Fatalf("inject terminal write failure: %v", injectErr)
+	}
+	if firstErr == nil {
+		t.Fatal("first completion succeeded; injected terminal write failure did not reach the lifecycle write")
+	}
+	if err := os.Remove(lifecyclePath); err != nil {
+		t.Fatalf("remove injected lifecycle directory: %v", err)
+	}
+	if err := os.Rename(backupPath, lifecyclePath); err != nil {
+		t.Fatalf("restore lifecycle record: %v", err)
+	}
+
+	if secondErr := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "finished"}, nil); secondErr != nil {
+		t.Fatalf("retry completion: %v", secondErr)
+	}
+
+	wakeMu.Lock()
+	gotWakeIDs := append([]string(nil), wakeIDs...)
+	wakeMu.Unlock()
+	wantID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
+	if len(gotWakeIDs) != 1 || gotWakeIDs[0] != wantID {
+		t.Fatalf("parent wakes = %v, want exactly one deterministic final wake %q across both attempts", gotWakeIDs, wantID)
+	}
+	got, err := lifecycle.Load(child.SessionID)
+	if err != nil {
+		t.Fatalf("Load(child after retry): %v", err)
+	}
+	if got.State != session.LifecycleCompleted {
+		t.Fatalf("child state after retry = %q, want %q", got.State, session.LifecycleCompleted)
 	}
 }
 

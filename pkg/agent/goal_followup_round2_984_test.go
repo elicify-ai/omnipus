@@ -128,17 +128,7 @@ func TestGoalDelegation984_MetWithRunningDescendantWakesVerdict(t *testing.T) {
 	if len(gotWakeIDs) != 1 || gotWakeIDs[0] != verdictID {
 		t.Fatalf("parent wakes = %v, want exactly the unacknowledged verdict %q when no final hand-back was stored", gotWakeIDs, verdictID)
 	}
-	unacked, _, _, err := inbox.Drain(parentMeta.ID, child.SessionID, "", 10)
-	if err != nil {
-		t.Fatalf("Drain(parent): %v", err)
-	}
-	if len(unacked) != 0 {
-		ids := make([]string, 0, len(unacked))
-		for _, msg := range unacked {
-			ids = append(ids, messageIDOf(msg))
-		}
-		t.Fatalf("unacked entries after successful verdict wake = %v, want none", ids)
-	}
+	assertUnackedMessageIDs(t, inbox, parentMeta.ID, child.SessionID, verdictID)
 	loaded, err := lifecycle.Load(child.SessionID)
 	if err != nil {
 		t.Fatalf("Load(goal child after met): %v", err)
@@ -163,15 +153,7 @@ func TestGoalDelegation984_MetWithRunningDescendantWakesVerdict(t *testing.T) {
 	if len(gotWakeIDs) != 2 || gotWakeIDs[0] != verdictID || gotWakeIDs[1] != wantFinalID {
 		t.Fatalf("parent wakes after descendant completion = %v, want verdict %q then hand-back %q", gotWakeIDs, verdictID, wantFinalID)
 	}
-	if err := al.wakeMetVerdictEntry(child.SessionID, g.GoalID, 1); err == nil {
-		t.Fatal("already-woken verdict remained eligible for another wake")
-	}
-	mu.Lock()
-	gotWakeIDs = append([]string(nil), wakeIDs...)
-	mu.Unlock()
-	if len(gotWakeIDs) != 2 {
-		t.Fatalf("parent wakes after verdict re-wake attempt = %v, want exactly the original two", gotWakeIDs)
-	}
+	assertUnackedMessageIDs(t, inbox, parentMeta.ID, child.SessionID, verdictID, wantFinalID)
 }
 
 // TestGoal984_CompletionTailSingleShotDuringFinishedTurnRace pins architect

@@ -102,50 +102,43 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	if lifecycle == nil {
 		return false, errors.New("steer: complete: lifecycle store is not wired")
 	}
-	message, err := al.completionMessage(rec, outcome, answer, failureReason)
+	finalAlreadyStored, err := al.completionFinalAlreadyStored(rec, outcome)
 	if err != nil {
 		return false, err
-	}
-	deliverer := al.getUpwardDeliverer()
-	if deliverer == nil {
-		return false, errSteerUpwardDelivererNotWired
-	}
-	// Finding A (ADR-091 fix lane 1, CRITICAL — the release blocker): this
-	// Deliver call is the ONLY upward path left. The former
-	// completeWaitingAncestors shortcut that used to run after the write
-	// below is DELETED, not kept as a fallback: it read the parent's OWN
-	// stale lastAssistantAnswer instead of ever re-entering it, so a
-	// grandchild's real result was silently replaced by whatever the parent
-	// had said BEFORE delegating. Landing order I-5 says the parent's
-	// handback is written "by the last such child's completion wake
-	// RE-ENTERING the parent" — Deliver's own wake (steer_audience.go),
-	// carried all the way through by Finding B's exit-path fix
-	// (disposeSteeredTurnResult, steer_launcher.go/loop_inbound.go), is that
-	// re-entry. There is no second, shortcut path to the parent.
-	//
-	// [ADR-091 fix lane RX-OUTCOME, HIGH] The Delivery this returns is no
-	// longer thrown away. This is THE normal completion path: a
-	// stored-not-woken outcome here means the parent silently never learns
-	// its child finished, and it stays that way until a gateway restart runs
-	// boot recovery. reportUndeliveredWake below makes that visible —
-	// nothing else in the system would.
-	event := steer.UpwardEvent{
-		ChildSessionID: rec.SessionID,
-		Generation:     rec.Generation,
-		Outcome:        outcome,
-		Message:        message,
 	}
 	// Snapshot the Stop marker BEFORE Deliver's I/O window so the Mutate
 	// below can tell "a Stop raced my write" from "the Stop that caused
 	// my write". See the closure for why the distinction matters.
 	stopBeforeDelivery := rec.Stop
 
-	delivery, err := deliverer.Deliver(ctx, event)
-	if err != nil {
-		return false, fmt.Errorf("steer: complete: deliver %q: %w", rec.SessionID, err)
+	finalWoke := false
+	if !finalAlreadyStored {
+		message, messageErr := al.completionMessage(rec, outcome, answer, failureReason)
+		if messageErr != nil {
+			return false, messageErr
+		}
+		deliverer := al.getUpwardDeliverer()
+		if deliverer == nil {
+			return false, errSteerUpwardDelivererNotWired
+		}
+		// Finding A (ADR-091 fix lane 1, CRITICAL — the release blocker):
+		// this Deliver call is the ONLY upward path left. The former
+		// completeWaitingAncestors shortcut is deleted: it substituted the
+		// parent's stale answer instead of re-entering it with the child's
+		// result. Deliver's wake is the required re-entry.
+		event := steer.UpwardEvent{
+			ChildSessionID: rec.SessionID,
+			Generation:     rec.Generation,
+			Outcome:        outcome,
+			Message:        message,
+		}
+		delivery, deliverErr := deliverer.Deliver(ctx, event)
+		if deliverErr != nil {
+			return false, fmt.Errorf("steer: complete: deliver %q: %w", rec.SessionID, deliverErr)
+		}
+		reportUndeliveredWake("steer: complete", event, steerParentSessionID(rec), rec.Generation, delivery)
+		finalWoke = deliveryWokeRecipient(delivery.Outcome)
 	}
-	reportUndeliveredWake("steer: complete", event, steerParentSessionID(rec), rec.Generation, delivery)
-	finalWoke := deliveryWokeRecipient(delivery.Outcome)
 
 	if completeStateWriteTestHook != nil {
 		completeStateWriteTestHook(rec.SessionID)
@@ -237,6 +230,35 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	default:
 		return finalWoke, fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, mutateErr)
 	}
+}
+
+// completionFinalAlreadyStored reports whether this generation's terminal
+// result already exists in the parent's durable inbox, acknowledged or not.
+// A previous attempt can complete Deliver (including the parent wake) and
+// then fail the lifecycle write. Retrying Deliver would deliberately re-wake
+// an unacknowledged duplicate, so a later attempt skips delivery and retries
+// only the terminal write. The generation-bound id keeps a revived session's
+// newer final independent from an older attempt.
+func (al *AgentLoop) completionFinalAlreadyStored(rec *session.LifecycleRecord, outcome steer.Outcome) (bool, error) {
+	if !isTerminalOutcome(outcome) {
+		return false, nil
+	}
+	inbox := al.GetMessageInboxStore()
+	ownerKey := deliverOwnerKey(rec)
+	if inbox == nil || ownerKey == "" {
+		return false, nil
+	}
+	entries, err := inbox.Entries(ownerKey)
+	if err != nil {
+		return false, fmt.Errorf("steer: complete: inspect parent inbox %q: %w", ownerKey, err)
+	}
+	wantID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
+	for _, entry := range entries {
+		if entry.Kind == session.InboxEntryMessage && entry.Message != nil && messageIDOf(*entry.Message) == wantID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func deliveryWokeRecipient(outcome steer.DeliveryOutcome) bool {
