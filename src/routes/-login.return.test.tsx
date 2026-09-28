@@ -164,3 +164,44 @@ describe('F-B2 — return-target sanitizer rejects hostile and self targets (SP-
     assertInternalDefault(safe('/login'))
   })
 })
+
+// --- N1 (gate round 2): the FLOW must use the sanitizer ---
+// The F-B2 block pins the sanitizer UNIT; pr-test-analyzer's N1 asks for the
+// FLOW binding: sign-in from a hostile hash through the real login form.
+// The hostile hash is the live input (sessionStorage is empty — cleared in
+// the block's beforeEach), so GREEN's consumeLoginReturn() falls through to
+// the validated hash fallback and a mutant bypassing the validation in the
+// fallback navigates to the hostile target directly.
+//
+// STATUS: on this pre-GREEN tree sign-in lands on '/' unconditionally, so
+// these cases pass here for the WRONG reason (vacuous green — documented);
+// failability is proven at the GREEN head by one production mutation
+// (currentHashPath returning the raw hash), reverted. At GREEN they hold
+// for the right reason: the sanitizer rejected the hash.
+describe('N1 — sign-in from a hostile hash lands on / through the real flow (SP-27 + security)', () => {
+  beforeEach(() => {
+    window.sessionStorage.removeItem('omnipus_login_return')
+  })
+
+  async function signInFromHash(hash: string): Promise<void> {
+    window.location.hash = hash
+    if (!LoginComponent) throw new Error('LoginComponent not loaded')
+    render(<LoginComponent />)
+    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'dana' } })
+    fireEvent.change(document.getElementById('login-password')!, { target: { value: 'secret' } })
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalled())
+  }
+
+  it('a protocol-relative hostile hash ("#//evil.example") lands on /, never off-origin', async () => {
+    await signInFromHash('#//evil.example')
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
+    expect(JSON.stringify(mockNavigate.mock.calls)).not.toContain('evil.example')
+  })
+
+  it('a backslash hostile hash ("#/\\evil.example") lands on /, never off-origin', async () => {
+    await signInFromHash('#/\\evil.example')
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
+    expect(JSON.stringify(mockNavigate.mock.calls)).not.toContain('evil.example')
+  })
+})
