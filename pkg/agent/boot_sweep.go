@@ -227,6 +227,7 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
 		return
 	}
+	terminalAtBoot := rec.Terminal()
 	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
 		// A current-generation Stop is durable. Do not deliver or re-wake any
 		// pending entry; it waits for Revive to mint a newer generation.
@@ -278,6 +279,13 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 			continue
 		}
 		r.deliverIfUnconsumed(ctx, rec, message, notice)
+	}
+	// A terminal record can predate this process because the prior process
+	// crashed after its lifecycle write but before the live Q2 B terminal
+	// hook. Re-run the idempotent quiet-subtree check after boot has repaired
+	// or replayed the descendant's final delivery.
+	if terminalAtBoot && rec.Terminal() && r.DescendantTerminal != nil {
+		r.DescendantTerminal(rec.SessionID)
 	}
 }
 

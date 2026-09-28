@@ -451,6 +451,9 @@ func (l *SteerLauncher) launchSteered(
 			if l.al.goalCompletionFenceActive(req.SteeringSessionID) {
 				return nil, fmt.Errorf("steer: launch: completion claim is pending for steering session %q", req.SteeringSessionID)
 			}
+			if launchAfterCompletionFenceTestHook != nil {
+				launchAfterCompletionFenceTestHook(req.SteeringSessionID)
+			}
 			steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)
 			if metaErr != nil {
 				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %w",
@@ -890,6 +893,11 @@ var dispatchStateWriteTestHook func(sessionID string, gen int)
 // can run to completion and deregister within one poll interval, so a test
 // that samples getActiveTurnState afterwards can miss it entirely.
 var turnRegisteredTestHook func(sessionID string, ts *turnState)
+
+// launchAfterCompletionFenceTestHook is a test-only synchronization seam
+// fired inside the parent-publication lock immediately after the Q2 B
+// completion fence passes. Always nil in production.
+var launchAfterCompletionFenceTestHook func(parentSessionID string)
 
 // dispatchSteeredSession is I-2/I-3's authoritative admission decision.
 // Reserves via I-6's live reserveDispatch guard,

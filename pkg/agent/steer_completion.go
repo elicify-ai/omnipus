@@ -693,6 +693,9 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 // be the wrong question — a run between turns has no registered turn at all.
 func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false, errors.New("steer: complete: no lifecycle store wired")
+	}
 	seen := map[string]bool{parentID: true}
 	queue := []string{parentID}
 	for len(queue) > 0 {

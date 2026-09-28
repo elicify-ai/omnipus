@@ -920,10 +920,26 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": cerr.Error()})
 		}
 		// Q2 B: a met claim is pending intent until the session's whole
-		// delegated subtree is quiet. Installing the phase before the read
-		// lets terminal writers close the delivery-before-terminal race; the
-		// CAS promotion below prevents that wake from also scheduling Judge.
+		// delegated subtree is quiet. Install the fence while holding the same
+		// parent-publication lock used by launchSteered. A launch that already
+		// passed its fence check finishes publishing before this lock is
+		// acquired; a later launch sees this phase and is refused. The subtree
+		// read runs after release because child IDs can share the store's
+		// striped mutex with their parent, making a recursive List deadlock.
+		lifecycle := gl.al.GetSessionLifecycleStore()
+		if lifecycle == nil {
+			gl.al.goalSetCompletionPhase(gl.rec.GoalID, goalCompletionWaitingDescendants)
+			logger.WarnCF("agent", "goal: completion claim held because no lifecycle store is wired",
+				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID})
+			return
+		}
+		if goalClaimBeforePublicationLockTestHook != nil {
+			goalClaimBeforePublicationLockTestHook(gl.sessionID)
+		}
+		publicationMu := lifecycle.Lock(gl.sessionID)
+		publicationMu.Lock()
 		gl.al.goalSetCompletionPhase(gl.rec.GoalID, goalCompletionWaitingDescendants)
+		publicationMu.Unlock()
 		blocked, blockErr := gl.al.hasRunningOrQueuedDescendant(gl.sessionID)
 		if blockErr != nil || blocked {
 			if blockErr != nil {
@@ -980,6 +996,11 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		gl.al.maybeNudgeUnregisteredGoal(gl.store, gl.sessionID, gl.rec, gl.agentInst, gl.opts)
 	}
 }
+
+// goalClaimBeforePublicationLockTestHook is a test-only synchronization seam
+// fired immediately before the met-claim path acquires its session's parent-
+// publication lock. Always nil in production.
+var goalClaimBeforePublicationLockTestHook func(sessionID string)
 
 // maybeNudgeUnregisteredGoal is ADR-088 D3 amendment item 3's immediate
 // post-turn correction: called only from checkGoalLoopAfterTurn's ordinary-
