@@ -279,7 +279,11 @@ func (t *GrepTool) resolvedScopeRoot(ctx context.Context, policy fspolicy.FSPoli
 	if wdErr == nil && isWithinWorkspace(realAbs, realWorkDir) {
 		root, n, err = t.workspaceScopeRoot(policy, realWorkDir, realAbs, opened)
 	} else {
-		root, n, err = t.absoluteGrepRoot(scope, realAbs, policy, opened)
+		// Security A1: absoluteGrepRoot consults the workspace's mounts so
+		// it can anchor os.OpenRoot at the mount's HostPath when realAbs is
+		// under a mount — the same anchor read_file uses via
+		// newMountRootHandle.
+		root, n, err = t.absoluteGrepRoot(scope, realAbs, grepMounts(ctx), policy, opened)
 	}
 	if err != nil {
 		return grepRootSet{}, err
@@ -334,7 +338,22 @@ func (t *GrepTool) workspaceScopeRoot(policy fspolicy.FSPolicy, realWorkDir, rea
 // own existence check — the two together let a single test hook cover both
 // windows with a `sync.Once`). Production: the pointer is nil; the cost is
 // one atomic load and a nil check per scoped absolute root.
-func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, policy fspolicy.FSPolicy, opened *[]*os.Root) (filegrep.Root, int, error) {
+//
+// Security fix A1 (Opus security-lead review): when realAbs is inside one
+// of the workspace's mounts, anchor os.OpenRoot at the mount's HostPath
+// instead of at parent. os.OpenRoot FOLLOWS symlinks in the directory
+// name (per os.OpenRoot's own doc), so opening at parent would let a
+// folder swapped for an outside symlink between ResolvePath's admission
+// and this open escape the mount's intended boundary — the same TOCTOU
+// class resolvepath.go's package doc claims to close for write/serve,
+// and the same class newMountRootHandle already closes for read_file
+// (TestResolvePath_ReadConfinedMountAncestorSwap, S-4.6). Anchoring at
+// the mount root + delegating to resolveScopedRoot applies os.Root's
+// "symbolic links may not reference a location outside the root"
+// protection to the resolved path; a swapped-in outside symlink is
+// caught as a "path escapes from parent" open error and surfaced as a
+// lost root (FR-021, truncated root_lost), never as silent coverage.
+func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.Mount, policy fspolicy.FSPolicy, opened *[]*os.Root) (filegrep.Root, int, error) {
 	if _, err := os.Stat(realAbs); err != nil {
 		return filegrep.Root{}, 0, grepAbsoluteStatError(rawPath, realAbs, err)
 	}
@@ -354,6 +373,33 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, policy fspolicy.FSP
 		}
 		*opened = append(*opened, root)
 		return filegrep.Root{Name: name, FS: guardGrepRoot(realAbs, root.FS(), policy)}, 0, nil
+	}
+	// Security A1: a path under a mount anchors at the mount root, not at
+	// the immediate parent. The containment check reuses isWithinWorkspace
+	// (filesystem.go) — the same predicate ResolvePath's own workspace
+	// branch uses for WorkDir — so the two cases cannot drift.
+	for _, m := range mounts {
+		if !isWithinWorkspace(realAbs, m.HostPath) {
+			continue
+		}
+		mr, mErr := os.OpenRoot(m.HostPath)
+		if mErr != nil {
+			return lost(mErr), 0, nil
+		}
+		*opened = append(*opened, mr)
+		rel, relErr := filepath.Rel(m.HostPath, realAbs)
+		if relErr != nil {
+			return filegrep.Root{}, 0, fmt.Errorf("path %s could not be made relative to its mount %q: %w", rawPath, m.Name, relErr)
+		}
+		r, n, rErr := t.resolveScopedRoot(mr, m.HostPath, filepath.ToSlash(rel), m.Name, fmt.Sprintf("mount %q", m.Name), policy, opened)
+		if rErr != nil {
+			var lostErr *grepScopeLostError
+			if errors.As(rErr, &lostErr) {
+				return lost(lostErr.err), 0, nil
+			}
+			return filegrep.Root{}, 0, rErr
+		}
+		return r, n, nil
 	}
 	container, err := os.OpenRoot(parent)
 	if err != nil {
