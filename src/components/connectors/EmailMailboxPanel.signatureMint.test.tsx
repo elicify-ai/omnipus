@@ -52,9 +52,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchWorkspaces: vi.fn(),
     fetchChannelRouting: vi.fn(),
     isApiError: vi.fn(() => false),
-    mintMailSignaturePreviewToken,
   }
 })
+
+vi.mock('@/lib/api/mail', () => ({ mintMailSignaturePreviewToken }))
 
 vi.mock('framer-motion', () => ({
   motion: new Proxy({}, {

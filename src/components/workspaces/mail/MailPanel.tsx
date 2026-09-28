@@ -7,8 +7,8 @@
 //
 // Oracle contract (MailPanel.states.test.tsx): props { workspaceId,
 // mailboxId? }; reads
-// fetchMailboxes/fetchMailFolders/fetchMailMessages/fetchMailSummary from
-// '@/lib/api'; folders refetch every 30s while mounted, never after unmount
+// fetchMailboxes from '@/lib/api' and the mail-only operations from
+// '@/lib/api/mail'; folders refetch every 30s while mounted, never after unmount
 // (D25); error shows the error CLASS (e.g. connect_refused) + Retry, never
 // the empty-state text; the US-6 read-by-agent tag appears exactly once per
 // flagged message; watcher backoff renders "Retrying at …" (D29/R2-8).
@@ -26,6 +26,8 @@ import {
 import {
   fetchMailboxes,
   fetchAgents,
+} from '@/lib/api'
+import {
   fetchMailFolders,
   fetchMailMessages,
   fetchMailMessage,
@@ -37,7 +39,7 @@ import {
   discardMailDraft,
   mintMailHtmlPreviewToken,
   fetchMailAttachment,
-} from '@/lib/api'
+} from '@/lib/api/mail'
 import type {
   MailboxNewMailSummary,
   MailMessage,

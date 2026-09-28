@@ -25,7 +25,12 @@ const { fetchAgents, fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchM
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgents, fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailSummary }
+  return { ...actual, fetchAgents, fetchMailboxes }
+})
+
+vi.mock('@/lib/api/mail', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/mail')>()
+  return { ...actual, fetchMailFolders, fetchMailMessages, fetchMailSummary }
 })
 
 async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>> {

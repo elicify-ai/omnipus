@@ -22,6 +22,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents,
     fetchMailboxes,
+  }
+})
+
+vi.mock('@/lib/api/mail', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/mail')>()
+  return {
+    ...actual,
     fetchMailFolders,
     fetchMailMessages,
     fetchMailSummary,

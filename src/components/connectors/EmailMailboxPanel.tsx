@@ -72,8 +72,8 @@ import {
   isWorker,
   isApiError,
   ApiError,
-  mintMailSignaturePreviewToken,
 } from '@/lib/api'
+import { mintMailSignaturePreviewToken } from '@/lib/api/mail'
 import type { Mailbox, MailboxConfigureRequest } from '@/lib/api'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
