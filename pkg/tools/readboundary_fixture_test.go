@@ -27,6 +27,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -148,7 +149,7 @@ func (f *rbFixture) rows(t *testing.T) []auditRow {
 		t.Fatal("rbFixture.rows called twice — build a fresh fixture per audited call sequence")
 	}
 	f.rowsTaken = true
-	if _, err := os.Stat(filepath.Join(f.auditDir, "audit.jsonl")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(f.auditDir, "audit.jsonl")); errors.Is(err, os.ErrNotExist) {
 		_ = f.auditLog.Close()
 		return nil
 	}

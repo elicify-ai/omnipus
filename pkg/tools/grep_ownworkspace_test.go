@@ -6,6 +6,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,7 +103,7 @@ func TestGrepTool_OwnWorkspaceOnly(t *testing.T) {
 		tool := NewGrepTool(workB, true)
 		reg.Register(tool)
 		return tool, func() []auditRow {
-			if _, statErr := os.Stat(filepath.Join(dir, "audit.jsonl")); os.IsNotExist(statErr) {
+			if _, statErr := os.Stat(filepath.Join(dir, "audit.jsonl")); errors.Is(statErr, os.ErrNotExist) {
 				_ = logger.Close()
 				return nil
 			}
