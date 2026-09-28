@@ -1,126 +1,193 @@
-// mailPanelDefinition.test.tsx — wave-2 RED pack for Mail's §8.1
-// PanelDefinition payload (side-panel-shell-spec.md §10 "Wave 2 — Mail
-// adopts the shell": "satisfied by registering a Mail PanelDefinition — no
-// shell change. Mail's expand target follows the email spec").
-//
-// Oracle — side-panel-shell-spec.md §1 panel inventory, mail row:
-//   "| mail | Mail | Mail panel (feature/email-mail, D11) | Mail full page
-//    (per email spec) |"
-// with the email spec naming the full page:
-//   email-mail-view-spec.md §17 (chat_link row): "the chat_link URL scheme:
-//   …/#/workspaces/{wsId}/mail?mailbox={agentId}&folder=drafts&message=…"
-//   and its router row: "The SPA router uses hash history (verified) — deep
-//   links carry #/…".
-//
-// The `/#/` prefix is derived, not observed: the shell's Expand does
-// window.open(expandTarget(context)) (src/components/panel-shell/
-// usePanelShell.ts), and in a hash-history SPA a new-tab URL without the
-// hash fragment names a GATEWAY path, not the SPA route — Library's and
-// Browser's registry entries both carry it for exactly this reason. A
-// expand target without `/#/` opens a dead tab.
-//
-// Also pinned: no beforeLeave (§8.1: "beforeLeave is supplied ONLY by
-// panels with unsaved-edit risk — Library, in wave 1"; Mail keeps no
-// unsaved-edit state outside its compose dialog, same posture as Browser).
+// Mail's final shared-panel contract. Expand is shell-owned: the definition
+// supplies a context codec for the chrome-less /panel/mail route, while the
+// content reports its current selection through registerExpandContext.
 
-import { Suspense } from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, it, expect, vi } from 'vitest'
+import { Suspense } from "react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  PanelContentProps,
+  PanelContext,
+  WorkspacePanelContext,
+} from "@/components/panel-shell/types";
 
-const { mailPanelModuleLoaded } = vi.hoisted(() => ({
+const { mailPanelModuleLoaded, mailPanelProps } = vi.hoisted(() => ({
   mailPanelModuleLoaded: vi.fn(),
-}))
+  mailPanelProps: vi.fn(),
+}));
 
-vi.mock('./MailPanel', () => {
-  mailPanelModuleLoaded()
+interface MockMailPanelProps {
+  workspaceId: string;
+  mailboxId?: string | null;
+  initialFolder?: string;
+  initialMessageRef?: string;
+  layout?: "stacked" | "split";
+  onLocationChange?: (location: {
+    mailboxId: string | null;
+    folder: string;
+    messageRef: string | null;
+  }) => void;
+}
+
+vi.mock("./MailPanel", () => {
+  mailPanelModuleLoaded();
   return {
-    MailPanel: ({ workspaceId, onLocationChange }: {
-      workspaceId: string
-      onLocationChange?: (location: { mailboxId: string | null; folder: string; messageRef: string | null }) => void
-    }) => (
-      <div>
-        Loaded Mail for {workspaceId}
-        <button
-          type="button"
-          onClick={() => onLocationChange?.({
-            mailboxId: 'mia agent',
-            folder: 'drafts',
-            messageRef: 'mid:<draft/42@test.local>',
-          })}
-        >
-          Select draft
-        </button>
-      </div>
-    ),
-  }
-})
+    MailPanel: (props: MockMailPanelProps) => {
+      mailPanelProps(props);
+      return (
+        <div data-testid="mock-mail-panel">
+          Loaded Mail for {props.workspaceId}
+        </div>
+      );
+    },
+  };
+});
 
-import { mailPanelDefinition } from './mailPanelDefinition'
+import { mailPanelDefinition } from "./mailPanelDefinition";
 
-describe('Mail PanelDefinition payload (§10 Wave 2, §1 mail row, email spec §17)', () => {
-  it('registers id "mail" with title "Mail" (§1 panel inventory mail row)', () => {
-    expect(mailPanelDefinition.id).toBe('mail')
-    expect(mailPanelDefinition.title).toBe('Mail')
-  })
+function renderContent(
+  presentation: PanelContentProps["presentation"],
+  context: WorkspacePanelContext,
+  registerExpandContext: PanelContentProps["registerExpandContext"] = () =>
+    undefined,
+) {
+  const Content = mailPanelDefinition.content;
+  return render(
+    <Suspense fallback={<div>Loading Mail…</div>}>
+      <Content
+        context={context}
+        presentation={presentation}
+        close={() => undefined}
+        expand={() => undefined}
+        registerExpandContext={registerExpandContext}
+        onWidthSettle={() => undefined}
+      />
+    </Suspense>,
+  );
+}
 
-  it('expand target is the Mail full page, hash-router form (email spec §17 chat_link scheme; §1 "Mail full page")', () => {
-    const target = mailPanelDefinition.expandTarget({ workspaceId: 'ws-1' })
-    const s = typeof target === 'string' ? target : String((target as unknown as { to?: string }).to)
-    // The SPA route lives in the hash fragment (createHashHistory) — a
-    // pop-out URL without `/#/` is a gateway path, not the Mail page.
-    expect(s).toContain('/#/workspaces/ws-1/mail')
-  })
+afterEach(() => {
+  cleanup();
+  mailPanelProps.mockClear();
+});
 
-  it('carries NO beforeLeave — the CRIT-001 unsaved-edits guard is Library-only (§8.1)', () => {
-    expect(mailPanelDefinition.beforeLeave).toBeUndefined()
-  })
+describe("Mail PanelDefinition shared full-screen contract (R10/R11, D48/D49)", () => {
+  it('registers id "mail" with title "Mail"', () => {
+    expect(mailPanelDefinition.id).toBe("mail");
+    expect(mailPanelDefinition.title).toBe("Mail");
+  });
 
-  it('loads Mail panel code only when the registered content is rendered', async () => {
-    expect(mailPanelModuleLoaded).not.toHaveBeenCalled()
+  it("round-trips every Mail address through fullScreen and rejects junk", () => {
+    const longMessageRef = `mid:<${"thread.".repeat(700)}final@example.test>`;
+    const contexts: WorkspacePanelContext[] = [
+      {
+        workspaceId: "workspace A",
+        mailboxId: "mia/primary",
+        folder: "drafts",
+        messageRef: longMessageRef,
+      },
+      {
+        workspaceId: "workspace A",
+        mailboxId: null,
+        folder: null,
+        messageRef: null,
+      },
+      {
+        workspaceId: "workspace A",
+        mailboxId: undefined,
+        folder: "inbox",
+        messageRef: "mid:<ordinary@example.test>",
+      },
+    ];
 
-    const Content = mailPanelDefinition.content
-    render(
-      <Suspense fallback={<div>Loading Mail…</div>}>
-        <Content
-          context={{ workspaceId: 'ws-1' }}
-          close={() => undefined}
-          expand={() => undefined}
-          registerExpand={() => undefined}
-          onWidthSettle={() => undefined}
-        />
-      </Suspense>,
-    )
+    for (const context of contexts) {
+      const search = mailPanelDefinition.fullScreen.toSearch(context);
+      const decoded = mailPanelDefinition.fullScreen.fromSearch(search);
+      expect(decoded).toEqual(context);
+      expect(decoded?.mailboxId).toBe(context.mailboxId);
+    }
 
-    expect(await screen.findByText('Loaded Mail for ws-1')).toBeInTheDocument()
-    expect(mailPanelModuleLoaded).toHaveBeenCalledTimes(1)
-  })
+    expect(
+      mailPanelDefinition.fullScreen.fromSearch({
+        workspace: 42,
+        mailbox: ["mia"],
+        folder: "spam",
+        message: { id: "not-a-string" },
+      }),
+    ).toBeNull();
+    expect(mailPanelDefinition).not.toHaveProperty("expandTarget");
+  });
 
-  it('carries the current mailbox, folder and message into the full-page Expand URL (D49)', async () => {
-    let expandAction: (() => boolean) | null = null
-    const open = vi.spyOn(window, 'open').mockReturnValue({ closed: false, opener: window } as unknown as Window)
-    const Content = mailPanelDefinition.content
+  it("loads Mail panel code only when the registered content is rendered", async () => {
+    expect(mailPanelModuleLoaded).not.toHaveBeenCalled();
 
-    render(
-      <Suspense fallback={<div>Loading Mail…</div>}>
-        <Content
-          context={{ workspaceId: 'ws-1' }}
-          close={() => undefined}
-          expand={() => undefined}
-          registerExpand={(action) => { expandAction = action }}
-          onWidthSettle={() => undefined}
-        />
-      </Suspense>,
-    )
+    renderContent("docked", { workspaceId: "ws-1" });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Select draft' }))
-    expect(expandAction).not.toBeNull()
-    expect((expandAction as unknown as () => boolean)()).toBe(true)
+    expect(await screen.findByText("Loaded Mail for ws-1")).toBeInTheDocument();
+    expect(mailPanelModuleLoaded).toHaveBeenCalledTimes(1);
+  });
 
-    const target = String(open.mock.calls[0]?.[0])
-    const url = new URL(target, 'http://omnipus.test')
-    expect(url.hash).toBe(
-      '#/workspaces/ws-1/mail?view=full&mailbox=mia+agent&folder=drafts&message=mid%3A%3Cdraft%2F42%40test.local%3E',
-    )
-    open.mockRestore()
-  })
-})
+  it("registers a getter for the current mailbox, folder and message, then unregisters on unmount", async () => {
+    const registrations: Array<(() => PanelContext) | null> = [];
+    const view = renderContent(
+      "docked",
+      {
+        workspaceId: "ws-1",
+        mailboxId: "mia",
+        folder: "inbox",
+        messageRef: null,
+      },
+      (getter) => registrations.push(getter),
+    );
+    await screen.findByTestId("mock-mail-panel");
+
+    const props = mailPanelProps.mock.lastCall?.[0] as MockMailPanelProps;
+    act(() => {
+      props.onLocationChange?.({
+        mailboxId: "mia agent",
+        folder: "drafts",
+        messageRef: "mid:<draft/42@test.local>",
+      });
+    });
+
+    await waitFor(() => {
+      const getter = [...registrations]
+        .reverse()
+        .find(
+          (entry): entry is () => PanelContext => typeof entry === "function",
+        );
+      expect(getter?.()).toEqual({
+        workspaceId: "ws-1",
+        mailboxId: "mia agent",
+        folder: "drafts",
+        messageRef: "mid:<draft/42@test.local>",
+      });
+    });
+
+    view.unmount();
+    expect(registrations.at(-1)).toBeNull();
+  });
+
+  it("chooses stacked versus split layout only from the shell presentation", async () => {
+    const context: WorkspacePanelContext = {
+      workspaceId: "ws-1",
+      mailboxId: "mia",
+      folder: "sent",
+      messageRef: "mid:<same-context@example.test>",
+    };
+
+    const docked = renderContent("docked", context);
+    await screen.findByTestId("mock-mail-panel");
+    expect(mailPanelProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: "stacked" }),
+    );
+    docked.unmount();
+
+    mailPanelProps.mockClear();
+    renderContent("fullscreen", context);
+    await screen.findByTestId("mock-mail-panel");
+    expect(mailPanelProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: "split" }),
+    );
+  });
+});
