@@ -7126,7 +7126,11 @@ export const MessageParentResponse = z.object({
   error: z.string().optional(),
 });
 
-const endpoints = makeApi([
+// The SPA imports individual generated schemas for response validation; it does
+// not use the generated Zodios client. Mark both client-construction steps pure
+// so production bundlers can discard the complete endpoint catalogue (including
+// its descriptions) when neither `api` nor `createApiClient` is imported.
+const endpoints = /* @__PURE__ */ makeApi([
   {
     method: "get",
     path: "/about",
@@ -15384,7 +15388,7 @@ Returns HTTP 201 on success.
   },
 ]);
 
-export const api = new Zodios(endpoints);
+export const api = /* @__PURE__ */ new Zodios(endpoints);
 
 export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
   return new Zodios(baseUrl, endpoints, options);

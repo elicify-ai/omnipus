@@ -72,6 +72,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchMailboxes: vi.fn(async () => [
       { agent_id: 'agent-a', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ]),
+  }
+})
+
+vi.mock('@/lib/api/mail', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/mail')>()
+  return {
+    ...actual,
     fetchMailFolders: vi.fn(async () => ({
       folders: [
         { slug: 'inbox', display_name: 'INBOX', total: 0, unread_count: 0 },
@@ -92,7 +99,7 @@ import { useUiStore } from '@/store/ui'
 import {
   fetchMailFolders,
   fetchMailMessages,
-} from '@/lib/api'
+} from '@/lib/api/mail'
 import { readMailPanelIntent } from '@/components/workspaces/mail/mailPanelIntent'
 
 const originalMatchMedia = window.matchMedia

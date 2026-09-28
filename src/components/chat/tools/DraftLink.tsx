@@ -205,3 +205,13 @@ export const CreateEmailDraftUI = makeAssistantToolUI<CreateEmailDraftArgs, unkn
     />
   ),
 })
+
+/** Both spellings share one lazy boundary in OmnipusRuntimeProvider. */
+export function DraftLinkToolUIs() {
+  return (
+    <>
+      <DraftLinkUI />
+      <CreateEmailDraftUI />
+    </>
+  )
+}
