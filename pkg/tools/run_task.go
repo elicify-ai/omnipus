@@ -138,12 +138,29 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("run_task failed: task executor not wired — denying by default")
 	}
 
-	// Already in flight: startTaskNow's own idempotency guard (a live
-	// session_id) returns the existing session rather than double-launching,
-	// so this is a safe no-op re-dispatch — but skip the status flip below
-	// (it is already in_progress) to avoid re-stamping StartedAt.
+	// Already in flight: startTaskNow's launch-slot claim guarantees a
+	// concurrent start of this task cannot double-launch — this call either
+	// reports the existing session as a safe no-op re-dispatch, or loses the
+	// claim race and receives the typed already-running sentinel, which is the
+	// same benign outcome (a run for THIS task is in flight) and must not fail
+	// the tool. Skip the status flip below (it is already in_progress) to
+	// avoid re-stamping StartedAt.
 	if existing.Status == task.StatusInProgress {
 		sessionID, startErr := t.startTaskNow(ctx, taskID)
+		if startErr != nil && errors.Is(startErr, task.ErrAlreadyRunning) {
+			// Lost the claim race: a concurrent start of this task won and is
+			// in flight. The documented contract — calling run_task on an
+			// already-running task is a safe no-op — applies: report the
+			// winner's session as a success, never an error, and never revert
+			// the winner's live state. The error itself carries no session id
+			// (StartTaskNow refuses with ("", err)), so re-read the record.
+			if fresh, ferr := t.store.Get(taskID); ferr == nil && fresh.SessionID != "" {
+				sessionID = fresh.SessionID
+			}
+			return NewToolResult(fmt.Sprintf(
+				`{"task_id":%q,"status":%q,"session_id":%q,"note":"already running"}`,
+				taskID, task.StatusInProgress, sessionID))
+		}
 		if startErr != nil {
 			return ErrorResult(fmt.Sprintf("run_task failed: could not confirm running task: %v", startErr))
 		}
@@ -155,7 +172,10 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// Mirror the REST PATCH-to-in_progress path (rest_tasks.go): transition
 	// to in_progress FIRST (so the board reflects the dispatch immediately),
 	// then dispatch; on dispatch failure, revert so the task is never
-	// stranded in in_progress with no agent actually running.
+	// stranded in in_progress with no agent actually running — EXCEPT the
+	// typed already-running sentinel below, which never reverts: a lost claim
+	// race means the winner's in_progress state and StartedAt stamp are live
+	// and must survive this caller's loss.
 	priorStatus := existing.Status
 	inProgress := task.StatusInProgress
 	if _, uerr := t.store.Update(taskID, task.Patch{Status: &inProgress}); uerr != nil {
@@ -164,6 +184,20 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 
 	sessionID, startErr := t.startTaskNow(ctx, taskID)
 	if startErr != nil {
+		if errors.Is(startErr, task.ErrAlreadyRunning) {
+			// Lost the launch-slot claim race: a concurrent start of this task
+			// (the REST PATCH path, or another run_task call) won and is in
+			// flight. Reverting here would clobber the winner's live state
+			// under a running task — the exact defect the sentinel mapping
+			// exists to prevent. Safe no-op: report the winner's session
+			// (re-read; the refusal carries none) as a success.
+			if fresh, ferr := t.store.Get(taskID); ferr == nil && fresh.SessionID != "" {
+				sessionID = fresh.SessionID
+			}
+			return NewToolResult(fmt.Sprintf(
+				`{"task_id":%q,"status":%q,"session_id":%q,"note":"already running"}`,
+				taskID, task.StatusInProgress, sessionID))
+		}
 		revert := priorStatus
 		emptyStarted := ""
 		if _, rErr := t.store.Update(taskID, task.Patch{Status: &revert, StartedAt: &emptyStarted}); rErr != nil {

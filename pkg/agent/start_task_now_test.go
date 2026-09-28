@@ -143,7 +143,9 @@ func TestStartTaskNow_Idempotent_ExistingSessionID(t *testing.T) {
 //
 //	Given a task in_progress and a cancel already in te.running[taskID],
 //	When StartTaskNow is called,
-//	Then an error is returned mentioning "goroutine already running".
+//	Then an error is returned wrapping the typed already-running sentinel
+//	(task.ErrAlreadyRunning) — the refusal both production callers map to the
+//	documented safe no-op.
 func TestStartTaskNow_Idempotent_AlreadyRunning(t *testing.T) {
 	te, store := newStartTaskNowExecutor(t)
 
@@ -163,9 +165,10 @@ func TestStartTaskNow_Idempotent_AlreadyRunning(t *testing.T) {
 	})
 
 	sessID, err := te.StartTaskNow(context.Background(), tk.ID)
-	assert.Error(t, err, "StartTaskNow must error when goroutine is already running")
+	assert.Error(t, err, "StartTaskNow must error when the launch slot is already held")
 	assert.Empty(t, sessID)
-	assert.Contains(t, err.Error(), "goroutine already running")
+	assert.ErrorIs(t, err, task.ErrAlreadyRunning,
+		"claim refusal must wrap the typed sentinel callers map to the safe no-op")
 }
 
 // TestStartTaskNow_TaskNotFound verifies that StartTaskNow returns an error for

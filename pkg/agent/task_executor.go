@@ -56,9 +56,16 @@ func TaskGoalTranscriptWriteFailures() uint64 {
 //
 //	reserved == true, cancel == nil  → slot claimed, goroutine not yet started
 //	reserved == false, cancel != nil → goroutine live and cancellable
+//
+// A reserved slot can also name the session its claim is held FOR
+// (reservedFor): StartTaskNow's launcher front sets it immediately before
+// handing the session to dispatch, and dispatchLaunchedTask adopts the
+// reservation only when reservedFor names its own session. Any other slot
+// state at that moment is a real already-running condition.
 type taskSlot struct {
-	cancel   context.CancelFunc // non-nil once the goroutine starts
-	reserved bool               // true while the slot is held but goroutine not yet launched
+	cancel      context.CancelFunc // non-nil once the goroutine starts
+	reserved    bool               // true while the slot is held but goroutine not yet launched
+	reservedFor string             // session id the launcher front's claim is held for (adoption key)
 }
 
 // TaskExecutor runs dispatchable tasks by handing them to agent sessions. It
@@ -1055,10 +1062,14 @@ type activeRun struct {
 // (the te.running slot is free), the call is a no-op and returns the existing
 // session ID immediately without launching a second agent.
 //
-// Concurrency: the te.mu-guarded slot claim is the single linearization point —
-// of N concurrent callers for the same task exactly ONE wins the launch and
-// every other concurrent caller fails with the already-running error, even when
+// Concurrency: the te.mu-guarded slot claim is the single linearization point
+// for BOTH dispatch fronts (the nil-launcher path and startTaskNowViaLauncher,
+// which production gateway boot always wires) — of N concurrent callers for the
+// same task exactly ONE wins the launch and every other concurrent caller fails
+// with an error wrapping the typed sentinel task.ErrAlreadyRunning, even when
 // the winner persists the new session_id while the losers are still deciding.
+// Callers map that sentinel to the documented safe no-op (idempotent success
+// reporting the winning session), never to a revert of the winner's state.
 //
 // Returns the session ID that was created (or already existed) on success, or
 // an empty string and an error when the task cannot be found, already has no
@@ -1090,10 +1101,6 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	if gateErr := te.requirePlanExecuting(t); gateErr != nil {
 		return "", gateErr
 	}
-	if te.launcher != nil {
-		return te.startTaskNowViaLauncher(ctx, t)
-	}
-
 	// Atomically claim the launch slot BEFORE any success can be decided: under
 	// a single te.mu critical section, check whether a goroutine is already
 	// running AND insert a sentinel cancel so competing concurrent callers
@@ -1123,30 +1130,58 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		// adopt the winner's session_id as this call's success. The winner
 		// persists that session_id mid-race, so a store re-read here is
 		// exactly how a lost race used to turn into a bogus second success.
-		return "", fmt.Errorf("task_executor: StartTaskNow: task %q goroutine already running", taskID)
+		//
+		// The error wraps the typed already-running sentinel (task.ErrAlreadyRunning)
+		// so both production callers (rest_tasks.go::launchIfStarted,
+		// run_task.go::Execute) can map a lost race to the documented safe
+		// no-op instead of reverting the winner's live state.
+		return "", fmt.Errorf("task_executor: StartTaskNow: claim: task %q: %w", taskID, task.ErrAlreadyRunning)
 	}
 	// Reserve the slot explicitly so competing callers bail at the check above.
-	// reserved=true, cancel=nil: slot is claimed but the goroutine has not started yet.
-	te.running[taskID] = &taskSlot{reserved: true}
+	// reserved=true, cancel=nil: slot is claimed but the goroutine has not started
+	// yet. This claim is the single linearization point for BOTH fronts — the
+	// nil-launcher path below and startTaskNowViaLauncher, which re-reads this
+	// reservation from the map at entry.
+	mySlot := &taskSlot{reserved: true}
+	te.running[taskID] = mySlot
 	te.mu.Unlock()
 
 	// releaseSlot removes the reservation if setup fails so future callers can
-	// retry. A no-op after the goroutine successfully replaces the sentinel.
+	// retry. Pointer-compare, never a blind delete: once the map entry is no
+	// longer THIS call's reservation, the slot has been handed off (the
+	// nil-launcher goroutine replaced the sentinel; dispatchLaunchedTask's
+	// adoption swapped the launcher front's reservation for the live slot) and
+	// the run's own release path owns it — the deferred release must no-op.
 	slotReleased := false
 	releaseSlot := func() {
 		if !slotReleased {
 			slotReleased = true
 			te.mu.Lock()
-			delete(te.running, taskID)
+			if te.running[taskID] == mySlot {
+				delete(te.running, taskID)
+			}
 			te.mu.Unlock()
 		}
 	}
 	defer releaseSlot()
 
-	// Idempotency guard: if a session already exists, don't create another one.
-	// Reached only while holding a fresh claim, so no launch is in flight: any
-	// session_id here is from a previous, completed run — the documented no-op
-	// success, not a concurrently-starting launch.
+	// The launcher front runs under the claim taken above; no explicit handoff
+	// signal is needed. dispatchLaunchedTask's adoption swaps the map entry for
+	// the live slot, after which this deferred pointer-compare release no-ops
+	// on its own; a refused or queued dispatch leaves the entry as this call's
+	// reservation, so the deferred release drops it and future callers retry.
+	// The front re-reads its reservation from the map (it is this call's own
+	// claim — the block above guarantees presence).
+	if te.launcher != nil {
+		return te.startTaskNowViaLauncher(ctx, t)
+	}
+
+	// Idempotency guard (nil-launcher path only — the launcher front branches
+	// on the task's session above and runs under the same claim): if a session
+	// already exists, don't create another one. Reached only while holding a
+	// fresh claim, so no launch is in flight: any session_id here is from a
+	// previous, completed run — the documented no-op success, not a
+	// concurrently-starting launch.
 	if t.SessionID != "" {
 		return t.SessionID, nil
 	}
@@ -1290,7 +1325,24 @@ func newSteeringRefusalError(err error) error {
 
 // startTaskNowViaLauncher is FR-A-010's single task front: Launch+Dispatch
 // for a task without a session and Dispatch alone for an existing session.
+//
+// It runs under the caller's launch-slot claim: StartTaskNow holds a reserved
+// slot in te.running for the whole call, this front fetches that reservation
+// at entry and names the session it is about to dispatch via reservedFor, and
+// dispatchLaunchedTask adopts exactly that reservation when the dispatch chain
+// reaches the executor. A concurrent StartTaskNow on the same task cannot
+// reach Launch at all — it fails at the claim with the typed already-running
+// sentinel — so at most one Launch happens per task.
 func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Task) (string, error) {
+	// Fetch the reservation StartTaskNow is holding for this call. A missing
+	// or live (non-reserved) slot is an internal ordering bug, not a caller
+	// error — fail loudly rather than dispatch unclaimed.
+	te.mu.Lock()
+	mySlot := te.running[t.ID]
+	te.mu.Unlock()
+	if mySlot == nil || !mySlot.reserved {
+		return "", fmt.Errorf("task_executor: StartTaskNow: launch slot missing for task %q", t.ID)
+	}
 	if t.SessionID != "" {
 		generation := 1
 		if lifecycle := te.getLifecycleStore(); lifecycle != nil {
@@ -1298,6 +1350,13 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 				generation = rec.Generation
 			}
 		}
+		// Name the session this reservation is held for: dispatchLaunchedTask
+		// adopts it when the dispatch chain reaches the executor. On a refusal
+		// or a queued outcome the reservation is never adopted, so StartTaskNow's
+		// deferred pointer-compare release drops it and future callers retry.
+		te.mu.Lock()
+		mySlot.reservedFor = t.SessionID
+		te.mu.Unlock()
 		if _, err := te.launcher.Dispatch(ctx, t.SessionID, generation); err != nil {
 			// Gate SFH#7: map a dispatch refusal for an existing task session
 			// the same way as the launch refusal — sentence surface, cause
@@ -1399,6 +1458,14 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 		return "", fmt.Errorf("task_executor: StartTaskNow: persist session id: %w", err)
 	}
 	_ = te.activateTaskGoal(updated, launched.SessionID)
+	// Same reservation naming for the fresh-launch leg: the production dispatch
+	// chain (dispatchSteeredSessionWithReservation → dispatchLaunchedTask)
+	// adopts this reservation. A queued outcome returns before the executor is
+	// ever reached; the reservation then stays unadopted, the deferred release
+	// drops it, and the later promotion dispatch claims a slot fresh.
+	te.mu.Lock()
+	mySlot.reservedFor = launched.SessionID
+	te.mu.Unlock()
 	if _, err := te.launcher.Dispatch(ctx, launched.SessionID, launched.Generation); err != nil {
 		// Gate SFH#7: map a dispatch refusal the same way as the launch
 		// refusal — same sentence surface, cause kept identifiable, logged
@@ -1429,14 +1496,35 @@ func (te *TaskExecutor) dispatchLaunchedTask(rec *session.LifecycleRecord, relea
 	}
 
 	te.mu.Lock()
-	if _, exists := te.running[t.ID]; exists {
+	var (
+		taskCtx context.Context
+		cancel  context.CancelFunc
+	)
+	if existing, exists := te.running[t.ID]; exists {
+		// Adopt the launcher front's reservation only when it names THIS
+		// session — the normal task path, where StartTaskNow's claim is still
+		// held and reservedFor was set immediately before Dispatch. Any other
+		// slot (a live run, or a reservation naming a different session) is a
+		// real already-running condition and refuses with the typed sentinel.
+		if !existing.reserved || existing.reservedFor != rec.SessionID {
+			te.mu.Unlock()
+			te.wg.Done()
+			return fmt.Errorf("task_executor: task %q: %w", t.ID, task.ErrAlreadyRunning)
+		}
+		// Adoption swaps the reservation for the live slot, which also makes
+		// StartTaskNow's deferred pointer-compare release a no-op — no explicit
+		// handoff signal is needed.
+		taskCtx, cancel = context.WithCancel(context.Background())
+		te.running[t.ID] = &taskSlot{cancel: cancel}
 		te.mu.Unlock()
-		te.wg.Done()
-		return fmt.Errorf("task_executor: task %q already running", t.ID)
+	} else {
+		// No reservation held (a task-origin session reaching the executor
+		// outside a StartTaskNow claim — e.g. a dispatch recovery path): claim
+		// the slot directly, the pre-existing behaviour for this entry.
+		taskCtx, cancel = context.WithCancel(context.Background())
+		te.running[t.ID] = &taskSlot{cancel: cancel}
+		te.mu.Unlock()
 	}
-	taskCtx, cancel := context.WithCancel(context.Background())
-	te.running[t.ID] = &taskSlot{cancel: cancel}
-	te.mu.Unlock()
 
 	if t.SessionID != rec.SessionID {
 		updated, updateErr := te.store.Update(t.ID, task.Patch{SessionID: &rec.SessionID})

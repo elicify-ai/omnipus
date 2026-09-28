@@ -15,9 +15,19 @@ import (
 // caller). It is a control-flow sentinel, NOT a wire validation error.
 var ErrAlreadyClaimed = errors.New("task already claimed")
 
-// ErrAlreadyRunning is returned by SpawnReset when a trigger fire would stomp a
-// task that is already in_progress (the trigger overlap guard). The trigger
-// executor treats it as a benign skip, not a failure.
+// ErrAlreadyRunning means "a run is already in flight for this task — do not
+// stomp it". Two producers share it, both control flow:
+//
+//   - SpawnReset: a trigger fire would stomp a task that is already
+//     in_progress (the trigger overlap guard).
+//   - The task executor's launch-slot claim (task_executor.go::StartTaskNow
+//     and dispatchLaunchedTask): a concurrent start lost the race for the
+//     task's single launch slot. The callers of StartTaskNow
+//     (rest_tasks.go::launchIfStarted, run_task.go::Execute) map it to the
+//     documented safe no-op — never a revert of the winner's live state.
+//
+// Handle both with errors.Is and treat as a benign skip / idempotent no-op,
+// never a failure.
 var ErrAlreadyRunning = errors.New("task already running")
 
 // ClaimForRun atomically transitions a dispatchable task to in_progress under

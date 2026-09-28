@@ -1510,7 +1510,12 @@ func (tp *taskPatch) syncGoalRecord() bool {
 	return false
 }
 
-// launchIfStarted starts the task run when the update moved it into in_progress, reverting on failure.
+// launchIfStarted starts the task run when the update moved it into in_progress,
+// reverting on failure. One class never reverts: a StartTaskNow error that
+// satisfies errors.Is(err, task.ErrAlreadyRunning) means a concurrent start of
+// THIS task won the launch-slot claim and is in flight — the loser answers 200
+// (idempotent PATCH) with the winner's re-read state and never touches the task
+// record. Everything else still reverts as before.
 func (tp *taskPatch) launchIfStarted() bool {
 	// If the task transitioned INTO in_progress (from a different state) and has
 	// an assigned agent, launch the agent immediately via StartTaskNow. The
@@ -1563,6 +1568,21 @@ func (tp *taskPatch) launchIfStarted() bool {
 		}
 		sessID, startErr := tp.a.taskExecutor.StartTaskNow(tp.r.Context(), tp.id)
 		if startErr != nil {
+			if errors.Is(startErr, task.ErrAlreadyRunning) {
+				// Lost the launch-slot claim race: a concurrent start of THIS
+				// task won the claim and is in flight. Reverting the winner's
+				// live in_progress state (status, StartedAt) under a running
+				// task is the defect this mapping exists to prevent, and a 500
+				// would misreport a benign lost race as a server fault. PATCH
+				// is idempotent and the loser's own status patch already
+				// applied — re-read the record so the response carries the
+				// winner's state (including its freshly-minted session_id)
+				// and answer 200 via finish().
+				if fresh, ferr := tp.a.taskStore.Get(tp.id); ferr == nil {
+					tp.updated = fresh
+				}
+				return false
+			}
 			// Revert the task to its prior status so it is not left stranded.
 			revertPatch := buildLaunchRevertPatch()
 			if _, rErr := tp.a.taskStore.Update(tp.id, revertPatch); rErr != nil {

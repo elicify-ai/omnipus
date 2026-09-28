@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -265,6 +266,108 @@ func TestRunTask_AlreadyInProgress_Idempotent(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("dispatcher called %d times, want 1", calls)
+	}
+}
+
+// alreadyRunningDispatcher returns a TaskStartNowFunc whose only job is to
+// reproduce what *pkg/agent.TaskExecutor.StartTaskNow returns to a caller
+// that lost the launch race: the typed already-running sentinel, wrapped.
+func alreadyRunningDispatcher(taskID string) TaskStartNowFunc {
+	return func(_ context.Context, id string) (string, error) {
+		return "", fmt.Errorf("task_executor: StartTaskNow: claim: task %q: %w", taskID, task.ErrAlreadyRunning)
+	}
+}
+
+// TestRunTask_AlreadyRunningSentinel_IsSafeNoOp proves the documented
+// contract ("Calling this on an already-running task is a safe no-op
+// returning the existing session") is TRUE for a caller that lost the start
+// race: the dispatcher's typed already-running sentinel must come back as a
+// SUCCESS result carrying the bound session id, and — critically — the
+// loser must NOT revert the pre-stamped in_progress status of the winner's
+// live run (the revert-on-loser regression this fix closes). Red on the
+// pre-fix code, which returned an error and reverted status+StartedAt.
+func TestRunTask_AlreadyRunningSentinel_IsSafeNoOp(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedStandaloneTask(t, store, task.StatusNext, "worker")
+	// Seed the winner's already-bound session: a task whose start is in
+	// flight under another caller carries a session id on the record.
+	sid := "sess-existing"
+	_, err := store.Update(tk.ID, task.Patch{SessionID: &sid})
+	if err != nil {
+		t.Fatalf("seed session id: %v", err)
+	}
+
+	tool := NewTaskRunTool(store)
+	tool.SetStartTaskNow(alreadyRunningDispatcher(tk.ID))
+
+	res := tool.Execute(context.Background(), map[string]any{"task_id": tk.ID})
+	if res.IsError {
+		t.Fatalf("an already-running start must be a safe no-op, not an error: %s", res.ForLLM)
+	}
+
+	var out struct {
+		TaskID    string `json:"task_id"`
+		Status    string `json:"status"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal([]byte(res.ForLLM), &out); err != nil {
+		t.Fatalf("parse result %q: %v", res.ForLLM, err)
+	}
+	if out.Status != string(task.StatusInProgress) {
+		t.Errorf("status = %q, want in_progress", out.Status)
+	}
+	if out.SessionID != "sess-existing" {
+		t.Errorf("session_id = %q, want the existing bound session sess-existing", out.SessionID)
+	}
+
+	// The winner's live run state must be intact: no revert of status and no
+	// StartedAt wipe.
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.Status != task.StatusInProgress {
+		t.Errorf("status = %q after already-running no-op, want in_progress (no revert)", got.Status)
+	}
+	if got.StartedAt == "" {
+		t.Error("StartedAt must survive the no-op (loser must not wipe the winner's stamp)")
+	}
+}
+
+// TestRunTask_InProgressBranch_AlreadyRunningSentinel_NoOp proves the
+// in_progress re-dispatch branch treats the dispatcher's already-running
+// sentinel as the documented safe no-op (success with the existing session),
+// not as "could not confirm running task". Red on the pre-fix code, which
+// surfaced the loser error.
+func TestRunTask_InProgressBranch_AlreadyRunningSentinel_NoOp(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedStandaloneTask(t, store, task.StatusInProgress, "worker")
+	// Seed the live run's bound session (a live run holds one).
+	sid := "sess-existing"
+	_, err := store.Update(tk.ID, task.Patch{SessionID: &sid})
+	if err != nil {
+		t.Fatalf("seed session id: %v", err)
+	}
+
+	tool := NewTaskRunTool(store)
+	tool.SetStartTaskNow(alreadyRunningDispatcher(tk.ID))
+
+	res := tool.Execute(context.Background(), map[string]any{"task_id": tk.ID})
+	if res.IsError {
+		t.Fatalf("already-running re-dispatch must be a safe no-op, not an error: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "sess-existing") {
+		t.Errorf("result must carry the existing session id, got: %s", res.ForLLM)
+	}
+
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.Status != task.StatusInProgress {
+		t.Errorf("status = %q after no-op, want in_progress (no revert)", got.Status)
 	}
 }
 
