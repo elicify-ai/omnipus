@@ -1005,6 +1005,14 @@ func taskOperatorFixText(cause operatorFixCause, agentName, provider, model stri
 	case operatorFixWorkDirUnavailable:
 		return lead + "the working folder for " + agent + " could not be opened. " +
 			"Check that the disk has space and the folder is writable" + rerun
+	case operatorFixQuotaBilling:
+		return lead + agent + "'s provider account is out of credit. Top up the account or assign the agent a provider with credit" + rerun
+	case operatorFixModelRetired:
+		subject := "the agent's model"
+		if model != "" {
+			subject = "the model " + model
+		}
+		return lead + subject + " has been withdrawn. Pick a new model in the agent's settings" + rerun
 	}
 	return lead + "a setting needs an operator's attention. Check the run transcript for which one" + rerun
 }

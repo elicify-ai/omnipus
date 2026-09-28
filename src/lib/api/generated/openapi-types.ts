@@ -193,7 +193,7 @@ export interface paths {
         };
         /**
          * List configurable search and voice-input integration providers
-         * @description Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+         * @description Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. ADR-096: the response also carries the resolved web-search roles (default_search, fallback_search) and each search row reports usable and its fallback flags, built from post-reload state. Requires authentication.
          */
         get: operations["getIntegrationProviders"];
         put?: never;
@@ -214,7 +214,7 @@ export interface paths {
         get?: never;
         /**
          * Configure a search or voice-input integration provider
-         * @description Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
+         * @description Stores an API key and/or assigns the provider its role (FR-12.1). ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none ("No fallback"), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 ("needs an API key"). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
          */
         put: operations["updateIntegrationProvider"];
         post?: never;
@@ -10287,13 +10287,14 @@ export interface components {
              */
             expires_in: number;
         };
-        /** @description A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available. */
+        /** @description A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available. ADR-096: search rows additionally carry the provider's resolved web-search roles — default vs fallback — and its usability, and id is an enum derived from the single search-provider catalogue (FR-035). Voice rows keep today's shape: they report active only and leave the search-role fields unset. */
         IntegrationProvider: {
             /**
-             * @description Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
+             * @description Provider identifier, from the single integration catalogue — not free-form. The search ids (brave, tavily, perplexity, duckduckgo, searxng, glm, baidu, exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids (elevenlabs, groq, audio-model) are listed so voice rows stay valid under this shared schema. searxng appears as a default only on installs whose configuration already resolved to it (ADR-096 D10).
              * @example brave
+             * @enum {string}
              */
-            id: string;
+            id: "brave" | "tavily" | "perplexity" | "duckduckgo" | "searxng" | "glm" | "baidu" | "exa" | "elevenlabs" | "groq" | "audio-model";
             /**
              * @description Whether this provider supplies web search or voice-input transcription.
              * @example search
@@ -10306,7 +10307,7 @@ export interface components {
              */
             display_name: string;
             /**
-             * @description True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+             * @description Search rows: true when this provider's credential entry resolves in the credential store (the vault test, ADR-096 D13) — and, for the keyless rows, when their prerequisite holds (duckduckgo always; searxng when base_url is set). It says nothing about runtime usability: a configured provider can still be switched off or fail to have its key reach search. For whether search can use the provider right now, see usable. Voice rows: true when the provider's credential resolves; audio-model when voice.model_name is set.
              * @example true
              */
             configured: boolean;
@@ -10316,19 +10317,34 @@ export interface components {
              */
             requires_key: boolean;
             /**
-             * @description True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
+             * @description True when this provider is the one currently selected for its kind. Voice rows: unchanged — the active transcriber. Search rows: true only when this row is the web-search default (ADR-096 D13 — no longer "whoever the old priority list picked"); kept so an older client still has the field. The Default/Fallback badges are built from default_search, fallback_search and the row's own usable flag instead.
              * @example true
              */
             active?: boolean;
+            /**
+             * @description Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on — or, for SearXNG, switched on with a non-empty base_url. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
+             * @example true
+             */
+            usable?: boolean;
+            /**
+             * @description Search rows only; unset on voice rows. True when this provider is the resolved web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17). True does not by itself mean the provider will be called: a known-but-unusable fallback (R4b) keeps the fallback role and is never called — the payload lists it under not called with its reason.
+             * @example false
+             */
+            fallback?: boolean;
+            /**
+             * @description Search rows only; unset on voice rows. True when this row is the fallback because the stored fallback value is absent and the automatic rule (R3) resolved it to DuckDuckGo — not because the operator picked the fallback radio. Set together with fallback: true.
+             * @example false
+             */
+            fallback_automatic?: boolean;
         };
-        /** @description Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. Defined inline so the search/voice arrays reference the shared IntegrationProvider component (a relative file $ref would inline as anonymous structs). */
+        /** @description Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. ADR-096: search rows additionally carry the resolved web-search roles — the default, the resolved fallback, and each row's usability. Defined inline so the search/voice arrays reference the shared IntegrationProvider component (a relative file $ref would inline as anonymous structs). */
         IntegrationProvidersResponse: {
             /** @description Configurable web-search providers. */
             search: components["schemas"]["IntegrationProvider"][];
             /** @description Configurable voice-input transcription providers. */
             voice: components["schemas"]["IntegrationProvider"][];
             /**
-             * @description id of the currently active search provider, when one is selected.
+             * @description id of the currently active search provider, when one is selected. ADR-096: for search rows this mirrors default_search — kept so an older client still has the field.
              * @example brave
              */
             active_search?: string;
@@ -10337,8 +10353,28 @@ export interface components {
              * @example elevenlabs
              */
             active_voice?: string;
+            /**
+             * @description id of the web-search default — the provider tried first (ADR-096 D4). Absent when the roles are not yet decided (the migration has not run, e.g. it deferred on an ambiguous install).
+             * @example tavily
+             */
+            default_search?: string;
+            /**
+             * @description id of the resolved web-search fallback, or null when there is none ("No fallback", or the stored value is absent with no automatic fallback). Absent when the roles are not yet decided.
+             * @example duckduckgo
+             */
+            fallback_search?: string | null;
+            /**
+             * @description Present only when the stored fallback was ignored at resolution time; value `same_as_default` when the stored fallback names the default and the R5 rule healed the file's interpretation without a write (ADR-096 D4 R5).
+             * @example same_as_default
+             */
+            fallback_ignored_reason?: string;
+            /**
+             * @description True when the active model's native search is in effect (prefer_native is set and the active provider reports native search). The search group's role settings are then not deciding who answers, and the UI must state that and name no provider as the answerer (ADR-096 D19, FR-031). WS-CX lane addition: FR-031/test 52 require this state on the payload but the spec's Contract shape section does not define it.
+             * @example false
+             */
+            native_search_in_effect?: boolean;
         };
-        /** @description Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6). */
+        /** @description Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role — and the PUT makes its writes live in the same request by triggering a config reload before it responds; the response is built from post-reload state (FR-033). Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6). */
         IntegrationProviderUpdateRequest: {
             /**
              * @description Whether this provider is a search engine or a voice transcriber.
@@ -10347,15 +10383,20 @@ export interface components {
              */
             kind: "search" | "voice";
             /**
-             * @description API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider.
+             * @description API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider. Storing a key alone (with no role fields in the same request) changes no role (ADR-096 D18 / AC-15).
              * @example BSA-abc123
              */
             api_key?: string;
             /**
-             * @description When true, select this provider as the active one for its kind.
+             * @description Assign the default role. Search: make this provider the web-search default (tried first; it also switches the provider on, and never deletes another provider's key reference — ADR-096 FR-005). Voice: make this provider the active transcriber — behaviour unchanged (ADR-096 D19-neutral voice rule). An explicit false is rejected with 400: roles are moved by setting another provider active, they are not unset (ADR-096 D18 — a silently accepted no-op is how a UI comes to lie).
              * @example true
              */
             active?: boolean;
+            /**
+             * @description Assign the fallback role. Search only; a fallback field on a voice request is rejected with 400. Search, true: make this provider the web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17). Rejected with 400 when this id is also the default in the same request, or is the stored default — a provider cannot fall back to itself (ADR-096 FR-006 / R5's save rule). Search, false: set the fallback to none ("No fallback"), regardless of which provider id is addressed — an explicit none is a choice, and is never flipped when the default changes (ADR-096 D4). An explicit false on a voice request is rejected with 400 for the same reason an explicit false active is.
+             * @example true
+             */
+            fallback?: boolean;
         };
         /** @description Response from POST /api/v1/voice/transcribe. Returns the text transcribed from an uploaded audio clip by the active Transcriber (FR-12.1, composer mic). 503 when no transcriber is configured. */
         TranscribeResponse: {

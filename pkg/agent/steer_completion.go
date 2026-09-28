@@ -236,12 +236,12 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 }
 
 // completionFinalAlreadyStored reports whether this generation's terminal
-// result already exists in the parent's durable inbox, acknowledged or not.
-// A previous attempt can complete Deliver (including the parent wake) and
-// then fail the lifecycle write. Retrying Deliver would deliberately re-wake
-// an unacknowledged duplicate, so a later attempt skips delivery and retries
-// only the terminal write. The generation-bound id keeps a revived session's
-// newer final independent from an older attempt.
+// result exists in the parent's durable inbox AND has been acknowledged.
+// Existence alone proves only that Deliver's append ran; it does not prove the
+// parent wake was queued. An unacknowledged final must therefore re-enter
+// Deliver, whose deterministic id deduplicates storage while retrying the
+// wake. The generation-bound id keeps a revived session's newer final
+// independent from an older attempt.
 func (al *AgentLoop) completionFinalAlreadyStored(rec *session.LifecycleRecord, outcome steer.Outcome) (bool, error) {
 	if !isTerminalOutcome(outcome) {
 		return false, nil
@@ -258,7 +258,11 @@ func (al *AgentLoop) completionFinalAlreadyStored(rec *session.LifecycleRecord, 
 	wantID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
 	for _, entry := range entries {
 		if entry.Kind == session.InboxEntryMessage && entry.Message != nil && messageIDOf(*entry.Message) == wantID {
-			return true, nil
+			acked, ackedErr := deliverEntryIsAcked(inbox, ownerKey, rec.SessionID, wantID)
+			if ackedErr != nil {
+				return false, fmt.Errorf("steer: complete: inspect final acknowledgement %q: %w", wantID, ackedErr)
+			}
+			return acked, nil
 		}
 	}
 	return false, nil
