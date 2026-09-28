@@ -28,8 +28,11 @@ const (
 	SteeringOneAtATime SteeringMode = "one-at-a-time"
 	// SteeringAll drains the entire queue in a single poll.
 	SteeringAll SteeringMode = "all"
-	// MaxQueueSize number of possible messages in the Steering Queue
-	MaxQueueSize = 10
+	// MaxQueueSize bounds ordinary steer messages against a runaway producer.
+	// It matches the durable inbox's 200-entry retention tail so anything
+	// admitted here remains recoverable there. Upward completion wakes are
+	// control flow and deliberately bypass this cap.
+	MaxQueueSize = 200
 	// manualSteeringScope is the legacy fallback queue used when no active
 	// turn/session scope is available.
 	manualSteeringScope = "__manual__"
@@ -102,7 +105,7 @@ func (sq *steeringQueue) pushItemScope(scope string, item steeringQueueItem) err
 
 	scope = normalizeSteeringScope(scope)
 	queue := sq.queues[scope]
-	if len(queue) >= MaxQueueSize {
+	if item.wake == nil && len(queue) >= MaxQueueSize {
 		return fmt.Errorf("steering queue is full")
 	}
 	sq.queues[scope] = append(queue, item)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -331,6 +332,10 @@ func TestGoal984_DeliveredFinalRetriesTerminalWriteWithoutSecondWake(t *testing.
 	if err := os.Rename(backupPath, lifecyclePath); err != nil {
 		t.Fatalf("restore lifecycle record: %v", err)
 	}
+	wantID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
+	if ackErr := al.GetMessageInboxStore().Ack(parentID, []string{wantID}); ackErr != nil {
+		t.Fatalf("ack consumed final before retry: %v", ackErr)
+	}
 
 	if secondErr := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "finished"}, nil); secondErr != nil {
 		t.Fatalf("retry completion: %v", secondErr)
@@ -339,13 +344,68 @@ func TestGoal984_DeliveredFinalRetriesTerminalWriteWithoutSecondWake(t *testing.
 	wakeMu.Lock()
 	gotWakeIDs := append([]string(nil), wakeIDs...)
 	wakeMu.Unlock()
-	wantID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
 	if len(gotWakeIDs) != 1 || gotWakeIDs[0] != wantID {
 		t.Fatalf("parent wakes = %v, want exactly one deterministic final wake %q across both attempts", gotWakeIDs, wantID)
 	}
 	got, err := lifecycle.Load(child.SessionID)
 	if err != nil {
 		t.Fatalf("Load(child after retry): %v", err)
+	}
+	if got.State != session.LifecycleCompleted {
+		t.Fatalf("child state after retry = %q, want %q", got.State, session.LifecycleCompleted)
+	}
+}
+
+func TestGoal1000_UnackedStoredFinalWithoutWakeRedeliversIntoFullLiveQueue(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	wireSteerCompletionDeps(t, al)
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	child := launchRunningChild(t, al, parentID, "call-n1-unacked-redelivery")
+	inbox := al.GetMessageInboxStore()
+
+	// Reproduce the durable state left by the round-5 failure: Deliver stored
+	// the deterministic final, but the old ten-item cap refused its live-turn
+	// wake. The retry must not mistake entry existence for successful waking.
+	message, messageErr := al.completionMessage(child, steer.OutcomeFinalAnswer, "finished", "")
+	if messageErr != nil {
+		t.Fatalf("completionMessage: %v", messageErr)
+	}
+	wantID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
+	message, messageErr = withDeterministicMessageID(message, wantID)
+	if messageErr != nil {
+		t.Fatalf("stamp deterministic final id: %v", messageErr)
+	}
+	if _, appendErr := inbox.Append(parentID, message); appendErr != nil {
+		t.Fatalf("append stored final: %v", appendErr)
+	}
+
+	full := make([]steeringQueueItem, MaxQueueSize)
+	for i := range full {
+		full[i] = steeringQueueItem{message: providers.Message{Role: "user", Content: fmt.Sprintf("ordinary-%03d", i)}}
+	}
+	al.steering.mu.Lock()
+	al.steering.queues[parentID] = full
+	al.steering.mu.Unlock()
+	al.activeTurnStates.Store(parentID, &turnState{sessionKey: parentID})
+	t.Cleanup(func() { al.activeTurnStates.Delete(parentID) })
+
+	if completeErr := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "finished"}, nil); completeErr != nil {
+		t.Fatalf("retry completion: %v", completeErr)
+	}
+
+	al.steering.mu.Lock()
+	items := append([]steeringQueueItem(nil), al.steering.queues[parentID]...)
+	al.steering.mu.Unlock()
+	if len(items) != MaxQueueSize+1 {
+		t.Fatalf("queue length after retry = %d, want %d (stored final was not re-woken)", len(items), MaxQueueSize+1)
+	}
+	if gotWake := items[len(items)-1].wake; gotWake == nil || gotWake.messageID != wantID {
+		t.Fatalf("retry wake = %+v, want message id %q", gotWake, wantID)
+	}
+	got, loadErr := al.GetSessionLifecycleStore().Load(child.SessionID)
+	if loadErr != nil {
+		t.Fatalf("Load(child after retry): %v", loadErr)
 	}
 	if got.State != session.LifecycleCompleted {
 		t.Fatalf("child state after retry = %q, want %q", got.State, session.LifecycleCompleted)
