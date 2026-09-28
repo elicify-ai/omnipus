@@ -50,6 +50,7 @@ var LLMErrorCodes = []string{
 	"request_too_large",
 	"provider_auth_failed",
 	"rate_limited",
+	"quota_billing",
 	"network",
 	"provider_stalled",
 	"content_policy",
@@ -60,6 +61,7 @@ var LLMErrorCodes = []string{
 	"agent_not_configured",
 	"workspace_unavailable",
 	"model_unavailable",
+	"model_retired",
 	"needs_provider",
 	"model_unassigned",
 	"turn_canceled",
@@ -78,6 +80,7 @@ var LLMErrorUserMessages = map[string]string{
 	"request_too_large":      "We built a request that was too large for this model to accept. Try shortening your message, or switch to a model with a larger limit.",
 	"provider_auth_failed":   "The model provider rejected our credentials. Check this provider’s API key in Settings.",
 	"rate_limited":           "The model provider is temporarily overloaded. Wait a moment, then retry.",
+	"quota_billing":          "The model provider says your account is out of credit.",
 	"network":                "We couldn’t reach the model provider. Check your internet connection and retry.",
 	"provider_stalled":       "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details.",
 	"content_policy":         "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content.",
@@ -88,6 +91,7 @@ var LLMErrorUserMessages = map[string]string{
 	"agent_not_configured":   "This agent isn’t on any workspace yet, so it has nowhere to work. Add it to a workspace team to get started.",
 	"workspace_unavailable":  "This agent’s working folder could not be opened. Check that the disk has space and the folder is writable.",
 	"model_unavailable":      "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings.",
+	"model_retired":          "This model is no longer offered by its provider. Pick a new model in the agent's settings.",
 	"needs_provider":         "Your sign-in for this provider expired. Sign in again under Settings → Providers.",
 	"model_unassigned":       "This agent has no model. Pick one in the agent's settings.",
 	"turn_canceled":          "This turn was stopped before it finished.",
@@ -106,6 +110,7 @@ var LLMErrorUserAttributions = map[string]LLMErrorAttribution{
 	"request_too_large":      LLMErrorAttributionProduct,
 	"provider_auth_failed":   LLMErrorAttributionConfig,
 	"rate_limited":           LLMErrorAttributionProvider,
+	"quota_billing":          LLMErrorAttributionConfig,
 	"network":                LLMErrorAttributionAmbiguous,
 	"provider_stalled":       LLMErrorAttributionProvider,
 	"content_policy":         LLMErrorAttributionProvider,
@@ -116,6 +121,7 @@ var LLMErrorUserAttributions = map[string]LLMErrorAttribution{
 	"agent_not_configured":   LLMErrorAttributionConfig,
 	"workspace_unavailable":  LLMErrorAttributionConfig,
 	"model_unavailable":      LLMErrorAttributionConfig,
+	"model_retired":          LLMErrorAttributionConfig,
 	"needs_provider":         LLMErrorAttributionUser,
 	"model_unassigned":       LLMErrorAttributionConfig,
 	"turn_canceled":          LLMErrorAttributionUser,
@@ -124,4 +130,16 @@ var LLMErrorUserAttributions = map[string]LLMErrorAttribution{
 	"context_unrecoverable":  LLMErrorAttributionProduct,
 	"context_window_unknown": LLMErrorAttributionConfig,
 	"unknown":                LLMErrorAttributionUnknown,
+}
+
+// LLMErrorProviderMessages maps the codes that carry a templated variant to
+// that variant (provider-messages spec §6, OBS-002). A code absent from this
+// map has no template — the catalogue message is the only copy. Slots come
+// from the closed vocabulary enforced above; the TypeScript half is
+// llmErrorProviderMessages in src/lib/api/generated/llm-error-messages.ts.
+var LLMErrorProviderMessages = map[string]string{
+	"provider_auth_failed": "{provider} rejected the API key. Check the key in Settings → Providers.",
+	"rate_limited":         "{provider} is busy right now. You can retry the turn.",
+	"quota_billing":        "{provider} says your account is out of credit.",
+	"model_retired":        "This model is no longer offered by {provider}. Pick a new model in the agent's settings.",
 }

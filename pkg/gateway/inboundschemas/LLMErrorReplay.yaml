@@ -49,6 +49,17 @@ x-user-message-attributions:
 # There is deliberately NO blanket "From the model:" prefix: attribution is
 # written into each sentence instead, so the copy stays readable and each
 # message names the real owner of the fault.
+#
+# ── Templated provider variants (provider-messages spec §6, OBS-002) ──────────
+# Kept in lockstep with contracts/components/schemas/LLMError.yaml (see that
+# file's comment for the full mechanism): an entry MAY carry an optional sibling
+# `provider_message` string — the templated sentence the agent assembles at the
+# emit site when the failing attempt's facts are present (C-16); the plain
+# `message` above is the facts-absent fallback. Slots come from the CLOSED
+# vocabulary {provider} {model} {attempt} {max} {countdown} {answered_model}
+# {unavailable_model}; both generators hard-fail on any other slot and on a
+# template with unbalanced braces. Emitted into BOTH catalogues
+# (LLMErrorProviderMessages / llmErrorProviderMessages) — never hand-written.
 x-user-messages:
   media_unsupported:
     message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
@@ -62,9 +73,23 @@ x-user-messages:
   provider_auth_failed:
     message: "The model provider rejected our credentials. Check this provider’s API key in Settings."
     attribution: config
+    # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
+    provider_message: "{provider} rejected the API key. Check the key in Settings → Providers."
   rate_limited:
     message: "The model provider is temporarily overloaded. Wait a moment, then retry."
     attribution: provider
+    # Kept in lockstep with contracts/components/schemas/LLMError.yaml. This is
+    # the TERMINAL line's template (§6); the live countdown line is
+    # client-assembled from the provider_retry frame, never a server template.
+    provider_message: "{provider} is busy right now. You can retry the turn."
+  quota_billing:
+    # provider-messages spec §7.1/D15: attribution config is FINAL (no placeholder).
+    # Facts-absent sentence follows the house "The model provider…" pattern; the
+    # templated variant substitutes the failing attempt's provider (C-16). Copy
+    # carries no button, no link (D6).
+    message: "The model provider says your account is out of credit."
+    attribution: config
+    provider_message: "{provider} says your account is out of credit."
   network:
     message: "We couldn’t reach the model provider. Check your internet connection and retry."
     attribution: ambiguous
@@ -96,6 +121,12 @@ x-user-messages:
   model_unavailable:
     message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
     attribution: config
+  model_retired:
+    # Kept in lockstep with contracts/components/schemas/LLMError.yaml (D9/D11:
+    # provider retired the configured model DURING a real call, C-24 trigger).
+    message: "This model is no longer offered by its provider. Pick a new model in the agent's settings."
+    attribution: config
+    provider_message: "This model is no longer offered by {provider}. Pick a new model in the agent's settings."
   needs_provider:
     # ADR-068 FR-046 (2026-08-23 §8b, T068-32) — kept in lockstep with
     # contracts/components/schemas/LLMError.yaml; see that file's comment.
@@ -131,6 +162,7 @@ properties:
       - request_too_large
       - provider_auth_failed
       - rate_limited
+      - quota_billing
       - network
       - provider_stalled
       - content_policy
@@ -141,6 +173,7 @@ properties:
       - agent_not_configured
       - workspace_unavailable
       - model_unavailable
+      - model_retired
       - needs_provider
       - model_unassigned
       - turn_canceled
@@ -155,3 +188,12 @@ properties:
     maxLength: 4096
   retryable:
     type: boolean
+  provider_message:
+    type: boolean
+    description: >-
+      Server-authored subtype/trust flag (MAJ-104, C-14), replay twin of the
+      live LLMError flag: when true, `message` carries the persisted
+      provider-message sentence and the SPA renders it after reload; when
+      absent or false, catalogue copy keyed on `code`, byte-identical to today
+      (RG-2). No `facts` object on the replay shape (§7.1 item 3 — the persisted
+      message itself carries the provider naming, C-13).

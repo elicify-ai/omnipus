@@ -339,6 +339,10 @@ func TestClassifyOperatorOnlyTurnError(t *testing.T) {
 		{"agent_not_on_workspace", fmt.Errorf("resolve: %w", ErrAgentNotWorkspaceMember), CodeAgentNotConfigured, operatorFixAgentNotOnWorkspace},
 		{"work_dir_unavailable", fmt.Errorf("resolve: %w", ErrWorkspaceWorkDirUnavailable), CodeWorkspaceUnavailable, operatorFixWorkDirUnavailable},
 		{"agent_home_unavailable", fmt.Errorf("resolve: %w", ErrAgentHomeUnavailable), CodeWorkspaceUnavailable, operatorFixWorkDirUnavailable},
+		// Gate finding F2: the two Section-7 quota_billing / model_retired causes
+		// were classified but worded by NEITHER consumer before this fix.
+		{"quota_billing_402", &common.ProviderError{Status: 402, Body: "payment required"}, CodeQuotaBilling, operatorFixQuotaBilling},
+		{"model_retired_404", &common.ProviderError{Status: 404, Body: "This model has been decommissioned"}, CodeModelRetired, operatorFixModelRetired},
 
 		{"rate_limited_429", &providers.FailoverError{Reason: providers.FailoverRateLimit, Status: 429, Wrapped: errors.New("slow down")}, CodeRateLimited, operatorFixNone},
 		{"outage_503", &common.ProviderError{Status: 503, Body: "unavailable"}, CodeNetwork, operatorFixNone},
@@ -381,6 +385,12 @@ func TestJudgeDispatchNeedsOperator_WordsEachCauseForTheJudge(t *testing.T) {
 			"the Judge agent is not on any workspace team; add it to one"},
 		{fmt.Errorf("x: %w", ErrAgentHomeUnavailable),
 			"the Judge's working folder could not be opened; check that the disk has space and the folder is writable"},
+		// Gate finding F2: the Judge words the two Section-7 operator-only
+		// causes instead of retrying them (D15: needsOperator=true at once).
+		{&common.ProviderError{Status: 402, Body: "payment required"},
+			"the Judge's provider account is out of credit; top up the account or give the Judge agent a provider with credit"},
+		{&common.ProviderError{Status: 404, Body: "This model has been decommissioned"},
+			"the Judge's model has been withdrawn; pick a new model on the Judge agent"},
 	}
 	for _, tc := range cases {
 		_, msg, needs := judgeDispatchNeedsOperator(tc.err)
@@ -395,17 +405,35 @@ func TestJudgeDispatchNeedsOperator_WordsEachCauseForTheJudge(t *testing.T) {
 
 // TestTaskOperatorFixText_NamesTheFixForEveryCause: every operator-only cause
 // renders a plain reason that says the task could not run, names what to
-// change, and ends by telling the operator to run the task again.
+// change, and ends by telling the operator to run the task again. Gate
+// finding F2: the cause list used to be a hand-written map that could
+// silently miss a new enum member; it now iterates the REAL enum and the
+// default case fails for any unpinned member.
 func TestTaskOperatorFixText_NamesTheFixForEveryCause(t *testing.T) {
-	for cause, fix := range map[operatorFixCause]string{
-		operatorFixCredentialsRejected:   "Settings → Providers",
-		operatorFixSignInExpired:         "Settings → Providers",
-		operatorFixProviderNotConfigured: "Settings → Providers",
-		operatorFixModelUnassigned:       "agent's settings",
-		operatorFixContextWindowUnknown:  "Settings → Models → Model overrides → Context length",
-		operatorFixAgentNotOnWorkspace:   "workspace team",
-		operatorFixWorkDirUnavailable:    "disk has space",
-	} {
+	for cause := operatorFixCredentialsRejected; cause <= operatorFixModelRetired; cause++ {
+		var fix string
+		switch cause {
+		case operatorFixCredentialsRejected:
+			fix = "Settings → Providers"
+		case operatorFixSignInExpired:
+			fix = "Settings → Providers"
+		case operatorFixProviderNotConfigured:
+			fix = "Settings → Providers"
+		case operatorFixModelUnassigned:
+			fix = "agent's settings"
+		case operatorFixContextWindowUnknown:
+			fix = "Settings → Models → Model overrides → Context length"
+		case operatorFixAgentNotOnWorkspace:
+			fix = "workspace team"
+		case operatorFixWorkDirUnavailable:
+			fix = "disk has space"
+		case operatorFixQuotaBilling:
+			fix = "out of credit"
+		case operatorFixModelRetired:
+			fix = "Pick a new model in the agent's settings"
+		default:
+			t.Fatalf("unpinned fix for cause %d - extend this switch when the enum grows", cause)
+		}
 		for _, names := range [][3]string{{"Native Agent", "acme-llm", "test-model"}, {"", "", ""}} {
 			got := taskOperatorFixText(cause, names[0], names[1], names[2])
 			if !strings.HasPrefix(got, "The task could not run: ") || !strings.Contains(got, fix) ||

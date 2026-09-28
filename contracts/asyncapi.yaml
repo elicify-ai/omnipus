@@ -87,6 +87,12 @@ channels:
         $ref: '#/components/messages/ReplayErrorFrame'
       RateLimitFrame:
         $ref: '#/components/messages/RateLimitFrame'
+      ProviderRetryFrame:
+        $ref: '#/components/messages/ProviderRetryFrame'
+      ProviderFallbackFrame:
+        $ref: '#/components/messages/ProviderFallbackFrame'
+      ProviderFallbackNote:
+        $ref: '#/components/messages/ProviderFallbackNote'
       MediaFrame:
         $ref: '#/components/messages/MediaFrame'
       AgentSwitchedFrame:
@@ -1162,6 +1168,27 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/RateLimitFrame'
+    ProviderRetryFrame:
+      name: ProviderRetryFrame
+      title: provider_retry
+      summary: Automatic provider rate-limit retry scheduled (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ProviderRetryFrame'
+    ProviderFallbackFrame:
+      name: ProviderFallbackFrame
+      title: provider_fallback
+      summary: Turn answered by the fallback model (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ProviderFallbackFrame'
+    ProviderFallbackNote:
+      name: ProviderFallbackNote
+      title: replay_provider_fallback
+      summary: Replay of a persisted fallback-model note (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ProviderFallbackNote'
     MediaFrame:
       name: MediaFrame
       title: media
@@ -1530,7 +1557,10 @@ components:
       - task_run_status
       - replay_message
       - replay_error
+      - replay_provider_fallback
       - rate_limit
+      - provider_retry
+      - provider_fallback
       - media
       - agent_switched
       - tool_approval_required
@@ -2077,6 +2107,18 @@ components:
       # There is deliberately NO blanket "From the model:" prefix: attribution is
       # written into each sentence instead, so the copy stays readable and each
       # message names the real owner of the fault.
+      #
+      # ── Templated provider variants (provider-messages spec §6, OBS-002) ──────────────
+      # An entry MAY carry an optional sibling `provider_message` string: the
+      # templated sentence the agent assembles at the emit site when the failing
+      # attempt's facts (provider/model) are present (C-16); when facts are absent
+      # the plain `message` above is the fallback — never a blank. Slots come from
+      # the CLOSED vocabulary {provider} {model} {attempt} {max} {countdown}
+      # {answered_model} {unavailable_model}; both generators hard-fail on any other
+      # slot and on a template with unbalanced braces. The templates are emitted
+      # into BOTH catalogues (LLMErrorProviderMessages in Go, llmErrorProviderMessages
+      # in TS) — never hand-written in consumer code.
+      # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
       x-user-messages:
         media_unsupported:
           message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
@@ -2090,9 +2132,25 @@ components:
         provider_auth_failed:
           message: "The model provider rejected our credentials. Check this provider’s API key in Settings."
           attribution: config
+          # provider-messages spec §6: templated variant names the failing attempt's
+          # provider (C-16); the plain message above is the facts-absent fallback.
+          provider_message: "{provider} rejected the API key. Check the key in Settings → Providers."
         rate_limited:
           message: "The model provider is temporarily overloaded. Wait a moment, then retry."
           attribution: provider
+          # provider-messages spec §6 (terminal row): the server-assembled line for the
+          # facts-present turn-end display. The LIVE retry/countdown line is assembled
+          # client-side from the provider_retry frame and is deliberately NOT a server
+          # template (§6 mechanics, C-15).
+          provider_message: "{provider} is busy right now. You can retry the turn."
+        quota_billing:
+          # provider-messages spec §7.1/D15: attribution config is FINAL (no placeholder).
+          # Facts-absent sentence follows the house "The model provider…" pattern; the
+          # templated variant substitutes the failing attempt's provider (C-16). Copy
+          # carries no button, no link (D6).
+          message: "The model provider says your account is out of credit."
+          attribution: config
+          provider_message: "{provider} says your account is out of credit."
         network:
           message: "We couldn’t reach the model provider. Check your internet connection and retry."
           attribution: ambiguous
@@ -2124,6 +2182,15 @@ components:
         model_unavailable:
           message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
           attribution: config
+        model_retired:
+          # provider-messages spec D9/D11: a provider retired or refused the configured
+          # model DURING a real call (C-24 trigger). Never shares model_unavailable's
+          # mid-session switch-failure meaning. attribution config (D15) — the
+          # facts-absent sentence replaces {provider} with "its provider" (the exact
+          # text §6 requires the catalogue to carry for facts-absent renders).
+          message: "This model is no longer offered by its provider. Pick a new model in the agent's settings."
+          attribution: config
+          provider_message: "This model is no longer offered by {provider}. Pick a new model in the agent's settings."
         needs_provider:
           # ADR-068 FR-046 (2026-08-23 §8b, T068-32) — kept in lockstep with
           # contracts/components/schemas/LLMError.yaml; see that file's comment.
@@ -2159,6 +2226,7 @@ components:
             - request_too_large
             - provider_auth_failed
             - rate_limited
+            - quota_billing
             - network
             - provider_stalled
             - content_policy
@@ -2169,6 +2237,7 @@ components:
             - agent_not_configured
             - workspace_unavailable
             - model_unavailable
+            - model_retired
             - needs_provider
             - model_unassigned
             - turn_canceled
@@ -2187,6 +2256,43 @@ components:
           type: string
           maxLength: 2048
           description: Live-only technical detail; never persisted or replayed.
+        facts:
+          type: object
+          additionalProperties: false
+          description: >-
+            Structured facts about the FAILING attempt, assembled server-side
+            (provider-messages spec §7.1 item 1). All fields optional — facts absent
+            means the catalogue sentence renders. Deliberately closed to
+            provider/model/request_id ONLY — no retry_after_seconds, no retry_at, no
+            attempts, no max_attempts (OBS-103 — the SPA has no consumer for retry
+            facts on the error frame; retry timing lives on the provider_retry frame,
+            whose consumer is the indicator), no billing_url (D6), no error_id (no
+            fetch path — §5/D1).
+          properties:
+            provider:
+              type: string
+              maxLength: 256
+              description: Catalog display name of the provider of the FAILING attempt (C-16) — never unconditionally the primary.
+            model:
+              type: string
+              maxLength: 256
+              description: Model id of the failing attempt (C-16).
+            request_id:
+              type: string
+              maxLength: 256
+              description: >-
+                Provider request id (x-request-id / request-id / x-amzn-requestid /
+                cf-ray as labelled last resort, OBS-003). VERBOSE-RENDER-ONLY (C-20,
+                PM-2) — renders only under Verbose chat, never to a non-Verbose viewer.
+        provider_message:
+          type: boolean
+          description: >-
+            Server-authored subtype/trust flag (MAJ-104, C-14) — when true, `message`
+            carries the server-assembled provider-message sentence and the SPA renders
+            it; when absent or false, the SPA keeps today's catalogue-copy rendering
+            keyed on `code` (e.g. the own-limiter's internal rate_limited text — RG-2).
+            Set at write time by the agent's assembly path; the replay shape carries
+            the same flag so a reloaded session renders identically.
     LLMErrorReplay:
       title: LLMErrorReplay
       description: Replay-safe translated provider/LLM error with live-only detail omitted.
@@ -2239,6 +2345,19 @@ components:
       # There is deliberately NO blanket "From the model:" prefix: attribution is
       # written into each sentence instead, so the copy stays readable and each
       # message names the real owner of the fault.
+      #
+      # ── Templated provider variants (provider-messages spec §6, OBS-002) ──────────────
+      # An entry MAY carry an optional sibling `provider_message` string: the
+      # templated sentence the agent assembles at the emit site when the failing
+      # attempt's facts (provider/model) are present (C-16); when facts are absent
+      # the plain `message` above is the fallback — never a blank. Slots come from
+      # the CLOSED vocabulary {provider} {model} {attempt} {max} {countdown}
+      # {answered_model} {unavailable_model}; both generators hard-fail on any other
+      # slot and on a template with unbalanced braces. The templates are emitted
+      # into BOTH catalogues (LLMErrorProviderMessages in Go, llmErrorProviderMessages
+      # in TS) — never hand-written in consumer code.
+      # Kept in lockstep with contracts/components/schemas/LLMError.yaml and
+      # contracts/components/schemas/LLMErrorReplay.yaml.
       x-user-messages:
         media_unsupported:
           message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
@@ -2252,9 +2371,25 @@ components:
         provider_auth_failed:
           message: "The model provider rejected our credentials. Check this provider’s API key in Settings."
           attribution: config
+          # provider-messages spec §6: templated variant names the failing attempt's
+          # provider (C-16); the plain message above is the facts-absent fallback.
+          provider_message: "{provider} rejected the API key. Check the key in Settings → Providers."
         rate_limited:
           message: "The model provider is temporarily overloaded. Wait a moment, then retry."
           attribution: provider
+          # provider-messages spec §6 (terminal row): the server-assembled line for the
+          # facts-present turn-end display. The LIVE retry/countdown line is assembled
+          # client-side from the provider_retry frame and is deliberately NOT a server
+          # template (§6 mechanics, C-15).
+          provider_message: "{provider} is busy right now. You can retry the turn."
+        quota_billing:
+          # provider-messages spec §7.1/D15: attribution config is FINAL (no placeholder).
+          # Facts-absent sentence follows the house "The model provider…" pattern; the
+          # templated variant substitutes the failing attempt's provider (C-16). Copy
+          # carries no button, no link (D6).
+          message: "The model provider says your account is out of credit."
+          attribution: config
+          provider_message: "{provider} says your account is out of credit."
         network:
           message: "We couldn’t reach the model provider. Check your internet connection and retry."
           attribution: ambiguous
@@ -2286,6 +2421,15 @@ components:
         model_unavailable:
           message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
           attribution: config
+        model_retired:
+          # provider-messages spec D9/D11: a provider retired or refused the configured
+          # model DURING a real call (C-24 trigger). Never shares model_unavailable's
+          # mid-session switch-failure meaning. attribution config (D15) — the
+          # facts-absent sentence replaces {provider} with "its provider" (the exact
+          # text §6 requires the catalogue to carry for facts-absent renders).
+          message: "This model is no longer offered by its provider. Pick a new model in the agent's settings."
+          attribution: config
+          provider_message: "This model is no longer offered by {provider}. Pick a new model in the agent's settings."
         needs_provider:
           # ADR-068 FR-046 (2026-08-23 §8b, T068-32) — kept in lockstep with
           # contracts/components/schemas/LLMError.yaml; see that file's comment.
@@ -2321,6 +2465,7 @@ components:
             - request_too_large
             - provider_auth_failed
             - rate_limited
+            - quota_billing
             - network
             - provider_stalled
             - content_policy
@@ -2331,6 +2476,7 @@ components:
             - agent_not_configured
             - workspace_unavailable
             - model_unavailable
+            - model_retired
             - needs_provider
             - model_unassigned
             - turn_canceled
@@ -2345,6 +2491,15 @@ components:
           maxLength: 4096
         retryable:
           type: boolean
+        provider_message:
+          type: boolean
+          description: >-
+            Server-authored subtype/trust flag (MAJ-104, C-14), replay twin of the
+            live LLMError flag — when true, `message` carries the persisted
+            provider-message sentence and the SPA renders it after reload; when
+            absent or false, catalogue copy keyed on `code`, byte-identical to today
+            (RG-2). No `facts` object on the replay shape (§7.1 item 3 — the persisted
+            message itself carries the provider naming, C-13).
     ErrorFrame:
       title: ErrorFrame
       description: 'Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped.
@@ -3532,6 +3687,181 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/RateLimitFrame.yaml.
+    ProviderRetryFrame:
+      title: ProviderRetryFrame
+      description: >
+        Server → client (provider-messages spec §7.1 item 3). Announces an
+        automatic provider rate-limit retry inside the turn's fallback-chain
+        execution — the candidate about to be re-called, when it will be called
+        (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the
+        #711 closure constraint) — built from NAMED FIELDS ONLY, never an
+        `error` field or raw provider text; the countdown is computed from
+        retry_at and sent_at client-side (C-11). Keep in sync by hand with
+        contracts/components/schemas/ProviderRetryFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - turn_id
+      - provider
+      - model
+      - retry_at
+      - retry_after_seconds
+      - sent_at
+      - attempt
+      - max_attempts
+      - error_code
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: provider_retry
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        turn_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        provider:
+          type: string
+          minLength: 1
+          maxLength: 256
+        model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        retry_at:
+          type: string
+          format: date-time
+        retry_after_seconds:
+          type: integer
+          minimum: 1
+        sent_at:
+          type: string
+          format: date-time
+        attempt:
+          type: integer
+          minimum: 2
+        max_attempts:
+          type: integer
+          minimum: 1
+        error_code:
+          type: string
+          maxLength: 64
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/ProviderRetryFrame.yaml.
+    ProviderFallbackFrame:
+      title: ProviderFallbackFrame
+      description: >
+        Server → client (provider-messages spec §7.1 item 3). Announces that a
+        turn was answered by the fallback model because another candidate could
+        not answer — the frame itself does NOT distinguish hard provider trouble
+        from a cooldown skip (that distinction lives only in the once-per-pair
+        note rate and the session transcript, C-18/MIN-103). No raw error text
+        and no `reason` field (OBS-103) — unavailable_code is the one field
+        that varies rendered text (D12 hint gate). Keep in sync by hand with
+        contracts/components/schemas/ProviderFallbackFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - turn_id
+      - answered_model
+      - unavailable_model
+      - unavailable_code
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: provider_fallback
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        turn_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        answered_model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        unavailable_model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        unavailable_code:
+          type: string
+          enum:
+          - rate_limited
+          - model_retired
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/ProviderFallbackFrame.yaml.
+    ProviderFallbackNote:
+      title: ProviderFallbackNote
+      description: >
+        Server → client. Replay carrier for a persisted fallback-model note
+        (provider-messages spec §7.1 item 2, MAJ-010/C-17) — the note is
+        persisted to the session transcript after the assistant answer
+        (MIN-103/FB-2) and must not be a live-only orphan; on session reload
+        the replay path emits this frame so the reloaded session renders the
+        same note. The LIVE announcement is the separate provider_fallback
+        frame. No seq (ReplayErrorFrame/ReplayMessageFrame pattern). Keep in
+        sync by hand with contracts/components/schemas/ProviderFallbackNote.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - entry_id
+      - timestamp
+      - message
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: replay_provider_fallback
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        entry_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        timestamp:
+          type: string
+          format: date-time
+        answered_model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        unavailable_model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        unavailable_code:
+          type: string
+          enum:
+          - rate_limited
+          - model_retired
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4096
     LibraryChangedFrame:
       title: LibraryChangedFrame
       description: >
