@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/config"
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
