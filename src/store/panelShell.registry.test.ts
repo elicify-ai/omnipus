@@ -19,8 +19,8 @@
 // the acceptance gate; if GREEN lands it elsewhere, updating the single
 // MODULE_PATH constant is the whole re-point.
 //
-// Every expected value is spec-derived: titles and expand targets from §1's
-// panel inventory (/library pop-out route; /browser-live?session=&agent=),
+// Every expected value is spec-derived: titles and the SP-38/R11 shared
+// full-screen context codecs (Library workspace + path; Browser session + agent),
 // the beforeLeave rule from §8.1 ("beforeLeave is supplied ONLY by panels
 // with unsaved-edit risk — Library, in wave 1"), the exactly-two rule from
 // SC-002 + §9 wave-1 scope.
@@ -72,30 +72,28 @@ describe('panel registry — wave-1 registrations (§12 #1, SC-002)', () => {
     expect(panels.map((p) => p.id).sort()).toEqual(['browser', 'library'])
   })
 
-  it('library resolves: title "Library", and its expand target names the /library pop-out route (§1 panel inventory)', async () => {
+  it('library resolves: title "Library" and its full-screen codec round-trips workspace plus path (SP-38/R11)', async () => {
     const { panels } = await loadRegistry()
     const library = panels.find((p) => p.id === 'library')
     expect(library).toBeDefined()
     expect(library?.title).toBe('Library')
-    const target = library?.expandTarget({ workspaceId: 'ws-1' })
-    expect(typeof target === 'string' || typeof (target as unknown as { to?: string })?.to === 'string').toBe(
-      true,
-    )
-    const s = typeof target === 'string' ? target : String((target as unknown as { to?: string }).to)
-    expect(s).toContain('/library')
-    expect(s).toContain('ws-1')
+    expect(library?.fullScreen).toBeDefined()
+    const context = { workspaceId: 'ws-1', path: 'Notes/Current.md' }
+    const search = library?.fullScreen.toSearch(context)
+    expect(search).toEqual({ workspace: 'ws-1', path: 'Notes/Current.md' })
+    expect(library?.fullScreen.fromSearch(search ?? {})).toEqual(context)
   })
 
-  it('browser resolves: title "Browser", expand target names /browser-live with session AND agent (§1: /browser-live?session=…&agent=…)', async () => {
+  it('browser resolves: title "Browser" and its full-screen codec round-trips session plus agent (SP-38/R11)', async () => {
     const { panels } = await loadRegistry()
     const browser = panels.find((p) => p.id === 'browser')
     expect(browser).toBeDefined()
     expect(browser?.title).toBe('Browser')
-    const target = browser?.expandTarget({ sessionId: 's1', agentId: 'a1' })
-    const s = typeof target === 'string' ? target : String((target as unknown as { to?: string }).to)
-    expect(s).toContain('/browser-live')
-    expect(s).toContain('session=')
-    expect(s).contains('agent=')
+    expect(browser?.fullScreen).toBeDefined()
+    const context = { sessionId: 's1', agentId: 'a1' }
+    const search = browser?.fullScreen.toSearch(context)
+    expect(search).toEqual({ session: 's1', agent: 'a1' })
+    expect(browser?.fullScreen.fromSearch(search ?? {})).toEqual(context)
   })
 
   it('library carries beforeLeave (the CRIT-001 unsaved-edits guard — §8.1); browser carries NONE (transitions replace it freely)', async () => {
