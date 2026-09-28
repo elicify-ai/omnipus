@@ -281,6 +281,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               key={segment}
               to={`/workspaces/$workspaceId/${segment}`}
               params={{ workspaceId }}
+              tabIndex={0}
               aria-current={isActive ? 'page' : undefined}
               aria-label={label}
               data-testid={`workspace-tab-${segment}`}

@@ -1,4 +1,4 @@
-export type PanelIdentity = {
+export type PanelIdentity = { // not-wire-format: SPA-local panel identity shared only between same-origin browser tabs, never sent to the gateway
   panelId: string
   workspaceId?: string
   sessionId?: string
@@ -7,7 +7,7 @@ export type PanelIdentity = {
 
 type PanelWindowHandle = Pick<Window, 'closed' | 'focus'>
 
-type MutableHandleRegistry = ReadonlyMap<string, PanelWindowHandle> & {
+type MutableHandleRegistry = ReadonlyMap<string, PanelWindowHandle> & { // not-wire-format: in-memory adapter for browser Window handles, never serialized or sent to the gateway
   delete?: (key: string) => boolean
   set?: (key: string, handle: PanelWindowHandle) => unknown
 }
@@ -36,12 +36,12 @@ type PanelPresenceMessage = // not-wire-format: same-origin browser-tab lifecycl
   | { type: 'request' }
   | { type: 'focus'; tabId: string }
 
-type PresenceEntry = {
+type PresenceEntry = { // not-wire-format: in-memory same-origin presence cache entry, never serialized or sent to the gateway
   identity: PanelIdentity
   seenAt: number
 }
 
-export type PanelPresenceAnnouncement = {
+export type PanelPresenceAnnouncement = { // not-wire-format: SPA-local lifecycle controller returned within one tab, never serialized or sent to the gateway
   update: (identity: PanelIdentity) => void
   stop: () => void
 }

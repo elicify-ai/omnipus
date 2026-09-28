@@ -152,38 +152,6 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     }
   }, [])
 
-  useEffect(() => {
-    return useUiStore.subscribe((state) => {
-      if (state.activePanel?.id !== 'library') return
-      const key = panelIdentityKey({
-        panelId: 'library',
-        workspaceId: state.activePanel.context.workspaceId,
-      })
-      const handle = libraryPopoutHandles.get(key)
-      if (handle?.closed) {
-        libraryPopoutHandles.delete(key)
-        return
-      }
-      if (handle) {
-        state.closePanel()
-        try {
-          handle.focus()
-        } catch {
-          // Focus is best-effort; keeping one tab is more important than
-          // opening a duplicate when the browser declines the request.
-        }
-        return
-      }
-      if (presenceRef.current.some((identity) => panelIdentityKey(identity) === key)) {
-        state.closePanel()
-        state.addToast({
-          message: 'The Library is already open in another tab.',
-          variant: 'default',
-        })
-      }
-    })
-  }, [])
-
   const libraryPanel = shellProps?.context ?? (activePanel?.id === 'library' ? activePanel.context : null)
 
   // Arrow function expression (not a `function` declaration) so TypeScript's
