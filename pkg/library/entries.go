@@ -160,6 +160,7 @@ var extMimeTypes = map[string]string{
 	".yaml":     "application/x-yaml",
 	".yml":      "application/x-yaml",
 	".base":     "application/x-yaml",
+	".view":     "application/x-yaml",
 	".xml":      "application/xml",
 	".svg":      "image/svg+xml",
 	".html":     "text/html",
@@ -225,7 +226,8 @@ var extMimeTypes = map[string]string{
 // (images, video, audio, archives, PDF, OOXML).
 var textExtensions = map[string]bool{
 	".txt": true, ".md": true, ".markdown": true, ".csv": true, ".tsv": true,
-	".json": true, ".yaml": true, ".yml": true, ".base": true, ".xml": true, ".svg": true,
+	".json": true, ".yaml": true, ".yml": true, ".base": true, ".view": true,
+	".xml": true, ".svg": true,
 	".html": true, ".htm": true, ".toml": true, ".ini": true, ".cfg": true, ".conf": true,
 	".log": true, ".env": true,
 	".go": true, ".py": true, ".js": true, ".ts": true, ".tsx": true, ".jsx": true,

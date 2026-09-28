@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -174,6 +173,13 @@ const (
 	// literal cannot match any conforming record: `=` selects nothing and
 	// `<>` selects everything, and both look exactly like a correct answer.
 	RejectViewUnknownEnumValue ViewRejectionCode = "view_unknown_enum_value"
+	// RejectViewTooLarge is the size cap refusal (D-SIZECAP, R2-MIN-002).
+	// A .view file over 256 KiB is read through io.LimitReader(MaxViewFileBytes+1)
+	// so a caller can tell "exactly the cap" from "over the cap"; the
+	// rejection here is what the over-cap case reports. Reading never
+	// exceeds the cap, so the file's actual on-disk size is the only
+	// information the loader has about it.
+	RejectViewTooLarge ViewRejectionCode = "view_too_large"
 )
 
 // ViewRejection is one refused view file.
@@ -250,6 +256,13 @@ type SavedView struct {
 	Def        generated.ViewDef
 	SourcePath string
 }
+
+// ViewDef is the alias of generated.ViewDef the accessor below attaches
+// to. Exposing the name under `records.ViewDef` lets callers (and the
+// (*ViewDef).DerivedFromString method) refer to it without importing the
+// generated package directly, keeping the public records API stable
+// across generator revisions.
+type ViewDef = generated.ViewDef
 
 // Name is the view's identifier.
 func (v *SavedView) Name() string {
@@ -535,56 +548,66 @@ func (s *ViewSet) add(v *SavedView) {
 // schemas may be nil, and the distinction is deliberate rather than a
 // convenience: with a schema set, a view is additionally checked against it
 // and a view naming a vanished type or property is REJECTED and reported;
-// without one, only the view's own format is checked. A caller that has the
-// schemas and passes nil gets a set of views that look fine and query nothing.
+// without one, only the view's own format is checked.
 //
-// A vault with no views directory is NOT an error. It is the ordinary state
-// of every vault nobody has authored a view in, which is most of them.
+// (Round 2 / library-views-anywhere-spec §4 step 1+3.) Discovery is no
+// longer restricted to one directory: views live anywhere inside a
+// knowledge base (FR-VA-001, FD-1). pkg/knowledge owns the canonical
+// helper for that discovery (`pkg/knowledge.DiscoverViewFiles`,
+// WalkContained + D-SYMLINK-READ + D-SIZECAP) — this package cannot import
+// it (MAJ-008's import cycle), so for the lone public `records.LoadViews`
+// shim a small, view-only walker runs here. Both walkers honour the same
+// four control-plane names and the same `.view`-extension rule; the
+// canonical one in pkg/knowledge is what the rest of the package uses.
+//
+// A vault with no `.view` files anywhere is NOT an error. It is the
+// ordinary state of every vault nobody has authored a view in, which is
+// most of them.
 func LoadViews(vaultRoot string, schemas *SchemaSet) (*ViewSet, *ViewLoadReport, error) {
-	dir := ViewsDir(vaultRoot)
-	entries, err := os.ReadDir(dir)
+	if vaultRoot == "" {
+		return nil, nil, errors.New("records.LoadViews: empty vault root")
+	}
+	report := &ViewLoadReport{}
+	files, skipped, err := walkViewFiles(vaultRoot)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return NewViewSet(), &ViewLoadReport{}, nil
-		}
-		return nil, nil, fmt.Errorf("reading views directory %s: %w", dir, err)
+		return nil, nil, fmt.Errorf("records.LoadViews: walk collection: %w", err)
 	}
-
-	paths := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext != ".yaml" && ext != ".yml" {
-			continue
-		}
-		paths = append(paths, filepath.Join(dir, name))
+	for _, d := range skipped {
+		report.Rejections = append(report.Rejections, ViewRejection{
+			Paths:  []string{d},
+			Code:   RejectViewUnreadable,
+			Reason: fmt.Sprintf("could not read subfolder %q during view discovery; views under it may have been missed", d),
+		})
 	}
-	sort.Strings(paths) // deterministic, so reports are reproducible
-
-	return loadViewPaths(paths, schemas)
+	if len(files) == 0 {
+		return NewViewSet(), report, nil
+	}
+	return loadViewBytes(files, schemas, report)
 }
 
-func loadViewPaths(paths []string, schemas *SchemaSet) (*ViewSet, *ViewLoadReport, error) {
-	report := &ViewLoadReport{ScannedFiles: append([]string(nil), paths...)}
-	parsed := make([]*SavedView, 0, len(paths))
+// loadViewBytes parses a slice of already-read view files into a ViewSet
+// plus a rejection report. Round-2 (library-views-anywhere-spec §4 step 3,
+// corrected): the walker that found these files OWNED the read, not this
+// function — every byte is here because some LinkFS-aware walker already
+// opened the file with no-follow semantics and read it through the
+// size-capped reader. This function does ParseView per file (the
+// JSON-round-trip through generated.ViewDef with DisallowUnknownFields),
+// then the dedup step. I/O would re-open the TOCTOU window D-SYMLINK-READ
+// exists to close.
+func loadViewBytes(files []ViewFileBytes, schemas *SchemaSet, report *ViewLoadReport) (*ViewSet, *ViewLoadReport, error) {
+	if report == nil {
+		report = &ViewLoadReport{}
+	}
+	parsed := make([]*SavedView, 0, len(files))
 
-	for _, p := range paths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			report.Rejections = append(report.Rejections, ViewRejection{
-				Paths:  []string{p},
-				Code:   RejectViewUnreadable,
-				Reason: fmt.Sprintf("could not read the view file: %v", err),
-			})
+	for _, f := range files {
+		if f.Rejection != "" {
+			continue // rejection already recorded upstream
+		}
+		if f.Path == "" {
 			continue
 		}
-		v, rej := ParseView(p, data)
+		v, rej := ParseView(f.Path, f.Bytes)
 		if rej != nil {
 			report.Rejections = append(report.Rejections, *rej)
 			continue
@@ -660,7 +683,30 @@ func viewDeclaredSource(v *SavedView) string {
 // imported from, or "" for a view somebody authored directly.
 func (v *SavedView) DeclaredSource() string { return viewDeclaredSource(v) }
 
-// commonDeclaredSource is the source every member of a rejected group agrees
+// KindString returns the view's authored kind as a plain string, or ""
+// for an absent kind (legal — only `name` is required) and for a nil
+// receiver. The wire mirror is gen.LibraryEntryViewKind; this accessor
+// returns the raw string so callers that build libraryEntryViewFields
+// without an explicit kind value (the common case for parse failures)
+// never have to inspect a nil *gen.ViewDefKind pointer.
+func (v *SavedView) KindString() string {
+	if v == nil || v.Def.Kind == nil {
+		return ""
+	}
+	return string(*v.Def.Kind)
+}
+
+// DerivedFromString returns the view's `derived_from` as a plain string,
+// or "" when the field is absent (the ordinary case for a hand-made view).
+// Same shape as KindString: the wire mirror is gen.ViewDef.derived_from,
+// and this accessor is the string the gateway's view-index cache stamps
+// alongside the rejection / label / name.
+func (v *SavedView) DerivedFromString() string {
+	if v == nil || v.Def.DerivedFrom == nil {
+		return ""
+	}
+	return *v.Def.DerivedFrom
+}
 // on, or "" when they do not all agree.
 //
 // A duplicate-name conflict rejects SEVERAL files at once, and attributing the

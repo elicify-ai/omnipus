@@ -1337,7 +1337,7 @@ func (t *DescribeTool) gather(
 		}
 	}
 
-	views, viewReport, err := records.LoadViews(root.Path(), schemas)
+	views, viewReport, err := LoadViewsForCollection(OSLinkFS(), root, schemas)
 	if err != nil {
 		return nil, err
 	}

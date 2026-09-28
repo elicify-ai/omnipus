@@ -74,7 +74,7 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 		return FindEnv{}, closeAll, fmt.Errorf("loading record schemas: %w", err)
 	}
 
-	views, viewReport, err := records.LoadViews(root.Path(), schemas)
+	views, viewReport, err := knowledge.LoadViewsForCollection(knowledge.OSLinkFS(), root, schemas)
 	if err != nil {
 		return FindEnv{}, closeAll, fmt.Errorf("loading saved views: %w", err)
 	}

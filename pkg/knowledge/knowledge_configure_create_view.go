@@ -812,14 +812,13 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	if viewName == "" {
 		return t.deps.refuse(authorOpConfigure, target, nil, "'view' is required for create_view")
 	}
-	// The name becomes a filename under records.ViewsDir. G6 guarantees that
-	// a REFUSED call writes nothing; it says nothing about WHERE an accepted
-	// call writes, and none of the six gates below ever looks at `view`. This
-	// is the check that makes "the composer writes one view file" true —
-	// controlPlaneNameRefusal (knowledge_configure.go) is the same validator
-	// write_view's raw path takes, so the composer and the escape hatch
-	// cannot disagree about what a view name may be.
-	if nrefusal := controlPlaneNameRefusal("view", viewName, records.ViewsDir(root)); nrefusal != "" {
+	// The name becomes a filename. The new default is the collection root
+	// (library-views-anywhere-spec Q5/B), but the file may LEGITIMATELY
+	// already exist at the legacy .omnipus-vault/views/<name>.yaml
+	// location from an older install — a create at the new default must
+	// refuse if EITHER location is occupied. controlPlaneNameRefusal below
+	// still validates the name's shape against the root directory.
+	if nrefusal := controlPlaneNameRefusal("view", viewName, root); nrefusal != "" {
 		return t.deps.refuse(authorOpConfigure, target, nil, "create_view: "+nrefusal)
 	}
 
@@ -865,9 +864,33 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	// D-21: a view name is a file; an identical or case-colliding name is
 	// refused rather than silently overwritten (or, on a case-insensitive
 	// filesystem, silently written over the OTHER spelling).
-	if existing, _, verr := records.LoadViews(root, schemas); verr == nil {
-		if crefusal := viewNameCollisionRefusal(existing, viewName, "", true); crefusal != "" {
-			return t.deps.refuse(authorOpConfigure, target, nil, "create_view: "+crefusal)
+	cr, rerr := NewCollectionRoot(OSLinkFS(), root)
+	if rerr == nil {
+		if existing, _, verr := LoadViewsForCollection(OSLinkFS(), cr, schemas); verr == nil {
+			if crefusal := viewNameCollisionRefusal(existing, viewName, "", true); crefusal != "" {
+				return t.deps.refuse(authorOpConfigure, target, nil, "create_view: "+crefusal)
+			}
+		}
+	}
+
+	// D-WRITE-IDENTITY occupied-path check: a non-view file at the EXACT
+	// default path is a hard refuse. viewNameCollisionRefusal only catches
+	// a name that already parses as a loaded view; an unrelated file at
+	// the same destination is invisible to it, and a silent overwrite
+	// there is exactly the failure CRIT-001 names for the create side.
+	//
+	// The check covers BOTH the new default location (Q5/B) AND the
+	// legacy `records.ViewsDir` location — an older install's
+	// `.omnipus-vault/views/<name>.yaml` from before the spec is a
+	// legitimate occupant we must not silently clobber.
+	defaultPath := filepath.Join(root, viewName+viewFileExt)
+	legacyPath := filepath.Join(records.ViewsDir(root), viewName+controlPlaneFileExt)
+	for _, p := range []string{defaultPath, legacyPath} {
+		if _, statErr := os.Stat(p); statErr == nil {
+			return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, p)},
+				fmt.Sprintf("create_view: the destination %s is already occupied; create_view refuses to overwrite an unrelated file. "+
+					"Move or delete the existing occupant, or use write_view on the view that already lives there.",
+					relControlPlanePath(root, p)))
 		}
 	}
 
@@ -911,7 +934,7 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	if merr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "create_view: "+merr.Error())
 	}
-	viewPath := filepath.Join(records.ViewsDir(root), viewName+controlPlaneFileExt)
+	viewPath := defaultPath
 	parsed, rej := records.ParseView(viewPath, yamlBytes)
 	if rej != nil {
 		// Reaching a REJECTION here (rather than a gate refusal above) means

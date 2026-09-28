@@ -797,9 +797,11 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 	if viewName == "" {
 		return t.deps.refuse(authorOpConfigure, target, nil, "'view' is required for write_view")
 	}
-	// The name becomes a filename under records.ViewsDir — see
-	// controlPlaneNameRefusal for why that is checked before anything else.
-	if nrefusal := controlPlaneNameRefusal("view", viewName, records.ViewsDir(root)); nrefusal != "" {
+	// The name becomes a filename. The new default is the collection root
+	// (library-views-anywhere-spec Q5/B) — but for write_view's upsert rule
+	// the actual destination is decided LATER: an EXISTING view's
+	// SourcePath wins, only a true create lands at the default.
+	if nrefusal := controlPlaneNameRefusal("view", viewName, root); nrefusal != "" {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+nrefusal)
 	}
 
@@ -846,28 +848,70 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 	if merr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+merr.Error())
 	}
-	viewPath := filepath.Join(records.ViewsDir(root), viewName+controlPlaneFileExt)
-	parsed, rej := records.ParseView(viewPath, yamlBytes)
-	if rej != nil {
-		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+rej.Reason)
-	}
 
 	schemas, _, lerr := records.LoadSchemas(root)
 	if lerr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: loading record schemas: "+lerr.Error())
+	}
+
+	// D-WRITE-IDENTITY: decide WHERE to write BEFORE we parse, by asking
+	// the current ViewSet whether a view named viewName already exists.
+	// If it does, the upsert targets that view's SourcePath (F13 / CRIT-001
+	// close) — never a path reconstructed from the name. If no view by
+	// that name exists yet, the write is a CREATE and the destination is
+	// the collection root (Q5/B), guarded by an occupied-path check.
+	defaultPath := filepath.Join(root, viewName+viewFileExt)
+	viewPath := defaultPath
+	cr, rerr := NewCollectionRoot(OSLinkFS(), root)
+	if rerr == nil {
+		if existing, _, verr := LoadViewsForCollection(OSLinkFS(), cr, schemas); verr == nil {
+			if cur, _, ok := existing.Resolve(viewName); ok {
+				if cur.SourcePath != "" {
+					viewPath = cur.SourcePath
+				}
+			}
+		}
+	}
+	// If the resolved viewPath falls inside the legacy ViewsDir
+	// (records.ViewsDir is one of the paths used by older installs), the
+	// file extension is the legacy .yaml rather than the new .view; the
+	// default path already uses the new extension, so the only branch
+	// that can pick the legacy one is when an EXISTING view's SourcePath
+	// is at the legacy location. In that case, leave the SourcePath's
+	// extension alone (it was correct when the view was written).
+	if viewPath == defaultPath {
+		// D-WRITE-IDENTITY occupied-path check: a non-view file at the
+		// exact default path is a hard refuse. The path-reconstruction
+		// reconstruction-vs-existing-SourcePath race this guard closes is
+		// the same one CRIT-001 names for the upsert side — a `write_view`
+		// for a name that doesn't exist as a view must never silently
+		// clobber an unrelated file at the default path.
+		if _, statErr := os.Stat(defaultPath); statErr == nil {
+			return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, defaultPath)},
+				fmt.Sprintf("write_view: the default path %s is already occupied; write_view only targets an existing view's discovered SourcePath, never an unrelated file at the deterministic name-path",
+					relControlPlanePath(root, defaultPath)))
+		}
+	}
+
+	parsed, rej := records.ParseView(viewPath, yamlBytes)
+	if rej != nil {
+		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+rej.Reason)
 	}
 	if rej := records.ValidateViewAgainstSchemas(parsed, schemas); rej != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+rej.Reason)
 	}
 	// D-21: write_view is an upsert of THIS exact name, but a case-colliding
 	// name or a label another view already carries is refused.
-	if existing, _, verr := records.LoadViews(root, schemas); verr == nil {
-		label := ""
-		if parsed.Def.Label != nil {
-			label = *parsed.Def.Label
-		}
-		if crefusal := viewNameCollisionRefusal(existing, viewName, label, false); crefusal != "" {
-			return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+crefusal)
+	cr, rerr = NewCollectionRoot(OSLinkFS(), root)
+	if rerr == nil {
+		if existing, _, verr := LoadViewsForCollection(OSLinkFS(), cr, schemas); verr == nil {
+			label := ""
+			if parsed.Def.Label != nil {
+				label = *parsed.Def.Label
+			}
+			if crefusal := viewNameCollisionRefusal(existing, viewName, label, false); crefusal != "" {
+				return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+crefusal)
+			}
 		}
 	}
 
@@ -928,7 +972,13 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 // swallowed: "saved, and I could not check" is a different statement from
 // "saved, and knowledge_find will run it", and only one of them is true.
 func (t *ConfigureTool) serveRefusalFor(root string, schemas *records.SchemaSet, viewName string) string {
-	set, _, lerr := records.LoadViews(root, schemas)
+	cr, rerr := NewCollectionRoot(OSLinkFS(), root)
+	if rerr != nil {
+		return fmt.Sprintf(
+			"could not be checked — resolving the collection root failed (%v); "+
+				"run knowledge_describe to see whether knowledge_find can serve this view", rerr)
+	}
+	set, _, lerr := LoadViewsForCollection(OSLinkFS(), cr, schemas)
 	if lerr != nil {
 		return fmt.Sprintf(
 			"could not be checked — re-reading the views directory failed (%v); "+
@@ -948,7 +998,11 @@ func (t *ConfigureTool) execDeleteView(target mutationTarget, args map[string]an
 		return t.deps.refuse(authorOpConfigure, target, nil, "'view' is required for delete_view")
 	}
 
-	set, _, lerr := records.LoadViews(root, nil)
+	cr, rerr := NewCollectionRoot(OSLinkFS(), root)
+	if rerr != nil {
+		return t.deps.refuse(authorOpConfigure, target, nil, "delete_view: resolving collection root: "+rerr.Error())
+	}
+	set, _, lerr := LoadViewsForCollection(OSLinkFS(), cr, nil)
 	if lerr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "delete_view: loading existing views: "+lerr.Error())
 	}
@@ -1093,8 +1147,12 @@ func staleKeysAcrossRecords(sc *records.Schema, matches []records.Record) map[st
 // and rejects against newSet — "view X names property priority, which
 // record type project does not declare" — each with the loader's reason.
 func viewsNewlyRejected(root string, oldSet, newSet *records.SchemaSet) []string {
-	_, before, berr := records.LoadViews(root, oldSet)
-	_, after, aerr := records.LoadViews(root, newSet)
+	cr, rerr := NewCollectionRoot(OSLinkFS(), root)
+	if rerr != nil {
+		return nil
+	}
+	_, before, berr := LoadViewsForCollection(OSLinkFS(), cr, oldSet)
+	_, after, aerr := LoadViewsForCollection(OSLinkFS(), cr, newSet)
 	if berr != nil || aerr != nil || after == nil {
 		return nil
 	}
@@ -1385,6 +1443,12 @@ func removeControlPlaneFile(target mutationTarget, abs string) error {
 // becomes a filename. Named once so controlPlaneNameRefusal validates the
 // EXACT string the callers below join, rather than a second spelling of it.
 const controlPlaneFileExt = ".yaml"
+
+// viewFileExt is the suffix new `.view` files use at the new default
+// destination (library-views-anywhere-spec Q1/A / Q5/B). Distinct from
+// controlPlaneFileExt because views and schemas share neither directory
+// nor suffix any more — the discovery walk keys off the extension alone.
+const viewFileExt = ".view"
 
 // controlPlaneNameRefusal is the ONE validator for every argument that becomes
 // a control-plane FILENAME — `view` under records.ViewsDir, `type` under

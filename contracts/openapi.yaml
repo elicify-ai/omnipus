@@ -977,8 +977,7 @@ components:
             (FR-024), never an empty result.
           example: "deal"
         kind:
-          type: string
-          enum: [note, record, task, attachment]
+          $ref: "./components/schemas/RecordRowKind.yaml"
           description: >
             What sort of row to return. Omitted means `note`.
 

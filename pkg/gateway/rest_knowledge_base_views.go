@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/records"
@@ -151,7 +152,14 @@ func (a *restAPI) handleKnowledgeBaseViews(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	views, report, viewsErr := records.LoadViews(col.Root, schemas)
+	kbRoot, kerr := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), col.Root)
+	if kerr != nil {
+		logger.ErrorCF("rest", "knowledge: resolving collection root for base views",
+			map[string]any{"workspace_id": workspaceID, "error": kerr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	views, report, viewsErr := knowledge.LoadViewsForCollection(knowledge.OSLinkFS(), kbRoot, schemas)
 	if viewsErr != nil {
 		logger.ErrorCF("rest", "knowledge: loading saved views for base views",
 			map[string]any{"workspace_id": workspaceID, "error": viewsErr.Error()})

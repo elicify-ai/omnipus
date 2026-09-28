@@ -24465,9 +24465,7 @@ type VaultFindRequest struct {
 	// Join Relation properties whose columns to BORROW onto each row (FR-124). A borrowed value renders visibly as borrowed and is never merged into the row's own columns: it is not a property of this record and must never read as one.
 	Join *[]string `json:"join,omitempty"`
 
-	// Kind What sort of row to return. Omitted means `note`.
-	//
-	// `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX LINES, not notes: each row carries `path`, `line`, `status` and `text`, and renders with its line number so a reader can never mistake it for the note that contains it (FR-076a). This narrowly amends the rule that a row is one note: a row is one real THING AT A PATH — a note, or a checkbox line within one. The whole-collection regex walk that `knowledge_tasks` performed does not survive; checkboxes are indexed, so the ordinary bounds apply and the old 5,000-file read cap is gone.
+	// Kind The kind of row a `knowledge_find` call may return (ADR-068 D15.3, spec FR-076a). Extracted to its own schema so this enum lives in one place — the same pattern ViewKind.yaml applies to `ViewDef.kind`, applied here to `VaultFindRequest.kind`, which the contract shape test would otherwise misread as an inline kind enum.
 	Kind *VaultFindRequestKind `json:"kind,omitempty"`
 
 	// Limit Rows per page. Omitted means 50. A value above the cap of 200 is CLAMPED and the clamp is REPORTED (FR-063) — deliberately no `maximum` here, so an over-large request comes back with a stated clamp rather than a bare schema error that says nothing about what was applied.
@@ -24499,9 +24497,7 @@ type VaultFindRequest struct {
 // VaultFindRequestDetail Rendering density. Omitted means `standard`. `minimal` drops columns and borrowed values to roughly 80 bytes per hit; the completeness header and the problem COUNT always survive the trim, because the caveat is the one thing a shorter answer must not lose.
 type VaultFindRequestDetail string
 
-// VaultFindRequestKind What sort of row to return. Omitted means `note`.
-//
-// `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX LINES, not notes: each row carries `path`, `line`, `status` and `text`, and renders with its line number so a reader can never mistake it for the note that contains it (FR-076a). This narrowly amends the rule that a row is one note: a row is one real THING AT A PATH — a note, or a checkbox line within one. The whole-collection regex walk that `knowledge_tasks` performed does not survive; checkboxes are indexed, so the ordinary bounds apply and the old 5,000-file read cap is gone.
+// VaultFindRequestKind The kind of row a `knowledge_find` call may return (ADR-068 D15.3, spec FR-076a). Extracted to its own schema so this enum lives in one place — the same pattern ViewKind.yaml applies to `ViewDef.kind`, applied here to `VaultFindRequest.kind`, which the contract shape test would otherwise misread as an inline kind enum.
 type VaultFindRequestKind string
 
 // VaultFindResponse The answer to `knowledge_find` — rows AND the account of everything the query could not include, in the SAME response (ADR-068 D13, D22; spec FR-025, FR-121).

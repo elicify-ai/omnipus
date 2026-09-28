@@ -563,7 +563,11 @@ func (rwo *runWithOptions) writeAndReloadViews() (*Report, bool, error) {
 			return nil, true, fmt.Errorf("vaultimport: writing view %q: %w", path, writeErr)
 		}
 	}
-	_, rwo.viewReload, rwo.err = records.LoadViews(rwo.viewRoot, rwo.schemaSet)
+	vroot, rerr := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), rwo.viewRoot)
+	if rerr != nil {
+		return nil, true, fmt.Errorf("vaultimport: resolving collection root for view reload: %w", rerr)
+	}
+	_, rwo.viewReload, rwo.err = knowledge.LoadViewsForCollection(knowledge.OSLinkFS(), vroot, rwo.schemaSet)
 	if rwo.err != nil {
 		return nil, true, fmt.Errorf("vaultimport: reloading views: %w", rwo.err)
 	}

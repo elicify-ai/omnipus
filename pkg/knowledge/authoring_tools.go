@@ -378,10 +378,38 @@ func cleanNoteArg(raw string) (string, error) {
 	return cleaned, nil
 }
 
+// IsViewPath reports whether a collection-relative path names a `.view`
+// file (library-views-anywhere-spec Q1/A: `.view` is the chosen
+// extension, case-insensitive per FR-VA-012a).
+func IsViewPath(relPath string) bool {
+	ext := path.Ext(relPath)
+	if !strings.EqualFold(ext, ".view") {
+		return false
+	}
+	// EC-9 / MIN-010: a bare `.view` with no stem is a dotfile, not a view.
+	base := path.Base(relPath)
+	if base == ".view" || base == "" {
+		return false
+	}
+	return true
+}
+
 // ensureMarkdown appends the markdown extension when the caller left it off.
 // Agents write "Weekly Review"; operators expect "Weekly Review.md".
+//
+// Per library-views-anywhere-spec D-MOVE / FR-VA-016a / FR-VA-016a-corr: a
+// `.view` path is NOT a note, so the `.md` append is NEVER applied to it
+// — rename/move must keep the `.view` extension unchanged. An
+// extension-less `new_name` keeps the source's extension (so renaming
+// `roadmap.view` to `roadmap-q3` becomes `roadmap-q3.view`, never
+// `roadmap-q3.view.md`). A rename that would CHANGE a `.view` file's
+// extension (e.g. `roadmap.view` → `roadmap.txt`) is REFUSED — the
+// caller must do that explicitly through a different door.
 func ensureMarkdown(rel string) string {
 	if IsMarkdownPath(rel) {
+		return rel
+	}
+	if IsViewPath(rel) {
 		return rel
 	}
 	return rel + ".md"
@@ -987,7 +1015,24 @@ func renameEngine(ctx context.Context, deps AuthoringDeps, args map[string]any, 
 	if err != nil {
 		return deps.refuse(op, target, []string{from}, err.Error())
 	}
-	to = ensureMarkdown(to)
+	// D-MOVE / FR-VA-016a (round-2, R2-MAJ-004): the destination inherits
+	// the SOURCE's "is this a view" decision, NOT its own. A `.view` source
+	// never gets a `.md` extension appended on rename/move — and an
+	// extension-less `new_name` keeps the source's `.view` extension. A
+	// rename that would CHANGE a `.view` file's extension (e.g. `.view`
+	// → `.txt`) is REFUSED.
+	if IsViewPath(from) {
+		ext := path.Ext(to)
+		switch {
+		case ext == "":
+			to += ".view"
+		case !strings.EqualFold(ext, ".view"):
+			return deps.refuse(op, target, []string{from},
+				fmt.Sprintf("rename would change a .view file's extension to %q — views keep their .view extension; this rename is refused", ext))
+		}
+	} else {
+		to = ensureMarkdown(to)
+	}
 
 	root, err := NewCollectionRoot(OSLinkFS(), target.col.Root)
 	if err != nil {

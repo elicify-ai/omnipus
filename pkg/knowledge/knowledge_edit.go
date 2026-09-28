@@ -1632,7 +1632,12 @@ func (t *EditTool) execEmbed(ctx context.Context, target mutationTarget, args ma
 		if lerr != nil {
 			return t.deps.refuse(AuthorOpEdit, target, []string{rel}, fmt.Sprintf("embed: %v", lerr))
 		}
-		views, _, verr := records.LoadViews(target.collection.Root(), set)
+		root, rerr := NewCollectionRoot(OSLinkFS(), target.collection.Root())
+		if rerr != nil {
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+				fmt.Sprintf("embed: resolving collection root: %v", rerr))
+		}
+		views, _, verr := LoadViewsForCollection(OSLinkFS(), root, set)
 		if verr != nil {
 			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
 				fmt.Sprintf("embed: loading this collection's saved views: %v", verr))

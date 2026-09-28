@@ -101,6 +101,27 @@ func (osLinkFS) Open(name string) (fs.File, error)          { return os.Open(nam
 // OSLinkFS returns a LinkFS backed by the real filesystem.
 func OSLinkFS() LinkFS { return osLinkFS{} }
 
+// carriesVaultMarker reports whether dir contains a `.obsidian` or
+// `.omnipus-vault` child — the nested-vault boundary detector
+// (library-views-anywhere-spec D-WALK, R2-MIN-012). A directory that
+// carries one of these markers is ITSELF a vault; the walk must stop
+// descending at it so the inner vault's own listings never conflict
+// with the outer collection's. Cheap: one ReadDir of the directory's own
+// children; no recursion, no filesystem race.
+func carriesVaultMarker(fsys LinkFS, dir string) bool {
+	entries, err := fsys.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		switch e.Name() {
+		case ".obsidian", ".omnipus-vault":
+			return true
+		}
+	}
+	return false
+}
+
 // CollectionRoot is a validated knowledge-base root: absolute, existing, a
 // directory, and with every symbolic link on the way to it already resolved.
 //
@@ -427,6 +448,14 @@ type WalkResult struct {
 // visited-set "loop breaker": a loop breaker would make the walk terminate
 // while still having FOLLOWED the link once, which is precisely what NB-7
 // forbids.
+//
+// NESTED-VAULT STOP (library-views-anywhere-spec D-WALK, R2-MIN-012): a
+// directory that itself carries a `.obsidian` or `.omnipus-vault` marker
+// is its own vault, not a child of this one. The walk stops at its
+// boundary so the outer collection's discovery and the inner vault's own
+// discovery cannot disagree about which views exist (EC-11). The marker
+// directory itself is still reported in Dirs (so callers can address
+// it); only its CONTENTS are not descended into.
 func WalkContained(fsys LinkFS, root CollectionRoot) (WalkResult, error) {
 	var out WalkResult
 	if !root.Valid() {
@@ -502,6 +531,23 @@ func WalkContained(fsys LinkFS, root CollectionRoot) (WalkResult, error) {
 				// "content this walk could not address" (NB-9). Tool state is
 				// not content, and Scan does not report it either.
 				if _, skip := scanSkippedDirNames[name]; skip {
+					continue
+				}
+				// D-WALK nested-vault rule (library-views-anywhere-spec §2,
+				// R2-MIN-012): a child directory that ITSELF carries a
+				// `.obsidian` or `.omnipus-vault` marker is its own
+				// collection, not a child of this one. The walk stops at
+				// its boundary so the outer collection's listing and the
+				// inner vault's own listing cannot disagree about which
+				// views exist. The collection root itself is also a marker
+				// carrier by construction, so the "other than the root"
+				// clause is implicit in the boundary test (we are here
+				// because the child's children are not the root's).
+				if carriesVaultMarker(fsys, childReal) {
+					// The marker-carrying directory is reported as a
+					// directory so callers can address it; its CONTENTS
+					// are not descended into.
+					out.Dirs = append(out.Dirs, childRel)
 					continue
 				}
 				stack = append(stack, queued{real: childReal, rel: childRel})

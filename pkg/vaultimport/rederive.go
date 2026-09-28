@@ -132,7 +132,11 @@ func RederiveBase(vaultRoot, baseRelPath string) (*RederiveBaseResult, error) {
 
 	// The views as they stand, loaded through the REAL loader so preservation
 	// and collision-checking operate on exactly what the product serves.
-	existing, _, err := records.LoadViews(vaultRoot, schemaSet)
+	vroot, rerr := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), vaultRoot)
+	if rerr != nil {
+		return nil, fmt.Errorf("vaultimport: resolving collection root for view load: %w", rerr)
+	}
+	existing, _, err := knowledge.LoadViewsForCollection(knowledge.OSLinkFS(), vroot, schemaSet)
 	if err != nil {
 		return nil, fmt.Errorf("vaultimport: loading the views under %q: %w", vaultRoot, err)
 	}
