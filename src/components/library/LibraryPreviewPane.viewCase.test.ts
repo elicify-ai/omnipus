@@ -1,8 +1,9 @@
 // RED tests for spec "Library views, anywhere"
 // (docs/internal/specs/library-views-anywhere-spec.md), §10 TDD Plan test 14,
 // the derived-view read-only banner (FD-6, US-6 AS-5, TDD test 49's SPA
-// half), and the rejection-reason/conflict-paths rendering (R2-MAJ-005,
-// US-6 AS-4, TDD test 57).
+// half), the rejection-reason/conflict-paths rendering (R2-MAJ-005,
+// US-6 AS-4, TDD test 57), and the loading/empty/refusal state distinction
+// (R2-MIN-007, US-6 AS-6, TDD test 70).
 //
 // Oracle: US-6 AS-2 ("Given a Library entry classified 'view'... When
 // LibraryPreviewPane renders its body, Then renderBody's switch gains a
@@ -81,5 +82,21 @@ describe('LibraryPreviewPane — rejected .view shows reason and conflict paths 
     // anywhere in this component today.
     expect(src).toMatch(/rejection_reason/)
     expect(src).toMatch(/conflict_paths/)
+  })
+})
+
+describe('LibraryPreviewPane — view case loading/empty/refusal states render distinctly (R2-MIN-007, US-6 AS-6, TDD test 70)', () => {
+  it('is BLOCKED: there is no "view" case at all yet to have distinct states', () => {
+    // US-6 AS-6 requires the 'view' case's loading/empty/unservable states
+    // to render distinctly, reusing BasePreview's existing state renderers
+    // where the shape applies. There is no 'view' case in renderBody at all
+    // (TDD test 14's own finding — no `case 'view':`, no reference to
+    // ViewPartsRenderer), so there is no component here whose three states
+    // could even be inspected.
+    throw new Error(
+      "BLOCKED: LibraryPreviewPane has no case 'view': branch (TDD test 14) — required before its " +
+        'loading/empty/unservable states can be shown to render distinctly, per US-6 AS-6 / ' +
+        'R2-MIN-007 / TDD test 70.'
+    )
   })
 })
