@@ -15,11 +15,13 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/smtp"
 	"reflect"
 	"strings"
 	"testing"
@@ -162,7 +164,7 @@ func TestDeliverAppendsSMTPMailToRecipientINBOX(t *testing.T) {
 	srv := startSrv(t, config{users: twoReviewUsers(t), usersFlagGiven: true, deliver: true})
 
 	sent := []string{"From: ada@example.test", "To: agent@test.local", "Subject: hi", "", "Hello agent."}
-	smtpSend(t, srv.smtpAddr, "ada@example.test", "agent@test.local", sent)
+	smtpSendMail(t, srv.smtpAddr, "agent@test.local", "s3cret", "ada@example.test", "agent@test.local", sent)
 	// The delivered copy is read back over IMAP, where servers may normalise
 	// line endings to CRLF (RFC 3501); the spec's claim is the delivered
 	// CONTENT, so both sides are compared as LF lines. The sink recording
@@ -182,6 +184,72 @@ func TestDeliverAppendsSMTPMailToRecipientINBOX(t *testing.T) {
 	}
 }
 
+// TestSMTPPlainAuth uses the standard library SMTP client against the real
+// fixture listener. A valid configured user must authenticate, while a wrong
+// password must receive the SMTP authentication-failed response.
+func TestSMTPPlainAuth(t *testing.T) {
+	srv := startSrv(t, config{users: twoReviewUsers(t), usersFlagGiven: true})
+	host, _, err := net.SplitHostPort(srv.smtpAddr)
+	if err != nil {
+		t.Fatalf("split SMTP address %q: %v", srv.smtpAddr, err)
+	}
+
+	t.Run("accepts configured credentials", func(t *testing.T) {
+		cl, err := smtp.Dial(srv.smtpAddr)
+		if err != nil {
+			t.Fatalf("dial SMTP: %v", err)
+		}
+		defer cl.Close()
+		if ok, mechanisms := cl.Extension("AUTH"); !ok || mechanisms != "PLAIN LOGIN" {
+			t.Fatalf("EHLO AUTH extension = %q, present=%v; want PLAIN LOGIN", mechanisms, ok)
+		}
+		if err := cl.Auth(smtp.PlainAuth("", "agent@test.local", "s3cret", host)); err != nil {
+			t.Fatalf("AUTH PLAIN with configured credentials: %v", err)
+		}
+	})
+
+	t.Run("rejects wrong credentials", func(t *testing.T) {
+		cl, err := smtp.Dial(srv.smtpAddr)
+		if err != nil {
+			t.Fatalf("dial SMTP: %v", err)
+		}
+		defer cl.Close()
+		err = cl.Auth(smtp.PlainAuth("", "agent@test.local", "wrong", host))
+		if err == nil {
+			t.Fatal("AUTH PLAIN with wrong password succeeded, want rejection")
+		}
+		if !strings.Contains(err.Error(), "535") {
+			t.Fatalf("AUTH PLAIN rejection = %q, want SMTP 535", err)
+		}
+	})
+}
+
+// TestSMTPAuthChallengeForms covers the challenge-response forms that
+// net/smtp does not expose: PLAIN without an initial response and LOGIN.
+func TestSMTPAuthChallengeForms(t *testing.T) {
+	srv := startSrv(t, config{users: twoReviewUsers(t), usersFlagGiven: true})
+	plain := base64.StdEncoding.EncodeToString([]byte("\x00agent@test.local\x00s3cret"))
+	username := base64.StdEncoding.EncodeToString([]byte("agent@test.local"))
+	password := base64.StdEncoding.EncodeToString([]byte("s3cret"))
+	wrongPassword := base64.StdEncoding.EncodeToString([]byte("wrong"))
+
+	t.Run("PLAIN without initial response", func(t *testing.T) {
+		smtpExchange(t, srv.smtpAddr,
+			[]string{"AUTH PLAIN", plain, "QUIT"},
+			[]string{"334", "235", "221"})
+	})
+	t.Run("LOGIN accepts configured credentials", func(t *testing.T) {
+		smtpExchange(t, srv.smtpAddr,
+			[]string{"AUTH LOGIN", username, password, "QUIT"},
+			[]string{"334", "334", "235", "221"})
+	})
+	t.Run("LOGIN rejects wrong credentials", func(t *testing.T) {
+		smtpExchange(t, srv.smtpAddr,
+			[]string{"AUTH LOGIN", username, wrongPassword},
+			[]string{"334", "334", "535"})
+	})
+}
+
 // TestDefaultModeSinksWithoutDelivering covers dispatch req 3's other half
 // and req 0: without -deliver the default fixture records SMTP in the sink
 // (exactly as today) and never touches the INBOX.
@@ -189,7 +257,7 @@ func TestDefaultModeSinksWithoutDelivering(t *testing.T) {
 	srv := startSrv(t, config{})
 
 	body := []string{"From: ada@example.test", "To: mailbox@test.local", "Subject: dropped", "", "Body only."}
-	smtpSend(t, srv.smtpAddr, "ada@example.test", "mailbox@test.local", body)
+	smtpSendMail(t, srv.smtpAddr, "mailbox@test.local", "s3cret", "ada@example.test", "mailbox@test.local", body)
 	want := strings.Join(body, "\n") + "\n"
 
 	if n := imapInboxCount(t, srv.imapAddr, "mailbox@test.local", "s3cret"); n != 0 {
@@ -289,11 +357,11 @@ func TestInjectAppendsSampleMessageForKnownUser(t *testing.T) {
 
 // --- helpers: real SMTP and IMAP clients, no mocks ---
 
-// smtpSend drives a minimal plaintext SMTP session against the REAL sink:
-// EHLO, MAIL FROM, RCPT TO, DATA, payload, dot, QUIT, asserting each reply
-// prefix. Deadlines keep failures fast instead of hanging.
-func smtpSend(t *testing.T, addr, from, rcpt string, payload []string) {
+func smtpExchange(t *testing.T, addr string, commands, replies []string) {
 	t.Helper()
+	if len(commands) != len(replies) {
+		t.Fatalf("SMTP exchange has %d commands and %d replies", len(commands), len(replies))
+	}
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("dial smtp %s: %v", addr, err)
@@ -303,38 +371,45 @@ func smtpSend(t *testing.T, addr, from, rcpt string, payload []string) {
 		t.Fatalf("set deadline: %v", err)
 	}
 	r := bufio.NewReader(conn)
-	reply := func(want string) {
-		t.Helper()
+	smtpReadReply(t, r, "220")
+	if _, err := fmt.Fprint(conn, "EHLO test.local\r\n"); err != nil {
+		t.Fatalf("SMTP EHLO: %v", err)
+	}
+	smtpReadReply(t, r, "250")
+	for i, command := range commands {
+		if _, err := fmt.Fprintf(conn, "%s\r\n", command); err != nil {
+			t.Fatalf("SMTP command %q: %v", command, err)
+		}
+		smtpReadReply(t, r, replies[i])
+	}
+}
+
+func smtpReadReply(t *testing.T, r *bufio.Reader, want string) {
+	t.Helper()
+	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
-			t.Fatalf("smtp read after %q: %v", want, err)
+			t.Fatalf("SMTP read waiting for %q: %v", want, err)
 		}
 		if !strings.HasPrefix(line, want) {
-			t.Fatalf("smtp reply = %q, want prefix %q", line, want)
+			t.Fatalf("SMTP reply = %q, want prefix %q", line, want)
+		}
+		if len(line) < 4 || line[3] != '-' {
+			return
 		}
 	}
-	write := func(s string) {
-		t.Helper()
-		if _, err := fmt.Fprintf(conn, "%s\r\n", s); err != nil {
-			t.Fatalf("smtp write %q: %v", s, err)
-		}
+}
+
+func smtpSendMail(t *testing.T, addr, user, pass, from, rcpt string, payload []string) {
+	t.Helper()
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("split SMTP address %q: %v", addr, err)
 	}
-	reply("220")
-	write("EHLO test.local")
-	reply("250")
-	write("MAIL FROM:<" + from + ">")
-	reply("250")
-	write("RCPT TO:<" + rcpt + ">")
-	reply("250")
-	write("DATA")
-	reply("354")
-	for _, line := range payload {
-		write(line)
+	msg := []byte(strings.Join(payload, "\r\n") + "\r\n")
+	if err := smtp.SendMail(addr, smtp.PlainAuth("", user, pass, host), from, []string{rcpt}, msg); err != nil {
+		t.Fatalf("smtp.SendMail: %v", err)
 	}
-	write(".")
-	reply("250")
-	write("QUIT")
-	reply("221")
 }
 
 func imapLogin(t *testing.T, addr, user, pass string) *imapclient.Client {
