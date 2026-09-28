@@ -181,6 +181,18 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			} else {
 				dt.SetLifecycleStore(nil)
 			}
+			// Issue #947 defect 2: give transitionLifecycle the shared
+			// UnifiedStore so every delegate child transition mirrors its
+			// terminal state onto sessions/<id>/meta.json (what the UI and
+			// follow_up read). The launcher mints every child's meta in this
+			// same store (launchOrdinaryRoot / launchSteered via
+			// al.GetSessionStore()),
+			// so the shared instance is the right handle — no per-agent
+			// store resolution needed. The field is a concrete pointer, not
+			// an interface, so a nil sharedSessionStore passes straight
+			// through: SetUnifiedStore(nil) keeps the mirror skipped, the
+			// same tolerance TransitionSession itself defines for nil.
+			dt.SetUnifiedStore(al.GetSessionStore())
 			if inbox != nil {
 				dt.SetMessageInbox(inbox)
 			} else {

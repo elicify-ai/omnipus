@@ -23,6 +23,12 @@
 #
 #   LANDING-ANNOUNCEMENT squad=<squad-id> branch=<branch-name> announced-at=<ISO8601> by=<who>
 #
+# The squad's GOAL is its own line below the row (never a row field — goal
+# text may contain "|"), written by whoever starts the squad and kept until
+# the squad is landed or released; no parser reads it:
+#
+#   GOAL squad=<squad-id> set-at=<ISO8601> by=<who> :: <end state, one line>
+#
 # A row untouched for 2 hours with no live session behind it is "stale"
 # (G3) — the chief asks the founder before releasing or re-assigning it.
 #

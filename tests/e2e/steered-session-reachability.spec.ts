@@ -278,7 +278,7 @@ test('steered session is reachable in its own live view without leaking child ou
   // KNOWN LIMIT, stated rather than papered over: a leaked frame carrying NO
   // agent_id would fall back to the parent's session agent and render as
   // "Jim", which this probe cannot see. The tool-call half of that hole is
-  // covered by the delegate-chip count below — the child's OWN nested
+  // covered by the delegated-line count below — the child's OWN nested
   // delegate calls would push it past 1.
   const childAgentLabel = (
     await page.getByTestId('agent-label').first().innerText({ timeout: 30_000 })
@@ -309,7 +309,20 @@ test('steered session is reachable in its own live view without leaking child ou
   // phrase no one ever produced (which is what asserting on the model's
   // unproduced ack would have been).
   await expect(parentView.getByText('Steering update', { exact: false })).toHaveCount(0)
-  await expect(parentView.locator('[data-testid="tool-call-badge"][data-tool="delegate"]')).toHaveCount(1)
+  await expect(parentView.locator('[data-testid="delegation-event-line"][data-event-kind="delegated"], [data-testid="delegation-event-line"][data-event-kind="started"]').filter({ hasText: LABEL_A })).toHaveCount(1)
+
+  // The pill assertion below is a POST-COMPLETION invariant — its own comment
+  // says "once the delegation has finished" — so the reload must not race the
+  // model. Gated on the delegation's own terminal event line (kind "finished",
+  // rendered from the persisted subagent_end), not on any wall-clock. Run-1
+  // evidence (local live run, 2026-09-27): every attempt reloaded ~17-20s into
+  // a 40-51s delegation and the pill truthfully read "1 running" through the
+  // whole 15s check window — the assertion fired on a LIVE delegation, not a
+  // phantom one. Every assertion above and below this gate is unchanged.
+  await expect(
+    parentView.locator('[data-testid="delegation-event-line"][data-event-kind="finished"]').filter({ hasText: LABEL_A }),
+    'child A must have finished before the reload — the pill check below is a post-completion invariant',
+  ).toBeVisible({ timeout: 240_000 })
 
   await parentView.reload()
   // CI run 36026415761: this segment used to wait 30s for the Activity bar to
@@ -320,13 +333,16 @@ test('steered session is reachable in its own live view without leaking child ou
   // delegation satisfies none of the three, and the visual-qa decision that
   // produced that gate is regression-protected by ActivityBar.test.tsx
   // ("renders nothing when there is no running activity"). The delegation
-  // stays visible through the surface ADR-091 D7/AC-7 designates for it at
-  // idle: the delegate tool-call chip, which shouldRenderToolCall renders
-  // unconditionally for a run action (toolVisibility.ts `delegate` case) —
+  // stays visible through its idle surface: the delegated event line
+  // (DelegationEventLine.tsx), the parent's
+  // default-thread delegation surface since fe1e2406a (delegation-chat-surface
+  // spec D2) — the delegate tool-call badge is verbose-only now. Birth kinds
+  // only ("delegated"/"started"), label-filtered to LABEL_A, so the terminal
+  // "… finished · ADR-091 child A" line can never inflate the count — and
   // proven to survive replay by the identical pre-reload assertion above.
   await expect(
-    parentView.locator('[data-testid="tool-call-badge"][data-tool="delegate"]'),
-    'the parent\'s delegate chip is the delegation surface that persists across reload at idle',
+    parentView.locator('[data-testid="delegation-event-line"][data-event-kind="delegated"], [data-testid="delegation-event-line"][data-event-kind="started"]').filter({ hasText: LABEL_A }),
+    'the parent\'s delegated event line is the delegation surface that persists across reload at idle',
   ).toHaveCount(1)
   // This previously asserted the bar mounts NOTHING here. That premise —
   // "idle and purely successful" — is not something this test can guarantee, and

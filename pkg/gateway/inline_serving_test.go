@@ -828,7 +828,7 @@ func serveViaWorkspaceMediaRoute(t *testing.T, filename string, body []byte) *ht
 	t.Cleanup(cleanup)
 
 	workspaceID := "ws-inline-serving"
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(store)
 	api.mediaStore = store
 

@@ -280,7 +280,10 @@ describe('ChatScreen — judge verdict thread card (ADR-049 D2/D4/SD-C10)', () =
 
     const cards = container.querySelectorAll('[data-testid="judge-verdict-thread-card"]')
     expect(cards).toHaveLength(1)
-    expect(cards[0].textContent).toContain('Judge verdict — goal round 1')
+    // toolui-analysis item 5 (founder-approved 2026-09-26): collapsed header
+    // renders "Judge verdict · <scope> round N · met/unmet" — middot, not the
+    // pre-restyle em-dash (JudgeVerdictThreadCard.tsx header comment).
+    expect(cards[0].textContent).toContain('Judge verdict · goal round 1')
     expect(cards[0].textContent).toContain('met')
 
     // In place: between the goal command and the later message.
@@ -328,7 +331,9 @@ describe('ChatScreen — judge verdict thread card (ADR-049 D2/D4/SD-C10)', () =
 
     const cards = container.querySelectorAll('[data-testid="judge-verdict-thread-card"]')
     expect(cards).toHaveLength(1)
-    expect(cards[0].textContent).toContain('Judge verdict — goal round 1')
+    // toolui-analysis item 5 (founder-approved 2026-09-26): middot separator,
+    // not the pre-restyle em-dash (JudgeVerdictThreadCard.tsx header comment).
+    expect(cards[0].textContent).toContain('Judge verdict · goal round 1')
     expect(cards[0].textContent).toContain('met')
   })
 
