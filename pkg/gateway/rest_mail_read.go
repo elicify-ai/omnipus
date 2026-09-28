@@ -25,6 +25,15 @@ type pageResult struct {
 	truncated bool
 }
 
+// mailNonNilSlice preserves populated slices and turns a nil slice into the
+// empty JSON array required by the mail response contracts.
+func mailNonNilSlice[T any](items []T) []T {
+	if items == nil {
+		return []T{}
+	}
+	return items
+}
+
 func (a *restAPI) handleMailFolders(w http.ResponseWriter, r *http.Request, workspaceID, agentID string) {
 	client := a.mailPairClient(w, agentID, workspaceID)
 	if client == nil {
@@ -124,7 +133,7 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 			Uid            int                               `json:"uid"`
 			Uidvalidity    int                               `json:"uidvalidity"`
 		}{
-			Cc:             row.Cc,
+			Cc:             mailNonNilSlice(row.Cc),
 			Date:           row.Date,
 			Folder:         gen.MailMessagePageMessagesFolder(folder),
 			From:           row.From,
@@ -135,11 +144,12 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 			ReadByAgent:    row.ReadByAgent,
 			Seen:           row.Seen,
 			Subject:        row.Subject,
-			To:             row.To,
+			To:             mailNonNilSlice(row.To),
 			Uid:            int(row.UID),
 			Uidvalidity:    int(uv),
 		})
 	}
+	out.Messages = mailNonNilSlice(out.Messages)
 	jsonOK(w, out)
 }
 
@@ -172,7 +182,7 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 	}
 	v := mv
 	out := gen.MailMessage{
-		Cc:             v.Cc,
+		Cc:             mailNonNilSlice(v.Cc),
 		Date:           v.Date,
 		Folder:         gen.MailMessageFolder(folder),
 		From:           v.From,
@@ -180,7 +190,7 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 		IsOmnipusDraft: v.IsOmnipusDraft,
 		MarkdownLossy:  v.MarkdownLossy,
 		Subject:        v.Subject,
-		To:             v.To,
+		To:             mailNonNilSlice(v.To),
 		Uid:            int(v.UID),
 		Uidvalidity:    int(v.UIDValidity),
 		BodyText:       v.TextBody,
@@ -213,7 +223,7 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 		out.BodyMarkdown = &bm
 	}
 	if folder == email.FolderDrafts || folder == email.FolderSent {
-		bcc := v.Bcc
+		bcc := mailNonNilSlice(v.Bcc)
 		out.Bcc = &bcc
 	}
 	for _, p := range v.Attachments {
@@ -237,6 +247,7 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 			SizeBytes:   p.SizeBytes,
 		})
 	}
+	out.Attachments = mailNonNilSlice(out.Attachments)
 	jsonOK(w, out)
 }
 
