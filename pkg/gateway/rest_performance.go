@@ -246,7 +246,7 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	if outcome.globalChanged || len(outcome.lowered) > 0 || a.pendingApply.isSet() {
 		if err := a.reloadAgentsAndConfirm(); err != nil {
 			a.pendingApply.mark(gen.PerformanceReloadFailedDetailsStageReload, changed,
-				a.reloadOutcome.startedCount())
+				a.reloadOutcome.startedCount(), a.reloadOutcome.configReadsCount())
 			writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageReload, changed)
 			return
 		}

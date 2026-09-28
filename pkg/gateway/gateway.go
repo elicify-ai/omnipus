@@ -460,7 +460,7 @@ type runContextWithOptions struct {
 	agentLoopCancel    context.CancelFunc
 	agentLoopDead      atomic.Bool
 	smConsumerCancel   context.CancelFunc
-	configReloadChan   <-chan *config.Config
+	configReloadChan   <-chan watchedConfigChange
 	stopWatch          func()
 }
 
@@ -1599,6 +1599,7 @@ func (rc *runContextWithOptions) configureHealthAndWatcher() {
 			rc.credStore,
 			rc.runningServices.selfWriteReg,
 			rc.runningServices.markReloadDegraded,
+			rc.runningServices.reloadOutcome,
 		)
 		logger.Info("Config hot reload enabled")
 	}
@@ -1627,7 +1628,7 @@ func (rc *runContextWithOptions) serveReloadLoop() error {
 			logger.Info("Shutting down...")
 			omnipusGracefulShutdown(rc.runningServices, rc.agentLoop, rc.provider, rc.cfg)
 			return nil
-		case newCfg := <-rc.configReloadChan:
+		case change := <-rc.configReloadChan:
 			if !rc.runningServices.beginReload(rc.agentLoop.MarkReloadPending) {
 				// NOT a drop: beginReload recorded the request, and the cycle
 				// that owns the in-flight reload will run a follow-up reload
@@ -1635,13 +1636,13 @@ func (rc *runContextWithOptions) serveReloadLoop() error {
 				logger.Info("Config reload coalesced into the in-flight reload")
 				continue
 			}
-			runReloadCycle(rc.agentLoop, rc.runningServices, newCfg, runOneReload, loadReloadConfig)
+			runReloadCycle(rc.agentLoop, rc.runningServices, change.cfg, change.readSeq, runOneReload, loadReloadConfig)
 		case <-rc.manualReloadChan:
 			// The slot was already claimed by reloadTrigger before it signalled
 			// this channel, so do NOT call beginReload here — runReloadCycle
 			// takes ownership of the release directly.
 			logger.Info("Manual reload triggered via /reload endpoint")
-			runReloadCycle(rc.agentLoop, rc.runningServices, nil, runOneReload, loadReloadConfig)
+			runReloadCycle(rc.agentLoop, rc.runningServices, nil, 0, runOneReload, loadReloadConfig)
 		}
 	}
 }

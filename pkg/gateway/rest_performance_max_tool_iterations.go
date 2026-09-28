@@ -569,7 +569,8 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 			"keeping the lowered agents (load/roster/credential causes are logged by refreshConfigAndRewireServices)",
 			"stage", "refresh", "lowered_agents", len(done))
 		out.notApplied = errPerformanceRefreshFailed
-		a.pendingApply.mark(gen.PerformanceReloadFailedDetailsStageRefresh, changed, a.reloadOutcome.startedCount())
+		a.pendingApply.mark(gen.PerformanceReloadFailedDetailsStageRefresh, changed,
+			a.reloadOutcome.startedCount(), a.reloadOutcome.configReadsCount())
 		a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
 		return out, nil
 	}

@@ -151,7 +151,7 @@ func TestPerformancePendingApply_ConcurrentOverlappingSaves_CoalescedFailureThen
 			case <-ctx.Done():
 				return
 			case <-svc.manualReloadChan:
-				runReloadCycle(api.agentLoop, svc, nil, exec, loadNext)
+				runReloadCycle(api.agentLoop, svc, nil, 0, exec, loadNext)
 			}
 		}
 	}()
