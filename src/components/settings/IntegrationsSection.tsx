@@ -60,6 +60,12 @@ export function IntegrationsSection() {
       setApiKeys({})
     },
     onError: (err: Error) => {
+      // A failed save can still have persisted state: the gateway stores the
+      // credential and writes config.json BEFORE the reload (or the
+      // post-reload usability judgment) fails — the persisted write stays
+      // (ADR-096 FR-033). Invalidate so the list reflects what the backend
+      // actually holds instead of the stale pre-save cache.
+      queryClient.invalidateQueries({ queryKey: ['integrations'] })
       addToast({
         message: getErrorMessage(err, 'Integration update failed'),
         variant: 'error',
