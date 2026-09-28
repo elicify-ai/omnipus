@@ -8,23 +8,27 @@
 
 ## Executive Summary
 
-1 CRITICAL, 7 MAJOR, 8 MINOR and 3 OBSERVATION findings. The spec is well researched on the
+2 CRITICAL, 10 MAJOR, 12 MINOR and 3 OBSERVATION findings. The spec is well researched on the
 read side (the whole-collection walk, `WalkContained`, is the right primitive and is correctly
 described), but it does not follow its own central decision (Q3/B: a view's identity is its
 `name`, not its filename) through to the **write** side: the writers still derive the file path
 from the name. As a result an ordinary `write_view` can silently overwrite a different view's
-file. It also misses a second live view writer (the `.base` re-derivation on every Library save).
-Agents cannot move or rename a view, and the Library preview has no server call it could use to
-open a view by file. Frontend coverage (preview states, accessibility of the icon-only kind
-distinction) is thinner than backend coverage.
+file (CRIT-001), and routine copies switch working views off (CRIT-002). It also misses a second
+live view writer (the `.base` re-derivation on every Library save). Agents cannot move or rename
+a view, the Library preview has no server call it could use to open a view by file, and §4
+cannot compile as written (package import cycle). Frontend coverage (preview states,
+accessibility of the icon-only kind distinction) is thinner than backend coverage.
+
+This file merges two independent round-1 passes over the same commit. Findings the second pass
+added are marked "(second pass)", and each was re-verified first-hand before it was included.
 
 | Severity | Count |
 |----------|-------|
-| CRITICAL | 1 |
-| MAJOR | 7 |
-| MINOR | 8 |
+| CRITICAL | 2 |
+| MAJOR | 10 |
+| MINOR | 12 |
 | OBSERVATION | 3 |
-| **Total** | **19** |
+| **Total** | **27** |
 
 All code claims below were checked first-hand in the `views-anywhere` worktree at `988c420bd`.
 GitNexus was not used (not indexed for this worktree). Evidence comes from direct Read/Grep and is
@@ -66,6 +70,24 @@ labelled Verified. Where a conclusion goes beyond what was read, it is labelled 
 
   Add dataset rows for both cases above.
 
+
+---
+
+#### [CRIT-002] Copying a view file, restoring it from trash or syncing it in kills the original through the reject-both duplicate rule
+
+- **Lens**: Security (availability) / UI journey
+- **Affected section**: D-DEDUP, US-1 AS-3, EC-4, EC-5
+- **Failure scenario**: views are now ordinary files, so "duplicate file" in the Library, a trash
+  restore, an upload, or a sync client's `open (1).view` conflict copy are routine actions. Each
+  creates a second file declaring the same `name`. D-DEDUP then rejects **both**, so the
+  original stops answering in `knowledge_find` and in embeds. The person did something harmless
+  and a working view silently died. The only signal is in a rejection report that people do not
+  see (Holdout 4 admits this). Today this cannot happen by accident, because views live in a
+  hidden directory.
+- **Evidence**: `pkg/records/view.go::loadViewPaths` has a duplicate-name group, and every member
+  is rejected. `knowledge_restructure_trash.go` has no view-name collision check on restore.
+- **Recommendation**: founder decision (Founder Q2). Severity raised from MAJOR after the second pass: copy-then-tweak is the ordinary way people make a variant of a note, and EC-5 wrongly calls a new collision "unlikely". At minimum, the spec must require that the
+  duplicate state is visible where a person looks: the tree entry and the preview refusal.
 ---
 
 ### MAJOR Findings
@@ -182,22 +204,58 @@ labelled Verified. Where a conclusion goes beyond what was read, it is labelled 
   the explicit GREEN task to move repo fixtures and e2e seeds out of `.omnipus-vault/views/`.
   Delete FR-VA-017's WARN clause, SC-VA-007, test 18, Dataset E3 and Holdout 7.
 
-#### [MAJ-007] Copying a view file, restoring it from trash or syncing it in kills the original through the reject-both duplicate rule
 
-- **Lens**: Security (availability) / UI journey
-- **Affected section**: D-DEDUP, US-1 AS-3, EC-4, EC-5
-- **Failure scenario**: views are now ordinary files, so "duplicate file" in the Library, a trash
-  restore, an upload, or a sync client's `open (1).view` conflict copy are routine actions. Each
-  creates a second file declaring the same `name`. D-DEDUP then rejects **both**, so the
-  original stops answering in `knowledge_find` and in embeds. The person did something harmless
-  and a working view silently died. The only signal is in a rejection report that people do not
-  see (Holdout 4 admits this). Today this cannot happen by accident, because views live in a
-  hidden directory.
-- **Evidence**: `pkg/records/view.go::loadViewPaths` has a duplicate-name group, and every member
-  is rejected. `knowledge_restructure_trash.go` has no view-name collision check on restore.
-- **Recommendation**: founder decision (Founder Q2). At minimum, the spec must require that the
-  duplicate state is visible where a person looks: the tree entry and the preview refusal.
 
+---
+
+#### [MAJ-008] §4 cannot compile: `pkg/records` calling `pkg/knowledge` is an import cycle (second pass)
+
+- **Lens**: Infeasibility
+- **Affected section**: §4 steps 1a–1c, D-WALK, §5 symbol table
+- **Failure scenario**: §4 has `records.LoadViews` build a `knowledge.CollectionRoot` and call
+  `knowledge.WalkContained`. `pkg/knowledge` already imports `pkg/records` (for example
+  `pkg/knowledge/author.go`), and `pkg/records` imports only `pkg/api/generated`. Go refuses the
+  reverse import, so the design cannot build.
+- **Recommendation**: invert it. Export today's `loadViewPaths` as `records.LoadViewPaths`. Add a
+  discovery helper in `pkg/knowledge` (walk plus `.view` filter) that every caller uses. Rewrite
+  §4 and the symbol table, noting that about 13 `LoadViews` call sites change signature.
+
+#### [MAJ-009] A view in an unreadable subfolder vanishes silently (second pass)
+
+- **Lens**: Incorrectness
+- **Affected section**: §4, §9 ("must not … silent drop")
+- **Failure scenario**: today an unreadable views directory makes `LoadViews` return an error.
+  `WalkContained` instead records an unreadable subfolder in `Skipped` (`SkipUnreadable`) and
+  returns success. Views in that folder disappear with no report, which breaks the spec's own
+  no-silent-drop rule.
+- **Evidence**: `pkg/knowledge/contain.go::WalkContained`, which returns an error only for the
+  root.
+- **Recommendation**: map `SkipUnreadable` entries to a view-load report entry, and test it.
+
+#### [MAJ-010] Library edits skip write-time validation, and a broken or duplicate view looks healthy in the tree (second pass)
+
+- **Lens**: Inoperability / Incompleteness
+- **Affected section**: US-4 AS-3, §7 error flows, Holdout 4
+- **Failure scenario**: `ViewDef` promises a bad view is "REJECTED at write time (D15), not stored
+  and discovered broken later". But a Library text edit, upload or rename of a `.view` file writes
+  it with no view validation. No field on `LibraryEntry` carries a rejection, so a duplicate
+  (CRIT-002) or broken view shows a normal kind icon.
+- **Recommendation**: decide whether a Library content write of a `.view` runs `ParseView` plus
+  `ValidateViewAgainstSchemas` and refuses on failure (recommended). Add an optional rejection
+  code to `LibraryEntry`, or state that only the preview shows it.
+
+#### [MAJ-011] Agents and people see different sets of views: dot-folders and mounts (second pass)
+
+- **Lens**: Ambiguity / Inconsistency
+- **Affected section**: FR-VA-001, FR-VA-012, EC-1, EC-2
+- **Failure scenario**:
+  - `WalkContained` skips only four folder names. A view in `.drafts/` is found by agents but
+    hidden in the Library.
+  - A mounted folder is a symlink that the Library shows as a folder
+    (`pkg/library/entries.go::annotateMount`), but the walk never follows it. A view there shows
+    in the tree but is invisible to agents.
+- **Recommendation**: align the discovery skip set with the Library's hidden rule, and state what
+  happens to mounts. Add these as dataset rows.
 ---
 
 ### MINOR Findings
@@ -320,6 +378,45 @@ labelled Verified. Where a conclusion goes beyond what was read, it is labelled 
   rendering where possible), an `aria-label`/tooltip naming the kind, and a line pointing to the
   catalogued components.
 
+
+---
+
+#### [MIN-009] Re-derivation reports "Deleted" for a file it did not delete (second pass)
+
+- **Lens**: Incorrectness (false success)
+- **Affected section**: US-2, MAJ-001
+- **Evidence**: `pkg/vaultimport/rederive.go` ignores `os.ErrNotExist` on `os.Remove` and still
+  appends the slug to `res.Deleted`. With views anywhere, a view the person moved is reported
+  deleted but remains on disk.
+- **Recommendation**: report "deleted" only when a file was actually removed, and locate the file
+  by `source` match.
+
+#### [MIN-010] Extension details are missing: letter case, a file named just `.view`, content type, text-editable flag (second pass)
+
+- **Lens**: Ambiguity
+- **Affected section**: Q1, FR-VA-010, FR-VA-012
+- **Recommendation**: state whether `.VIEW` matches (today's loader lowercases extensions). State
+  that a file named exactly `.view` is hidden and not discovered. FR-VA-012 is a no-op, because
+  `x.view` never starts with a dot. Add FRs to put `.view` in `pkg/library/entries.go`'s content
+  type table and its text-editable set.
+
+#### [MIN-011] "Existing tests pass unchanged" is impossible (second pass)
+
+- **Lens**: Testability
+- **Affected section**: §10 Regression item 2
+- **Evidence**: `pkg/records/view_test.go` calls `ViewsDir`, and many Go and SPA tests plant files
+  in `.omnipus-vault/views`. The second pass counted 29 Go and 4 SPA files (count not
+  re-verified).
+- **Recommendation**: reword to "fixtures relocated; assertions unchanged", and list the
+  relocation as a GREEN task.
+
+#### [MIN-012] The BDD structure and "Traces to" lines are missing (second pass)
+
+- **Lens**: Testability / traceability
+- **Affected section**: §6, §15
+- **Recommendation**: add Given/When/Then scenario blocks with `Traces to:` lines. Trace US-2
+  AS-2, US-6 AS-3 and `view_label` into the matrix. Name the two "add at implementation" tests
+  now (for example `TestDiscovery_SkipsControlDirs`, `TestRenameThenResolve`).
 ---
 
 ### Observations
@@ -392,7 +489,7 @@ labelled Verified. Where a conclusion goes beyond what was read, it is labelled 
 | Write identity | Upsert of a moved view; create onto an occupied filename | CRIT-001 |
 | Re-derivation | `.base` save after a view was moved or edited | MAJ-001 |
 | Agent move/rename | `knowledge_restructure` on `.view` | MAJ-002 |
-| Delete | `delete_view` of a view outside the root; trash/restore | MAJ-004, MAJ-007 |
+| Delete | `delete_view` of a view outside the root; trash/restore | MAJ-004, CRIT-002 |
 | Symlink race | Walked file swapped for a symlink before read | MIN-001 |
 | Resource limit | Oversize `.view` | MIN-002 |
 | Frontend states | Preview loading/refusal/duplicate; icon accessible name | MIN-008 |
@@ -447,3 +544,5 @@ mid-sized: storage, three agent tools, one contract change, and a new preview.
 
 (Q4 of the spec, the orphan-directory WARN, is not re-asked. Under your 2026-09-15 greenfield
 ruling it should simply be dropped, see MAJ-006.)
+
+Note: the second pass also offered, for Q2, the option "the filename is the name, like a note: renaming renames the view, and a copy becomes a new view". That option removes CRIT-001 and CRIT-002 at the root, but it reverses the spec's Q3/B. If you prefer it, answer **Q2 D**.
