@@ -129,7 +129,14 @@ describe("Mail unsaved-edit leave guard", () => {
     const guard = requireMailLeaveGuard();
     renderMail({ workspaceId: "ws-1", mailboxId: "mia" }, "docked");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Compose" }));
+    // MailPanel rides the shell's on-open dynamic-chunk path (React.lazy in
+    // mailPanelDefinition.tsx) — a cold import of its graph (tiptap,
+    // markdown/katex) takes 3.7-11s in this environment, well past
+    // findByRole's default 1000ms wait. Explicit timeout matches the
+    // precedent in src/routes/_app/-workspaces.$workspaceId.chat.mailPanel.test.tsx.
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Compose" }, { timeout: 30000 }),
+    );
     fireEvent.change(screen.getByRole("textbox", { name: "Message" }), {
       target: { value: "Unsent compose text" },
     });
@@ -172,7 +179,10 @@ describe("Mail unsaved-edit leave guard", () => {
       "fullscreen",
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    // Same cold-lazy-chunk wait as the compose-flow test above.
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Edit" }, { timeout: 30000 }),
+    );
     fireEvent.change(screen.getByRole("textbox", { name: "Message" }), {
       target: { value: "Changed draft text" },
     });
