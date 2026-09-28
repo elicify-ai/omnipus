@@ -5,7 +5,6 @@ import type { Editor } from '@tiptap/core'
 import { Blockquote } from '@tiptap/extension-blockquote'
 import { Bold } from '@tiptap/extension-bold'
 import { Code as TiptapCode } from '@tiptap/extension-code'
-import { CodeBlock } from '@tiptap/extension-code-block'
 import { Document } from '@tiptap/extension-document'
 import { HardBreak } from '@tiptap/extension-hard-break'
 import { Heading } from '@tiptap/extension-heading'
@@ -93,7 +92,6 @@ export function createMailEditorExtensions() {
     Bold,
     BulletList,
     TiptapCode,
-    CodeBlock,
     Document,
     HardBreak,
     Heading.configure({ levels: [1, 2, 3] }),

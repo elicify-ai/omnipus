@@ -105,7 +105,6 @@
     "@tiptap/extension-blockquote": "3.31.3",
     "@tiptap/extension-bold": "3.31.3",
     "@tiptap/extension-code": "3.31.3",
-    "@tiptap/extension-code-block": "3.31.3",
     "@tiptap/extension-document": "3.31.3",
     "@tiptap/extension-hard-break": "3.31.3",
     "@tiptap/extension-heading": "3.31.3",
