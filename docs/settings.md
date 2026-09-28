@@ -92,7 +92,7 @@ If an agent's own limit changes between the dialog opening and your confirmation
 
 ### When a save is not applied yet
 
-Rarely, a save is written but not yet in force. A warning then starts with **"Saved, but not applied yet"**. It names only the settings that save changed (for this card, "the tool-iteration limit"), and the agents the save lowered are still listed under the field. It comes in two forms:
+Rarely, a save is written but not yet in force. A warning then starts with **"Saved, but not applied yet"**. It names only the settings that save changed (for this card, "the tool-iteration limit"). The agents that save lowered are named at the moment of the save — in a status toast and inline under the field — but that naming does not survive a page reload: reload, and the list under the field is gone, even though the "Saved, but not applied yet" warning itself keeps showing. The audit log is the lasting record of which agents were lowered and when. It comes in two forms:
 
 | The warning reads | What happened |
 |---|---|

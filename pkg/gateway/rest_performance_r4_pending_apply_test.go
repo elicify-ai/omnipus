@@ -74,7 +74,7 @@ func wireR4ReloadPipeline(t *testing.T, api *restAPI) *r4ReloadPipeline {
 			case <-ctx.Done():
 				return
 			case <-svc.manualReloadChan:
-				runReloadCycle(api.agentLoop, svc, nil, exec, loadNext)
+				runReloadCycle(api.agentLoop, svc, nil, 0, exec, loadNext)
 			}
 		}
 	}()
@@ -229,18 +229,25 @@ func waitForReloadOrRebuildFailure(api *restAPI) error {
 // A reload that started before the save was marked read an older config: its
 // success must not clear the state; a PUT whose refresh predates a later mark
 // must not clear it either.
+//
+// readSeq is held fixed at 1 against configReadsAtMark=0 throughout (1 > 0
+// always holds), so only the reloadsStarted/markedAtReload dimension this
+// test targets can decide the outcome — the readSeq/markedAtConfigRead
+// dimension (round-4 finding: a reload cycle's start-sequence number alone
+// does not prove its config was read after the mark) is covered on its own
+// in rest_performance_r5_pending_apply_test.go.
 func TestPerformancePendingApply_OnlyLaterApplyClears(t *testing.T) {
 	var p performancePendingApply
 	p.mark(gen.PerformanceReloadFailedDetailsStageReload,
-		[]gen.PerformanceReloadFailedDetailsChangedFields{gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand}, 3)
+		[]gen.PerformanceReloadFailedDetailsChangedFields{gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand}, 3, 0)
 
-	p.clearAfterReload(3)
+	p.clearAfterReload(3, 1)
 	require.NotNil(t, p.snapshot(), "reload #3 started before the mark: must not clear")
-	p.clearAfterReload(4)
+	p.clearAfterReload(4, 1)
 	require.Nil(t, p.snapshot(), "reload #4 started after the mark: clears")
 
 	stale := p.epochNow()
-	p.mark(gen.PerformanceReloadFailedDetailsStageRefresh, nil, 4)
+	p.mark(gen.PerformanceReloadFailedDetailsStageRefresh, nil, 4, 1)
 	p.clearIfEpoch(stale)
 	require.NotNil(t, p.snapshot(), "a refresh that predates the latest mark must not clear it")
 	p.clearIfEpoch(p.epochNow())
