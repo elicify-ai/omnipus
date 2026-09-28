@@ -414,3 +414,50 @@ func TestFixS5_ConstructorErrorIsNotUsableNotNetworkHop(t *testing.T) {
 		t.Fatalf("log missing provider id and cause:\n%s", text)
 	}
 }
+
+// Gate round 2 (security NEW-1): a malformed credentialed proxy URL makes the
+// URL parser's own error quote the whole URL. The S5 path surfaces constructor
+// errors to the log and to the agent, so the proxy password must be redacted
+// in both — never echoed.
+func TestFixS5_ProxyCredentialsRedactedInConstructorError(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "search-proxy-creds.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	t.Cleanup(logger.DisableFileLogging)
+
+	const secret = "s3cretProxyPW"
+	t.Setenv("S5R_TAVILY_KEY", "s5r-tavily-key")
+	cfg := &config.WebToolsConfig{
+		DefaultProvider: config.SearchProviderTavily,
+		Tavily:          config.TavilyConfig{Enabled: true, APIKeyRef: "S5R_TAVILY_KEY"},
+	}
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		Proxy:         "http://proxyuser:" + secret + "@bad host:9",
+		TavilyEnabled: true,
+		TavilyAPIKeys: []string{"s5r-tavily-key"},
+		TavilyBaseURL: "https://api.tavily.com/search",
+		Roles:         func() *config.WebToolsConfig { return cfg },
+	})
+	if err != nil {
+		t.Fatalf("constructor error aborted the tool: %v", err)
+	}
+	res := tool.Execute(context.Background(), map[string]any{"query": "golang"})
+	if res == nil || !res.IsError {
+		t.Fatalf("expected a not-usable error for the malformed proxy")
+	}
+	if strings.Contains(res.ForLLM, secret) {
+		t.Fatalf("agent text leaks the proxy password:\n%s", res.ForLLM)
+	}
+	logger.DisableFileLogging()
+	raw, rerr := os.ReadFile(logPath)
+	if rerr != nil {
+		t.Fatalf("read log: %v", rerr)
+	}
+	if strings.Contains(string(raw), secret) {
+		t.Fatalf("log leaks the proxy password:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "proxyuser") && !strings.Contains(res.ForLLM, "invalid proxy URL") {
+		t.Fatalf("the cause must still be reported (redacted, not dropped):\n%s\n%s", res.ForLLM, raw)
+	}
+}
