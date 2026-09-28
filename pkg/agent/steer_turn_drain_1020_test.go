@@ -263,6 +263,8 @@ func finalHandbackResult1020(t *testing.T, deliverer *steerTurnDrainDeliverer102
 	return handback.ResultSoFar
 }
 
+func discardSteeredTurnDrain1020(_ *turnState, _ turnResult, _ error) {}
+
 func TestSteeredTurnDrain1020_LateWakeContinuesChildWithoutRestart(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -441,8 +443,8 @@ func TestSteeredTurnDrain1020_TwoItemsPersistentPreDequeueFailureAreAllAbandoned
 
 	blocker := &turnState{turnID: "issue-1020-pre-dequeue-blocker", sessionKey: child.SessionID}
 	al.activeTurnStates.Store(child.SessionID, blocker)
-	_, _, _ = al.drainSteeredTurn(
-		context.Background(), snapshot, ts, turnResult{finalContent: "initial response"}, nil)
+	discardSteeredTurnDrain1020(al.drainSteeredTurn(
+		context.Background(), snapshot, ts, turnResult{finalContent: "initial response"}, nil))
 	al.activeTurnStates.Delete(child.SessionID)
 
 	if got := al.pendingSteeringCountForScope(child.SessionID); got != 0 {
@@ -620,5 +622,84 @@ func TestSteeredTurnDrain1020_ConsumedMarkerFailureCannotCompleteCleanly(t *test
 	}
 	if got := al.pendingSteeringCountForScope(childID); got != 0 {
 		t.Errorf("pending steering count after consumed-marker persistence failure = %d, want 0 after fail-loud abandonment", got)
+	}
+}
+
+func TestSteeredTurnDrain1020_StopAfterFinalRecordCheckPreventsContinuation(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	provider := &steerTurnDrainProvider1020{}
+	agent, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
+	if !ok {
+		t.Fatal("SETUP: default test agent is not registered")
+	}
+	agent.Provider = provider
+	deliverer := newSteerTurnDrainDeliverer1020()
+	observer := &steerTurnDrainObserver1020{hook: func(sessionID string) error {
+		_, err := al.EnqueueSteeringMessage(
+			sessionID,
+			testDefaultAgentID,
+			providers.Message{Role: "user", Content: "ISSUE-1020-STOP-RACE-CONTINUATION"},
+			"issue-1020-stop-race",
+		)
+		return err
+	}}
+	al.SetSteerAudienceDeps(
+		NewSteerAudienceResolver(NewSteerRecordClassifier(al.GetSessionLifecycleStore(), al.GetSessionStore())),
+		observer,
+		deliverer,
+	)
+
+	hookReached := make(chan struct{})
+	releaseHook := make(chan struct{})
+	continueSteeredTurnBeforeRunTestHook = func(string, int) {
+		close(hookReached)
+		<-releaseHook
+	}
+	t.Cleanup(func() { continueSteeredTurnBeforeRunTestHook = nil })
+
+	child := launchQueuedSteeredTurnDrainChild1020(
+		t, al, testDefaultAgentID, "exercise Stop after the continuation's final lifecycle check")
+	dispatched, err := NewSteerLauncher(al).Dispatch(context.Background(), child.SessionID, child.Generation)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if dispatched.State != steer.DispatchRunning {
+		t.Fatalf("Dispatch state = %q, want %q", dispatched.State, steer.DispatchRunning)
+	}
+
+	select {
+	case <-hookReached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the continuation's pre-run hook")
+	}
+	canceller := NewSteerCanceller(al.GetSessionLifecycleStore(), al.SteerGenerationCancel)
+	report, cancelErr := canceller.CancelSubtree(context.Background(), child.SessionID, steer.Principal{
+		Kind: steer.PrincipalKindHuman,
+		ID:   "issue-1020-test",
+	})
+	if cancelErr != nil {
+		t.Fatalf("CancelSubtree: %v", cancelErr)
+	}
+	if len(report.Reached) != 1 || report.Reached[0] != child.SessionID {
+		t.Fatalf("CancelSubtree reached = %v, want only %q", report.Reached, child.SessionID)
+	}
+	close(releaseHook)
+
+	select {
+	case <-deliverer.delivered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for interrupted completion")
+	}
+	al.drainSteeredTurns(5 * time.Second)
+	if got := len(provider.Requests()); got != 1 {
+		t.Errorf("provider request count after Stop in the continuation registration gap = %d, want 1 (the initial turn only)", got)
+	}
+	events := deliverer.Events()
+	if len(events) != 1 {
+		t.Fatalf("upward completion event count after Stop = %d, want exactly 1", len(events))
+	}
+	if events[0].Outcome != steer.OutcomeInterrupted {
+		t.Errorf("upward completion outcome after Stop = %q, want %q", events[0].Outcome, steer.OutcomeInterrupted)
 	}
 }

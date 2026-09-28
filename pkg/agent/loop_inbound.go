@@ -1009,6 +1009,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	runCtx, cancel := steeredTurnRunContext(ctx, rec)
 	defer cancel()
 	result, err := al.runTurn(runCtx, ts)
+	ts, result, err = al.drainSteeredTurn(runCtx, rec, ts, result, err)
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	return result.finalContent, err
 }

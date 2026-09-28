@@ -961,6 +961,9 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 			al.drainSteerQueue(sessionID, gen)
 			return steer.DispatchResult{}, commitErr
 		}
+		if al.steering != nil {
+			al.steering.reopenScopeForGeneration(sessionID, gen)
+		}
 		if running.SteeredBy != nil {
 			al.deliverSubagentState(running.SteeringSessionID(), running, string(session.LifecycleRunning), nil)
 		}
@@ -996,6 +999,9 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 		al.activeTurnStates.CompareAndDelete(sessionID, ts)
 		al.drainSteerQueue(sessionID, gen)
 		return steer.DispatchResult{}, err
+	}
+	if al.steering != nil {
+		al.steering.reopenScopeForGeneration(sessionID, gen)
 	}
 	if rec.SteeredBy != nil {
 		al.deliverSubagentState(rec.SteeringSessionID(), rec, string(session.LifecycleRunning), nil)

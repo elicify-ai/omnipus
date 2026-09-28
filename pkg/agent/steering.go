@@ -48,9 +48,10 @@ func parseSteeringMode(s string) SteeringMode {
 // steeringQueue is a thread-safe queue of user messages that can be injected
 // into a running agent loop to interrupt it between tool calls.
 type steeringQueue struct {
-	mu     sync.Mutex
-	queues map[string][]steeringQueueItem
-	mode   SteeringMode
+	mu                sync.Mutex
+	queues            map[string][]steeringQueueItem
+	closedGenerations map[string]int
+	mode              SteeringMode
 }
 
 type steeringQueueItem struct {
@@ -73,8 +74,9 @@ type steeringWake struct {
 
 func newSteeringQueue(mode SteeringMode) *steeringQueue {
 	return &steeringQueue{
-		queues: make(map[string][]steeringQueueItem),
-		mode:   mode,
+		queues:            make(map[string][]steeringQueueItem),
+		closedGenerations: make(map[string]int),
+		mode:              mode,
 	}
 }
 
@@ -101,12 +103,54 @@ func (sq *steeringQueue) pushItemScope(scope string, item steeringQueueItem) err
 	defer sq.mu.Unlock()
 
 	scope = normalizeSteeringScope(scope)
+	if _, closed := sq.closedGenerations[scope]; closed {
+		return fmt.Errorf("steering session %s finished; use follow_up to continue it", scope)
+	}
 	queue := sq.queues[scope]
 	if len(queue) >= MaxQueueSize {
 		return fmt.Errorf("steering queue is full")
 	}
 	sq.queues[scope] = append(queue, item)
 	return nil
+}
+
+// closeScopeIfEmpty atomically hands a steered session from its drain to its
+// terminal disposition. An enqueue either wins this mutex first and leaves an
+// item for the drain, or observes the closed generation and fails loudly.
+func (sq *steeringQueue) closeScopeIfEmpty(scope string, generation int) bool {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	if len(sq.queues[scope]) > 0 {
+		return false
+	}
+	sq.closedGenerations[scope] = generation
+	return true
+}
+
+// drainAllAndCloseScope removes every queued item regardless of steering mode
+// and closes the generation in the same critical section. It is the bounded
+// failure path: no stale item may survive into a later revival.
+func (sq *steeringQueue) drainAllAndCloseScope(scope string, generation int) (string, []steeringQueueItem) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	items := append([]steeringQueueItem(nil), sq.queues[scope]...)
+	delete(sq.queues, scope)
+	sq.closedGenerations[scope] = generation
+	return scope, items
+}
+
+// reopenScopeForGeneration re-enables enqueue only for a newer lifecycle
+// generation. A same-generation wake cannot reopen a drain that already made
+// its terminal handoff.
+func (sq *steeringQueue) reopenScopeForGeneration(scope string, generation int) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	if closedGeneration, closed := sq.closedGenerations[scope]; closed && generation > closedGeneration {
+		delete(sq.closedGenerations, scope)
+	}
 }
 
 // dequeue removes and returns pending steering messages from the legacy
@@ -648,12 +692,17 @@ func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) (
 // resolved to (scope itself, or the manual fallback scope), the same value a
 // restore call must pass to steeringQueue.prependItemsScope.
 func (al *AgentLoop) dequeueSteeringItemsForScopeWithFallback(scope string) (actualScope string, consumedItems []steeringQueueItem, msgs []providers.Message, correlationIDs []string) {
+	actualScope, consumedItems, msgs, correlationIDs, _ = al.dequeueSteeringItemsForScopeWithFallbackResult(scope)
+	return actualScope, consumedItems, msgs, correlationIDs
+}
+
+func (al *AgentLoop) dequeueSteeringItemsForScopeWithFallbackResult(scope string) (actualScope string, consumedItems []steeringQueueItem, msgs []providers.Message, correlationIDs []string, err error) {
 	if al.steering == nil {
-		return normalizeSteeringScope(scope), nil, nil, nil
+		return normalizeSteeringScope(scope), nil, nil, nil, nil
 	}
 	actualScope, items := al.steering.dequeueItemsScopeWithFallback(scope)
-	msgs, correlationIDs, consumedItems = al.consumeDequeuedSteering(actualScope, items)
-	return actualScope, consumedItems, msgs, correlationIDs
+	msgs, correlationIDs, consumedItems, err = al.consumeDequeuedSteeringResult(actualScope, items)
+	return actualScope, consumedItems, msgs, correlationIDs, err
 }
 
 // consumeDequeuedSteering flattens dequeued steeringQueueItems into their
@@ -671,26 +720,31 @@ func (al *AgentLoop) dequeueSteeringItemsForScopeWithFallback(scope string) (act
 // item shape that was dequeued, rather than reconstructing an approximation
 // from the flattened msgs/correlationIDs slices that drops the wake pointer.
 func (al *AgentLoop) consumeDequeuedSteering(scope string, items []steeringQueueItem) ([]providers.Message, []string, []steeringQueueItem) {
+	msgs, correlationIDs, consumedItems, _ := al.consumeDequeuedSteeringResult(scope, items)
+	return msgs, correlationIDs, consumedItems
+}
+
+func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steeringQueueItem) ([]providers.Message, []string, []steeringQueueItem, error) {
 	if len(items) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	msgs := make([]providers.Message, 0, len(items))
 	correlationIDs := make([]string, 0, len(items))
 	consumedItems := make([]steeringQueueItem, 0, len(items))
-	for i, item := range items {
+	for _, item := range items {
 		if item.wake != nil {
 			if err := al.writeSteeringConsumedMarker(*item.wake); err != nil {
-				al.steering.prependItemsScope(scope, items[i:])
+				al.steering.prependItemsScope(scope, items)
 				slog.Error("agent: steering wake not consumed; restored to queue",
 					"scope", scope, "message_id", item.wake.messageID, "error", err)
-				return msgs, correlationIDs, consumedItems
+				return nil, nil, nil, fmt.Errorf("write steering consumed marker %q: %w", item.wake.messageID, err)
 			}
 		}
 		msgs = append(msgs, item.message)
 		correlationIDs = append(correlationIDs, item.correlationID)
 		consumedItems = append(consumedItems, item)
 	}
-	return msgs, correlationIDs, consumedItems
+	return msgs, correlationIDs, consumedItems, nil
 }
 
 func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) error {
@@ -790,6 +844,15 @@ func (al *AgentLoop) continuePendingSteering(
 	sessionKey string,
 	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
 ) (string, error) {
+	return al.continuePendingSteeringWithAgent(ctx, sessionKey, al.agentForSession(sessionKey), run)
+}
+
+func (al *AgentLoop) continuePendingSteeringWithAgent(
+	ctx context.Context,
+	sessionKey string,
+	agent *AgentInstance,
+	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
+) (string, error) {
 	// Bug 1 fix (design note "Caller survey"): the active-turn guard must be
 	// scoped to THIS session's own key, not the whole activeTurnStates map —
 	// GetActiveTurn() ranges the map and returns the first entry found
@@ -813,12 +876,14 @@ func (al *AgentLoop) continuePendingSteering(
 	// than merely stranded in the queue. This reorder is the invariant the
 	// drain-loop redesign (session_worker.go) depends on: every Continue
 	// error return must leave the steering queue exactly as it was.
-	agent := al.agentForSession(sessionKey)
 	if agent == nil {
 		return "", fmt.Errorf("no agent available for session %q", sessionKey)
 	}
 
-	actualScope, consumedItems, steeringMsgs, steeringCorrelationIDs := al.dequeueSteeringItemsForScopeWithFallback(sessionKey)
+	actualScope, consumedItems, steeringMsgs, steeringCorrelationIDs, consumeErr := al.dequeueSteeringItemsForScopeWithFallbackResult(sessionKey)
+	if consumeErr != nil {
+		return "", consumeErr
+	}
 	if len(steeringMsgs) == 0 {
 		return "", nil
 	}

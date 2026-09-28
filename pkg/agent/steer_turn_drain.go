@@ -27,6 +27,11 @@ type steeredContinuationAttempt struct {
 	turnRan bool
 }
 
+// continueSteeredTurnBeforeRunTestHook is a test-only synchronization seam,
+// fired after the continuation is registered and its lifecycle generation is
+// rechecked, immediately before runTurn. It is nil in production.
+var continueSteeredTurnBeforeRunTestHook func(sessionID string, generation int)
+
 // drainSteeredTurn consumes steering that arrived after runTurn's final poll.
 // It keeps the admission slot and lifetime context owned by the original
 // dispatch, but reconstructs a fresh turnState for every continuation. The
@@ -53,7 +58,10 @@ func (al *AgentLoop) drainSteeredTurn(
 		}
 	}
 
-	for al.pendingSteeringCountForScope(snapshot.SessionID) > 0 {
+	for {
+		if al.steering == nil || al.steering.closeScopeIfEmpty(snapshot.SessionID, snapshot.Generation) {
+			return lastTS, lastResult, lastErr
+		}
 		var attempted steeredContinuationAttempt
 		continued, attempts, continueErr := retrySteeringContinuation(ctx, func() (string, error) {
 			var err error
@@ -81,14 +89,13 @@ func (al *AgentLoop) drainSteeredTurn(
 			if _, stateErr := al.steeredDrainRecord(snapshot.SessionID, snapshot.Generation); errors.Is(stateErr, errSteeredDrainStopped) {
 				return lastTS, lastResult, context.Canceled
 			}
-			al.abandonSteeredQueuedSteering(lastTS, snapshot.SessionID, continueErr, attempts)
-			return lastTS, lastResult, lastErr
+			al.abandonSteeredQueuedSteering(lastTS, snapshot.SessionID, snapshot.Generation, continueErr, attempts)
+			return lastTS, lastResult, continueErr
 		}
 		if continued == "" {
-			return lastTS, lastResult, lastErr
+			continue
 		}
 	}
-	return lastTS, lastResult, lastErr
 }
 
 // continueSteeredTurn adapts the shared Continue dequeue/restore machinery to
@@ -110,10 +117,17 @@ func (al *AgentLoop) continueSteeredTurn(
 	}
 	attempt.ts = ts
 
-	_, err = al.continuePendingSteering(ctx, sessionID,
+	_, err = al.continuePendingSteeringWithAgent(ctx, sessionID, ts.agent,
 		func(_ *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
+			if !al.registerTurnIfAbsent(ts) {
+				return "", fmt.Errorf("steer: post-turn drain: session %q already has an active turn", sessionID)
+			}
 			if _, stateErr := al.steeredDrainRecord(sessionID, generation); stateErr != nil {
+				al.clearActiveTurnStateEntry(sessionID, ts)
 				return "", stateErr
+			}
+			if continueSteeredTurnBeforeRunTestHook != nil {
+				continueSteeredTurnBeforeRunTestHook(sessionID, generation)
 			}
 			ts.opts.UserMessage = ""
 			ts.userMessage = ""
@@ -155,6 +169,7 @@ func (al *AgentLoop) steeredDrainRecord(sessionID string, generation int) (*sess
 func (al *AgentLoop) abandonSteeredQueuedSteering(
 	ts *turnState,
 	sessionID string,
+	generation int,
 	lastErr error,
 	attempts int,
 ) {
@@ -172,7 +187,9 @@ func (al *AgentLoop) abandonSteeredQueuedSteering(
 		}
 	}()
 
-	abandonedScope, abandonedItems, _, _ = al.dequeueSteeringItemsForScopeWithFallback(sessionID)
+	if al.steering != nil {
+		abandonedScope, abandonedItems = al.steering.drainAllAndCloseScope(sessionID, generation)
+	}
 	logger.ErrorCF("agent", "steer: persistent Continue failure — abandoning queued steering",
 		map[string]any{
 			"session_id":  sessionID,
@@ -180,10 +197,12 @@ func (al *AgentLoop) abandonSteeredQueuedSteering(
 			"attempts":    attempts,
 			"error":       lastErr.Error(),
 		})
-	if ts != nil {
-		ts.appendClassifiedError(EventKindError.String(), "steering_continue", LLMError{
-			Code:    CodeUnknown,
-			Message: "A queued follow-up message could not be processed and was not delivered. Please send it again.",
-		})
+	for range abandonedItems {
+		if ts != nil {
+			ts.appendClassifiedError(EventKindError.String(), "steering_continue", LLMError{
+				Code:    CodeUnknown,
+				Message: "A queued follow-up message could not be processed and was not delivered. Please send it again.",
+			})
+		}
 	}
 }
