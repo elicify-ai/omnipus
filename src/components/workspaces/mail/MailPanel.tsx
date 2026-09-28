@@ -286,8 +286,13 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       })
     },
     onSuccess: (updated) => {
+      const updatedRef = mailUidRef(updated.uidvalidity, updated.uid)
+      const updatedDetailKey = [...DETAIL_KEY, workspaceId, agentId, 'drafts', updatedRef]
+      queryClient.setQueryData(updatedDetailKey, updated)
+      void queryClient.invalidateQueries({ queryKey: updatedDetailKey })
+      setSelectedRef(updatedRef)
+      void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
       void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
-      void queryClient.invalidateQueries({ queryKey: DETAIL_KEY })
       addToast({ message: updated.draft_cleanup_warning ?? 'Draft saved', variant: updated.draft_cleanup_warning ? 'warning' : 'success' })
     },
     onError: (err) => addToast({ message: mailErrorCode(err), variant: 'error' })
@@ -637,7 +642,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                     bodyMarkdown={detail.body_markdown ?? detail.body_text ?? ''}
                     to={detail.to.join(', ')}
                     sentOn={folder === 'sent' ? formatMailDate(detail.date) : undefined}
-                    onSave={(next) => draftSave.mutate(next)}
+                    onSave={(next) => draftSave.mutateAsync(next).then(() => true, () => false)}
                     onSend={() => draftSend.mutate()}
                     onDiscard={() => draftDiscard.mutate()}
                   />

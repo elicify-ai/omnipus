@@ -34,7 +34,7 @@ export interface MailPreviewPaneProps {
   to: string
   /** Shown in the 'sent' state (US-4 AS-4). */
   sentOn?: string
-  onSave(next: { to: string; subject: string; bodyMarkdown: string }): void
+  onSave(next: { to: string; subject: string; bodyMarkdown: string }): void | Promise<boolean>
   onSend(): void
   onDiscard(): void
 }
@@ -45,6 +45,7 @@ function toRecipientValue(value: string): MailRecipientValue {
 
 export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSave, onSend, onDiscard }: MailPreviewPaneProps) {
   const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [editTo, setEditTo] = useState<MailRecipientValue>(() => toRecipientValue(to))
   const [editSubject, setEditSubject] = useState(subject)
   const [editBody, setEditBody] = useState(bodyMarkdown)
@@ -109,7 +110,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
             label="To"
             required
             data-compose-header-row
-            className="mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
+            className="mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 px-[var(--space-3)] py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
           >
             {(controlProps) => (
               <MailRecipientInput
@@ -123,7 +124,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
           <Field
             label="Subject"
             data-compose-header-row
-            className="mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)]"
+            className="mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 px-[var(--space-3)] py-[var(--space-0-5)]"
           >
             <Input
               className="rounded-none border-0 bg-transparent px-0"
@@ -137,7 +138,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
           label="Message"
           description="Sent as formatted HTML plus a plain-text copy, with the mailbox signature appended."
           data-compose-message-region
-          className="flex min-h-[calc(var(--space-8)+var(--space-4))] flex-1 flex-col gap-[var(--space-1)] space-y-0"
+          className="flex min-h-[calc(var(--space-8)+var(--space-4))] flex-1 flex-col gap-[var(--space-1)] space-y-0 px-[var(--space-3)]"
         >
           {(controlProps) => (
             <MailMarkdownEditor
@@ -151,16 +152,22 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
           )}
         </Field>
         <div className="flex shrink-0 items-center gap-[var(--space-1)] border-t border-[var(--color-border)] bg-[var(--color-surface-0)] px-[var(--space-3)] py-[var(--space-2)]">
-          <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
+          <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(false)}>
             Back to preview
           </Button>
           <div className="min-w-0 flex-1" />
           <Button
             size="sm"
-            onClick={() => {
-              const toString = collectMailRecipients(editTo).join(', ')
-              onSave({ to: toString, subject: editSubject, bodyMarkdown: editBodyRef.current })
-              setEditing(false)
+            disabled={saving}
+            onClick={async () => {
+              setSaving(true)
+              try {
+                const toString = collectMailRecipients(editTo).join(', ')
+                const saved = await onSave({ to: toString, subject: editSubject, bodyMarkdown: editBodyRef.current })
+                if (saved !== false) setEditing(false)
+              } finally {
+                setSaving(false)
+              }
             }}
           >
             Save
