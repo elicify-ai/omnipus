@@ -16,7 +16,18 @@ import (
 
 func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, workspaceID string) {
 	cfg := a.agentLoop.GetConfig()
-	out := gen.MailSummaryList{}
+	// items is ALWAYS a JSON array: zero enabled mailboxes render [] — never
+	// null (MailSummaryList.yaml: items required, array, not nullable;
+	// architect confirmation 1, coordination/logs/email-arch-sigcsp.log).
+	out := gen.MailSummaryList{Items: []struct {
+		AgentId        string                               `json:"agent_id"`
+		LastErrorClass *string                              `json:"last_error_class"`
+		LastSeenUid    *int                                 `json:"last_seen_uid"`
+		LastSuccessAt  *time.Time                           `json:"last_success_at"`
+		NextAttemptAt  *time.Time                           `json:"next_attempt_at"`
+		UnseenTotal    int                                  `json:"unseen_total"`
+		WatcherState   gen.MailSummaryListItemsWatcherState `json:"watcher_state"`
+	}{}}
 	for agentID, ws := range cfg.Mailboxes {
 		mb, ok := ws[workspaceID]
 		if !ok || !mb.Enabled {

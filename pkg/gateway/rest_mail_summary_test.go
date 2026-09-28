@@ -212,3 +212,33 @@ func watcherTransport(t *testing.T) email.Transport {
 	require.NoError(t, err)
 	return cl
 }
+
+func TestMailSummary_ZeroEnabledMailboxes_ItemsEmptyArray(t *testing.T) {
+	// Architect confirmation 1 (coordination/logs/email-arch-sigcsp.log,
+	// "Confirmations" #1): `{"items":null}` violates
+	// contracts/components/schemas/MailSummaryList.yaml — required: [items],
+	// items: {type: array}, not nullable. Zero enabled mailboxes must render
+	// `items` as an EMPTY JSON array, never null. The control half reads the
+	// fixture's one-mailbox workspace on the same handler, so the empty
+	// reading cannot come from a dead route or an always-empty handler.
+	env := newMailRedEnv(t)
+	seedWorkspaceFile(t, env.api.homePath, "ws-empty-mail")
+	path := "/api/v1/workspaces/ws-empty-mail/mail/summary"
+	requireMailLive(t, env.mux, http.MethodGet, path, "MailSummaryList.yaml (items not nullable)")
+
+	rec := mailDo(env.mux, http.MethodGet, path, nextMailIP(), true, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("summary for a workspace with zero enabled mailboxes = %d, want 200. body=%s",
+			rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `"items":null`) {
+		t.Fatalf("MailSummaryList.yaml: items rendered null with zero enabled mailboxes — null violates the schema (required array). body=%s", body)
+	}
+	require.JSONEq(t, `{"items":[]}`, body,
+		"zero enabled mailboxes must render exactly an empty items array")
+
+	out := decodeSummary(t, mailDo(env.mux, http.MethodGet, summaryPath(), nextMailIP(), true, ""))
+	require.Len(t, out.Items, 1,
+		"control: the ws-mail fixture renders exactly its one enabled mailbox on the same handler")
+}

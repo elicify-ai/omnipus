@@ -421,3 +421,58 @@ func TestMailDraftRead_NeverListsDraftBodyPart(t *testing.T) {
 		require.NotEmpty(t, m.Attachments, "%s: the draft carries one real attachment; the listing may not be empty", name)
 	}
 }
+
+// leakFetchCopyRaw fetches one draft copy's full raw MIME bytes from the
+// fixture (BODY.PEEK[] — MC-25: fetching never sets \Seen) so the oracle can
+// count the marker parts the NEW copy actually carries. No response surface
+// can supply this: the listing never shows the marker.
+func leakFetchCopyRaw(t *testing.T, cl *imapclient.Client, uid uint32) string {
+	t.Helper()
+	opts := &imap.FetchOptions{UID: true, BodySection: []*imap.FetchItemBodySection{{Peek: true}}}
+	bufs, err := cl.Fetch(imap.UIDSetNum(imap.UID(uid)), opts).Collect()
+	require.NoError(t, err, "fixture fetch of the edited draft copy")
+	require.Len(t, bufs, 1, "fixture fetch: edited copy uid %d not found in Drafts", uid)
+	var raw []byte
+	for _, bs := range bufs[0].BodySection {
+		raw = bs.Bytes
+	}
+	require.NotEmpty(t, raw, "fixture fetch: no BODY[] bytes for the edited copy")
+	return string(raw)
+}
+
+func TestMailDraftPanelUpdate_KeepNamingMarkerPartIsAcceptedAndSkipped(t *testing.T) {
+	// Round 7 — CHECK round-5/6 finding 2: the PUT update path's
+	// keep_attachment_parts must ACCEPT a list that names the draft-body
+	// marker part's OWN stable index (derived independently from the appended
+	// fixture's raw MIME leaf walk — draftBodyMarkerStableIndex, never from
+	// any response surface) and SKIP the marker: the new copy carries exactly
+	// ONE marker part (its own, freshly rendered), never two, and the edit is
+	// never a 400 — "keep_attachment_parts names no such part" would mean the
+	// carry path forgot the marker is Omnipus bookkeeping, not a user
+	// attachment.
+	env := newMailRedEnv(t)
+	imapPort, cl := startPlainIMAP(t)
+	pointMailboxAt(t, env, imapPort, 1)
+	rawDraft := appendLeakDraft(t, cl)
+	uv := draftUIDValidity(t, cl)
+
+	realIdx := leakFreshDraftKeep(t, env, uv)      // download-route probe (contract addressing authority)
+	markerIdx := draftBodyMarkerStableIndex(t, rawDraft) // raw-MIME leaf walk (independent)
+	require.NotContains(t, realIdx, markerIdx,
+		"instrument: the derived marker index collides with the real attachment's index — the keep list would not actually name the marker")
+
+	m := editLeakDraft(t, env, uv, 1, append(realIdx, markerIdx), "marker named edit", leakEdit1Body)
+
+	require.False(t, containsMarkerListing(m),
+		"the carried listing must never show the marker; listing: %s", listingString(m))
+	require.True(t, listsRealAttachment(m),
+		"the real user attachment must still ride the keep list; listing: %s", listingString(m))
+	require.NotContains(t, allPartIndexes(m), markerIdx,
+		"the new copy's listing must not expose the marker as an attachment; listing: %s", listingString(m))
+
+	newRaw := leakFetchCopyRaw(t, cl, uint32(m.Uid))
+	markers := draftBodyMarkerParts(newRaw)
+	require.Len(t, markers, 1,
+		"the new copy must carry exactly ONE draft-body marker part (its own) — a keep list naming the marker's own stable index must be skipped, never carried:\n%s\nfull new copy:\n%s",
+		strings.Join(markers, "\n"), newRaw)
+}

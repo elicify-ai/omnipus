@@ -3483,6 +3483,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mail/signature-preview-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a short-lived token for the draft signature's live preview
+         * @description Mints the signature live-preview credential (email-mail-view-spec §16 Signature editor row, security sign-off MC-10 posture) — session-authenticated and STAYS in the API namespace; the SPA frames the served result through the existing token-only non-API /mail-preview/ prefix: /mail-preview/html/{token} serves the sanitized sandboxed signature HTML with the MC-10 normative header set (zero new serve surface; /mail-preview/img/{token}/{index} proxies the signature's https images under the same MC-41 rules).
+         *     Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request carries no workspace/agent/folder/ref, only the signature HTML itself. The HTML is sanitized AT MINT (MC-10(5) named-sanitizer discipline: strip meta/base/forms/scripts/event handlers, harden anchors; the signature policy keeps inline style, tables and https+data images per FR-003). The mint NEVER PERSISTS: the sanitized HTML lives only in the in-memory token store for the TTL and dies with the token (logout revocation or expiry). Storage sanitization stays the draft PUT's job. Token hygiene: 2-minute named MailSignaturePreviewTokenTTL, REPLACE-ON-MINT — a session holds at most one live signature token (a new mint revokes the session's previous signature token; message-preview tokens keep their separate cap-8-refuses hygiene). Rate-limited by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+         */
+        post: operations["mintMailSignaturePreviewToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/delegation": {
         parameters: {
             query?: never;
@@ -12473,6 +12494,33 @@ export interface components {
             /**
              * @description Seconds from the moment this response was produced until the token stops working (Library precedent: 900 for the 15-minute PreviewTokenTTL).
              * @example 900
+             */
+            expires_in_seconds: number;
+        };
+        /**
+         * MailSignaturePreviewTokenRequest
+         * @description Request to mint a short-lived token for the draft signature's live preview (POST /mail/signature-preview-token — session-authenticated, stays in the API namespace). Unlike the message HTML-preview mint, this endpoint NEVER dials IMAP: there is no workspace/agent/folder/ref in the request — the signature HTML is sanitized at mint (strip meta/base/forms/scripts/event handlers, harden anchors; the signature policy keeps inline style, tables and https+data images per FR-003) and held in the in-memory token store for the TTL. Mint never persists: the sanitized HTML lives only in memory and dies with the token (logout revocation or TTL expiry). Rate-limited by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+         */
+        MailSignaturePreviewTokenRequest: {
+            /**
+             * @description The signature editor's current HTML (MC-1 bound: 1..16384 characters). Sanitized at mint before it is ever served into the sandboxed preview frame; storage sanitization stays the draft PUT's job — this mint never writes the signature anywhere.
+             * @example <p style="color:#333">Elicify GmbH — Berlin</p>
+             */
+            signature_html: string;
+        };
+        /**
+         * MailSignaturePreviewTokenResponse
+         * @description Minted preview token for the draft signature's live preview. Mirrors the message preview's token hygiene (MC-43): 256-bit crypto/rand token, fail-closed on entropy failure, named TTL, indistinguishable 404s on the serve routes, logout revocation. Signature-token specifics: the TTL is the named 2-minute MailSignaturePreviewTokenTTL (bounds replay; the preview outlives debounce+render), and mints REPLACE — a session holds at most one live signature token (a new mint revokes the session's previous signature token; message-preview tokens keep their separate cap-8-refuses hygiene). The SPA constructs the /mail-preview/html/{token} URL from the token; expiry comes from expires_in_seconds.
+         */
+        MailSignaturePreviewTokenResponse: {
+            /**
+             * @description The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (Library token hygiene, MC-43). This string is the entire security of the unauthenticated /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (Referrer-Policy: no-referrer on the served responses).
+             * @example kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t
+             */
+            token: string;
+            /**
+             * @description Seconds from the moment this response was produced until the token stops working (named signature TTL: 120 for the 2-minute MailSignaturePreviewTokenTTL — replace-on-mint keeps exactly one live signature token per session).
+             * @example 120
              */
             expires_in_seconds: number;
         };
@@ -24415,6 +24463,41 @@ export interface operations {
             };
         };
     };
+    mintMailSignaturePreviewToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailSignaturePreviewTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Token minted; the SPA points the sandboxed signature-preview iframe at /mail-preview/html/{token}. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailSignaturePreviewTokenResponse"];
+                };
+            };
+            /** @description Validation failure — the signature HTML is outside its MC-1 bound (empty, or over the 16384-character maximum). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+        };
+    };
     getWorkspaceDelegation: {
         parameters: {
             query?: never;
@@ -25255,6 +25338,8 @@ export type MailDraftUpdateRequest = components["schemas"]["MailDraftUpdateReque
 export type MailDraftSendRequest = components["schemas"]["MailDraftSendRequest"];
 export type MailHtmlPreviewTokenRequest = components["schemas"]["MailHtmlPreviewTokenRequest"];
 export type MailHtmlPreviewTokenResponse = components["schemas"]["MailHtmlPreviewTokenResponse"];
+export type MailSignaturePreviewTokenRequest = components["schemas"]["MailSignaturePreviewTokenRequest"];
+export type MailSignaturePreviewTokenResponse = components["schemas"]["MailSignaturePreviewTokenResponse"];
 export type CreateEmailDraftResult = components["schemas"]["CreateEmailDraftResult"];
 export type MailUnavailableError = components["schemas"]["MailUnavailableError"];
 export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];

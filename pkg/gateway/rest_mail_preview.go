@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/email"
@@ -38,7 +39,18 @@ const (
 	mailImageMaxSeconds = 10
 	// mailImageLimiter is the mint limiter's rate (MC-44): 10/min per IP.
 	mailMintRatePerMinute = 10
+	// mailSignatureMintRatePerMinute is the signature mint limiter's rate
+	// (MC-44, decision): 60/min per IP — typing cadence is the load.
+	mailSignatureMintRatePerMinute = 60
+	// mailSignatureMaxChars is the signature_html bound (MC-1, contract
+	// MailSignaturePreviewTokenRequest): characters, not bytes.
+	mailSignatureMaxChars = 16384
 )
+
+// mailSignaturePreviewMintPath is the session-authenticated signature preview
+// mint endpoint (decision: POST /api/v1/mail/signature-preview-token — the
+// draft signature's live preview; never dials IMAP, never persists).
+const mailSignaturePreviewMintPath = "/api/v1/mail/signature-preview-token"
 
 // mailPreviewRoutes binds the mint endpoint and the serve prefix to one
 // token store, and publishes that store on the restAPI so logout (rest_auth)
@@ -69,6 +81,8 @@ func (a *restAPI) registerMailPreviewRoutes(cm httpHandlerRegistrar) {
 	routes := newMailPreviewRoutes(a)
 	cm.RegisterHTTPHandler(mailPreviewMintPath,
 		a.withAuth(withRateLimit(mailMintLimiter, routes.handleMint)))
+	cm.RegisterHTTPHandler(mailSignaturePreviewMintPath,
+		a.withAuth(withRateLimit(mailSignatureMintLimiter, routes.handleSignatureMint)))
 	serve := routes.serveHandler()
 	cm.RegisterHTTPHandler(mailPreviewPathPrefix, serve)
 }
@@ -76,6 +90,11 @@ func (a *restAPI) registerMailPreviewRoutes(cm httpHandlerRegistrar) {
 // mailMintLimiter guards the mint endpoint (MC-44): dedicated 10/min per IP,
 // separate from the panel mutation limiter.
 var mailMintLimiter = newAPIRateLimiter(mailMintRatePerMinute, 1*time.Minute)
+
+// mailSignatureMintLimiter guards the signature preview mint (MC-44, decision):
+// its OWN dedicated 60/min per-IP instance — typing cadence is the load.
+// Never the shared API limiter, never the message mint limiter.
+var mailSignatureMintLimiter = newAPIRateLimiter(mailSignatureMintRatePerMinute, 1*time.Minute)
 
 // serveHandler wraps the serving handler in a limiter with the MC-10 header
 // set applied BEFORE the limiter, so even the 429 carries the policy.
@@ -177,6 +196,59 @@ func (p *mailPreviewRoutes) handleMint(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := gen.MailHtmlPreviewTokenResponse{Token: token, ExpiresInSeconds: int(MailPreviewTokenTTL / time.Second)}
 	jsonOK(w, resp)
+}
+
+// handleSignatureMint implements POST /api/v1/mail/signature-preview-token
+// (decision memo email-arch-sigcsp, "Decision — exact contract shape"): the
+// draft signature's live preview. It NEVER dials IMAP — the request carries
+// no workspace/agent/folder/ref — and never persists: the sanitized HTML
+// lives only in the in-memory token store and dies with the token (logout
+// revocation or the 2-minute TTL).
+func (p *mailPreviewRoutes) handleSignatureMint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req gen.MailSignaturePreviewTokenRequest
+	if !decodeMailJSON(p.api, w, r, "MailSignaturePreviewTokenRequest", &req) {
+		return
+	}
+	sessionKey, ok := PreviewSessionKey(r)
+	if !ok {
+		jsonErr(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	// MC-1: 1..16384 characters (chars, not bytes).
+	if n := utf8.RuneCountInString(req.SignatureHtml); n < 1 || n > mailSignatureMaxChars {
+		jsonErr(w, http.StatusBadRequest, "signature_html must be 1..16384 characters")
+		return
+	}
+	sanitized, serr := email.SanitizeSignatureHTML(req.SignatureHtml)
+	if serr != nil {
+		jsonErr(w, http.StatusBadRequest, serr.Error())
+		return
+	}
+	// T38 (MIN-001 resolution): the signature's https images ride the
+	// existing MC-41-pinned proxy — extract from the FR-003-sanitized HTML,
+	// rewrite onto token-scoped paths, and bind LoadRemote so no load-images
+	// step is needed.
+	remoteURLs := mailExtractRemoteImageURLs(sanitized)
+	previewHTML := mailRewritePreviewSources(sanitized, nil, remoteURLs)
+	previewHTML = mailHardenAnchors(previewHTML)
+	token, merr := p.tokens.mint(sessionKey, mailPreviewGrant{
+		Kind:       mailPreviewKindSignature,
+		LoadRemote: true,
+		HTML:       previewHTML,
+		RemoteURLs: remoteURLs,
+	})
+	if merr != nil {
+		// No cap can refuse a signature mint (replace-on-mint); a failure
+		// here is entropy, a genuine server fault.
+		slog.Error("rest: mail signature preview mint failed", "error", merr)
+		jsonErr(w, http.StatusInternalServerError, "could not mint preview token")
+		return
+	}
+	jsonOK(w, gen.MailSignaturePreviewTokenResponse{Token: token, ExpiresInSeconds: int(MailSignaturePreviewTokenTTL / time.Second)})
 }
 
 // mailTokenPlaceholder stands in for the token inside sanitized HTML; it is

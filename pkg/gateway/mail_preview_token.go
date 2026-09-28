@@ -23,9 +23,36 @@ import (
 // precedent). Named so tests assert the constant, not a repeated literal.
 const MailPreviewTokenTTL = 15 * time.Minute
 
-// MailPreviewMaxLiveTokensPerSession caps live tokens per session (MC-43);
-// the ninth mint is refused, never an eviction.
+// MailPreviewMaxLiveTokensPerSession caps live MESSAGE preview tokens per
+// session (MC-43); the ninth message mint is refused, never an eviction.
+// Signature tokens are purpose-differentiated out of this counter: they
+// replace rather than accumulate.
 const MailPreviewMaxLiveTokensPerSession = 8
+
+// MailSignaturePreviewTokenTTL is the signature-preview token lifetime
+// (decision: 2 minutes — bounds replay; the editor preview outlives
+// debounce+render). Named so tests assert the constant, not a literal.
+const MailSignaturePreviewTokenTTL = 2 * time.Minute
+
+// Preview grant kinds. The zero value behaves as a message grant so grants
+// constructed without a kind keep the cap-8-refuses / 15-minute hygiene.
+const (
+	// mailPreviewKindMessage marks a message-preview grant: per-session
+	// cap-8-refuses, MailPreviewTokenTTL.
+	mailPreviewKindMessage = "message"
+	// mailPreviewKindSignature marks a draft-signature preview grant:
+	// replace-on-mint (a session holds at most one live signature token),
+	// never counted against the message cap, MailSignaturePreviewTokenTTL.
+	mailPreviewKindSignature = "signature"
+)
+
+// grantKindOf normalizes a grant's zero-value kind to the message kind.
+func grantKindOf(g mailPreviewGrant) string {
+	if g.Kind == "" {
+		return mailPreviewKindMessage
+	}
+	return g.Kind
+}
 
 // mailPreviewInline is one inline cid part ready to serve on
 // /mail-preview/part/{token}/{index}.
@@ -40,6 +67,10 @@ type mailPreviewInline struct {
 // store-recorded URLs only). Bound to the (pair, folder, ref, load_remote)
 // identity (MC-43).
 type mailPreviewGrant struct {
+	// Kind is the grant's purpose (mailPreviewKind*): it selects the TTL and
+	// the per-session cap discipline (message: cap-8-refuses; signature:
+	// replace-on-mint). Zero value behaves as message.
+	Kind        string
 	WorkspaceID string
 	AgentID     string
 	Folder      string
@@ -99,11 +130,18 @@ func (s *mailPreviewTokenStore) mint(sessionKey string, grant mailPreviewGrant) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.purgeLocked()
-	if len(s.bySession[sessionKey]) >= MailPreviewMaxLiveTokensPerSession {
+	ttl := MailPreviewTokenTTL
+	if grant.Kind == mailPreviewKindSignature {
+		// Replace-on-mint (decision): a session holds at most one live
+		// signature token — the new mint revokes the session's previous
+		// one, and signature tokens never count against the message cap.
+		s.revokeKindLocked(sessionKey, mailPreviewKindSignature)
+		ttl = MailSignaturePreviewTokenTTL
+	} else if s.countKindLocked(sessionKey, mailPreviewKindMessage) >= MailPreviewMaxLiveTokensPerSession {
 		return "", ErrMailPreviewCap
 	}
 	grant.SessionKey = sessionKey
-	grant.ExpiresAt = s.now().Add(MailPreviewTokenTTL)
+	grant.ExpiresAt = s.now().Add(ttl)
 	s.byToken[token] = grant
 	if s.bySession[sessionKey] == nil {
 		s.bySession[sessionKey] = make(map[string]struct{})
@@ -165,5 +203,31 @@ func (s *mailPreviewTokenStore) purgeLocked() {
 				}
 			}
 		}
+	}
+}
+
+// countKindLocked counts the session's live tokens of one kind. Caller
+// holds s.mu.
+func (s *mailPreviewTokenStore) countKindLocked(sessionKey, kind string) int {
+	n := 0
+	for tok := range s.bySession[sessionKey] {
+		if g, ok := s.byToken[tok]; ok && grantKindOf(g) == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// revokeKindLocked revokes the session's live tokens of one kind. Caller
+// holds s.mu.
+func (s *mailPreviewTokenStore) revokeKindLocked(sessionKey, kind string) {
+	for tok := range s.bySession[sessionKey] {
+		if g, ok := s.byToken[tok]; ok && grantKindOf(g) == kind {
+			delete(s.byToken, tok)
+			delete(s.bySession[sessionKey], tok)
+		}
+	}
+	if set := s.bySession[sessionKey]; len(set) == 0 {
+		delete(s.bySession, sessionKey)
 	}
 }

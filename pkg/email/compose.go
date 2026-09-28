@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
@@ -41,8 +42,8 @@ const (
 	// 1 MiB before any SMTP connection is opened.
 	maxOutboundBodyBytes = 1 << 20
 
-	// maxSignatureHTMLBytes is MC-1: a stored signature is at most 16,384 chars.
-	maxSignatureHTMLBytes = 16384
+	// maxSignatureHTMLChars is MC-1: a stored signature is at most 16,384 chars.
+	maxSignatureHTMLChars = 16384
 
 	// agentDraftHeader marks a locally composed draft (FR-029).
 	agentDraftHeader = "X-Omnipus-Draft"
@@ -230,12 +231,12 @@ func signaturePolicy() *bluemonday.Policy {
 }
 
 // SanitizeSignatureHTML applies the stored-signature allowlist. Raw input over
-// maxSignatureHTMLBytes (16,384) chars is rejected with an error naming the
+// maxSignatureHTMLChars (16,384) chars is rejected with an error naming the
 // limit (MC-1); the sanitized result is safe to store and to append to
 // outbound mail.
 func SanitizeSignatureHTML(raw string) (string, error) {
-	if len(raw) > maxSignatureHTMLBytes {
-		return "", fmt.Errorf("signature is %d characters; the maximum is %d", len(raw), maxSignatureHTMLBytes)
+	if chars := utf8.RuneCountInString(raw); chars > maxSignatureHTMLChars {
+		return "", fmt.Errorf("signature is %d characters; the maximum is %d", chars, maxSignatureHTMLChars)
 	}
 	return signaturePolicy().Sanitize(raw), nil
 }
