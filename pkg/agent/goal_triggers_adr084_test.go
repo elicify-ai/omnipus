@@ -75,7 +75,7 @@ func TestRunGoalAdjudication_RejectsEmptyClaimText(t *testing.T) {
 	judgeInst.Provider = cp
 
 	steered := false
-	met := al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, meta, "",
+	met, _ := al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, meta, "",
 		func(string) { steered = true })
 	if met {
 		t.Fatal("an empty claimText must never report met")
