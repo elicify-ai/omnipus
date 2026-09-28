@@ -2234,6 +2234,22 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   collection with saved views renders no "Saved views" block and no view dialog; the views are
   tree entries).
 
+- **FR-VA-031 *(founder-direction amendment, 2026-09-29, architect ruling Q-A = C)***: A Library
+  transfer to ANOTHER knowledge base (`pkg/gateway/rest_library_write.go::handleLibraryTransfer`, any
+  mode other than a same-collection move) MUST be REFUSED when it involves a tracked derived `.view`
+  (a view in its `.base`'s membership record) or a `.base` that has tracked views — including a folder
+  transfer containing either. The refusal is a visible REST error naming the tracked paths and the
+  reason; the Library UI shows it as a message; agent move/rename paths (`knowledge_configure`
+  rename/move) return the same refusal. Nothing is moved, copied, released or re-keyed. Tests 74, 75, 76.
+- **FR-VA-032 *(founder-direction amendment, 2026-09-29, architect ruling Q-B = B)***: When an
+  Omnipus-mediated move fails after the membership revocation (revoke-before-rename: preflight → persist
+  revocation → rename → markers → enroll; see #1042 for full crash atomicity), the visible "incomplete"
+  error MUST carry a Retry / re-enroll action that replays steps 3–5 (rename-completion check, markers,
+  enroll new paths) for the named paths only. Retry is idempotent (running it twice changes nothing the
+  second time), never grants authority to a path whose identity is not the revoked view's, and restores
+  management on success. Available to the user (UI action on the error) and to agents (same backend
+  operation). Tests 77, 78.
+
 ## 13. Success Criteria
 
 - **SC-VA-001**: A view file placed anywhere inside a knowledge base (any depth, not the former
@@ -2377,6 +2393,8 @@ registration/wiring, not the test suite).
 | FR-VA-026 | — (cross-cutting, OBS-003; **corrected in round 2, R2-MIN-007 — round 1 wrongly mapped this to test 10, a Library-listing test with no path-in-output assertion**) | — | 68 |
 | FR-VA-027 | — (cross-cutting, R2-MAJ-006) | — | 59, 60 |
 | FR-VA-030 | US-5, US-6 | founder-direction amendment 2026-09-29 (#1013) | 73 |
+| FR-VA-031 | US-2, US-3 | founder-direction amendment 2026-09-29 (architect Q-A) | 74, 75, 76 |
+| FR-VA-032 | US-2 | founder-direction amendment 2026-09-29 (architect Q-B) | 77, 78 |
 
 Every FR appears above. Remaining gaps between the TDD plan's numbered tests and a scenario are
 flagged rather than silently left implicit, per "no false success": the implementing lead adds the
