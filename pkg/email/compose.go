@@ -170,7 +170,11 @@ func Compose(in ComposeInput) (ComposeOutput, error) {
 			mix.WriteString(renderMarkdownPart(mixBoundary, in.Markdown))
 		}
 		for _, att := range in.Attachments {
-			mix.WriteString(renderAttachmentPart(mixBoundary, att))
+			part, err := renderAttachmentPart(mixBoundary, att)
+			if err != nil {
+				return ComposeOutput{}, err
+			}
+			mix.WriteString(part)
 		}
 		mix.WriteString("--" + mixBoundary + "--\r\n")
 		body = mix.String()
@@ -719,28 +723,39 @@ func renderMarkdownPart(boundary, md string) string {
 // multipart/mixed root. 7-bit-clean payloads are sent verbatim so the file
 // bytes stay readable on the wire; anything else is base64 (MC-32 keeps the
 // size caps in the caller, pre-dial).
-func renderAttachmentPart(boundary string, att Attachment) string {
+func renderAttachmentPart(boundary string, att Attachment) (string, error) {
 	name := sanitizeHeader(att.Name)
 	name = strings.ReplaceAll(name, `"`, "'")
 	if name == "" {
 		name = "attachment.bin"
 	}
 	ct := att.ContentType
+	if strings.ContainsAny(ct, "\r\n") {
+		return "", fmt.Errorf("compose: attachment %q has an invalid content type", name)
+	}
 	if ct == "" {
 		ct = mime.TypeByExtension("." + extOf(name))
 	}
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
-	ct = strings.ReplaceAll(ct, `"`, "'")
+	mediaType, params, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return "", fmt.Errorf("compose: attachment %q has an invalid content type", name)
+	}
+	params["name"] = name
+	ct = mime.FormatMediaType(mediaType, params)
+	if ct == "" {
+		return "", fmt.Errorf("compose: attachment %q has an invalid content type", name)
+	}
 	var b strings.Builder
 	b.WriteString("--" + boundary + "\r\n")
-	b.WriteString("Content-Type: " + ct + "; name=\"" + name + "\"\r\n")
+	b.WriteString("Content-Type: " + ct + "\r\n")
 	b.WriteString("Content-Disposition: attachment; filename=\"" + name + "\"\r\n")
 	b.WriteString("Content-Transfer-Encoding: " + textEncoding(att.Data) + "\r\n\r\n")
 	b.WriteString(writeTextPayload(att.Data))
 	b.WriteString("\r\n")
-	return b.String()
+	return b.String(), nil
 }
 
 // is7bitClean reports whether the bytes can ride the wire without encoding.

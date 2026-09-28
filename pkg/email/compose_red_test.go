@@ -78,6 +78,44 @@ func TestComposeMultipart_HeaderInjectionGuard(t *testing.T) {
 	}
 }
 
+func TestComposeAttachmentContentTypeRejectsHeaderInjection(t *testing.T) {
+	base := ComposeInput{
+		From:     "ada@box.test",
+		To:       []string{"a@x.test"},
+		Subject:  "attachment",
+		Markdown: "body",
+	}
+
+	t.Run("CRLF is rejected", func(t *testing.T) {
+		in := base
+		in.Attachments = []Attachment{{
+			Name:        "report.pdf",
+			ContentType: "application/pdf\r\nX-Injected: yes",
+			Data:        []byte("pdf"),
+		}}
+		out, err := Compose(in)
+		if err == nil {
+			t.Fatalf("Compose accepted a MIME content type containing CRLF; output contains injected header=%v", strings.Contains(string(out.Transmitted), "X-Injected: yes"))
+		}
+	})
+
+	t.Run("valid media type parameters are preserved", func(t *testing.T) {
+		in := base
+		in.Attachments = []Attachment{{
+			Name:        "report.pdf",
+			ContentType: "application/pdf; name=x.pdf",
+			Data:        []byte("pdf"),
+		}}
+		out, err := Compose(in)
+		if err != nil {
+			t.Fatalf("Compose rejected a valid parameterized media type: %v", err)
+		}
+		if !strings.Contains(string(out.Transmitted), "Content-Type: application/pdf") {
+			t.Fatalf("composed message lost the valid application/pdf media type:\n%s", out.Transmitted)
+		}
+	})
+}
+
 func TestPlainTextPart_ASTDerivation_HardWraps(t *testing.T) {
 	// MC-30 / DS-2: plain text comes from the same Markdown parse as the HTML.
 	// Links are "text (href)", list items are indented, code stays literal, and
