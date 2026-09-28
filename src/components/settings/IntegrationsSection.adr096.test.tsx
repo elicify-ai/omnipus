@@ -321,3 +321,47 @@ describe('IntegrationsSection — ADR-096 save rules', () => {
     })
   })
 })
+
+describe('IntegrationsSection — failed save that persisted state', () => {
+  // The reload-failure PUT is not a clean failure: the backend stores the
+  // credential and writes config.json BEFORE the reload (or the post-reload
+  // usability judgment) fails — rest_integrations_roles.go::
+  // handleIntegrationProviderUpdate returns 500 "saved but config reload
+  // failed" AFTER the store+persist, and the post-reload 400 keeps "the
+  // persisted write". The list must refetch so the row reflects what the
+  // backend actually holds, not the pre-save cache.
+  it('refetches the list after a save-then-fail PUT — the reload-failure response names a save that DID persist', async () => {
+    // Initial load: brave NOT configured — the row honestly shows "Add key".
+    vi.mocked(api.fetchIntegrationProviders).mockResolvedValueOnce({
+      ...RESPONSE,
+      search: RESPONSE.search.map((p) => (p.id === 'brave' ? { ...p, configured: false, usable: false } : p)),
+    } as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('addkey-brave'))
+    expect(screen.getByTestId('addkey-brave')).toHaveTextContent('Add key')
+
+    // The PUT fails AFTER persisting: key stored, config.json written, then
+    // the reload fails. The refetch the fix must trigger returns the
+    // persisted truth: the key is in the vault, so brave reads configured.
+    vi.mocked(api.configureIntegrationProvider).mockRejectedValueOnce(
+      new Error('Brave Search integration saved but config reload failed: reload timed out'),
+    )
+    vi.mocked(api.fetchIntegrationProviders).mockResolvedValueOnce(RESPONSE as never)
+
+    fireEvent.click(screen.getByTestId('addkey-brave'))
+    fireEvent.change(screen.getByTestId('key-input-brave'), { target: { value: 'BSA-secret' } })
+    fireEvent.click(screen.getByTestId('save-brave'))
+    await confirmGate()
+
+    // Existing behaviour kept: the failure surfaces as an error toast.
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
+    })
+    // The fix under test: the stale cache is dropped and the refetched list
+    // renders — brave now shows "Edit key" (the stored key resolved).
+    await waitFor(() => {
+      expect(screen.getByTestId('addkey-brave')).toHaveTextContent('Edit key')
+    })
+    expect(vi.mocked(api.fetchIntegrationProviders).mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+})
