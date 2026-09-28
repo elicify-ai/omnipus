@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/daemon"
+	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -134,6 +135,9 @@ func omnipusGracefulShutdown(
 		slog.Info("shutdown: agent loop drained cleanly")
 	case <-ctx.Done():
 		slog.Warn("shutdown: timeout waiting for agent loop drain — saving partial state")
+	}
+	if mediaStore, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
+		mediaStore.Stop()
 	}
 
 	slog.Info("shutdown: step 3 — verifying partial state persistence")

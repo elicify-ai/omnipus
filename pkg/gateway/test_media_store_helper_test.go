@@ -4,48 +4,58 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/stretchr/testify/require"
 )
+
+type cleanupRegistrar interface {
+	Helper()
+	Cleanup(fn func())
+}
 
 // newTestFileMediaStore constructs a media store whose debounced registry
 // writer is drained before the calling test's temporary OMNIPUS_HOME is
 // removed. Every gateway test must use this helper instead of constructing a
 // FileMediaStore directly: Stop cancels a pending debounce timer, flushes its
 // registry synchronously, and joins an in-flight save.
-func newTestFileMediaStore(t *testing.T) *media.FileMediaStore {
+func newTestFileMediaStore(t cleanupRegistrar) *media.FileMediaStore {
 	t.Helper()
 	store := media.NewFileMediaStore()
 	t.Cleanup(store.Stop)
 	return store
 }
 
+type cleanupRecorder struct {
+	cleanups []func()
+}
+
+func (*cleanupRecorder) Helper() {}
+
+func (r *cleanupRecorder) Cleanup(cleanup func()) {
+	r.cleanups = append(r.cleanups, cleanup)
+}
+
 func TestNewTestFileMediaStore_DrainsRegistryWriterBeforeHomeChanges(t *testing.T) {
-	root := t.TempDir()
-	firstHome := filepath.Join(root, "first-home")
-	secondHome := filepath.Join(root, "second-home")
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	source := filepath.Join(home, "upload.txt")
+	require.NoError(t, os.WriteFile(source, []byte("upload"), 0o600))
 
-	t.Run("schedule registry save", func(t *testing.T) {
-		t.Setenv("OMNIPUS_HOME", firstHome)
-		require.NoError(t, os.MkdirAll(firstHome, 0o700))
-		source := filepath.Join(firstHome, "upload.txt")
-		require.NoError(t, os.WriteFile(source, []byte("upload"), 0o600))
+	recorder := &cleanupRecorder{}
+	store := newTestFileMediaStore(recorder)
+	ref, err := store.Store(source, media.MediaMeta{
+		Filename:      "upload.txt",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "test-upload")
+	require.NoError(t, err)
+	require.Len(t, recorder.cleanups, 1, "the helper must register exactly one store cleanup")
 
-		store := newTestFileMediaStore(t)
-		_, err := store.Store(source, media.MediaMeta{
-			Filename:      "upload.txt",
-			CleanupPolicy: media.CleanupPolicyForgetOnly,
-		}, "test-upload")
-		require.NoError(t, err)
-	})
+	recorder.cleanups[0]()
 
-	require.NoError(t, os.RemoveAll(firstHome))
-	t.Setenv("OMNIPUS_HOME", secondHome)
-	time.Sleep(2 * time.Second)
-
-	require.NoDirExists(t, firstHome, "the stopped store must not recreate its original home")
-	require.NoDirExists(t, filepath.Join(secondHome, "media"),
-		"a delayed registry save must not follow a later test's OMNIPUS_HOME")
+	reloaded := media.NewFileMediaStore()
+	require.NoError(t, reloaded.LoadRegistry(), "registered cleanup must flush synchronously")
+	resolved, err := reloaded.Resolve(ref)
+	require.NoError(t, err)
+	require.Equal(t, source, resolved)
 }

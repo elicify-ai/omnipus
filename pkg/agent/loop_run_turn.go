@@ -1398,6 +1398,14 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	}()
 
 	if !rt.al.beginActiveRequest() {
+		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
+			"site":        "callProviderOnce",
+			"channel":     rt.ts.channel,
+			"chat_id":     rt.ts.chatID,
+			"session_id":  rt.ts.opts.TranscriptSessionID,
+			"session_key": rt.ts.sessionKey,
+			"agent_id":    rt.ts.agent.ID,
+		})
 		return nil, context.Canceled
 	}
 	defer rt.al.endActiveRequest()

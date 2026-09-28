@@ -215,6 +215,12 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	})
 	switch {
 	case mutateErr == nil:
+		// (e)② #947 defect 1 — the pair ends together (FD1=A): the
+		// terminal write just landed, so the child's ACTIVE session-owned goal
+		// ends with its session, the failureReason (already a readable
+		// "interrupted: the session was cancelled" shape) naming the cause.
+		// Idempotent; never speaks for a task-owned goal.
+		al.endSessionOwnedGoalOnTerminal(sessionID, goalEndingForTerminalState(nextState), failureReason)
 	case errors.Is(mutateErr, errTerminalReportStaleGeneration),
 		errors.Is(mutateErr, errTerminalReportAlreadyTerminal),
 		errors.Is(mutateErr, errTerminalReportStoppedDuringDelivery),
