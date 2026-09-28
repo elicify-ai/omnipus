@@ -313,15 +313,33 @@ func TestReadBoundary_GrepAbsoluteUnderMountAncestorSwap(t *testing.T) {
 		"pattern": "OUTSIDE-NEEDLE",
 		"path":    filepath.Join(f.mnt, "src", "b.md"),
 	})
-	// Oracle: the grep must NOT match any file INSIDE the swapped-in
-	// folder. rbHitPaths returns the match paths the engine reports;
-	// pre-fix those come from <EXT>/ext/b.md, post-fix none do (the
-	// walk never reaches outside content). ForLLM echoes the pattern
-	// string itself, so a plain strings.Contains check would always
-	// fire — match paths is the strict oracle.
-	for _, p := range rbHitPaths(res.ForLLM) {
-		if strings.HasPrefix(p, rbSlash(filepath.Join(f.ext, "ext"))) || strings.HasPrefix(p, filepath.Join(f.ext, "ext")) {
-			t.Fatalf("A1: read-confined grep matched a path inside the swapped-in folder %q:\n%s", p, res.ForLLM)
+	// fix3 RED oracle rewrite (this test's own prior oracle could never
+	// fail — Opus security-lead review, finding A1/re-review): a
+	// filegrep.Root's reported Name is a STRING LABEL fixed at
+	// Root-construction time from the mount's ORIGINAL configured host
+	// path (grepAbsoluteName(m.HostPath) / grepAbsoluteName(parent)) — it
+	// is never re-derived from which inode the walk actually reads
+	// through. Even a fully successful escape through the swapped-in
+	// folder renders its hit path prefixed with the MOUNT's own original
+	// host path (e.g. ".../src/b.md"), never with the swapped-to folder's
+	// path — this test's own PRIOR commit message documents exactly that,
+	// confirmed by an actual pre-fix run: "grep OUTSIDE-NEEDLE 1 match(es)
+	// /.../src/b.md:1:  OUTSIDE-NEEDLE" — a path-prefix check against the
+	// swapped-to folder can therefore never observe a leak, whatever the
+	// implementation does; it is not falsifiable.
+	//
+	// The only oracle that can actually fail is the swapped-in file's
+	// CONTENT, matched against a genuine content-hit line — never a bare
+	// strings.Contains(res.ForLLM, "OUTSIDE-NEEDLE"), which would also
+	// match the echoed pattern header ("grep \"OUTSIDE-NEEDLE\" case=smart")
+	// on every run, leak or not.
+	for _, line := range strings.Split(res.ForLLM, "\n") {
+		m := rbContentHitLine.FindStringSubmatch(line)
+		if m == nil {
+			continue // not a "path:line:  excerpt" content-match line
+		}
+		if strings.Contains(line[len(m[0]):], "OUTSIDE-NEEDLE") {
+			t.Fatalf("A1: read-confined grep's match content leaked the swapped-in folder's content:\n%s", res.ForLLM)
 		}
 	}
 }
