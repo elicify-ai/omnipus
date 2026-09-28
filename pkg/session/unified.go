@@ -93,6 +93,12 @@ type MetaPatch struct {
 	// InstanceID patches the channel instance key. Needed so a session created
 	// before the field existed can be identified later rather than guessed at.
 	InstanceID *string
+	// ReasoningEffort patches the conversation's stored reasoning effort
+	// (SessionMeta.ReasoningEffort, thinking-reasoning-spec.md §9.5). Follows
+	// the Owner/WorkspaceID convention: only written when non-nil; an empty
+	// string is a valid value and CLEARS the stored effort (the "/effort
+	// default" path).
+	ReasoningEffort *string
 	// ParentSessionID stamps this session's direct parent (ADR-057 FR-008).
 	// Only written when non-nil; empty string clears it (making the session
 	// a root again). The write path also wires the FR-097 in-memory parent

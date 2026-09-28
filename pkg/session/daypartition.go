@@ -76,18 +76,27 @@ func NewPartitionStore(agentWorkspaceDir, agentID string) *PartitionStore {
 
 // SessionMeta is the meta.json file per Appendix E §E.5.1.
 type SessionMeta struct {
-	ID          string        `json:"id"`
-	AgentID     string        `json:"agent_id"`
-	Title       string        `json:"title,omitempty"`
-	Status      SessionStatus `json:"status"` // StatusActive | StatusArchived | StatusInterrupted
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
-	Model       string        `json:"model,omitempty"`
-	Provider    string        `json:"provider,omitempty"`
-	Stats       SessionStats  `json:"stats"`
-	WorkspaceID string        `json:"workspace_id,omitempty"`
-	TaskID      string        `json:"task_id,omitempty"`
-	Channel     string        `json:"channel"`
+	ID        string        `json:"id"`
+	AgentID   string        `json:"agent_id"`
+	Title     string        `json:"title,omitempty"`
+	Status    SessionStatus `json:"status"` // StatusActive | StatusArchived | StatusInterrupted
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
+	Model     string        `json:"model,omitempty"`
+	Provider  string        `json:"provider,omitempty"`
+	// ReasoningEffort is the conversation-scoped reasoning-effort override a
+	// non-web conversation sets via /effort (thinking-reasoning-spec.md §9.5,
+	// C5 non-web row). Empty means the provider's own default applies. It is
+	// conversation state, never agent config: /effort on CLI/messenger
+	// channels patches THIS field for its own session only (D30 isolation);
+	// a model change on that conversation clears it; web never writes it
+	// (web is per-message picker state, D23). Server-internal — deliberately
+	// not mapped onto the gateway wire by rest_sessions.go.
+	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
+	Stats           SessionStats `json:"stats"`
+	WorkspaceID     string       `json:"workspace_id,omitempty"`
+	TaskID          string       `json:"task_id,omitempty"`
+	Channel         string       `json:"channel"`
 	// InstanceID is the channel INSTANCE this session belongs to — the key in
 	// cfg.Channels, e.g. "whatsapp.eu", not the bare type "whatsapp".
 	//
