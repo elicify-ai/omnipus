@@ -93,20 +93,24 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     await page.getByRole('tab', { name: /^mail$/i }).click()
   }
 
-  test('reads the seeded inbox message (US-3)', async ({ browser }) => {
+  test('reads the seeded inbox message and marks it seen (US-3, US-6)', async ({ browser }) => {
     const page = await mailPage(browser)
     await openMail(page)
     await expect(page.getByText('Quarterly')).toBeVisible()
-    await page.getByText('Quarterly').click()
-    await expect(page.getByText('The numbers are in.')).toBeVisible()
-  })
-
-  test('opening a message drops the Inbox unread count (US-6)', async ({ browser }) => {
-    const page = await mailPage(browser)
-    await openMail(page)
     const inbox = page.getByRole('tab', { name: /inbox/i })
     await expect(inbox).toContainText('1')
-    await page.getByText('Quarterly').click()
+    const [detailResponse] = await Promise.all([
+      page.waitForResponse((response) => {
+        const url = new URL(response.url())
+        return response.request().method() === 'GET'
+          && /\/folders\/inbox\/messages\/[^/]+$/.test(url.pathname)
+      }),
+      page.getByText('Quarterly').click(),
+    ])
+    const messageRef = decodeURIComponent(new URL(detailResponse.url()).pathname.split('/').at(-1) ?? '')
+    expect(messageRef).toMatch(/^uid:\d+:\d+$/)
+    expect(detailResponse.status()).toBe(200)
+    await expect(page.getByText('The numbers are in.')).toBeVisible()
     await expect(inbox).toContainText('0')
   })
 

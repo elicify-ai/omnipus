@@ -54,6 +54,11 @@ export type MailMessagePageParams = NonNullable<
   operations['listMailMessages']['parameters']['query']
 >
 
+/** Build the server's folder-scoped UID message reference. */
+export function mailUidRef(uidvalidity: number, uid: number): string {
+  return `uid:${uidvalidity}:${uid}`
+}
+
 /** Query-string suffix for the contract's `retry` marker (absent when false). */
 function retryQs(opts: { retry?: boolean }): string {
   return opts.retry === true ? '?retry=true' : ''

@@ -5,6 +5,7 @@
 // (the panel tolerates partial payloads in tests).
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { mailUidRef } from '@/lib/api/mail'
 import { formatMailTime } from './mail-format'
 import type { MailMessageSummary } from '@/lib/api'
 
@@ -23,7 +24,7 @@ export function MailMessageList({ messages, selectedRef, onSelect }: MailMessage
         </li>
       )}
       {messages.map((message) => {
-        const ref = `uid:${message.uid}`
+        const ref = mailUidRef(message.uidvalidity, message.uid)
         const selected = selectedRef === ref
         return (
           <li key={ref}>
