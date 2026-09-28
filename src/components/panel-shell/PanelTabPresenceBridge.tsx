@@ -1,10 +1,13 @@
 import { useEffect } from 'react'
 import {
+  armPanelFocusFallback,
+  consumePanelFocusFallback,
   focusPanelTab,
   resolveExistingPanelTab,
   startPanelTabPresenceMonitor,
   type PanelIdentity,
 } from '@/lib/panelTabPresence'
+import { startPanelPopoutLifecycleOwner } from '@/lib/panelPopoutLifecycle'
 import { useUiStore } from '@/store/ui'
 import type { ActivePanel } from './types'
 
@@ -28,11 +31,13 @@ function panelLabel(panelId: string): string {
 export function PanelTabPresenceBridge() {
   useEffect(() => {
     const stopMonitor = startPanelTabPresenceMonitor()
+    const stopLifecycleOwner = startPanelPopoutLifecycleOwner()
     const unsubscribe = useUiStore.subscribe((state, previous) => {
       const activePanel = state.activePanel
       if (activePanel === null || activePanel === previous.activePanel) return
       const identity = panelIdentity(activePanel)
       if (!identity) return
+      if (consumePanelFocusFallback(identity)) return
       const existing = resolveExistingPanelTab(identity)
       if (!existing) return
 
@@ -45,7 +50,10 @@ export function PanelTabPresenceBridge() {
         action: {
           label: 'Switch',
           onClick: () => {
-            focusPanelTab(identity)
+            if (!focusPanelTab(identity)) {
+              armPanelFocusFallback(identity)
+              useUiStore.getState().openPanel(activePanel.id, activePanel.context)
+            }
           },
         },
       })
@@ -53,6 +61,7 @@ export function PanelTabPresenceBridge() {
     return () => {
       unsubscribe()
       stopMonitor()
+      stopLifecycleOwner()
     }
   }, [])
 

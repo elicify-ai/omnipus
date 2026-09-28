@@ -23,51 +23,26 @@
 // control lock. Re-invoking the same identity focuses the existing full-page
 // tab instead of opening a duplicate.
 //
-// UAT fix (Dana, re-verified v8 — "pop-out re-dock STILL does not restore
-// the workspace"): the ORIGINAL version of this re-dock reaction only ever
-// fired when NOTHING was currently docked (a pure safety net). Dana's exact
-// repro — pop out from "My Workspace" (docked panel stays OPEN the whole
-// time), navigate the pop-out to "Dana Workspace B", close it — never hit
-// that branch at all: the docked panel was never null, so the broadcast was
-// treated as a no-op by design, regardless of whether the message plumbing
-// itself worked. That guard, not the BroadcastChannel wiring, was the actual
-// bug. Wave 1 preserves that follow-to-last-workspace behavior only in the
-// opener tab: the held Window handle proves ownership, the Library leave
-// guard protects a same-panel re-target, and a different open panel wins.
-//
-// `lastKnownPopoutWorkspaceRef` is fed CONTINUOUSLY by
-// `onLibraryWorkspaceChanged` (every in-tab navigation in the pop-out, not
-// only at teardown — see libraryHandoff.ts's module doc for why relying on
-// a single message posted at `pagehide` is unreliable: BroadcastChannel
-// delivery during unload is asynchronous and may never arrive). By the time
-// `popout-closed` fires, the latest workspace is almost always already
-// known from that continuous stream; the `workspaceId` `popout-closed`
-// itself carries is only a fallback for the (rare, and now much smaller)
-// window where no continuous update was ever received.
+// Pop-out ownership and workspace tracking live in panelPopoutLifecycle.ts,
+// whose app-level owner remains mounted after this content unmounts. That
+// stable owner keeps the opener-only handle, consumes the Library's
+// continuous workspace broadcasts, and re-docks at the last known workspace
+// through the leave guard. A different panel in the slot still wins.
 import { useCallback, useEffect, useRef } from 'react'
 import { useUiStore } from '@/store/ui'
-import { onLibraryPopoutClosed, onLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
 import {
+  armPanelFocusFallback,
   focusPanelTab,
-  forgetPanelTabHandle,
-  getPanelTabPresence,
-  panelIdentityKey,
-  registerPanelTabHandle,
-  resolvePanelOpen,
+  resolveRegisteredPanelOpen,
+  type PanelIdentity,
 } from '@/lib/panelTabPresence'
-import { watchPopoutClosed } from '@/lib/browserLiveHandoff'
+import {
+  registerPanelPopout,
+  releasePanelPopoutWithoutAppOwner,
+} from '@/lib/panelPopoutLifecycle'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import type { PanelContentProps } from '@/components/panel-shell/types'
 import { LibraryExplorer } from './LibraryExplorer'
-
-type OwnedLibraryPopout = {
-  window: Window
-  identityKey: string
-  workspaceId?: string
-  stop: () => void
-}
-
-const libraryPopoutHandles = new Map<string, Window>()
 
 export interface LibraryPanelProps {
   shellProps?: PanelContentProps
@@ -75,17 +50,10 @@ export interface LibraryPanelProps {
 
 export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
   const activePanel = useUiStore((s) => s.activePanel)
-  const ownedPopoutRef = useRef<OwnedLibraryPopout | null>(null)
-  const presenceRef = useRef<Array<{ panelId: string; workspaceId?: string }>>([])
-  // `set: false` until the FIRST continuous broadcast arrives, so a
-  // `popout-closed` that beats every `workspace-changed` message (e.g. the
-  // pop-out closed before this listener ever mounted) correctly falls back
-  // to the `popout-closed` payload instead of an undefined "known" value
-  // that would look identical to "the pop-out is at the virtual root".
-  const lastKnownPopoutWorkspaceRef = useRef<{
-    set: boolean
-    workspaceId?: string
-  }>({ set: false })
+  const isolatedCleanupRef = useRef<{
+    identity: PanelIdentity
+    handle: Window
+  } | null>(null)
 
   // C4: the docked LibraryExplorer's CURRENT location — not the
   // `libraryPanel.workspaceId` the store recorded at open time, which goes
@@ -100,56 +68,10 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     folder: '',
   })
 
-  useEffect(() => {
-    return onLibraryWorkspaceChanged((workspaceId) => {
-      lastKnownPopoutWorkspaceRef.current = { set: true, workspaceId }
-      presenceRef.current = [{ panelId: 'library', workspaceId }]
-
-      const owned = ownedPopoutRef.current
-      if (!owned) return
-      const nextKey = panelIdentityKey({ panelId: 'library', workspaceId })
-      if (nextKey === owned.identityKey) return
-      forgetPanelTabHandle({ panelId: 'library', workspaceId: owned.workspaceId }, owned.window)
-      libraryPopoutHandles.delete(owned.identityKey)
-      libraryPopoutHandles.set(nextKey, owned.window)
-      registerPanelTabHandle({ panelId: 'library', workspaceId }, owned.window)
-      owned.identityKey = nextKey
-      owned.workspaceId = workspaceId
-    })
-  }, [])
-
-  // A pop-out close only re-docks in its opener. The held handle is the
-  // ownership proof; a manual/third tab's broadcast therefore cannot move
-  // this tab's panel state (MAJ-208).
-  useEffect(() => {
-    const reDockOwned = (workspaceId?: string): void => {
-      const owned = ownedPopoutRef.current
-      presenceRef.current = []
-      if (!owned) return
-      ownedPopoutRef.current = null
-      owned.stop()
-      forgetPanelTabHandle({ panelId: 'library', workspaceId: owned.workspaceId }, owned.window)
-      libraryPopoutHandles.delete(owned.identityKey)
-      const active = useUiStore.getState().activePanel
-      if (active !== null && active.id !== 'library') return
-      const known = lastKnownPopoutWorkspaceRef.current
-      leaveGateThen(() => {
-        const current = useUiStore.getState().activePanel
-        if (current !== null && current.id !== 'library') return
-        useUiStore.getState().openPanel('library', {
-          workspaceId: known.set ? known.workspaceId : workspaceId,
-        })
-      })
-    }
-
-    const stopBroadcast = onLibraryPopoutClosed(reDockOwned)
-    return () => {
-      stopBroadcast()
-      const current = ownedPopoutRef.current
-      current?.stop()
-      if (current) libraryPopoutHandles.delete(current.identityKey)
-      ownedPopoutRef.current = null
-    }
+  useEffect(() => () => {
+    const owned = isolatedCleanupRef.current
+    if (owned) releasePanelPopoutWithoutAppOwner(owned.identity, owned.handle)
+    isolatedCleanupRef.current = null
   }, [])
 
   const libraryPanel = shellProps?.context ?? (activePanel?.id === 'library' ? activePanel.context : null)
@@ -184,13 +106,14 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     const qs = params.toString()
     // Hash routing: the route + search MUST live in the `#/` fragment or the
     // router falls back to the default route (same caveat as browser-live).
-    const identity = { panelId: 'library', workspaceId }
-    const identityKey = panelIdentityKey(identity)
-    const outcome = resolvePanelOpen({
+    const identity: PanelIdentity = { panelId: 'library', workspaceId }
+    let openedPopup: Window | null = null
+    const outcome = resolveRegisteredPanelOpen({
       identity,
-      handles: libraryPopoutHandles,
-      presence: [...presenceRef.current, ...getPanelTabPresence()],
-      open: () => window.open(`/#/library${qs ? `?${qs}` : ''}`, '_blank'),
+      open: () => {
+        openedPopup = window.open(`/#/library${qs ? `?${qs}` : ''}`, '_blank')
+        return openedPopup
+      },
     })
 
     if (outcome.kind === 'blocked') {
@@ -208,7 +131,10 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
         action: {
           label: 'Switch',
           onClick: () => {
-            focusPanelTab(identity)
+            if (!focusPanelTab(identity)) {
+              armPanelFocusFallback(identity)
+              useUiStore.getState().openPanel('library', { workspaceId })
+            }
           },
         },
       })
@@ -218,13 +144,11 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
       return true
     }
 
-    const popup = libraryPopoutHandles.get(identityKey)
+    const popup = openedPopup as Window | null
     if (!popup) return false
     try {
       popup.opener = null
-      registerPanelTabHandle(identity, popup)
     } catch {
-      libraryPopoutHandles.delete(identityKey)
       popup.close()
       useUiStore.getState().addToast({
         message: 'The Library tab could not open. The panel remains here.',
@@ -232,29 +156,22 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
       })
       return false
     }
-    const owned: OwnedLibraryPopout = {
-      window: popup,
-      identityKey,
-      workspaceId,
-      stop: () => {},
-    }
-    ownedPopoutRef.current = owned
-    owned.stop = watchPopoutClosed(popup, () => {
-      if (ownedPopoutRef.current !== owned) return
-      ownedPopoutRef.current = null
-      forgetPanelTabHandle({ panelId: 'library', workspaceId: owned.workspaceId }, popup)
-      libraryPopoutHandles.delete(owned.identityKey)
-      presenceRef.current = []
-      const known = lastKnownPopoutWorkspaceRef.current
-      const current = useUiStore.getState().activePanel
-      if (current !== null && current.id !== 'library') return
-      leaveGateThen(() => {
-        const latest = useUiStore.getState().activePanel
-        if (latest !== null && latest.id !== 'library') return
-        useUiStore.getState().openPanel('library', {
-          workspaceId: known.set ? known.workspaceId : workspaceId,
+    isolatedCleanupRef.current = { identity, handle: popup }
+    registerPanelPopout({
+      identity,
+      handle: popup,
+      onClosed: (finalIdentity) => {
+        isolatedCleanupRef.current = null
+        const current = useUiStore.getState().activePanel
+        if (current !== null && current.id !== 'library') return
+        leaveGateThen(() => {
+          const latest = useUiStore.getState().activePanel
+          if (latest !== null && latest.id !== 'library') return
+          useUiStore.getState().openPanel('library', {
+            workspaceId: finalIdentity.workspaceId,
+          })
         })
-      })
+      },
     })
     return true
   }, [libraryPanel])
