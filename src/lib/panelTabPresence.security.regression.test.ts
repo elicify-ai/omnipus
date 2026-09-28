@@ -79,20 +79,45 @@ describe('panel-tab presence security boundaries', () => {
     )
   })
 
-  it('returns false and forgets an app handle whose focus throws', async () => {
+  it('returns false without treating a live handle whose focus throws as stale', async () => {
     const api = await loadFresh()
     const identity = { panelId: 'library', workspaceId: 'ws-1' } as const
+    let focusDenied = true
     const handle = {
       closed: false,
       focus: vi.fn(() => {
-        throw new Error('focus denied')
+        if (focusDenied) throw new Error('focus denied')
       }),
     } as unknown as Window
     api.registerPanelTabHandle(identity, handle)
 
     expect(api.focusPanelTab(identity)).toBe(false)
-    expect(api.focusPanelTab(identity)).toBe(false)
-    expect(handle.focus).toHaveBeenCalledTimes(1)
+    focusDenied = false
+    expect(api.focusPanelTab(identity)).toBe(true)
+    expect(handle.focus).toHaveBeenCalledTimes(2)
+    api.forgetPanelTabHandle(identity, handle)
+  })
+
+  it('does not open a duplicate when a live registered handle cannot be focused', async () => {
+    const api = await loadFresh()
+    const identity = { panelId: 'library', workspaceId: 'ws-1' } as const
+    const open = vi.fn()
+    const handle = {
+      closed: false,
+      focus: vi.fn(() => {
+        throw new Error('focus denied')
+      }),
+    }
+
+    const result = api.resolvePanelOpen({
+      identity,
+      handles: new Map([[api.panelIdentityKey(identity), handle]]),
+      presence: [],
+      open,
+    })
+
+    expect(result).toEqual({ kind: 'focus-failed' })
+    expect(open).not.toHaveBeenCalled()
   })
 
   it('warns once when BroadcastChannel is unavailable', async () => {

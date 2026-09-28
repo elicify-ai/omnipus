@@ -5,12 +5,11 @@ import { flushSync } from 'react-dom'
 import { useUiStore } from '@/store/ui'
 import type { PanelContentProps } from '@/components/panel-shell/types'
 import {
-  armPanelFocusFallback,
-  focusPanelTab,
   resolveExistingPanelTab,
   resolveRegisteredPanelOpen,
   type PanelIdentity,
 } from '@/lib/panelTabPresence'
+import { showPanelTabFocusDegraded, showPanelTabSwitch } from '@/components/panel-shell/panelTabSwitch'
 import {
   discardPanelPopout,
   registerPanelPopout,
@@ -97,25 +96,17 @@ export function BrowserLivePanel({ shellProps }: BrowserLivePanelProps = {}) {
       return false
     }
     if (outcome.kind === 'affordance') {
-      const openHere = () => {
-        armPanelFocusFallback(identity)
+      const openWhenUnavailable = () => {
         useUiStore.getState().openPanel('browser', {
           sessionId: browserPanel.sessionId,
           agentId: browserPanel.agentId,
         })
       }
-      useUiStore.getState().addToast({
-        message: 'The Browser is already open in another tab — switch.',
-        variant: 'default',
-        duration: 10_000,
-        action: {
-          label: 'Switch',
-          onClick: () => {
-            if (!focusPanelTab(identity)) openHere()
-          },
-        },
-        secondaryAction: { label: 'Open here', onClick: openHere },
-      })
+      showPanelTabSwitch(identity, 'The Browser', openWhenUnavailable)
+      return true
+    }
+    if (outcome.kind === 'focus-failed') {
+      showPanelTabFocusDegraded('The Browser')
       return true
     }
     if (outcome.kind === 'focused') {

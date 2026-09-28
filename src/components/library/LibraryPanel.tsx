@@ -31,12 +31,8 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useUiStore } from '@/store/ui'
 import { generateId } from '@/lib/constants'
-import {
-  armPanelFocusFallback,
-  focusPanelTab,
-  resolveRegisteredPanelOpen,
-  type PanelIdentity,
-} from '@/lib/panelTabPresence'
+import { resolveRegisteredPanelOpen, type PanelIdentity } from '@/lib/panelTabPresence'
+import { showPanelTabFocusDegraded, showPanelTabSwitch } from '@/components/panel-shell/panelTabSwitch'
 import {
   registerPanelPopout,
   releasePanelPopoutWithoutAppOwner,
@@ -127,22 +123,14 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
       return false
     }
     if (outcome.kind === 'affordance') {
-      const openHere = () => {
-        armPanelFocusFallback(identity)
+      const openWhenUnavailable = () => {
         useUiStore.getState().openPanel('library', { workspaceId })
       }
-      useUiStore.getState().addToast({
-        message: 'The Library is already open in another tab — switch.',
-        variant: 'default',
-        duration: 10_000,
-        action: {
-          label: 'Switch',
-          onClick: () => {
-            if (!focusPanelTab(identity)) openHere()
-          },
-        },
-        secondaryAction: { label: 'Open here', onClick: openHere },
-      })
+      showPanelTabSwitch(identity, 'The Library', openWhenUnavailable)
+      return true
+    }
+    if (outcome.kind === 'focus-failed') {
+      showPanelTabFocusDegraded('The Library')
       return true
     }
     if (outcome.kind === 'focused') {

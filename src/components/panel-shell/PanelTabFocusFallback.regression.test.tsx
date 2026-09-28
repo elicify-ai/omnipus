@@ -9,9 +9,12 @@ vi.mock('@/lib/panelTabPresence', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/panelTabPresence')>()
   return {
     ...actual,
-    focusPanelTab: vi.fn(() => false),
+    switchToPanelTab: vi.fn(() => {
+      if (focusResult === 'absent') existingResult = null
+      return focusResult
+    }),
     getPanelTabPresence: vi.fn(() => [{ panelId: 'library', workspaceId: 'ws-1' }]),
-    resolveExistingPanelTab: vi.fn(() => 'affordance' as const),
+    resolveExistingPanelTab: vi.fn(() => existingResult),
     resolvePanelOpen: vi.fn(() => ({ kind: 'affordance' as const })),
     resolveRegisteredPanelOpen: vi.fn(() => ({ kind: 'affordance' as const })),
     startPanelTabPresenceMonitor: vi.fn(() => () => {}),
@@ -39,6 +42,8 @@ import { LibraryPanel } from '@/components/library/LibraryPanel'
 import { PanelTabPresenceBridge } from './PanelTabPresenceBridge'
 
 let registeredExpand: (() => boolean) | null = null
+let focusResult: 'absent' | 'failed' = 'absent'
+let existingResult: 'affordance' | null = 'affordance'
 
 function shellProps(context: PanelContentProps['context']): PanelContentProps {
   return {
@@ -60,6 +65,8 @@ function invokeExpandAndClose(): void {
 
 beforeEach(() => {
   registeredExpand = null
+  focusResult = 'absent'
+  existingResult = 'affordance'
   useUiStore.setState({ activePanel: null, toasts: [] })
 })
 
@@ -69,8 +76,8 @@ afterEach(() => {
   useUiStore.setState({ activePanel: null, toasts: [] })
 })
 
-describe('failed already-open focus reopens the panel locally', () => {
-  it('PanelTabPresenceBridge restores the panel when its Switch action cannot focus', () => {
+describe('SP-18 focus fallback', () => {
+  it('PanelTabPresenceBridge restores locally only after the remote presence is absent', () => {
     render(
       <>
         <PanelTabPresenceBridge />
@@ -88,9 +95,29 @@ describe('failed already-open focus reopens the panel locally', () => {
       id: 'library',
       context: { workspaceId: 'ws-1' },
     })
+    expect(screen.queryByRole('button', { name: 'Open here' })).not.toBeInTheDocument()
   })
 
-  it('Library Expand restores its dock when the other tab cannot be focused', async () => {
+  it('keeps the dock closed and gives an honest manual-switch message when live focus fails', () => {
+    focusResult = 'failed'
+    render(
+      <>
+        <PanelTabPresenceBridge />
+        <ToastContainer />
+      </>,
+    )
+    act(() => {
+      useUiStore.getState().openPanel('library', { workspaceId: 'ws-1' })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch' }))
+
+    expect(useUiStore.getState().activePanel).toBeNull()
+    expect(screen.getByText(/switch to that tab manually/i)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Open here' })).not.toBeInTheDocument()
+  })
+
+  it('Library Expand restores its dock only after the other tab is absent', async () => {
     act(() => {
       useUiStore.getState().openPanel('library', { workspaceId: 'ws-1' })
     })
@@ -113,7 +140,7 @@ describe('failed already-open focus reopens the panel locally', () => {
     })
   })
 
-  it('Browser Expand restores its dock when the other tab cannot be focused', async () => {
+  it('Browser Expand restores its dock only after the other tab is absent', async () => {
     const context = { sessionId: 'session-1', agentId: 'agent-1' }
     act(() => {
       useUiStore.getState().openPanel('browser', context)

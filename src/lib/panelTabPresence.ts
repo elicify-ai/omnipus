@@ -12,9 +12,12 @@ type MutableHandleRegistry = ReadonlyMap<string, PanelWindowHandle> & // not-wir
 
 type PanelOpenOutcome =
   | { kind: 'focused' }
+  | { kind: 'focus-failed' }
   | { kind: 'affordance' }
   | { kind: 'opened' }
   | { kind: 'blocked' }
+
+export type PanelTabFocusResult = 'focused' | 'requested' | 'absent' | 'failed'
 
 const PRESENCE_CHANNEL_NAME = 'omnipus-panel-tab-presence'
 const PRESENCE_HEARTBEAT_MS = 1_000
@@ -25,6 +28,7 @@ type PanelPresenceMessage = // not-wire-format: same-origin browser-tab lifecycl
   | { type: 'leave'; tabId: string }
   | { type: 'request' }
   | { type: 'focus'; tabId: string; focusNonce: string }
+  | { type: 'focus-failed'; tabId: string; focusNonce: string }
 
 type PresenceEntry = { // not-wire-format: in-memory same-origin presence cache entry, never serialized or sent to the gateway
   identityKey: string
@@ -40,7 +44,14 @@ export type PanelPresenceAnnouncement = { // not-wire-format: SPA-local lifecycl
 const panelTabHandles = new Map<string, Window>()
 const presenceByTab = new Map<string, PresenceEntry>()
 const localIdentityByOpaqueKey = new Map<string, PanelIdentity>()
-const localFocusFallbackKeys = new Set<string>()
+// Longer than PRESENCE_STALE_MS so a recent Switch can observe one stale-presence sweep.
+const PANEL_FOCUS_FALLBACK_MS = 5_000
+const localFocusFallbacks = new Map<string, {
+  identity: PanelIdentity
+  onUnavailable: () => void
+  onFocusFailed: () => void
+  timer: ReturnType<typeof setTimeout>
+}>()
 const presenceSubscribers = new Set<() => void>()
 let monitorChannel: BroadcastChannel | null = null
 let monitorConsumers = 0
@@ -161,7 +172,7 @@ export function acceptPanelPresenceMessage(value: unknown): value is PanelPresen
   if (value.type === 'leave') {
     return Object.keys(value).length === 2 && isTabId(value.tabId)
   }
-  if (value.type === 'focus') {
+  if (value.type === 'focus' || value.type === 'focus-failed') {
     return Object.keys(value).length === 3 && isTabId(value.tabId) && isFocusNonce(value.focusNonce)
   }
   return (
@@ -178,6 +189,34 @@ export function acceptPanelPresenceMessage(value: unknown): value is PanelPresen
 
 function notifyPresenceSubscribers(): void {
   for (const subscriber of presenceSubscribers) subscriber()
+  flushPanelFocusFallbacks()
+}
+
+function hasLivePanelTarget(identity: PanelIdentity): boolean {
+  const key = panelIdentityKey(identity)
+  const handle = panelTabHandles.get(key)
+  if (handle?.closed) panelTabHandles.delete(key)
+  if (handle && !handle.closed) return true
+  const opaqueKey = panelPresenceKey(identity)
+  return [...presenceByTab.values()].some((entry) => entry.identityKey === opaqueKey)
+}
+
+function flushPanelFocusFallbacks(): void {
+  for (const [key, fallback] of localFocusFallbacks) {
+    if (hasLivePanelTarget(fallback.identity)) continue
+    localFocusFallbacks.delete(key)
+    clearTimeout(fallback.timer)
+    fallback.onUnavailable()
+  }
+}
+
+function failPanelFocusFallback(identityKey: string): void {
+  for (const [key, fallback] of localFocusFallbacks) {
+    if (panelPresenceKey(fallback.identity) !== identityKey) continue
+    localFocusFallbacks.delete(key)
+    clearTimeout(fallback.timer)
+    fallback.onFocusFailed()
+  }
 }
 
 function removeStalePresence(now = Date.now()): void {
@@ -204,6 +243,13 @@ function handleMonitorMessage(event: MessageEvent<unknown>): void {
   }
   if (message.type === 'leave') {
     if (presenceByTab.delete(message.tabId)) notifyPresenceSubscribers()
+    return
+  }
+  if (message.type === 'focus-failed') {
+    const entry = presenceByTab.get(message.tabId)
+    if (entry?.focusNonce === message.focusNonce) {
+      failPanelFocusFallback(entry.identityKey)
+    }
   }
 }
 
@@ -224,6 +270,8 @@ function stopPresenceMonitor(): void {
     monitorChannel.close()
   }
   monitorChannel = null
+  for (const fallback of localFocusFallbacks.values()) clearTimeout(fallback.timer)
+  localFocusFallbacks.clear()
   if (presenceByTab.size > 0) {
     presenceByTab.clear()
     notifyPresenceSubscribers()
@@ -281,7 +329,11 @@ export function announcePanelTabPresence(initialIdentity: PanelIdentity): PanelP
       try {
         window.focus()
       } catch {
-        channel.postMessage({ type: 'leave', tabId } satisfies PanelPresenceMessage)
+        channel.postMessage({
+          type: 'focus-failed',
+          tabId,
+          focusNonce,
+        } satisfies PanelPresenceMessage)
       }
     }
   }
@@ -341,7 +393,7 @@ export function forgetPanelTabHandle(identity: PanelIdentity, handle?: Window): 
 }
 
 /** Focus an app-owned handle, or ask the newest matching manual tab to focus itself. */
-export function focusPanelTab(identity: PanelIdentity): boolean {
+export function switchToPanelTab(identity: PanelIdentity): PanelTabFocusResult {
   const key = panelIdentityKey(identity)
   const handle = panelTabHandles.get(key)
   if (handle) {
@@ -351,10 +403,9 @@ export function focusPanelTab(identity: PanelIdentity): boolean {
       try {
         handle.focus()
       } catch {
-        panelTabHandles.delete(key)
-        return false
+        return 'failed'
       }
-      return true
+      return 'focused'
     }
   }
 
@@ -363,23 +414,32 @@ export function focusPanelTab(identity: PanelIdentity): boolean {
   const match = [...presenceByTab.entries()]
     .filter(([, entry]) => entry.identityKey === opaqueKey)
     .sort((a, b) => b[1].seenAt - a[1].seenAt)[0]
-  if (!match || !monitorChannel) return false
+  if (!match || !monitorChannel) return 'absent'
   monitorChannel.postMessage({
     type: 'focus',
     tabId: match[0],
     focusNonce: match[1].focusNonce,
   } satisfies PanelPresenceMessage)
-  return true
+  return 'requested'
 }
 
-export function resolveExistingPanelTab(identity: PanelIdentity): 'focused' | 'affordance' | null {
+/** Boolean form for callers that only need best-effort focus. */
+export function focusPanelTab(identity: PanelIdentity): boolean {
+  const result = switchToPanelTab(identity)
+  return result === 'focused' || result === 'requested'
+}
+
+export function resolveExistingPanelTab(
+  identity: PanelIdentity,
+): 'focused' | 'focus-failed' | 'affordance' | null {
   const key = panelIdentityKey(identity)
   const handle = panelTabHandles.get(key)
   if (handle) {
     if (handle.closed) {
       panelTabHandles.delete(key)
     } else {
-      if (focusPanelTab(identity)) return 'focused'
+      const result = switchToPanelTab(identity)
+      return result === 'focused' ? 'focused' : 'focus-failed'
     }
   }
   return getPanelTabPresenceKeys().includes(panelPresenceKey(identity)) ? 'affordance' : null
@@ -396,12 +456,29 @@ export function panelPresenceKey(identity: PanelIdentity): string {
   return sha256Hex(panelIdentityKey(identity))
 }
 
-export function armPanelFocusFallback(identity: PanelIdentity): void {
-  localFocusFallbackKeys.add(panelIdentityKey(identity))
+export function armPanelFocusFallback(
+  identity: PanelIdentity,
+  onUnavailable: () => void,
+  onFocusFailed: () => void,
+): void {
+  const key = panelIdentityKey(identity)
+  cancelPanelFocusFallback(identity)
+  const fallback = {
+    identity,
+    onUnavailable,
+    onFocusFailed,
+    timer: setTimeout(() => {
+      if (localFocusFallbacks.get(key) === fallback) localFocusFallbacks.delete(key)
+    }, PANEL_FOCUS_FALLBACK_MS),
+  }
+  localFocusFallbacks.set(key, fallback)
 }
 
-export function consumePanelFocusFallback(identity: PanelIdentity): boolean {
-  return localFocusFallbackKeys.delete(panelIdentityKey(identity))
+export function cancelPanelFocusFallback(identity: PanelIdentity): void {
+  const fallback = localFocusFallbacks.get(panelIdentityKey(identity))
+  if (!fallback) return
+  clearTimeout(fallback.timer)
+  localFocusFallbacks.delete(panelIdentityKey(identity))
 }
 
 export function resolvePanelOpen(input: {
@@ -419,8 +496,7 @@ export function resolvePanelOpen(input: {
       try {
         existing.focus()
       } catch {
-        registry.delete(key)
-        return resolvePanelOpen({ ...input, handles: registry })
+        return { kind: 'focus-failed' }
       }
       return { kind: 'focused' }
     }

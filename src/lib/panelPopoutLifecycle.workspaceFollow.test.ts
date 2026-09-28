@@ -22,13 +22,13 @@ describe('policy-driven pop-out workspace following', () => {
       closed: false,
       focus: vi.fn(),
       close: vi.fn(),
-    } as unknown as Window
+    }
 
     try {
       lifecycle.registerPanelPopout({
         popoutId: 'mail-popout-1',
         identity: { panelId: 'mail', workspaceId: 'workspace-a' },
-        handle,
+        handle: handle as unknown as Window,
         onClosed: vi.fn(),
       })
 
@@ -43,31 +43,40 @@ describe('policy-driven pop-out workspace following', () => {
     }
   })
 
-  it('keeps an unscoped Library pop-out in its app bucket under when-scoped policy', async () => {
+  it('re-keys an unscoped Library pop-out to its current workspace and closes in that scope', async () => {
+    vi.useFakeTimers()
     vi.stubGlobal('BroadcastChannel', NoopBroadcastChannel)
     const lifecycle = await import('./panelPopoutLifecycle')
     const presence = await import('./panelTabPresence')
     const stopOwner = lifecycle.startPanelPopoutLifecycleOwner()
+    const onClosed = vi.fn()
     const handle = {
       closed: false,
       focus: vi.fn(),
       close: vi.fn(),
-    } as unknown as Window
+    }
 
     try {
       lifecycle.registerPanelPopout({
         popoutId: 'library-popout-app',
         identity: { panelId: 'library' },
-        handle,
-        onClosed: vi.fn(),
+        handle: handle as unknown as Window,
+        onClosed,
       })
 
       lifecycle.updatePanelPopoutWorkspace('library', 'library-popout-app', 'workspace-b')
 
-      expect(presence.focusPanelTab({ panelId: 'library' })).toBe(true)
-      expect(presence.focusPanelTab({ panelId: 'library', workspaceId: 'workspace-b' })).toBe(false)
+      expect(presence.focusPanelTab({ panelId: 'library' })).toBe(false)
+      expect(presence.focusPanelTab({ panelId: 'library', workspaceId: 'workspace-b' })).toBe(true)
+      handle.closed = true
+      vi.advanceTimersByTime(250)
+      expect(onClosed).toHaveBeenCalledWith({
+        panelId: 'library',
+        workspaceId: 'workspace-b',
+      })
     } finally {
       stopOwner()
+      vi.useRealTimers()
     }
   })
 })

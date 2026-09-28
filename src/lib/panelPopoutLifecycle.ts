@@ -4,7 +4,7 @@ import {
   onLibraryPopoutClosed,
   onLibraryWorkspaceChanged,
 } from './libraryHandoff'
-import { PANEL_POLICIES, isWorkspaceScopedPanel } from '@/components/panel-shell/types'
+import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
 import type { PanelId } from '@/components/panel-shell/types'
 import {
   forgetPanelTabHandle,
@@ -89,16 +89,14 @@ function moveOwned(entry: OwnedPanelPopout, identity: PanelIdentity): void {
   registerPanelTabHandle(identity, entry.handle)
 }
 
-/** Re-key an owned workspace pop-out according to its central switch policy. */
+/** Re-key a pop-out to what the child currently shows; outer switch policy does not apply here. */
 export function updatePanelPopoutWorkspace(
   panelId: PanelId,
   popoutId: string,
   workspaceId?: string,
 ): void {
   const entry = findOwnedPanelPopout(panelId, popoutId)
-  const follows = PANEL_POLICIES[panelId].switchFollows
-  if (!entry || follows === 'never' || !isWorkspaceScopedPanel(panelId)) return
-  if (follows === 'when-scoped' && entry.identity.workspaceId === undefined) return
+  if (!entry || !isWorkspaceScopedPanel(panelId)) return
   moveOwned(entry, { panelId, workspaceId })
 }
 

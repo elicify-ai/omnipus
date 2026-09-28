@@ -1,8 +1,5 @@
 import { useEffect } from 'react'
 import {
-  armPanelFocusFallback,
-  consumePanelFocusFallback,
-  focusPanelTab,
   resolveExistingPanelTab,
   startPanelTabPresenceMonitor,
   type PanelIdentity,
@@ -10,6 +7,7 @@ import {
 import { startPanelPopoutLifecycleOwner } from '@/lib/panelPopoutLifecycle'
 import { useUiStore } from '@/store/ui'
 import type { ActivePanel } from './types'
+import { showPanelTabFocusDegraded, showPanelTabSwitch } from './panelTabSwitch'
 
 function panelIdentity(activePanel: ActivePanel): PanelIdentity | null {
   if (activePanel.id === 'browser') {
@@ -37,32 +35,24 @@ export function PanelTabPresenceBridge() {
       if (activePanel === null || activePanel === previous.activePanel) return
       const identity = panelIdentity(activePanel)
       if (!identity) return
-      if (consumePanelFocusFallback(identity)) return
       const existing = resolveExistingPanelTab(identity)
       if (!existing) return
 
       state.closePanel()
       if (existing === 'focused') return
-      const openHere = () => {
-        armPanelFocusFallback(identity)
+      const openWhenUnavailable = () => {
         if (activePanel.id === 'browser') {
           useUiStore.getState().openPanel('browser', activePanel.context)
         } else {
           useUiStore.getState().openPanel(activePanel.id, activePanel.context)
         }
       }
-      state.addToast({
-        message: `${panelLabel(activePanel.id)} is already open in another tab — switch.`,
-        variant: 'default',
-        duration: 10_000,
-        action: {
-          label: 'Switch',
-          onClick: () => {
-            if (!focusPanelTab(identity)) openHere()
-          },
-        },
-        secondaryAction: { label: 'Open here', onClick: openHere },
-      })
+      const label = panelLabel(activePanel.id)
+      if (existing === 'focus-failed') {
+        showPanelTabFocusDegraded(label)
+      } else {
+        showPanelTabSwitch(identity, label, openWhenUnavailable)
+      }
     })
     return () => {
       unsubscribe()
