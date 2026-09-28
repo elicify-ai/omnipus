@@ -401,22 +401,38 @@ func TestCatalogStartupRefreshPolicy(t *testing.T) {
 	})
 
 	t.Run("permanent rejections are not retried", func(t *testing.T) {
-		for name, permanentErr := range map[string]error{
-			"invalid document":  catalog.ErrInvalid,
-			"asset too large":   catalog.ErrTooLarge,
-			"regressed version": catalog.ErrRegressed,
+		for name, tc := range map[string]struct {
+			err  error
+			want error
+		}{
+			"invalid document": {
+				err:  catalog.ErrInvalid,
+				want: catalog.ErrInvalid,
+			},
+			"served envelope serialization": {
+				err:  fmt.Errorf("%w: serialise served envelope: json: unsupported value", catalog.ErrInvalid),
+				want: catalog.ErrInvalid,
+			},
+			"asset too large": {
+				err:  catalog.ErrTooLarge,
+				want: catalog.ErrTooLarge,
+			},
+			"regressed version": {
+				err:  catalog.ErrRegressed,
+				want: catalog.ErrRegressed,
+			},
 		} {
 			t.Run(name, func(t *testing.T) {
 				calls := 0
 				attempts, err := runCatalogStartupRefresh(context.Background(), func(int) error {
 					calls++
-					return fmt.Errorf("published catalog rejected: %w", permanentErr)
+					return fmt.Errorf("published catalog rejected: %w", tc.err)
 				}, func(context.Context, time.Duration) bool {
 					t.Fatal("permanent catalog rejection must not enter retry backoff")
 					return false
 				})
 
-				require.ErrorIs(t, err, permanentErr)
+				require.ErrorIs(t, err, tc.want)
 				require.Equal(t, 1, attempts)
 				require.Equal(t, 1, calls)
 			})
