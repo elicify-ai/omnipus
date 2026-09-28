@@ -69,7 +69,11 @@ func mailViewDraftBodyPart(p email.MailPart) bool {
 // mailAuditRecipients concatenates the recipient lists into one address list
 // (MC-19: addresses, not a count — incl. Bcc, MAJ-005).
 func mailAuditRecipients(lists ...[]string) []string {
-	var out []string
+	total := 0
+	for _, l := range lists {
+		total += len(l)
+	}
+	out := make([]string, 0, total)
 	for _, l := range lists {
 		out = append(out, l...)
 	}

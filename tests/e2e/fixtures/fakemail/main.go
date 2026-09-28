@@ -261,8 +261,8 @@ func run(cfg config, out io.Writer) (*fakeServer, error) {
 			if !ok {
 				return
 			}
-			if _, err := appendRaw(mu, "INBOX", []byte(raw)); err != nil {
-				fmt.Fprintf(os.Stderr, "fakemail: deliver to %s INBOX: %v\n", rcpt, err)
+			if _, appendErr := appendRaw(mu, "INBOX", []byte(raw)); appendErr != nil {
+				fmt.Fprintf(os.Stderr, "fakemail: deliver to %s INBOX: %v\n", rcpt, appendErr)
 			}
 		}
 	}
