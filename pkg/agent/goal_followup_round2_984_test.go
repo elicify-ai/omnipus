@@ -132,12 +132,12 @@ func TestGoalDelegation984_MetWithRunningDescendantWakesVerdict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Drain(parent): %v", err)
 	}
-	if len(unacked) != 1 || messageIDOf(unacked[0]) != verdictID {
+	if len(unacked) != 0 {
 		ids := make([]string, 0, len(unacked))
 		for _, msg := range unacked {
 			ids = append(ids, messageIDOf(msg))
 		}
-		t.Fatalf("unacked entries = %v, want exactly verdict %q (no final hand-back while descendant runs)", ids, verdictID)
+		t.Fatalf("unacked entries after successful verdict wake = %v, want none", ids)
 	}
 	loaded, err := lifecycle.Load(child.SessionID)
 	if err != nil {
@@ -145,6 +145,32 @@ func TestGoalDelegation984_MetWithRunningDescendantWakesVerdict(t *testing.T) {
 	}
 	if loaded.Terminal() {
 		t.Fatalf("goal child state = %q, want non-terminal while descendant %q is still running", loaded.State, grandchild.SessionID)
+	}
+
+	grandchild.State = session.LifecycleCompleted
+	if persistErr := lifecycle.Persist(grandchild); persistErr != nil {
+		t.Fatalf("Persist(grandchild completed): %v", persistErr)
+	}
+	al.activeTurnStates.Delete(grandchild.SessionID)
+	if woke := al.completeSteeredTurnAfterGoal(context.Background(), child.SessionID, "verified", nil); !woke {
+		t.Fatal("deferred goal-child hand-back did not wake the parent")
+	}
+
+	mu.Lock()
+	gotWakeIDs = append([]string(nil), wakeIDs...)
+	mu.Unlock()
+	wantFinalID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
+	if len(gotWakeIDs) != 2 || gotWakeIDs[0] != verdictID || gotWakeIDs[1] != wantFinalID {
+		t.Fatalf("parent wakes after descendant completion = %v, want verdict %q then hand-back %q", gotWakeIDs, verdictID, wantFinalID)
+	}
+	if err := al.wakeMetVerdictEntry(child.SessionID, g.GoalID, 1); err == nil {
+		t.Fatal("already-woken verdict remained eligible for another wake")
+	}
+	mu.Lock()
+	gotWakeIDs = append([]string(nil), wakeIDs...)
+	mu.Unlock()
+	if len(gotWakeIDs) != 2 {
+		t.Fatalf("parent wakes after verdict re-wake attempt = %v, want exactly the original two", gotWakeIDs)
 	}
 }
 

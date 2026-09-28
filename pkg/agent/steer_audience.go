@@ -385,7 +385,15 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: %w", matchErr)
 	}
 	if isTerminalOutcome(event.Outcome) {
-		id := fmt.Sprintf("%s:%d:final", event.ChildSessionID, childRec.Generation)
+		generation := childRec.Generation
+		if event.Generation != 0 {
+			if event.Generation != childRec.Generation {
+				return steer.Delivery{}, fmt.Errorf("steer: deliver: child %q generation changed from %d to %d",
+					event.ChildSessionID, event.Generation, childRec.Generation)
+			}
+			generation = event.Generation
+		}
+		id := fmt.Sprintf("%s:%d:final", event.ChildSessionID, generation)
 		msg, err = withDeterministicMessageID(msg, id)
 		if err != nil {
 			return steer.Delivery{}, fmt.Errorf("steer: deliver: stamp deterministic id: %w", err)

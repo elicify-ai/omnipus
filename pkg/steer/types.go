@@ -144,8 +144,12 @@ const (
 // maps onto a kind the inbox already stores and the SPA already renders.
 type UpwardEvent struct {
 	ChildSessionID string
-	Outcome        Outcome
-	Message        generated.SessionMessage
+	// Generation pins a terminal event to the lifecycle generation that its
+	// producer validated. Zero means the deliverer uses the currently loaded
+	// generation, preserving existing non-completion producers.
+	Generation int
+	Outcome    Outcome
+	Message    generated.SessionMessage
 
 	// SuppressWake stores the entry without waking the recipient (the
 	// delivery still runs its frames, and the outcome reports

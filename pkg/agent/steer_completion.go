@@ -25,10 +25,11 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 }
 
 // completeSteeredTurnDurably is completeSteeredTurn's result-bearing form.
-// finalStored is true only after the generation's deterministic final inbox
-// entry is known durable; goal completion uses that fact to decide whether a
-// wake-suppressed met verdict may be acknowledged.
-func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *session.LifecycleRecord, result turnResult, runErr error) (finalStored bool, err error) {
+// finalWoke is true only after the generation's deterministic final inbox
+// entry is durable and its delivery produced a parent wake (or queued the
+// entry into an already-live parent turn). Goal completion uses that fact to
+// decide whether a wake-suppressed met verdict may be acknowledged.
+func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *session.LifecycleRecord, result turnResult, runErr error) (finalWoke bool, err error) {
 	if al == nil || snapshot == nil || snapshot.SteeredBy == nil {
 		return false, nil
 	}
@@ -44,7 +45,7 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 		return false, nil
 	}
 	if rec.Terminal() {
-		return al.completionFinalStored(rec), nil
+		return false, nil
 	}
 
 	answer := strings.TrimSpace(result.finalContent)
@@ -130,6 +131,7 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	// nothing else in the system would.
 	event := steer.UpwardEvent{
 		ChildSessionID: rec.SessionID,
+		Generation:     rec.Generation,
 		Outcome:        outcome,
 		Message:        message,
 	}
@@ -143,6 +145,7 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		return false, fmt.Errorf("steer: complete: deliver %q: %w", rec.SessionID, err)
 	}
 	reportUndeliveredWake("steer: complete", event, steerParentSessionID(rec), rec.Generation, delivery)
+	finalWoke := deliveryWokeRecipient(delivery.Outcome)
 
 	if completeStateWriteTestHook != nil {
 		completeStateWriteTestHook(rec.SessionID)
@@ -221,7 +224,7 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		// goal, no action), and it never speaks for a task-owned goal.
 		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
 			goalEndingForTerminalState(nextState), goalSessionEndedReasonForState(nextState))
-		return true, nil
+		return finalWoke, nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
 		errors.Is(mutateErr, errCompleteAlreadyTerminal),
@@ -230,10 +233,14 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		// Stop, a Revive or a second completion racing this write is a
 		// legitimate outcome, not a caller-actionable failure — mirrors the
 		// top-of-function guard's own "already terminal" no-op.
-		return true, nil
+		return finalWoke, nil
 	default:
-		return true, fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, mutateErr)
+		return finalWoke, fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, mutateErr)
 	}
+}
+
+func deliveryWokeRecipient(outcome steer.DeliveryOutcome) bool {
+	return outcome == steer.DeliveryWoke || outcome == steer.DeliveryQueuedIntoLiveTurn
 }
 
 type steeredCompletionFlightKey struct {
@@ -243,15 +250,15 @@ type steeredCompletionFlightKey struct {
 }
 
 type steeredCompletionFlight struct {
-	done        chan struct{}
-	finalStored bool
-	err         error
+	done      chan struct{}
+	finalWoke bool
+	err       error
 }
 
 // steeredCompletionFlights serializes the side-effecting completion tail per
-// AgentLoop/session/generation. Entries are removed after a terminal write or
-// a pre-delivery failure. A delivered-but-not-terminal failure stays claimed
-// in this process so a retry cannot re-wake the same unacknowledged final.
+// AgentLoop/session/generation. Entries exist only while a completion is in
+// flight and are removed on every exit, so the process-global coordinator
+// never retains an AgentLoop after the call returns.
 var steeredCompletionFlights sync.Map //nolint:gochecknoglobals
 
 func (al *AgentLoop) runSteeredCompletionOnce(rec *session.LifecycleRecord, complete func() (bool, error)) (bool, error) {
@@ -261,49 +268,36 @@ func (al *AgentLoop) runSteeredCompletionOnce(rec *session.LifecycleRecord, comp
 	if loaded {
 		flight, ok := actual.(*steeredCompletionFlight)
 		if !ok {
-			steeredCompletionFlights.Delete(key)
+			steeredCompletionFlights.CompareAndDelete(key, actual)
 			return false, errors.New("steer: complete: invalid completion-flight state")
 		}
 		<-flight.done
-		return flight.finalStored, flight.err
+		return flight.finalWoke, flight.err
 	}
 
-	candidate.finalStored, candidate.err = complete()
-	close(candidate.done)
-	if !candidate.finalStored || al.completionRecordTerminal(rec.SessionID, rec.Generation) {
+	defer func() {
+		close(candidate.done)
 		steeredCompletionFlights.Delete(key)
+	}()
+	current, err := al.completionFlightCurrent(rec)
+	if err != nil || !current {
+		candidate.err = err
+		return false, err
 	}
-	return candidate.finalStored, candidate.err
+	candidate.finalWoke, candidate.err = complete()
+	return candidate.finalWoke, candidate.err
 }
 
-func (al *AgentLoop) completionRecordTerminal(sessionID string, generation int) bool {
+func (al *AgentLoop) completionFlightCurrent(rec *session.LifecycleRecord) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
-		return false
+		return false, errors.New("steer: complete: lifecycle store is not wired")
 	}
-	rec, err := lifecycle.Load(sessionID)
-	return err == nil && rec != nil && rec.Generation == generation && rec.Terminal()
-}
-
-func (al *AgentLoop) completionFinalStored(rec *session.LifecycleRecord) bool {
-	if rec == nil || rec.SteeredBy == nil {
-		return false
-	}
-	inbox := al.GetMessageInboxStore()
-	if inbox == nil {
-		return false
-	}
-	entries, err := inbox.Entries(deliverOwnerKey(rec))
+	current, err := lifecycle.Load(rec.SessionID)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("steer: complete: revalidate %q: %w", rec.SessionID, err)
 	}
-	wantID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
-	for _, entry := range entries {
-		if entry.Kind == session.InboxEntryMessage && entry.Message != nil && messageIDOf(*entry.Message) == wantID {
-			return true
-		}
-	}
-	return false
+	return current != nil && current.Generation == rec.Generation && !current.Terminal(), nil
 }
 
 // errCompleteStaleGeneration, errCompleteAlreadyTerminal and
@@ -746,12 +740,12 @@ func (al *AgentLoop) completeSteeredTurnAfterGoal(ctx context.Context, sessionID
 			map[string]any{"session_id": sessionID, "error": errString(err)})
 		return false
 	}
-	finalStored, err := al.completeSteeredTurnDurably(ctx, snapshot, turnResult{finalContent: answer}, runErr)
+	finalWoke, err := al.completeSteeredTurnDurably(ctx, snapshot, turnResult{finalContent: answer}, runErr)
 	if err != nil {
 		logger.WarnCF("agent", "goal: completion tail failed — boot recovery repairs a delivered-but-not-terminal gap",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
 	}
-	return finalStored
+	return finalWoke
 }
 
 // completeSteeredTurnIfDeferredAtGate routes a steered child through the

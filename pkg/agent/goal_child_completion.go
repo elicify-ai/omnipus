@@ -320,11 +320,11 @@ func (al *AgentLoop) deliverGoalParkUpward(sessionID string, blocked bool, text 
 }
 
 // ackMetVerdictEntry acknowledges the session-goal met verdict's inbox entry
-// at hand-back time (founder Q1=A, #984 follow-up). The met verdict is
-// delivered with its wake suppressed (deliverGoalVerdictUpward's
-// SuppressWake); the completion handback that follows it is the one parent
-// wake for the whole "met". An entry delivered without a wake is consumed by
-// nothing — leaving it unacked would make boot recovery
+// after the hand-back produces the parent wake (founder Q1=A, #984 follow-up).
+// The met verdict is delivered with its wake suppressed
+// (deliverGoalVerdictUpward's SuppressWake); the completion handback that
+// follows it is the one parent wake for the whole "met". An entry delivered
+// without a wake is consumed by nothing — leaving it unacked would make boot recovery
 // (boot_sweep.go::unacknowledged) re-deliver AND re-wake it on every later
 // restart, which is exactly the re-entry Q1=A removes.
 //
@@ -364,9 +364,12 @@ func (al *AgentLoop) ackMetVerdictEntry(sessionID, goalID string, round int) {
 }
 
 // wakeMetVerdictEntry re-delivers the already-durable, unacknowledged met
-// verdict without wake suppression when no deterministic final hand-back was
-// stored. Deliver's duplicate handling deliberately re-runs the wake for an
-// unacknowledged wake-eligible entry, so this creates no second inbox row.
+// verdict without wake suppression when no deterministic final hand-back
+// woke the parent. Deliver's duplicate handling deliberately re-runs the wake
+// for an unacknowledged wake-eligible entry, so this creates no second inbox
+// row. A successful wake consumes the verdict immediately; a missing or
+// stopped parent produces DeliveryStoredNotWoken, returns an error, and leaves
+// the entry unacknowledged for boot recovery.
 func (al *AgentLoop) wakeMetVerdictEntry(sessionID, goalID string, round int) error {
 	inbox := al.GetMessageInboxStore()
 	lifecycle := al.GetSessionLifecycleStore()
@@ -395,6 +398,12 @@ func (al *AgentLoop) wakeMetVerdictEntry(sessionID, goalID string, round int) er
 		return fmt.Errorf("wake stored met verdict: %w", err)
 	}
 	reportUndeliveredWake("goal: met verdict fallback wake", event, steerParentSessionID(rec), rec.Generation, delivery)
+	if !deliveryWokeRecipient(delivery.Outcome) {
+		return fmt.Errorf("wake stored met verdict: delivery outcome %q did not wake the parent", delivery.Outcome)
+	}
+	if err := inbox.Ack(deliverOwnerKey(rec), []string{wantID}); err != nil {
+		return fmt.Errorf("acknowledge woken met verdict %q: %w", wantID, err)
+	}
 	return nil
 }
 
