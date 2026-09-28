@@ -52,9 +52,17 @@ func TestGoalDelegation984_MetWithRunningDescendantWaitsForFinalHandback(t *test
 	if wakes := h.parentWakeEvents(); len(wakes) != 1 || wakes[0].SourceKind != "message_parent:handback" {
 		t.Fatalf("parent wakes after fresh met claim = %+v, want exactly one final handback", wakes)
 	}
+	wantFinalID := fmt.Sprintf("%s:%d:final", h.child.SessionID, h.child.Generation)
+	wakes := h.parentWakeEvents()
+	if got := fmt.Sprint(wakes[0].Metadata["steer_message_id"]); got != wantFinalID {
+		t.Fatalf("final parent wake id = %q, want deterministic id %q", got, wantFinalID)
+	}
 	messages := h.parentMessages()
 	if len(messages) != 1 {
 		t.Fatalf("parent messages after fresh met claim = %d, want exactly 1", len(messages))
+	}
+	if got := messageIDOf(messages[0]); got != wantFinalID {
+		t.Fatalf("final parent message id = %q, want deterministic id %q", got, wantFinalID)
 	}
 	class, err := session.ClassifySessionMessage(messages[0])
 	if err != nil {

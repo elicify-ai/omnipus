@@ -1,0 +1,289 @@
+package agent
+
+// Fix-round-1 RED coverage for founder ruling Q2 B.
+//
+// Oracle source: coordination/logs/fix890-opus/arch-q2-design.md, especially
+// "Re-trigger behavior", "Invariants", and "Tests required". Boot recovery
+// expectations also derive from the design's durable-claim reconstruction
+// rule. No expected value below was copied from observed implementation output.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/goal"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
+)
+
+func q2bPendingClaimWithRunningDescendant(t *testing.T, h *q2bHarness, callID string) *session.LifecycleRecord {
+	t.Helper()
+	descendant := q2bLaunchDescendant(t, h, callID, session.LifecycleRunning)
+	q2bKeepTurnAlive(t, h.al, descendant.SessionID)
+	result := h.claimMet("completion must wait for the last descendant")
+	if result.goalDeferredAdjudication != nil {
+		t.Fatalf("initial met claim scheduled adjudication while descendant %q was running", descendant.SessionID)
+	}
+	if !h.al.goalCompletionWaiting(h.child.GoalRef) {
+		t.Fatalf("goal %q completion phase is not waiting_descendants", h.child.GoalRef)
+	}
+	return descendant
+}
+
+func q2bAssertExactlyOneReevaluation(t *testing.T, h *q2bHarness) {
+	t.Helper()
+	if got := q2bCountReevaluations(h.dispatches.all(), h.child.SessionID); got != 1 {
+		t.Fatalf("completion re-evaluations for waiting parent child = %d, want exactly 1", got)
+	}
+	if calls := h.judge.callCount(); calls != 0 {
+		t.Fatalf("Judge calls before a fresh post-handback claim = %d, want 0", calls)
+	}
+}
+
+func q2bBootRecoveryForHarness(h *q2bHarness) *SteerBootRecovery {
+	return &SteerBootRecovery{
+		Lifecycle:  h.lifecycle,
+		Sessions:   h.al.GetSessionStore(),
+		Inbox:      h.inbox,
+		Classifier: NewSteerRecordClassifier(h.lifecycle, h.al.GetSessionStore()),
+		Deliverer:  h.al.getUpwardDeliverer(),
+		EndSessionGoal: func(sessionID, reason string) {
+			h.al.EndSessionOwnedGoalOnTerminal(sessionID, reason)
+		},
+		DescendantTerminal: h.al.ResumeDeferredGoalAfterDescendantTerminal,
+	}
+}
+
+func TestGoalQ2B_LastDescendantTerminalRoutesScheduleExactlyOneReevaluation(t *testing.T) {
+	tests := []struct {
+		name      string
+		terminate func(t *testing.T, h *q2bHarness, descendant *session.LifecycleRecord)
+	}{
+		{
+			name: "completed",
+			terminate: func(t *testing.T, h *q2bHarness, descendant *session.LifecycleRecord) {
+				t.Helper()
+				if err := h.al.completeSteeredTurn(context.Background(), descendant, turnResult{finalContent: "done"}, nil); err != nil {
+					t.Fatalf("completeSteeredTurn(completed): %v", err)
+				}
+			},
+		},
+		{
+			name: "failed",
+			terminate: func(t *testing.T, h *q2bHarness, descendant *session.LifecycleRecord) {
+				t.Helper()
+				if err := h.al.completeSteeredTurn(context.Background(), descendant, turnResult{}, errors.New("injected worker failure")); err != nil {
+					t.Fatalf("completeSteeredTurn(failed): %v", err)
+				}
+			},
+		},
+		{
+			name: "timed_out",
+			terminate: func(t *testing.T, h *q2bHarness, descendant *session.LifecycleRecord) {
+				t.Helper()
+				if err := h.al.completeSteeredTurn(context.Background(), descendant, turnResult{}, context.DeadlineExceeded); err != nil {
+					t.Fatalf("completeSteeredTurn(timed_out): %v", err)
+				}
+			},
+		},
+		{
+			name: "cancelled_report",
+			terminate: func(t *testing.T, h *q2bHarness, descendant *session.LifecycleRecord) {
+				t.Helper()
+				h.al.reportSteeredSessionTerminalUpward(context.Background(), descendant.SessionID, descendant.Generation,
+					session.LifecycleCancelled, steer.OutcomeInterrupted, "interrupted: cancelled by operator")
+			},
+		},
+		{
+			name: "boot_finish_from_final",
+			terminate: func(t *testing.T, h *q2bHarness, descendant *session.LifecycleRecord) {
+				t.Helper()
+				message := bootHandback(t, descendant.SessionID, h.child.SessionID,
+					fmt.Sprintf("%s:%d:final", descendant.SessionID, descendant.Generation))
+				if err := q2bBootRecoveryForHarness(h).finishFromFinal(descendant, message); err != nil {
+					t.Fatalf("finishFromFinal: %v", err)
+				}
+			},
+		},
+		{
+			name: "boot_fail_interrupted",
+			terminate: func(t *testing.T, h *q2bHarness, descendant *session.LifecycleRecord) {
+				t.Helper()
+				if err := q2bBootRecoveryForHarness(h).failInterrupted(descendant); err != nil {
+					t.Fatalf("failInterrupted: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newQ2BHarness(t, "q2b-terminal-route-"+tt.name)
+			descendant := q2bPendingClaimWithRunningDescendant(t, h, "q2b-terminal-route-descendant-"+tt.name)
+			tt.terminate(t, h, descendant)
+
+			loaded, err := h.lifecycle.Load(descendant.SessionID)
+			if err != nil {
+				t.Fatalf("Load(terminal descendant): %v", err)
+			}
+			if !loaded.Terminal() {
+				t.Fatalf("descendant lifecycle after %s = %q, want terminal", tt.name, loaded.State)
+			}
+			q2bAssertExactlyOneReevaluation(t, h)
+		})
+	}
+}
+
+func TestGoalQ2B_NotificationFailureRestoresWaitingAndLaterTriggerRetriesOnce(t *testing.T) {
+	h := newQ2BHarness(t, "q2b-notification-retry")
+	descendant := q2bPendingClaimWithRunningDescendant(t, h, "q2b-notification-retry-descendant")
+	if err := h.lifecycle.Mutate(descendant.SessionID, func(rec *session.LifecycleRecord) error {
+		rec.State = session.LifecycleCompleted
+		return nil
+	}); err != nil {
+		t.Fatalf("terminalise descendant without live hook: %v", err)
+	}
+
+	originalBus := h.al.bus
+	t.Cleanup(func() { h.al.bus = originalBus })
+	h.al.bus = nil
+	h.al.resumeDeferredGoalForSession(h.child.SessionID, h.child.GoalRef)
+	if !h.al.goalCompletionWaiting(h.child.GoalRef) {
+		t.Fatalf("completion phase after failed notification is not waiting_descendants; later retry would be stranded")
+	}
+	if g := h.goalRecord(); g.State != generated.GoalStateActive {
+		t.Fatalf("goal state after failed notification = %q, want active", g.State)
+	}
+
+	h.al.bus = originalBus
+	h.al.resumeDeferredGoalForSession(h.child.SessionID, h.child.GoalRef)
+	h.al.resumeDeferredGoalForSession(h.child.SessionID, h.child.GoalRef)
+	if got := q2bCountReevaluations(h.dispatches.all(), h.child.SessionID); got != 2 {
+		t.Fatalf("notification attempts = %d, want one failed attempt plus exactly one successful retry", got)
+	}
+	if h.al.goalCompletionWaiting(h.child.GoalRef) {
+		t.Fatal("completion phase remained waiting after the successful retry")
+	}
+	if calls := h.judge.callCount(); calls != 0 {
+		t.Fatalf("Judge calls without a fresh claim = %d, want 0", calls)
+	}
+}
+
+func TestGoalQ2B_QuietnessReadFailureFailsClosed(t *testing.T) {
+	h := newQ2BHarness(t, "q2b-quietness-read-failure")
+	descendant := q2bLaunchDescendant(t, h, "q2b-unreadable-descendant", session.LifecycleQueued)
+	path := filepath.Join(h.lifecycle.Dir(), descendant.SessionID+".jsonl")
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove descendant lifecycle fixture: %v", err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatalf("replace descendant lifecycle file with unreadable directory: %v", err)
+	}
+
+	result := h.claimMet("subtree authority is unreadable")
+	if result.goalDeferredAdjudication != nil {
+		t.Fatal("unreadable subtree scheduled adjudication, want fail-closed pending claim")
+	}
+	if g := h.goalRecord(); g.State != generated.GoalStateActive || g.LatestVerdict != nil {
+		t.Fatalf("goal after unreadable subtree = state %q verdict %+v, want active with no verdict", g.State, g.LatestVerdict)
+	}
+	if calls := h.judge.callCount(); calls != 0 {
+		t.Fatalf("Judge calls with unreadable subtree = %d, want 0", calls)
+	}
+	if messages := h.parentMessages(); len(messages) != 0 {
+		t.Fatalf("parent messages with unreadable subtree = %d, want 0", len(messages))
+	}
+}
+
+func TestGoalQ2B_BootPreservesPendingOwnerUntilDescendantFinishesThenHandsBackOnce(t *testing.T) {
+	h := newQ2BHarness(t, "q2b-boot-pending-owner")
+	descendant := q2bPendingClaimWithRunningDescendant(t, h, "q2b-boot-pending-descendant")
+	resetGoalTriggerStateForTest()
+	t.Cleanup(resetGoalTriggerStateForTest)
+
+	recovery := q2bBootRecoveryForHarness(h)
+	notice := func(string, string) {}
+	recovery.recoverSteered(context.Background(), h.child.SessionID, notice)
+	owner, err := h.lifecycle.Load(h.child.SessionID)
+	if err != nil {
+		t.Fatalf("Load(pending goal owner after boot): %v", err)
+	}
+	if owner.Terminal() || owner.State != session.LifecycleRunning {
+		t.Fatalf("pending goal owner after boot = %q, want running while descendant remains live", owner.State)
+	}
+
+	recovery.recoverSteered(context.Background(), descendant.SessionID, notice)
+	q2bAssertExactlyOneReevaluation(t, h)
+	fresh := h.claimMet("fresh claim after boot recovered the descendant handback")
+	if fresh.goalDeferredAdjudication == nil {
+		t.Fatal("fresh post-boot claim did not schedule adjudication")
+	}
+	h.al.dispatchDeferredGoalAdjudication(fresh.goalDeferredAdjudication)
+	if calls := h.judge.callCount(); calls != 1 {
+		t.Fatalf("Judge calls after fresh post-boot claim = %d, want 1", calls)
+	}
+	if wakes := h.parentWakeEvents(); len(wakes) != 1 || wakes[0].SourceKind != "message_parent:handback" {
+		t.Fatalf("parent wakes after boot recovery = %+v, want exactly one final handback", wakes)
+	}
+}
+
+func TestGoalQ2B_BootRepairsTerminalDescendantWhoseLiveHookDidNotRun(t *testing.T) {
+	h := newQ2BHarness(t, "q2b-boot-missed-hook")
+	descendant := q2bPendingClaimWithRunningDescendant(t, h, "q2b-boot-missed-hook-descendant")
+	finalID := fmt.Sprintf("%s:%d:final", descendant.SessionID, descendant.Generation)
+	message := bootHandback(t, descendant.SessionID, h.child.SessionID, finalID)
+	if _, err := h.inbox.Append(h.child.SessionID, message); err != nil {
+		t.Fatalf("Append(descendant final before crash): %v", err)
+	}
+	if err := h.lifecycle.Mutate(descendant.SessionID, func(rec *session.LifecycleRecord) error {
+		rec.State = session.LifecycleCompleted
+		return nil
+	}); err != nil {
+		t.Fatalf("persist terminal descendant before crash: %v", err)
+	}
+	resetGoalTriggerStateForTest()
+	t.Cleanup(resetGoalTriggerStateForTest)
+
+	q2bBootRecoveryForHarness(h).recoverSteered(context.Background(), descendant.SessionID, func(string, string) {})
+	q2bAssertExactlyOneReevaluation(t, h)
+}
+
+func TestGoalQ2B_MetClaimWithoutLifecycleStoreFailsClosed(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
+	if !ok {
+		t.Fatal("native-agent not registered")
+	}
+	store, sessionID := newGoalTestSession(t, al, agentInst.ID)
+	goalID := activateTestGoalRecord(t, sessionID, "ordinary session goal remains active")
+	al.SetSessionMessagingStores(nil, nil)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sessionID,
+		Channel: "webchat", ChatID: "q2b-no-lifecycle", SessionKey: "q2b-no-lifecycle", UserInitiated: true,
+	}
+	result := &turnResult{finalContent: "[goal:evidence] work appears complete\nGOAL_STATUS: met"}
+
+	var panicValue any
+	func() {
+		defer func() { panicValue = recover() }()
+		al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
+	}()
+	if panicValue != nil {
+		t.Fatalf("met claim panicked without lifecycle authority: %v", panicValue)
+	}
+	if result.goalDeferredAdjudication != nil {
+		t.Fatal("met claim without lifecycle authority scheduled adjudication, want fail closed")
+	}
+	g, err := resolveGoalRecordStore().Get(goalID)
+	if err != nil {
+		t.Fatalf("Get(goal): %v", err)
+	}
+	if !goal.IsActiveState(g.State) || g.LatestVerdict != nil {
+		t.Fatalf("goal without lifecycle authority = state %q verdict %+v, want active with no verdict", g.State, g.LatestVerdict)
+	}
+}
