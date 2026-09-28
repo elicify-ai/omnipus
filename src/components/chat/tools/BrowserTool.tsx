@@ -167,7 +167,7 @@ export function BrowserToolBlock({
     }
     // CRIT-001: "Watch live" REPLACES whatever panel is open (SP-7), so the
     // outgoing panel's leave gate (Library unsaved edits) runs first.
-    leaveGateThen(() => {
+    leaveGateThen(useUiStore.getState().activePanel?.id ?? null, () => {
       useUiStore.getState().openPanel('browser', { sessionId: activeSessionId, agentId: activeAgentId })
     })
   }
@@ -206,6 +206,7 @@ export function BrowserToolBlock({
           variant="link"
           onClick={handleWatchLive}
           aria-label="Watch live"
+          data-panel-trigger="browser"
           title="Watch this agent's browser live"
           className="rounded-none shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)]"
         >

@@ -48,7 +48,8 @@ export function ChatControls({ className }: ChatControlsProps) {
   // Cancel leaves the store and URL untouched.
   const handleOpenLibrary = () => {
     const scope = activeWorkspaceId
-    leaveGateThen(() => {
+    const outgoingPanelId = useUiStore.getState().activePanel?.id ?? null
+    leaveGateThen(outgoingPanelId, () => {
       if (!scope) {
         // Fall back to the virtual root rather than refusing outright — with no
         // active workspace, "all workspaces" is still a useful, correct view.
@@ -104,16 +105,20 @@ export function ChatControls({ className }: ChatControlsProps) {
     const sessionId = activeSessionId && activeSessionId !== '__pending' ? activeSessionId : null
     const agentId = activeAgentId
     const workspaceId = activeWorkspaceId
-    leaveGateThen(() => {
+    const approvedPanel = useUiStore.getState().activePanel
+    leaveGateThen(approvedPanel?.id ?? null, () => {
       if (sessionId) {
         useUiStore.getState().openPanel('browser', { sessionId, agentId })
         return
       }
       if (creatingBrowserSession) return
+      const panelAtCreationStart = useUiStore.getState().activePanel
       setCreatingBrowserSession(true)
       void (async () => {
         try {
-          // U2: the workspace this chat belongs to travels WITH the create.
+          // ADR-075 — Browser tools: workspace-scoped, and usable by an
+          // agent (D1.13; pkg/gateway/browser_ws.go::handleAttach): the
+          // workspace this chat belongs to travels WITH the create.
           //
           // The panel about to open resolves which workspace's browser — and whose
           // live logins — it shows by reading the workspace off this very session's
@@ -132,7 +137,15 @@ export function ChatControls({ className }: ChatControlsProps) {
           // when there is genuinely nothing to disambiguate on.
           const created = await createSession(agentId, workspaceId ?? undefined)
           setActiveSession(created.id, created.agent_id, null)
-          useUiStore.getState().openPanel('browser', { sessionId: created.id, agentId: created.agent_id })
+          const current = useUiStore.getState().activePanel
+          if (current !== panelAtCreationStart) return
+          leaveGateThen(current?.id ?? null, () => {
+            if (useUiStore.getState().activePanel !== current) return
+            useUiStore.getState().openPanel('browser', {
+              sessionId: created.id,
+              agentId: created.agent_id,
+            })
+          })
         } catch (err) {
           addToast({
             message: err instanceof Error ? err.message : 'Could not start a browser session — try again.',
@@ -193,6 +206,7 @@ export function ChatControls({ className }: ChatControlsProps) {
         // keystroke even when steering is also available.
         tabIndex={7}
         aria-label="Open browser"
+        data-panel-trigger="browser"
         aria-busy={creatingBrowserSession}
         title="Open a live browser session"
         className={cn(
@@ -218,6 +232,7 @@ export function ChatControls({ className }: ChatControlsProps) {
         onClick={handleOpenLibrary}
         tabIndex={8}
         aria-label="Open library"
+        data-panel-trigger="library"
         title="Browse this workspace's files"
         className={cn(
           'shrink-0 px-[var(--space-2)] h-8 gap-[var(--space-1)]',

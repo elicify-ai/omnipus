@@ -10,11 +10,6 @@
 //     beforeLeave?:  () => Promise<boolean>         // CRIT-001 transition gate
 //   }
 //
-// Wave 0 (this demo) exercises the contract through Storybook stories only —
-// no route wiring, no store integration with the real app (those are wave 1).
-// Wave 1 refines `expandTarget`'s return to a TanStack Router location; the
-// demo returns a URL string because the demo has no router.
-
 import type { ComponentType } from 'react'
 
 /**
@@ -30,6 +25,29 @@ export const PANEL_WIDTH_UNSET = -1
 /** The registered panel ids (§8.1; §8.2: valid `?panel=` values are the REGISTERED ids). */
 export type PanelId = 'library' | 'browser' | 'mail' | 'tasks' | 'team' | 'calendar'
 
+export type PanelScope = 'workspace' | 'session' | 'app'
+export type PanelSwitchFollows = 'always' | 'when-scoped' | 'never'
+
+/** One policy table owns scope and workspace-switch behavior for every panel. */
+export const PANEL_POLICIES = {
+  library: { scope: 'workspace', switchFollows: 'when-scoped' },
+  browser: { scope: 'session', switchFollows: 'never' },
+  mail: { scope: 'workspace', switchFollows: 'always' },
+  tasks: { scope: 'workspace', switchFollows: 'always' },
+  team: { scope: 'workspace', switchFollows: 'always' },
+  calendar: { scope: 'workspace', switchFollows: 'always' },
+} as const satisfies Record<PanelId, { scope: PanelScope; switchFollows: PanelSwitchFollows }>
+
+export type WorkspacePanelId = Exclude<PanelId, 'browser'>
+
+export const WORKSPACE_SCOPED_PANELS = (Object.keys(PANEL_POLICIES) as PanelId[]).filter(
+  (id): id is WorkspacePanelId => PANEL_POLICIES[id].scope === 'workspace',
+)
+
+export function isWorkspaceScopedPanel(id: PanelId): id is WorkspacePanelId {
+  return PANEL_POLICIES[id].scope === 'workspace'
+}
+
 /**
  * The ids with a shell REGISTRATION in wave 1 (MAJ-012, §10). The chat route's
  * `validateSearch` accepts exactly these as `?panel=` values; every other
@@ -44,15 +62,35 @@ export const WAVE_1_PANEL_IDS = ['library', 'browser'] as const satisfies readon
  * What a panel needs to render its content (§8.1: "context carries what the
  * panel needs"). Wave-0 panels use a subset; wave-1 wires the real ids.
  */
-export interface PanelContext {
+export interface WorkspacePanelContext {
   /** Library / Tasks / Team / Calendar / Mail scope (undefined = virtual root → `app` bucket). */
   workspaceId?: string
-  /** Browser scope (MAJ-201: the Browser's identity is a session, not a workspace). */
-  sessionId?: string
-  agentId?: string
   /** Mail's mailbox context (per the email spec, wave 2). */
   mailboxId?: string
+  sessionId?: never
+  agentId?: never
 }
+
+export interface BrowserPanelContext {
+  /** Browser scope (MAJ-201: the Browser's identity is a session, not a workspace). */
+  sessionId: string
+  agentId: string
+  workspaceId?: never
+  mailboxId?: never
+}
+
+export type PanelContext = WorkspacePanelContext | BrowserPanelContext
+
+/** Discriminated open specification: Browser context cannot be omitted. */
+export type PanelOpenSpec =
+  | { id: 'browser'; context: BrowserPanelContext }
+  | { id: WorkspacePanelId; context: WorkspacePanelContext }
+
+export type PanelOpenArgs =
+  | [id: 'browser', context: BrowserPanelContext]
+  | [id: WorkspacePanelId, context?: WorkspacePanelContext]
+
+export type OpenPanel = (...args: PanelOpenArgs) => void
 
 /** Props every panel content component receives from the shell. */
 export interface PanelContentProps {
@@ -75,10 +113,7 @@ export interface PanelContentProps {
 }
 
 /** What the store holds for the at-most-one open panel (§8.1, verbatim). */
-export interface ActivePanel {
-  id: PanelId
-  context: PanelContext
-}
+export type ActivePanel = PanelOpenSpec
 
 /**
  * One panel definition feeds the shell — the §8.1 shape, verbatim. Panels

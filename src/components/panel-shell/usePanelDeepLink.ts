@@ -27,7 +27,8 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useBlocker, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from './leaveGate'
-import type { PanelContext } from './types'
+import { isWorkspaceScopedPanel, WAVE_1_PANEL_IDS } from './types'
+import type { ActivePanel, WorkspacePanelContext, WorkspacePanelId } from './types'
 import {
   confirmDiscardLibraryEdits,
   isLibraryEditorDirty,
@@ -35,8 +36,11 @@ import {
 
 type SearchRecord = Record<string, unknown>
 
-function rawPanel(search: SearchRecord): string | undefined {
-  return typeof search.panel === 'string' ? search.panel : undefined
+function rawPanel(search: SearchRecord): WorkspacePanelId | undefined {
+  if (typeof search.panel !== 'string') return undefined
+  if (!(WAVE_1_PANEL_IDS as readonly string[]).includes(search.panel)) return undefined
+  const id = search.panel as WorkspacePanelId
+  return isWorkspaceScopedPanel(id) ? id : undefined
 }
 
 function hasForeignKey(search: SearchRecord): boolean {
@@ -45,7 +49,7 @@ function hasForeignKey(search: SearchRecord): boolean {
 
 /** Keep `agent` (declared, SP-23) and an optional `panel=library`. Every
  * other key is set undefined so the encoder drops it. */
-function cleanedSearch(prev: SearchRecord, panel: 'library' | undefined): SearchRecord {
+function cleanedSearch(prev: SearchRecord, panel: WorkspacePanelId | undefined): SearchRecord {
   const next: SearchRecord = {}
   for (const key of Object.keys(prev)) next[key] = undefined
   if (panel) next.panel = panel
@@ -54,10 +58,17 @@ function cleanedSearch(prev: SearchRecord, panel: 'library' | undefined): Search
 }
 
 function gatedCloseIfOpen(): void {
-  if (useUiStore.getState().activePanel === null) return
-  leaveGateThen(() => {
+  const outgoing = useUiStore.getState().activePanel
+  if (outgoing === null) return
+  leaveGateThen(outgoing.id, () => {
     if (useUiStore.getState().activePanel !== null) useUiStore.getState().closePanel()
   })
+}
+
+function projectedPanel(activePanel: ActivePanel | null): WorkspacePanelId | undefined {
+  if (activePanel === null) return undefined
+  if (!(WAVE_1_PANEL_IDS as readonly string[]).includes(activePanel.id)) return undefined
+  return isWorkspaceScopedPanel(activePanel.id) ? activePanel.id : undefined
 }
 
 export function usePanelDeepLink(workspaceId: string, panel: string | undefined): void {
@@ -81,7 +92,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   })
 
   const replaceSearch = useCallback(
-    (desired: 'library' | undefined): void => {
+    (desired: WorkspacePanelId | undefined): void => {
       selfWriteRef.current = true
       navigate({
         search: ((prev: SearchRecord) => cleanedSearch(prev, desired)) as never,
@@ -95,7 +106,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     const onPopState = () => {
       backForwardRef.current = true
       const current = useUiStore.getState().activePanel
-      replaceSearch(current?.id === 'library' ? 'library' : undefined)
+      replaceSearch(projectedPanel(current))
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
@@ -111,27 +122,28 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
       selfWriteRef.current = false
       return
     }
+    const rawNamed = typeof rawSearch.panel === 'string' ? rawSearch.panel : undefined
     const named = rawPanel(rawSearch)
-    if (named === 'library') {
-      if (hasForeignKey(rawSearch)) replaceSearch('library')
+    if (named !== undefined) {
+      if (hasForeignKey(rawSearch)) replaceSearch(named)
       const { activePanel: current, openPanel } = useUiStore.getState()
-      if (current?.id === 'library') return
-      const context: PanelContext = workspaceId ? { workspaceId } : {}
+      if (current?.id === named) return
+      const context: WorkspacePanelContext = workspaceId ? { workspaceId } : {}
       if (current !== null) {
-        leaveGateThen(() => {
+        leaveGateThen(current.id, () => {
           const { activePanel: still, openPanel: open } = useUiStore.getState()
-          if (still?.id !== 'library') open('library', context)
+          if (still?.id !== named) open(named, context)
         })
       } else {
-        openPanel('library', context)
+        openPanel(named, context)
       }
       return
     }
     // browser, unknown, or a foreign key (session) — rewrite the bar.
-    if (named !== undefined || hasForeignKey(rawSearch)) replaceSearch(undefined)
+    if (rawNamed !== undefined || hasForeignKey(rawSearch)) replaceSearch(undefined)
     // A named non-library param is a "no panel" verdict (US-7 AS-4/AS-5).
     // An absent param is not: in-app panel opens must survive projection.
-    if (named !== undefined) gatedCloseIfOpen()
+    if (rawNamed !== undefined) gatedCloseIfOpen()
   }, [rawSearch, workspaceId, replaceSearch])
 
   // PROJECTION (store -> URL, SP-22 REPLACE). The mount pass records a
@@ -144,8 +156,8 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
       mountedRef.current = true
       return
     }
-    const desired = activePanel?.id === 'library' ? 'library' : undefined
-    const validated = panel === 'library' ? 'library' : undefined
+    const desired = projectedPanel(activePanel)
+    const validated = panel === undefined ? undefined : rawPanel({ panel })
     if (desired === validated) return
     replaceSearch(desired)
   }, [activePanel, panel, replaceSearch])

@@ -2,7 +2,8 @@ import { create } from 'zustand'
 import { generateId } from '@/lib/constants'
 import type { WizardCli, WizardType } from '@/components/agents/wizard/types'
 import { PANEL_WIDTH_UNSET } from '@/components/panel-shell/types'
-import type { ActivePanel, PanelContext, PanelId } from '@/components/panel-shell/types'
+import type { ActivePanel, OpenPanel, PanelOpenArgs } from '@/components/panel-shell/types'
+import { capturePanelTriggerOrigin } from '@/components/panel-shell/panelFocus'
 
 export interface Toast {
   id: string
@@ -151,15 +152,22 @@ interface UiStore {
   // store action, so the store stays a plain reducer (the RED pack asserts
   // exactly this shape). `panelWidth` is the stored (unsettled) width the
   // shell clamps against live geometry (MAJ-009); `guardPending`/
-  // `historyPushed` are the shell's transition flags (dialog-up marker, SP-26
-  // one-pushed-entry marker).
+  // `historyPushed` are the shell's transition flags.
+  //
+  // State table (F6):
+  //   guardPending=false/historyPushed=false — ordinary docked or idle state
+  //   guardPending=true /historyPushed=*     — leave decision pending; moves stop
+  //   guardPending=false/historyPushed=true  — one phone takeover entry exists
+  // A cancelled phone Back restores historyPushed=true; leaving takeover or
+  // an external close collapses that entry and returns both flags to false.
   activePanel: ActivePanel | null
   panelWidth: number
   guardPending: boolean
   historyPushed: boolean
-  openPanel: (id: PanelId, context?: PanelContext) => void
+  openPanel: OpenPanel
   closePanel: () => void
   setPanelWidth: (px: number) => void
+  resetPanelWidth: () => void
   setGuardPending: (pending: boolean) => void
   setHistoryPushed: (pushed: boolean) => void
 }
@@ -258,17 +266,22 @@ export const useUiStore = create<UiStore>((set, get) => ({
   panelWidth: PANEL_WIDTH_UNSET,
   guardPending: false,
   historyPushed: false,
-  openPanel: (id, context = {}) =>
+  openPanel: (...args: PanelOpenArgs) => {
+    const [id, suppliedContext] = args
+    const context = suppliedContext ?? {}
+    capturePanelTriggerOrigin(id)
     set((state) => ({
-      activePanel: { id, context },
+      activePanel: { id, context } as ActivePanel,
       // Opening a DIFFERENT panel re-reads that panel's own width (its stored
       // value for its own scope, or the SP-17 default). Same panel re-open =
       // keep the current width (a context refresh must not jump the divider).
       panelWidth: state.activePanel?.id === id ? state.panelWidth : PANEL_WIDTH_UNSET,
-    })),
+    }))
+  },
   closePanel: () =>
     set({ activePanel: null, panelWidth: PANEL_WIDTH_UNSET, guardPending: false, historyPushed: false }),
   setPanelWidth: (px) => set({ panelWidth: px }),
+  resetPanelWidth: () => set({ panelWidth: PANEL_WIDTH_UNSET }),
   setGuardPending: (pending) => set({ guardPending: pending }),
   setHistoryPushed: (pushed) => set({ historyPushed: pushed }),
 }))

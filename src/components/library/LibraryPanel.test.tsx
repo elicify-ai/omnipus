@@ -68,6 +68,7 @@ vi.mock('./LibraryExplorer', () => ({
 }))
 
 import { LibraryPanel } from './LibraryPanel'
+import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 
 beforeEach(() => {
   mockLibraryExplorerProps.mockClear()
@@ -89,7 +90,7 @@ function shellProps(context: PanelContentProps['context']): PanelContentProps {
   }
 }
 
-function renderShellHostedLibrary(context: PanelContentProps['context']) {
+function renderShellHostedLibrary(context: WorkspacePanelContext) {
   act(() => {
     useUiStore.getState().openPanel('library', context)
   })

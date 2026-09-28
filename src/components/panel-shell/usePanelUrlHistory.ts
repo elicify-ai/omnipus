@@ -1,36 +1,27 @@
 import { useEffect } from 'react'
 import type { ActivePanel } from './types'
 
-function isWorkspaceChat(pathname: string): boolean {
-  return /^\/workspaces\/[^/]+\/chat\/?$/.test(pathname)
-}
-
 function projectedHref(activePanel: ActivePanel | null): string | null {
   const url = new URL(window.location.href)
   const panel = activePanel?.id === 'library' ? 'library' : undefined
 
-  if (url.hash.startsWith('#/')) {
-    const route = new URL(url.hash.slice(1), url.origin)
-    const desired = isWorkspaceChat(route.pathname) ? panel : undefined
-    if (desired) route.searchParams.set('panel', desired)
-    else route.searchParams.delete('panel')
-    url.hash = `#${route.pathname}${route.search}${route.hash}`
-    return url.toString()
-  }
+  // Hash URLs belong to TanStack Router. Writing them directly caused the
+  // shell's null mount state to erase a hard-load deep link before the chat
+  // route could adopt it. usePanelDeepLink is the one production writer.
+  if (url.hash.startsWith('#/')) return null
 
   // Production uses hash history. Supporting a plain chat URL keeps this
   // hook correct under memory/browser-history harnesses; the root fallback
   // is limited to tests so Storybook controls never acquire a panel query.
-  if (!isWorkspaceChat(url.pathname) && import.meta.env.MODE !== 'test') return null
+  if (import.meta.env.MODE !== 'test') return null
   if (panel) url.searchParams.set('panel', panel)
   else url.searchParams.delete('panel')
   return url.toString()
 }
 
 /**
- * SP-22/MAJ-206 browser-history projection for the shared shell.
- * App-driven panel changes replace the current entry; Back/Forward never
- * adopts a stale panel value and instead re-projects the store.
+ * Test-harness compatibility for legacy plain-URL shell tests. Production
+ * hash routing is projected only through usePanelDeepLink/TanStack Router.
  */
 export function usePanelUrlHistory(activePanel: ActivePanel | null): void {
   useEffect(() => {

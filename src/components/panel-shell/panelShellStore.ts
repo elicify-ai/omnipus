@@ -12,4 +12,16 @@
 
 export { PANEL_WIDTH_UNSET } from './types'
 export type { ActivePanel } from './types'
-export { useUiStore as usePanelShellStore } from '@/store/ui'
+
+import type { StoreApi, UseBoundStore } from 'zustand'
+import type { PanelContext, PanelId } from './types'
+import { useUiStore } from '@/store/ui'
+
+// Compatibility boundary for the wave-0 shell harnesses, whose helpers pass
+// a union PanelId plus a record-shaped context. The production store keeps
+// the discriminated OpenPanel signature; only this legacy alias is broad.
+type PanelShellState = Omit<ReturnType<typeof useUiStore.getState>, 'openPanel'> & {
+  openPanel: (id: PanelId, context?: PanelContext | Record<string, unknown>) => void
+}
+
+export const usePanelShellStore = useUiStore as unknown as UseBoundStore<StoreApi<PanelShellState>>

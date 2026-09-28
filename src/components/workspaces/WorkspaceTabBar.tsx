@@ -19,7 +19,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
-import type { PanelId } from '@/components/panel-shell/types'
+import type { WorkspacePanelId } from '@/components/panel-shell/types'
 import { cn } from '@/lib/utils'
 
 // The workspace container surface — the MAJ-007 mixed-mode strip (US-5):
@@ -69,7 +69,7 @@ export const WORKSPACE_TABS = [
  * ('media') is the only one in wave 1 (§10); waves 2-3 register Tasks/
  * Calendar/Team, at which point those segments move from the Link path to
  * the toggle path (their routes stay as the expand targets, MAJ-012). */
-const PANEL_TOGGLE_SEGMENTS: Partial<Record<TabSegment, PanelId>> = {
+const PANEL_TOGGLE_SEGMENTS: Partial<Record<TabSegment, WorkspacePanelId>> = {
   media: 'library',
 }
 
@@ -124,10 +124,9 @@ interface WorkspaceTabBarProps {
  *   ≥ 72rem (1152px): full strip — name → settings, Chat, the Library toggle,
  *     and the mixed-mode links (hidden @6xl:flex)
  *   < 72rem (1152px): single "Active ▾" view-switcher dropdown (flex
- *     @6xl:hidden) — all entries navigate (the Library item lands on the
- *     /media redirect stub, which opens the panel and rewrites the URL to
- *     chat?panel=library) — and it also carries a settings entry, since
- *     narrow viewports have no other settings entry point in this header
+ *     @6xl:hidden) — registered panel entries use the same toggle model as
+ *     the full strip; page entries navigate. It also carries settings,
+ *     since narrow viewports have no other settings entry point here.
  *
  * The underline layoutId tracks the ROUTE entry only (the page you are on).
  * A pressed panel toggle shows its state via aria-pressed + accent colour,
@@ -152,8 +151,9 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
    * through the CRIT-001 leave gate (a dirty outgoing Library asks before
    * it closes; clean runs synchronously). No navigation: the chat route
    * stays the underlying page. */
-  const togglePanel = (panelId: PanelId) => {
-    leaveGateThen(() => {
+  const togglePanel = (panelId: WorkspacePanelId) => {
+    const outgoingPanelId = useUiStore.getState().activePanel?.id ?? null
+    leaveGateThen(outgoingPanelId, () => {
       const state = useUiStore.getState()
       if (state.activePanel?.id === panelId) {
         state.closePanel()
@@ -242,6 +242,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 onClick={() => togglePanel(panelId)}
                 title={label}
                 aria-pressed={pressed}
+                data-panel-trigger={panelId}
                 data-testid={`workspace-tab-${segment}`}
                 className={tabEntryClass(pressed)}
               >
@@ -345,6 +346,34 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
             </DropdownMenuItem>
             {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
               const isActive = segment === activeSegment
+              const panelId = PANEL_TOGGLE_SEGMENTS[segment]
+              if (panelId) {
+                const pressed = activePanelId === panelId
+                return (
+                  <DropdownMenuItem
+                    key={segment}
+                    data-testid={`workspace-view-switcher-${segment}`}
+                    data-panel-trigger={panelId}
+                    aria-pressed={pressed}
+                    onClick={() => togglePanel(panelId)}
+                    className={cn(
+                      'flex items-center gap-[var(--space-2)]',
+                      pressed ? 'text-[var(--color-accent)]' : undefined,
+                    )}
+                  >
+                    <Icon size={15} weight={pressed ? 'fill' : 'regular'} />
+                    <span>{label}</span>
+                    {pressed && (
+                      <span
+                        className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
+                        aria-hidden="true"
+                      >
+                        ●
+                      </span>
+                    )}
+                  </DropdownMenuItem>
+                )
+              }
               return (
                 <DropdownMenuItem
                   key={segment}

@@ -12,12 +12,30 @@
 // none of the call sites change shape.
 
 import { useCallback, useEffect, useRef } from 'react'
-import type { PanelDefinition, PanelContext, PanelId } from './types'
+import type { OpenPanel, PanelDefinition, PanelContext, PanelId } from './types'
 import { usePanelShellStore, PANEL_WIDTH_UNSET } from './panelShellStore'
 import { readPanelWidth, writePanelWidth, deletePanelWidth, panelWidthScope } from './panelWidthMemory'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
-/** DOM hook the shell looks up to return focus on close (MIN-002). */
-export const PANEL_TRIGGER_ATTR = 'data-panel-trigger'
+import { focusPanelTriggerOrigin } from './panelFocus'
+
+export { PANEL_TRIGGER_ATTR } from './panelFocus'
+
+function usePanelWidthHydration(
+  username: string,
+  activePanel: ReturnType<typeof usePanelShellStore.getState>['activePanel'],
+): void {
+  const widthScope = activePanel === null
+    ? null
+    : `${activePanel.id}:${panelWidthScope(activePanel.id, activePanel.context)}`
+
+  useEffect(() => {
+    const current = usePanelShellStore.getState().activePanel
+    if (current === null) return
+    usePanelShellStore.getState().setPanelWidth(
+      readPanelWidth(username, current.id, current.context) ?? PANEL_WIDTH_UNSET,
+    )
+  }, [username, widthScope])
+}
 
 export function usePanelShell(panels: PanelDefinition[], username: string) {
   const activePanel = usePanelShellStore((s) => s.activePanel)
@@ -25,6 +43,11 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
 
   const panelsRef = useRef(panels)
   panelsRef.current = panels
+
+  // Production entry points open through the global store, not requestOpen.
+  // Hydrate on every user/panel/scope transition so those paths restore the
+  // same remembered width as shell-owned opens.
+  usePanelWidthHydration(username, activePanel)
 
   /** Return focus to the control that opened the panel (MIN-002). The
    *  trigger can be display:none AT the close moment — a container-query
@@ -35,10 +58,10 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
    *  strip collapses the same way. */
   const restoreFocusToTrigger = useCallback((id: PanelId) => {
     const tryFocus = (): boolean => {
-      const root = document.querySelector(`[${PANEL_TRIGGER_ATTR}="${id}"]`)
-      if (!(root instanceof HTMLElement) || !root.isConnected) return false
-      root.focus()
-      return document.activeElement === root
+      return focusPanelTriggerOrigin(id)
+    }
+    const focusChatInput = (): void => {
+      document.querySelector<HTMLElement>('[data-testid="chat-input"]')?.focus()
     }
     if (tryFocus()) return
     let frames = 0
@@ -47,7 +70,11 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
       // Bounded: if the trigger never becomes focusable (e.g. the chat
       // column is hidden in the takeover), stop after 10 frames and let
       // focus stay where the browser put it.
-      if (++frames < 10) requestAnimationFrame(tick)
+      if (++frames < 10) {
+        requestAnimationFrame(tick)
+      } else {
+        focusChatInput()
+      }
     }
     requestAnimationFrame(tick)
   }, [])
@@ -122,16 +149,8 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
       const outgoing = store.activePanel
       const go = (): void => {
         const s = usePanelShellStore.getState()
-        const prev = s.activePanel
-        const switched = prev?.id !== id
-        // Same panel, new scope (e.g. the demo's workspace switcher): the
-        // width bucket changed, so the width is re-read from memory (SP-13).
-        const scopeChanged =
-          prev !== null && prev.id === id && panelWidthScope(id, prev.context) !== panelWidthScope(id, context)
-        s.openPanel(id, context)
-        if (switched || scopeChanged) {
-          s.setPanelWidth(readPanelWidth(username, id, context) ?? PANEL_WIDTH_UNSET)
-        }
+        ;(s.openPanel as (panelId: PanelId, panelContext?: PanelContext) => void)(id, context)
+        // The hydration effect handles all entry points, including this one.
         // Takeover push happens in the takeover effect in the shell hook-up.
       }
       if (outgoing !== null && outgoing.id !== id) {
@@ -143,8 +162,8 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
       }
       go()
     },
-    [runGuard, username],
-  )
+    [runGuard],
+  ) as OpenPanel
 
   /**
    * SP-26's header Back: when the takeover pushed a history entry, Back is
@@ -165,7 +184,7 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
    * successfully opens. A declined guard is not a popup failure.
    */
   const requestExpand = useCallback(
-    async (expandAction?: () => boolean): Promise<'opened' | 'cancelled' | 'blocked'> => {
+    async (expandAction?: () => boolean): Promise<'opened' | 'cancelled' | 'blocked' | 'error'> => {
       const { activePanel, guardPending } = usePanelShellStore.getState()
       if (activePanel === null || guardPending) return 'cancelled'
       const def = panelsRef.current.find((p) => p.id === activePanel.id)
@@ -174,21 +193,23 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
       // in the original click stack. Guarded panels await their decision.
       if (def.beforeLeave !== undefined && !(await runGuard(def))) return 'cancelled'
 
-      let opened = false
       try {
         if (expandAction !== undefined) {
-          opened = expandAction()
+          if (!expandAction()) return 'blocked'
         } else {
           const url = def.expandTarget(activePanel.context)
           const win = window.open(url, '_blank')
-          opened = win !== null && !win.closed
-          if (opened && win) win.opener = null
+          if (win === null) return 'blocked'
+          if (win.closed) {
+            console.error('[side-panel] Expand failed', new Error('window.open returned a closed window'))
+            return 'error'
+          }
+          win.opener = null
         }
-      } catch {
-        return 'blocked'
+      } catch (error) {
+        console.error('[side-panel] Expand failed', error)
+        return 'error'
       }
-      if (!opened) return 'blocked'
-
       const current = usePanelShellStore.getState().activePanel
       if (current?.id === activePanel.id && current.context === activePanel.context) {
         finishClose(activePanel.id)
@@ -211,7 +232,7 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
         requestClose()
         return
       }
-      requestOpen(id, context)
+      ;(requestOpen as (panelId: PanelId, panelContext?: PanelContext) => void)(id, context)
     },
     [requestClose, requestOpen],
   )
@@ -232,7 +253,7 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
   const resetWidth = useCallback((): void => {
     const { activePanel } = usePanelShellStore.getState()
     if (activePanel === null) return
-    setPanelWidthInStore(PANEL_WIDTH_UNSET)
+    usePanelShellStore.getState().resetPanelWidth()
     deletePanelWidth(username, activePanel.id, activePanel.context)
   }, [username])
 
@@ -270,23 +291,49 @@ export function usePanelShellHistory(options: {
 }): void {
   const { enabled, guardThenClose } = options
   const activePanel = usePanelShellStore((st) => st.activePanel)
+  const historyPushed = usePanelShellStore((st) => st.historyPushed)
+  const guardPending = usePanelShellStore((st) => st.guardPending)
+  const collapsingRef = useRef(false)
+  const ownsEntryRef = useRef(false)
+  const backGuardRef = useRef(false)
 
   // One push per (takeover visible, panel open). The store flag keeps the
   // push/pop bookkeeping in one place shared with requestClose.
   useEffect(() => {
     const store = usePanelShellStore.getState()
-    if (enabled && activePanel !== null && !store.historyPushed) {
+    if (enabled && activePanel !== null && !historyPushed && !guardPending && !backGuardRef.current) {
       store.setHistoryPushed(true)
+      ownsEntryRef.current = true
       window.history.pushState({ sidePanel: activePanel.id }, '')
+      return
     }
-  }, [enabled, activePanel])
+    if (enabled && activePanel !== null && historyPushed) {
+      // Includes a guard-cancel re-push performed by guardThenClose.
+      ownsEntryRef.current = true
+      return
+    }
+    if ((!enabled || activePanel === null) && ownsEntryRef.current) {
+      collapsingRef.current = true
+      ownsEntryRef.current = false
+      store.setHistoryPushed(false)
+      window.history.back()
+    }
+  }, [enabled, activePanel, historyPushed, guardPending])
 
   useEffect(() => {
     const onPopState = (): void => {
+      if (collapsingRef.current) {
+        collapsingRef.current = false
+        return
+      }
       const store = usePanelShellStore.getState()
       if (!store.historyPushed || store.activePanel === null) return
+      ownsEntryRef.current = false
+      backGuardRef.current = true
       store.setHistoryPushed(false)
-      void guardThenClose(false)
+      void guardThenClose(true).finally(() => {
+        backGuardRef.current = false
+      })
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)

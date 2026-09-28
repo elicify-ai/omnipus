@@ -1,3 +1,4 @@
+import { PANEL_POLICIES } from './types'
 import type { PanelId } from './types'
 
 type WorkspaceSwitchDecision =
@@ -11,11 +12,12 @@ export async function resolveWorkspaceSwitch(input: {
   nextWorkspaceId: string
   beforeLeave?: () => Promise<boolean>
 }): Promise<WorkspaceSwitchDecision> {
-  if (input.panelId === 'browser' || input.panelId === 'team') {
+  const follows = PANEL_POLICIES[input.panelId].switchFollows
+  if (follows === 'never') {
     return { action: 'stay' }
   }
 
-  if (input.panelId === 'library' && input.openedWorkspaceId === undefined) {
+  if (follows === 'when-scoped' && input.openedWorkspaceId === undefined) {
     return { action: 'stay' }
   }
 

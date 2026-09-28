@@ -14,10 +14,11 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
-import { ArrowsOutSimple, ArrowLeft, X } from '@phosphor-icons/react'
+import { ArrowsOutSimple, ArrowLeft, SpinnerGap, X } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { IconButton } from '@/components/ui/icon-button'
 import { ResizeSeparator } from '@/components/ui/resize-separator'
+import { ErrorBoundary } from '@/components/ui/error-boundary'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
 import { usePanelShell, usePanelShellHistory } from './usePanelShell'
 import { usePanelUrlHistory } from './usePanelUrlHistory'
@@ -25,6 +26,7 @@ import { useSwipeToClose } from './useSwipeToClose'
 import { usePanelShellStore, PANEL_WIDTH_UNSET } from './panelShellStore'
 import { PANEL_MIN_PX, clampPanelWidth, panelDefaultWidth, panelWidthCeiling, isPhoneTakeover } from './panelWidth'
 import type { PanelDefinition } from './types'
+import { hasPanelTriggerOrigin } from './panelFocus'
 
 export interface SidePanelShellProps {
   /** The registered panels (§8.1 registry — adding a panel is one entry). */
@@ -135,7 +137,9 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
   } | null>(null)
 
   useEffect(() => {
-    if (panelOpen) headerRef.current?.focus()
+    if (panelOpen && activePanel !== null && hasPanelTriggerOrigin(activePanel.id)) {
+      headerRef.current?.focus()
+    }
   }, [activePanel?.id, activePanel?.context, panelOpen])
 
   const registerExpand = useCallback((action: (() => boolean) | null) => {
@@ -156,13 +160,13 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
   }, [activePanel])
 
   // SP-12 expand with fail-visible popup-block handling.
-  const [expandBlocked, setExpandBlocked] = useState(false)
+  const [expandFailure, setExpandFailure] = useState<'blocked' | 'error' | null>(null)
   const handleExpand = async () => {
-    setExpandBlocked(false)
+    setExpandFailure(null)
     const registered = expandActionRef.current
     const expandAction = registered !== null && registered.id === activePanel?.id ? registered.action : undefined
     const result = await shell.requestExpand(expandAction)
-    if (result === 'blocked') setExpandBlocked(true)
+    if (result === 'blocked' || result === 'error') setExpandFailure(result)
   }
 
   // Plain JSX builder (NOT a nested component — a nested component type
@@ -200,13 +204,15 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
               {def.title}
             </span>
             <span className="grow" />
-            {expandBlocked && (
+            {expandFailure && (
               <span
                 data-testid="panel-expand-error"
                 className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
                 role="status"
               >
-                Pop-up blocked — allow pop-ups to expand.
+                {expandFailure === 'blocked'
+                  ? 'Pop-up blocked — allow pop-ups to expand.'
+                  : 'Could not expand this panel. Try again.'}
               </span>
             )}
             <IconButton
@@ -227,16 +233,28 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
             </IconButton>
           </div>
           <div className="min-h-0 flex-1 overflow-hidden">
-            <Suspense fallback={null}>
-              <def.content
-                context={activePanel.context}
-                close={shell.requestClose}
-                expand={() => {
-                  void handleExpand()
-                }}
-                registerExpand={registerExpand}
-                onWidthSettle={onWidthSettle}
-              />
+            <Suspense
+              fallback={
+                <div
+                  role="status"
+                  className="flex h-full items-center justify-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
+                >
+                  <SpinnerGap className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  <span>Loading {def.title}…</span>
+                </div>
+              }
+            >
+              <ErrorBoundary key={def.id}>
+                <def.content
+                  context={activePanel.context}
+                  close={shell.requestClose}
+                  expand={() => {
+                    void handleExpand()
+                  }}
+                  registerExpand={registerExpand}
+                  onWidthSettle={onWidthSettle}
+                />
+              </ErrorBoundary>
             </Suspense>
           </div>
         </>
