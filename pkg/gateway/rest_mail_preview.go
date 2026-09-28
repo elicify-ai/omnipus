@@ -282,30 +282,46 @@ var mailAnchorHrefRe = regexp.MustCompile(`^(?:https?|mailto):`)
 var mailImageSrcRe = regexp.MustCompile(`^(?:/mail-preview/(?:part|img)/|data:image/(?:png|gif|jpe?g|webp);base64,)`)
 
 // mailRewritePreviewSources rewrites img srcs onto the token-scoped paths
-// before sanitization; bluemonday then re-checks each surviving value.
-func mailRewritePreviewSources(raw string, inlines []email.MailPart, remoteURLs []string) string {
-	out := raw
+// before sanitization; bluemonday then re-checks each surviving value. The
+// attribute name folds case (SRC/src — Outlook normalizes attribute names to
+// upper case) and the value quoting is tolerant (double, single, unquoted —
+// round-8 F6): real-world mail HTML must not fail the rewrite and then the
+// post-sanitize src allowlist, which silently vanishes the image. The VALUE
+// still matches case-sensitively (two cids differing only by case address
+// different parts).
+func mailRewritePreviewSources(src string, inlines []email.MailPart, remoteURLs []string) string {
+	out := src
 	for i, part := range inlines {
 		cid := part.ContentID
 		if cid == "" {
 			continue
 		}
 		bare := strings.Trim(cid, "<>")
+		if bare == "" {
+			continue
+		}
 		path := mailPreviewPartPrefix + mailTokenPlaceholder + "/" + strconv.Itoa(i)
-		out = strings.ReplaceAll(out, `src="cid:`+bare+`"`, `src="`+path+`"`)
-		out = strings.ReplaceAll(out, `src='cid:`+bare+`'`, `src='`+path+`'`)
+		out = mailRewriteSrcAttr(out, "cid:"+bare, path)
 	}
 	for i, u := range remoteURLs {
 		if u == "" {
 			continue
 		}
 		path := mailPreviewImgPrefix + mailTokenPlaceholder + "/" + strconv.Itoa(i)
-		quoted := []string{`src="` + u + `"`, `src='` + u + `'`}
-		for _, q := range quoted {
-			out = strings.ReplaceAll(out, q, `src="`+path+`"`)
-		}
+		out = mailRewriteSrcAttr(out, u, path)
 	}
 	return out
+}
+
+// mailRewriteSrcAttr rewrites every src attribute whose value is exactly want
+// to src="path": the attribute NAME folds case, the quoting is tolerant
+// (double-quoted, single-quoted, or unquoted). RE2 has no lookahead, so the
+// unquoted form captures its terminator ([\s>/]) and the replacement re-emits
+// it ($3) — the terminator is never consumed.
+func mailRewriteSrcAttr(out, want, path string) string {
+	q := regexp.QuoteMeta(want)
+	re := regexp.MustCompile(`(?i:src)(\s*=\s*)(?:"` + q + `"|'` + q + `'|(` + q + `)([\s>/]))`)
+	return re.ReplaceAllString(out, `src$1"`+path+`"$3`)
 }
 
 // mailAnchorTagRe matches an opening anchor tag (MC-40 hardening pass).
