@@ -25,7 +25,8 @@ squad). Team-lead and any squad lead widening its own fan-out both run it.
 
 | Signal | Role | HOLD threshold (approx.) | Why this signal |
 |---|---|---|---|
-| Memory | **hard** | Available RAM below ~4 GB, or swap-in activity rising | Parallel agents and build caches OOM the machine, not just one lane |
+| Memory | **hard** | Available RAM below ~3 GB (founder, 2026-09-27; was 4 GB), or swap-in activity rising | Parallel agents and build caches OOM the machine, not just one lane |
+| Overload | **hard** (founder, 2026-09-28) | 5-minute load average above 4x logical cores (32 on an 8-core Mac); `DEV_CAPACITY_OVERLOAD_FACTOR` | A load of 700+ stalled every lane while memory and disk read fine; normal busy periods stay below it |
 | Disk | **hard** | Free space on the workspace volume below ~20 GB | Worktrees, node_modules and Go caches grow fast |
 | CPU load | advisory — feeds the verdict, never holds alone | Sustained 1-minute load above ~80% of logical cores over two samples ~30 s apart | One spike is noise; sustained load means lanes already compete |
 | Active dispatches | advisory — feeds the verdict, never holds alone (Round 18) | More than ~12 in-flight rows | The work-in-flight measure; the ledger knows what is actually running, the process table does not |
