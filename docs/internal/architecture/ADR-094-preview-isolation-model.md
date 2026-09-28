@@ -131,7 +131,7 @@ The residual round 1 accepted is now founder-rejected, and issue #798 (`security
 ```
 default-src 'none';
 script-src ${ORIGIN}${PREFIX} 'unsafe-inline' 'unsafe-eval';
-style-src ${ORIGIN}${PREFIX};
+style-src ${ORIGIN}${PREFIX} 'unsafe-inline';
 img-src ${ORIGIN}${PREFIX} data:;
 font-src ${ORIGIN}${PREFIX} data:;
 media-src ${ORIGIN}${PREFIX};
@@ -144,6 +144,8 @@ frame-ancestors 'none';
 ```
 
 Notes: `script-src` gains `'unsafe-eval'` — dev-server bundles commonly need it, F794-2 grants it, and it does not weaken #798 defence because CSP governs the *network* of the document, however the script was produced. `blob:` workers inherit the creating document's policy, so confinement holds inside them. The origin list is frozen at boot; the string is byte-stable per `(agent, token)` (review MIN-001). Agent-ID and token go into `${PREFIX}` percent-encoded to the RFC 3986 unreserved set — `validation.EntityID` admits `;`, `,`, spaces and quotes, any of which would split directives (review MIN-002); the builder must never interpolate raw registry values.
+
+> **[2026-09-28 amendment — founder ruling: inline styles in previewed content (F794-8)]** `style-src` gains `'unsafe-inline'`. Founder (2026-09-28, verbatim): "omnipus must not have inline styles, however content that can be previewed on the preview address can". Previewed content may use inline styles; `connect-src`, `img-src` and `form-action` stay confined to the prefix — the #798 network boundary (control-stack rows 1–2) is untouched by this widening. Omnipus's own app — the SPA and all non-preview routes — keeps a strict style policy with no inline styles. Why the gap arose: this template was already being emitted on dev-proxy responses, and the A1 gate fix put it on static Mode 2 responses too, where inline-styled pages rendered white — caught by the E2E browser-live-video check. The spec's template, FR-014 and Decisions Log carry the same amendment (`F794-8` in `ADR-094-founder-decisions.md`, authoritative); tripwire transcriptions MUST take the template as amended here.
 
 **The control stack — what stops a same-origin, full-capability page from calling `/api/v1` as the user:**
 
