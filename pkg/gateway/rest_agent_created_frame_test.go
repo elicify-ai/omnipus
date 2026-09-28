@@ -101,6 +101,45 @@ func TestCreateAgent_ValidationFailure_DoesNotEmitAgentCreatedFrame(t *testing.T
 	assert.Empty(t, frames(), "a request that never persisted an agent must not emit agent_created")
 }
 
+// TestCreateAgent_RosterWideCoverageGapRejected_DoesNotEmitAgentCreatedFrame
+// proves emitAgentCreated does not fire when createAgent is rejected by
+// persistAgent's LATER config.ValidateToolPolicyCoverage guard
+// (withToolPolicyCoverageGuard) rather than by an earlier gate.
+// TestCreateAgent_ValidationFailure_DoesNotEmitAgentCreatedFrame above only
+// proves the emit is gated on SOME rejection — the earliest possible one, a
+// missing required field — so it would still pass against a mutation that
+// hoisted the emit call to fire unconditionally anywhere between prepareAgent
+// and persistAgent, since that earliest rejection never reaches persistAgent
+// at all. This test closes that gap: the request here has a valid name/soul/
+// type and carries no tools_cfg at all, so buildToolConfig's caller-side
+// check never runs and cra.ac.Tools ends up fully enumerated (coreagent.
+// NewCustomAgentToolsCfg()'s complete deny-seeded baseline) — the NEW agent's
+// own map is never the problem. Deliberately NOT calling seedGlobalCeiling
+// (see its own doc comment: "the bare fixture agent already has 88
+// roster-wide coverage gaps") leaves the PRE-EXISTING fixture agent
+// (01JXTESTAGENTSTARTTEST001, seeded by newTestRestAPIWithAgent with
+// Tools: nil) with a roster-wide gap for every known builtin tool and no
+// ceiling to fall back on — so persistAgent's withToolPolicyCoverageGuard
+// rejects the create for a reason that has nothing to do with the new
+// agent's own (complete) map. A hoisted-earlier emit would fire here; the
+// correct, current position does not.
+func TestCreateAgent_RosterWideCoverageGapRejected_DoesNotEmitAgentCreatedFrame(t *testing.T) {
+	api := newTestRestAPIWithAgent(t)
+	frames := agentCreatedRecorder(api)
+
+	w := postAgent(t, api, `{"type":"Main","name":"RosterGapAgent","soul":"passes every earlier gate"}`)
+
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"a create must be rejected when the roster-wide tool-policy coverage guard finds a gap "+
+			"(from the PRE-EXISTING fixture agent, not the new one); body=%s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "tool policy coverage incomplete",
+		"the rejection must come from persistAgent's withToolPolicyCoverageGuard (the roster-wide "+
+			"guard), confirming this test exercises that later gate and not an earlier one")
+	assert.Empty(t, frames(),
+		"a create rejected by the roster-wide coverage guard never reached persistence — "+
+			"emitAgentCreated must not fire (a hoisted-emit mutation before persistAgent would fire here)")
+}
+
 // The broadcaster is nil until the gateway wires the WS handler in at boot;
 // createAgent must survive that (test APIs, and any boot ordering hiccup)
 // rather than nil-deref.

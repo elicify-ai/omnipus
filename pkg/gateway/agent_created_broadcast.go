@@ -29,11 +29,13 @@ import (
 )
 
 // broadcastAgentCreated fans one agent_created frame out to every connected
-// WS client. Same construction + drop-log shape as broadcastLibraryChange: a
-// client whose send buffer is full drops the frame (counted, never
-// blocking); a full-buffer WS client's own reconnect/refetch behavior is the
-// recovery path, exactly as it is for every other broadcast frame on this
-// handler.
+// WS client. Same construction + logging shape as broadcastLibraryChange —
+// per #823 (pkg/gateway/ws_conn_queue.go), a client's outbound queue never
+// drops a frame on a full buffer: it queues until the connection either
+// drains or falls more than connQueueByteCap behind, at which point it is
+// closed with WS code 4008 ("catch-up required") and the client reconnects
+// and catches up from its journal cursor. broadcastRaw's dropLogMsg logs
+// exactly that closure, not a silent per-frame drop.
 func (h *WSHandler) broadcastAgentCreated(f gen.AgentCreatedFrame) {
 	f.Type = string(gen.WsFrameTypeAgentCreated)
 	data, err := json.Marshal(f)

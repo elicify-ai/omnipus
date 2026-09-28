@@ -21,6 +21,8 @@ package systools_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -97,6 +99,127 @@ func TestAgentCreate_ValidationFailure_DoesNotNotifyAgentCreated(t *testing.T) {
 	}
 	if got := notifyCalls.Load(); got != 0 {
 		t.Fatalf("a request that never persisted an agent must not call NotifyAgentCreated; got %d calls", got)
+	}
+}
+
+// TestAgentCreate_NotifyFiresOnlyAfterAgentIsListable is the ordering-fix
+// regression proof for #1009's reappearance: it asserts NotifyAgentCreated
+// fires only AFTER publishAgentActivation has actually landed the new agent
+// in the live, in-memory config/registry that pkg/gateway/rest_agents.go::
+// listAgents (GET /api/v1/agents) reads — not merely after persistAndJoin's
+// durable disk write. It checks this synchronously, from INSIDE the notify
+// callback itself: al.GetConfig().Agents.List must already contain the new
+// agent's ID at the exact moment the callback runs. Against the pre-fix call
+// order (notify right after persistAndJoin, before publishAndRespond /
+// publishAgentActivation), this would fail — see this task's report for the
+// red run captured by temporarily reverting the ordering change.
+func TestAgentCreate_NotifyFiresOnlyAfterAgentIsListable(t *testing.T) {
+	home := t.TempDir()
+	provider := &reloadTestProvider{}
+	al := buildSysagentFastUpsertTestLoop(t, home, provider, nil)
+
+	var reloadCalls atomic.Int32
+	deps := newSysagentFastUpsertDeps(al, provider, home, &reloadCalls)
+
+	var (
+		notifyCalls     int
+		listedAtNotify  bool
+		notifiedAgentID string
+	)
+	deps.NotifyAgentCreated = func(agentID string) {
+		notifyCalls++
+		notifiedAgentID = agentID
+		for _, a := range al.GetConfig().Agents.List {
+			if a.ID == agentID {
+				listedAtNotify = true
+				break
+			}
+		}
+	}
+
+	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
+		"name":        "Ordering Proof Agent",
+		"description": "proves NotifyAgentCreated fires only once the agent is live-listable",
+		"soul":        "You are a test agent.",
+		"model":       "test-model",
+		"color":       "#22C55E",
+		"icon":        "robot",
+	})
+	if result.IsError {
+		t.Fatalf("create_agent failed: %s", result.ForLLM)
+	}
+	created := parseSuccess(t, result.ForLLM)
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("create_agent response missing id: %+v", created)
+	}
+
+	if notifyCalls != 1 {
+		t.Fatalf("NotifyAgentCreated must be called exactly once per landed create; got %d calls", notifyCalls)
+	}
+	if notifiedAgentID != id {
+		t.Fatalf("NotifyAgentCreated called with agent id %q, want %q", notifiedAgentID, id)
+	}
+	if !listedAtNotify {
+		t.Fatalf("NotifyAgentCreated fired BEFORE the agent was live-listable: " +
+			"al.GetConfig().Agents.List did not yet contain the new agent's ID at notify time — " +
+			"this is the #1009 ordering race (notify racing publishAgentActivation)")
+	}
+}
+
+// TestAgentCreate_InitAgentHomeFailure_DoesNotNotifyAgentCreated proves
+// NotifyAgentCreated does not fire when persistAndJoin's InitAgentHome step
+// fails AFTER agentstore.CreateState has already durably persisted the
+// entity — a LATER failure gate than
+// TestAgentCreate_ValidationFailure_DoesNotNotifyAgentCreated's earliest
+// field-validation rejection. This closes the gap that test leaves open: a
+// mutation that hoisted the notify call to fire right after persistAndJoin's
+// CreateState succeeds (the #1009 bug's exact original position, before this
+// fix moved the call into publishAndRespond gated on publishAgentActivation)
+// would still pass the validation-failure test, because that test's request
+// never reaches persistAndJoin at all. This test does reach it, and fails at
+// a step strictly after CreateState.
+func TestAgentCreate_InitAgentHomeFailure_DoesNotNotifyAgentCreated(t *testing.T) {
+	home := t.TempDir()
+	provider := &reloadTestProvider{}
+	al := buildSysagentFastUpsertTestLoop(t, home, provider, nil)
+
+	var reloadCalls atomic.Int32
+	deps := newSysagentFastUpsertDeps(al, provider, home, &reloadCalls)
+
+	var notifyCalls atomic.Int32
+	deps.NotifyAgentCreated = func(string) { notifyCalls.Add(1) }
+
+	// Pre-create a REGULAR FILE at the exact path datamodel.InitAgentHome
+	// will try to os.MkdirAll a subdirectory under
+	// (home/agents/<toSlug(name)>) — MkdirAll on a path whose parent already
+	// exists as a non-directory file fails deterministically and portably
+	// (no reliance on permission bits, which behave inconsistently as root
+	// or across platforms). toSlug("Init Home Fail Agent") deterministically
+	// yields "init-home-fail-agent" (lowercase, spaces to hyphens).
+	const agentID = "init-home-fail-agent"
+	if err := os.MkdirAll(filepath.Join(home, "agents"), 0o755); err != nil {
+		t.Fatalf("setup: mkdir agents dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "agents", agentID), []byte("x"), 0o600); err != nil {
+		t.Fatalf("setup: write colliding file: %v", err)
+	}
+
+	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
+		"name":        "Init Home Fail Agent",
+		"description": "proves an InitAgentHome failure after entity save never notifies",
+		"soul":        "You are a test agent.",
+		"model":       "test-model",
+		"color":       "#22C55E",
+		"icon":        "robot",
+	})
+	if !result.IsError {
+		t.Fatalf("create_agent must fail when InitAgentHome cannot create the agent's workspace dir "+
+			"(collision at %s), got success: %s", filepath.Join(home, "agents", agentID), result.ForLLM)
+	}
+	if got := notifyCalls.Load(); got != 0 {
+		t.Fatalf("a persistAndJoin failure AFTER the entity is already durable must not call "+
+			"NotifyAgentCreated (the agent is not yet listable); got %d calls", got)
 	}
 }
 
