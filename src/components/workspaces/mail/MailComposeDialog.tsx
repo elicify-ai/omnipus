@@ -163,7 +163,7 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
             error={errors.to}
             required
             data-compose-header-row
-            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
+            className="mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
           >
             {(controlProps) => (
               <MailRecipientInput
@@ -178,7 +178,7 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
             label="Cc"
             error={errors.cc}
             data-compose-header-row
-            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
+            className="mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
           >
             {(controlProps) => (
               <MailRecipientInput
@@ -193,7 +193,7 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
             label="Bcc"
             error={errors.bcc}
             data-compose-header-row
-            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
+            className="mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
           >
             {(controlProps) => (
               <MailRecipientInput
@@ -207,7 +207,7 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
           <Field
             label="Subject"
             data-compose-header-row
-            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)]"
+            className="mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)]"
           >
             <Input className="rounded-none border-0 bg-transparent px-0" value={values.subject} onChange={setSubject} placeholder="Subject" />
           </Field>

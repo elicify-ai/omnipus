@@ -17,6 +17,19 @@
   max-height: calc(100dvh - var(--space-5));
 }
 
+.mail-compose-header-row {
+  display: grid;
+  grid-template-columns: var(--space-8) minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-2);
+  padding-block: var(--space-0-5);
+}
+
+.mail-compose-header-row > [role='alert'] {
+  grid-column-start: 2;
+  padding-bottom: var(--space-1);
+}
+
 .mail-markdown-editor:focus-within {
   border-color: var(--color-accent);
 }

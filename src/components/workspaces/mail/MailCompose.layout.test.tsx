@@ -26,8 +26,10 @@ describe('MailComposeDialog layout', () => {
     for (const name of ['To', 'Cc', 'Bcc', 'Subject']) {
       const input = screen.getByRole('textbox', { name: new RegExp(`^${name}`, 'i') })
       const row = input.closest('[data-compose-header-row]')
+      const label = screen.getByText(new RegExp(`^${name}`), { selector: 'label' })
 
       expect(row).not.toBeNull()
+      expect(row).toHaveClass('mail-compose-header-row')
       expect(row).toHaveClass(
         'grid',
         'grid-cols-[var(--space-8)_minmax(0,1fr)]',
@@ -35,6 +37,8 @@ describe('MailComposeDialog layout', () => {
         'space-y-0',
         'py-[var(--space-0-5)]',
       )
+      expect(row?.children[0]).toBe(label)
+      expect(row?.children[1]).toContainElement(input)
       expect(row).toContainElement(input)
     }
 
