@@ -192,7 +192,10 @@ type SearchRoleSnapshot struct {
 	DefaultID string
 	// FallbackID is the resolved fallback: the stored id when usable (R4),
 	// the auto-DuckDuckGo when the stored value is absent and R3 applies,
-	// "" for explicit none (R2), R5, R4b-unknown, and the undecided state.
+	// and also a KNOWN-but-unusable stored id (R4b — the role exists, the
+	// ladder must never call it, the payload lists it under not called).
+	// "" for explicit none (R2), R5 (same as default), an UNKNOWN fallback
+	// id (not a role at all), and the undecided state.
 	FallbackID string
 	// FallbackAutomatic is true only when FallbackID came from the R3
 	// absent-value rule rather than an operator choice.

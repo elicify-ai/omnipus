@@ -229,11 +229,11 @@ One tool-side shape:
 | `include_domains` | list of hostnames | at most 10 |
 | `exclude_domains` | list of hostnames | at most 10 |
 
-**Hostname is defined by reference, not by adjective.** Round 1 found "a value that is not a hostname is a rejection" unbuildable and untestable as written. The repository already owns the validator for this exact problem: `pkg/gateway/video_embed_hosts.go::validVideoEmbedHosts`, documented as the single validator both of its surfaces use, which normalises, validates and de-duplicates while dropping syntactically invalid entries. Reuse its rule set:
+**Hostname is defined by the same rules, not by a shared function.** Round 1 found "a value that is not a hostname is a rejection" unbuildable and untestable as written. The gateway's `pkg/gateway/video_embed_hosts.go::validVideoEmbedHosts` already defines exactly this shape (bare hostname, normalised, de-duplicated, invalid entries rejected); `pkg/tools` cannot import `pkg/gateway`, so the search tool's site-filter validator (`pkg/tools/web_search.go::normalizeSearchDomains` and its per-entry check) MIRRORS that rule set — same validity, normalisation, per-entry and count caps — and a comment at the validator names the file it mirrors. The rules:
 
 | Question | Answer |
 |---|---|
-| What is valid | A bare hostname, as `validVideoEmbedHosts` defines it. Lower-cased, trailing dot stripped, duplicates collapsed |
+| What is valid | A bare hostname, under the mirrored rule set (rules of `validVideoEmbedHosts`, implemented in `pkg/tools/web_search.go::normalizeSearchDomains`). Lower-cased, trailing dot stripped, duplicates collapsed |
 | Rejected outright | Wildcards (`*.example.com`), ports, paths, query strings, userinfo, schemes, IP literals |
 | Per-entry length | 253 characters, the DNS name limit |
 | Count | 10 per list, as above. Ten entries of unbounded length was an agent-controlled payload with no ceiling |
@@ -520,8 +520,8 @@ So on a default install pointed at OpenAI or Azure, `search_web` does not exist 
 | Control | Rule | Cost of adding it |
 |---|---|---|
 | Depth ceiling | The operator's configured depth for a provider is a **ceiling**, not just a default. `depth` may ask for less and is clamped, with a note in the result, if it asks for more | No new config key. A rule on values that already exist |
-| Per-call record | One structured log record per search call carrying: resolved default, resolved fallback, provider that answered, role (`default` / `fallback` / `chosen`), depth sent, failure class, and whether a hop, refusal or skip occurred — with the existing correlation fields | Needed for MAJ-017's operability gap anyway |
-| Consecutive-empty warning | A warning after a run of `empty` results from DuckDuckGo | The cheap version of the block-page fingerprint D17 declines to build. On a new install DuckDuckGo is the only provider, so "DuckDuckGo is blocking this IP" is the single most likely real-world failure and today renders as a successful empty search, forever |
+| Per-call record | One structured log record per search call carrying: resolved default, resolved fallback, provider that answered, role (`default` / `fallback` / `chosen`), depth sent, failure class, and whether a hop, refusal or skip occurred. Carries NO request-correlation fields (no session/turn/request id): `pkg/logger` has no context-aware variant, so the record cannot be joined to a specific agent request — a known, accepted limitation | Needed for MAJ-017's operability gap anyway |
+| Consecutive-empty warning | A warning after 3 consecutive `empty` results from DuckDuckGo (`pkg/tools/web_search.go::ddgEmptyWarnThreshold`; lane decision — the spec fixes the warning, not a number) | The cheap version of the block-page fingerprint D17 declines to build. On a new install DuckDuckGo is the only provider, so "DuckDuckGo is blocking this IP" is the single most likely real-world failure and today renders as a successful empty search, forever |
 
 Two further controls are **not** decided here and are open questions for the founder, because both add operator policy surface that was not asked for: a per-agent or operator-visible allow-set restricting which providers the agent may name, and a per-turn cap on search calls. Recorded rather than silently omitted — if the founder wants the agent able to escalate spend without either, that should be an explicit decision, not a by-product of D5 plus D12.
 
@@ -623,7 +623,7 @@ WP-5 is contract-first. The order is in the spec, and the regenerated `pkg/gatew
 - **Tool:** `pkg/tools/web.go::NewWebSearchTool`, `WebSearchTool`, `WebSearchToolOptions`, `enabledButKeylessSearchProviders`, each `Search` method named above, `pkg/agent/loop_wire.go::registerCoreTools`. `pkg/tools/general_builtin_catalog.go::GeneralBuiltinMetadata` stays a non-executed metadata instance and, with a static `Description`, no longer diverges from the live one.
 - **Credentials:** `pkg/credentials/inject.go::nonChannelRefsFor` — named explicitly. Exa joins it. This ADR does not redesign injection.
 - **Boot and reload:** `pkg/gateway/gateway_boot_credentials.go::bootCredentials` (the migration's new home), `pkg/gateway/gateway_reload.go::executeReload` (the mirror, plus the self-write registration).
-- **Gateway:** `pkg/gateway/rest_integrations_auth.go::activeSearchProviderID`, `applySearchIntegration`, `buildIntegrationResponse`, `handleIntegrationProviderUpdate`; `pkg/gateway/rest_config.go::storeCredential`, `safeUpdateConfigJSON`, `refreshConfigAndRewireServices`; `pkg/gateway/video_embed_hosts.go::validVideoEmbedHosts` (reused as the hostname validator).
+- **Gateway:** `pkg/gateway/rest_integrations_auth.go::activeSearchProviderID`, `applySearchIntegration`, `buildIntegrationResponse`, `handleIntegrationProviderUpdate`; `pkg/gateway/rest_config.go::storeCredential`, `safeUpdateConfigJSON`, `refreshConfigAndRewireServices`; `pkg/gateway/video_embed_hosts.go::validVideoEmbedHosts` (its rule set mirrored by `pkg/tools/web_search.go::normalizeSearchDomains` for the search tool's site filters).
 - **SPA:** `src/components/settings/IntegrationsSection.tsx`; `src/components/chat/tools/WebSearchResult.tsx::WebSearchResultUI`; `src/components/chat/OmnipusRuntimeProvider.tsx` (the `search_web` registration).
 - **Contracts:** `contracts/components/schemas/IntegrationProvider.yaml` (search rows gain role and usability fields; the `id` becomes an enum) and `IntegrationProviderUpdateRequest.yaml` (D18's shape), plus the regenerated `pkg/gateway/inboundschemas/`.
 
@@ -675,7 +675,7 @@ Each of these is a real decision this ADR deliberately did not make on the found
 | MAJ-016 | **New D17a**: a 45-second budget, a skipped fallback with a stated reason |
 | MAJ-017 | D20's record and consecutive-empty warning; D16's fixed reason vocabulary |
 | MAJ-018 | D16: redaction through the registered sensitive values and a 300-character truncation, with Tavily's in-body key as the reason. New AC-19 |
-| MAJ-019 | D9: hostname defined by reference to `validVideoEmbedHosts`, with per-entry and count caps, wildcards rejected, and both-lists precedence |
+| MAJ-019 | D9: hostname rules mirroring `validVideoEmbedHosts` (implemented in pkg/tools, which cannot import pkg/gateway), with per-entry and count caps, wildcards rejected, and both-lists precedence |
 | MAJ-020 | D8's temperature benefit narrowed to sampler variance; the vacuous substring assertion replaced with a decoded-body assertion |
 | MAJ-021 | D10: the ingest bound and the SSRF-safe client named as security fixes with their own acceptance criterion |
 | MAJ-022 | D18: the request shape enumerated, `active: false` given a meaning, `inboundschemas` regeneration named |
