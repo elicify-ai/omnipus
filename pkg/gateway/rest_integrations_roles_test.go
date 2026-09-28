@@ -447,11 +447,16 @@ func TestIntegrationRolesGET_UnusableDefaultNotActive(t *testing.T) {
 	assert.False(t, *tavily.Active,
 		"FR-028/test 26: active is not that row — it does not run")
 
-	// With the default unusable, R6/R3 still resolve DuckDuckGo as the
-	// automatic fallback.
+	// With the default unusable and the fallback ABSENT, no fallback
+	// resolves: R3's automatic DuckDuckGo requires a usable default (its
+	// third conjunct), so this is R7 — nobody is called, and DuckDuckGo is
+	// not presented as the fallback (K6, gate round 1).
 	ddg := searchRow(t, resp, "duckduckgo")
-	require.NotNil(t, ddg.FallbackAutomatic)
-	assert.True(t, *ddg.FallbackAutomatic)
+	assert.False(t, ddg.FallbackAutomatic != nil && *ddg.FallbackAutomatic,
+		"R3 needs a usable default: DuckDuckGo is not the automatic fallback")
+	assert.False(t, ddg.Fallback != nil && *ddg.Fallback,
+		"R7: no provider holds the fallback role")
+	assert.Nil(t, resp.FallbackSearch, "decided with no fallback: fallback_search is null")
 }
 
 // TestIntegrationRolesGET_NativeSearchInEffect pins FR-031 (test 52's payload
