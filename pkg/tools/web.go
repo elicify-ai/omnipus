@@ -476,10 +476,14 @@ func (p *TavilySearchProvider) effectiveDepth(agentDepth string) (string, bool) 
 }
 
 // honoursDepth: Tavily exposes search_depth (capability matrix).
-func (p *TavilySearchProvider) honoursDepth() bool { return true }
+func (p *TavilySearchProvider) honoursDepth() bool {
+	return catalogueHonoursDepth(config.SearchProviderTavily)
+}
 
 // honoursSiteFilters: Tavily supports include_domains/exclude_domains.
-func (p *TavilySearchProvider) honoursSiteFilters() bool { return true }
+func (p *TavilySearchProvider) honoursSiteFilters() bool {
+	return catalogueHonoursSiteFilters(config.SearchProviderTavily)
+}
 
 // SearchWithCaps is the ADR-096 capability-aware entry point for Tavily.
 func (p *TavilySearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
@@ -1135,9 +1139,20 @@ type misconfiguredSearchProvider struct {
 // enabledButKeylessSearchProviders returns the keyed providers that are
 // enabled but carry no key at tool construction. DuckDuckGo is never included
 // (keyless by design) and SearXNG is never included (self-hosted: it has an
-// optional base URL but no credential ref), so "enabled" here means exactly
-// the five providers whose keys come from the credential vault.
+// optional base URL but no credential ref). Two paths (D15/FR-035): with a
+// live-roles config the list derives from the provider catalogue; the legacy
+// flat-options walk stays for constructions without Roles.
 func enabledButKeylessSearchProviders(opts WebSearchToolOptions) []misconfiguredSearchProvider {
+	if opts.Roles == nil {
+		return enabledButKeylessFromFlatOpts(opts)
+	}
+	return enabledButKeylessFromConfig(opts.Roles)
+}
+
+// enabledButKeylessFromFlatOpts is the legacy flat walk over the per-provider
+// WebSearchToolOptions fields — the path every pre-ADR-096 construction and
+// test takes, unchanged.
+func enabledButKeylessFromFlatOpts(opts WebSearchToolOptions) []misconfiguredSearchProvider {
 	var out []misconfiguredSearchProvider
 	addIfKeyless := func(enabled bool, hasKey bool, name, ref string) {
 		if enabled && !hasKey {
@@ -1151,6 +1166,33 @@ func enabledButKeylessSearchProviders(opts WebSearchToolOptions) []misconfigured
 	addIfKeyless(opts.BaiduSearchEnabled, opts.BaiduSearchAPIKey != "", "baidu_search", opts.BaiduSearchAPIKeyRef)
 	// ADR-096: exa joins the enabled-but-keyless warning list.
 	addIfKeyless(opts.ExaEnabled, opts.ExaAPIKey != "", "exa", opts.ExaAPIKeyRef)
+	return out
+}
+
+// enabledButKeylessFromConfig derives the same list from the provider
+// catalogue over the LIVE config (D15/FR-035): every keyed def enabled with
+// no resolved key. Names are the catalogue Section (the warning text keeps
+// saying "glm_search"/"baidu_search"); the ref comes from the config's own
+// api_key_ref, so the warning names the ref the operator must fill.
+func enabledButKeylessFromConfig(getCfg func() *config.WebToolsConfig) []misconfiguredSearchProvider {
+	cfg := getCfg()
+	if cfg == nil {
+		return nil
+	}
+	var out []misconfiguredSearchProvider
+	for _, def := range config.SearchProviderCatalogue {
+		if !def.Keyed {
+			continue
+		}
+		if !def.Enabled(cfg) || def.APIKey(cfg) != "" {
+			continue
+		}
+		ref := ""
+		if def.APIKeyRef != nil {
+			ref = def.APIKeyRef(cfg)
+		}
+		out = append(out, misconfiguredSearchProvider{name: def.Section, ref: ref})
+	}
 	return out
 }
 

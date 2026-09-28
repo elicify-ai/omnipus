@@ -10,7 +10,6 @@ package gateway
 // AC-20); contracts/components/schemas/IntegrationProvider.yaml.
 
 import (
-	"slices"
 	"testing"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"

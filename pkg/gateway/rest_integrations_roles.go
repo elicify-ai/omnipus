@@ -213,7 +213,7 @@ func (a *restAPI) buildIntegrationResponse(cfg *config.Config) (gen.IntegrationP
 	resp.Search = []gen.IntegrationProvider{}
 	resp.Voice = []gen.IntegrationProvider{}
 
-	for _, d := range integrationCatalogue {
+	for _, d := range integrationCatalogue() {
 		entry := gen.IntegrationProvider{
 			Id:          gen.IntegrationProviderId(d.id),
 			Kind:        gen.IntegrationProviderKind(d.kind),
@@ -589,8 +589,8 @@ func applySearchIntegrationRoles(m map[string]any, def integrationDef, write int
 	web := mapChild(toolsMap, "web")
 
 	if write.keySet && def.credRef != "" {
-		if sec, ok := searchRefKeyByID[def.id]; ok {
-			section := mapChild(web, sec.section)
+		if sec, ok := searchRefSectionByID(def.id); ok {
+			section := mapChild(web, sec)
 			section["api_key_ref"] = def.credRef
 		}
 	}
@@ -605,8 +605,8 @@ func applySearchIntegrationRoles(m map[string]any, def integrationDef, write int
 		case "searxng":
 			mapChild(web, "searxng")["enabled"] = true
 		default:
-			if sec, ok := searchRefKeyByID[def.id]; ok {
-				mapChild(web, sec.section)["enabled"] = true
+			if sec, ok := searchRefSectionByID(def.id); ok {
+				mapChild(web, sec)["enabled"] = true
 			}
 		}
 		if write.materializeFallback {

@@ -258,17 +258,20 @@ func nonChannelRefsFor(cfg *config.Config) []credentialRef {
 	}
 	add(cfg.Voice.ElevenLabsAPIKeyRef, ScopeVoice, "elevenlabs")
 	add(cfg.Voice.GroqAPIKeyRef, ScopeVoice, "groq")
-	add(cfg.Tools.Web.Brave.APIKeyRef, ScopeWebSearch, "brave")
-	add(cfg.Tools.Web.Tavily.APIKeyRef, ScopeWebSearch, "tavily")
-	add(cfg.Tools.Web.Perplexity.APIKeyRef, ScopeWebSearch, "perplexity")
-	add(cfg.Tools.Web.GLMSearch.APIKeyRef, ScopeWebSearch, "glm_search")
-	add(cfg.Tools.Web.BaiduSearch.APIKeyRef, ScopeWebSearch, "baidu_search")
-	// ADR-096 (spec "Exa", Key injection row): Exa joins the shared
-	// enumeration feeding InjectFromConfig (os.Setenv) and ResolveAll (the
-	// redaction bundle). Without this line the key sits in the vault, the
-	// process environment never sees it, and search silently degrades —
-	// exactly the Tavily defect this function's shape fixed.
-	add(cfg.Tools.Web.Exa.APIKeyRef, ScopeWebSearch, "exa")
+	// Keyed web-search providers derive from the single catalogue (ADR-096
+	// D15/FR-035) — the enumeration feeding InjectFromConfig (os.Setenv) and
+	// ResolveAll (the redaction bundle) covers every keyed catalogue entry
+	// with no hand-list edit. Without a catalogue entry a provider's key
+	// would sit in the vault, the process environment would never see it,
+	// and search would silently degrade — exactly the Tavily defect this
+	// function's shape fixed. Owner attribution uses the config section
+	// name (glm_search / baidu_search), the pre-catalogue convention.
+	for _, def := range config.SearchProviderCatalogue {
+		if !def.Keyed || def.APIKeyRef == nil {
+			continue
+		}
+		add(def.APIKeyRef(&cfg.Tools.Web), ScopeWebSearch, def.Section)
+	}
 	// Skill marketplace credential refs (FR-10.1 unified list): each
 	// marketplace entry may carry a ClawHub AuthTokenRef and/or a GitHub
 	// TokenRef, both resolved via the credential store (SEC-23).

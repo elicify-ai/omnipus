@@ -52,58 +52,65 @@ const (
 
 // UsableSearchProvider reports whether provider id is usable RIGHT NOW —
 // the one test from the spec's Resolution table, in one place, for every
-// consumer (tool resolver, settings screen, migration):
+// consumer (tool resolver, settings screen, migration). Derived from the
+// provider catalogue (ADR-096 D15) — one rule per provider shape, never a
+// per-id switch:
 //
-//   - Brave, Tavily, Perplexity, GLM, Baidu, Exa: usable when switched on,
-//     and APIKey() is non-empty.
-//   - SearXNG: usable when switched on, and base_url is non-empty after
-//     trimming — a whitespace-only base URL is not usable.
-//   - DuckDuckGo: usable when switched on.
+//   - keyed providers (Brave, Tavily, Perplexity, GLM, Baidu, Exa): usable
+//     when switched on, and APIKey() is non-empty.
+//   - base-URL providers (SearXNG): usable when switched on, and base_url is
+//     non-empty after trimming — a whitespace-only base URL is not usable.
+//   - plain keyless providers (DuckDuckGo): usable when switched on.
 //   - An unknown id is never usable (R9) — and never a boot failure.
 //
 // APIKey() reads the process environment, so callers must be aware that the
 // answer is only meaningful after credentials.InjectFromConfig has run.
 func (w *WebToolsConfig) UsableSearchProvider(id string) bool {
-	switch id {
-	case SearchProviderPerplexity:
-		return w.Perplexity.Enabled && w.Perplexity.APIKey() != ""
-	case SearchProviderBrave:
-		return w.Brave.Enabled && w.Brave.APIKey() != ""
-	case SearchProviderTavily:
-		return w.Tavily.Enabled && w.Tavily.APIKey() != ""
-	case SearchProviderGLM:
-		return w.GLMSearch.Enabled && w.GLMSearch.APIKey() != ""
-	case SearchProviderBaidu:
-		return w.BaiduSearch.Enabled && w.BaiduSearch.APIKey() != ""
-	case SearchProviderExa:
-		return w.Exa.Enabled && w.Exa.APIKey() != ""
-	case SearchProviderSearXNG:
-		return w.SearXNG.Enabled && strings.TrimSpace(w.SearXNG.BaseURL) != ""
-	case SearchProviderDuckDuckGo:
-		return w.DuckDuckGo.Enabled
-	default:
+	def, ok := SearchProviderDefByID(id)
+	if !ok {
 		// Unknown ids (including an empty one) are never usable. R9: the
-		// default is treated as not usable; no walk of the old list; never
-		// a boot failure.
+		// default is treated as not usable; never a boot failure.
 		return false
+	}
+	switch {
+	case def.Keyed:
+		return def.Enabled(w) && def.APIKey(w) != ""
+	case def.RequiresBaseURL:
+		return def.Enabled(w) && strings.TrimSpace(def.BaseURL(w)) != ""
+	default:
+		return def.Enabled(w)
 	}
 }
 
-// webRolesKeyedChainOrder is the chain NewWebSearchTool builds TODAY
-// (pkg/tools/web.go::NewWebSearchTool), restricted to keyed providers —
-// the tie-break order migration step 9 uses when more than one keyed
-// provider is switched off with a resolving ref. pkg/config cannot import
-// pkg/tools (pkg/tools imports pkg/config), so the order is restated here;
-// a change to the live chain must update this slice in the same commit, or
-// the migration mis-records who the operator chose.
-//
-// DuckDuckGo is absent: it is keyless and never part of the keyed tie-break.
-var webRolesKeyedChainOrder = []string{
-	SearchProviderPerplexity,
-	SearchProviderBrave,
-	SearchProviderTavily,
-	SearchProviderBaidu,
-	SearchProviderGLM,
+// webRolesKeyedChainIDs derives the keyed subset of the PRE-ADR selection
+// chain — the tie-break order migration step 9 uses when more than one keyed
+// provider is switched off with a resolving ref. Derived from the catalogue's
+// LegacyChainPos values (D15), so the migration and the catalogue cannot
+// drift: a provider absent from the pre-ADR chain (Exa, LegacyChainPos 0)
+// never enters it, and DuckDuckGo is absent (keyless, never part of the
+// keyed tie-break).
+func webRolesKeyedChainIDs() []string {
+	var ids []string
+	for _, def := range legacyChainDefs() {
+		if def.Keyed {
+			ids = append(ids, def.ID)
+		}
+	}
+	return ids
+}
+
+// migrationWinnerChain returns the FULL PRE-ADR selection chain — the order
+// pkg/tools/web.go::NewWebSearchTool evaluated before ADR-096 roles
+// (Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu > GLM). The
+// migration mirrors it verbatim (D11); Exa is correctly absent (it did not
+// exist pre-ADR, so a test-appended catalogue entry must not enter it
+// either).
+func (w *WebToolsConfig) migrationWinnerChain() []string {
+	ids := make([]string, 0, len(SearchProviderCatalogue))
+	for _, def := range legacyChainDefs() {
+		ids = append(ids, def.ID)
+	}
+	return ids
 }
 
 // migrationWinnerID returns the catalogue id of the provider
@@ -111,22 +118,15 @@ var webRolesKeyedChainOrder = []string{
 // spec's step 1: "including the final DuckDuckGo branch that runs even when
 // duckduckgo.enabled is false".
 //
-// The chain order below mirrors NewWebSearchTool's if/else chain verbatim
-// (Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu > GLM > final
-// DuckDuckGo), evaluated with the same UsableSearchProvider test every
-// other consumer uses.
+// Derived from the catalogue's LegacyChainPos order (D15), evaluated with the
+// same UsableSearchProvider test every other consumer uses. The final
+// fallback stays a literal DuckDuckGo: it mirrors the live constructor's
+// unconditional fallback branch, which is constructor logic — not a
+// catalogue property.
 func (w *WebToolsConfig) migrationWinnerID() string {
-	for _, id := range []string{
-		SearchProviderPerplexity,
-		SearchProviderBrave,
-		SearchProviderSearXNG,
-		SearchProviderTavily,
-		SearchProviderDuckDuckGo,
-		SearchProviderBaidu,
-		SearchProviderGLM,
-	} {
-		if w.UsableSearchProvider(id) {
-			return id
+	for _, def := range legacyChainDefs() {
+		if w.UsableSearchProvider(def.ID) {
+			return def.ID
 		}
 	}
 	// Final branch: DuckDuckGo even when switched off — matching the live
@@ -142,7 +142,7 @@ func (w *WebToolsConfig) migrationWinnerID() string {
 // key or a broken one, and deferring is safe because the pre-migration path
 // still works.
 func (w *WebToolsConfig) isAmbiguousInstall() bool {
-	for _, id := range webRolesKeyedChainOrder {
+	for _, id := range webRolesKeyedChainIDs() {
 		if w.UsableSearchProvider(id) {
 			continue // resolves fine — not ambiguous
 		}
@@ -154,24 +154,11 @@ func (w *WebToolsConfig) isAmbiguousInstall() bool {
 }
 
 // enabledKeyedWithRef reports whether the provider's config object carries
-// enabled=true with a non-empty api_key_ref.
+// enabled=true with a non-empty api_key_ref. Derived from the catalogue —
+// non-keyed ids (DuckDuckGo, SearXNG) and unknown ids are false.
 func enabledKeyedWithRef(w *WebToolsConfig, id string) bool {
-	switch id {
-	case SearchProviderPerplexity:
-		return w.Perplexity.Enabled && w.Perplexity.APIKeyRef != ""
-	case SearchProviderBrave:
-		return w.Brave.Enabled && w.Brave.APIKeyRef != ""
-	case SearchProviderTavily:
-		return w.Tavily.Enabled && w.Tavily.APIKeyRef != ""
-	case SearchProviderGLM:
-		return w.GLMSearch.Enabled && w.GLMSearch.APIKeyRef != ""
-	case SearchProviderBaidu:
-		return w.BaiduSearch.Enabled && w.BaiduSearch.APIKeyRef != ""
-	case SearchProviderExa:
-		return w.Exa.Enabled && w.Exa.APIKeyRef != ""
-	default:
-		return false
-	}
+	def, ok := SearchProviderDefByID(id)
+	return ok && def.Keyed && def.Enabled(w) && def.APIKeyRef(w) != ""
 }
 
 // offKeyedWithResolvingRef reports whether the provider is switched OFF with
@@ -179,23 +166,10 @@ func enabledKeyedWithRef(w *WebToolsConfig, id string) bool {
 // step 9 reads as the operator's choice. It is the MIRROR of the defer
 // predicate (enabled ON, key not resolving): reusing one helper for both
 // silently inverts the flag condition, which the (e)-install test caught.
+// Derived from the catalogue (D15).
 func offKeyedWithResolvingRef(w *WebToolsConfig, id string) bool {
-	switch id {
-	case SearchProviderPerplexity:
-		return !w.Perplexity.Enabled && w.Perplexity.APIKeyRef != "" && w.Perplexity.APIKey() != ""
-	case SearchProviderBrave:
-		return !w.Brave.Enabled && w.Brave.APIKeyRef != "" && w.Brave.APIKey() != ""
-	case SearchProviderTavily:
-		return !w.Tavily.Enabled && w.Tavily.APIKeyRef != "" && w.Tavily.APIKey() != ""
-	case SearchProviderGLM:
-		return !w.GLMSearch.Enabled && w.GLMSearch.APIKeyRef != "" && w.GLMSearch.APIKey() != ""
-	case SearchProviderBaidu:
-		return !w.BaiduSearch.Enabled && w.BaiduSearch.APIKeyRef != "" && w.BaiduSearch.APIKey() != ""
-	case SearchProviderExa:
-		return !w.Exa.Enabled && w.Exa.APIKeyRef != "" && w.Exa.APIKey() != ""
-	default:
-		return false
-	}
+	def, ok := SearchProviderDefByID(id)
+	return ok && def.Keyed && !def.Enabled(w) && def.APIKeyRef(w) != "" && def.APIKey(w) != ""
 }
 
 // MigrateWebSearchRoles runs the ADR-096 D11 roles migration ONCE — when the
@@ -281,7 +255,7 @@ func MigrateWebSearchRoles(cfg *Config, cfgPath string, onSelfHeal SelfHealWrite
 	// operator intent. Where more than one provider is in this state, the
 	// old keyed chain order breaks the tie, and the log says which and why.
 	step9 := ""
-	for _, id := range webRolesKeyedChainOrder {
+	for _, id := range webRolesKeyedChainIDs() {
 		if web.UsableSearchProvider(id) {
 			continue
 		}
@@ -350,20 +324,11 @@ func MigrateWebSearchRoles(cfg *Config, cfgPath string, onSelfHeal SelfHealWrite
 }
 
 // setKeyedEnabled flips one keyed provider's Enabled flag in memory.
+// Derived from the catalogue — non-keyed and unknown ids are a silent no-op,
+// exactly as the previous per-id switch was.
 func setKeyedEnabled(web *WebToolsConfig, id string, on bool) {
-	switch id {
-	case SearchProviderPerplexity:
-		web.Perplexity.Enabled = on
-	case SearchProviderBrave:
-		web.Brave.Enabled = on
-	case SearchProviderTavily:
-		web.Tavily.Enabled = on
-	case SearchProviderGLM:
-		web.GLMSearch.Enabled = on
-	case SearchProviderBaidu:
-		web.BaiduSearch.Enabled = on
-	case SearchProviderExa:
-		web.Exa.Enabled = on
+	if def, ok := SearchProviderDefByID(id); ok && def.Keyed {
+		def.SetEnabled(web, on)
 	}
 }
 
@@ -421,26 +386,15 @@ func writeMigratedConfig(
 		ddg["enabled"] = true
 	}
 	if step9ID != "" {
-		section := ""
-		switch step9ID {
-		case SearchProviderPerplexity:
-			section = "perplexity"
-		case SearchProviderBrave:
-			section = "brave"
-		case SearchProviderTavily:
-			section = "tavily"
-		case SearchProviderGLM:
-			section = "glm_search"
-		case SearchProviderBaidu:
-			section = "baidu_search"
-		case SearchProviderExa:
-			section = "exa"
-		}
-		if section != "" {
-			obj, ok := w[section].(map[string]any)
-			if !ok {
+		// The provider's config section comes from the catalogue — the same
+		// id→section mapping the Settings save path uses (glm and baidu ids
+		// map to glm_search / baidu_search sections).
+		def, ok := SearchProviderDefByID(step9ID)
+		if ok && def.Keyed && def.Section != "" {
+			obj, exists := w[def.Section].(map[string]any)
+			if !exists {
 				obj = map[string]any{}
-				w[section] = obj
+				w[def.Section] = obj
 			}
 			obj["enabled"] = true
 		}

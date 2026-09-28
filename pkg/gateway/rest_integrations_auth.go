@@ -239,22 +239,10 @@ type integrationDef struct {
 	credRef     string // env-var ref name in the credential store ("" for keyless)
 }
 
-// integrationCatalogue is the fixed set of providers surfaced in the UI. It
-// mirrors the providers wired in pkg/tools/web.go and pkg/voice. Keyless
-// providers (DuckDuckGo, SearXNG, audio-model) have requiresKey=false and an
-// empty credRef; SearXNG additionally needs a base_url and audio-model needs a
-// voice.model_name (checked at activation time).
-var integrationCatalogue = []integrationDef{
-	// Search providers (pkg/tools/web.go SearchProvider implementations).
-	{id: "brave", kind: "search", displayName: "Brave Search", requiresKey: true, credRef: "BRAVE_API_KEY"},
-	{id: "tavily", kind: "search", displayName: "Tavily", requiresKey: true, credRef: "TAVILY_API_KEY"},
-	{id: "perplexity", kind: "search", displayName: "Perplexity", requiresKey: true, credRef: "PERPLEXITY_API_KEY"},
-	{id: "duckduckgo", kind: "search", displayName: "DuckDuckGo", requiresKey: false, credRef: ""},
-	{id: "searxng", kind: "search", displayName: "SearXNG", requiresKey: false, credRef: ""},
-	{id: "glm", kind: "search", displayName: "GLM Search", requiresKey: true, credRef: "GLM_API_KEY"},
-	{id: "baidu", kind: "search", displayName: "Baidu Search", requiresKey: true, credRef: "BAIDU_API_KEY"},
-	{id: "exa", kind: "search", displayName: "Exa", requiresKey: true, credRef: "EXA_API_KEY"},
-	// Voice transcribers (pkg/voice Transcriber implementations).
+// voiceIntegrationDefs are the voice transcriber rows of the Integrations
+// list (pkg/voice Transcriber implementations). They live outside the
+// web-search catalogue but share the IntegrationProvider wire schema.
+var voiceIntegrationDefs = []integrationDef{
 	{
 		id:          "elevenlabs",
 		kind:        "voice",
@@ -266,9 +254,31 @@ var integrationCatalogue = []integrationDef{
 	{id: "audio-model", kind: "voice", displayName: "Audio Model (provider)", requiresKey: false, credRef: ""},
 }
 
+// integrationCatalogue is the fixed set of providers surfaced in the UI,
+// DERIVED from the single provider catalogue (ADR-096 D15/FR-035): one
+// web-search row per catalogue def, then the voice rows. Requires-key and
+// cred-ref come straight from the catalogue, so a provider added there and
+// nothing else is listable with no edit here. Keyless providers (DuckDuckGo,
+// SearXNG, audio-model) have requiresKey=false and an empty credRef; SearXNG
+// additionally needs a base_url and audio-model needs a voice.model_name
+// (checked at activation time).
+func integrationCatalogue() []integrationDef {
+	defs := make([]integrationDef, 0, len(config.SearchProviderCatalogue)+len(voiceIntegrationDefs))
+	for _, def := range config.SearchProviderCatalogue {
+		defs = append(defs, integrationDef{
+			id:          def.ID,
+			kind:        "search",
+			displayName: def.DisplayName,
+			requiresKey: def.Keyed,
+			credRef:     def.CredRef,
+		})
+	}
+	return append(defs, voiceIntegrationDefs...)
+}
+
 // integrationDefByID returns the catalog entry for id, or false.
 func integrationDefByID(id string) (integrationDef, bool) {
-	for _, d := range integrationCatalogue {
+	for _, d := range integrationCatalogue() {
 		if d.id == id {
 			return d, true
 		}
@@ -372,15 +382,16 @@ func (a *restAPI) handleIntegrationProvidersList(w http.ResponseWriter, r *http.
 // applyVoiceIntegration below; the old applySearchIntegration (which deleted
 // other providers' refs and force-toggled searxng.enabled) is gone with it.
 
-// searchRefKeyByID maps a search provider id to its config sub-object key
-// (the raw-map section that carries its api_key_ref and enabled flag).
-var searchRefKeyByID = map[string]struct{ section string }{
-	"brave":      {"brave"},
-	"tavily":     {"tavily"},
-	"perplexity": {"perplexity"},
-	"glm":        {"glm_search"},
-	"baidu":      {"baidu_search"},
-	"exa":        {"exa"},
+// searchRefSectionByID maps a search provider id to its config sub-object
+// key (the raw-map section that carries its api_key_ref and enabled flag),
+// derived from the catalogue (D15/FR-035): keyed providers only, since a
+// keyless provider has no api_key_ref to write.
+func searchRefSectionByID(id string) (string, bool) {
+	def, ok := config.SearchProviderDefByID(id)
+	if !ok || !def.Keyed {
+		return "", false
+	}
+	return def.Section, true
 }
 
 func applyVoiceIntegration(m map[string]any, def integrationDef, keySet, makeActive bool) error {

@@ -60,31 +60,24 @@ type capabilitySearchProvider interface {
 	honoursSiteFilters() bool
 }
 
-// searchProviderCatalogueOrder lists every ADR-096 provider id in the
-// operator-facing priority order the legacy chain uses (Perplexity > Brave >
-// SearXNG > Tavily > DuckDuckGo > Baidu > GLM), with Exa appended. Lists in
-// refusals, notes and the provider enum render in this order.
-var searchProviderCatalogueOrder = []string{
-	config.SearchProviderPerplexity,
-	config.SearchProviderBrave,
-	config.SearchProviderSearXNG,
-	config.SearchProviderTavily,
-	config.SearchProviderDuckDuckGo,
-	config.SearchProviderBaidu,
-	config.SearchProviderGLM,
-	config.SearchProviderExa,
+// searchProviderCatalogueIDs derives the catalogue ids in catalogue order —
+// the operator-facing order lists in refusals, notes and the provider enum
+// render in. Derived (D15/FR-035): an id appended to the catalogue is
+// immediately part of every rendered list with no edit here.
+func searchProviderCatalogueIDs() []string {
+	ids := make([]string, 0, len(config.SearchProviderCatalogue))
+	for _, def := range config.SearchProviderCatalogue {
+		ids = append(ids, def.ID)
+	}
+	return ids
 }
 
 // searchProviderKeyed reports whether an id needs an API key to be usable.
-// SearXNG needs a base URL instead, DuckDuckGo nothing at all.
+// SearXNG needs a base URL instead, DuckDuckGo nothing at all. Derived from
+// the catalogue (D15).
 func searchProviderKeyed(id string) bool {
-	switch id {
-	case config.SearchProviderPerplexity, config.SearchProviderBrave,
-		config.SearchProviderTavily, config.SearchProviderBaidu,
-		config.SearchProviderGLM, config.SearchProviderExa:
-		return true
-	}
-	return false
+	def, ok := config.SearchProviderDefByID(id)
+	return ok && def.Keyed
 }
 
 // unusableReason maps a not-currently-usable id onto the spec's fixed reason
@@ -93,7 +86,7 @@ func searchProviderKeyed(id string) bool {
 // off" (a SearXNG enabled with an empty base URL reports "switched off" too —
 // the vocabulary has no separate word for a missing base URL; flagged).
 func unusableReason(cfg *config.WebToolsConfig, id string) string {
-	if !slices.Contains(searchProviderCatalogueOrder, id) {
+	if !slices.Contains(searchProviderCatalogueIDs(), id) {
 		return "unknown id"
 	}
 	if cfg.UsableSearchProvider(id) {
@@ -108,25 +101,30 @@ func unusableReason(cfg *config.WebToolsConfig, id string) string {
 	return "switched off"
 }
 
-// searchProviderEnabledInCfg reads only the enabled flag for an id.
+// searchProviderEnabledInCfg reads only the enabled flag for an id. Derived
+// from the catalogue accessors (D15).
 func searchProviderEnabledInCfg(cfg *config.WebToolsConfig, id string) bool {
-	switch id {
-	case config.SearchProviderPerplexity:
-		return cfg.Perplexity.Enabled
-	case config.SearchProviderBrave:
-		return cfg.Brave.Enabled
-	case config.SearchProviderTavily:
-		return cfg.Tavily.Enabled
-	case config.SearchProviderDuckDuckGo:
-		return cfg.DuckDuckGo.Enabled
-	case config.SearchProviderSearXNG:
-		return cfg.SearXNG.Enabled
-	case config.SearchProviderBaidu:
-		return cfg.BaiduSearch.Enabled
-	case config.SearchProviderGLM:
-		return cfg.GLMSearch.Enabled
-	case config.SearchProviderExa:
-		return cfg.Exa.Enabled
+	def, ok := config.SearchProviderDefByID(id)
+	if !ok {
+		return false
+	}
+	return def.Enabled(cfg)
+}
+
+// catalogueHonoursDepth and catalogueHonoursSiteFilters read the capability
+// matrix from the single provider catalogue (ADR-096 D15/FR-035). The
+// per-provider honours* methods below stay one-line delegations so interface
+// compliance is unchanged while the VALUE lives only in the catalogue.
+func catalogueHonoursDepth(id string) bool {
+	if def, ok := config.SearchProviderDefByID(id); ok {
+		return def.HonoursDepth
+	}
+	return false
+}
+
+func catalogueHonoursSiteFilters(id string) bool {
+	if def, ok := config.SearchProviderDefByID(id); ok {
+		return def.HonoursSiteFilters
 	}
 	return false
 }
@@ -137,8 +135,8 @@ func resolveRoles(cfg *config.WebToolsConfig) roleEntries {
 	defaultID := strings.TrimSpace(cfg.DefaultProvider)
 	fallbackRaw := strings.TrimSpace(cfg.FallbackProvider)
 
-	usable := make(map[string]bool, len(searchProviderCatalogueOrder))
-	for _, id := range searchProviderCatalogueOrder {
+	usable := make(map[string]bool, len(searchProviderCatalogueIDs()))
+	for _, id := range searchProviderCatalogueIDs() {
 		usable[id] = cfg.UsableSearchProvider(id)
 	}
 
@@ -168,7 +166,7 @@ func resolveRoles(cfg *config.WebToolsConfig) roleEntries {
 			entries.fallbackID = config.SearchProviderDuckDuckGo
 			entries.fallbackAuto = true
 		}
-	case !slices.Contains(searchProviderCatalogueOrder, fallbackRaw):
+	case !slices.Contains(searchProviderCatalogueIDs(), fallbackRaw):
 		// Unknown fallback id: not a role at all — never called, never
 		// listed (lane decision; R4b covers known-unusable ids only).
 	case !usable[fallbackRaw]:
@@ -692,7 +690,7 @@ func (t *WebSearchTool) capabilityRefusal(
 		plural = "depth"
 	}
 	var ids []string
-	for _, cand := range searchProviderCatalogueOrder {
+	for _, cand := range searchProviderCatalogueIDs() {
 		if entries.usable[cand] {
 			if c, ok := t.dynamic[cand].(capabilitySearchProvider); ok {
 				if (what == "depth" && c.honoursDepth()) || (what != "depth" && c.honoursSiteFilters()) {
@@ -941,7 +939,7 @@ func (t *WebSearchTool) executeChosen(
 	usesCap := len(req.includeDomains) > 0 || len(req.excludeDomains) > 0 ||
 		req.depth != "" || id == config.SearchProviderPerplexity
 	// Unknown or unusable picks are refused honestly, no silent substitution.
-	if !slices.Contains(searchProviderCatalogueOrder, id) || !entries.usable[id] {
+	if !slices.Contains(searchProviderCatalogueIDs(), id) || !entries.usable[id] {
 		rec.refusal = true
 		return t.chosenRefusal(entries, id)
 	}
@@ -1002,7 +1000,7 @@ func (t *WebSearchTool) executeChosen(
 // usable now: "search failed / - <id>: not usable / Usable providers: ...".
 func (t *WebSearchTool) chosenRefusal(entries roleEntries, id string) *ToolResult {
 	var usableIds []string
-	for _, cand := range searchProviderCatalogueOrder {
+	for _, cand := range searchProviderCatalogueIDs() {
 		if entries.usable[cand] {
 			usableIds = append(usableIds, cand)
 		}
@@ -1017,7 +1015,7 @@ func (t *WebSearchTool) chosenRefusal(entries roleEntries, id string) *ToolResul
 // usableOthers lists usable ids other than one, catalogue order.
 func usableOthers(entries roleEntries, id string) []string {
 	var out []string
-	for _, cand := range searchProviderCatalogueOrder {
+	for _, cand := range searchProviderCatalogueIDs() {
 		if cand != id && entries.usable[cand] {
 			out = append(out, cand)
 		}
@@ -1047,7 +1045,7 @@ func (t *WebSearchTool) parametersDynamic() map[string]any {
 	cfg := t.roles()
 	entries := resolveRoles(cfg)
 	var usableList []string
-	for _, id := range searchProviderCatalogueOrder {
+	for _, id := range searchProviderCatalogueIDs() {
 		if entries.usable[id] {
 			usableList = append(usableList, id)
 		}
@@ -1275,10 +1273,14 @@ func (p *ExaSearchProvider) search(ctx context.Context, req searchRequest) (stri
 }
 
 // honoursDepth: Exa does not expose a depth control (capability matrix).
-func (p *ExaSearchProvider) honoursDepth() bool { return false }
+func (p *ExaSearchProvider) honoursDepth() bool {
+	return catalogueHonoursDepth(config.SearchProviderExa)
+}
 
 // honoursSiteFilters: Exa supports includeDomains/excludeDomains.
-func (p *ExaSearchProvider) honoursSiteFilters() bool { return true }
+func (p *ExaSearchProvider) honoursSiteFilters() bool {
+	return catalogueHonoursSiteFilters(config.SearchProviderExa)
+}
 
 // searchCaps is the capability-aware Tavily search: snake_case domain
 // filters plus the agent's depth through the operator ceiling (D20).
@@ -1400,10 +1402,14 @@ func (p *GLMSearchProvider) effectiveContentSize(agentDepth string) (string, boo
 
 // honoursDepth: GLM exposes content_size (matrix), but agent depth low is
 // refused upstream at pre-flight.
-func (p *GLMSearchProvider) honoursDepth() bool { return true }
+func (p *GLMSearchProvider) honoursDepth() bool {
+	return catalogueHonoursDepth(config.SearchProviderGLM)
+}
 
 // honoursSiteFilters: GLM has no site-filter support.
-func (p *GLMSearchProvider) honoursSiteFilters() bool { return false }
+func (p *GLMSearchProvider) honoursSiteFilters() bool {
+	return catalogueHonoursSiteFilters(config.SearchProviderGLM)
+}
 
 // SearchWithCaps maps agent depth onto GLM's content_size (medium/high;
 // low is refused at pre-flight) and mirrors the legacy request shape.
@@ -1496,10 +1502,14 @@ func (p *GLMSearchProvider) searchCaps(ctx context.Context, req searchRequest) (
 }
 
 // honoursDepth: Perplexity exposes search_context_size (capability matrix).
-func (p *PerplexitySearchProvider) honoursDepth() bool { return true }
+func (p *PerplexitySearchProvider) honoursDepth() bool {
+	return catalogueHonoursDepth(config.SearchProviderPerplexity)
+}
 
 // honoursSiteFilters: Perplexity supports search_domain_filter.
-func (p *PerplexitySearchProvider) honoursSiteFilters() bool { return true }
+func (p *PerplexitySearchProvider) honoursSiteFilters() bool {
+	return catalogueHonoursSiteFilters(config.SearchProviderPerplexity)
+}
 
 // SearchWithCaps runs the ADR-096 Perplexity flow: temperature 0, context
 // size sent only when the operator set it or the agent passed depth, domain
@@ -1659,8 +1669,12 @@ func (p *PerplexitySearchProvider) searchCaps(ctx context.Context, req searchReq
 }
 
 // honoursDepth/honoursSiteFilters: DuckDuckGo supports neither (matrix).
-func (p *DuckDuckGoSearchProvider) honoursDepth() bool       { return false }
-func (p *DuckDuckGoSearchProvider) honoursSiteFilters() bool { return false }
+func (p *DuckDuckGoSearchProvider) honoursDepth() bool {
+	return catalogueHonoursDepth(config.SearchProviderDuckDuckGo)
+}
+func (p *DuckDuckGoSearchProvider) honoursSiteFilters() bool {
+	return catalogueHonoursSiteFilters(config.SearchProviderDuckDuckGo)
+}
 
 // SearchWithCaps is the ADR-096 DuckDuckGo entry: honours the per-tool
 // base URL and treats non-200 as a bad_response error (the legacy path
@@ -1727,8 +1741,12 @@ func (p *DuckDuckGoSearchProvider) noteEmptyRun(text string, err error) (string,
 
 // honoursDepth/honoursSiteFilters: Brave supports neither (capability
 // matrix) — depth or include_domains on Brave are refused at pre-flight.
-func (p *BraveSearchProvider) honoursDepth() bool       { return false }
-func (p *BraveSearchProvider) honoursSiteFilters() bool { return false }
+func (p *BraveSearchProvider) honoursDepth() bool {
+	return catalogueHonoursDepth(config.SearchProviderBrave)
+}
+func (p *BraveSearchProvider) honoursSiteFilters() bool {
+	return catalogueHonoursSiteFilters(config.SearchProviderBrave)
+}
 
 // SearchWithCaps is the ADR-096 Brave entry: honours the per-tool base URL
 // (the legacy path keeps its hardcoded endpoint).
@@ -1815,8 +1833,12 @@ func (p *BraveSearchProvider) SearchWithCaps(ctx context.Context, req searchRequ
 }
 
 // honoursDepth/honoursSiteFilters: SearXNG supports neither (matrix).
-func (p *SearXNGSearchProvider) honoursDepth() bool       { return false }
-func (p *SearXNGSearchProvider) honoursSiteFilters() bool { return false }
+func (p *SearXNGSearchProvider) honoursDepth() bool {
+	return catalogueHonoursDepth(config.SearchProviderSearXNG)
+}
+func (p *SearXNGSearchProvider) honoursSiteFilters() bool {
+	return catalogueHonoursSiteFilters(config.SearchProviderSearXNG)
+}
 
 // SearchWithCaps delegates to the legacy search (base-URL aware already).
 func (p *SearXNGSearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
@@ -1824,8 +1846,12 @@ func (p *SearXNGSearchProvider) SearchWithCaps(ctx context.Context, req searchRe
 }
 
 // honoursDepth/honoursSiteFilters: Baidu supports neither (matrix).
-func (p *BaiduSearchProvider) honoursDepth() bool       { return false }
-func (p *BaiduSearchProvider) honoursSiteFilters() bool { return false }
+func (p *BaiduSearchProvider) honoursDepth() bool {
+	return catalogueHonoursDepth(config.SearchProviderBaidu)
+}
+func (p *BaiduSearchProvider) honoursSiteFilters() bool {
+	return catalogueHonoursSiteFilters(config.SearchProviderBaidu)
+}
 
 // SearchWithCaps delegates to the legacy search (base-URL aware already).
 func (p *BaiduSearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {

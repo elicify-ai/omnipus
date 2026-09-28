@@ -35,12 +35,18 @@ func TestSearchProviderCatalogue_ShippedContentPinned(t *testing.T) {
 		if def.ID == "" || def.Section == "" || def.DisplayName == "" {
 			t.Errorf("provider %q: id/section/display_name must be set", def.ID)
 		}
-		if def.Enabled == nil || def.APIKey == nil || def.APIKeyRef == nil || def.SetEnabled == nil {
-			t.Errorf("provider %q: config accessors must be wired", def.ID)
+		if def.Enabled == nil || def.SetEnabled == nil {
+			t.Errorf("provider %q: enabled accessors must be wired", def.ID)
+		}
+		if def.Keyed && (def.APIKey == nil || def.APIKeyRef == nil) {
+			t.Errorf("provider %q: keyed providers need key accessors", def.ID)
+		}
+		if def.RequiresBaseURL && def.BaseURL == nil {
+			t.Errorf("provider %q: base-URL providers need a BaseURL accessor", def.ID)
 		}
 	}
 
-	keyedWant := []string{"perplexity", "brave", "tavily", "glm", "baidu", "exa"}
+	keyedWant := []string{"perplexity", "brave", "tavily", "baidu", "glm", "exa"}
 	var keyedGot []string
 	var baseURLWant []string
 	for _, def := range SearchProviderCatalogue {
