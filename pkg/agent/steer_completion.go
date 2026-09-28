@@ -650,6 +650,43 @@ func (al *AgentLoop) completeSteeredTurnAfterGoal(ctx context.Context, sessionID
 	}
 }
 
+// completeSteeredTurnIfDeferredAtGate routes a steered child through the
+// completion tail exactly when it is deferred at the (a) gate: an ACTIVE goal
+// ended above it (/goal clear, idle-expiry sweep) while its own turn had
+// already exited and its record is still non-terminal. The gate only re-runs
+// on a turn exit or cancel, so without this call nothing re-enters it — the
+// child record stays `running` until the next boot sweep repairs it (architect
+// finding F4, #984 follow-up). The goal record itself is already ended by the
+// caller; the tail's Deliver + terminal write + pair-end (e)① then run with
+// the goal gone, so the (a) gate passes and nothing loops.
+//
+// A LIVE turn is deliberately left alone: its own exit re-runs the gate (the
+// goal is gone by then) and completes it through the same tail. NeedsInput
+// (parked) children are left to their own park flow. The cancelled outcome is
+// honest for "the operator ended the goal": interrupted handback to the
+// parent, state cancelled, never a false "empty answer" failure.
+func (al *AgentLoop) completeSteeredTurnIfDeferredAtGate(sessionID string) {
+	if al == nil || sessionID == "" {
+		return
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil || rec == nil || rec.SteeredBy == nil {
+		return
+	}
+	if rec.Terminal() || rec.State == session.LifecycleNeedsInput {
+		return
+	}
+	if ts := al.getActiveTurnState(sessionID); ts != nil && ts.IsAlive() {
+		return
+	}
+	tailErr := fmt.Errorf("%w: the goal was ended while this session was deferred at the completion gate", context.Canceled)
+	al.completeSteeredTurnAfterGoal(context.Background(), sessionID, "", tailErr)
+}
+
 func (al *AgentLoop) parkedQuestions(ownerID string) ([]string, error) {
 	inbox := al.GetMessageInboxStore()
 	if inbox == nil {

@@ -1268,6 +1268,11 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 					map[string]any{"session_id": sessionID, "goal_id": g.GoalID})
 				continue
 			}
+			// F4 (#984 follow-up): the idle-expiry sweep ends a goal whose
+			// steered child may be deferred at the (a) gate — same shape as
+			// /goal clear. Route it through the completion tail; ordinary
+			// roots are refused by completeSteeredTurn's edge check.
+			al.completeSteeredTurnIfDeferredAtGate(sessionID)
 		}
 	}
 

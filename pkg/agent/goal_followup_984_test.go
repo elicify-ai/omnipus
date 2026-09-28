@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -296,4 +297,166 @@ func TestBoot984_SweepPairEndsSteeredGoal(t *testing.T) {
 	if !goal.IsActiveState(rootG.State) {
 		t.Fatalf("standing root's goal = %q, want still active — ordinary roots are exempt from the sweep", rootG.State)
 	}
+}
+
+// TestGoal984_GoalEnderRoutesDeferredChildThroughTail pins architect finding
+// F4: /goal clear and the idle-expiry sweep end a goal whose steered child
+// sits deferred at the (a) completion gate (turn already exited, record still
+// non-terminal) — and the gate only re-runs on a turn exit or cancel, so the
+// child record stayed `running` until the next boot sweep repaired it. Both
+// goal enders now route such a child through the completion tail
+// (completeSteeredTurnIfDeferredAtGate): the parent is told (interrupted
+// handback), the record goes terminal (cancelled), and ordinary roots are
+// never touched (completeSteeredTurn refuses without a steered edge).
+func TestGoal984_GoalEnderRoutesDeferredChildThroughTail(t *testing.T) {
+	t.Run("goal clear", func(t *testing.T) {
+		al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+		lifecycle := session.NewLifecycleStore(t.TempDir())
+		inbox := session.NewMessageInboxStore(t.TempDir())
+		al.SetSessionMessagingStores(inbox, lifecycle)
+		wireSteerCompletionDeps(t, al)
+
+		parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
+		if err != nil {
+			t.Fatalf("NewSession(parent): %v", err)
+		}
+		res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+			SteeringSessionID: parentMeta.ID,
+			TargetAgentID:     "native-agent",
+			Task:              "deferred at the gate",
+			Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-f4-clear"},
+			Goal: &steer.GoalSpec{
+				Criteria: []steer.Criterion{{Text: "the work is complete"}},
+				DoD:      []steer.Criterion{{Text: "the evidence is sufficient"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Launch: %v", err)
+		}
+		rec, err := lifecycle.Load(res.SessionID)
+		if err != nil {
+			t.Fatalf("Load(child): %v", err)
+		}
+		rec.State = session.LifecycleRunning
+		if persistErr := lifecycle.Persist(rec); persistErr != nil {
+			t.Fatalf("Persist(running): %v", persistErr)
+		}
+
+		reply := al.clearGoalByUser(rec.SessionID, al.GetSessionStore(), "native-agent")
+		if reply == "" {
+			t.Fatal("clearGoalByUser returned an empty reply, want the Goal cleared line")
+		}
+
+		loaded, err := lifecycle.Load(rec.SessionID)
+		if err != nil {
+			t.Fatalf("Load(child) after clear: %v", err)
+		}
+		if !loaded.Terminal() {
+			t.Fatalf("child state after /goal clear = %q — F4: a deferred steered child must reach a terminal state the parent sees", loaded.State)
+		}
+		if loaded.State != session.LifecycleCancelled {
+			t.Fatalf("child state = %q, want cancelled (the operator ended the goal)", loaded.State)
+		}
+		entries, err := inbox.Entries(parentMeta.ID)
+		if err != nil {
+			t.Fatalf("inbox.Entries(parent): %v", err)
+		}
+		// The F4 tail's outcome for an operator-ended goal is interrupted →
+		// completionMessage encodes it as a FATAL ERROR message (not a
+		// handback — completionMessage only writes a handback for
+		// final_answer), deterministic <child>:<gen>:final id, wake-eligible
+		// (fatal errors wake). Count THAT.
+		var fatalErrs int
+		for _, entry := range entries {
+			if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
+				continue
+			}
+			cls, cerr := session.ClassifySessionMessage(*entry.Message)
+			if cerr != nil || cls.Kind != "error" || !cls.Fatal {
+				continue
+			}
+			fatalErrs++
+		}
+		if fatalErrs != 1 {
+			t.Fatalf("parent fatal-error entries = %d, want exactly 1 (the interrupted report)", fatalErrs)
+		}
+	})
+
+	t.Run("idle expiry sweep", func(t *testing.T) {
+		al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+		lifecycle := session.NewLifecycleStore(t.TempDir())
+		inbox := session.NewMessageInboxStore(t.TempDir())
+		al.SetSessionMessagingStores(inbox, lifecycle)
+		wireSteerCompletionDeps(t, al)
+
+		parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
+		if err != nil {
+			t.Fatalf("NewSession(parent): %v", err)
+		}
+		res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+			SteeringSessionID: parentMeta.ID,
+			TargetAgentID:     "native-agent",
+			Task:              "deferred at the gate (idle)",
+			Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-f4-idle"},
+			Goal: &steer.GoalSpec{
+				Criteria: []steer.Criterion{{Text: "the work is complete"}},
+				DoD:      []steer.Criterion{{Text: "the evidence is sufficient"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Launch: %v", err)
+		}
+		rec, err := lifecycle.Load(res.SessionID)
+		if err != nil {
+			t.Fatalf("Load(child): %v", err)
+		}
+		rec.State = session.LifecycleRunning
+		if persistErr := lifecycle.Persist(rec); persistErr != nil {
+			t.Fatalf("Persist(running): %v", persistErr)
+		}
+		// Backdate the goal's last activity past the idle-expiry horizon.
+		gs := resolveGoalRecordStore()
+		if _, uerr := gs.Update(rec.GoalRef, func(cur *goal.Goal) error {
+			cur.LastActivityAt = time.Now().Add(-30 * 24 * time.Hour)
+			return nil
+		}); uerr != nil {
+			t.Fatalf("backdate activity: %v", uerr)
+		}
+
+		al.goalIdleExpirySweep(config.PlanningConfig{}, time.Now())
+
+		loaded, err := lifecycle.Load(rec.SessionID)
+		if err != nil {
+			t.Fatalf("Load(child) after sweep: %v", err)
+		}
+		if !loaded.Terminal() {
+			t.Fatalf("child state after idle-expiry sweep = %q — F4: the sweep must route the deferred child through the tail", loaded.State)
+		}
+		if loaded.State != session.LifecycleCancelled {
+			t.Fatalf("child state = %q, want cancelled", loaded.State)
+		}
+		entries, err := inbox.Entries(parentMeta.ID)
+		if err != nil {
+			t.Fatalf("inbox.Entries(parent): %v", err)
+		}
+		// The F4 tail's outcome for an operator-ended goal is interrupted →
+		// completionMessage encodes it as a FATAL ERROR message (not a
+		// handback — completionMessage only writes a handback for
+		// final_answer), deterministic <child>:<gen>:final id, wake-eligible
+		// (fatal errors wake). Count THAT.
+		var fatalErrs int
+		for _, entry := range entries {
+			if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
+				continue
+			}
+			cls, cerr := session.ClassifySessionMessage(*entry.Message)
+			if cerr != nil || cls.Kind != "error" || !cls.Fatal {
+				continue
+			}
+			fatalErrs++
+		}
+		if fatalErrs != 1 {
+			t.Fatalf("parent fatal-error entries = %d, want exactly 1", fatalErrs)
+		}
+	})
 }
