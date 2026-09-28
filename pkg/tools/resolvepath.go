@@ -1300,7 +1300,7 @@ func (rp *resolvePath) readConfinedMountHandle(realAbs string) (*PathHandle, boo
 		// FSOpList for a mount handle (the guard at the top of this
 		// function) — mark it read-only at the type level rather than
 		// relying on that guard alone. newMountRootHandle's FSOpWrite/
-		// FSOpServe call site (resolveValidatedPath, below) never sets this.
+		// FSOpServe call site (resolveValidatedPath, above) never sets this.
 		handle.readOnly = true
 	}
 	return handle, true, err

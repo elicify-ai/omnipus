@@ -68,7 +68,7 @@ func runGrepScopeStatOpenHook(subPath string) {
 // grepPathRefusal marks an error as a refusal of the `path` argument by the
 // single read decision (or by grep's own NUL pre-check): Execute audits it
 // as path.access_denied (FR-020) and returns a permission-denied result.
-// Every other grepRoots error (not found, not a directory, cannot open the
+// Every other resolveGrepRoots error (not found, not a directory, cannot open the
 // workspace) is a plain error and writes no denial row.
 type grepPathRefusal struct{ err error }
 
@@ -339,7 +339,7 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, policy fspolicy.FSP
 	parent := filepath.Dir(realAbs)
 	if parent == realAbs {
 		// A volume root (`/`, `C:\`) has no parent: open it directly, the
-		// shape of grepRoots' mount branch with no sub-path (ADR-081 D4).
+		// shape of resolveGrepRoots' mount branch with no sub-path (ADR-081 D4).
 		root, err := os.OpenRoot(realAbs)
 		if err != nil {
 			return lost(err), 0, nil

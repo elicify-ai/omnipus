@@ -113,7 +113,10 @@ func (c AutoApproveClass) String() string {
 
 // AutoVerdictClass is the typed spelling of an AutoVerdict/AutoPin's Class
 // field (T1, pkg/tools/auto_approve.go review): the four values below are
-// the only legal members, so a stray literal no longer type-checks as one.
+// the only intended members. The named type stops a plain string
+// variable from being assigned without an explicit conversion; an untyped
+// string literal still compiles (Go constant assignability), so new values
+// belong in the const block below, not inline.
 type AutoVerdictClass string
 
 // Verdict class strings recorded on AutoVerdict.Class (and so in the

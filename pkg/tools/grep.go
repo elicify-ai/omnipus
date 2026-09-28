@@ -315,7 +315,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	return NewToolResult(rendered)
 }
 
-// closeGrepRoots closes every os.Root one call opened (FR-032: grepRoots'
+// closeGrepRoots closes every os.Root one call opened (FR-032: resolveGrepRoots'
 // single closer, deferred by Execute before the busy check).
 func closeGrepRoots(opened []*os.Root) {
 	for _, r := range opened {
@@ -433,7 +433,7 @@ func (t *GrepTool) grepRootsError(ctx context.Context, scope string, err error) 
 // namePrefix is the reported-path prefix already established for container
 // ("" for the workspace root, the mount name for a mount); label names
 // container in a caller-facing sentence ("your workspace", `mount "x"`).
-// *opened accumulates every os.Root this opens so grepRoots' single
+// *opened accumulates every os.Root this opens so resolveGrepRoots' single
 // closeAll can close them all on the caller's defer.
 //
 // The int return is LoadAncestorIgnore's own "unreadable" count (finding
@@ -445,7 +445,7 @@ func (t *GrepTool) grepRootsError(ctx context.Context, scope string, err error) 
 // count was silently discarded here, so a scoped search (path=subdir) with
 // a permission-denied ancestor .gitignore applied fewer rules than intended
 // with NO trace anywhere in the response — the same class of gap F-E closed
-// for the within-walk case. Callers (grepRoots) sum this across every root
+// for the within-walk case. Callers (resolveGrepRoots) sum this across every root
 // resolved and Execute folds the total into result.Stats.IgnoreFilesUnreadable
 // before rendering, so it reaches the agent through the exact same counter.
 func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subPath, namePrefix, label string, policy fspolicy.FSPolicy, opened *[]*os.Root) (filegrep.Root, int, error) {
@@ -689,7 +689,7 @@ func (s singleEntryFS) ReadDir(name string) ([]fs.DirEntry, error) {
 // A hostAbs that cannot be resolved yields an unreachableRootFS rather than an
 // unguarded FS: without a trustworthy anchor there is no way to name the files
 // this FS would expose, and an unnameable file cannot be judged. That surfaces
-// through filegrep's existing ReasonRootLost path (see grepRoots' "A broken
+// through filegrep's existing ReasonRootLost path (see resolveGrepRoots' "A broken
 // mount is never silently dropped"), so the coverage loss is stated to the
 // caller rather than silently taken.
 //
@@ -1008,14 +1008,14 @@ func normalizeGrepScope(scope string) string {
 	if cleaned == "." {
 		// "." and "./" both mean "the whole workspace" — the same thing ""
 		// means, which takes the full-workspace-plus-mounts branch in
-		// grepRoots.
+		// resolveGrepRoots.
 		return ""
 	}
 	return cleaned
 }
 
 // unreachableRootFS stands in for a Root whose real folder could not be
-// opened. See grepRoots' doc comment for why this exists instead of
+// opened. See resolveGrepRoots' doc comment for why this exists instead of
 // dropping the root.
 type unreachableRootFS struct{ err error }
 
