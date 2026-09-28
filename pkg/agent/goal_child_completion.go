@@ -68,6 +68,13 @@ const goalSessionEndedNotePrefix = "session ended: "
 // re-capture: it is persisted on the goal record, and every attempt re-reads
 // the record fresh, so a goal cleared or restated mid-re-drive is simply not
 // adjudicated further.
+//
+// A registry concurrency back-off (#984) is NOT re-driven: runGoalAdjudication
+// resolves JudgeCriteriaResult.ConcurrencyBackoff to (false, false) — a
+// final, silent stop for THIS wrapper, with no retry (the in-flight
+// adjudication resolves the goal) and no child failure. Only a genuine
+// judge outage (unavailable=true, reason != the concurrency sentinel) is
+// retried and, on exhaustion, fails the child visibly.
 func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork) {
 	if al == nil || work == nil || work.sessionID == "" {
 		return
