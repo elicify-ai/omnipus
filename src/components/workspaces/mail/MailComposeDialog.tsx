@@ -121,38 +121,85 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent className="flex max-h-[85vh] flex-col gap-[var(--space-3)] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="flex h-[calc(100dvh-var(--space-5))] max-h-[calc(100dvh-var(--space-5))] w-[calc(100%-var(--space-5))] max-w-5xl flex-col gap-[var(--space-2)] overflow-y-auto p-[var(--space-3)]">
+        <DialogHeader className="shrink-0 pr-[var(--space-6)]">
           <DialogTitle>{mode === 'reply' ? 'Reply' : 'Compose message'}</DialogTitle>
           <DialogDescription>
             Sent as formatted HTML plus a plain-text copy, with the mailbox signature appended.
           </DialogDescription>
         </DialogHeader>
-        <Field label="To" error={errors.to} required>
-          <Input value={values.to} onChange={set('to')} placeholder="name@example.com" />
+        <div className="shrink-0 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+          <Field
+            label="To"
+            error={errors.to}
+            required
+            data-compose-header-row
+            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
+          >
+            <Input className="rounded-none border-0 bg-transparent px-0" value={values.to} onChange={set('to')} placeholder="name@example.com" />
+          </Field>
+          <Field
+            label="Cc"
+            data-compose-header-row
+            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)]"
+          >
+            <Input className="rounded-none border-0 bg-transparent px-0" value={values.cc} onChange={set('cc')} placeholder="name@example.com" />
+          </Field>
+          <Field
+            label="Bcc"
+            data-compose-header-row
+            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)]"
+          >
+            <Input className="rounded-none border-0 bg-transparent px-0" value={values.bcc} onChange={set('bcc')} placeholder="name@example.com" />
+          </Field>
+          <Field
+            label="Subject"
+            data-compose-header-row
+            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)]"
+          >
+            <Input className="rounded-none border-0 bg-transparent px-0" value={values.subject} onChange={set('subject')} placeholder="Subject" />
+          </Field>
+        </div>
+        <Field
+          label="Message (Markdown)"
+          error={errors.body}
+          data-compose-message-region
+          className="flex min-h-[calc(var(--space-8)+var(--space-4))] flex-1 flex-col gap-[var(--space-1)] space-y-0"
+        >
+          <Textarea className="min-h-0 flex-1" value={values.body} onChange={set('body')} placeholder="Write your message in Markdown" />
         </Field>
-        <Field label="Cc">
-          <Input value={values.cc} onChange={set('cc')} placeholder="name@example.com" />
-        </Field>
-        <Field label="Bcc">
-          <Input value={values.bcc} onChange={set('bcc')} placeholder="name@example.com" />
-        </Field>
-        <Field label="Subject">
-          <Input value={values.subject} onChange={set('subject')} placeholder="Subject" />
-        </Field>
-        <Field label="Message (Markdown)" error={errors.body}>
-          <Textarea rows={7} value={values.body} onChange={set('body')} placeholder="Write your message in Markdown" />
-        </Field>
-        <div>
-          <p className="text-[length:var(--type-caption-size)] font-[var(--font-weight-medium)] text-[var(--color-muted)]">
+        <div
+          data-testid="compose-attachments-row"
+          className="flex shrink-0 flex-wrap items-center gap-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2)]"
+        >
+          <p className="shrink-0 text-[length:var(--type-caption-size)] font-[var(--font-weight-medium)] text-[var(--color-muted)]">
             Attachments (up to 10 files, 25 MB total)
           </p>
+          {/* The real input stays visually hidden; the button is its visible
+              trigger. The label association above keeps the input reachable
+              by name for assistive tech and tests. */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            tabIndex={0}
+            multiple
+            aria-label="Attach files"
+            className="sr-only"
+            onChange={(e) => {
+              handleFiles(e.target.files)
+              e.target.value = ''
+            }}
+          />
+          <Button variant="outline" size="sm" className="shrink-0 gap-[var(--space-1)]" onClick={() => fileInputRef.current?.click()}>
+            <Plus size={14} aria-hidden="true" />
+            Attach files
+          </Button>
           {attachments.length > 0 && (
-            <ul className="mt-[var(--space-1)] flex flex-col gap-[var(--space-1)]">
+            <ul className="flex min-w-0 flex-1 flex-wrap items-center gap-[var(--space-1)]">
               {attachments.map((attachment, index) => (
                 <li
                   key={`${attachment.name}-${index}`}
-                  className="flex items-center gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2)] py-[var(--space-1)]"
+                  className="flex min-w-0 max-w-full items-center gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] pl-[var(--space-2)]"
                 >
                   <File size={16} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
                   <span className="min-w-0 flex-1 truncate text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
@@ -169,31 +216,12 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
             </ul>
           )}
           {attachError && (
-            <p role="alert" className="mt-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+            <p role="alert" className="w-full text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
               {attachError}
             </p>
           )}
-          {/* The real input stays visually hidden; the button is its visible
-              trigger. The label association above keeps the input reachable
-              by name for assistive tech and tests. */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            tabIndex={0}
-            multiple
-            aria-label="Attach files"
-            className="sr-only"
-            onChange={(e) => {
-              handleFiles(e.target.files)
-              e.target.value = ''
-            }}
-          />
-          <Button variant="outline" size="sm" className="mt-[var(--space-2)] gap-[var(--space-1)]" onClick={() => fileInputRef.current?.click()}>
-            <Plus size={14} aria-hidden="true" />
-            Attach files
-          </Button>
         </div>
-        <DialogFooter>
+        <DialogFooter className="sticky bottom-0 z-10 shrink-0 bg-[var(--color-surface-1)] pt-[var(--space-2)]">
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
