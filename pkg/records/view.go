@@ -713,6 +713,7 @@ func (v *SavedView) DerivedFromString() string {
 	}
 	return *v.Def.DerivedFrom
 }
+
 // on, or "" when they do not all agree.
 //
 // A duplicate-name conflict rejects SEVERAL files at once, and attributing the

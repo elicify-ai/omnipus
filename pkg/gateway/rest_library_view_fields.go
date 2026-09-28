@@ -39,9 +39,9 @@ import (
 type viewIndexEntry struct {
 	// Rejection is the view_* code (or "" for a healthy view). When set,
 	// the other optional fields are not populated.
-	Rejection string
+	Rejection       string
 	RejectionReason string
-	ConflictPaths []string
+	ConflictPaths   []string
 	// Kind is the ViewKind (one of the eight declared kinds) — empty for
 	// an absent kind or any broken view.
 	Kind string
@@ -300,9 +300,9 @@ func rebuildViewIndex(idx *viewIndex, root *library.Root, homePath, workspaceID,
 		}
 		if wi == nil {
 			parsed[rel] = viewIndexEntry{
-				Rejection: rj.code,
+				Rejection:       rj.code,
 				RejectionReason: rj.reason,
-				Size: rj.size,
+				Size:            rj.size,
 			}
 			if rj.code == "view_duplicate_name" {
 				rejected[rj.duplicateOf] = append(rejected[rj.duplicateOf], rel)
@@ -336,9 +336,9 @@ func rebuildViewIndex(idx *viewIndex, root *library.Root, homePath, workspaceID,
 // for a single file: rejection code + reason + size, plus the name of
 // the group this file collides with (for the dupNames stamping above).
 type viewRejectionInfo struct {
-	code       string
-	reason     string
-	size       int64
+	code        string
+	reason      string
+	size        int64
 	duplicateOf string // empty unless code == view_duplicate_name
 }
 

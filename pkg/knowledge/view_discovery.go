@@ -77,8 +77,8 @@ type ViewFile struct {
 // walk's skipped-directory notes. Skipped is surfaced on EVERY caller
 // (FR-VA-025, R2-MIN-007) so a silent skip cannot disappear the view count.
 type ViewDiscoveryReport struct {
-	Files    []ViewFile
-	Skipped  []string // collection-relative directory paths WalkContained reported unreadable
+	Files   []ViewFile
+	Skipped []string // collection-relative directory paths WalkContained reported unreadable
 }
 
 // DiscoverViewFiles walks root via WalkContained (FR-VA-001, D-WALK) and
