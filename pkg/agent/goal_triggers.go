@@ -1268,6 +1268,12 @@ func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudica
 	// receives the completion handback IN ADDITION to the goal_status verdict
 	// and the child's record leaves `running` (the #947 hang).
 	ag.al.completeSteeredTurnAfterGoal(context.Background(), ag.sessionID, ag.claimText, nil)
+	// Q1=A (founder, #984 follow-up): the met verdict's inbox entry was
+	// delivered without a wake (deliverGoalVerdictUpward's SuppressWake);
+	// acknowledge it NOW, at hand-back time, so boot recovery never re-wakes
+	// it (ackMetVerdictEntry). Ordered AFTER the tail so a crash between
+	// delivery and hand-back leaves both entries unacked for boot recovery.
+	ag.al.ackMetVerdictEntry(ag.sessionID, ag.rec.GoalID, ag.verdict.Round)
 	ag.ret0 = true
 	return agentLoopRunGoalAdjudicationReturn
 }

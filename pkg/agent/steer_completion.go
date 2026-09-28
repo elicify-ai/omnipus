@@ -260,6 +260,13 @@ func reportUndeliveredWake(op string, event steer.UpwardEvent, parentSessionID s
 	if delivery.Outcome != steer.DeliveryStoredNotWoken {
 		return
 	}
+	// Q1=A (#984 follow-up): a producer-suppressed wake is a deliberate
+	// stored-not-woken — the session-goal met verdict, acked at hand-back —
+	// not a stall. The ERROR below exists for UNintended stored-not-woken
+	// outcomes; a suppressed event must never trip it.
+	if event.SuppressWake {
+		return
+	}
 	if class, err := session.ClassifySessionMessage(event.Message); err == nil && !class.WakeEligible {
 		return
 	}

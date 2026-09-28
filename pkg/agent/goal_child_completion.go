@@ -318,3 +318,47 @@ func (al *AgentLoop) deliverGoalParkUpward(sessionID string, blocked bool, text 
 	}
 	reportUndeliveredWake("goal: park delivery", event, steerParentSessionID(rec), rec.Generation, delivery)
 }
+
+// ackMetVerdictEntry acknowledges the session-goal met verdict's inbox entry
+// at hand-back time (founder Q1=A, #984 follow-up). The met verdict is
+// delivered with its wake suppressed (deliverGoalVerdictUpward's
+// SuppressWake); the completion handback that follows it is the one parent
+// wake for the whole "met". An entry delivered without a wake is consumed by
+// nothing — leaving it unacked would make boot recovery
+// (boot_sweep.go::unacknowledged) re-deliver AND re-wake it on every later
+// restart, which is exactly the re-entry Q1=A removes.
+//
+// Best-effort by design: the tail (completeSteeredTurnAfterGoal) runs FIRST
+// so a crash between delivery and this ack leaves both entries unacked for
+// boot recovery to re-deliver (the same posture as every other crash window
+// in the pair-end design); this ack runs AFTER the tail returns, so it never
+// races the tail's own Deliver. No parent edge → nothing to ack (a task-owned
+// goal has no steered edge and its verdict wake is load-bearing).
+func (al *AgentLoop) ackMetVerdictEntry(sessionID, goalID string, round int) {
+	inbox := al.GetMessageInboxStore()
+	if inbox == nil {
+		return
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		logger.WarnCF("agent", "goal: met verdict ack skipped — could not load the child's lifecycle record",
+			map[string]any{"session_id": sessionID, "goal_id": goalID, "error": err.Error()})
+		return
+	}
+	if rec == nil || rec.SteeredBy == nil {
+		return
+	}
+	ownerKey := deliverOwnerKey(rec)
+	if ownerKey == "" {
+		return
+	}
+	id := goalVerdictUpwardMessageID(goalID, round)
+	if aerr := inbox.Ack(ownerKey, []string{id}); aerr != nil {
+		logger.WarnCF("agent", "goal: met verdict ack failed — boot recovery may re-wake this verdict once",
+			map[string]any{"session_id": sessionID, "goal_id": goalID, "message_id": id, "error": aerr.Error()})
+	}
+}

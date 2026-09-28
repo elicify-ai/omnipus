@@ -968,6 +968,22 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 	return candidates, strconv.FormatInt(lastScannedSeq, 10), false, nil
 }
 
+// Entries returns the owner key's raw durable inbox entries in write order —
+// message lines and ack lines alike, with NO ack filtering. Drain is the
+// parent-facing surface (unacked only, cursor paginated); Entries is the raw
+// stream for callers that must answer "does this entry exist and has it been
+// acknowledged" — boot recovery's unacked scan and regression tests —
+// without re-implementing the on-disk format.
+func (s *MessageInboxStore) Entries(ownerKey string) ([]InboxEntry, error) {
+	if strings.TrimSpace(ownerKey) == "" {
+		return nil, ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	defer mu.Unlock()
+	return s.readEntries(ownerKey)
+}
+
 // Latest returns the newest message for childSessionID, including messages
 // that were already acknowledged. Acknowledgement is a delivery cursor, not
 // deletion: durable status still needs the last upward report and its real

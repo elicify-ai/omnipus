@@ -468,6 +468,21 @@ func (al *AgentLoop) deliverSteeringReceiptsForInjection(childSessionKey string,
 // missing-goal-record case — Deliver()'s own edge lookup already covers
 // "no steering parent to deliver to" the same way every other Deliver call
 // site in this package does (best-effort, never fails the caller).
+//
+// Q1=A (founder, #984 follow-up): a SESSION-goal owner's MET verdict is
+// delivered with its wake suppressed (UpwardEvent.SuppressWake) — the
+// completion handback is the single parent wake for the whole "met" — and
+// its inbox entry is acknowledged at hand-back time so boot recovery never
+// re-wakes it. See the SuppressWake decision at the Deliver call below.
+// goalVerdictUpwardMessageID is the deterministic inbox id of a goal verdict's
+// upward entry — the delivery (deliverGoalVerdictUpward) and the session-goal
+// met path's hand-back acknowledgement (goal_child_completion.go::
+// ackMetVerdictEntry) both build it from this one function, so the two ids
+// can never drift.
+func goalVerdictUpwardMessageID(goalID string, round int) string {
+	return fmt.Sprintf("%s-verdict-%d", goalID, round)
+}
+
 func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID string, verdict *task.JudgeVerdict) {
 	if verdict == nil || sessionID == "" {
 		return
@@ -500,7 +515,7 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 	}
 	if err := sm.FromSessionMessageGoalStatus(generated.SessionMessageGoalStatus{
 		Kind:            generated.SessionMessageGoalStatusKindGoalStatus,
-		MessageId:       fmt.Sprintf("%s-verdict-%d", rec.GoalID, verdict.Round),
+		MessageId:       goalVerdictUpwardMessageID(rec.GoalID, verdict.Round),
 		SessionId:       sessionID,
 		SenderIdentity:  verdict.JudgeAgentID,
 		CreatedAt:       time.Now().UTC(),
@@ -515,7 +530,21 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
 		return
 	}
-	event := steer.UpwardEvent{ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: sm}
+	// Q1=A (founder, #984 follow-up): on the SESSION-goal met path the
+	// verdict's wake is suppressed — the completion handback that follows it
+	// (finishMetGoal's tail) is the one parent wake for the whole "met", and
+	// this entry is acknowledged at hand-back time (ackMetVerdictEntry) so
+	// boot recovery cannot re-wake it later. Task-owned goals are excluded by
+	// the OwnerKind check: their verdict wake is load-bearing (no handback
+	// follows a task verdict). Unmet verdicts never suppress: they leave the
+	// goal active and the parent must see the round's outcome.
+	suppressWake := false
+	if verdict.Met && rec.OwnerKind == generated.GoalOwnerKindSession {
+		if childRec, lerr := al.GetSessionLifecycleStore().Load(sessionID); lerr == nil && childRec != nil {
+			suppressWake = childRec.SteeredBy != nil
+		}
+	}
+	event := steer.UpwardEvent{ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: sm, SuppressWake: suppressWake}
 	delivery, err := deliverer.Deliver(ctx, event)
 	if err != nil {
 		logger.WarnCF("agent", "goal-status upward delivery failed",

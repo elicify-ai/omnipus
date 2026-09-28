@@ -146,6 +146,19 @@ type UpwardEvent struct {
 	ChildSessionID string
 	Outcome        Outcome
 	Message        generated.SessionMessage
+
+	// SuppressWake stores the entry without waking the recipient (the
+	// delivery still runs its frames, and the outcome reports
+	// DeliveryStoredNotWoken). Zero value = the class's own wake-eligibility,
+	// so every existing producer is unchanged. Set ONLY where a wake would
+	// double-re-enter the parent for one logical event: the session-goal
+	// "met" verdict (founder Q1=A, #984 follow-up) — the completion handback
+	// that follows it is the one wake worth the parent's turn, the verdict
+	// stays visible through its side-panel entry, and the entry is
+	// acknowledged at hand-back time (pkg/agent goal path) so boot recovery
+	// never re-wakes it. Never set it on a message the parent must ACT on —
+	// questions, blockers and errors keep their wakes.
+	SuppressWake bool
 }
 
 // DeliveryOutcome is Delivery.Outcome's enum (I-5).
