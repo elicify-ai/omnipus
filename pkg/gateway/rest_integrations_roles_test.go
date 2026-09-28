@@ -884,6 +884,11 @@ func TestIntegrationPut_FallbackSearchNullContract(t *testing.T) {
 		fixture["brave"] = map[string]any{"enabled": true, "api_key_ref": "BRAVE_API_KEY"}
 		writeRolesWebConfig(t, api, fixture)
 		storeWebSearchKeys(t, api, "TAVILY_API_KEY", "BRAVE_API_KEY")
+		// The post-reload usability check (G4) reads the env lane, and this
+		// test's reload stand-in performs no injection — pin both keys so the
+		// test does not depend on the machine's environment (CI has none).
+		t.Setenv("TAVILY_API_KEY", "k-tavily")
+		t.Setenv("BRAVE_API_KEY", "k-brave")
 
 		w := putRoles(t, api, user, "tavily", `{"kind":"search","fallback":true}`)
 		require.Equal(t, 200, w.Code, "body=%s", w.Body.String())
