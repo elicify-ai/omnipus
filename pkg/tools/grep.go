@@ -461,7 +461,7 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 	// Ancestor .gitignore/.ignore files are read through the container,
 	// which no grepGateFS covers; regularOnlyFS keeps a pipe planted there
 	// from blocking the call (D13).
-	ancestorFS := regularOnlyFS{fsys: container.FS()}
+	ancestorFS := regularOnlyFS{fsys: container.FS(), root: containerHostPath}
 
 	switch {
 	case info.IsDir():

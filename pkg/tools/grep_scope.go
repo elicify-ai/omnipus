@@ -92,6 +92,33 @@ func runGrepAbsolutePostOpenHook(anchor string) {
 	}
 }
 
+// grepGateFIFOSwapHook is the A3 test-only seam (Opus security-lead
+// review): invoked in refuseNonRegular (the OLD code's Stat-then-check
+// window, between Stat and the kind check) and via refuseNonRegularViaOpen
+// (the A3 fix's open-then-stat window, BEFORE the non-blocking open —
+// the seam fires before the open there too so the open sees the FIFO).
+// Production never sets it — the pointer stays nil and the cost is one
+// atomic load per Open. A test sets it (installGrepGateFIFOSwapHook)
+// to remove a regular file and replace it with a FIFO synchronously,
+// driving the "regular at Stat, FIFO at Open" race that the OLD code
+// path's Stat-then-Open hangs on.
+var grepGateFIFOSwapHook atomic.Pointer[func(name string)]
+
+func setGrepGateFIFOSwapHook(fn func(name string)) (restore func()) {
+	var next *func(string)
+	if fn != nil {
+		next = &fn
+	}
+	prev := grepGateFIFOSwapHook.Swap(next)
+	return func() { grepGateFIFOSwapHook.Store(prev) }
+}
+
+func runGrepGateFIFOSwapHook(name string) {
+	if hook := grepGateFIFOSwapHook.Load(); hook != nil {
+		(*hook)(name)
+	}
+}
+
 // grepPathRefusalError marks an error as a refusal of the `path` argument by
 // the single read decision (or by grep's own NUL pre-check): Execute audits it
 // as path.access_denied (FR-020) and returns a permission-denied result.
@@ -440,7 +467,14 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 		if relErr != nil {
 			return filegrep.Root{}, 0, fmt.Errorf("path %s could not be made relative to its mount %q: %w", rawPath, m.Name, relErr)
 		}
-		r, n, rErr := t.resolveScopedRoot(mr, m.HostPath, filepath.ToSlash(rel), m.Name, fmt.Sprintf("mount %q", m.Name), policy, opened)
+		// namePrefix is the absolute host root (e.g., "<MNT>"), not the
+		// mount name ("docs-mount") — the spec contract for row 4
+		// (DS-1 absolute in a mount) is "<MNT>/src/b.md" (absolute) as
+		// the match path, while the mount-name SHORTHAND path (row 3)
+		// uses "docs-mount/src/b.md". The two are distinguished by how
+		// the user invoked the scope, not by which mount holds the
+		// location; the engine joins namePrefix + "/" + match-rel.
+		r, n, rErr := t.resolveScopedRoot(mr, m.HostPath, filepath.ToSlash(rel), grepAbsoluteName(m.HostPath), fmt.Sprintf("mount %q", m.Name), policy, opened)
 		if rErr != nil {
 			var lostErr *grepScopeLostError
 			if errors.As(rErr, &lostErr) {
@@ -650,7 +684,14 @@ func (g grepGateFS) Open(name string) (fs.File, error) {
 	if name != "." && g.withheld(name) {
 		return nil, g.refusal("open", name)
 	}
-	if err := refuseNonRegular(g.raw, name); err != nil {
+	// A3 fix: non-blocking open + kind check on the opened file (the
+	// OLD code did Stat-then-Open as two steps; an entry that was
+	// regular at Stat time but a FIFO at Open time blocked the gate
+	// Open forever — FIFO read blocks until a writer appears).
+	// Opening with regularReadOpenFlags() (O_NONBLOCK on unix) lets a
+	// FIFO open succeed without a writer; the kind check below
+	// refuses it before the blocking g.fsys.Open(name).
+	if err := refuseNonRegularViaOpen(g.abs(name), name); err != nil {
 		return nil, err
 	}
 	return g.fsys.Open(name)
@@ -701,6 +742,15 @@ func (g grepGateFS) ReadDir(name string) ([]fs.DirEntry, error) {
 // (component "tool", the walk-relative name only — never file content) via
 // the repo's structured logger.WarnCF, the same log-safe shape
 // guardCarveOuts already uses for its own refusal (grep.go).
+//
+// The seam between Stat and the kind check is the OLD-code race window
+// the A3 fix removes. Kept here for the RED test (Opus security-lead
+// review A3): with this code path AND the seam installed, an entry
+// that is regular at Stat time but a FIFO at Open time causes the
+// following g.fsys.Open(name) to block on a FIFO (the bug the fix
+// removes). The A3 fix in refuseNonRegularViaOpen replaces this Stat-
+// then-Open with a non-blocking Open + kind check on the opened file —
+// no race window, the FIFO is caught before any blocking Open.
 func refuseNonRegular(fsys fs.FS, name string) error {
 	info, err := fs.Stat(fsys, name)
 	if err != nil {
@@ -712,20 +762,72 @@ func refuseNonRegular(fsys fs.FS, name string) error {
 		})
 		return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("entry kind could not be determined, refusing to open it: %w: %w", fs.ErrPermission, err)}
 	}
+	// A3 seam: in the OLD code, the kind check uses the snapshot info
+	// above, so a FIFO swap here passes the check and the next Open
+	// blocks. The A3 fix moves the check to the opened file, where
+	// the swap is visible without any blocking Open.
+	runGrepGateFIFOSwapHook(name)
 	if info.IsDir() || info.Mode().IsRegular() {
 		return nil
 	}
 	return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%s is not searched: %w", describeFileKind(info.Mode()), fs.ErrPermission)}
 }
 
-// regularOnlyFS applies refuseNonRegular to an unguarded container FS whose
+// refuseNonRegularViaOpen is the A3 fix: open the file with
+// regularReadOpenFlags() (O_NONBLOCK on unix), then check the kind on the
+// opened file. The opened kind check is the only one that matters — a
+// Stat-then-Open races with a FIFO swap because a FIFO read blocks until a
+// writer connects, leaving the walk slot pinned past the 10 s deadline
+// (D13 / DS-5 row 3). Opening with O_NONBLOCK lets a FIFO open succeed
+// without a writer; the kind check refuses it before the actual reader.
+// Mirrors pkg/tools/resolvepath.go::PathHandle.OpenRegularNonBlocking.
+func refuseNonRegularViaOpen(hostAbs, name string) error {
+	// A3 seam (paired with refuseNonRegular's seam — A3 fires once via
+	// sync.Once, so the OLD code path's race window OR the NEW code
+	// path's pre-open window drives the swap; either way the kind
+	// check on the opened file sees the FIFO and refuses).
+	runGrepGateFIFOSwapHook(name)
+	f, err := os.OpenFile(hostAbs, regularReadOpenFlags(), 0)
+	if err != nil {
+		// ENOENT: the entry is genuinely missing; leave the absence
+		// to the actual Open that follows (it surfaces ENOENT to the
+		// engine). Every other error — permission denied on an
+		// ancestor, transient fs-specific I/O — fails closed (F1/S3,
+		// the pre-fix code's fail-OPEN hazard on non-ENOENT Stat errors).
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		logger.WarnCF("tool", "grep: could not open an entry to determine its kind — refusing it (fail closed)", map[string]any{
+			"path": name, "error": err.Error(),
+		})
+		return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("entry kind could not be determined, refusing to open it: %w: %w", fs.ErrPermission, err)}
+	}
+	info, statErr := f.Stat()
+	// Close whether or not Stat succeeded — we only need the info.
+	_ = f.Close()
+	if statErr != nil {
+		return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("could not stat opened file: %w", statErr)}
+	}
+	if info.IsDir() || info.Mode().IsRegular() {
+		return nil
+	}
+	return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%s is not searched: %w", describeFileKind(info.Mode()), fs.ErrPermission)}
+}
+
+// regularOnlyFS applies the kind check to an unguarded container FS whose
 // only use is reading ancestor .gitignore/.ignore files
 // (filegrep.LoadAncestorIgnore) — the one read above a scoped root that no
-// grepGateFS covers.
-type regularOnlyFS struct{ fsys fs.FS }
+// grepGateFS covers. root is the absolute host path the FS is anchored
+// at, used by the A3 non-blocking open (regularOnlyFS's fsys alone is
+// fs.FS, with no OpenFile-with-flags method).
+type regularOnlyFS struct {
+	fsys fs.FS
+	root string
+}
 
 func (r regularOnlyFS) Open(name string) (fs.File, error) {
-	if err := refuseNonRegular(r.fsys, name); err != nil {
+	abs := filepath.Join(r.root, filepath.FromSlash(name))
+	if err := refuseNonRegularViaOpen(abs, name); err != nil {
 		return nil, err
 	}
 	return r.fsys.Open(name)
