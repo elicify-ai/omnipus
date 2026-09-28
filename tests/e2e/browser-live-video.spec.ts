@@ -378,6 +378,20 @@ test("live browser view streams genuinely playing video with real audio and real
     page,
     Date.now() % 65_536,
   );
+  // row 55 bug A: createBrowserProbeAgent creates the agent via a raw
+  // `POST /api/v1/agents` call, bypassing CreateAgentModal.tsx — the only
+  // real-product path that invalidates the AgentPicker's `['agents']`
+  // react-query cache after a create. This `beforeEach` already navigated
+  // to "/" once (populating that cache with whatever agents existed then),
+  // so without a fresh navigation the picker can be looking at an
+  // arbitrarily stale list — intermittently timing out selectAgent's whole
+  // 720s budget waiting for a menuitem that will never appear on its own
+  // (confirmed on PR #940 run 36341847219 and on release/v0.1.1 itself, run
+  // 36396042860 @ 8402634e7 — see tests/e2e/agent-picker-freshness.spec.ts
+  // for the isolated repro). Reload now, matching the safe order
+  // fixtures/conformance-helpers.ts's startFreshChatWithAgent already uses
+  // (create, then navigate, then select).
+  await page.goto("/");
   await selectAgent(
     page,
     new RegExp(probeAgentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),

@@ -901,23 +901,51 @@ _e2e_run_shard() {
   # shard's key value (seeded next). See pr.yml "Seed gateway config" for the rationale
   # behind dev_mode_bypass / audit_log.
   #
+  # The model id is centralized in tests/e2e/e2e-model.json (the guard
+  # scripts/check-no-hardcoded-e2e-model.sh fails any hardcoded model id in
+  # live config), read once below into E2E_MODEL, fail-closed.
+  #
   # C1 fix (ADR-067 FR-034): providers[] rows are keyed by the EXACT (provider, model)
-  # pair — `provider` is the catalog id ("openrouter"), `model` is the BARE catalog
-  # model id ("z-ai/glm-5.2"). The old "<protocol>/<model>" prefix-splitting migration
+  # pair — `provider` is the catalog id ("openrouter"), `model` is the bare
+  # catalog model id exactly as stored in tests/e2e/e2e-model.json. The old
+  # "<protocol>/<model>" prefix-splitting migration
   # was deleted deliberately (it silently mis-routed vendors), so a row with an empty
   # `provider` now fails ModelConfig.Validate ("provider is required") instead of being
   # guessed. agents.defaults.default_model is the (provider, model) pair — the retired
   # model_name alias is gone (ADR-068 CRIT-001).
+  # --- e2e model read (fail-closed) >>>
+  # Split diagnostics (silent-failure-hunter LOW re-review finding, 2026-09-27): a
+  # PRESENT file with an empty/whitespace-only .model is a different failure from a
+  # MISSING file, and the old single message ("predates the central e2e model file")
+  # named the wrong repair for the former — it pointed at the checkout's age instead
+  # of at tests/e2e/e2e-model.json. jq's stderr is surfaced so "No such file or
+  # directory" vs a JSON parse error is visible in the gate log.
+  #   jq fails (file missing / unreadable / invalid JSON) → checkout predates the central file
+  #   jq succeeds but the trimmed .model is empty          → present-but-empty: edit tests/e2e/e2e-model.json
+  local e2e_jq_rc=0 e2e_jq_err_file e2e_jq_msg
+  e2e_jq_err_file="$(mktemp "${TMPDIR:-/tmp}/runci-e2e-model-jq.XXXXXX")" || { echo "[$name] tests/e2e/e2e-model.json: mktemp failed — cannot read the e2e model id fail-closed" >&2; return 1; }
+  E2E_MODEL="$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json 2>"$e2e_jq_err_file")" || e2e_jq_rc=$?
+  e2e_jq_msg="$(tr '\n' ' ' <"$e2e_jq_err_file")"
+  rm -f "$e2e_jq_err_file"
+  if [ "$e2e_jq_rc" -ne 0 ]; then
+    echo "[$name] tests/e2e/e2e-model.json: missing or unreadable/invalid JSON (jq exit $e2e_jq_rc: $e2e_jq_msg) — the checkout at $(git -C . rev-parse --short HEAD 2>/dev/null || echo '?') predates the central e2e model file" >&2
+    return 1
+  fi
+  if [ -z "$E2E_MODEL" ]; then
+    echo "[$name] tests/e2e/e2e-model.json: present but .model is empty or whitespace-only — edit that file to set the e2e model id" >&2
+    return 1
+  fi
+  # <<< e2e model read (fail-closed)
   cat > "$home/config.json" <<EOF
 {
   "version": 1,
   "gateway": { "port": $port, "dev_mode_bypass": true },
   "sandbox": { "audit_log": true, "tool_policies": { "spawn": "allow" } },
-  "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "z-ai/glm-5.2" }, "auto_recap_enabled": true } },
+  "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "${E2E_MODEL}" }, "auto_recap_enabled": true } },
   "providers": [
     {
       "provider": "openrouter",
-      "model": "z-ai/glm-5.3-flash",
+      "model": "${E2E_MODEL}",
       "api_base": "https://openrouter.ai/api/v1",
       "api_key_ref": "OPENROUTER_API_KEY"
     }
@@ -952,8 +980,8 @@ EOF
 
   # Onboarding must pass the REAL key — the handler appends a second provider entry the
   # agent's model lookup then picks; a placeholder would 401 every LLM call.
-  jq -n --arg key "$key" \
-    '{provider:{auth_method:"api_key",id:"openrouter",api_key:$key,model:"z-ai/glm-5.3-flash"},admin:{username:"admin",password:"admin123"}}' \
+  jq -n --arg key "$key" --arg model "$E2E_MODEL" \
+    '{provider:{auth_method:"api_key",id:"openrouter",api_key:$key,model:$model},admin:{username:"admin",password:"admin123"}}' \
     | curl -sf -X POST "http://localhost:$port/api/v1/onboarding/complete" \
         -H 'Content-Type: application/json' -d @- >/dev/null \
     || { echo "[$name] onboarding failed" >&2; cat "$logf" >&2; return 1; }

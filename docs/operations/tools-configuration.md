@@ -97,12 +97,15 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 
 ### Tavily
 
-| Config        | Type   | Default | Description                                              |
-|---------------|--------|---------|----------------------------------------------------------|
-| `enabled`     | bool   | false   | Enable Tavily search                                     |
-| `api_key_ref` | string | -       | Env-var name of the Tavily credential                    |
-| `base_url`    | string | -       | Custom Tavily API base URL                               |
-| `max_results` | int    | 5       | Maximum number of results                                |
+| Config         | Type   | Default    | Description                                                          |
+|----------------|--------|------------|------------------------------------------------------------------------|
+| `enabled`      | bool   | false      | Enable Tavily search                                                  |
+| `api_key_ref`  | string | -          | Env-var name of the Tavily credential                                 |
+| `base_url`     | string | -          | Custom Tavily API base URL                                            |
+| `search_depth` | string | `advanced` | Depth **cap** for Tavily searches: `ultra-fast` < `fast` < `basic` < `advanced` (cheapest to costliest). See below. |
+| `max_results`  | int    | 5          | Maximum number of results                                             |
+
+`search_depth` is a ceiling, not a fixed value. When an agent's `search_web` call asks for a `depth` (`low`/`medium`/`high`, mapped to Tavily's `fast`/`basic`/`advanced`), Omnipus clamps it down to this ceiling if it asks for more — it is never raised above it. When the agent's call carries no `depth` at all, Omnipus searches at this ceiling directly. A brand-new install ships `basic` (Tavily's cheapest tier); if the key is ever missing or empty — including on an install upgrading from before this setting existed — Omnipus falls back to `advanced`, the depth the code used unconditionally before this release, so an existing install's search depth (and its Tavily bill) does not change on upgrade. Deeper searches cost more per call, so this is also the operator's cost ceiling for Tavily. Env var: `OMNIPUS_TOOLS_WEB_TAVILY_SEARCH_DEPTH`.
 
 ### SearXNG
 
@@ -120,7 +123,10 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 | `api_key_ref`   | string | -                                                 | Env-var name of the GLM API credential   |
 | `base_url`      | string | `https://open.bigmodel.cn/api/paas/v4/web_search` | GLM Search API URL                       |
 | `search_engine` | string | `search_std`                                      | Search engine type                       |
+| `content_size`  | string | `medium`                                          | Depth **cap** for GLM searches: `medium` or `high` (GLM has no `low` value). See below. |
 | `max_results`   | int    | 5                                                 | Maximum number of results                |
+
+`content_size` works the same way as Tavily's `search_depth` above: it is the operator's ceiling on GLM's own `content_size` field. An agent's `search_web` call asking for `depth` `medium` or `high` is clamped down to this ceiling if it asks for more; a call with no `depth` uses the ceiling directly. GLM has no `low` value at all — a `search_web` call asking for `depth: "low"` is refused outright before any request reaches GLM (see the `search_web` parameters below), never silently upgraded to `medium`. Shipped default and the value existing installs are migrated onto are both `medium`, the value the code used unconditionally before this release. Env var: `OMNIPUS_TOOLS_WEB_GLM_CONTENT_SIZE`.
 
 > **Note:** `api_key_ref` stores the name of an environment variable whose value is resolved from the encrypted credential store. The legacy plaintext `api_key` and older `api_keys[]` forms are dropped by the loader. See [providers and models](../providers-and-models.md) for the user-facing provider model.
 
@@ -131,17 +137,27 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 | `prefer_native`          | bool     | true    | Prefer provider's native search over configured search engines |
 | `private_host_whitelist` | string[] | `[]`    | Private/internal hosts allowed for web fetching                |
 
+### Default and fallback search provider
+
+Omnipus tries one search provider first (the **default**) and, if that call fails, can try a second (the **fallback**). These are not settings you hand-edit in `config.json` — set them from **Settings > Integrations**, in the **Web Search** group: each provider's row has a **Default** and a **Fallback** radio, plus a **No fallback** choice if you don't want a second try. Under the hood this is `tools.web.default_provider` / `tools.web.fallback_provider`; an install upgrading from before these roles existed gets a one-time migration that keeps using whichever provider it was already using, so switching to this release does not change which provider answers your searches.
+
 ### `search_web` tool parameters
 
-At runtime, the `search_web` tool accepts the following parameters:
+At runtime, the real tool name is `search_web`. `query`, `count` and `range` are always offered. `depth`, `include_domains` and `exclude_domains` are offered together, only when the provider Omnipus would use for this call honours depth or site filters (at least one of the two); `provider` is offered only when two or more search providers are enabled and usable.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `query` | string | yes | Search query string |
-| `count` | integer | no | Number of results to return. Default: `10`, max: `10` |
-| `range` | string | no | Optional time filter: `d` (day), `w` (week), `m` (month), `y` (year) |
+| Field              | Type            | Required | Description |
+|---------------------|-----------------|----------|-------------|
+| `query`             | string          | yes      | Search query string |
+| `count`             | integer         | no       | Number of results to return, 1-10. Default: `10`. Out-of-range values are rejected, not clamped. |
+| `range`             | string          | no       | Optional time filter: `d` (day), `w` (week), `m` (month), `y` (year) |
+| `depth`             | string          | no       | Result depth: `low`, `medium` or `high`. Tavily maps these to `fast`/`basic`/`advanced`; Perplexity sets `search_context_size`; GLM refuses `low`. Present only under the condition above. |
+| `include_domains`   | array of string | no       | Restrict results to these domains (max 10). Present only under the condition above; refused (see below) when the provider that would run the call cannot honour it. |
+| `exclude_domains`   | array of string | no       | Domains to avoid (max 10). Present only under the condition above. A soft preference, not a requirement: if the provider that runs the call can't honour it, the search still runs and the result notes the omission — it is never refused for this alone. |
+| `provider`          | string          | no       | Name a specific configured provider to run this call, overriding the operator's Default/Fallback order. Present only when two or more providers are enabled and usable. |
 
 If `range` is omitted, Omnipus performs an unrestricted search.
+
+**When a parameter is refused.** `depth` and `include_domains` are checked before any request is sent to the provider that would run the call. The call is refused outright — naming every other configured provider that does support it — when: the provider has no depth (or site-filter) support at all, or the provider is GLM and the requested `depth` is `low` (GLM has no `low` value). Note the asymmetry with `exclude_domains`, which is never refused this way. A provider that supports only one of depth or site filters still offers all three fields — for example Exa, which honours site filters but not depth — so asking Exa for a `depth` hits this refusal even though `depth` was present in the schema.
 
 ### Example `search_web` call
 
@@ -149,8 +165,19 @@ If `range` is omitted, Omnipus performs an unrestricted search.
 {
   "query": "ai agent news",
   "count": 10,
-  "range": "w"
+  "range": "w",
+  "depth": "high"
 }
+```
+
+### Example capability refusal
+
+Asking for a `depth` when the provider that would run the call has no depth support at all — for example Brave as the default, with Tavily also configured — is refused before any request is sent:
+
+```
+search failed
+- brave (default): rejected: depth is not supported
+Providers that support depth: tavily
 ```
 
 ## Browser Tools

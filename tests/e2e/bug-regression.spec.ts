@@ -182,7 +182,7 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
   test(
     '(Bug-3-a) two chats opened in parallel both receive replies',
     async ({ page, context }) => {
-      // Real LLM turns in two tabs; deepseek-v4.1-flash (the standard e2e model) is reliable
+      // Real LLM turns in two tabs; the central e2e model (tests/e2e/e2e-model.json) is reliable
       // but slower than the old gemini pick, so budget the full slow ceiling.
       test.slow()
       // BDD: Given two browser tabs open to different chat sessions
@@ -227,7 +227,7 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       await input1.press('Enter')
       await input2.press('Enter')
 
-      // Both must get a settled reply. deepseek-v4.1-flash (the standard e2e model) is
+      // Both must get a settled reply. The central e2e model (tests/e2e/e2e-model.json) is
       // reliable but slower than the old gemini pick, and concurrent turns share
       // the model, so allow generous headroom.
       const replyTimeout = 90_000
@@ -379,7 +379,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   test(
     '(Bug-5-a) navigating away and back to a session preserves message order',
     async ({ page }) => {
-      // Real LLM turn + replay; deepseek-v4.1-flash (the standard e2e model) is reliable but
+      // Real LLM turn + replay; the central e2e model (tests/e2e/e2e-model.json) is reliable but
       // slower than the old gemini pick, so budget the full slow ceiling.
       test.slow()
       // BDD: Given a chat session with at least 1 assistant message
@@ -449,7 +449,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   test(
     '(Bug-5-b) two-turn session: turns appear in chronological order after replay',
     async ({ page }) => {
-      // Two real LLM turns + replay; deepseek-v4.1-flash (the standard e2e model) is reliable
+      // Two real LLM turns + replay; the central e2e model (tests/e2e/e2e-model.json) is reliable
       // but slower than the old gemini pick, so budget the full slow ceiling.
       test.slow()
       // BDD: Given a session with 2 turns (user→assistant, user→assistant)
