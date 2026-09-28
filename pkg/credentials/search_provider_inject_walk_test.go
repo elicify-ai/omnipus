@@ -74,7 +74,7 @@ func TestCatalogueWalk_AppendedProviderIsInjectable(t *testing.T) {
 	t.Cleanup(func() { config.SearchProviderCatalogue = saved })
 
 	cfg := config.DefaultConfig()
-	var got []string
+	got := make([]string, 0, len(config.SearchProviderCatalogue))
 	for _, cr := range nonChannelRefsFor(cfg) {
 		got = append(got, cr.ref)
 	}

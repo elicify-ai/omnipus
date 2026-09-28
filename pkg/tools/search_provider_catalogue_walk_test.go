@@ -53,7 +53,7 @@ func TestCatalogueWalk_AppendedProviderIsWarnableAndSelectable(t *testing.T) {
 	cfg := &config.WebToolsConfig{}
 	cfg.Exa.Enabled = true
 	opts := WebSearchToolOptions{Roles: func() *config.WebToolsConfig { return cfg }}
-	var warned []string
+	warned := make([]string, 0, 2)
 	for _, m := range enabledButKeylessSearchProviders(opts) {
 		warned = append(warned, m.name)
 	}
@@ -94,7 +94,7 @@ func TestCatalogueWalk_EveryKeyedProviderIsWarnable(t *testing.T) {
 	}
 
 	opts := WebSearchToolOptions{Roles: func() *config.WebToolsConfig { return cfg }}
-	var got []string
+	got := make([]string, 0, 2)
 	for _, m := range enabledButKeylessSearchProviders(opts) {
 		got = append(got, m.name)
 	}
