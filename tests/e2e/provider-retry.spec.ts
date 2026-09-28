@@ -253,8 +253,16 @@ test.describe('provider-messages row 20 (A-1, A-5, DG-1, DG-2, MIN-005)', () => 
       await input.press('Enter');
 
       // ── A-1: the countdown line, D3 template, attempt 2 of 3 ──
+      // Scoped to the indicator's visible <span> (not its sr-only live-region
+      // <div>, ProviderRetryIndicator.tsx): the same line is deliberately
+      // rendered twice — once for screen readers, once for sighted users — so
+      // an unscoped page-wide getByText() is a Playwright strict-mode
+      // violation ("resolved to 2 elements"), not a real ambiguity in the UI.
       await expect(
-        page.getByText(/is busy\. Retrying automatically in \d+:\d{2} \(attempt 2 of 3\)\./),
+        page
+          .getByTestId('provider-retry-indicator')
+          .locator('span')
+          .filter({ hasText: /is busy\. Retrying automatically in \d+:\d{2} \(attempt 2 of 3\)\./ }),
       ).toBeVisible({ timeout: 20_000 });
 
       // ── A-5: the terminal answer replaces the indicator ──
