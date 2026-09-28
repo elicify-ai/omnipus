@@ -10,7 +10,6 @@ import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { HistoricalMessageMarkdown } from '@/components/chat/historical-markdown'
-import { cn } from '@/lib/utils'
 
 export type MailPreviewState = 'draft' | 'missing' | 'sent' | 'foreign'
 
@@ -24,10 +23,9 @@ export interface MailPreviewPaneProps {
   onSave(next: { to: string; subject: string; bodyMarkdown: string }): void
   onSend(): void
   onDiscard(): void
-  className?: string
 }
 
-export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSave, onSend, onDiscard, className }: MailPreviewPaneProps) {
+export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSave, onSend, onDiscard }: MailPreviewPaneProps) {
   const [editing, setEditing] = useState(false)
   const [editTo, setEditTo] = useState(to)
   const [editSubject, setEditSubject] = useState(subject)
@@ -35,7 +33,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
 
   if (state === 'missing') {
     return (
-      <section aria-label="Draft" className={cn('flex min-w-0 flex-1 flex-col items-center justify-center bg-[var(--color-surface-0)] p-[var(--space-4)]', className)}>
+      <section aria-label="Draft" className="flex min-w-0 flex-1 flex-col items-center justify-center bg-[var(--color-surface-0)] p-[var(--space-4)]">
         <File size={40} aria-hidden="true" className="text-[var(--color-border)]" />
         <p className="mt-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           This draft no longer exists.
@@ -46,7 +44,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
 
   if (state === 'sent') {
     return (
-      <section aria-label="Sent message" className={cn('flex min-w-0 flex-1 flex-col bg-[var(--color-surface-0)]', className)}>
+      <section aria-label="Sent message" className="flex min-w-0 flex-1 flex-col bg-[var(--color-surface-0)]">
         <div className="flex items-center gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2-5)]">
           <PaperPlaneTilt size={16} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           <p className="min-w-0 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
@@ -73,7 +71,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
 
   if (editing) {
     return (
-      <section aria-label="Draft" className={cn('flex min-w-0 flex-1 flex-col overflow-y-auto bg-[var(--color-surface-0)]', className)}>
+      <section aria-label="Draft" className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-[var(--color-surface-0)]">
         <div className="flex flex-col gap-[var(--space-3)] p-[var(--space-3)]">
           <Field label="To" required>
             <Input value={editTo} onChange={(e) => setEditTo(e.target.value)} placeholder="name@example.com" />
@@ -109,7 +107,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
 
   // 'draft' | 'foreign' — view mode. A foreign draft adds the D24 statement.
   return (
-    <section aria-label="Draft" className={cn('flex min-w-0 flex-1 flex-col bg-[var(--color-surface-0)]', className)}>
+    <section aria-label="Draft" className="flex min-w-0 flex-1 flex-col bg-[var(--color-surface-0)]">
       {state === 'foreign' && (
         <div
           role="note"

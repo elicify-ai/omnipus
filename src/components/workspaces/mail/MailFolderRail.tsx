@@ -5,6 +5,7 @@
 // pollutes it. The inbox badge renders its unread count even when 0 (the
 // count dropping to 0 must stay visible — opening a message clears it).
 import { NotePencil, PaperPlaneTilt, TrayArrowDown } from '@phosphor-icons/react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { MailFolder } from '@/lib/api'
@@ -13,15 +14,14 @@ export interface MailFolderRailProps {
   folders: MailFolder[]
   active: string
   onFolderChange: (slug: string) => void
-  className?: string
 }
 
-export function MailFolderRail({ folders, active, onFolderChange, className }: MailFolderRailProps) {
+export function MailFolderRail({ folders, active, onFolderChange }: MailFolderRailProps) {
   return (
     <nav
       aria-label="Mail folders"
       role="tablist"
-      className={cn('flex w-40 shrink-0 flex-col gap-[var(--space-1)] p-[var(--space-2)]', className)}
+      className="hidden w-40 shrink-0 flex-col gap-[var(--space-1)] p-[var(--space-2)] sm:flex"
     >
       {folders.map((folder) => {
         const selected = folder.slug === active
@@ -48,16 +48,15 @@ export function MailFolderRail({ folders, active, onFolderChange, className }: M
             {folder.slug === 'inbox' ? (
               // Inbox: the live unread count — rendered at 0 too, so the
               // drop to zero after reading a message stays visible.
-              <span
-                className={cn(
-                  'shrink-0 rounded-full px-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-medium)]',
-                  unread !== null && unread > 0
-                    ? 'bg-[var(--color-accent)] text-[var(--color-primary)]'
-                    : 'text-[var(--color-muted)]',
-                )}
-              >
-                {unread ?? 0}
-              </span>
+              unread !== null && unread > 0 ? (
+                <Badge className="shrink-0 px-[var(--space-1)] py-0 font-[var(--font-weight-medium)]">
+                  {unread}
+                </Badge>
+              ) : (
+                <span className="shrink-0 px-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-medium)] text-[var(--color-muted)]">
+                  {unread ?? 0}
+                </span>
+              )
             ) : (
               <span className="shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 {folder.total}

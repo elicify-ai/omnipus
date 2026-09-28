@@ -179,6 +179,7 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
           <input
             ref={fileInputRef}
             type="file"
+            tabIndex={0}
             multiple
             aria-label="Attach files"
             className="sr-only"

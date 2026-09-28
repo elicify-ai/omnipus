@@ -457,7 +457,6 @@ export function MailPanel({ workspaceId, mailboxId }: MailPanelProps) {
             folders={foldersQuery.data?.folders ?? []}
             active={folder}
             onFolderChange={(slug) => { setIntent((prev) => ({ ...prev, folder: slug })); setSelectedRef(null) }}
-            className="hidden sm:flex"
           />
           <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="mail-list-zone">
             {foldersQuery.isError ? (

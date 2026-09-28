@@ -30,6 +30,7 @@ import {
   MailSignaturePreviewTokenResponse as MailSignaturePreviewTokenResponseSchema,
 } from './generated/schemas'
 import type {
+  operations,
   MailFolderList,
   MailMessagePage,
   MailMessage,
@@ -49,19 +50,9 @@ function seg(raw: string): string {
   return encodeURIComponent(raw)
 }
 
-export interface MailMessagePageParams {
-  /** Page size, 1..200 (gateway clamps). Default 50. */
-  limit?: number
-  /** Cursor: return messages with uid < before_uid. */
-  beforeUid?: number
-  /**
-   * Human-initiated fetch marker (D29/R2-9, MC-33): bypasses the mailbox
-   * watcher's backoff gate for THIS one request. Absent/false = automatic
-   * panel poll (refused with 503 code=backoff while the watcher is backing
-   * off) — never send it from a refetch cadence.
-   */
-  retry?: boolean
-}
+export type MailMessagePageParams = NonNullable<
+  operations['listMailMessages']['parameters']['query']
+>
 
 /** Query-string suffix for the contract's `retry` marker (absent when false). */
 function retryQs(opts: { retry?: boolean }): string {
@@ -94,7 +85,7 @@ export async function fetchMailMessages(
 ): Promise<MailMessagePage> {
   const qs = new URLSearchParams()
   if (params.limit !== undefined) qs.set('limit', String(params.limit))
-  if (params.beforeUid !== undefined) qs.set('before_uid', String(params.beforeUid))
+  if (params.before_uid !== undefined) qs.set('before_uid', String(params.before_uid))
   if (params.retry === true) qs.set('retry', 'true')
   const suffix = qs.size > 0 ? `?${qs.toString()}` : ''
   return request<MailMessagePage>(

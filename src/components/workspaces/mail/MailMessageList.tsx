@@ -4,6 +4,7 @@
 // state). Timestamps render via formatMailTime; absent dates render as ''
 // (the panel tolerates partial payloads in tests).
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { formatMailTime } from './mail-format'
 import type { MailMessageSummary } from '@/lib/api'
 
@@ -11,12 +12,11 @@ export interface MailMessageListProps {
   messages: MailMessageSummary[]
   selectedRef: string | null
   onSelect(message: MailMessageSummary): void
-  className?: string
 }
 
-export function MailMessageList({ messages, selectedRef, onSelect, className }: MailMessageListProps) {
+export function MailMessageList({ messages, selectedRef, onSelect }: MailMessageListProps) {
   return (
-    <ul data-testid="mail-message-list" aria-label="Messages" className={cn('min-w-0 flex-1 list-none overflow-y-auto', className)}>
+    <ul data-testid="mail-message-list" aria-label="Messages" className="min-w-0 flex-1 list-none overflow-y-auto">
       {messages.length === 0 && (
         <li className="p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           No messages
@@ -27,12 +27,12 @@ export function MailMessageList({ messages, selectedRef, onSelect, className }: 
         const selected = selectedRef === ref
         return (
           <li key={ref}>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
               onClick={() => onSelect(message)}
               aria-current={selected ? 'true' : undefined}
               className={cn(
-                'flex w-full items-start gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-2)] text-left',
+                'h-auto w-full items-start gap-[var(--space-2)] whitespace-normal rounded-none border-b border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-2)] text-left',
                 selected ? 'bg-[var(--color-surface-2)]' : 'hover:bg-[var(--color-surface-1)]',
               )}
             >
@@ -47,7 +47,7 @@ export function MailMessageList({ messages, selectedRef, onSelect, className }: 
                 <ListRowTop message={message} />
                 <ListRowBottom message={message} />
               </span>
-            </button>
+            </Button>
           </li>
         )
       })}

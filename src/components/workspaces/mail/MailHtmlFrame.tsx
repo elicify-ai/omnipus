@@ -8,7 +8,6 @@
 // owns the re-mint via onLoadImages).
 import { ShieldWarning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
 
 export interface MailHtmlFrameProps {
   /** The minted preview URL: /mail-preview/html/{token} (or absolute). */
@@ -19,7 +18,6 @@ export interface MailHtmlFrameProps {
   showLoadImages?: boolean
   /** Accessible frame name (axe: every frame needs one). */
   title?: string
-  className?: string
 }
 
 /**
@@ -28,9 +26,9 @@ export interface MailHtmlFrameProps {
  */
 export const MAIL_HTML_FRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox'
 
-export function MailHtmlFrame({ tokenUrl, onLoadImages, showLoadImages = true, title = 'Mail body', className }: MailHtmlFrameProps) {
+export function MailHtmlFrame({ tokenUrl, onLoadImages, showLoadImages = true, title = 'Mail body' }: MailHtmlFrameProps) {
   return (
-    <div className={cn('flex h-full min-h-0 flex-col', className)}>
+    <div className="flex h-full min-h-0 flex-col">
       {showLoadImages && (
         <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-2)]">
           <ShieldWarning size={16} aria-hidden="true" className="shrink-0 text-[var(--color-warning)]" />
