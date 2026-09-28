@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -174,5 +175,125 @@ func TestGoalDelegation984_MetPathOneWakeVerdictAcked(t *testing.T) {
 			gotIDs = append(gotIDs, messageIDOf(msg))
 		}
 		t.Fatalf("unacked entries = %v, want exactly the handback %q", gotIDs, handbackID)
+	}
+}
+
+// TestBoot984_FinishFromFinalPairEndsSessionGoal pins architect finding F2
+// (rev984-architect): finishFromFinal's terminal write — the boot repair for
+// "delivered-but-not-terminal" — carries no pair-end, so a child whose final
+// report was delivered but crashed before its terminal state landed leaves
+// its session-owned goal ACTIVE on a terminal session (FD1=A residue bounded
+// only by the 7-day idle-expiry brake). Post-fix the terminal write ends the
+// session-owned goal with the session, through the same EndSessionGoal seam
+// failInterrupted already uses.
+func TestBoot984_FinishFromFinalPairEndsSessionGoal(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	h := newBootRecoveryHarness(t)
+	parent := h.rootSession(t)
+	child := h.newSession(t, session.SessionTypeDelegate, parent)
+	rec := h.steeredRecord(child, parent, session.LifecycleRunning)
+	h.persist(t, rec)
+	goalID := activateTestGoalRecord(t, child, "boot final pair-end")
+
+	var hooked []string
+	recovery := h.recovery()
+	recovery.EndSessionGoal = func(sid, reason string) {
+		hooked = append(hooked, sid)
+		al.EndSessionOwnedGoalOnTerminal(sid, reason)
+	}
+	msg := bootHandback(t, child, parent, "boot-final-pairend")
+	if err := recovery.finishFromFinal(rec, msg); err != nil {
+		t.Fatalf("finishFromFinal: %v", err)
+	}
+
+	loaded, err := h.lifecycle.Load(child)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	if loaded.State != session.LifecycleCompleted {
+		t.Fatalf("child state after finishFromFinal = %q, want completed", loaded.State)
+	}
+	g, err := resolveGoalRecordStore().Get(goalID)
+	if err != nil {
+		t.Fatalf("Get(goal): %v", err)
+	}
+	if !goal.IsTerminalState(g.State) {
+		t.Fatalf("session-owned goal state = %q after its session went terminal — F2: the pair must end together at the boot repair", g.State)
+	}
+	if len(hooked) != 1 || hooked[0] != child {
+		t.Fatalf("EndSessionGoal hook fired %v, want exactly once with %q", hooked, child)
+	}
+}
+
+// TestBoot984_SweepPairEndsSteeredGoal pins architect finding F3: the Plan
+// Engine boot sweep lands steered records on failed(interrupted) with no
+// pair-end, so a steered child stranded at crash keeps its ACTIVE goal on a
+// failed session. Post-fix sweepToFailedInterrupted fires the
+// steeredGoalEndHook (wired to AgentLoop.EndSessionOwnedGoalOnTerminal at
+// gateway boot) for steered records ONLY — never for task-origin records (no
+// steered edge), and ordinary roots are exempt from the sweep entirely, so a
+// standing root's goal stays active untouched.
+func TestBoot984_SweepPairEndsSteeredGoal(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	h := newBootSweepHarness(t)
+
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "sess-steered-goal", Generation: 1, State: session.LifecycleRunning,
+		WorkspaceID: "ws", AgentID: "agent-1",
+		OwnerScopeKind: session.OwnerScopeHuman,
+		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+	})
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "sess-task-origin", Generation: 1, State: session.LifecycleRunning,
+		WorkspaceID: "ws", AgentID: "agent-1",
+		OwnerScopeKind: session.OwnerScopeHuman,
+		Origin:         &session.Origin{Kind: session.OriginKindTask, TaskID: "task-fix-1"},
+	})
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "sess-standing-root", Generation: 1, State: session.LifecycleRunning,
+		WorkspaceID: "ws", AgentID: "agent-1",
+		OwnerScopeKind: session.OwnerScopeHuman,
+		Origin:         &session.Origin{Kind: session.OriginKindChat},
+	})
+	steeredGoal := activateTestGoalRecord(t, "sess-steered-goal", "sweep pair-end")
+	taskSessionGoal := activateTestGoalRecord(t, "sess-task-origin", "task session goal stays")
+	rootGoal := activateTestGoalRecord(t, "sess-standing-root", "standing root goal stays active")
+
+	var pairEnded []string
+	h.pe.SetSteeredGoalEndHook(func(sid, reason string) {
+		pairEnded = append(pairEnded, sid)
+		al.EndSessionOwnedGoalOnTerminal(sid, reason)
+	})
+	res := h.pe.runBootSweep(context.Background())
+	_ = res
+
+	steered, err := h.ls.Load("sess-steered-goal")
+	if err != nil || steered.State != session.LifecycleFailed {
+		t.Fatalf("steered record state = %q (err=%v), want failed(interrupted)", steered.State, err)
+	}
+	g, err := resolveGoalRecordStore().Get(steeredGoal)
+	if err != nil {
+		t.Fatalf("Get(steeredGoal): %v", err)
+	}
+	if !goal.IsTerminalState(g.State) {
+		t.Fatalf("steered session's goal = %q after the sweep — F3: a steered record swept to failed(interrupted) ends its session-owned goal", g.State)
+	}
+	if len(pairEnded) != 1 || pairEnded[0] != "sess-steered-goal" {
+		t.Fatalf("steeredGoalEndHook fired %v, want exactly once with the steered id only", pairEnded)
+	}
+	taskG, err := resolveGoalRecordStore().Get(taskSessionGoal)
+	if err != nil {
+		t.Fatalf("Get(taskSessionGoal): %v", err)
+	}
+	if !goal.IsActiveState(taskG.State) {
+		t.Fatalf("task-origin session's goal = %q, want still active — the pair-end is steered-only", taskG.State)
+	}
+	rootG, err := resolveGoalRecordStore().Get(rootGoal)
+	if err != nil {
+		t.Fatalf("Get(rootGoal): %v", err)
+	}
+	if !goal.IsActiveState(rootG.State) {
+		t.Fatalf("standing root's goal = %q, want still active — ordinary roots are exempt from the sweep", rootG.State)
 	}
 }
