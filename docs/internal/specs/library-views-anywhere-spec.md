@@ -1,6 +1,7 @@
 # Library views, anywhere — a saved view is a file like a note
 
-**Status:** Draft
+**Status:** Approved
+**Approved on**: 2026-09-29 — after two grill rounds and fix rounds; the round-2 criticals were confirmed closed by an independent read-only architect pass; founder decisions FD-1..FD-7.
 
 **Input**: GitHub issue #1017. Founder direction, verbatim, 2026-09-28: "we could simply
 treat views as files that can be stored anywhere like a note only with a different icon" /
