@@ -1033,6 +1033,7 @@ func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *
 	defer cancel()
 	result, runErr := al.runTurn(runCtx, ts)
 	finalAudience := al.audienceFor(runCtx, steer.BoundaryFinalReply, sessionID)
+	ts, result, runErr = al.drainSteeredTurn(runCtx, rec, ts, result, runErr)
 	if runErr == nil && result.finalContent != "" && finalAudience == steer.AudienceUser {
 		if publishErr := al.bus.PublishOutbound(runCtx, bus.OutboundMessage{
 			Channel: ts.channel, ChatID: ts.chatID, Content: result.finalContent, SessionID: sessionID,

@@ -779,20 +779,17 @@ func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 	return registry.GetDefaultAgent()
 }
 
-// Continue resumes an idle agent by dequeuing any pending steering messages
-// and running them through the agent loop. This is used when the agent's last
-// message was from the assistant (i.e., it has stopped processing) and the
-// user has since enqueued steering messages.
-//
-// If no steering messages are pending, it returns an empty string.
-//
-// workspaceID (FIX 1 re-review) is the workspace this continuation should run
-// inside — the caller (session_worker.go) resolves it once via
-// AgentLoop.resolveWorkspaceIDForContinuation from the ORIGINAL triggering
-// message and threads it straight through; Continue has no message of its
-// own to resolve it from (only the already-collapsed sessionKey/channel/
-// chatID), so it cannot recompute this value itself.
-func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, workspaceID string) (string, error) {
+// continuePendingSteering is the one destructive dequeue-and-run path for an
+// idle session's queued steering. The ordinary session-worker continuation
+// and a steered child's post-turn drain supply different turn runners, but
+// both share the same guards, wake-consumption markers, queue restoration and
+// post-dequeue error classification here. Keeping that machinery singular is
+// what prevents the steered path from becoming a second injection path.
+func (al *AgentLoop) continuePendingSteering(
+	ctx context.Context,
+	sessionKey string,
+	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
+) (string, error) {
 	// Bug 1 fix (design note "Caller survey"): the active-turn guard must be
 	// scoped to THIS session's own key, not the whole activeTurnStates map —
 	// GetActiveTurn() ranges the map and returns the first entry found
@@ -832,7 +829,7 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		}
 	}
 
-	resp, err := al.continueWithSteeringMessages(ctx, agent, sessionKey, channel, chatID, workspaceID, steeringMsgs, steeringCorrelationIDs)
+	resp, err := run(agent, steeringMsgs, steeringCorrelationIDs)
 	if err != nil {
 		// Gate finding, CRITICAL: continueWithSteeringMessages's own turn can
 		// fail with an ordinary error (provider error, mid-turn failure — the
@@ -849,6 +846,29 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		return "", fmt.Errorf("%w: %w", errContinuePostDequeueFailure, err)
 	}
 	return resp, nil
+}
+
+// Continue resumes an idle agent by dequeuing any pending steering messages
+// and running them through the agent loop. This is used when the agent's last
+// message was from the assistant (i.e., it has stopped processing) and the
+// user has since enqueued steering messages.
+//
+// If no steering messages are pending, it returns an empty string.
+//
+// workspaceID (FIX 1 re-review) is the workspace this continuation should run
+// inside — the caller (session_worker.go) resolves it once via
+// AgentLoop.resolveWorkspaceIDForContinuation from the ORIGINAL triggering
+// message and threads it straight through; Continue has no message of its
+// own to resolve it from (only the already-collapsed sessionKey/channel/
+// chatID), so it cannot recompute this value itself.
+func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, workspaceID string) (string, error) {
+	return al.continuePendingSteering(ctx, sessionKey,
+		func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
+			return al.continueWithSteeringMessages(
+				ctx, agent, sessionKey, channel, chatID, workspaceID,
+				steeringMsgs, steeringCorrelationIDs,
+			)
+		})
 }
 
 func (al *AgentLoop) InterruptGraceful(hint string) error {

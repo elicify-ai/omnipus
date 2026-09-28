@@ -29,7 +29,7 @@ relationship. `pkg/steer` holds every published interface; `pkg/agent` supplies
 the production implementations; the tools, channels, and gateway packages
 inject them and cannot import `pkg/agent`.
 
-The nine implementation files:
+The ten implementation files:
 
 - `pkg/agent/steer_launcher.go` — `SteerLauncher.Launch` writes the record and
   the mandatory fields (identity, ownership stamp, workspace, title and edge)
@@ -48,13 +48,18 @@ The nine implementation files:
   bring it back.
 - `pkg/agent/steer_reconstruct.go` — `reconstructSteeredTurn` rebuilds a
   steered session's `turnState` from its record on every entry path that
-  RESUMES a turn: first run and revival (`SteerLauncher.Dispatch`) and the
-  wake (`loop_inbound.go::processSteeredSystemWake`). Identity is never
-  per-path. **Boot is not one of those paths** — `boot_sweep.go::
+  RESUMES a turn: first run and revival (`SteerLauncher.Dispatch`), the wake
+  (`loop_inbound.go::processSteeredSystemWake`), and the bounded post-turn
+  steering drain (`steer_turn_drain.go`). Identity is never per-path.
+  **Boot is not one of those paths** — `boot_sweep.go::
   SteerBootRecovery` never calls it; a steered session still mid-flight at
   boot is marked `OutcomeInterrupted` and delivered to its parent rather
   than resumed. (That file's own header says so; this list used to claim
   boot as a fourth entry point.)
+- `pkg/agent/steer_turn_drain.go` — after a dispatched child's turn exits,
+  drains steering that landed beyond `runTurn`'s final poll through the
+  shared continuation dequeue path, with bounded retry and one completion
+  disposition using the last turn's result.
 - `pkg/agent/steer_classify.go` — `SteerRecordClassifier` implements I-8:
   which of the six classes a session belongs to, reading the lifecycle
   record AND the session's own metadata and requiring them to agree.
