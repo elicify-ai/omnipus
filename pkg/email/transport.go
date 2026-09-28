@@ -344,6 +344,22 @@ func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.Select
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 
+	// Bounded DNS retry inside the overall dial bound (round-8 F2,
+	// FR-037/MC-33/B-42): the hostname resolves through the dialResolver seam
+	// (3 lookups, 250/500 ms backoff on failure) and the dial targets the
+	// RESOLVED address; tlsCfg.ServerName above keeps the ORIGINAL hostname
+	// so the TLS handshake still validates the name the user configured. IP
+	// literals skip resolution entirely (the loopback test servers are
+	// unaffected). A resolution failure surfaces a dns-class error and spends
+	// no dial attempt.
+	if host, port, serr := net.SplitHostPort(addr); serr == nil && !isIPLiteral(host) {
+		resolved, rerr := resolveHostBounded(dialCtx, dialResolver, host)
+		if rerr != nil {
+			return nil, nil, rerr
+		}
+		addr = net.JoinHostPort(resolved, port)
+	}
+
 	// imapDial does not take a context; guard the dial with a timeout goroutine
 	// so an unreachable server cannot block past dialTimeout.
 	type dialResult struct {
@@ -1021,12 +1037,18 @@ func ctxOrCommandDeadline(ctx context.Context) time.Time {
 	return time.Now().Add(commandTimeout)
 }
 
-// dialSMTPRaw opens the TCP connection respecting ctx and dialTimeout.
+// dialSMTPRaw opens the TCP connection respecting ctx and dialTimeout, with
+// the bounded DNS retry (round-8 F2, FR-037/MC-33/B-42): the host part of
+// addr resolves through the dialResolver seam (3 lookups, 250/500 ms backoff
+// on failure) and the dial targets the RESOLVED address — the STARTTLS
+// upgrade keeps the original hostname as its TLS ServerName. A resolution
+// failure surfaces a dns-class error; a non-DNS dial failure (refused) is
+// never retried.
 func dialSMTPRaw(ctx context.Context, addr string) (net.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", addr)
+	conn, err := dialTCPDNSRetry(ctx, dialResolver, addr)
 	if err != nil {
 		return nil, classifyDialErr(ctx, err)
 	}
