@@ -9,6 +9,8 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/commands"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func (al *AgentLoop) handleCommand(
@@ -311,7 +313,36 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 		rt.SwitchModel = func(value string) (string, error) {
 			// Shared in-place model switch (#73): same path as the
 			// PUT /api/v1/agents/{id} model change.
-			return al.ApplyAgentModel(agent.ID, value)
+			oldModel, err := al.ApplyAgentModel(agent.ID, value)
+			if err != nil {
+				// A failed switch is not a model change — the conversation's
+				// stored effort must survive it (C5 clearing paragraph: only
+				// a successful model change clears).
+				return oldModel, err
+			}
+			// C5 clearing paragraph: a SUCCESSFUL non-web model change clears
+			// the conversation's stored reasoning effort (§9.5: "cleared
+			// whenever that conversation's model changes"). The next turn
+			// then resolves "never a stale 'high'" against the new model.
+			al.clearConversationEffort(agent.ID, opts)
+			return oldModel, nil
+		}
+		if opts != nil {
+			rt.GetConversationEffort = func() (string, error) {
+				m, err := al.conversationMeta(agent, opts)
+				if err != nil {
+					return "", err
+				}
+				return m.ReasoningEffort, nil
+			}
+			rt.SetConversationEffort = func(value string) error {
+				v := value
+				store := al.GetAgentStore(agent.ID)
+				if store == nil {
+					return fmt.Errorf("session store not available for agent %q", agent.ID)
+				}
+				return store.SetMeta(opts.SessionKey, session.MetaPatch{ReasoningEffort: &v})
+			}
 		}
 
 		rt.ClearHistory = func() error {
@@ -349,4 +380,38 @@ func mapCommandError(result commands.ExecuteResult) string {
 		return fmt.Sprintf("Failed to execute command: %v", result.Err)
 	}
 	return fmt.Sprintf("Failed to execute /%s: %v", result.Command, result.Err)
+}
+
+// conversationMeta reads the conversation's meta for the /effort callbacks —
+// the loop's own store for this agent, addressed by the issuing conversation's
+// session key (the same value rt.SessionID carries).
+func (al *AgentLoop) conversationMeta(agent *AgentInstance, opts *processOptions) (*session.UnifiedMeta, error) {
+	store := al.GetAgentStore(agent.ID)
+	if store == nil {
+		return nil, fmt.Errorf("session store not available for agent %q", agent.ID)
+	}
+	return store.GetMeta(opts.SessionKey)
+}
+
+// clearConversationEffort clears SessionMeta.ReasoningEffort for the
+// conversation after a SUCCESSFUL non-web model change (thinking-reasoning-
+// spec.md C5 clearing paragraph: the next turn resolves "never a stale
+// 'high'"). A failed switch never reaches this helper. A clear failure is
+// logged, not returned: the model switch itself already succeeded durably,
+// and failing the reply would misreport a completed switch as failed (same
+// rationale as SetMeta's forced stats flush). The stale value, if any, is
+// still cleared on the next successful model change.
+func (al *AgentLoop) clearConversationEffort(agentID string, opts *processOptions) {
+	if opts == nil || opts.SessionKey == "" {
+		return
+	}
+	store := al.GetAgentStore(agentID)
+	if store == nil {
+		return
+	}
+	cleared := ""
+	if err := store.SetMeta(opts.SessionKey, session.MetaPatch{ReasoningEffort: &cleared}); err != nil {
+		logger.WarnCF("agent", "model change: failed to clear conversation reasoning effort",
+			map[string]any{"agent_id": agentID, "session_id": opts.SessionKey, "error": err})
+	}
 }

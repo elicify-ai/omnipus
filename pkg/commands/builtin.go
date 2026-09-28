@@ -5,7 +5,7 @@ package commands
 // Definitions are stateless — runtime dependencies are provided
 // via the Runtime parameter passed to handlers at execution time.
 //
-// Canonical (visible) commands (15): clear, help, model, cancel,
+// Canonical (visible) commands (16): clear, help, model, effort, cancel,
 // agents, tasks, skills, channels, status, config, remember, recall,
 // retrospective, goal, loop.
 //
@@ -29,6 +29,7 @@ func BuiltinDefinitions() []Definition {
 		clearCommand(),
 		helpCommand(),
 		modelCommand(),
+		effortCommand(),
 		cancelCommand(),
 		agentsCommand(),
 		tasksCommand(),

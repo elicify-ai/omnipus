@@ -85,8 +85,20 @@ type Runtime struct {
 	GetActiveTurn      func() any // Returning any to avoid circular dependency with agent package
 	SwitchModel        func(value string) (oldModel string, err error)
 	SwitchChannel      func(value string) error
-	ClearHistory       func() error
-	ReloadConfig       func() error
+	// GetConversationEffort reads the conversation-scoped reasoning effort
+	// (SessionMeta.ReasoningEffort) for SessionID — the read half of the
+	// /effort callbacks (thinking-reasoning-spec.md §9.5). Empty string means
+	// "Default" (provider default applies). Nil = not wired → unavailable.
+	// Deliberately a session-state seam, never an agent-config writer.
+	GetConversationEffort func() (string, error)
+	// SetConversationEffort patches SessionMeta.ReasoningEffort for SessionID
+	// — the write half of the /effort callbacks. An empty value CLEARS the
+	// stored effort (the "/effort default" path). Nil = not wired →
+	// unavailable. MUST NOT be implemented by any agent-config writer (D30:
+	// /effort never routes through SwitchModel/ApplyAgentModel).
+	SetConversationEffort func(value string) error
+	ClearHistory          func() error
+	ReloadConfig          func() error
 	// SessionID returns the session key for the current request context. Used by
 	// handlers that need to address a specific session (e.g., /cancel).
 	SessionID func() string
