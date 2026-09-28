@@ -51,6 +51,8 @@ const localIdentityByOpaqueKey = new Map<string, PanelIdentity>()
 const PANEL_FOCUS_FALLBACK_MS = 5_000
 const localFocusFallbacks = new Map<string, {
   identity: PanelIdentity
+  panelIntentRevision: number
+  isPanelIntentCurrent: (revision: number) => boolean
   onUnavailable: () => void
   onFocusFailed: () => void
   timer: ReturnType<typeof setTimeout>
@@ -206,6 +208,11 @@ function hasLivePanelTarget(identity: PanelIdentity): boolean {
 
 function flushPanelFocusFallbacks(): void {
   for (const [key, fallback] of localFocusFallbacks) {
+    if (!fallback.isPanelIntentCurrent(fallback.panelIntentRevision)) {
+      localFocusFallbacks.delete(key)
+      clearTimeout(fallback.timer)
+      continue
+    }
     if (hasLivePanelTarget(fallback.identity)) continue
     localFocusFallbacks.delete(key)
     clearTimeout(fallback.timer)
@@ -218,6 +225,7 @@ function failPanelFocusFallback(identityKey: string): void {
     if (panelPresenceKey(fallback.identity) !== identityKey) continue
     localFocusFallbacks.delete(key)
     clearTimeout(fallback.timer)
+    if (!fallback.isPanelIntentCurrent(fallback.panelIntentRevision)) continue
     fallback.onFocusFailed()
   }
 }
@@ -465,6 +473,8 @@ export function panelPresenceKey(identity: PanelIdentity): string {
 
 export function armPanelFocusFallback(
   identity: PanelIdentity,
+  panelIntentRevision: number,
+  isPanelIntentCurrent: (revision: number) => boolean,
   onUnavailable: () => void,
   onFocusFailed: () => void,
 ): void {
@@ -472,6 +482,8 @@ export function armPanelFocusFallback(
   cancelPanelFocusFallback(identity)
   const fallback = {
     identity,
+    panelIntentRevision,
+    isPanelIntentCurrent,
     onUnavailable,
     onFocusFailed,
     timer: setTimeout(() => {

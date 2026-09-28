@@ -7,6 +7,11 @@ import {
   registerPanelTabHandle,
   forgetPanelTabHandle,
 } from '@/lib/panelTabPresence'
+import {
+  getDiscardConfirmDialogOpen,
+  resolveDiscardConfirmDialog,
+  setLibraryEditorDirty,
+} from '@/components/library/preview/unsavedGuard'
 import { useUiStore } from '@/store/ui'
 import { PanelTabPresenceBridge } from './PanelTabPresenceBridge'
 
@@ -24,6 +29,8 @@ function ToastFixture() {
 
 afterEach(() => {
   cleanup()
+  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(false)
+  setLibraryEditorDirty(false)
   useUiStore.setState({ activePanel: null, toasts: [] })
   vi.restoreAllMocks()
 })
@@ -119,5 +126,39 @@ describe('advisory panel-tab presence', () => {
       id: 'library',
       context: { workspaceId: 'ws-1' },
     })
+  })
+
+  it('does not let an older Switch fallback replace a newer dirty Library choice', async () => {
+    render(
+      <>
+        <PanelTabPresenceBridge />
+        <ToastFixture />
+      </>,
+    )
+    const remoteIdentity = { panelId: 'library', workspaceId: 'workspace-a' } as const
+    const announcement = announcePanelTabPresence(remoteIdentity)
+    vi.spyOn(window, 'focus').mockImplementation(() => {})
+
+    try {
+      await expect.poll(() => getPanelTabPresence()).toContainEqual(remoteIdentity)
+      act(() => useUiStore.getState().openPanel('library', { workspaceId: 'workspace-a' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Switch' }))
+
+      act(() => {
+        useUiStore.getState().openPanel('library', { workspaceId: 'workspace-b' })
+        setLibraryEditorDirty(true)
+      })
+      announcement.stop()
+
+      await expect.poll(() => getPanelTabPresence()).not.toContainEqual(remoteIdentity)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(useUiStore.getState().activePanel).toEqual({
+        id: 'library',
+        context: { workspaceId: 'workspace-b' },
+      })
+      expect(getDiscardConfirmDialogOpen()).toBe(false)
+    } finally {
+      announcement.stop()
+    }
   })
 })
