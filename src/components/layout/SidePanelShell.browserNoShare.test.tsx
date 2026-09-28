@@ -105,7 +105,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', RowRO)
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })
@@ -121,7 +121,7 @@ afterEach(() => {
   })
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })
@@ -132,7 +132,10 @@ function renderShell() {
     id: 'browser',
     title: 'Browser',
     content: browserContent,
-    expandTarget: () => '/browser-live',
+    fullScreen: {
+      toSearch: () => ({ session: 'session-1', agent: 'agent-1' }),
+      fromSearch: () => ({ sessionId: 'session-1', agentId: 'agent-1' }),
+    },
   }
   render(
     <SidePanelShell
@@ -211,17 +214,25 @@ describe('SP-37 — the Browser panel offers no share affordance', () => {
     // (SP-12) as does the Close click, so the loop re-opens between actions.
     const openSpy = vi
       .spyOn(window, 'open')
-      .mockReturnValue({ closed: false, close: () => {}, opener: null } as unknown as Window)
+      .mockReturnValue({
+        closed: false,
+        close: () => {},
+        focus: () => {},
+        opener: null,
+        location: { replace: () => {} },
+      } as unknown as Window)
     const headerButtons = () => within(screen.getByTestId('side-panel-header')).getAllByRole('button')
     const initialCount = headerButtons().length
     for (let i = 0; i < initialCount; i++) {
-      let btn = within(screen.getByTestId('side-panel-header')).queryAllByRole('button')[i]
+      let header = screen.queryByTestId('side-panel-header')
+      let btn = header ? within(header).queryAllByRole('button')[i] : undefined
       if (!btn) {
         // A previous action closed the panel — re-open to expose the rest.
         act(() => {
           usePanelShellStore.getState().openPanel('browser', { sessionId: 's1', agentId: 'share-1' })
         })
-        btn = within(screen.getByTestId('side-panel-header')).queryAllByRole('button')[i]
+        header = screen.getByTestId('side-panel-header')
+        btn = within(header).queryAllByRole('button')[i]
       }
       if (!btn) continue
       fireEvent.click(btn)

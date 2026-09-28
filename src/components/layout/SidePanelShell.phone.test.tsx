@@ -56,7 +56,7 @@ function makeDef(): PanelDefinition {
     id: 'library',
     title: 'Library',
     content: probeContent,
-    expandTarget: () => '/library',
+    fullScreen: { toSearch: () => ({}), fromSearch: () => ({}) },
   }
 }
 
@@ -91,7 +91,7 @@ function docked() {
 function resetStore() {
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })

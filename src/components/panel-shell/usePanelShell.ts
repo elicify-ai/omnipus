@@ -12,11 +12,21 @@
 // none of the call sites change shape.
 
 import { useCallback, useEffect, useRef } from 'react'
+import { flushSync } from 'react-dom'
 import type { OpenPanel, PanelDefinition, PanelContext, PanelId } from './types'
 import { usePanelShellStore } from './panelShellStore'
 import { readPanelWidth, writePanelWidth, deletePanelWidth, panelWidthScope } from './panelWidthMemory'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
 import { focusPanelTriggerOrigin } from './panelFocus'
+import { generateId } from '@/lib/constants'
+import {
+  panelIdentityFromContext,
+  resolveRegisteredPanelOpen,
+} from '@/lib/panelTabPresence'
+import {
+  discardPanelPopout,
+  registerPanelPopout,
+} from '@/lib/panelPopoutLifecycle'
 
 export { PANEL_TRIGGER_ATTR } from './panelFocus'
 
@@ -60,6 +70,121 @@ function usePanelWidthHydration(
     if (width === null) usePanelShellStore.getState().resetPanelWidth()
     else usePanelShellStore.getState().setPanelWidth(width)
   }, [username, widthScope])
+}
+
+type PanelExpandResult = 'opened' | 'cancelled' | 'blocked' | 'error'
+
+async function expandActivePanel(options: {
+  panels: readonly PanelDefinition[]
+  getCurrentContext?: () => PanelContext
+  runGuard: (definition: PanelDefinition | undefined) => Promise<boolean>
+  finishClose: (id: PanelId, focusReturn: PanelFocusReturnReason) => void
+}): Promise<PanelExpandResult> {
+  const { panels, getCurrentContext, runGuard, finishClose } = options
+  const { activePanel, guardPending } = usePanelShellStore.getState()
+  if (activePanel === null || guardPending) return 'cancelled'
+  const definition = panels.find((panel) => panel.id === activePanel.id)
+  if (definition === undefined) return 'cancelled'
+  if (definition.beforeLeave !== undefined && !(await runGuard(definition))) return 'cancelled'
+
+  const context = getCurrentContext?.() ?? activePanel.context
+  const identity = panelIdentityFromContext(definition.id, context)
+  if (!identity) {
+    usePanelShellStore.getState().addToast({
+      message: `${definition.title} could not open full screen. Try again.`,
+      variant: 'error',
+    })
+    return 'error'
+  }
+
+  const popoutId = generateId()
+  let popupCreationThrew = false
+  let popupCreationError: unknown
+  let popup: Window | null = null
+  const outcome = resolveRegisteredPanelOpen({
+    identity,
+    open: () => {
+      try {
+        popup = window.open('about:blank', '_blank')
+        return popup
+      } catch (error) {
+        popupCreationThrew = true
+        popupCreationError = error
+        throw error
+      }
+    },
+  })
+
+  if (outcome.kind === 'blocked') {
+    if (popupCreationThrew) {
+      console.error('[side-panel] Expand failed while opening a tab', popupCreationError)
+    }
+    usePanelShellStore.getState().addToast({
+      message: popupCreationThrew
+        ? `${definition.title} could not open full screen. The panel remains here.`
+        : `${definition.title} was blocked. Allow pop-ups and try again.`,
+      variant: 'error',
+    })
+    return popupCreationThrew ? 'error' : 'blocked'
+  }
+
+  const reopen = () => {
+    const store = usePanelShellStore.getState()
+    if (store.activePanel !== null) return
+    ;(store.openPanel as (id: PanelId, context?: PanelContext) => void)(definition.id, context)
+  }
+  if (outcome.kind === 'affordance') {
+    const { showPanelTabSwitch } = await import('./panelTabSwitch')
+    showPanelTabSwitch(identity, `The ${definition.title}`, reopen)
+    finishClose(activePanel.id, 'chat')
+    return 'opened'
+  }
+  if (outcome.kind === 'focus-failed') {
+    const { showPanelTabFocusDegraded } = await import('./panelTabSwitch')
+    showPanelTabFocusDegraded(`The ${definition.title}`)
+    finishClose(activePanel.id, 'chat')
+    return 'opened'
+  }
+  if (outcome.kind === 'focused') {
+    finishClose(activePanel.id, 'chat')
+    return 'opened'
+  }
+
+  const openedPopup = popup as Window | null
+  if (!openedPopup) return 'blocked'
+  try {
+    openedPopup.opener = null
+    registerPanelPopout({
+      popoutId,
+      identity,
+      context,
+      handle: openedPopup,
+      onClosed: (_finalIdentity, finalContext) => {
+        const store = usePanelShellStore.getState()
+        if (store.activePanel !== null) return
+        ;(store.openPanel as (id: PanelId, context?: PanelContext) => void)(definition.id, finalContext)
+      },
+    })
+    flushSync(() => finishClose(activePanel.id, 'chat'))
+    const search = new URLSearchParams(definition.fullScreen.toSearch(context))
+    search.set('popout', popoutId)
+    openedPopup.location.replace(`/#/panel/${definition.id}?${search.toString()}`)
+    return 'opened'
+  } catch (error) {
+    console.error('[side-panel] Expand handoff failed', error)
+    discardPanelPopout(identity, openedPopup)
+    try {
+      openedPopup.close()
+    } catch {
+      // The original error remains the actionable failure.
+    }
+    reopen()
+    usePanelShellStore.getState().addToast({
+      message: `${definition.title} could not open full screen. The panel remains here.`,
+      variant: 'error',
+    })
+    return 'error'
+  }
 }
 
 export function usePanelShell(panels: readonly PanelDefinition[], username: string) {
@@ -187,43 +312,16 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
   }, [requestClose])
 
   /**
-   * SP-12 expand: guard first, then run the panel-specific pop-out action (or
-   * the registry target fallback), and close the source only after a popup
-   * successfully opens. A declined guard is not a popup failure.
+   * SP-38 expand: the shell owns the popup, presence, handoff and re-dock
+   * lifecycle. A panel only reports its current addressable context.
    */
   const requestExpand = useCallback(
-    async (expandAction?: () => boolean): Promise<'opened' | 'cancelled' | 'blocked' | 'error'> => {
-      const { activePanel, guardPending } = usePanelShellStore.getState()
-      if (activePanel === null || guardPending) return 'cancelled'
-      const def = panelsRef.current.find((p) => p.id === activePanel.id)
-      if (def === undefined) return 'cancelled'
-      // Panels without a leave guard (Browser in wave 1) reach window.open
-      // in the original click stack. Guarded panels await their decision.
-      if (def.beforeLeave !== undefined && !(await runGuard(def))) return 'cancelled'
-
-      try {
-        if (expandAction !== undefined) {
-          if (!expandAction()) return 'blocked'
-        } else {
-          const url = def.expandTarget(activePanel.context)
-          const win = window.open(url, '_blank')
-          if (win === null) return 'blocked'
-          if (win.closed) {
-            console.error('[side-panel] Expand failed', new Error('window.open returned a closed window'))
-            return 'error'
-          }
-          win.opener = null
-        }
-      } catch (error) {
-        console.error('[side-panel] Expand failed', error)
-        return 'error'
-      }
-      const current = usePanelShellStore.getState().activePanel
-      if (current?.id === activePanel.id && current.context === activePanel.context) {
-        finishClose(activePanel.id, 'chat')
-      }
-      return 'opened'
-    },
+    (getCurrentContext?: () => PanelContext) => expandActivePanel({
+      panels: panelsRef.current,
+      getCurrentContext,
+      runGuard,
+      finishClose,
+    }),
     [finishClose, runGuard],
   )
 

@@ -1,9 +1,18 @@
 import { PANEL_POLICIES, isWorkspaceScopedPanel } from '@/components/panel-shell/types'
-import type { PanelId, WorkspacePanelId } from '@/components/panel-shell/types'
+import type { PanelContext, PanelId, WorkspacePanelId } from '@/components/panel-shell/types'
 
 export type PanelIdentity = // not-wire-format: SPA-local identity; only its SHA-256 key is shared between tabs, never sent to the gateway
   | { panelId: 'browser'; sessionId: string; agentId: string; workspaceId?: never }
   | { panelId: WorkspacePanelId; workspaceId?: string; sessionId?: never; agentId?: never }
+
+/** Derive the exclusive tab identity from a registered panel's render context. */
+export function panelIdentityFromContext(panelId: PanelId, context: PanelContext): PanelIdentity | null {
+  if (panelId === 'browser') {
+    const { sessionId, agentId } = context
+    return sessionId && agentId ? { panelId, sessionId, agentId } : null
+  }
+  return { panelId, workspaceId: context.workspaceId }
+}
 
 type PanelWindowHandle = Pick<Window, 'closed' | 'focus'>
 

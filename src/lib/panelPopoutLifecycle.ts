@@ -1,61 +1,66 @@
 import { watchPopoutClosed } from './browserLiveHandoff'
-import {
-  LEGACY_LIBRARY_HANDOFF_ID,
-  onLibraryPopoutClosed,
-  onLibraryWorkspaceChanged,
-} from './libraryHandoff'
 import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
-import type { PanelId } from '@/components/panel-shell/types'
+import type { PanelContext, PanelId, WorkspacePanelContext } from '@/components/panel-shell/types'
 import {
   forgetPanelTabHandle,
+  panelIdentityFromContext,
   panelIdentityKey,
   registerPanelTabHandle,
   type PanelIdentity,
 } from './panelTabPresence'
 
-type OwnedPanelPopout = { // not-wire-format: in-memory app-tab ownership record; never serialized or sent to the gateway
+const CHANNEL_NAME = 'omnipus-panel-popout-lifecycle'
+
+type PanelPopoutMessage = // not-wire-format: same-origin browser lifecycle signal
+  | { type: 'context-changed'; panelId: PanelId; popoutId: string; context: PanelContext }
+  | { type: 'popout-closed'; panelId: PanelId; popoutId: string; context: PanelContext }
+
+type OwnedPanelPopout = { // not-wire-format: in-memory app-tab ownership record
   ownershipKey: string
-  popoutId?: string
+  popoutId: string
   identity: PanelIdentity
+  context: PanelContext
   handle: Window
-  scopeUpdated: boolean
   stopWatching: () => void
-  onClosed: (identity: PanelIdentity) => void
+  onClosed: (identity: PanelIdentity, context: PanelContext) => void
 }
 
-export type PanelPopoutRegistration = { // not-wire-format: in-memory lifecycle registration from panel content to the stable app owner
-  popoutId?: string
+export type PanelPopoutRegistration = { // not-wire-format: in-memory lifecycle registration
+  popoutId: string
   identity: PanelIdentity
+  context: PanelContext
   handle: Window
-  onClosed: (identity: PanelIdentity) => void
+  onClosed: (identity: PanelIdentity, context: PanelContext) => void
 }
 
 const ownedPopouts = new Map<string, OwnedPanelPopout>()
 let ownerConsumers = 0
-let stopLibraryClosed: (() => void) | null = null
-let stopLibraryWorkspace: (() => void) | null = null
+let lifecycleChannel: BroadcastChannel | null = null
 let pagehideListening = false
 
+function openChannel(): BroadcastChannel | null {
+  if (typeof BroadcastChannel === 'undefined') return null
+  try {
+    return new BroadcastChannel(CHANNEL_NAME)
+  } catch {
+    return null
+  }
+}
+
 function ownershipKey(registration: PanelPopoutRegistration): string {
-  return registration.popoutId
-    ? `popout:${registration.popoutId}`
-    : `identity:${panelIdentityKey(registration.identity)}`
+  return `popout:${registration.popoutId}`
 }
 
 function findOwnedPanelPopout(panelId: PanelId, popoutId: string): OwnedPanelPopout | undefined {
-  const direct = ownedPopouts.get(`popout:${popoutId}`)
-  if (direct?.identity.panelId === panelId) return direct
-  if (panelId !== 'library' || popoutId !== LEGACY_LIBRARY_HANDOFF_ID) return undefined
-  // Old Library children predate pop-out ids. Falling back is unambiguous only
-  // while exactly one Library child is owned; otherwise no signal is routed.
-  const libraries = [...ownedPopouts.values()].filter((entry) => entry.identity.panelId === 'library')
-  return libraries.length === 1 ? libraries[0] : undefined
+  const entry = ownedPopouts.get(`popout:${popoutId}`)
+  return entry?.identity.panelId === panelId ? entry : undefined
 }
 
 function findOwned(identity: PanelIdentity, handle: Window): OwnedPanelPopout | undefined {
-  const direct = ownedPopouts.get(`identity:${panelIdentityKey(identity)}`)
-  if (direct?.handle === handle) return direct
-  return [...ownedPopouts.values()].find((entry) => entry.handle === handle)
+  const identityKey = panelIdentityKey(identity)
+  return [...ownedPopouts.values()].find(
+    (entry) => entry.handle === handle && panelIdentityKey(entry.identity) === identityKey,
+  )
 }
 
 function isOwned(entry: OwnedPanelPopout): boolean {
@@ -68,30 +73,88 @@ function removeOwned(entry: OwnedPanelPopout): void {
   forgetPanelTabHandle(entry.identity, entry.handle)
 }
 
-function finishOwned(entry: OwnedPanelPopout, fallbackIdentity?: PanelIdentity): void {
+function finishOwned(entry: OwnedPanelPopout, finalContext = entry.context): void {
   if (!isOwned(entry)) return
-  const finalIdentity = entry.scopeUpdated || fallbackIdentity === undefined
-    ? entry.identity
-    : fallbackIdentity
+  const finalIdentity = panelIdentityFromContext(entry.identity.panelId, finalContext) ?? entry.identity
   removeOwned(entry)
-  entry.onClosed(finalIdentity)
+  entry.onClosed(finalIdentity, finalContext)
   maybeStopInfrastructure()
 }
 
-function moveOwned(entry: OwnedPanelPopout, identity: PanelIdentity): void {
-  const previousKey = panelIdentityKey(entry.identity)
-  const nextKey = panelIdentityKey(identity)
-  if (previousKey === nextKey) {
-    entry.scopeUpdated = true
-    return
-  }
+function moveOwned(entry: OwnedPanelPopout, context: PanelContext): void {
+  const nextIdentity = panelIdentityFromContext(entry.identity.panelId, context)
+  if (!nextIdentity) return
+  entry.context = context
+  if (panelIdentityKey(entry.identity) === panelIdentityKey(nextIdentity)) return
   forgetPanelTabHandle(entry.identity, entry.handle)
-  entry.identity = identity
-  entry.scopeUpdated = true
-  registerPanelTabHandle(identity, entry.handle)
+  entry.identity = nextIdentity
+  registerPanelTabHandle(nextIdentity, entry.handle)
 }
 
-/** Re-key a pop-out to what the child currently shows; outer switch policy does not apply here. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isPanelId(value: unknown): value is PanelId {
+  return typeof value === 'string' && ['library', 'browser', 'mail', 'tasks', 'team', 'calendar'].includes(value)
+}
+
+function isContextForPanel(panelId: PanelId, value: unknown): value is PanelContext {
+  if (!isRecord(value)) return false
+  if (panelId === 'browser') {
+    return typeof value.sessionId === 'string' && value.sessionId.length > 0 &&
+      typeof value.agentId === 'string' && value.agentId.length > 0
+  }
+  if ('sessionId' in value || 'agentId' in value) return false
+  return ['workspaceId', 'mailboxId', 'path', 'folder'].every((key) =>
+    value[key] === undefined || (typeof value[key] === 'string' && value[key].length > 0),
+  )
+}
+
+function acceptMessage(value: unknown): value is PanelPopoutMessage {
+  if (!isRecord(value) || (value.type !== 'context-changed' && value.type !== 'popout-closed')) return false
+  return isPanelId(value.panelId) && typeof value.popoutId === 'string' && value.popoutId.length > 0 &&
+    isContextForPanel(value.panelId, value.context)
+}
+
+function handleMessage(event: MessageEvent<unknown>): void {
+  const message = event.data
+  if (!acceptMessage(message)) return
+  const entry = findOwnedPanelPopout(message.panelId, message.popoutId)
+  if (!entry) return
+  if (message.type === 'context-changed') moveOwned(entry, message.context)
+  else finishOwned(entry, message.context)
+}
+
+/** Tell the opener which address the full-screen panel currently shows. */
+export function announcePanelPopoutContext(
+  panelId: PanelId,
+  popoutId: string,
+  context: PanelContext,
+): void {
+  postMessage({ type: 'context-changed', panelId, popoutId, context })
+}
+
+/** Tell the opener that the full-screen panel is leaving. */
+export function announcePanelPopoutClosed(
+  panelId: PanelId,
+  popoutId: string,
+  context: PanelContext,
+): void {
+  postMessage({ type: 'popout-closed', panelId, popoutId, context })
+}
+
+function postMessage(message: PanelPopoutMessage): void {
+  const channel = openChannel()
+  if (!channel) return
+  try {
+    channel.postMessage(message)
+  } finally {
+    channel.close()
+  }
+}
+
+/** Compatibility seam for workspace-scoped panels; the generic route sends full contexts. */
 export function updatePanelPopoutWorkspace(
   panelId: PanelId,
   popoutId: string,
@@ -99,7 +162,7 @@ export function updatePanelPopoutWorkspace(
 ): void {
   const entry = findOwnedPanelPopout(panelId, popoutId)
   if (!entry || !isWorkspaceScopedPanel(panelId)) return
-  moveOwned(entry, { panelId, workspaceId })
+  moveOwned(entry, { ...(entry.context as WorkspacePanelContext), workspaceId })
 }
 
 function closeAllOwned(): void {
@@ -117,17 +180,9 @@ function closeAllOwned(): void {
 }
 
 function ensureInfrastructure(): void {
-  if (stopLibraryWorkspace === null) {
-    stopLibraryWorkspace = onLibraryWorkspaceChanged((popoutId, workspaceId) => {
-      updatePanelPopoutWorkspace('library', popoutId, workspaceId)
-    })
-  }
-  if (stopLibraryClosed === null) {
-    stopLibraryClosed = onLibraryPopoutClosed((popoutId, workspaceId) => {
-      const entry = findOwnedPanelPopout('library', popoutId)
-      if (!entry) return
-      finishOwned(entry, { panelId: 'library', workspaceId })
-    })
+  if (lifecycleChannel === null) {
+    lifecycleChannel = openChannel()
+    lifecycleChannel?.addEventListener('message', handleMessage)
   }
   if (!pagehideListening) {
     window.addEventListener('pagehide', closeAllOwned)
@@ -137,10 +192,9 @@ function ensureInfrastructure(): void {
 
 function maybeStopInfrastructure(): void {
   if (ownerConsumers > 0 || ownedPopouts.size > 0) return
-  stopLibraryWorkspace?.()
-  stopLibraryWorkspace = null
-  stopLibraryClosed?.()
-  stopLibraryClosed = null
+  lifecycleChannel?.removeEventListener('message', handleMessage)
+  lifecycleChannel?.close()
+  lifecycleChannel = null
   if (pagehideListening) window.removeEventListener('pagehide', closeAllOwned)
   pagehideListening = false
 }
@@ -159,7 +213,7 @@ export function startPanelPopoutLifecycleOwner(): () => void {
   }
 }
 
-/** Transfer a newly opened child from panel content to the stable app owner. */
+/** Transfer a newly opened child from the side-panel shell to the stable app owner. */
 export function registerPanelPopout(registration: PanelPopoutRegistration): void {
   ensureInfrastructure()
   registerPanelTabHandle(registration.identity, registration.handle)
@@ -178,10 +232,10 @@ export function registerPanelPopout(registration: PanelPopoutRegistration): void
   const entry: OwnedPanelPopout = {
     ...registration,
     ownershipKey: key,
-    scopeUpdated: false,
     stopWatching: () => {},
   }
   ownedPopouts.set(key, entry)
+  // Polling reads this entry's live context after every handoff update.
   entry.stopWatching = watchPopoutClosed(entry.handle, () => finishOwned(entry))
 }
 
@@ -191,18 +245,4 @@ export function discardPanelPopout(identity: PanelIdentity, handle: Window): voi
   if (!entry) return
   removeOwned(entry)
   maybeStopInfrastructure()
-}
-
-/**
- * Isolated component tests have no app owner. In that environment only,
- * preserve the legacy cleanup contract when the content itself unmounts.
- */
-export function releasePanelPopoutWithoutAppOwner(identity: PanelIdentity, handle: Window): void {
-  if (ownerConsumers > 0) return
-  discardPanelPopout(identity, handle)
-  try {
-    handle.close()
-  } catch {
-    // Best-effort cleanup for an isolated mount.
-  }
 }

@@ -21,9 +21,9 @@ vi.stubGlobal('ResizeObserver', RowResizeObserver)
 
 function Probe(props: PanelContentProps) {
   useEffect(() => {
-    props.registerExpand(() => true)
-    return () => props.registerExpand(null)
-  }, [props.registerExpand])
+    props.registerExpandContext(() => ({}))
+    return () => props.registerExpandContext(null)
+  }, [props.registerExpandContext])
   return <div>Panel content</div>
 }
 
@@ -31,7 +31,7 @@ const library: PanelDefinition = {
   id: 'library',
   title: 'Library',
   content: Probe,
-  expandTarget: () => '/library',
+  fullScreen: { toSearch: () => ({}), fromSearch: () => ({}) },
 }
 
 function renderShell() {
@@ -56,7 +56,7 @@ function renderShell() {
 beforeEach(() => {
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })
@@ -79,6 +79,13 @@ describe('US-9 focus return reasons', () => {
   })
 
   it('returns header Expand to the chat input', async () => {
+    vi.spyOn(window, 'open').mockReturnValue({
+      closed: false,
+      opener: {},
+      location: { replace: vi.fn() },
+      close: vi.fn(),
+      focus: vi.fn(),
+    } as unknown as Window)
     renderShell()
     fireEvent.click(screen.getByText('Library trigger'))
     fireEvent.click(screen.getByRole('button', { name: 'Expand Library panel' }))

@@ -59,7 +59,12 @@ function makeDef(
     id,
     title: id === 'library' ? 'Library' : 'Browser',
     content: probeContent,
-    expandTarget: () => (id === 'library' ? '/library' : '/browser-live'),
+    fullScreen: {
+      toSearch: () => ({}),
+      fromSearch: () => id === 'browser'
+        ? { sessionId: 'session-1', agentId: 'agent-1' }
+        : {},
+    },
     ...(beforeLeave ? { beforeLeave } : {}),
   }
 }
@@ -98,7 +103,7 @@ function openPanel(id: 'library' | 'browser', context: Record<string, unknown> =
 function resetStore() {
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })
@@ -281,7 +286,13 @@ describe('focus management (US-9 AS-3 / MIN-002)', () => {
     // close-on-success coupling, not a popup-block artifact.
     const openSpy = vi
       .spyOn(window, 'open')
-      .mockReturnValue({ closed: false, close: () => {}, opener: null } as unknown as Window)
+      .mockReturnValue({
+        closed: false,
+        close: () => {},
+        focus: () => {},
+        opener: null,
+        location: { replace: () => {} },
+      } as unknown as Window)
     renderShell([makeDef('library')])
     openPanel('library')
     fireEvent.click(screen.getByRole('button', { name: 'Expand Library panel' }))

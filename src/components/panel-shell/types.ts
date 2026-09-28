@@ -5,8 +5,8 @@
 //   PanelDefinition {
 //     id:            'library' | 'browser' | 'mail' | 'tasks' | 'team' | 'calendar'
 //     title:         string                          // shell header title
-//     content:       React component (receives close/expand callbacks via props)
-//     expandTarget:  (context) => route location    // full-page route + params
+//     content:       React component (receives shell callbacks via props)
+//     fullScreen:    context ↔ search codec         // shell-owned route state
 //     beforeLeave?:  () => Promise<boolean>         // CRIT-001 transition gate
 //     beforeLeaveRequired?: () => boolean            // optional synchronous fast path
 //   }
@@ -58,6 +58,10 @@ export interface WorkspacePanelContext {
   workspaceId?: string
   /** Mail's mailbox context (per the email spec, wave 2). */
   mailboxId?: string
+  /** Library's selected work-tree item. */
+  path?: string
+  /** Library's browsed folder when no item is selected. */
+  folder?: string
   sessionId?: never
   agentId?: never
 }
@@ -68,6 +72,8 @@ export interface BrowserPanelContext {
   agentId: string
   workspaceId?: never
   mailboxId?: never
+  path?: never
+  folder?: never
 }
 
 export type PanelContext = WorkspacePanelContext | BrowserPanelContext
@@ -86,16 +92,17 @@ export type OpenPanel = (...args: PanelOpenArgs) => void
 /** Props every panel content component receives from the shell. */
 export interface PanelContentProps {
   context: PanelContext
+  /** The shell uses one content component for its docked and full-screen presentations. */
+  presentation: 'docked' | 'fullscreen'
   /** Ask the shell to close this panel (runs the leave guard first). */
   close: () => void
-  /** Ask the shell to expand this panel to its full-page route (SP-12). */
+  /** Ask the shell to expand this panel through its shared full-screen route (SP-38). */
   expand: () => void
   /**
-   * Register the panel-specific Expand implementation. Library uses this to
-   * carry its current selection; Browser uses it for its ownership handoff.
-   * Returning false means the popup was blocked and the shell must stay open.
+   * Report the panel's current addressable state. The shell owns popup,
+   * presence, handoff, and re-dock behavior for every registered panel.
    */
-  registerExpand: (action: (() => boolean) | null) => void
+  registerExpandContext: (getter: (() => PanelContext) | null) => void
   /**
    * Subscribe to settled divider widths. Browser uses the notification to
    * start its existing remote-viewport handover only after resize settles.
@@ -124,8 +131,11 @@ export interface PanelDefinition {
   title: string
   /** The panel's content, rendered inside the shell below the header. */
   content: PanelContentComponent
-  /** The full-page route (URL) this panel expands to. */
-  expandTarget: (context: PanelContext) => string
+  /** Converts panel state to/from the shared `#/panel/$panelId` route. */
+  fullScreen: {
+    toSearch: (context: PanelContext) => Record<string, string>
+    fromSearch: (search: Record<string, unknown>) => PanelContext | null
+  }
   /**
    * CRIT-001: the leave gate for panels with unsaved-edit risk. The shell
    * awaits it BEFORE touching store, URL or content — while the outgoing
