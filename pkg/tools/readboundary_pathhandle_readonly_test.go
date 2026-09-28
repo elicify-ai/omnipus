@@ -103,7 +103,7 @@ func TestPathHandle_ReadConfinedMountHandleRefusesMkdirAll(t *testing.T) {
 
 	if _, statErr := os.Stat(newDir); statErr == nil {
 		t.Fatalf("T2: nothing may be written on disk; %q was created", newDir)
-	} else if !os.IsNotExist(statErr) {
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("os.Stat(%q): %v", newDir, statErr)
 	}
 }
