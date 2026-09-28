@@ -26,11 +26,45 @@ interface ParsedResult {
   snippet: string
 }
 
-/** Best-effort parser for the text-based search results returned by web_search */
-function parseSearchResults(text: string): ParsedResult[] {
+interface ParsedSearchText {
+  results: ParsedResult[]
+  /** The wire header's provider id and role, when the text carries one. */
+  provider: { id: string; role: string } | null
+  /** Lines after the provider header — hop notes, not-called reasons, exclusion notes. */
+  notes: string[]
+}
+
+/**
+ * Best-effort parser for the text-based search results returned by
+ * web_search. The wire format (pkg/tools/web_search.go::successText) puts
+ * the numbered results first, then "Search provider: <id> (<role>)", then
+ * the note lines — everything from the header onward is the trailer, split
+ * off so it can render as its own visible lines instead of being glued
+ * into the last result's snippet.
+ */
+function parseSearchResults(text: string): ParsedSearchText {
+  const lines = text.split('\n')
+
+  // The trailer starts at the LAST header-shaped line — the wire format
+  // always places the header after the results, so the last match is the
+  // real header (a snippet line that merely looks like the header cannot
+  // steal the earlier results' lines).
+  let headerIdx = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^Search provider: .+ \(.+\)\s*$/.test(lines[i])) {
+      headerIdx = i
+      break
+    }
+  }
+
+  const trailer = headerIdx >= 0 ? lines.slice(headerIdx + 1) : []
+  const resultText = headerIdx >= 0 ? lines.slice(0, headerIdx).join('\n') : text
+
+  const headerMatch = headerIdx >= 0 ? lines[headerIdx].trim().match(/^Search provider: (.+?) \((.+)\)$/) : null
+
   const results: ParsedResult[] = []
   // Pattern: lines starting with "1. Title\n   URL" or similar
-  const blocks = text.split(/\n(?=\d+\. )/)
+  const blocks = resultText.split(/\n(?=\d+\. )/)
 
   for (const block of blocks) {
     const firstLine = block.split('\n')[0]
@@ -56,7 +90,15 @@ function parseSearchResults(text: string): ParsedResult[] {
     results.push({ index, title, url, snippet })
   }
 
-  return results
+  const notes = trailer
+    .map((l) => l.trim())
+    .filter((l) => l !== '')
+
+  return {
+    results,
+    provider: headerMatch ? { id: headerMatch[1].trim(), role: headerMatch[2].trim() } : null,
+    notes,
+  }
 }
 
 export function WebSearchBlock({
@@ -104,8 +146,8 @@ export function WebSearchBlock({
   // listing (honest 0 for any other shape) — never from a stringified object.
   const resolved = resolveToolResult(result)
   const content = resolved.kind === 'text' ? resolved.text : ''
-  const parsed = content ? parseSearchResults(content) : []
-  const hasStructured = parsed.length > 0
+  const parsed = parseSearchResults(content)
+  const hasStructured = parsed.results.length > 0
   // Nothing to expand until the call finishes with actual content (a result,
   // the failure reason, or a structured sentinel) — mirrors
   // GenericToolCall.tsx's `hasDetail` gate.
@@ -124,7 +166,7 @@ export function WebSearchBlock({
   // shown at all when hasStructured was false). Running/error/cancelled show
   // the shared status label instead, matching BashOutput/WebFetchPreview.
   const countOrStatusLabel =
-    isRunning || isError || isCancelled ? statusConfig.label : `${parsed.length} results`
+    isRunning || isError || isCancelled ? statusConfig.label : `${parsed.results.length} results`
 
   return (
     // Flat text-line design (ticket "Tool components in chat", P2): no card
@@ -159,7 +201,15 @@ export function WebSearchBlock({
             />
           ) : hasStructured ? (
             <div className="space-y-[var(--space-2)]">
-              {parsed.map((item) => (
+              {parsed.provider && (
+                <p
+                  className="text-[var(--color-secondary)] font-medium break-words"
+                  data-testid="web-search-provider"
+                >
+                  Search provider: {parsed.provider.id} ({parsed.provider.role})
+                </p>
+              )}
+              {parsed.results.map((item) => (
                 <div key={item.index} className="flex items-start gap-[var(--space-1)]">
                   <span className="text-[var(--color-muted)] shrink-0 mt-[var(--space-0-5)]">{item.index}.</span>
                   <div className="min-w-0">
@@ -180,6 +230,18 @@ export function WebSearchBlock({
                   </div>
                 </div>
               ))}
+              {parsed.notes.length > 0 && (
+                <div className="space-y-[var(--space-0-5)]" data-testid="web-search-notes">
+                  {parsed.notes.map((note, i) => (
+                    <p
+                      key={i}
+                      className="text-[var(--color-muted)] text-[length:var(--type-caption-size)] leading-relaxed break-words"
+                    >
+                      {note}
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">

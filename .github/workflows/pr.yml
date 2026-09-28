@@ -19,8 +19,10 @@ on:
   workflow_dispatch:
 
 # Six playwright e2e shards (llm-chat, llm-agents, llm-light, llm-hot-reload,
-# llm-verifier-eval, llm-conformance) call a real paid LLM (openrouter/deepseek/deepseek-v4.1-flash),
-# so every push to a PR branch spends money. Cancel the superseded run on each new
+# llm-verifier-eval, llm-conformance) call a real paid LLM (the model is
+# centralized in tests/e2e/e2e-model.json and read into $OMNIPUS_E2E_MODEL by
+# the playwright job's "Read central e2e model" step), so every push to a PR
+# branch spends money. Cancel the superseded run on each new
 # push instead of letting it burn through the full 17-job/9-shard fan-out. For a
 # release-branch/main push (no `pull_request` context), `github.event.pull_request.number`
 # is empty so the group falls back to `github.ref` (e.g. refs/heads/release/v0.1.1) —
@@ -947,6 +949,48 @@ jobs:
           path: test-results/design-system-browser-artifacts/screenshot-*
           if-no-files-found: ignore
 
+  design-system-locks:
+    name: Design system lock audit
+    # The policy/lock HALF of the enforcement audit: `lint:design-system-locks`
+    # runs scripts/design-system-locks's policy.mjs + audit.mjs WITHOUT
+    # --coverage, so it needs only node_modules — not the storybook build or
+    # the evidence artifacts the coverage half composes. Running it as a light
+    # job means a lock violation goes red in minutes instead of waiting behind
+    # the design-system/browser/screenshot chain. The coverage half stays in
+    # `design-system-audit` below — both halves write the same report file,
+    # test-results/design-system-audit.json, and both fail the run.
+    #
+    # ADR-067 step 12: skips when no SPA-relevant file changed (see the
+    # `changes` job's `spa` filter and its force-full list). `code` is still
+    # checked too — `spa` narrows on top of it, never replaces it. fast-tier
+    # tolerates this job's 'skipped' result exactly like typecheck/lint-spa's.
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.spa == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
+
+      - name: Run design-system lock audit (no coverage)
+        # The npm script prints only the errors plus one count line and exits
+        # non-zero on failure — no report cat lives here (cat'ing the whole
+        # ~6,000-line report on failure is the failure mode this split exists
+        # to remove; see design-system-audit's run step).
+        run: npm run lint:design-system-locks
+
   design-system-audit:
     name: Design system enforcement audit
     runs-on: ubuntu-latest
@@ -1028,19 +1072,89 @@ jobs:
       - name: Run design-system audit
         # The npm script writes its full report to
         # test-results/design-system-audit.json and prints only the error count;
-        # on failure, print the report (folded) so the errors are readable
-        # straight from this log. The audit's own exit code is captured and
-        # re-exited verbatim — the gate stays hard-blocking.
+        # on failure, print ONLY the errors via the shared printer
+        # (scripts/design-system-locks/print-audit-errors.mjs) instead of
+        # cat'ing the whole report — the report is ~6,000 lines and buries the
+        # errors it exists to surface. The printer's exit code is captured
+        # separately and noted, never discarded: it exits 1 when it printed
+        # errors and 2 when the report is missing or malformed. Both are
+        # informational only: this step's verdict is the AUDIT's exit code,
+        # re-exited verbatim below, so the gate stays hard-blocking. If the
+        # audit died before writing its report, say so explicitly rather than
+        # printing nothing at all.
         run: |
           npm run audit:design-system || status=$?
-          if [ "${status:-0}" -ne 0 ] && [ -f test-results/design-system-audit.json ]; then
-            echo "::group::design-system-locks audit report (test-results/design-system-audit.json)"
-            cat test-results/design-system-audit.json
-            echo "::endgroup::"
+          if [ "${status:-0}" -ne 0 ]; then
+            if [ -f test-results/design-system-audit.json ]; then
+              node scripts/design-system-locks/print-audit-errors.mjs test-results/design-system-audit.json || printer_status=$?
+              if [ "${printer_status:-0}" -ne 0 ]; then
+                echo "NOTE: the audit-error printer itself exited ${printer_status} (1 = it printed errors, 2 = report missing/malformed); the step's verdict remains the audit's exit code." >&2
+              fi
+            else
+              echo "ERROR: test-results/design-system-audit.json was not written — the audit failed before producing a report, so no per-error detail is available here. See the audit's own output above and the uploaded design-system-evidence artifacts." >&2
+            fi
           fi
           exit "${status:-0}"
         env:
           CI: "true"
+
+  design-system-audit-summary:
+    name: Design system audit ran
+    # A skipped audit used to read as a pass. Both audit jobs gate on
+    # code=='true' && spa=='true', and `design-system-audit` additionally on
+    # the whole heavy design-system chain succeeding — so ANY upstream failure
+    # skipped the audit, and ci-required's "skipped -> pass" accounting turned
+    # that skip green: enforcement silently off on exactly the PRs (SPA file
+    # changes) it exists to police. docs/internal/false-green-patterns.md
+    # calls this shape out; this job closes it. It always runs (`if: always()`,
+    # no checkout — it reads only its needs' results) and re-derives the
+    # verdict itself:
+    #   * `changes` did not succeed       -> FAIL (every skip below it is
+    #                                        uninterpretable — ci-required's
+    #                                        own rule, applied identically);
+    #   * SPA files changed (code && spa) -> BOTH audit jobs must be
+    #                                        'success'; skipped, cancelled or
+    #                                        failed all FAIL, naming which
+    #                                        job did not run and why that is
+    #                                        not a pass;
+    #   * no SPA files changed            -> the audits legitimately skipped,
+    #                                        PASS.
+    runs-on: ubuntu-latest
+    needs: [changes, design-system-locks, design-system-audit]
+    if: always()
+    steps:
+      - name: Require the design-system audits to have run when SPA files changed
+        run: |
+          set -euo pipefail
+          changes="${{ needs.changes.result }}"
+          code="${{ needs.changes.outputs.code }}"
+          spa="${{ needs.changes.outputs.spa }}"
+          locks="${{ needs.design-system-locks.result }}"
+          audit="${{ needs.design-system-audit.result }}"
+          if [ "$changes" != "success" ]; then
+            echo "FAIL: the 'changes' job did not succeed (result: $changes) — every" >&2
+            echo "design-system-audit skip downstream of it is uninterpretable, and uninterpretable is not a pass." >&2
+            exit 1
+          fi
+          if [ "$code" != "true" ] || [ "$spa" != "true" ]; then
+            echo "OK: design-system audits legitimately skipped (code=$code, spa=$spa)."
+            exit 0
+          fi
+          not_pass=()
+          if [ "$locks" != "success" ]; then
+            not_pass+=("design-system-locks (result: $locks)")
+          fi
+          if [ "$audit" != "success" ]; then
+            not_pass+=("design-system-audit (result: $audit)")
+          fi
+          if [ "${#not_pass[@]}" -gt 0 ]; then
+            echo "FAIL: SPA files changed (code=true, spa=true) but these design-system audit jobs did NOT run to success:" >&2
+            for j in "${not_pass[@]}"; do echo "  - $j" >&2; done
+            echo "A skipped/cancelled/failed audit is NOT a pass — design-system enforcement never" >&2
+            echo "ran on this change. Fix the upstream job that did not run; this PR is not green." >&2
+            exit 1
+          fi
+          echo "OK: both design-system audit jobs ran and passed."
 
   wire-types-lint:
     name: Wire-Types Lint
@@ -1267,16 +1381,18 @@ jobs:
     # on `needs:`), which cascades the skip down through every SLOW job's
     # own needs on it.
     #
-    # ADR-067 step 12 changes this: `typecheck`, `lint-spa`, and `lint` are
-    # now independently skippable (spa==false or go==false respectively)
-    # even when `code` is true. A skipped need is NOT a success under
-    # GitHub's default `needs` semantics, so a bare `success()` here would
-    # cascade-skip THIS job whenever any one of those three legitimately
+    # ADR-067 step 12 changes this: `typecheck` and `lint-spa` are
+    # independently skippable when spa==false, `lint` when go==false, and
+    # `design-system-locks` (same spa-scoped shape as typecheck/lint-spa)
+    # when spa==false even when `code` is true. A skipped need is NOT a
+    # success under GitHub's default `needs` semantics, so a bare
+    # `success()` here would cascade-skip THIS job whenever any one of
+    # those four legitimately
     # skips — taking every Tier 2/3 job down with it, including ones from
     # the OTHER cohort that still needed to run (e.g. a pure-SPA PR
     # legitimately skipping `lint` (go==false) must not also take `vitest`
     # (spa==true, needs fast-tier) down with it). So this job cannot rely on
-    # bare success(): each of the three conditionally-skippable needs is
+    # bare success(): each of the four conditionally-skippable needs is
     # explicitly allowed to be 'skipped' as well as 'success'; every other
     # need (still gated on `code` alone, unchanged) must be a real
     # 'success' — a genuine failure or cancellation of ANY need still blocks
@@ -1295,13 +1411,14 @@ jobs:
     # which bare `always()` would.
     #
     # `setup` is listed as a need and checked explicitly. It is NOT redundant
-    # bookkeeping: `typecheck`, `lint-spa` and `lint` all consume setup's
-    # node_modules artifact AND are all explicitly tolerated as 'skipped'
-    # above, so a broken `npm ci` skips all three and this job tolerates all
-    # three. The only thing that used to stop a failed setup from clearing the
-    # whole fast tier was `verify-contracts` happening to also consume the
-    # artifact while NOT being tolerant of a skip — one undeclared edge
-    # carrying the entire cascade. Stated directly here instead.
+    # bookkeeping: `typecheck`, `lint-spa`, `design-system-locks` and `lint`
+    # all consume setup's node_modules artifact AND are all explicitly
+    # tolerated as 'skipped' above, so a broken `npm ci` skips all four and
+    # this job tolerates all four. The only thing that used to stop a failed
+    # setup from clearing the whole fast tier was `verify-contracts` happening
+    # to also consume the artifact while NOT being tolerant of a skip — one
+    # undeclared edge carrying the entire cascade. Stated directly here
+    # instead.
     # `setup` is gated on `code == 'true'` exactly like this job, so whenever
     # this job is eligible at all setup has really run: no 'skipped'
     # tolerance is wanted or correct for it. Same shape the `playwright` job
@@ -1314,6 +1431,7 @@ jobs:
       - cli-verb-guard
       - typecheck
       - lint-spa
+      - design-system-locks
       - wire-types-lint
       - tool-error-status-lint
       - verify-contracts
@@ -1327,6 +1445,7 @@ jobs:
       needs.cli-verb-guard.result == 'success' &&
       (needs.typecheck.result == 'success' || needs.typecheck.result == 'skipped') &&
       (needs.lint-spa.result == 'success' || needs.lint-spa.result == 'skipped') &&
+      (needs.design-system-locks.result == 'success' || needs.design-system-locks.result == 'skipped') &&
       needs.wire-types-lint.result == 'success' &&
       needs.tool-error-status-lint.result == 'success' &&
       needs.verify-contracts.result == 'success' &&
@@ -2697,6 +2816,18 @@ jobs:
           echo "::add-mask::$KEY"
           echo "OPENROUTER_API_KEY_CI=$KEY" >> "$GITHUB_ENV"
 
+      - name: Read central e2e model
+        # One committed source of truth for the real-LLM model id. Every model
+        # literal in live config is banned (scripts/check-no-hardcoded-e2e-model.sh),
+        # so the seeding and onboarding steps below interpolate $OMNIPUS_E2E_MODEL.
+        run: |
+          m=$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json)
+          if [ -z "$m" ]; then
+            echo "::error::tests/e2e/e2e-model.json: .model is missing, empty, or whitespace-only" >&2
+            exit 1
+          fi
+          echo "OMNIPUS_E2E_MODEL=$m" >> "$GITHUB_ENV"
+
       - name: Seed gateway config
         # providers is a flat array of ModelConfig entries (see pkg/config/config.go).
         # Each row's `provider` (catalog id) is EXPLICIT and REQUIRED — the old
@@ -2720,7 +2851,11 @@ jobs:
         # override it (an existing "allow" policy is never downgraded by the migrator).
         run: |
           set -euo pipefail
-          cat > /tmp/omnipus-e2e/config.json <<'EOF'
+          : "${OMNIPUS_E2E_MODEL:?OMNIPUS_E2E_MODEL is not set — the 'Read central e2e model' step must run first}"
+          # Unquoted heredoc (interpolating $OMNIPUS_E2E_MODEL) — the same idiom as
+          # the sandbox-uat.yml and runci.sh config seeds; this JSON body carries no
+          # other shell-significant characters.
+          cat > /tmp/omnipus-e2e/config.json <<EOF
           {
             "version": 1,
             "gateway": {
@@ -2737,7 +2872,7 @@ jobs:
               "defaults": {
                 "default_model": {
                   "provider": "openrouter",
-                  "model": "deepseek/deepseek-v4.1-flash"
+                  "model": "${OMNIPUS_E2E_MODEL}"
                 },
                 "auto_recap_enabled": true
               }
@@ -2745,7 +2880,7 @@ jobs:
             "providers": [
               {
                 "provider": "openrouter",
-                "model": "deepseek/deepseek-v4.1-flash",
+                "model": "${OMNIPUS_E2E_MODEL}",
                 "api_base": "https://openrouter.ai/api/v1",
                 "api_key_ref": "OPENROUTER_API_KEY"
               }
@@ -2822,8 +2957,8 @@ jobs:
           # Capture status and body instead, and print the body on failure. The
           # key is registered with add-mask, so it stays masked in whatever the
           # server echoes back.
-          body=$(jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
-            '{provider:{id:"openrouter",auth_method:"api_key",api_key:$key,model:"deepseek/deepseek-v4.1-flash"},admin:{username:"admin",password:"admin123"}}' \
+          body=$(jq -n --arg key "${OPENROUTER_API_KEY_CI}" --arg model "$OMNIPUS_E2E_MODEL" \
+            '{provider:{id:"openrouter",auth_method:"api_key",api_key:$key,model:$model},admin:{username:"admin",password:"admin123"}}' \
             | curl -s -o /tmp/onboard-body.txt -w '%{http_code}' \
                 -X POST http://localhost:6060/api/v1/onboarding/complete \
                 -H 'Content-Type: application/json' \
@@ -3134,7 +3269,12 @@ jobs:
   #   failure/cancelled in ANY dependency -> fail. No exceptions, no allowlist.
   #   skipped                             -> pass. Language scoping means a
   #                                          Go-only PR legitimately skips the
-  #                                          SPA jobs and vice versa.
+  #                                          SPA jobs and vice versa. The one
+  #                                          skip a pass may NOT hide — the
+  #                                          design-system audits skipping on
+  #                                          an SPA-changing PR — is converted
+  #                                          to an explicit failure by
+  #                                          design-system-audit-summary.
   #   changes must have SUCCEEDED         -> otherwise "everything skipped"
   #                                          reads as success while nothing ran.
   ci-required:
@@ -3149,7 +3289,9 @@ jobs:
       - design-system
       - design-system-browser
       - design-system-screenshot
+      - design-system-locks
       - design-system-audit
+      - design-system-audit-summary
       - wire-types-lint
       - tool-error-status-lint
       - verify-contracts

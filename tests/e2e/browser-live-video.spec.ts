@@ -333,9 +333,18 @@ test.beforeEach(async ({ page }) => {
   await installWebrtcDebug(page);
 });
 
-test("live browser view streams genuinely playing video with real audio and realtime input", async ({
-  page,
-}, testInfo) => {
+// DISABLED (2026-09-28): intermittent hang under CI, root cause not yet found —
+// a real Playwright failure captured on a related run was
+// `locator.click: Test timeout of 720000ms exceeded`. Founder-ruled: stop
+// investigating for now, disable instead. Tracked as
+// https://github.com/elicify-ai/omnipus/issues/1015 ("Live-video e2e tests
+// disabled — intermittent hang"). Do not delete this test's body — re-enable
+// (test.fixme -> test) once #1015's root cause is fixed and verified stable.
+test.fixme(
+  "live browser view streams genuinely playing video with real audio and realtime input",
+  async ({
+    page,
+  }, testInfo) => {
   // Budget (worst-case ceiling, same accounting discipline as media.spec.ts):
   //   Agent picker + Jim selection + input visibility ...................... ~35s
   //   assistantMessages toHaveCount ceiling ................................ 240s
@@ -378,6 +387,20 @@ test("live browser view streams genuinely playing video with real audio and real
     page,
     Date.now() % 65_536,
   );
+  // row 55 bug A: createBrowserProbeAgent creates the agent via a raw
+  // `POST /api/v1/agents` call, bypassing CreateAgentModal.tsx — the only
+  // real-product path that invalidates the AgentPicker's `['agents']`
+  // react-query cache after a create. This `beforeEach` already navigated
+  // to "/" once (populating that cache with whatever agents existed then),
+  // so without a fresh navigation the picker can be looking at an
+  // arbitrarily stale list — intermittently timing out selectAgent's whole
+  // 720s budget waiting for a menuitem that will never appear on its own
+  // (confirmed on PR #940 run 36341847219 and on release/v0.1.1 itself, run
+  // 36396042860 @ 8402634e7 — see tests/e2e/agent-picker-freshness.spec.ts
+  // for the isolated repro). Reload now, matching the safe order
+  // fixtures/conformance-helpers.ts's startFreshChatWithAgent already uses
+  // (create, then navigate, then select).
+  await page.goto("/");
   await selectAgent(
     page,
     new RegExp(probeAgentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),

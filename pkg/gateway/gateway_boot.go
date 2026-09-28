@@ -238,14 +238,20 @@ func bootLoggingAndDataModel(homePath string) error {
 	return nil
 }
 
-// The production values for the ADR-067 FR-008 background refresh: one pull
-// every 24 h, each attempt bounded to 30 s, and a startup pull skipped
-// entirely when the persisted last-known-good was written less than an hour
-// ago.
+// The production values for the ADR-067 FR-008 background refresh. Daily
+// attempts retain the 30 s budget. Startup gets two fast 4 s attempts, then
+// one full-budget attempt, with 500 ms / 1 s backoff. A transient failure can
+// therefore recover inside the model picker's 15 s readiness window without
+// denying a slow valid pull the specification's full 30 s allowance. Startup
+// refresh is skipped when the persisted last-known-good was written less than
+// an hour ago.
 const (
-	catalogRefreshInterval   = 24 * time.Hour
-	catalogRefreshTimeout    = 30 * time.Second
-	catalogStartupSkipWindow = time.Hour
+	catalogRefreshInterval        = 24 * time.Hour
+	catalogRefreshTimeout         = 30 * time.Second
+	catalogStartupSkipWindow      = time.Hour
+	catalogStartupRefreshAttempts = 3
+	catalogStartupFastTimeout     = 4 * time.Second
+	catalogStartupRetryBackoff    = 500 * time.Millisecond
 )
 
 // setupAndStartServicesState carries the shared state of setupAndStartServices across its stages.
@@ -1717,7 +1723,8 @@ func skipStartupPull(store persistedCatalogAger, window time.Duration) bool {
 }
 
 // runCatalogRefreshLoop performs the FR-008 startup pull (unless the
-// persisted document is younger than skipWindow), then one pull every
+// persisted document is younger than skipWindow), retrying a transient
+// startup failure with bounded exponential backoff, then one pull every
 // interval thereafter, until ctx is canceled. The sole caller
 // (setupAndStartServices) invokes it in its own goroutine, AFTER the
 // listener is bound, passing the gateway's own shutdown-aware context.
@@ -1771,6 +1778,69 @@ func startCatalogRefreshLoop(
 	return loopCancel, ch
 }
 
+type catalogRetryWait func(context.Context, time.Duration) bool
+
+func waitForCatalogRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// retryableCatalogRefreshError distinguishes a transient pull/timeout failure
+// from a downloaded document that deterministically failed acceptance. The
+// latter cannot recover until the publisher changes the artifact, so retrying
+// it immediately only repeats network traffic and warning noise.
+// ErrChecksumMismatch stays retryable because the puller also wraps temporary
+// checksum-sidecar fetch failures (timeout, 429, 5xx) with that sentinel.
+func retryableCatalogRefreshError(err error) bool {
+	return err != nil &&
+		!errors.Is(err, catalog.ErrTooLarge) &&
+		!errors.Is(err, catalog.ErrInvalid) &&
+		!errors.Is(err, catalog.ErrRegressed)
+}
+
+func catalogStartupAttemptTimeout(attempt int, fullTimeout time.Duration) time.Duration {
+	if attempt < catalogStartupRefreshAttempts {
+		return min(fullTimeout, catalogStartupFastTimeout)
+	}
+	return fullTimeout
+}
+
+// runCatalogStartupRefresh applies the bounded startup retry policy. wait is
+// injected so tests can prove attempts and cancellation without wall-clock
+// sleeps; production passes waitForCatalogRetry.
+func runCatalogStartupRefresh(
+	ctx context.Context,
+	refresh func(attempt int) error,
+	wait catalogRetryWait,
+) (attempts int, err error) {
+	for attempts < catalogStartupRefreshAttempts {
+		attempts++
+		err = refresh(attempts)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return attempts, ctxErr
+		}
+		if err == nil || !retryableCatalogRefreshError(err) || attempts == catalogStartupRefreshAttempts {
+			return attempts, err
+		}
+		delay := catalogStartupRetryBackoff << (attempts - 1)
+		logger.InfoCF("gateway", "catalog: retrying startup refresh",
+			map[string]any{"attempt": attempts + 1, "delay": delay.String()})
+		if !wait(ctx, delay) {
+			if ctx.Err() != nil {
+				return attempts, ctx.Err()
+			}
+			return attempts, err
+		}
+	}
+	return attempts, err
+}
+
 func runCatalogRefreshLoop(
 	ctx context.Context,
 	cat *catalog.Catalog,
@@ -1780,21 +1850,24 @@ func runCatalogRefreshLoop(
 	if cat == nil {
 		return
 	}
-	refresh := func(failureLogMsg string) {
-		attemptCtx, cancel := context.WithTimeout(ctx, refreshTimeout)
+	refresh := func(failureLogMsg string, attemptTimeout time.Duration) error {
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 		defer cancel()
-		if err := cat.Refresh(attemptCtx); err != nil {
-			// A cancellation reaching here mid-attempt (gateway shutting
-			// down) is expected, not a real refresh failure — log it at a
-			// lower level than a genuine pull/parse/apply error so shutdown
-			// under load does not spam WARN.
-			if ctx.Err() != nil {
-				logger.InfoCF("gateway", "catalog refresh: canceled by gateway shutdown",
-					map[string]any{"error": err})
-				return
-			}
+		err := cat.Refresh(attemptCtx)
+		if err == nil {
+			return nil
+		}
+
+		// A cancellation reaching here mid-attempt (gateway shutting down)
+		// is expected, not a real refresh failure. Log it below WARN so
+		// shutdown under load does not produce warning noise.
+		if ctx.Err() != nil {
+			logger.InfoCF("gateway", "catalog refresh: canceled by gateway shutdown",
+				map[string]any{"error": err})
+		} else {
 			logger.WarnCF("gateway", failureLogMsg, map[string]any{"error": err})
 		}
+		return err
 	}
 
 	if ctx.Err() != nil {
@@ -1805,7 +1878,17 @@ func runCatalogRefreshLoop(
 		logger.InfoCF("gateway", "catalog: startup pull skipped; persisted document is recent",
 			map[string]any{"skip_window": skipWindow.String()})
 	} else {
-		refresh("gateway: catalog startup refresh failed; served document retained")
+		attempts, err := runCatalogStartupRefresh(ctx, func(attempt int) error {
+			attemptTimeout := catalogStartupAttemptTimeout(attempt, refreshTimeout)
+			return refresh("gateway: catalog startup refresh failed; served document retained", attemptTimeout)
+		}, waitForCatalogRetry)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil && retryableCatalogRefreshError(err) && attempts == catalogStartupRefreshAttempts {
+			logger.WarnCF("gateway", "catalog: startup refresh retries exhausted; last-known-good retained",
+				map[string]any{"attempts": attempts, "next_refresh_in": interval.String(), "error": err})
+		}
 	}
 
 	ticker := time.NewTicker(interval)
@@ -1815,7 +1898,7 @@ func runCatalogRefreshLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			refresh("gateway: catalog refresh failed; last-known-good retained")
+			_ = refresh("gateway: catalog refresh failed; last-known-good retained", refreshTimeout)
 		}
 	}
 }

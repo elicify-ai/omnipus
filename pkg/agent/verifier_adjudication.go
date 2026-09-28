@@ -1909,6 +1909,10 @@ func judgeDispatchNeedsOperator(callErr error) (code LLMErrorCode, message strin
 		return code, "the Judge agent is not on any workspace team; add it to one", true
 	case operatorFixWorkDirUnavailable:
 		return code, "the Judge's working folder could not be opened; check that the disk has space and the folder is writable", true
+	case operatorFixQuotaBilling:
+		return code, "the Judge's provider account is out of credit; top up the account or give the Judge agent a provider with credit", true
+	case operatorFixModelRetired:
+		return code, "the Judge's model has been withdrawn; pick a new model on the Judge agent", true
 	}
 	return code, "", false
 }
