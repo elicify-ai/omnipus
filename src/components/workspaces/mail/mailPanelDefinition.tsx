@@ -25,7 +25,7 @@
 // state outside its compose dialog, which owns its own confirm-on-close —
 // same posture as Browser).
 import { lazy } from 'react'
-import type { PanelContentProps, PanelDefinition } from '@/components/panel-shell/types'
+import type { PanelDefinition } from '@/components/panel-shell/types'
 
 // Lazy, like the shell's Library/Browser entries: the registry is imported
 // by the AppShell eagerly, so the mail panel's code must ride the same
