@@ -17,6 +17,11 @@ import { useUiStore } from '@/store/ui'
 import { announceLibraryPopoutClosed, announceLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
 import type { PanelContentProps } from '@/components/panel-shell/types'
 
+vi.mock('@/lib/constants', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/constants')>()),
+  generateId: () => 'library-popout-test',
+}))
+
 const mockLibraryExplorerProps = vi.fn()
 
 // The mock's own "current selection" — settable per test via
@@ -168,7 +173,7 @@ describe('LibraryPanel (always-docked)', () => {
 
       expect(invokeShellExpand()).toBe(true)
 
-      expect(openSpy).toHaveBeenCalledWith('/#/library?workspace=ws-1', '_blank')
+      expect(openSpy).toHaveBeenCalledWith('/#/library?workspace=ws-1&popout=library-popout-test', '_blank')
       expect(popup.opener).toBeNull()
       // C4: the slide-out closes now that the fullscreen tab shows the same
       // place — see LibraryPanel.tsx's module doc "C4 UPDATE" note for why
@@ -185,7 +190,7 @@ describe('LibraryPanel (always-docked)', () => {
 
       invokeShellExpand()
 
-      expect(openSpy).toHaveBeenCalledWith('/#/library', '_blank')
+      expect(openSpy).toHaveBeenCalledWith('/#/library?popout=library-popout-test', '_blank')
 
       vi.mocked(window.open).mockRestore()
     })
@@ -202,7 +207,7 @@ describe('LibraryPanel (always-docked)', () => {
 
       // `path` wins over `folder` — a selected file already implies its own
       // folder (LibraryAddress/`selectedDir`), so only one needs to travel.
-      expect(openSpy).toHaveBeenCalledWith('/#/library?workspace=ws-1&path=01-Areas%2FCRM%2Fnotes.md', '_blank')
+      expect(openSpy).toHaveBeenCalledWith('/#/library?workspace=ws-1&path=01-Areas%2FCRM%2Fnotes.md&popout=library-popout-test', '_blank')
 
       vi.mocked(window.open).mockRestore()
     })
@@ -214,7 +219,10 @@ describe('LibraryPanel (always-docked)', () => {
       renderShellHostedLibrary({ workspaceId: 'ws-1' })
       invokeShellExpand()
 
-      expect(openSpy).toHaveBeenCalledWith('/#/library?workspace=ws-1&folder=01-Areas%2FCRM', '_blank')
+      expect(openSpy).toHaveBeenCalledWith(
+        '/#/library?workspace=ws-1&folder=01-Areas%2FCRM&popout=library-popout-test',
+        '_blank',
+      )
 
       vi.mocked(window.open).mockRestore()
     })
@@ -229,7 +237,10 @@ describe('LibraryPanel (always-docked)', () => {
       renderShellHostedLibrary({})
       invokeShellExpand()
 
-      expect(openSpy).toHaveBeenCalledWith('/#/library?workspace=ws-live', '_blank')
+      expect(openSpy).toHaveBeenCalledWith(
+        '/#/library?workspace=ws-live&popout=library-popout-test',
+        '_blank',
+      )
 
       vi.mocked(window.open).mockRestore()
     })

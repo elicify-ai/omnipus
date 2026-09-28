@@ -235,7 +235,7 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
               size="sm"
               aria-label={`Close ${def.title}`}
               data-testid="panel-close"
-              onClick={() => shell.requestClose()}
+              onClick={() => shell.requestClose('chat')}
             >
               <X weight="bold" className="h-4 w-4" />
             </IconButton>
@@ -255,7 +255,7 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
               <ErrorBoundary key={def.id}>
                 <def.content
                   context={activePanel.context}
-                  close={shell.requestClose}
+                  close={() => shell.requestClose('chat')}
                   expand={() => {
                     void handleExpand()
                   }}

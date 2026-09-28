@@ -63,6 +63,7 @@ describe('panel-tab presence security boundaries', () => {
       type: 'presence',
       tabId: '8e51c73e-7a88-4acc-a779-cd09cc949f11',
       identityKey: 'a'.repeat(64),
+      focusNonce: '90d82f08-ff9e-4de6-b7f7-bf08b27c4971',
       sentAt: Date.now(),
     }
     expect(accept(valid)).toBe(true)

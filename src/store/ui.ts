@@ -16,6 +16,11 @@ export interface Toast {
     label: string
     onClick: () => void
   }
+  /** Optional second action, used when a remote-tab hint must remain advisory. */
+  secondaryAction?: {
+    label: string
+    onClick: () => void
+  }
 }
 
 interface UiStore {

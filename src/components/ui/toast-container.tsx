@@ -50,6 +50,18 @@ export function ToastContainer() {
             <Warning size={16} className="text-[var(--color-accent)] shrink-0 mt-[var(--space-0-5)]" weight="fill" />
           )}
           <p className="flex-1 text-[length:var(--type-body-compact-size)]">{toast.message}</p>
+          {toast.secondaryAction && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                toast.secondaryAction!.onClick()
+                removeToast(toast.id)
+              }}
+              className="h-auto w-auto shrink-0 p-0 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)] hover:underline"
+            >
+              {toast.secondaryAction.label}
+            </Button>
+          )}
           {toast.action && (
             <Button
               variant="ghost"

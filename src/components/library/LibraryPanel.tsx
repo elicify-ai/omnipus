@@ -30,6 +30,7 @@
 // through the leave guard. A different panel in the slot still wins.
 import { useCallback, useEffect, useRef } from 'react'
 import { useUiStore } from '@/store/ui'
+import { generateId } from '@/lib/constants'
 import {
   armPanelFocusFallback,
   focusPanelTab,
@@ -87,6 +88,7 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     // a same-origin window.open'd tab inherits it automatically, no token
     // hand-off needed.
     const params = new URLSearchParams()
+    const popoutId = generateId()
     // `currentWorkspaceRef`, not `libraryPanel.workspaceId` — see this ref's
     // own doc comment above.
     const workspaceId = currentWorkspaceRef.current
@@ -103,6 +105,7 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     } else if (folder) {
       params.set('folder', folder)
     }
+    params.set('popout', popoutId)
     const qs = params.toString()
     // Hash routing: the route + search MUST live in the `#/` fragment or the
     // router falls back to the default route (same caveat as browser-live).
@@ -124,6 +127,10 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
       return false
     }
     if (outcome.kind === 'affordance') {
+      const openHere = () => {
+        armPanelFocusFallback(identity)
+        useUiStore.getState().openPanel('library', { workspaceId })
+      }
       useUiStore.getState().addToast({
         message: 'The Library is already open in another tab — switch.',
         variant: 'default',
@@ -131,12 +138,10 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
         action: {
           label: 'Switch',
           onClick: () => {
-            if (!focusPanelTab(identity)) {
-              armPanelFocusFallback(identity)
-              useUiStore.getState().openPanel('library', { workspaceId })
-            }
+            if (!focusPanelTab(identity)) openHere()
           },
         },
+        secondaryAction: { label: 'Open here', onClick: openHere },
       })
       return true
     }
@@ -158,6 +163,7 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     }
     isolatedCleanupRef.current = { identity, handle: popup }
     registerPanelPopout({
+      popoutId,
       identity,
       handle: popup,
       onClosed: (finalIdentity) => {

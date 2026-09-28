@@ -43,6 +43,14 @@ export function PanelTabPresenceBridge() {
 
       state.closePanel()
       if (existing === 'focused') return
+      const openHere = () => {
+        armPanelFocusFallback(identity)
+        if (activePanel.id === 'browser') {
+          useUiStore.getState().openPanel('browser', activePanel.context)
+        } else {
+          useUiStore.getState().openPanel(activePanel.id, activePanel.context)
+        }
+      }
       state.addToast({
         message: `${panelLabel(activePanel.id)} is already open in another tab — switch.`,
         variant: 'default',
@@ -50,16 +58,10 @@ export function PanelTabPresenceBridge() {
         action: {
           label: 'Switch',
           onClick: () => {
-            if (!focusPanelTab(identity)) {
-              armPanelFocusFallback(identity)
-              if (activePanel.id === 'browser') {
-                useUiStore.getState().openPanel('browser', activePanel.context)
-              } else {
-                useUiStore.getState().openPanel(activePanel.id, activePanel.context)
-              }
-            }
+            if (!focusPanelTab(identity)) openHere()
           },
         },
+        secondaryAction: { label: 'Open here', onClick: openHere },
       })
     })
     return () => {

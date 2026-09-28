@@ -20,6 +20,29 @@ import { focusPanelTriggerOrigin } from './panelFocus'
 
 export { PANEL_TRIGGER_ATTR } from './panelFocus'
 
+export type PanelFocusReturnReason = 'trigger' | 'chat'
+
+function restoreFocusToChat(): void {
+  const focus = (): boolean => {
+    const input = document.querySelector<HTMLElement>('[data-testid="chat-input"]')
+    input?.focus()
+    return input !== null && document.activeElement === input
+  }
+  if (focus()) return
+  requestAnimationFrame(focus)
+}
+
+function restoreFocusToTrigger(id: PanelId): void {
+  if (focusPanelTriggerOrigin(id)) return
+  let frames = 0
+  const tick = (): void => {
+    if (focusPanelTriggerOrigin(id)) return
+    if (++frames < 10) requestAnimationFrame(tick)
+    else restoreFocusToChat()
+  }
+  requestAnimationFrame(tick)
+}
+
 function usePanelWidthHydration(
   username: string,
   activePanel: ReturnType<typeof usePanelShellStore.getState>['activePanel'],
@@ -42,42 +65,13 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
   const guardPending = usePanelShellStore((s) => s.guardPending)
 
   const panelsRef = useRef(panels)
+  const historyFocusReturnRef = useRef<PanelFocusReturnReason>('trigger')
   panelsRef.current = panels
 
   // Production entry points open through the global store, not requestOpen.
   // Hydrate on every user/panel/scope transition so those paths restore the
   // same remembered width as shell-owned opens.
   usePanelWidthHydration(username, activePanel)
-
-  /** Return focus to the control that opened the panel (MIN-002). The
-   *  trigger can be display:none AT the close moment — a container-query
-   *  strip flip (compact dropdown ↔ full strip) or the takeover's chat
-   *  un-hide resolves only after the close re-render + style recalc, and
-   *  focus() into display:none is a silent no-op — so the focus lands via a
-   *  short frame-bounded retry. Shell-level correctness: wave 1's real tab
-   *  strip collapses the same way. */
-  const restoreFocusToTrigger = useCallback((id: PanelId) => {
-    const tryFocus = (): boolean => {
-      return focusPanelTriggerOrigin(id)
-    }
-    const focusChatInput = (): void => {
-      document.querySelector<HTMLElement>('[data-testid="chat-input"]')?.focus()
-    }
-    if (tryFocus()) return
-    let frames = 0
-    const tick = (): void => {
-      if (tryFocus()) return
-      // Bounded: if the trigger never becomes focusable (e.g. the chat
-      // column is hidden in the takeover), stop after 10 frames and let
-      // focus stay where the browser put it.
-      if (++frames < 10) {
-        requestAnimationFrame(tick)
-      } else {
-        focusChatInput()
-      }
-    }
-    requestAnimationFrame(tick)
-  }, [])
 
   /** CRIT-001: run the outgoing panel's guard; true when the move is allowed. */
   const runGuard = useCallback(async (def: PanelDefinition | undefined): Promise<boolean> => {
@@ -92,11 +86,12 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
 
   /** Store-level close + focus return. Guard already passed. */
   const finishClose = useCallback(
-    (id: PanelId) => {
+    (id: PanelId, focusReturn: PanelFocusReturnReason) => {
       usePanelShellStore.getState().closePanel() // also clears historyPushed
-      restoreFocusToTrigger(id)
+      if (focusReturn === 'chat') restoreFocusToChat()
+      else restoreFocusToTrigger(id)
     },
-    [restoreFocusToTrigger],
+    [],
   )
 
   /**
@@ -106,15 +101,25 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
    * shell state.
    */
   const guardThenClose = useCallback(
-    async (repushOnCancel: boolean): Promise<void> => {
+    async (
+      repushOnCancel: boolean,
+      focusReturn: PanelFocusReturnReason = historyFocusReturnRef.current,
+    ): Promise<void> => {
       const { activePanel } = usePanelShellStore.getState()
-      if (activePanel === null) return
+      if (activePanel === null) {
+        historyFocusReturnRef.current = 'trigger'
+        return
+      }
       const def = panelsRef.current.find((p) => p.id === activePanel.id)
-      if (await runGuard(def)) {
-        finishClose(activePanel.id)
-      } else if (repushOnCancel) {
-        usePanelShellStore.getState().setHistoryPushed(true)
-        window.history.pushState({ sidePanel: activePanel.id }, '')
+      try {
+        if (await runGuard(def)) {
+          finishClose(activePanel.id, focusReturn)
+        } else if (repushOnCancel) {
+          usePanelShellStore.getState().setHistoryPushed(true)
+          window.history.pushState({ sidePanel: activePanel.id }, '')
+        }
+      } finally {
+        historyFocusReturnRef.current = 'trigger'
       }
     },
     [runGuard, finishClose],
@@ -126,15 +131,16 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
    * history.back() so URL and shell state never disagree; popstate runs
    * guardThenClose on the way back.
    */
-  const requestClose = useCallback((): void => {
+  const requestClose = useCallback((focusReturn: PanelFocusReturnReason = 'trigger'): void => {
     const store = usePanelShellStore.getState()
     if (store.guardPending || store.activePanel === null) return
     if (getDiscardConfirmDialogOpen()) return
     if (store.historyPushed) {
+      historyFocusReturnRef.current = focusReturn
       window.history.back() // popstate runs guardThenClose(false)
       return
     }
-    void guardThenClose(false)
+    void guardThenClose(false, focusReturn)
   }, [guardThenClose])
 
   /**
@@ -212,7 +218,7 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
       }
       const current = usePanelShellStore.getState().activePanel
       if (current?.id === activePanel.id && current.context === activePanel.context) {
-        finishClose(activePanel.id)
+        finishClose(activePanel.id, 'chat')
       }
       return 'opened'
     },
