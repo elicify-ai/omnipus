@@ -169,14 +169,15 @@ export interface LibraryExplorerProps {
   /** Extra classes for the root element — e.g. the pop-out route's `absolute inset-0` fill. */
   className?: string
   /** Fires whenever the workspace currently being VIEWED changes (including
-   * the initial mount) — null for the virtual root. library-spec.md D-4's
-   * pop-out route uses this to know what to announce via libraryHandoff.ts,
-   * and it must keep using THIS rather than reading the workspace back out of
-   * its own URL: this fires at the moment the workspace changes, whereas the
-   * URL is written by a router navigation that settles a tick later — and at
-   * `pagehide` there is no later tick. (Before deep-linking the reason was
-   * different but the conclusion identical: the param went stale the moment
-   * the user navigated inside the explorer.) */
+   * the initial mount) — null for the virtual root. The pop-out route uses
+   * this to feed the continuous workspace presence announcement
+   * (`panelTabPresence.ts`), and it must keep using THIS rather than reading
+   * the workspace back out of its own URL: this fires at the moment the
+   * workspace changes, whereas the URL is written by a router navigation
+   * that settles a tick later — and at `pagehide` there is no later tick.
+   * (Before deep-linking the reason was different but the conclusion
+   * identical: the param went stale the moment the user navigated inside the
+   * explorer.) */
   onWorkspaceChange?: (workspaceId: string | null) => void
   /**
    * Fires whenever the CURRENT selection changes (the selected file, or —

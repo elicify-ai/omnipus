@@ -1,8 +1,9 @@
 // panelTabPresence.contract.test.ts — side-panel-shell-spec.md §12 #14
 // (§8.3 already-open-tab contract). No production module implements the
-// handle registry + continuous presence list (verified: libraryHandoff and
-// browserLiveHandoff are per-feature broadcasts, not this contract). RED
-// fails LOUDLY with BLOCKED until the module lands — never a skip.
+// handle registry + continuous presence list (verified: browserLiveHandoff
+// is a per-feature broadcast, not this contract; the deleted Library
+// cross-tab signal was the other per-feature broadcast). RED fails LOUDLY
+// with BLOCKED until the module lands — never a skip.
 //
 // Oracles (§8.3): identity is panelId×workspace (app at the root) or
 // panelId×session×agent for Browser, matched on CURRENT scope (MAJ-213);

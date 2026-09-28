@@ -17,48 +17,12 @@
 // bookmarkable, shareable and reachable by the back button — and it is the
 // same mechanism later waves point wikilink clicks, search results, backlinks
 // and agent-supplied links at, so those need no navigation of their own.
-//
-// UAT fix (2026-07, v1): the `workspace` search param only reflects what this
-// TAB WAS OPENED WITH — LibraryExplorer manages in-tab navigation (drilling
-// into a different workspace from the virtual root, or switching workspaces
-// some other way) as its own internal state, never synced back to the URL.
-// A `handlePageHide` closed over the initial `workspace` value would
-// therefore announce a STALE workspace once the user had navigated
-// elsewhere before closing the tab, and the docked panel would re-dock to
-// the wrong place. `currentWorkspaceRef` — kept live via LibraryExplorer's
-// `onWorkspaceChange` — is what's actually announced, so the re-dock always
-// lands on whatever was on screen at close time.
-//
-// UAT fix (2026-07-30, v2 — that first fix did not actually work): Dana's
-// re-verification found the docked panel still didn't update, because (a)
-// the DOCKED side ignored the announcement whenever it was already open
-// (fixed in LibraryPanel.tsx — see its doc comment), and (b) `pagehide` +
-// BroadcastChannel is not a reliable delivery moment (a message posted
-// during unload may never arrive). This route now ALSO calls
-// `announceLibraryWorkspaceChanged` on every `onWorkspaceChange` — i.e.
-// continuously, the moment navigation happens, not only at teardown — so
-// the docked side already knows the latest workspace well before this tab
-// ever closes. The `pagehide` → `announceLibraryPopoutClosed` call stays as
-// the trigger signal (and a same-payload fallback), but is no longer the
-// only carrier of the workspace itself.
-//
-// IMPORTANT — deep-linking (2026-08) changed the FIRST half of the v1 note — the
-// `workspace` param is now written on every in-tab workspace change, so it
-// is no longer merely what the tab was opened with. It did NOT change what
-// v1 and v2 fixed, and must not: the pop-out still announces its workspace
-// from `currentWorkspaceRef` (fed by `onWorkspaceChange`) and still
-// announces CONTINUOUSLY, never from the search param and never only at
-// `pagehide`. Reading the announcement off the URL instead would reintroduce
-// exactly the v2 failure — the param is written by a router navigation that
-// settles a tick later than the navigation itself, and at `pagehide` there
-// is no later tick.
 
 import { useEffect, useRef } from 'react'
 import { createFileRoute, useBlocker, useNavigate } from '@tanstack/react-router'
 import { z } from 'zod'
 import { LibraryExplorer } from '@/components/library/LibraryExplorer'
 import { confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
-import { announceLibraryPopoutClosed, announceLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
 import { announcePanelTabPresence, type PanelPresenceAnnouncement } from '@/lib/panelTabPresence'
 import { generateId } from '@/lib/constants'
 
@@ -86,7 +50,6 @@ function LibraryRoute() {
   const { workspace, path, folder, popout } = Route.useSearch()
   const navigate = useNavigate()
   const popoutIdRef = useRef(popout ?? generateId())
-  const currentWorkspaceRef = useRef<string | undefined>(workspace)
   const presenceAnnouncementRef = useRef<PanelPresenceAnnouncement | null>(null)
 
   // The unsaved-edits guard, extended to the one navigation LibraryExplorer's
@@ -105,23 +68,6 @@ function LibraryRoute() {
     // a second one here would be a second native prompt for one event.
     enableBeforeUnload: false,
   })
-
-  // Tell the main app's docked panel (LibraryPanel.tsx) this pop-out went
-  // away, so it can re-dock itself IF nothing is currently docked (see
-  // libraryHandoff.ts's doc comment — this is a safety net, not a hand-over:
-  // unlike /browser-live, the docked panel is never force-closed just
-  // because this pop-out opened). `pagehide` fires for every teardown path
-  // (native tab-close/Cmd+W, navigate-away, or this route's own unmount),
-  // so this one listener covers all of them. Registered once (not keyed on
-  // `workspace`) since it always reads the live ref at call time rather than
-  // closing over a point-in-time value.
-  useEffect(() => {
-    const handlePageHide = () => {
-      announceLibraryPopoutClosed(popoutIdRef.current, currentWorkspaceRef.current)
-    }
-    window.addEventListener('pagehide', handlePageHide)
-    return () => window.removeEventListener('pagehide', handlePageHide)
-  }, [])
 
   useEffect(() => {
     const announcement = announcePanelTabPresence({ panelId: 'library', workspaceId: workspace })
@@ -154,8 +100,6 @@ function LibraryRoute() {
       // narrow docked aside would be unusable cut in two.
       layout="split"
       onWorkspaceChange={(id) => {
-        currentWorkspaceRef.current = id ?? undefined
-        announceLibraryWorkspaceChanged(popoutIdRef.current, id ?? undefined)
         presenceAnnouncementRef.current?.update({ panelId: 'library', workspaceId: id ?? undefined })
       }}
       // onClose omitted: closing "the Library" from a standalone tab means
