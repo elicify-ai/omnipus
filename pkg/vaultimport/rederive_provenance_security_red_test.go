@@ -1,6 +1,6 @@
 // Omnipus — RED tests for spec "Library views, anywhere"
 // (docs/internal/specs/library-views-anywhere-spec.md), §10 TDD Plan tests
-// 45 (SECURITY), 44, 46 and 47.
+// 45 (SECURITY), 44, 46, 47 and 65.
 //
 // SECURITY CONTEXT (D-PROVENANCE, round 2, resolves R2-CRIT-001/R2-CRIT-002):
 // the spec requires a PIPELINE-OWNED MEMBERSHIP RECORD, not the `derived_from`
@@ -36,6 +36,7 @@
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRederive_IgnoresCopiedDerivedFromField$' ./pkg/vaultimport/
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRederive_RefusesOccupiedPathNotOwnRecord$' ./pkg/vaultimport/
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRederive_TwoFilesClaimingSameDerivedFromAndName$' ./pkg/vaultimport/
+//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRederive_TakesLockBeforeWriteOrDelete$' ./pkg/vaultimport/
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -158,4 +159,27 @@ func TestRederive_TwoFilesClaimingSameDerivedFromAndName(t *testing.T) {
 		"record (D-PROVENANCE, R2-CRIT-001) are not implemented — required before two files sharing " +
 		"both derived_from and name can be shown to be left untouched by re-derivation, per " +
 		"Dataset F-10 / TDD test 46.")
+}
+
+// TestRederive_TakesLockBeforeWriteOrDelete is TDD Plan test 65 (R2-MIN-002,
+// FR-VA-024): re-derivation's write/delete step on a view file must take
+// the SAME lock key a concurrent write_view/Library save on that file would
+// take (D-LOCK), so the two paths always serialize through
+// WithNoteWriteLock.
+//
+// BLOCKED: rederive.go and run.go never call WithNoteWriteLock or
+// controlPlaneLockKey at all — confirmed by grep:
+//
+//	$ grep -n "WithNoteWriteLock\|controlPlaneLockKey" pkg/vaultimport/rederive.go pkg/vaultimport/run.go
+//	(zero matches)
+//
+// fileTranslatedBase's write loop calls fileutil.WriteFileAtomic and its
+// delete loop calls os.Remove directly, with no lock acquisition around
+// either — there is no lock key to compare against write_view's for this
+// test to prove equal.
+func TestRederive_TakesLockBeforeWriteOrDelete(t *testing.T) {
+	t.Fatal("BLOCKED: rederive.go's write and delete steps take no lock at all (grep for " +
+		"WithNoteWriteLock/controlPlaneLockKey in rederive.go and run.go returns zero matches) — " +
+		"required before its lock key can be shown to match write_view's D-LOCK derivation for the " +
+		"same file, per FR-VA-024 / TDD test 65.")
 }
