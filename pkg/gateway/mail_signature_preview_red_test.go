@@ -45,11 +45,24 @@ import (
 // existing mint").
 const sigMintPath = "/api/v1/mail/signature-preview-token"
 
+// mintSignature mints with the test session (the authenticated arm). For the
+// unauthenticated arm of the auth contract use mintSignatureNoAuth — a mint
+// that silently rode the session token could never observe the contract's 401.
 func mintSignature(t *testing.T, env *mailRedEnv, ip, html string) *httptest.ResponseRecorder {
+	return mintSignatureAuthed(t, env, ip, html, true)
+}
+
+// mintSignatureNoAuth sends the same mint request with NO session/Bearer
+// token (mailDo's authed=false omits the header entirely).
+func mintSignatureNoAuth(t *testing.T, env *mailRedEnv, ip, html string) *httptest.ResponseRecorder {
+	return mintSignatureAuthed(t, env, ip, html, false)
+}
+
+func mintSignatureAuthed(t *testing.T, env *mailRedEnv, ip, html string, authed bool) *httptest.ResponseRecorder {
 	t.Helper()
 	body, err := json.Marshal(gen.MintMailSignaturePreviewTokenJSONRequestBody{SignatureHtml: html})
 	require.NoError(t, err)
-	return mailDo(env.mux, http.MethodPost, sigMintPath, ip, true, string(body))
+	return mailDo(env.mux, http.MethodPost, sigMintPath, ip, authed, string(body))
 }
 
 func decodeSigMint(t *testing.T, rec *httptest.ResponseRecorder) gen.MailSignaturePreviewTokenResponse {
@@ -148,7 +161,7 @@ func TestSignaturePreviewMint_UnauthenticatedIs401_AuthenticatedMints(t *testing
 	env := newMailRedEnv(t)
 	requireMailLive(t, env.mux, http.MethodPost, sigMintPath, "architect decision / contracts /mail/signature-preview-token")
 
-	rec := mintSignature(t, env, nextMailIP(), "<p>no auth</p>")
+	rec := mintSignatureNoAuth(t, env, nextMailIP(), "<p>no auth</p>")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated mint = %d, want 401. body=%s", rec.Code, rec.Body.String())
 	}
