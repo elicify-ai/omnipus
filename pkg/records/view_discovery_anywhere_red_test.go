@@ -1,6 +1,6 @@
 // Omnipus — RED tests for spec "Library views, anywhere"
-// (docs/internal/specs/library-views-anywhere-spec.md), §10 TDD Plan tests 1
-// and 2.
+// (docs/internal/specs/library-views-anywhere-spec.md), §10 TDD Plan tests 1,
+// 2 and 3.
 //
 // Oracle: FD-1 / FR-VA-001 ("The system MUST discover every `.view`-extension
 // file reachable inside a collection's real, symlink-resolved boundary...")
@@ -22,6 +22,7 @@
 //
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestLoadViews_FindsViewOutsideFixedViewsDirectory$' ./pkg/records/
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestLoadViews_DedupAcrossDirectories$' ./pkg/records/
+//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestLoadViews_ResolveByNameAcrossFolders$' ./pkg/records/
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -140,5 +141,52 @@ func TestLoadViews_DedupAcrossDirectories(t *testing.T) {
 				"as %q, evaluated over the full discovery result — got rejections: %+v (scanned: %v)",
 			RejectViewDuplicateName, report.Rejections, report.ScannedFiles,
 		)
+	}
+}
+
+// TestLoadViews_ResolveByNameAcrossFolders is TDD Plan test 3
+// (US-1 AS-2): two DIFFERENT-named views in different subfolders — neither
+// colliding — must both resolve correctly by ViewSet.Resolve regardless of
+// which folder each lives in.
+func TestLoadViews_ResolveByNameAcrossFolders(t *testing.T) {
+	root := t.TempDir()
+	dirA := filepath.Join(root, "clients", "acme")
+	dirB := filepath.Join(root, "internal")
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatalf("mkdir dirA: %v", err)
+	}
+	if err := os.MkdirAll(dirB, 0o755); err != nil {
+		t.Fatalf("mkdir dirB: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirA, "acme-open.view"), []byte(vaViewBody("acme-open")), 0o644); err != nil {
+		t.Fatalf("write view A: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirB, "roadmap.view"), []byte(vaViewBody("roadmap")), 0o644); err != nil {
+		t.Fatalf("write view B: %v", err)
+	}
+
+	set, report, err := LoadViews(root, nil)
+	if err != nil {
+		t.Fatalf("LoadViews returned an unexpected error: %v", err)
+	}
+	if len(report.Rejections) > 0 {
+		t.Fatalf("LoadViews reported rejections for two well-formed, non-colliding views: %+v", report.Rejections)
+	}
+
+	acme, _, ok := set.Resolve("acme-open")
+	if !ok {
+		t.Fatalf("US-1 AS-2: ViewSet.Resolve(\"acme-open\") failed to find the view at %s — resolution "+
+			"must work regardless of which subfolder a view lives in; loaded names: %v",
+			filepath.Join(dirA, "acme-open.view"), set.Names())
+	} else if acme.SourcePath != filepath.Join(dirA, "acme-open.view") {
+		t.Errorf("acme-open resolved to SourcePath %q, want %q", acme.SourcePath, filepath.Join(dirA, "acme-open.view"))
+	}
+
+	roadmap, _, ok := set.Resolve("roadmap")
+	if !ok {
+		t.Fatalf("US-1 AS-2: ViewSet.Resolve(\"roadmap\") failed to find the view at %s; loaded names: %v",
+			filepath.Join(dirB, "roadmap.view"), set.Names())
+	} else if roadmap.SourcePath != filepath.Join(dirB, "roadmap.view") {
+		t.Errorf("roadmap resolved to SourcePath %q, want %q", roadmap.SourcePath, filepath.Join(dirB, "roadmap.view"))
 	}
 }
