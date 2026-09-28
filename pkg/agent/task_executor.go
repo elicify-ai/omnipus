@@ -1051,8 +1051,14 @@ type activeRun struct {
 // launch block only ever checked the TASK's own status transition, never
 // its PlanID.
 //
-// Idempotency: if the task already has a SessionID the call is a no-op and
-// returns the existing session ID immediately without launching a second agent.
+// Idempotency: if the task already has a SessionID and no launch is in flight
+// (the te.running slot is free), the call is a no-op and returns the existing
+// session ID immediately without launching a second agent.
+//
+// Concurrency: the te.mu-guarded slot claim is the single linearization point —
+// of N concurrent callers for the same task exactly ONE wins the launch and
+// every other concurrent caller fails with the already-running error, even when
+// the winner persists the new session_id while the losers are still deciding.
 //
 // Returns the session ID that was created (or already existed) on success, or
 // an empty string and an error when the task cannot be found, already has no
@@ -1088,16 +1094,22 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		return te.startTaskNowViaLauncher(ctx, t)
 	}
 
-	// Idempotency guard: if a session already exists, don't create another one.
-	if t.SessionID != "" {
-		return t.SessionID, nil
-	}
-
-	// Atomically claim the slot: under a single te.mu critical section, re-check
-	// whether a goroutine is already running AND insert a sentinel cancel so
-	// competing concurrent callers observe the slot as taken before we unlock.
-	// This closes the TOCTOU window where two concurrent StartTaskNow calls could
-	// both pass the running-check before either one registered its goroutine.
+	// Atomically claim the launch slot BEFORE any success can be decided: under
+	// a single te.mu critical section, check whether a goroutine is already
+	// running AND insert a sentinel cancel so competing concurrent callers
+	// observe the slot as taken before we unlock. This closes the TOCTOU window
+	// where two concurrent StartTaskNow calls could both pass the running-check
+	// before either one registered its goroutine.
+	//
+	// The claim must come BEFORE the idempotency guard below. The race winner
+	// persists session_id on the task DURING the race, so a loser that re-read
+	// the store after that persist used to report the winner's session as its
+	// own idempotent success — two successes for one launch (CI:
+	// TestStartTaskNow_NoConcurrentDoubleLaunch "expected 1, actual 2", PR #950
+	// run 36355591016). With the claim first, a loser fails at the mutex and
+	// never reaches a success return; the idempotency guard is only reachable
+	// by a caller that holds a fresh claim, so any session_id it sees comes
+	// from a PREVIOUS completed run, never from a concurrently-starting one.
 	//
 	// A nil sentinel marks "slot reserved, cancel not yet set". The goroutine
 	// replaces it with the real cancel before returning. If setup fails we delete
@@ -1105,12 +1117,12 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	te.mu.Lock()
 	if _, alreadyRunning := te.running[taskID]; alreadyRunning {
 		te.mu.Unlock()
-		// A goroutine is live (or starting up); the session_id may have been
-		// written by now — re-read.
-		fresh, rerr := te.store.Get(taskID)
-		if rerr == nil && fresh.SessionID != "" {
-			return fresh.SessionID, nil
-		}
+		// This call lost the race: a launch is in flight for this task (the
+		// slot is reserved but the goroutine has not replaced the sentinel
+		// yet, or the goroutine itself is live). Fail unconditionally — never
+		// adopt the winner's session_id as this call's success. The winner
+		// persists that session_id mid-race, so a store re-read here is
+		// exactly how a lost race used to turn into a bogus second success.
 		return "", fmt.Errorf("task_executor: StartTaskNow: task %q goroutine already running", taskID)
 	}
 	// Reserve the slot explicitly so competing callers bail at the check above.
@@ -1130,6 +1142,14 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		}
 	}
 	defer releaseSlot()
+
+	// Idempotency guard: if a session already exists, don't create another one.
+	// Reached only while holding a fresh claim, so no launch is in flight: any
+	// session_id here is from a previous, completed run — the documented no-op
+	// success, not a concurrently-starting launch.
+	if t.SessionID != "" {
+		return t.SessionID, nil
+	}
 
 	// Check that the assigned agent is known.
 	registry := te.agentLoop.GetRegistry()
