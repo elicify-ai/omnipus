@@ -39,8 +39,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { request, type APIRequestContext } from '@playwright/test';
 import { getFreePort, waitForHealth, DEFAULT_OMNIPUS_BINARY } from '../setup.js';
-
-const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
+import { E2E_MODEL } from './e2e-model.js';
 
 export interface ApiResult<T> {
   ok: boolean;
@@ -149,7 +148,7 @@ export class GatewayProcess {
         binary,
         adminUsername: opts.adminUsername ?? 'admin',
         adminPassword: opts.adminPassword ?? 'admin1234',
-        model: opts.model ?? DEFAULT_MODEL,
+        model: opts.model ?? E2E_MODEL,
         apiBase: opts.apiBase ?? '',
         extraArgs: opts.extraArgs ?? ['--sandbox=off'],
         extraEnv: opts.env ?? {},

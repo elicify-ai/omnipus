@@ -29,9 +29,14 @@
  * auto-reconnect/reattach to the SAME session all verified (see `h`'s own
  * comment for the `restart({relogin:false})` harness-bug fix that came out
  * of that pass). Pass 3 still could not reliably catch a turn genuinely
- * mid-answer at kill time — z-ai/glm-5.2 answers fast enough in this
- * environment that three different timing strategies produced three
- * different outcomes. Pass 4 closes that gap with the backend's new
+ * mid-answer at kill time — the then-configured model answered fast enough
+ * in that environment that three different timing strategies produced three
+ * different outcomes. The central e2e model (tests/e2e/e2e-model.json, see
+ * fixtures/e2e-model.ts) streams
+ * much more slowly (measured full real turns ran 17s-1.8m across scenarios
+ * a-f, 2026-09-27 local run), which widens the window, and pass 4's
+ * stream-delay knob makes it model-independent anyway. Pass 4 closed that
+ * gap with the backend's
  * test-only knob, `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS`
  * (`pkg/gateway/ws_session_hub.go`'s `streamTokenDelayEnvOverrideVar`,
  * read once at gateway start): set to 300ms on `h`'s OWN `GatewayProcess`
@@ -54,16 +59,19 @@ const LONG_PROMPT =
   'Do NOT use any tools. Plain prose only. Write eight short paragraphs about the tide, about 600 words total.'
 
 // Scenario h only: real-browser follow-up (orchestrator) — the ordinary
-// LONG_PROMPT above genuinely raced kill9() in practice against a fast
-// model (z-ai/glm-5.2 completed the full ~600-word answer, `done` and all,
-// before this test's kill9()/restart() cycle finished — confirmed by a
-// local run whose failure screenshot showed a COMPLETE, model-footer-
-// stamped answer with no "Generate again", i.e. nothing was actually
-// interrupted, not a real product bug). Item h's whole premise is a turn
-// that is GENUINELY still in flight at the moment of the crash, so this
-// scenario alone asks for a much longer answer to widen that window well
-// past kill9()'s own real-world latency (SIGKILL + wait-for-exit + re-spawn
-// + health-check).
+// LONG_PROMPT above genuinely raced kill9() in practice against the pass-3
+// model (it completed the full ~600-word answer, `done` and all,
+// before that cycle finished — confirmed by a local run whose failure
+// screenshot showed a COMPLETE, model-footer-stamped answer with no
+// "Generate again", i.e. nothing was actually interrupted, not a real
+// product bug). The central e2e model (tests/e2e/e2e-model.json) streams
+// far more slowly than that, and the
+// pass-4 stream-delay knob below keeps the turn mid-stream through
+// kill9()/restart() regardless of model speed either way. Item h's whole
+// premise is a turn that is GENUINELY still in flight at the moment of the
+// crash, so this scenario alone asks for a much longer answer to widen that
+// window well past kill9()'s own real-world latency (SIGKILL + wait-for-exit
+// + re-spawn + health-check).
 const VERY_LONG_PROMPT =
   'Do NOT use any tools. Plain prose only. Write twenty long, detailed paragraphs about the history and science of tides, at least 3000 words total.'
 
@@ -516,17 +524,21 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       // Deliberately NOT `startLongTurn()` here: that helper polls for
       // >80 characters of streamed bubble text before returning, which two
       // pass-3 runs proved fatal for this scenario specifically (before the
-      // stream-delay knob existed) — the configured model (z-ai/glm-5.2,
-      // per GatewayProcess's own default) answered BOTH the original
-      // 600-word LONG_PROMPT and a 3000-word VERY_LONG_PROMPT so fast
-      // (screenshots showed the COMPLETE, model-footer-stamped answer,
+      // stream-delay knob existed) — the then-configured model (the pass-3
+      // GatewayProcess default) answered BOTH the
+      // original 600-word LONG_PROMPT and a 3000-word VERY_LONG_PROMPT so
+      // fast (screenshots showed the COMPLETE, model-footer-stamped answer,
       // 16-20k tokens, already rendered) that by the time that poll
       // resolved, the turn had already finished — nothing was left to
-      // interrupt. Pass 4's `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300'`
-      // (above) removes that race at the source (300ms per token keeps the
-      // turn mid-stream for many seconds), but the kill point below still
-      // waits for the minimum real signal rather than any particular amount
-      // of content — see the "two rounds" comment just below for why.
+      // interrupt. GatewayProcess's default is now the central e2e model
+      // (tests/e2e/e2e-model.json via `fixtures/e2e-model.ts`, which
+      // streams far more slowly than that), and
+      // pass 4's `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300'` (above)
+      // removes the race at the source anyway (300ms per token keeps the
+      // turn mid-stream for many seconds on ANY model), but the kill point
+      // below still waits for the minimum real signal rather than any
+      // particular amount of content — see the "two rounds" comment just
+      // below for why.
       const input = chatInput(page)
       await expect(input).toBeVisible({ timeout: 15_000 })
       await waitForConnected(page)

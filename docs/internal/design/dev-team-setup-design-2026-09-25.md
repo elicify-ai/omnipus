@@ -426,7 +426,7 @@ Status updates are **event-driven** (Round 12): they fire when something lands, 
 
 | Signal | Role | Proposed HOLD threshold | Why this signal |
 |---|---|---|---|
-| Memory | **hard** | Available RAM below ~4 GB, or swap-in activity rising | Parallel agents and build caches OOM the machine, not just one lane |
+| Memory | **hard** | Available RAM below ~3 GB (founder, 2026-09-27; was 4 GB), or swap-in activity rising | Parallel agents and build caches OOM the machine, not just one lane |
 | Disk | **hard** | Free space on the workspace volume below ~20 GB | Worktrees, node_modules and Go caches grow fast |
 | CPU load | advisory — feeds the verdict, never holds alone | sustained 1-minute load above ~80% of logical cores over two samples ~30 s apart | One spike is noise; sustained load means lanes already compete |
 | Active dispatches | advisory — counted from the ledger's in-flight rows across all squad files | more than ~12 in-flight rows | The work-in-flight measure that replaces the deleted agent-process count; the ceiling is founder-adjustable |
