@@ -477,7 +477,15 @@ test('UAT-CTRL a chat reaches its own workspace browser and can drive it', async
   if (isMemoryRefusal(opened.error)) {
     throw new Error(`BLOCKED by the memory ceiling (the feature working, not a defect): ${opened.error}`);
   }
-  expect(opened.error, 'attach must not error').toBeNull();
+  // Row 55: a LIVE_NAVIGATE_DEADLINE dispatch error is stale once the tab
+  // strip already shows PAGE_A — the same "Chrome commits the load anyway"
+  // race errorUnlessPageShows already tolerates for UAT-09b above. Deferring
+  // to the tabs assertion right below (which already exists and is
+  // unconditional) as the real oracle; any OTHER error still fails here
+  // immediately, same as before.
+  if (opened.error === null || !LIVE_NAVIGATE_DEADLINE.test(opened.error)) {
+    expect(opened.error, 'attach must not error').toBeNull();
+  }
   expect(opened.statuses.some((s) => s.state === 'attached'), 'panel must report attached').toBe(true);
   expect(opened.tabs.map((t) => t.url).join(','), 'the workspace tab must be on the page we drove it to').toContain(PAGE_A);
 });
