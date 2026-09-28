@@ -228,7 +228,7 @@ func PlantedCookieGuard(opts ...PlantedCookieGuardOption) func(http.Handler) htt
 			// never cookie values, never the raw Cookie header.
 			stateChanging := isStateChangingMethod(r.Method)
 			redactedPath := pathredact.RequestPath(r.URL.Path)
-			slog.Warn("planted-cookie guard: duplicated reserved cookie names detected",
+			logsafeWarn("planted-cookie guard: duplicated reserved cookie names detected",
 				"names", dup, "path", redactedPath, "method", r.Method, "state_changing", stateChanging)
 			if o.auditLog != nil {
 				if logErr := o.auditLog.Log(&audit.Entry{
