@@ -9,24 +9,45 @@
 // last resize keystroke — MIN-205 ...), with its visible status and Retry
 // ..., never a silent stall."
 //
-// Driven entirely through the REAL shell + REAL ResizeSeparator: the
-// Browser content probe records the settle notification the shell gives the
-// panel (onWidthSettle — the shell→panel width handover; only a stub today,
-// which is exactly what this pack is red for) and renders it as the VISIBLE
-// status the spec requires. Wave-0's PanelContentProps does not carry
-// onWidthSettle yet, so it is typed structurally — the probe renders the
-// status only if the shell actually notifies it, so a shell that never
-// notifies fails loudly instead of passing vacuously.
+// The §8.1 settle channel is a SUBSCRIBE function (GREEN
+// src/components/panel-shell/types.ts:112::PanelContentProps.onWidthSettle —
+// "(listener: ((px: number) => void) | null) => void", "Subscribe to settled
+// divider widths. Browser uses the notification to start its existing
+// remote-viewport handover only after resize settles."): the panel REGISTERS
+// a listener in an effect and unregisters with null on unmount; the shell
+// invokes it once per settle (GREEN SidePanelShell.tsx separator onCommit —
+// settleWidth(px) then registered.listener(px)).
 //
-// RED on this pre-GREEN tree (assertion form): the shell never notifies the
-// panel of a settled width, so no status ever renders and the settle
-// notification is never observed.
+// Batch-8 rewrite (squad-lead-verified defect in the previous probe): it
+// READ props.onWidthSettle as a direct-call value and never registered a
+// listener, so settleCalls could never be written and the pack could never
+// pass. This probe subscribes the way the real Browser panel does — register
+// in an effect, record the settled px into both the module array (the
+// assertion oracle) and React state (so the VISIBLE status re-renders),
+// unregister with null on unmount — and keeps every original assertion:
+// flood guard mid-burst, settle-once 300ms after the last change, real width
+// (SP-17 floor), visible status, second burst settles again.
+//
+// RED on this pre-GREEN tree (stated form): wave-0's PanelContentProps does
+// not carry onWidthSettle, so the probe renders a loud BLOCKED marker
+// (browser-settle-blocked) and every test fails at requireSettleChannel()
+// naming the missing channel — never an unexplained TypeError from a
+// missing prop.
 
+import { useEffect, useState } from 'react'
 import { cleanup, fireEvent, render, screen, act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
 import { usePanelShellStore } from '@/components/panel-shell/panelShellStore'
 import type { PanelDefinition, PanelContentProps } from '@/components/panel-shell/types'
+
+/** The §8.1 settle channel's real shape (GREEN
+ * src/components/panel-shell/types.ts:112::PanelContentProps.onWidthSettle):
+ * a SUBSCRIBE function — register a settle listener, or pass null to
+ * unregister. Typed structurally here because wave-0 PanelContentProps
+ * predates the member; the signature is identical to GREEN's, so the
+ * intersection below compiles on both trees without loosening anything. */
+type WidthSettleSubscribe = (listener: ((px: number) => void) | null) => void
 
 class RowRO {
   static last: RowRO | null = null
@@ -47,12 +68,43 @@ class RowRO {
 }
 vi.stubGlobal('ResizeObserver', RowRO)
 
-// The settle notification the shell owes the panel (FR-015/9b) — typed
-// structurally because wave-0 PanelContentProps predates it.
+// The settle notifications the shell owes the panel (FR-015/9b), recorded by
+// the probe's registered listener.
 let settleCalls: number[] = []
 
-function browserProbe(props: PanelContentProps & { onWidthSettle?: (px: number) => void }) {
-  const settled = settleCalls.length > 0 ? settleCalls[settleCalls.length - 1] : null
+function browserProbe(props: PanelContentProps & { onWidthSettle?: WidthSettleSubscribe }) {
+  // React state so the VISIBLE status re-renders on each settle (the module
+  // array alone would update assertions but never the rendered output).
+  const [settled, setSettled] = useState<number | null>(null)
+  const [blocked, setBlocked] = useState(false)
+
+  useEffect(() => {
+    const register = props.onWidthSettle
+    if (typeof register !== 'function') {
+      setBlocked(true)
+      return
+    }
+    const listener = (px: number) => {
+      settleCalls.push(px)
+      setSettled(px)
+    }
+    register(listener)
+    // §8.1 unregistration: null on unmount.
+    return () => register(null)
+  }, [props.onWidthSettle])
+
+  if (blocked) {
+    // Loud, stated absence — the shell passed no subscribe channel (wave-0).
+    // The browser-settle-blocked marker is what requireSettleChannel() sees.
+    return (
+      <div data-testid="browser-probe">
+        <output data-testid="browser-settle-blocked" role="alert">
+          BLOCKED: shell provided no onWidthSettle subscribe channel
+        </output>
+      </div>
+    )
+  }
+
   return (
     <div data-testid="browser-probe">
       {settled !== null && (
@@ -62,10 +114,22 @@ function browserProbe(props: PanelContentProps & { onWidthSettle?: (px: number) 
           Remote viewport handover at {settled}px
         </output>
       )}
-      {/* keep the prop referenced so a type-level regression is visible */}
-      <span hidden>{typeof props.onWidthSettle}</span>
     </div>
   )
+}
+
+/** Stated gate: fail naming the missing settle channel, never with a
+ * downstream TypeError or a vacuous pass. */
+function requireSettleChannel() {
+  if (screen.queryByTestId('browser-settle-blocked') !== null) {
+    throw new Error(
+      'BLOCKED: the shell provides no onWidthSettle subscribe channel to panel content — ' +
+        'required by FR-015/§12 9b (GREEN src/components/panel-shell/types.ts:112::PanelContentProps.onWidthSettle: ' +
+        '"(listener: ((px: number) => void) | null) => void" — the panel registers a settle listener; ' +
+        'the Browser handover starts only on that notification)',
+    )
+  }
+  expect(screen.queryByTestId('browser-settle-blocked')).toBeNull()
 }
 
 function makeBrowserDef(): PanelDefinition {
@@ -117,6 +181,10 @@ describe('§12 9b — Browser settle/handover on width change (FR-015, MIN-205)'
     renderShell()
     openDocked()
 
+    // Stated gate first: without the subscribe channel nothing below could
+    // ever observe a settle (this is the pre-GREEN failure point).
+    requireSettleChannel()
+
     // Before any resize: no handover status (instrument proof — the
     // assertion below is not vacuously satisfiable by a static label).
     expect(screen.queryByTestId('browser-handover-status')).toBeNull()
@@ -157,6 +225,7 @@ describe('§12 9b — Browser settle/handover on width change (FR-015, MIN-205)'
     vi.useFakeTimers()
     renderShell()
     openDocked()
+    requireSettleChannel()
     const separator = screen.getByTestId('panel-resize-separator')
     fireEvent.focus(separator)
 
