@@ -208,6 +208,68 @@ func TestSteeredTurnDrain1020_SameGenerationReentryAcceptsSecondChildWake(t *tes
 	}
 }
 
+// TestSteeredTurnDrain1020_LiveCheckCloseRaceFallsBackToDurableWake pins the
+// IsAlive-to-enqueue race. If a non-terminal recipient's queue closes in that
+// window, delivery must use the ordinary durable wake path instead of
+// rejecting the child completion.
+func TestSteeredTurnDrain1020_LiveCheckCloseRaceFallsBackToDurableWake(t *testing.T) {
+	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	const parentID, childID = "issue-1020-r2-parent", "issue-1020-r2-child"
+	seedParentAndChild(t, lifecycle, parentID, childID)
+	seedUnifiedSession(t, al, parentID)
+	al.activeTurnStates.Store(parentID, &turnState{sessionKey: parentID})
+
+	hookCalls := 0
+	steerUpwardDelivererAfterLiveTurnCheckTestHook = func(sessionID string, generation int) {
+		hookCalls++
+		if sessionID != parentID || generation != 1 {
+			t.Errorf("live-check hook = (%q, %d), want (%q, 1)", sessionID, generation, parentID)
+		}
+		al.steering.mu.Lock()
+		if len(al.steering.queues[sessionID]) != 0 {
+			t.Error("live-check hook could not close the empty steering scope")
+		} else {
+			al.steering.closedGenerations[sessionID] = generation
+		}
+		al.steering.mu.Unlock()
+	}
+	t.Cleanup(func() { steerUpwardDelivererAfterLiveTurnCheckTestHook = nil })
+
+	delivery, err := deliverer.Deliver(context.Background(), handbackEvent(childID, "ignored"))
+	if err != nil {
+		t.Fatalf("Deliver(live-check close race): %v", err)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("live-check hook calls = %d, want 1", hookCalls)
+	}
+	if delivery.Outcome != "woke" {
+		t.Errorf("Delivery.Outcome = %q, want woke fallback", delivery.Outcome)
+	}
+	if got := al.pendingSteeringCountForScope(parentID); got != 0 {
+		t.Errorf("live queue depth after fallback = %d, want 0", got)
+	}
+
+	select {
+	case wake := <-al.bus.InboundChan():
+		if wake.AsyncTranscriptSessionID != parentID {
+			t.Errorf("fallback wake transcript session = %q, want %q", wake.AsyncTranscriptSessionID, parentID)
+		}
+		if got := inboundMetadata(wake, "steer_message_id"); got != delivery.MessageID {
+			t.Errorf("fallback wake message id = %q, want %q", got, delivery.MessageID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordinary wake fallback was not published")
+	}
+
+	rec, loadErr := lifecycle.Load(parentID)
+	if loadErr != nil {
+		t.Fatalf("Load(parent after fallback): %v", loadErr)
+	}
+	if rec.Terminal() {
+		t.Fatalf("parent became terminal during fallback: state=%q", rec.State)
+	}
+}
+
 // TestSteeredTurnDrain1020_SteeringAllLaterMarkerFailureDoesNotLoseConsumedPrefix
 // derives its oracle from the durable-consumption contract: marker A may be
 // written only if A is processed exactly once. A later marker failure for B

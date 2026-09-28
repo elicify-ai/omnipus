@@ -1096,8 +1096,18 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 		al.finishSteeredGoalTurn(ts, rec, &result, runErr)
 		return
 	}
-	if finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr); finishErr != nil {
-		logger.WarnCF("agent", "steer: complete turn failed",
-			map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})
+	for {
+		finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr)
+		if !errors.Is(finishErr, errCompleteSteeringPending) {
+			if finishErr != nil {
+				logger.WarnCF("agent", "steer: complete turn failed",
+					map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})
+			}
+			return
+		}
+
+		drainCtx, cancel := steeredTurnRunContext(context.Background(), rec)
+		ts, result, runErr = al.drainSteeredTurn(drainCtx, rec, ts, result, runErr)
+		cancel()
 	}
 }

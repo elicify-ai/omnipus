@@ -51,7 +51,13 @@ type steeringQueue struct {
 	mu                sync.Mutex
 	queues            map[string][]steeringQueueItem
 	closedGenerations map[string]int
+	terminalizing     map[string]*steeringTerminalTransition
 	mode              SteeringMode
+}
+
+type steeringTerminalTransition struct {
+	done       chan struct{}
+	committing bool
 }
 
 type steeringQueueItem struct {
@@ -76,9 +82,12 @@ func newSteeringQueue(mode SteeringMode) *steeringQueue {
 	return &steeringQueue{
 		queues:            make(map[string][]steeringQueueItem),
 		closedGenerations: make(map[string]int),
+		terminalizing:     make(map[string]*steeringTerminalTransition),
 		mode:              mode,
 	}
 }
+
+var errSteeringScopeClosed = errors.New("steering session finished; use follow_up to continue it")
 
 func normalizeSteeringScope(scope string) string {
 	scope = strings.TrimSpace(scope)
@@ -99,56 +108,135 @@ func (sq *steeringQueue) pushScope(scope string, msg providers.Message) error {
 }
 
 func (sq *steeringQueue) pushItemScope(scope string, item steeringQueueItem) error {
-	sq.mu.Lock()
-	defer sq.mu.Unlock()
+	return sq.pushItemScopeChecked(scope, item, nil)
+}
 
+// pushItemScopeChecked serializes enqueue with a lifecycle terminal
+// transition. An enqueue joins during delivery, but is refused once the
+// empty scope has been handed to the durable terminal write.
+func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueItem, checkOpen func() error) error {
 	scope = normalizeSteeringScope(scope)
+	sq.mu.Lock()
+	if transition := sq.terminalizing[scope]; transition != nil {
+		if transition.committing {
+			sq.mu.Unlock()
+			return fmt.Errorf("%w: %s", errSteeringScopeClosed, scope)
+		}
+		queue := sq.queues[scope]
+		if len(queue) >= MaxQueueSize {
+			sq.mu.Unlock()
+			return fmt.Errorf("steering queue is full")
+		}
+		sq.queues[scope] = append(queue, item)
+		sq.mu.Unlock()
+		return nil
+	}
 	if _, closed := sq.closedGenerations[scope]; closed {
-		return fmt.Errorf("steering session %s finished; use follow_up to continue it", scope)
+		sq.mu.Unlock()
+		return fmt.Errorf("%w: %s", errSteeringScopeClosed, scope)
+	}
+	if checkOpen != nil {
+		if err := checkOpen(); err != nil {
+			sq.mu.Unlock()
+			return err
+		}
 	}
 	queue := sq.queues[scope]
 	if len(queue) >= MaxQueueSize {
+		sq.mu.Unlock()
 		return fmt.Errorf("steering queue is full")
 	}
 	sq.queues[scope] = append(queue, item)
+	sq.mu.Unlock()
 	return nil
 }
 
-// closeScopeIfEmpty atomically hands a steered session from its drain to its
-// terminal disposition. An enqueue either wins this mutex first and leaves an
-// item for the drain, or observes the closed generation and fails loudly.
-func (sq *steeringQueue) closeScopeIfEmpty(scope string, generation int) bool {
-	sq.mu.Lock()
-	defer sq.mu.Unlock()
+// runTerminalTransition runs prepare while a still-live enqueue can join the
+// scope, then atomically hands an empty scope to transition. Enqueues that
+// arrive during prepare abort the handoff and retain a consumer; enqueues
+// arriving during the durable terminal write are refused so they cannot be
+// accepted after the scope has lost its consumer.
+func (sq *steeringQueue) runTerminalTransition(
+	scope string,
+	prepare func() error,
+	transition func() (bool, error),
+) (started bool, terminal bool, err error) {
 	scope = normalizeSteeringScope(scope)
-	if len(sq.queues[scope]) > 0 {
-		return false
+	for {
+		sq.mu.Lock()
+		if current := sq.terminalizing[scope]; current != nil {
+			done := current.done
+			sq.mu.Unlock()
+			<-done
+			continue
+		}
+		if len(sq.queues[scope]) > 0 {
+			sq.mu.Unlock()
+			return false, false, nil
+		}
+		current := &steeringTerminalTransition{done: make(chan struct{})}
+		sq.terminalizing[scope] = current
+		sq.mu.Unlock()
+		finished := false
+		finish := func() {
+			if !finished {
+				sq.finishTerminalTransition(scope, current)
+				finished = true
+			}
+		}
+		defer finish()
+
+		if err = prepare(); err != nil {
+			return true, false, err
+		}
+
+		sq.mu.Lock()
+		if len(sq.queues[scope]) > 0 {
+			sq.mu.Unlock()
+			return false, false, nil
+		}
+		current.committing = true
+		sq.mu.Unlock()
+
+		terminal, err = transition()
+		return true, terminal, err
 	}
-	sq.closedGenerations[scope] = generation
-	return true
 }
 
-// drainAllAndCloseScope removes every queued item regardless of steering mode
-// and closes the generation in the same critical section. It is the bounded
-// failure path: no stale item may survive into a later revival.
-func (sq *steeringQueue) drainAllAndCloseScope(scope string, generation int) (string, []steeringQueueItem) {
+func (sq *steeringQueue) finishTerminalTransition(scope string, transition *steeringTerminalTransition) {
+	sq.mu.Lock()
+	delete(sq.terminalizing, scope)
+	delete(sq.closedGenerations, scope)
+	close(transition.done)
+	sq.mu.Unlock()
+}
+
+func (sq *steeringQueue) scopeEmpty(scope string) bool {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	return len(sq.queues[normalizeSteeringScope(scope)]) == 0
+}
+
+// drainAllScope removes every queued item regardless of steering mode. It is
+// a bounded failure cleanup, not a lifecycle transition, so it never closes
+// the non-terminal scope.
+func (sq *steeringQueue) drainAllScope(scope string) (string, []steeringQueueItem) {
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
 	scope = normalizeSteeringScope(scope)
 	items := append([]steeringQueueItem(nil), sq.queues[scope]...)
 	delete(sq.queues, scope)
-	sq.closedGenerations[scope] = generation
 	return scope, items
 }
 
-// reopenScopeForGeneration re-enables enqueue only for a newer lifecycle
-// generation. A same-generation wake cannot reopen a drain that already made
-// its terminal handoff.
+// reopenScopeForGeneration re-enables enqueue for a non-terminal entry path.
+// A same-generation wake may legitimately re-enter after completion was
+// deferred; a terminal generation is still rejected by the lifecycle check.
 func (sq *steeringQueue) reopenScopeForGeneration(scope string, generation int) {
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
 	scope = normalizeSteeringScope(scope)
-	if closedGeneration, closed := sq.closedGenerations[scope]; closed && generation > closedGeneration {
+	if closedGeneration, closed := sq.closedGenerations[scope]; closed && generation >= closedGeneration {
 		delete(sq.closedGenerations, scope)
 	}
 }
@@ -580,7 +668,23 @@ func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQue
 	// Pushed via pushItemScope directly, not pushScope/pushWakeScope: those
 	// two rebuild a steeringQueueItem from only message+wake, which would
 	// silently drop correlationID (issue #870) on every enqueue.
-	err := al.steering.pushItemScope(scope, item)
+	err := al.steering.pushItemScopeChecked(scope, item, func() error {
+		lifecycle := al.GetSessionLifecycleStore()
+		if lifecycle == nil {
+			return nil
+		}
+		rec, loadErr := lifecycle.Load(normalizeSteeringScope(scope))
+		switch {
+		case errors.Is(loadErr, session.ErrLifecycleNotFound):
+			return nil
+		case loadErr != nil:
+			return fmt.Errorf("check steering session lifecycle: %w", loadErr)
+		case rec.Terminal():
+			return fmt.Errorf("%w: %s", errSteeringScopeClosed, normalizeSteeringScope(scope))
+		default:
+			return nil
+		}
+	})
 	if err != nil {
 		logger.WarnCF("agent", "Failed to enqueue steering message", map[string]any{
 			"error": err.Error(),
@@ -731,13 +835,14 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 	msgs := make([]providers.Message, 0, len(items))
 	correlationIDs := make([]string, 0, len(items))
 	consumedItems := make([]steeringQueueItem, 0, len(items))
-	for _, item := range items {
+	for i, item := range items {
 		if item.wake != nil {
 			if err := al.writeSteeringConsumedMarker(*item.wake); err != nil {
-				al.steering.prependItemsScope(scope, items)
-				slog.Error("agent: steering wake not consumed; restored to queue",
+				al.steering.prependItemsScope(scope, items[i:])
+				slog.Error("agent: steering wake not consumed; restored unmarked suffix to queue",
 					"scope", scope, "message_id", item.wake.messageID, "error", err)
-				return nil, nil, nil, fmt.Errorf("write steering consumed marker %q: %w", item.wake.messageID, err)
+				return msgs, correlationIDs, consumedItems,
+					fmt.Errorf("write steering consumed marker %q: %w", item.wake.messageID, err)
 			}
 		}
 		msgs = append(msgs, item.message)
@@ -881,7 +986,7 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 	}
 
 	actualScope, consumedItems, steeringMsgs, steeringCorrelationIDs, consumeErr := al.dequeueSteeringItemsForScopeWithFallbackResult(sessionKey)
-	if consumeErr != nil {
+	if consumeErr != nil && len(steeringMsgs) == 0 {
 		return "", consumeErr
 	}
 	if len(steeringMsgs) == 0 {
@@ -907,10 +1012,28 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 		// (session_worker.go processTurn) can tell this apart from a
 		// pre-dequeue guard failure and stop retrying immediately instead of
 		// re-running the same restored turn from scratch.
-		al.steering.prependItemsScope(actualScope, consumedItems)
+		al.steering.prependItemsScope(actualScope, restorableSteeringItems(consumedItems))
 		return "", fmt.Errorf("%w: %w", errContinuePostDequeueFailure, err)
 	}
+	if consumeErr != nil {
+		return resp, consumeErr
+	}
 	return resp, nil
+}
+
+// restorableSteeringItems excludes wakes whose consumed marker was already
+// written before their turn ran. Restoring those items would append the same
+// marker again and could later abandon a wake that recovery already treats as
+// consumed. Plain steering messages have no durable marker and remain safe to
+// restore after a failed turn.
+func restorableSteeringItems(items []steeringQueueItem) []steeringQueueItem {
+	restored := make([]steeringQueueItem, 0, len(items))
+	for _, item := range items {
+		if item.wake == nil {
+			restored = append(restored, item)
+		}
+	}
+	return restored
 }
 
 // Continue resumes an idle agent by dequeuing any pending steering messages

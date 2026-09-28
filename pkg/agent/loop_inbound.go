@@ -890,6 +890,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if err != nil {
 		return "", fmt.Errorf("steer: wake: load %q: %w", sessionID, err)
 	}
+	if al.steering != nil && !rec.Terminal() {
+		al.steering.reopenScopeForGeneration(sessionID, generation)
+	}
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {
 		return "", fmt.Errorf("steer: wake: transcript store for %q is not available", sessionID)

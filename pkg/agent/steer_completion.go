@@ -79,63 +79,63 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 	if err != nil {
 		return err
 	}
-	deliverer := al.getUpwardDeliverer()
-	if deliverer == nil {
-		return errSteerUpwardDelivererNotWired
-	}
-	// Finding A (ADR-091 fix lane 1, CRITICAL — the release blocker): this
-	// Deliver call is the ONLY upward path left. The former
-	// completeWaitingAncestors shortcut that used to run after the write
-	// below is DELETED, not kept as a fallback: it read the parent's OWN
-	// stale lastAssistantAnswer instead of ever re-entering it, so a
-	// grandchild's real result was silently replaced by whatever the parent
-	// had said BEFORE delegating. Landing order I-5 says the parent's
-	// handback is written "by the last such child's completion wake
-	// RE-ENTERING the parent" — Deliver's own wake (steer_audience.go),
-	// carried all the way through by Finding B's exit-path fix
-	// (disposeSteeredTurnResult, steer_launcher.go/loop_inbound.go), is that
-	// re-entry. There is no second, shortcut path to the parent.
-	//
-	// [ADR-091 fix lane RX-OUTCOME, HIGH] The Delivery this returns is no
-	// longer thrown away. This is THE normal completion path: a
-	// stored-not-woken outcome here means the parent silently never learns
-	// its child finished, and it stays that way until a gateway restart runs
-	// boot recovery. reportUndeliveredWake below makes that visible —
-	// nothing else in the system would.
 	event := steer.UpwardEvent{
 		ChildSessionID: rec.SessionID,
 		Outcome:        outcome,
 		Message:        message,
 	}
-	// Snapshot the Stop marker BEFORE Deliver's I/O window so the Mutate
-	// below can tell "a Stop raced my write" from "the Stop that caused
-	// my write". See the closure for why the distinction matters.
 	stopBeforeDelivery := rec.Stop
+	prepare := func() error {
+		return al.deliverSteeredTerminal(ctx, rec, event)
+	}
+	transition := func() (bool, error) {
+		return al.commitSteeredTerminal(lifecycle, rec, stopBeforeDelivery, nextState, failureReason)
+	}
+	if al.steering == nil {
+		if prepareErr := prepare(); prepareErr != nil {
+			return prepareErr
+		}
+		_, transitionErr := transition()
+		return transitionErr
+	}
+	started, _, transitionErr := al.steering.runTerminalTransition(rec.SessionID, prepare, transition)
+	if !started {
+		return errCompleteSteeringPending
+	}
+	return transitionErr
+}
 
+func (al *AgentLoop) deliverSteeredTerminal(
+	ctx context.Context,
+	rec *session.LifecycleRecord,
+	event steer.UpwardEvent,
+) error {
+	deliverer := al.getUpwardDeliverer()
+	if deliverer == nil {
+		return errSteerUpwardDelivererNotWired
+	}
 	delivery, err := deliverer.Deliver(ctx, event)
 	if err != nil {
 		return fmt.Errorf("steer: complete: deliver %q: %w", rec.SessionID, err)
 	}
 	reportUndeliveredWake("steer: complete", event, steerParentSessionID(rec), rec.Generation, delivery)
+	return nil
+}
 
+// commitSteeredTerminal performs the durable half of the terminal transition.
+// The queue has been rechecked empty and later enqueues are refused during
+// this write, so success leaves no accepted instruction without a consumer.
+func (al *AgentLoop) commitSteeredTerminal(
+	lifecycle *session.LifecycleStore,
+	rec *session.LifecycleRecord,
+	stopBeforeDelivery *session.Stop,
+	nextState session.LifecycleState,
+	failureReason string,
+) (bool, error) {
 	if completeStateWriteTestHook != nil {
 		completeStateWriteTestHook(rec.SessionID)
 	}
 
-	// Finding D (ADR-091 fix lane 1, HIGH — three reviewers found this
-	// independently): this used to be a raw Load (above) -> Deliver (I/O,
-	// just above) -> mutate the PRE-Deliver snapshot in memory -> Persist —
-	// the exact stale-write-back shape already fixed on the dispatch path
-	// (steer_launcher.go::commitSteeredDispatchState), with a WIDER window
-	// here because Deliver does real I/O (an inbox append, transcript
-	// writes, a parent wake). A Stop pressed while Deliver was still
-	// running used to be ERASED by this write: state went straight to
-	// completed/failed, Stop became nil, and the durable record that Stop
-	// was ever pressed was gone. pkg/session/lifecycle.go's own rule is
-	// explicit: a caller doing read-then-decide-then-write MUST use Mutate.
-	// This re-checks generation AND the Stop marker inside the SAME lock
-	// the write happens under, refusing rather than writing a stale
-	// snapshot over either — mirrors commitSteeredDispatchState exactly.
 	mutateErr := lifecycle.Mutate(rec.SessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return fmt.Errorf("steer: complete: record %q vanished during delivery", rec.SessionID)
@@ -189,24 +189,17 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 	})
 	switch {
 	case mutateErr == nil:
-		// (e)① #947 defect 1 — the pair ends together (FD1=A): the terminal
-		// write just landed, so the child's ACTIVE session-owned goal ends
-		// with its session, the outcome recording why. Idempotent (no active
-		// goal, no action), and it never speaks for a task-owned goal.
 		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
 			goalEndingForTerminalState(nextState), goalSessionEndedReasonForState(nextState))
-		return nil
+		return true, nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
 		errors.Is(mutateErr, errCompleteAlreadyTerminal),
 		errors.Is(mutateErr, session.ErrLifecycleTerminalImmutable):
-		// The message is already durably delivered (Deliver ran above); a
-		// Stop, a Revive or a second completion racing this write is a
-		// legitimate outcome, not a caller-actionable failure — mirrors the
-		// top-of-function guard's own "already terminal" no-op.
-		return nil
+		current, loadErr := lifecycle.Load(rec.SessionID)
+		return loadErr == nil && current.Terminal(), nil
 	default:
-		return fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, mutateErr)
+		return false, fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, mutateErr)
 	}
 }
 
@@ -218,6 +211,7 @@ var (
 	errCompleteStaleGeneration       = errors.New("steer: complete: generation changed during delivery")
 	errCompleteAlreadyTerminal       = errors.New("steer: complete: record became terminal during delivery")
 	errCompleteStoppedDuringDelivery = errors.New("steer: complete: a Stop landed during delivery")
+	errCompleteSteeringPending       = errors.New("steer: complete: steering arrived before terminal transition")
 )
 
 // completeStateWriteTestHook is a test-only synchronization seam, fired

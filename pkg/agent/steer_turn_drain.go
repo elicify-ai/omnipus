@@ -59,7 +59,7 @@ func (al *AgentLoop) drainSteeredTurn(
 	}
 
 	for {
-		if al.steering == nil || al.steering.closeScopeIfEmpty(snapshot.SessionID, snapshot.Generation) {
+		if al.steering == nil || al.steering.scopeEmpty(snapshot.SessionID) {
 			return lastTS, lastResult, lastErr
 		}
 		var attempted steeredContinuationAttempt
@@ -89,7 +89,7 @@ func (al *AgentLoop) drainSteeredTurn(
 			if _, stateErr := al.steeredDrainRecord(snapshot.SessionID, snapshot.Generation); errors.Is(stateErr, errSteeredDrainStopped) {
 				return lastTS, lastResult, context.Canceled
 			}
-			al.abandonSteeredQueuedSteering(lastTS, snapshot.SessionID, snapshot.Generation, continueErr, attempts)
+			al.abandonSteeredQueuedSteering(lastTS, snapshot.SessionID, continueErr, attempts)
 			return lastTS, lastResult, continueErr
 		}
 		if continued == "" {
@@ -169,7 +169,6 @@ func (al *AgentLoop) steeredDrainRecord(sessionID string, generation int) (*sess
 func (al *AgentLoop) abandonSteeredQueuedSteering(
 	ts *turnState,
 	sessionID string,
-	generation int,
 	lastErr error,
 	attempts int,
 ) {
@@ -188,7 +187,7 @@ func (al *AgentLoop) abandonSteeredQueuedSteering(
 	}()
 
 	if al.steering != nil {
-		abandonedScope, abandonedItems = al.steering.drainAllAndCloseScope(sessionID, generation)
+		abandonedScope, abandonedItems = al.steering.drainAllScope(sessionID)
 	}
 	logger.ErrorCF("agent", "steer: persistent Continue failure — abandoning queued steering",
 		map[string]any{
