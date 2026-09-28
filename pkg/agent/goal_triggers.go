@@ -166,6 +166,7 @@ var goalLiveTurnStallGrace = 5 * time.Minute //nolint:gochecknoglobals
 const (
 	goalIdleSettleSourceKind    = "goal_idle_settle"
 	goalClaimDeferredSourceKind = "goal_claim_deferred"
+	goalCompletionSourceKind    = "goal_completion_reevaluation"
 )
 
 // goalRoute captures the channel/chat/sessionKey a goal's chat lives on, so an
@@ -287,6 +288,19 @@ type goalTriggerState struct {
 	// comment for the one residual gap that leaves). Keyed by GOAL ID.
 	blocked map[string]bool
 
+	// completionPhase coordinates a met claim with the goal owner's delegated
+	// subtree. A waiting claim has not reached the Judge; adjudicating fences
+	// new launches until the verdict resolves; reevaluationDispatched records
+	// that the one fresh-claim turn has already been published. Keyed by goal
+	// id and protected by mu with the rest of this process-local trigger state.
+	completionPhase map[string]goalCompletionPhase
+
+	// steeredCompletionWrites marks a child between upward delivery and its
+	// terminal lifecycle write. The release branch otherwise treats a
+	// running record with no registered turn as idle; this marker preserves
+	// the delivery-before-terminal window as genuinely active work.
+	steeredCompletionWrites map[string]bool
+
 	// claimScanWatermarks is JUDGE-FR-092's own per-goal-id boundary: the
 	// transcript timestamp that separates "already resolved by an earlier
 	// checkGoalLoopAfterTurn pass" from "produced during the CURRENT turn".
@@ -356,16 +370,18 @@ var goalTriggersMu sync.RWMutex //nolint:gochecknoglobals // package-wide seam, 
 
 //nolint:gochecknoglobals // package-wide singleton; one AgentLoop per process.
 var goalTriggersSingleton = &goalTriggerState{
-	bareClaimStreak:     make(map[string]int),
-	waitingOnUser:       make(map[string]bool),
-	routing:             make(map[string]goalRoute),
-	idleSettling:        make(map[string]bool),
-	diffBoundaryHash:    make(map[string]string),
-	outputWatermarks:    make(map[string]time.Time),
-	blocked:             make(map[string]bool),
-	claimScanWatermarks: make(map[string]time.Time),
-	liveTurnWork:        make(map[string]goalLiveTurnWork),
-	keeperPausedByStop:  make(map[string]time.Time),
+	bareClaimStreak:         make(map[string]int),
+	waitingOnUser:           make(map[string]bool),
+	routing:                 make(map[string]goalRoute),
+	idleSettling:            make(map[string]bool),
+	diffBoundaryHash:        make(map[string]string),
+	outputWatermarks:        make(map[string]time.Time),
+	blocked:                 make(map[string]bool),
+	completionPhase:         make(map[string]goalCompletionPhase),
+	steeredCompletionWrites: make(map[string]bool),
+	claimScanWatermarks:     make(map[string]time.Time),
+	liveTurnWork:            make(map[string]goalLiveTurnWork),
+	keeperPausedByStop:      make(map[string]time.Time),
 }
 
 // goalLiveTurnWork is one observation of what a goal's live turn(s) were
@@ -402,6 +418,8 @@ func resetGoalTriggerStateForTest() {
 	s.diffBoundaryHash = make(map[string]string)
 	s.outputWatermarks = make(map[string]time.Time)
 	s.blocked = make(map[string]bool)
+	s.completionPhase = make(map[string]goalCompletionPhase)
+	s.steeredCompletionWrites = make(map[string]bool)
 	s.claimScanWatermarks = make(map[string]time.Time)
 	s.liveTurnWork = make(map[string]goalLiveTurnWork)
 	s.keeperPausedByStop = make(map[string]time.Time)
@@ -497,6 +515,7 @@ func (al *AgentLoop) clearGoalTriggerState(sessionID, goalID string) {
 		delete(s.idleSettling, goalID)
 		delete(s.outputWatermarks, goalID)
 		delete(s.blocked, goalID)
+		delete(s.completionPhase, goalID)
 		delete(s.claimScanWatermarks, goalID)
 		delete(s.liveTurnWork, goalID)
 	}
@@ -948,6 +967,9 @@ func (al *AgentLoop) runGoalAdjudication(
 	bumpGoalRecordActivity(aa.ag.rec.GoalID, time.Now().UTC())
 
 	aa.ag.verdict = jr.Verdict
+	if aa.ag.deferMetWhileDescendantsActive() {
+		return false, false
+	}
 	aa.ag.al.writeGoalVerdictTranscript(aa.ag.store, aa.ag.sessionID, aa.ag.verdict)
 	// ADR-088 D8: the verdict summary — the event D8 names that this file
 	// previously had no INFO line for at all.
@@ -1161,6 +1183,10 @@ func (aa *agentLoopRunGoalAdjudicationAdvance) advanceUnmetGoal() agentLoopRunGo
 		aa.ret0 = false
 		return agentLoopRunGoalAdjudicationAdvanceReturn
 	}
+	// The unmet verdict resolves this completion attempt. Drop the fence
+	// before publishing the corrective steer so the next worker turn may
+	// delegate more work if the Judge's feedback requires it.
+	aa.ag.al.goalClearCompletionPhase(aa.ag.rec.GoalID)
 	aa.ag.al.emitGoalStatusFrameWithCriteriaAndDoD(aa.ag.sessionID, aa.ag.rec.GoalID, aa.ag.rec.Prompt, newRound, aa.ag.maxRounds, aa.ag.reasonText, goalPillActive,
 		aa.ag.goalDefinition, aa.ag.projectedCriteria, aa.ag.projectedDoD)
 	if aa.deliverSteer != nil {
@@ -1412,6 +1438,17 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 	// deliberately NOT paused: it is D-A's sole terminator for a goal that
 	// stays quiet forever, Stop or no Stop.
 	if al.goalKeeperPausedByStop(sessionID) {
+		return
+	}
+	// completionPhase is intentionally process-local. Reconstruct the safe
+	// waiting state from the durable claim after a restart so the keeper can
+	// retry a notification that did not survive the prior process.
+	al.goalRestoreWaitingCompletion(rec)
+	// A failed Q2 B re-evaluation notification retains the waiting phase.
+	// The existing active-goal keeper is its retry driver once the subtree is
+	// quiet; this path never adjudicates the stale claim itself.
+	if al.goalCompletionWaiting(rec.GoalID) {
+		al.resumeDeferredGoalForSession(sessionID, rec.GoalID)
 		return
 	}
 	// FR-102 re-arm: a previous quiet-window adjudication already fired for
@@ -2089,10 +2126,10 @@ func (al *AgentLoop) idleSteerDeliverer(sessionID, goalID, sourceKind string) fu
 // gate forever, indistinguishable from a genuinely quiet goal. A deferred
 // claim-path steer (goalID's marker was never set by markGoalIdleFired for
 // this call) clears a marker that was already absent — a harmless no-op.
-func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, content string) {
+func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, content string) bool {
 	if content == "" || al.asyncNotifier == nil {
 		al.goalMarkIdleSettling(goalID, false)
-		return
+		return false
 	}
 	route := goalTriggers().routeFor(sessionID)
 	if route.channel == "" || route.chatID == "" {
@@ -2101,7 +2138,7 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 		// here beyond what it already did. No turn will ever be dispatched
 		// for this evaluation — un-wedge the keeper.
 		al.goalMarkIdleSettling(goalID, false)
-		return
+		return false
 	}
 	// UAT E-3 sibling: a route rehydrated from the persisted record carries no
 	// agent id (FR-033 folded it into the owner), and an event with an EMPTY
@@ -2116,7 +2153,7 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 			logger.WarnCF("agent", "goal: follow-up not dispatched — the agent working this goal cannot be resolved, and it must not run as another agent",
 				map[string]any{"session_id": sessionID, "goal_id": goalID, "source": sourceKind, "error": rerr.Error()})
 			al.goalMarkIdleSettling(goalID, false)
-			return
+			return false
 		}
 		agentID = resolved
 	}
@@ -2137,7 +2174,9 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 		// marker downstream. Un-wedge the keeper so the next idle cycle
 		// gets another chance instead of wedging forever.
 		al.goalMarkIdleSettling(goalID, false)
+		return false
 	}
+	return true
 }
 
 // routeFor returns the captured routing for sessionID: the in-memory entry

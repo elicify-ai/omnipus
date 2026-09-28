@@ -995,7 +995,8 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 				},
 				// (e)three (FD1=A, #947 defect 1): the boot sweep's
 				// failInterrupted terminal write also ends the session-owned goal.
-				EndSessionGoal: stg.agentLoop.EndSessionOwnedGoalOnTerminal,
+				EndSessionGoal:     stg.agentLoop.EndSessionOwnedGoalOnTerminal,
+				DescendantTerminal: stg.agentLoop.ResumeDeferredGoalAfterDescendantTerminal,
 			}
 			return recovery.Run(ctx)
 		},

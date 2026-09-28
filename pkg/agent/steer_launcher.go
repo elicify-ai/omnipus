@@ -444,6 +444,13 @@ func (l *SteerLauncher) launchSteered(
 				}
 				return nil, steer.ErrSteeringStopped
 			}
+			// Q2 B completion fence: once this session has claimed completion,
+			// no new child may be published while that claim is waiting on its
+			// existing descendants or being adjudicated. This check is inside
+			// the parent's publication lock and precedes every child record.
+			if l.al.goalCompletionFenceActive(req.SteeringSessionID) {
+				return nil, fmt.Errorf("steer: launch: completion claim is pending for steering session %q", req.SteeringSessionID)
+			}
 			steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)
 			if metaErr != nil {
 				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %w",
