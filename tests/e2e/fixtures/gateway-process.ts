@@ -55,12 +55,14 @@ export interface GatewayProcessOptions {
   adminPassword?: string;
   model?: string;
   /**
-   * provider-messages row 20 (RED, authored not executed): explicit provider
-   * base URL passed through to onboarding as `provider.api_base`. The
-   * onboarding key probe (rest_onboarding.go: probeBase resolves api_base
-   * ahead of the catalog default) then goes to THIS base instead of the real
-   * vendor, so a spec can point the whole install at a local mock provider.
-   * Omitted → behaviour identical to before (no api_base sent).
+   * provider-messages row 20: explicit provider base URL passed through to
+   * onboarding as `provider.endpoint` (the OnboardingProviderApiKey wire
+   * field — contracts/components/schemas/OnboardingProviderApiKey.yaml).
+   * The onboarding key probe (rest_onboarding.go: probeBase resolves
+   * variant.Endpoint ahead of the catalog default) then goes to THIS base
+   * instead of the real vendor, so a spec can point the whole install at a
+   * local mock provider. Omitted → behaviour identical to before (no
+   * endpoint sent).
    */
   apiBase?: string;
   /** Extra gateway args (default: ['--sandbox=off'], mirroring setup.ts —
@@ -223,11 +225,13 @@ export class GatewayProcess {
             id: 'openrouter',
             api_key: apiKey,
             model: this.model,
-            // provider-messages row 20: an explicit api_base rides the same
-            // onboarding contract (rest_onboarding.go: persisted as
-            // newProviderEntry["api_base"]; probeBase prefers it) — when set,
-            // the key probe AND every later chat call go to this base.
-            ...(this.apiBase ? { api_base: this.apiBase } : {}),
+            // provider-messages row 20: an explicit endpoint rides the same
+            // onboarding contract (OnboardingProviderApiKey.endpoint —
+            // contracts/components/schemas/OnboardingProviderApiKey.yaml;
+            // rest_onboarding.go reads variant.Endpoint and persists it as
+            // the provider entry's api_base; probeBase prefers it) — when
+            // set, the key probe AND every later chat call go to this base.
+            ...(this.apiBase ? { endpoint: this.apiBase } : {}),
           },
           admin: { username: this.adminUsername, password: this.adminPassword },
         },
