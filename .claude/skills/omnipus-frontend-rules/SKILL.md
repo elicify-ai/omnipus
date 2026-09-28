@@ -5,7 +5,7 @@ description: TypeScript/React-specific operational detail for frontend-lead only
 
 # Omnipus Frontend Rules
 
-Last reviewed: 2026-09-26
+Last reviewed: 2026-09-27
 
 Frontend-lead only. Read `omnipus-shared-rules` first — this skill adds
 TypeScript/React-specific detail on top of it, never repeats it. Root `CLAUDE.md` stays
@@ -20,6 +20,11 @@ authoritative on the facts this restates.
 - Local test runs are capped by shared rule 2: one `npx vitest run <file>` or
   `npx playwright test <x>.spec.ts` at a time; never bare `npm test`, `vitest` or
   `playwright test`.
+- When the work touches UI code under `src/`, also run `npm run lint:design-system-locks`
+  — the local design-system lock scanners (no Storybook/browser evidence needed): a new
+  test/story file with raw controls needs its own exact-path reviewedBoundaries entry in
+  `design-system/enforcement/ledger.json`, and this command is what catches it before
+  CI's `design-system` job goes red.
 - Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/` and embedded via `go:embed` (`CLAUDE.md`, "Tech stack and platforms"). # agent-guard: allow
   `pkg/gateway/spa/` is gitignored and absent until the first SPA build. # agent-guard: allow
   A missing `pkg/gateway/spa/` in a fresh worktree is backend-lead's stub trap, not a frontend defect — do not "fix" it by editing frontend build config. # agent-guard: allow

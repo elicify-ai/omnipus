@@ -30,7 +30,10 @@ export type WsFrameType =
   | "task_run_status"
   | "replay_message"
   | "replay_error"
+  | "replay_provider_fallback"
   | "rate_limit"
+  | "provider_retry"
+  | "provider_fallback"
   | "media"
   | "agent_switched"
   | "tool_approval_required"
@@ -182,16 +185,23 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "delegated_task_limit" | "context_unrecoverable" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "delegated_task_limit" | "context_unrecoverable" | "context_window_unknown" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
+  facts?: {
+    provider?: string;
+    model?: string;
+    request_id?: string;
+  };
+  provider_message?: boolean;
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "delegated_task_limit" | "context_unrecoverable" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "delegated_task_limit" | "context_unrecoverable" | "context_window_unknown" | "unknown";
   message: string;
   retryable: boolean;
+  provider_message?: boolean;
 }
 
 export interface ErrorFrame {
@@ -414,6 +424,42 @@ export interface RateLimitFrame {
   agent_id?: string;
   tool?: string;
   seq?: number;
+}
+
+export interface ProviderRetryFrame {
+  type: "provider_retry";
+  session_id: string;
+  turn_id: string;
+  provider: string;
+  model: string;
+  retry_at: string;
+  retry_after_seconds: number;
+  sent_at: string;
+  attempt: number;
+  max_attempts: number;
+  error_code: string;
+  seq?: number;
+}
+
+export interface ProviderFallbackFrame {
+  type: "provider_fallback";
+  session_id: string;
+  turn_id: string;
+  answered_model: string;
+  unavailable_model: string;
+  unavailable_code: "rate_limited" | "model_retired";
+  seq?: number;
+}
+
+export interface ProviderFallbackNote {
+  type: "replay_provider_fallback";
+  session_id: string;
+  entry_id: string;
+  timestamp: string;
+  answered_model?: string;
+  unavailable_model?: string;
+  unavailable_code?: "rate_limited" | "model_retired";
+  message: string;
 }
 
 export interface LibraryChangedFrame {
@@ -1089,6 +1135,9 @@ export type WsFrame =
   | ReplayErrorFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
+  | ProviderRetryFrame
+  | ProviderFallbackFrame
+  | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
   | AgentSwitchedFrame
@@ -1187,6 +1236,9 @@ export type ServerFrame =
   | ReplayErrorFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
+  | ProviderRetryFrame
+  | ProviderFallbackFrame
+  | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
   | AgentSwitchedFrame

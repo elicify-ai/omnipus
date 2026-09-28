@@ -98,6 +98,7 @@ import { LibrarySearchBar } from './search/LibrarySearchBar'
 import { useLibraryCrossTabRefresh } from './useLibraryCrossTabRefresh'
 import {
   confirmDiscardLibraryEdits,
+  discardConfirmDialogHostUnmounted,
   getDiscardConfirmDialogOpen,
   resolveDiscardConfirmDialog,
   subscribeDiscardConfirmDialog,
@@ -263,6 +264,7 @@ export function LibraryExplorer({
   // hosting the dialog here (rendered below, alongside the other dialogs)
   // covers the docked panel AND the /library pop-out route's useBlocker.
   const discardDialogOpen = useSyncExternalStore(subscribeDiscardConfirmDialog, getDiscardConfirmDialogOpen)
+  useEffect(() => discardConfirmDialogHostUnmounted, [])
 
   // Uncontrolled fallbacks — used only when the caller does NOT address the
   // Library by URL. In addressed mode these are never read or written, so

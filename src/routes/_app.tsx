@@ -4,6 +4,7 @@ import { fetchAppState, validateToken, type AppState } from '@/lib/api'
 import { forceLogout } from '@/lib/authLogout'
 import { hasStoredSession } from '@/store/auth'
 import { checkTokenValidity, resetTokenValidationCache } from './authValidation'
+import { captureLoginReturn } from './-loginReturn'
 
 // Re-exported so the login flow (and tests) can reset the validation cache (#359).
 export { resetTokenValidationCache }
@@ -12,7 +13,10 @@ export { resetTokenValidationCache }
 // Landing page (/landing) is a sibling, NOT nested here, so it renders without the shell
 // /onboarding is also a sibling — no AppShell, no beforeLoad
 export const Route = createFileRoute('/_app')({
-  beforeLoad: async () => {
+  beforeLoad: async (routeContext) => {
+    const rememberCurrentLocation = () => {
+      captureLoginReturn(routeContext?.location?.href)
+    }
     // First check onboarding state — if not complete, redirect to onboarding
     let state: AppState | undefined
     try {
@@ -43,6 +47,7 @@ export const Route = createFileRoute('/_app')({
       if (!state.identity.signed_in) {
         // The server already told us: not signed in. No point asking
         // /auth/validate too — same destination, one less round trip.
+        rememberCurrentLocation()
         throw redirect({ to: '/login' })
       }
       // Signed in per the boot request itself — proceed into the app
@@ -74,6 +79,7 @@ export const Route = createFileRoute('/_app')({
     // checkTokenValidity() below; hasStoredSession() only reports whether a
     // login ever happened, not whether it's still valid.
     if (!hasStoredSession()) {
+      rememberCurrentLocation()
       throw redirect({ to: '/login' })
     }
 
@@ -97,6 +103,7 @@ export const Route = createFileRoute('/_app')({
       // window.location.hash write (both land on /login), but dropping it
       // would leave beforeLoad falling through to `component: AppShell`
       // instead of aborting the in-flight route resolution.
+      rememberCurrentLocation()
       forceLogout('expired')
       throw redirect({ to: '/login' })
     }

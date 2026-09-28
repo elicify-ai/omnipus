@@ -7,6 +7,7 @@
       "port": 6060,
       "specs": [
         "tests/e2e/chat.spec.ts",
+        "tests/e2e/provider-retry.spec.ts",
         "tests/e2e/truncation-notice-live.spec.ts"
       ]
     },
@@ -65,7 +66,8 @@
         "tests/e2e/accessibility.spec.ts",
         "tests/e2e/agents.spec.ts",
         "tests/e2e/auth.spec.ts",
-        "tests/e2e/burst-resilience.spec.ts"
+        "tests/e2e/burst-resilience.spec.ts",
+        "tests/e2e/side-panel-deeplink.spec.ts"
       ]
     },
     {
@@ -76,7 +78,8 @@
         "tests/e2e/calendar-recurrence.spec.ts",
         "tests/e2e/calendar.spec.ts",
         "tests/e2e/contract-counters.spec.ts",
-        "tests/e2e/create-agent.spec.ts"
+        "tests/e2e/create-agent.spec.ts",
+        "tests/e2e/side-panel-signin-return.spec.ts"
       ]
     },
     {
@@ -87,7 +90,8 @@
         "tests/e2e/security-tools.spec.ts",
         "tests/e2e/sidebar.spec.ts",
         "tests/e2e/skills.spec.ts",
-        "tests/e2e/uat-audit-and-settings.spec.ts"
+        "tests/e2e/uat-audit-and-settings.spec.ts",
+        "tests/e2e/side-panel-expand-multitab.spec.ts"
       ]
     },
     {
@@ -111,7 +115,9 @@
         "tests/e2e/browser-control-handover.spec.ts",
         "tests/e2e/browser-live-video.spec.ts",
         "tests/e2e/uat-browser-panel.spec.ts",
-        "tests/e2e/uat-ownership-api.spec.ts"
+        "tests/e2e/uat-ownership-api.spec.ts",
+        "tests/e2e/side-panel-browser-restore.spec.ts",
+        "tests/e2e/agent-picker-freshness.spec.ts"
       ]
     },
     {

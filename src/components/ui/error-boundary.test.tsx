@@ -8,12 +8,12 @@
 //   5. Displays the thrown error message in the fallback
 //
 // BDD scenarios inferred from the ErrorBoundary implementation at
-// src/components/ui/error-boundary.tsx (no formal spec file for M4 frontend).
-// Traces to: src/components/ui/error-boundary.tsx — ErrorBoundary class component
+// src/components/shared/ErrorBoundary.tsx (no formal spec file for M4 frontend).
+// Traces to: src/components/shared/ErrorBoundary.tsx — ErrorBoundary class component
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { ErrorBoundary } from './error-boundary'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 
 // Suppress console.error for expected boundary catches in these tests
 const originalError = console.error
@@ -39,7 +39,7 @@ function ThrowingChild({ shouldThrow, message }: { shouldThrow: boolean; message
 // BDD: Given an ErrorBoundary wrapping a non-throwing child,
 // When the component renders,
 // Then the child content is displayed without a fallback.
-// Traces to: src/components/ui/error-boundary.tsx — render() normal path
+// Traces to: src/components/shared/ErrorBoundary.tsx — render() normal path
 describe('ErrorBoundary — normal rendering (no error)', () => {
   it('renders child content when no error is thrown', () => {
     render(
@@ -70,7 +70,7 @@ describe('ErrorBoundary — normal rendering (no error)', () => {
 // BDD: Given an ErrorBoundary wrapping a child that throws during render,
 // When the child throws,
 // Then the default fallback UI is displayed showing "Something went wrong".
-// Traces to: src/components/ui/error-boundary.tsx — getDerivedStateFromError + render fallback
+// Traces to: src/components/shared/ErrorBoundary.tsx — getDerivedStateFromError + render fallback
 describe('ErrorBoundary — default fallback on error', () => {
   it('shows "Something went wrong" when a child throws', () => {
     render(
@@ -121,7 +121,7 @@ describe('ErrorBoundary — default fallback on error', () => {
 // BDD: Given an ErrorBoundary with a custom fallback prop,
 // When a child throws,
 // Then the custom fallback is rendered instead of the default.
-// Traces to: src/components/ui/error-boundary.tsx — render() fallback ?? default
+// Traces to: src/components/shared/ErrorBoundary.tsx — render() fallback ?? default
 describe('ErrorBoundary — custom fallback', () => {
   it('renders the custom fallback when provided and a child throws', () => {
     render(
@@ -154,7 +154,7 @@ describe('ErrorBoundary — custom fallback', () => {
 // BDD: Given an ErrorBoundary displaying the default fallback after a child threw,
 // When the user clicks "Try again",
 // Then the ErrorBoundary resets to hasError=false.
-// Traces to: src/components/ui/error-boundary.tsx — onClick setState reset
+// Traces to: src/components/shared/ErrorBoundary.tsx — onClick setState reset
 describe('ErrorBoundary — "Try again" recovery', () => {
   it('clicking "Try again" resets hasError and clears the error', () => {
     // We need a child that stops throwing after the first render so we can confirm recovery.

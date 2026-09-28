@@ -15,7 +15,12 @@ import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 
-let mockSearch: { workspace?: string; path?: string; folder?: string } = {}
+let mockSearch: { workspace?: string; path?: string; folder?: string; popout?: string } = {}
+
+vi.mock('@/lib/constants', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/constants')>()),
+  generateId: () => 'route-popout-test',
+}))
 
 const { mockNavigate, mockUseBlocker } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
@@ -173,7 +178,7 @@ describe('/library pop-out route', () => {
 
     window.dispatchEvent(new Event('pagehide'))
 
-    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith('ws-7')
+    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith('route-popout-test', 'ws-7')
   })
 
   it('announces with undefined (virtual root) when no workspace was scoped', () => {
@@ -182,7 +187,7 @@ describe('/library pop-out route', () => {
 
     window.dispatchEvent(new Event('pagehide'))
 
-    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith(undefined)
+    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith('route-popout-test', undefined)
   })
 
   // UAT fix: `handlePageHide` used to close over the `workspace` value the
@@ -208,7 +213,7 @@ describe('/library pop-out route', () => {
 
     window.dispatchEvent(new Event('pagehide'))
 
-    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith('ws-99')
+    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith('route-popout-test', 'ws-99')
   })
 
   it('announces undefined once in-tab navigation returns to the virtual root', () => {
@@ -222,7 +227,7 @@ describe('/library pop-out route', () => {
 
     window.dispatchEvent(new Event('pagehide'))
 
-    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith(undefined)
+    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith('route-popout-test', undefined)
   })
 
   // UAT fix (Dana, re-verified v8 — "pop-out re-dock STILL does not restore
@@ -246,7 +251,10 @@ describe('/library pop-out route', () => {
       // simulate that here since LibraryExplorer itself is mocked.
       onWorkspaceChange?.('ws-7')
 
-      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith('ws-7')
+      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith(
+        'route-popout-test',
+        'ws-7',
+      )
     })
 
     it('announces EACH in-tab navigation immediately, well before any pagehide', () => {
@@ -258,13 +266,19 @@ describe('/library pop-out route', () => {
       }
 
       onWorkspaceChange?.('ws-99')
-      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith('ws-99')
+      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith(
+        'route-popout-test',
+        'ws-99',
+      )
       // Not waiting for pagehide — the whole point of publishing
       // continuously is that the docked side already knows before teardown.
       expect(mockAnnounceLibraryPopoutClosed).not.toHaveBeenCalled()
 
       onWorkspaceChange?.('ws-other')
-      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith('ws-other')
+      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith(
+        'route-popout-test',
+        'ws-other',
+      )
       expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledTimes(2)
     })
 
@@ -277,7 +291,10 @@ describe('/library pop-out route', () => {
       }
       onWorkspaceChange?.(null)
 
-      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith(undefined)
+      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith(
+        'route-popout-test',
+        undefined,
+      )
     })
   })
 
@@ -301,7 +318,7 @@ describe('/library pop-out route', () => {
 
       expect(mockNavigate).toHaveBeenCalledWith({
         to: '/library',
-        search: { workspace: 'ws-1', path: 'notes/plan.md' },
+        search: { workspace: 'ws-1', path: 'notes/plan.md', popout: 'route-popout-test' },
       })
     })
 
@@ -313,7 +330,7 @@ describe('/library pop-out route', () => {
 
       expect(mockNavigate).toHaveBeenCalledWith({
         to: '/library',
-        search: { workspace: 'ws-1', path: undefined },
+        search: { workspace: 'ws-1', path: undefined, popout: 'route-popout-test' },
       })
     })
 

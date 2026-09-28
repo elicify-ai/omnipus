@@ -292,7 +292,17 @@ func runRefusedWebchatTurn(t *testing.T) []collectedFrame {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	frames := collectWSFrames(t, conn, 2*time.Second, 25*time.Second)
+	// §7.4 C-8 (gate finding F1): a root turn now retries a refused provider
+	// IN PLACE — 3 total calls with standard backoff 2s × 2^(n-1) (±25%
+	// jitter) when the refusal carries no Retry-After. Exhaustion therefore
+	// takes ~7s of wall clock (2s + 4s waits), and the terminal error/done
+	// frames land AFTER a ≥3s silence — longer than this collector's quiet
+	// window used to be. 2s of quiet stopped collection mid-backoff (the red
+	// run's last frame was provider_retry with retry_after_seconds: 4), so
+	// the tests "failed" while the production path was about to deliver
+	// exactly the frames they demand. 8s of quiet survives any single
+	// backoff step (max 5s) and still bounds each test at ~16s.
+	frames := collectWSFrames(t, conn, 8*time.Second, 45*time.Second)
 
 	require.Positive(t, provider.calls.Load(),
 		"fixture check: the provider was never called, so no refusal was ever produced — "+

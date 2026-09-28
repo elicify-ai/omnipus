@@ -143,21 +143,24 @@ type cfg struct {
 	allowEmptyScenarios bool
 }
 
-func parseFlags() cfg {
+// parseFlags resolves configuration in three tiers: explicit flag, then the
+// AGENT_MODEL / JUDGE_MODEL environment overrides, then — for either knob left
+// empty — the repo's single source of truth tests/e2e/e2e-model.json. It
+// returns an error instead of a hardcoded fallback model when that file cannot
+// supply a value (exit code 3, configuration error).
+func parseFlags() (cfg, error) {
 	today := time.Now().UTC().Format("2006-01-02")
 	c := cfg{}
 	flag.StringVar(&c.scenariosDir, "scenarios", "evals/scenarios", "directory to walk for *.yaml scenario files")
 	flag.StringVar(&c.outPath, "out", filepath.Join("evals", "results", today+".jsonl"), "JSONL output path")
 	flag.StringVar(&c.reportPath, "report", filepath.Join("evals", "REPORT.md"), "Markdown report output path")
 	flag.StringVar(
-		&c.agentModel, "agent-model",
-		envOrDefault("AGENT_MODEL", "openrouter/z-ai/glm-5-turbo"),
-		"model for agent responses",
+		&c.agentModel, "agent-model", "",
+		"agent model as an OpenRouter slug (openrouter/<vendor>/<model>); overrides AGENT_MODEL; default: the central tests/e2e/e2e-model.json",
 	)
 	flag.StringVar(
-		&c.judgeModel, "judge-model",
-		envOrDefault("JUDGE_MODEL", "openrouter/anthropic/claude-sonnet-4.6"),
-		"model for judge scoring",
+		&c.judgeModel, "judge-model", "",
+		"judge model as an OpenRouter slug (openrouter/<vendor>/<model>); overrides JUDGE_MODEL; default: the central tests/e2e/e2e-model.json",
 	)
 	flag.DurationVar(&c.timeout, "timeout", 5*time.Minute, "per-scenario hard cap")
 	flag.BoolVar(&c.dryRun, "dry-run", false, "skip judge call, just collect transcripts")
@@ -173,7 +176,27 @@ func parseFlags() cfg {
 		"exit 0 (instead of 2) when no scenario files are found",
 	)
 	flag.Parse()
-	return c
+
+	// Both model knobs default from the ONE committed source of truth —
+	// tests/e2e/e2e-model.json — so a model change never edits this file
+	// (founder decision 2026-09-27: the judge follows the same central setting
+	// instead of being a final hardcoded literal). Precedence: explicit flag >
+	// AGENT_MODEL / JUDGE_MODEL env > the central file. resolveModel returns
+	// each knob's source so startup can say which tier decided it (E3).
+	agentModel, agentSrc, err := resolveModel(c.agentModel, os.Getenv("AGENT_MODEL"), centralE2EModel)
+	if err != nil {
+		return c, fmt.Errorf("resolve agent model: %w", err)
+	}
+	judgeModel, judgeSrc, err := resolveModel(c.judgeModel, os.Getenv("JUDGE_MODEL"), centralE2EModel)
+	if err != nil {
+		return c, fmt.Errorf("resolve judge model: %w", err)
+	}
+	c.agentModel, c.judgeModel = agentModel, judgeModel
+
+	slog.Info("eval: resolved models",
+		"agent_model", c.agentModel, "agent_model_source", agentSrc,
+		"judge_model", c.judgeModel, "judge_model_source", judgeSrc)
+	return c, nil
 }
 
 func envOrDefault(key, def string) string {
@@ -181,6 +204,68 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// resolveModel resolves ONE model knob in strict precedence order: an
+// explicit flag value, then the environment override, then the central file
+// (via loader). It returns the resolved value plus where it came from —
+// "flag", "env" or "file" — so the startup log can name the deciding tier
+// for each model. loader is only invoked when BOTH flag and env are empty;
+// a loader error aborts the run loudly (there is no hardcoded fallback).
+func resolveModel(flagValue, envValue string, loader func() (string, error)) (string, string, error) {
+	switch {
+	case flagValue != "":
+		return flagValue, "flag", nil
+	case envValue != "":
+		return envValue, "env", nil
+	default:
+		m, err := loader()
+		if err != nil {
+			return "", "", err
+		}
+		return m, "file", nil
+	}
+}
+
+// centralE2EModelPath is the repo's ONE committed source of truth for the
+// real-LLM e2e/evals model id ({"model": "<vendor>/<model>"}). Every workflow
+// job, the Fly CI runner (deploy/ci-worker/runci.sh) and this binary resolve
+// their model from it; scripts/check-no-hardcoded-e2e-model.sh fails any
+// model-id literal that appears in live config or code outside it.
+const centralE2EModelPath = "tests/e2e/e2e-model.json"
+
+// openrouterSlugPrefix: the runner and the workflows carry the model as a
+// provider-prefixed OpenRouter slug (openrouter/<vendor>/<model>); the source
+// file stores the bare vendor/model. callJudge strips the prefix before the
+// API call.
+const openrouterSlugPrefix = "openrouter/"
+
+// centralE2EModel reads the repo's single source of truth for the real-LLM
+// e2e/evals model id and returns it as a provider-prefixed OpenRouter slug.
+// Both model knobs (agent and judge) default from it — founder decision
+// 2026-09-27: the judge follows the same central setting instead of being a
+// second hardcoded literal. There is NO hardcoded fallback model anymore: with
+// no flag and no env override, an unreadable or empty source file fails the
+// run loudly rather than silently billing a stale model.
+func centralE2EModel() (string, error) {
+	data, err := os.ReadFile(centralE2EModelPath)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w — run from the repo root, or set AGENT_MODEL / JUDGE_MODEL explicitly",
+			centralE2EModelPath, err)
+	}
+	var parsed struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return "", fmt.Errorf("parse %s: %w", centralE2EModelPath, err)
+	}
+	// Trim before the emptiness check: a whitespace-only "model" is the same
+	// config corruption as an empty one and must fail the same way (E2).
+	model := strings.TrimSpace(parsed.Model)
+	if model == "" {
+		return "", fmt.Errorf("%s: \"model\" is empty or whitespace-only", centralE2EModelPath)
+	}
+	return openrouterSlugPrefix + model, nil
 }
 
 // ── Scenario discovery ────────────────────────────────────────────────────────
@@ -721,7 +806,8 @@ func callJudge(ctx context.Context, model, prompt string) (string, int, error) {
 	}
 
 	// Strip "openrouter/" prefix if present — the OpenRouter API uses the
-	// bare model path (e.g. "anthropic/claude-sonnet-4.6").
+	// bare model path ("<vendor>/<model>", the exact shape
+	// tests/e2e/e2e-model.json stores; see scripts/check-no-hardcoded-e2e-model.sh).
 	orModel := model
 	if parts := strings.SplitN(model, "/", 2); len(parts) == 2 && parts[0] == "openrouter" {
 		orModel = parts[1]
@@ -974,7 +1060,11 @@ func main() {
 		Level: slog.LevelInfo,
 	})))
 
-	c := parseFlags()
+	c, err := parseFlags()
+	if err != nil {
+		slog.Error("eval: configuration error", "error", err)
+		os.Exit(3)
+	}
 
 	scenarios, err := discoverScenarios(c.scenariosDir)
 	if err != nil {

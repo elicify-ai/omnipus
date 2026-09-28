@@ -14,8 +14,10 @@ oracles from this spec, a traceability table, and Reachability.
 
 `Status: Draft`
 
-`ADR: [ADR-NNN — Title](../architecture/ADR-NNN-title.md)` — or, if none:
-`ADR: none — no open design decision`
+`ADR: [Title](../architecture/<ADR's actual filename>.md)` — cite the ADR's own filename and
+title, whatever its naming scheme (`.claude/agents/architect.md`'s "ADR naming" bullet states
+the current rule for a NEW ADR; an existing ADR keeps whatever filename it already has —
+never invent a placeholder pattern here). If none: `ADR: none — no open design decision`
 
 # Feature Specification: [Feature Name]
 

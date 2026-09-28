@@ -869,7 +869,17 @@ type ProviderError struct {
 	BodyTruncated bool
 	BodyPreview   string
 	ContentType   string
-	Err           error
+	// RetryAfterSeconds is the parsed Retry-After fact (§7.2/MIN-101): a
+	// plain int with 0 == "fact absent, take the backoff schedule". Parsed
+	// by parseRetryAfterSeconds (retry_facts.go); over-ceiling values are
+	// still captured — the ≤120 s auto-retry ceiling is a chain decision,
+	// not a capture decision.
+	RetryAfterSeconds int
+	// RequestID is the provider request id from the first non-empty of
+	// x-request-id, request-id, x-amzn-requestid, cf-ray (OBS-003). Empty
+	// when none of the candidates is present.
+	RequestID string
+	Err       error
 }
 
 func (e *ProviderError) Error() string {
@@ -919,6 +929,12 @@ func (e *ProviderError) Unwrap() error {
 func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	contentType := resp.Header.Get("Content-Type")
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, handleErrorBodyCap))
+	// §7.2 capture: the retry-after and request-id facts are parsed from the
+	// response headers at the boundary — the one place every error path
+	// (JSON body, HTML body, unreadable body) passes through with the
+	// headers still in hand.
+	retryAfterSeconds := parseRetryAfterSeconds(resp.Header)
+	requestID := parseRequestID(resp.Header)
 	truncated := false
 	if readErr != nil {
 		// Preserve partial bytes on read failure: keep what was read so the
@@ -933,6 +949,8 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 			ContentType:   contentType,
 			Err:           fmt.Errorf("failed to read response: %w", readErr),
 		}
+		pe.RetryAfterSeconds = retryAfterSeconds
+		pe.RequestID = requestID
 		return pe
 	}
 	// Detect a body that hit the cap exactly — that means the read was
@@ -941,7 +959,8 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 		truncated = true
 	}
 	if LooksLikeHTML(body, contentType) {
-		return WrapHTMLResponseError(resp.StatusCode, body, contentType, apiBase)
+		return WrapHTMLResponseErrorWithFacts(resp.StatusCode, body, contentType, apiBase,
+			retryAfterSeconds, requestID)
 	}
 	return &ProviderError{
 		Status:        resp.StatusCode,
@@ -951,6 +970,8 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 		ContentType:   contentType,
 		Err: fmt.Errorf("API request failed: status=%d body=%s",
 			resp.StatusCode, ResponsePreview(body, 512)),
+		RetryAfterSeconds: retryAfterSeconds,
+		RequestID:         requestID,
 	}
 }
 

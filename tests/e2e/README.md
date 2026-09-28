@@ -80,7 +80,7 @@ To add a legitimate skip:
 
 CI runs are in `.github/workflows/pr.yml` under the `playwright` job. The job:
 1. Builds the Go binary with the SPA embedded.
-2. Seeds an `OMNIPUS_HOME` with `config.json` pointing at `google/gemini-2.5-flash` via OpenRouter.
+2. Seeds an `OMNIPUS_HOME` whose config.json and onboarding seed use the central e2e model — the `OMNIPUS_E2E_MODEL` env var (repo/step env in CI), falling back to the single value in `tests/e2e/e2e-model.json` (read fail-closed by `tests/e2e/fixtures/e2e-model.ts`).
 3. Seeds the OpenRouter credential into `credentials.json`.
 4. Starts the gateway and waits for `/health`.
 5. **Verifies `OPENROUTER_API_KEY_CI` is set** (preflight step) before running any test.

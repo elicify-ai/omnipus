@@ -60,6 +60,8 @@ import { z } from 'zod'
 import { LibraryExplorer } from '@/components/library/LibraryExplorer'
 import { confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
 import { announceLibraryPopoutClosed, announceLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
+import { announcePanelTabPresence, type PanelPresenceAnnouncement } from '@/lib/panelTabPresence'
+import { generateId } from '@/lib/constants'
 
 const librarySearchSchema = z.object({
   workspace: z.string().min(1).optional(),
@@ -73,6 +75,7 @@ const librarySearchSchema = z.object({
   // own doc comment explains why that's safe: `goTo()` never reports it
   // back, so it can't drift out of sync with `path`).
   folder: z.string().min(1).optional(),
+  popout: z.string().min(1).optional(),
 })
 
 export const Route = createFileRoute('/_app/library')({
@@ -81,9 +84,11 @@ export const Route = createFileRoute('/_app/library')({
 })
 
 function LibraryRoute() {
-  const { workspace, path, folder } = Route.useSearch()
+  const { workspace, path, folder, popout } = Route.useSearch()
   const navigate = useNavigate()
+  const popoutIdRef = useRef(popout ?? generateId())
   const currentWorkspaceRef = useRef<string | undefined>(workspace)
+  const presenceAnnouncementRef = useRef<PanelPresenceAnnouncement | null>(null)
 
   // The unsaved-edits guard, extended to the one navigation LibraryExplorer's
   // own handlers cannot see: the browser's back/forward buttons. In-app
@@ -112,9 +117,20 @@ function LibraryRoute() {
   // `workspace`) since it always reads the live ref at call time rather than
   // closing over a point-in-time value.
   useEffect(() => {
-    const handlePageHide = () => announceLibraryPopoutClosed(currentWorkspaceRef.current)
+    const handlePageHide = () => {
+      announceLibraryPopoutClosed(popoutIdRef.current, currentWorkspaceRef.current)
+    }
     window.addEventListener('pagehide', handlePageHide)
     return () => window.removeEventListener('pagehide', handlePageHide)
+  }, [])
+
+  useEffect(() => {
+    const announcement = announcePanelTabPresence({ panelId: 'library', workspaceId: workspace })
+    presenceAnnouncementRef.current = announcement
+    return () => {
+      if (presenceAnnouncementRef.current === announcement) presenceAnnouncementRef.current = null
+      announcement.stop()
+    }
   }, [])
 
   return (
@@ -130,7 +146,7 @@ function LibraryRoute() {
         // should return to (US-3 AS-4).
         void navigate({
           to: '/library',
-          search: { workspace: next.workspaceId, path: next.path },
+          search: { workspace: next.workspaceId, path: next.path, popout: popoutIdRef.current },
         })
       }}
       // Side-by-side here, stacked in the docked aside (operator direction,
@@ -140,7 +156,8 @@ function LibraryRoute() {
       layout="split"
       onWorkspaceChange={(id) => {
         currentWorkspaceRef.current = id ?? undefined
-        announceLibraryWorkspaceChanged(id ?? undefined)
+        announceLibraryWorkspaceChanged(popoutIdRef.current, id ?? undefined)
+        presenceAnnouncementRef.current?.update({ panelId: 'library', workspaceId: id ?? undefined })
       }}
       // onClose omitted: closing "the Library" from a standalone tab means
       // closing the tab itself, not returning to some other in-app view —

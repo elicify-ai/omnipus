@@ -6286,6 +6286,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/ChatModeBadge.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ChatScreen.tsx",
       "lane": 3
     },
@@ -6299,6 +6303,10 @@
     },
     {
       "source": "src/components/chat/ConnectionStatus.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/DelegationEventLine.tsx",
       "lane": 3
     },
     {
@@ -6350,6 +6358,14 @@
       "lane": 6
     },
     {
+      "source": "src/components/chat/ProviderFallbackNoteLine.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ProviderRetryIndicator.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/RateLimitIndicator.tsx",
       "lane": 3
     },
@@ -6368,6 +6384,10 @@
     {
       "source": "src/components/chat/composer/AgentPicker.tsx",
       "lane": 5
+    },
+    {
+      "source": "src/components/chat/composer/AutoApprovePicker.tsx",
+      "lane": 3
     },
     {
       "source": "src/components/chat/composer/ModelPicker.tsx",
@@ -6438,6 +6458,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/tools/HistoricalToolCallBlock.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/tools/PreviewToolHeader.tsx",
       "lane": 4
     },
@@ -6474,6 +6498,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/useChatDelegationEvents.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/useSelectSession.ts",
       "lane": 3
     },
@@ -6488,6 +6516,10 @@
     {
       "source": "src/components/layout/CrossWorkspaceApprovalBanner.tsx",
       "lane": 8
+    },
+    {
+      "source": "src/components/layout/GodModeIndicators.tsx",
+      "lane": 7
     },
     {
       "source": "src/components/layout/NotificationPanel.tsx",
@@ -6666,11 +6698,11 @@
       "lane": 4
     },
     {
-      "source": "src/components/library/preview/LibraryPdfPreview.tsx",
+      "source": "src/components/library/preview/LibraryPdfPreview.loadEffect.ts",
       "lane": 4
     },
     {
-      "source": "src/components/library/preview/LibraryPdfPreview.loadEffect.ts",
+      "source": "src/components/library/preview/LibraryPdfPreview.tsx",
       "lane": 4
     },
     {
@@ -6848,6 +6880,90 @@
     {
       "source": "src/components/library/useLibraryCrossTabRefresh.ts",
       "lane": 4
+    },
+    {
+      "source": "src/components/panel-shell/PanelTabPresenceBridge.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/SidePanelShell.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/BrowserPanelPlaceholder.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/DemoWorkspace.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/demoPanelRegistry.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/fixtureApi.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/fixtures.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/standins.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/leaveGate.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelFocus.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelShellStore.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelTabSwitch.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelWidth.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelWidthMemory.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/registry.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/types.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/usePanelDeepLink.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/usePanelShell.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/usePanelUrlHistory.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/useSwipeToClose.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/workspaceSwitch.ts",
+      "lane": 8
     },
     {
       "source": "src/components/providers/AuthMethodControl.tsx",
@@ -7038,6 +7154,10 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/WebSearchGroup.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/settings/useReAuthGate.tsx",
       "lane": 6
     },
@@ -7051,6 +7171,10 @@
     },
     {
       "source": "src/components/shared/CriteriaBreakdown.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/shared/ErrorBoundary.tsx",
       "lane": 7
     },
     {
@@ -7330,6 +7454,10 @@
       "lane": 7
     },
     {
+      "source": "src/routes/-loginReturn.ts",
+      "lane": 7
+    },
+    {
       "source": "src/routes/__root.tsx",
       "lane": 7
     },
@@ -7460,26 +7588,6 @@
     {
       "source": "src/routes/onboarding.tsx",
       "lane": 1
-    },
-    {
-      "source": "src/components/chat/ChatModeBadge.tsx",
-      "lane": 3
-    },
-    {
-      "source": "src/components/chat/composer/AutoApprovePicker.tsx",
-      "lane": 3
-    },
-    {
-      "source": "src/components/layout/GodModeIndicators.tsx",
-      "lane": 7
-    },
-    {
-      "source": "src/components/chat/DelegationEventLine.tsx",
-      "lane": 3
-    },
-    {
-      "source": "src/components/chat/useChatDelegationEvents.ts",
-      "lane": 3
     }
   ]
 }

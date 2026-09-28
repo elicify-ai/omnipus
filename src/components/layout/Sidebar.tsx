@@ -27,6 +27,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
+import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents, logout } from '@/lib/api'
@@ -740,9 +741,15 @@ export function Sidebar() {
         <Button
           variant="ghost"
           data-testid="sidebar-library-button"
+          data-panel-trigger="library"
           aria-label="Library"
           onClick={() => {
-            useUiStore.getState().openLibraryPanel()
+            // CRIT-001: opening Library REPLACES whatever panel is open
+            // (SP-7), so the outgoing panel's leave gate runs first. Virtual
+            // root scope (no workspaceId → the `app` width/identity bucket).
+            leaveGateThen(useUiStore.getState().activePanel?.id ?? null, () => {
+              useUiStore.getState().openPanel('library', {})
+            })
             if (!effectivelyPinned) close()
           }}
           className="h-auto justify-start gap-[var(--space-2-5)] w-[calc(100%-16px)] px-[var(--space-3)] py-[var(--space-2)] mx-[var(--space-2)] rounded-lg font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
