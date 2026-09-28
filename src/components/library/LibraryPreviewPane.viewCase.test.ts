@@ -1,7 +1,8 @@
 // RED tests for spec "Library views, anywhere"
-// (docs/internal/specs/library-views-anywhere-spec.md), §10 TDD Plan test 14
-// and the derived-view read-only banner (FD-6, US-6 AS-5, TDD test 49's
-// SPA half).
+// (docs/internal/specs/library-views-anywhere-spec.md), §10 TDD Plan test 14,
+// the derived-view read-only banner (FD-6, US-6 AS-5, TDD test 49's SPA
+// half), and the rejection-reason/conflict-paths rendering (R2-MAJ-005,
+// US-6 AS-4, TDD test 57).
 //
 // Oracle: US-6 AS-2 ("Given a Library entry classified 'view'... When
 // LibraryPreviewPane renders its body, Then renderBody's switch gains a
@@ -66,5 +67,19 @@ describe('LibraryPreviewPane — derived-view read-only banner (FD-6, US-6 AS-5,
     // load-bearing signals FD-6 requires can be present yet.
     expect(src).toMatch(/derived_from/)
     expect(src.toLowerCase()).toMatch(/read-?only/)
+  })
+})
+
+describe('LibraryPreviewPane — rejected .view shows reason and conflict paths (R2-MAJ-005, US-6 AS-4, TDD test 57)', () => {
+  it('renders view.rejection_reason and, for a duplicate, every view.conflict_paths entry', () => {
+    const src = readPaneSource()
+    // R2-MAJ-005's own two wire fields (LibraryEntryView.rejection_reason,
+    // LibraryEntryView.conflict_paths) are what a duplicate-rejected or
+    // malformed .view entry's preview must render — neither field exists on
+    // the generated LibraryEntry type yet (confirmed: LIBRARY_PREVIEW_KINDS
+    // has no 'view' member, TDD test 13), so neither string appears
+    // anywhere in this component today.
+    expect(src).toMatch(/rejection_reason/)
+    expect(src).toMatch(/conflict_paths/)
   })
 })
