@@ -4,16 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // This file carries the #984 post-merge follow-up regression tests (PR #984,
@@ -459,4 +462,312 @@ func TestGoal984_GoalEnderRoutesDeferredChildThroughTail(t *testing.T) {
 			t.Fatalf("parent fatal-error entries = %d, want exactly 1", fatalErrs)
 		}
 	})
+}
+
+// TestGoal984_RoundBoundArmRoutesChildThroughTail pins the judged
+// round-bound arm (goal_triggers.go::runGoalAdjudication's
+// `attempt >= maxRounds` block): an UNMET verdict at the round bound ends
+// the goal (rounds_exhausted) and hands the child to the completion tail
+// with a nil error — the child reaches Completed and the parent receives
+// the deterministic handback. This arm landed in PR #984 (decision (b));
+// the post-merge pr-test-analyzer asked for it to be pinned so a future
+// edit cannot silently strand the child `running` above a settled goal.
+func TestGoal984_RoundBoundArmRoutesChildThroughTail(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	wireSteerCompletionDeps(t, al)
+
+	parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
+	if err != nil {
+		t.Fatalf("NewSession(parent): %v", err)
+	}
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: parentMeta.ID,
+		TargetAgentID:     "native-agent",
+		Task:              "prove the bound",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-roundbound"},
+		Goal: &steer.GoalSpec{
+			Criteria: []steer.Criterion{{Text: "the work is complete"}},
+			DoD:      []steer.Criterion{{Text: "the evidence is sufficient"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	rec, err := lifecycle.Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	rec.State = session.LifecycleRunning
+	if persistErr := lifecycle.Persist(rec); persistErr != nil {
+		t.Fatalf("Persist(running): %v", persistErr)
+	}
+
+	// Push the record to one round before its bound so this single unmet
+	// verdict exhausts the budget.
+	if _, uerr := resolveGoalRecordStore().Update(rec.GoalRef, func(cur *goal.Goal) error {
+		cur.Round = cur.MaxRounds - 1
+		return nil
+	}); uerr != nil {
+		t.Fatalf("Update(Round): %v", uerr)
+	}
+
+	type criterionVerdict struct {
+		ID     string `json:"id"`
+		Met    bool   `json:"met"`
+		Reason string `json:"reason"`
+	}
+	g, err := resolveGoalRecordStore().Get(rec.GoalRef)
+	if err != nil {
+		t.Fatalf("Get(goal): %v", err)
+	}
+	verdicts := make([]criterionVerdict, 0, len(g.Criteria)+len(g.DoD))
+	for _, criterion := range append(append([]task.AcceptanceCriterion{}, g.Criteria...), g.DoD...) {
+		verdicts = append(verdicts, criterionVerdict{ID: criterion.ID, Met: false, Reason: "not yet"})
+	}
+	body, err := json.Marshal(map[string]any{"met": false, "criteria": verdicts})
+	if err != nil {
+		t.Fatalf("Marshal(verdict): %v", err)
+	}
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{Content: string(body)}, nil
+	}}
+
+	ts, err := al.reconstructSteeredTurn(rec, nil)
+	if err != nil {
+		t.Fatalf("reconstructSteeredTurn: %v", err)
+	}
+	done := make(chan string, 1)
+	oldDone := goalDeferredAdjudicationDoneFn
+	goalDeferredAdjudicationDoneFn = func(sessionID string) { done <- sessionID }
+	t.Cleanup(func() { goalDeferredAdjudicationDoneFn = oldDone })
+	result := turnResult{finalContent: "[goal:evidence] claiming done\nGOAL_STATUS: met"}
+	al.finishSteeredGoalTurn(ts, rec, &result, nil)
+	select {
+	case got := <-done:
+		if got != rec.SessionID {
+			t.Fatalf("adjudicated session = %q, want %q", got, rec.SessionID)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for delegated goal adjudication")
+	}
+
+	g2, err := resolveGoalRecordStore().Get(rec.GoalRef)
+	if err != nil {
+		t.Fatalf("Get(goal) after: %v", err)
+	}
+	if !goal.IsTerminalState(g2.State) {
+		t.Fatalf("goal state = %q, want terminal after the round bound", g2.State)
+	}
+	if !strings.Contains(g2.TerminalReason, "round bound reached") {
+		t.Fatalf("goal TerminalReason = %q, want the round-bound note", g2.TerminalReason)
+	}
+	loaded, err := lifecycle.Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("Load(child) after: %v", err)
+	}
+	if loaded.State != session.LifecycleCompleted {
+		t.Fatalf("child state = %q, want completed — the round-bound arm must route the child through the completion tail", loaded.State)
+	}
+	entries, err := inbox.Entries(parentMeta.ID)
+	if err != nil {
+		t.Fatalf("inbox.Entries(parent): %v", err)
+	}
+	handbackID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
+	var handbacks int
+	for _, entry := range entries {
+		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
+			continue
+		}
+		cls, cerr := session.ClassifySessionMessage(*entry.Message)
+		if cerr != nil {
+			continue
+		}
+		if cls.Kind == "handback" {
+			handbacks++
+		}
+	}
+	if handbacks != 1 {
+		t.Fatalf("parent handback entries = %d, want exactly 1 (%s)", handbacks, handbackID)
+	}
+}
+
+// TestGoal984_BlockedParkDeliversBlockerUpward pins handleOutcome's blocked
+// arm (goal_loop.go, JUDGE-FR-093 + design-note decision (d)): a goal_claim
+// tool `blocked` claim on a goal-bearing steered child parks the goal
+// WITHOUT ending it, records the claim on the record, and delivers a
+// blocker message to the parent through the one upward path — never
+// silence. Reachable only through the tool channel (FR-091 keeps `blocked`
+// out of the prose marker parser).
+func TestGoal984_BlockedParkDeliversBlockerUpward(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	wireSteerCompletionDeps(t, al)
+
+	parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
+	if err != nil {
+		t.Fatalf("NewSession(parent): %v", err)
+	}
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: parentMeta.ID,
+		TargetAgentID:     "native-agent",
+		Task:              "blocked park pin",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-blocked"},
+		Goal: &steer.GoalSpec{
+			Criteria: []steer.Criterion{{Text: "the work is complete"}},
+			DoD:      []steer.Criterion{{Text: "the evidence is sufficient"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	rec, err := lifecycle.Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	rec.State = session.LifecycleRunning
+	if persistErr := lifecycle.Persist(rec); persistErr != nil {
+		t.Fatalf("Persist(running): %v", persistErr)
+	}
+
+	// A blocked claim is reachable ONLY through the goal_claim tool channel:
+	// append a successful tool-call entry the post-turn scan will find.
+	goalID := ""
+	if g, gerr := resolveGoalRecordStore().Get(rec.GoalRef); gerr == nil {
+		goalID = g.GoalID
+	}
+	claimResult, merr := json.Marshal(map[string]any{
+		"status":   "blocked",
+		"evidence": "missing credentials for the upstream API",
+		"goal_id":  goalID,
+	})
+	if merr != nil {
+		t.Fatalf("Marshal(claim): %v", merr)
+	}
+	if terr := al.GetSessionStore().AppendTranscriptStrict(rec.SessionID, session.TranscriptEntry{
+		ID:        "tc-blocked-1",
+		Type:      session.EntryTypeToolCall,
+		Role:      "assistant",
+		Timestamp: time.Now(),
+		ToolCalls: []session.ToolCall{{
+			ID:     "tc-blocked-1",
+			Tool:   tools.GoalClaimToolName,
+			Status: "success",
+			Result: map[string]any{"text": string(claimResult)},
+		}},
+	}); terr != nil {
+		t.Fatalf("AppendTranscriptStrict(tool call): %v", terr)
+	}
+
+	ts, err := al.reconstructSteeredTurn(rec, nil)
+	if err != nil {
+		t.Fatalf("reconstructSteeredTurn: %v", err)
+	}
+	result := turnResult{finalContent: "I am blocked: missing credentials for the upstream API."}
+	al.finishSteeredGoalTurn(ts, rec, &result, nil)
+
+	// The park: the goal stays ACTIVE (a pause, not an ending) with the
+	// blocked claim recorded on the record, and the blocked flag set.
+	g, err := resolveGoalRecordStore().Get(rec.GoalRef)
+	if err != nil {
+		t.Fatalf("Get(goal) after: %v", err)
+	}
+	if !goal.IsActiveState(g.State) {
+		t.Fatalf("goal state = %q, want active — a blocked park is a pause, not an ending", g.State)
+	}
+	if g.LatestClaim == nil || g.LatestClaim.Status != generated.GoalLatestClaimStatusBlocked {
+		t.Fatalf("LatestClaim = %+v, want status blocked recorded on the record", g.LatestClaim)
+	}
+	if !al.goalIsBlocked(g.GoalID) {
+		t.Fatal("goalIsBlocked = false, want true after the blocked claim")
+	}
+	loaded, err := lifecycle.Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("Load(child) after: %v", err)
+	}
+	if loaded.State != session.LifecycleRunning {
+		t.Fatalf("child state = %q, want running — a park must not terminalise the child", loaded.State)
+	}
+
+	// The parent was told: exactly one blocker entry, carrying the claim's
+	// evidence text, wake-eligible.
+	entries, err := inbox.Entries(parentMeta.ID)
+	if err != nil {
+		t.Fatalf("inbox.Entries(parent): %v", err)
+	}
+	blockers := 0
+	var blockerText string
+	for _, entry := range entries {
+		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
+			continue
+		}
+		cls, cerr := session.ClassifySessionMessage(*entry.Message)
+		if cerr != nil || cls.Kind != "blocker" {
+			continue
+		}
+		blockers++
+		if blocker, berr := entry.Message.AsSessionMessageBlocker(); berr == nil {
+			blockerText = blocker.Text
+		}
+	}
+	if blockers != 1 {
+		t.Fatalf("parent blocker entries = %d, want exactly 1 — decision (d): a blocked park tells the parent", blockers)
+	}
+	if !strings.Contains(blockerText, "missing credentials") {
+		t.Fatalf("blocker text = %q, want the claim's evidence", blockerText)
+	}
+}
+
+// TestBoot984_FailInterruptedPairEnd pins the boot pair-end on the
+// mid-flight arm: SteerBootRecovery.failInterrupted (boot_sweep.go) must
+// fire the EndSessionGoal hook with the CHILD's session id — ending the
+// child's session-owned goal (FD1=A), never the ancestor's.
+func TestBoot984_FailInterruptedPairEnd(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	h := newBootRecoveryHarness(t)
+	parent := h.rootSession(t)
+	child := h.newSession(t, session.SessionTypeDelegate, parent)
+	rec := h.steeredRecord(child, parent, session.LifecycleRunning)
+	h.persist(t, rec)
+	childGoal := activateTestGoalRecord(t, child, "failInterrupted pair-end")
+	parentGoal := activateTestGoalRecord(t, parent, "ancestor goal untouched")
+
+	var hooked []string
+	recovery := h.recovery()
+	recovery.EndSessionGoal = func(sid, reason string) {
+		hooked = append(hooked, sid)
+		al.EndSessionOwnedGoalOnTerminal(sid, reason)
+	}
+	if err := recovery.failInterrupted(rec); err != nil {
+		t.Fatalf("failInterrupted: %v", err)
+	}
+
+	loaded, err := h.lifecycle.Load(child)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	if loaded.State != session.LifecycleFailed {
+		t.Fatalf("child state after failInterrupted = %q, want failed", loaded.State)
+	}
+	if len(hooked) != 1 || hooked[0] != child {
+		t.Fatalf("EndSessionGoal hook fired %v, want exactly once with the child id %q", hooked, child)
+	}
+	cg, err := resolveGoalRecordStore().Get(childGoal)
+	if err != nil {
+		t.Fatalf("Get(childGoal): %v", err)
+	}
+	if !goal.IsTerminalState(cg.State) {
+		t.Fatalf("child's goal = %q, want terminal — FD1=A pair-end", cg.State)
+	}
+	pg, err := resolveGoalRecordStore().Get(parentGoal)
+	if err != nil {
+		t.Fatalf("Get(parentGoal): %v", err)
+	}
+	if !goal.IsActiveState(pg.State) {
+		t.Fatalf("ancestor's goal = %q, want active — the pair-end is keyed to the child's session only", pg.State)
+	}
 }
