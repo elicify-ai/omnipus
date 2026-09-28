@@ -1,4 +1,4 @@
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, dismissStaleDialogOverlay, selectAgent, waitForConnected, watchAndDenyToolApprovals } from './fixtures/selectors'
 
@@ -13,6 +13,109 @@ function requireApiKey(): void {
   }
 }
 
+
+// Pre-reload gate: "the delegation has settled" — the reload below is only
+// allowed once the steered delegation to childLabel has finished AND the SPA
+// itself renders no running claim for it. Two DOM conditions, both read from
+// surfaces the SPA derives itself:
+//
+//   1. FINISHED (persisted half) — at least one `finished` event line for
+//      childLabel rendered in the parent transcript. Event lines derive from
+//      the persisted span records, so they replay identically after a reload
+//      (src/lib/delegationEvents.ts, module header); each line is keyed
+//      `<kind>:<spanId>` (src/lib/delegationEvents.ts::lifecycleId), one line
+//      per GENERATION span, and terminalKind
+//      (src/lib/delegationEvents.ts::terminalKind) emits one only once the
+//      span left running/parked — so a finished line is proof that at least
+//      one generation ENDED.
+//
+//   2. NOT-RUNNING (live half) — the Agents pill's rendered label
+//      (`[data-testid="activity-bar-label"]`) is either unmounted or does
+//      not read "N running". The label is `${runningChildren} running` only
+//      while useRunningActivity's `runningChildren` is non-zero
+//      (src/components/chat/ActivityBar.tsx::activityLabel): the active
+//      session's direct agent children whose lifecycleState is exactly
+//      'running', one item per generation span
+//      (src/hooks/useRunningActivity.ts::useRunningActivity). A queued child
+//      renders "N queued"; background shell work renders on the separate
+//      Commands pill — neither satisfies this predicate. In this spec's
+//      parent view A is the only delegated child, so every "N running" claim
+//      on this pill is A's.
+//
+// Why not an exact finished-line count: the steer's arrival in the child is
+// observed two ways live — injected into the child's still-live turn (SAME
+// generation: exactly one finished line, ever) or answered with a follow-up
+// generation (a SECOND span, which renders no birth line — D9,
+// src/lib/delegationEvents.ts::birthKind — and so is invisible on the event
+// lines until it ends). A "two finished lines" oracle is wrong under the
+// first timing — it can never see a second line and burns its whole budget —
+// and the pill's "N running" claim is the only surface that renders a
+// follow-up generation while it runs.
+//
+// Why a quiet window: between generations the claim drops for the spawn gap
+// (observed ~1s: local live run 2, 2026-09-28 — gen-1 finished line at
+// 22:52:30Z, g2 span 22:52:31Z-22:53:19Z). A single zero reading races that
+// gap exactly the way the one-shot overlay guard raced the rehydrating
+// approval (run 36337231197 — the precedent that produced
+// fixtures/selectors.ts::dismissStaleDialogOverlay's quiet window): the pass
+// state must HOLD for SETTLED_QUIET_WINDOW_MS, so sampling the gap restarts
+// the window instead of releasing the test into a reload mid-generation.
+// The window is not a timeout: the gate's bound stays
+// SETTLED_GATE_TIMEOUT_MS, unchanged from the gate it replaces.
+//
+// On timeout the thrown error names the condition still unmet (deadline
+// branch below).
+const SETTLED_GATE_TIMEOUT_MS = 240_000 // same bound the previous gate carried — not lengthened
+const SETTLED_QUIET_WINDOW_MS = 5_000 // 5x the observed between-generations spawn gap (~1s, run 2)
+const SETTLED_POLL_INTERVAL_MS = 250
+
+async function waitForDelegationSettled(parentView: Page, childLabel: string): Promise<void> {
+  const finishedLine = parentView
+    .locator('[data-testid="delegation-event-line"][data-event-kind="finished"]')
+    .filter({ hasText: childLabel })
+  const agentsPillLabel = parentView.locator('[data-testid="activity-bar-label"]')
+  const deadline = Date.now() + SETTLED_GATE_TIMEOUT_MS
+  let quietSince = -1
+  while (true) {
+    const finishedCount = await finishedLine.count()
+    const pillTexts = await agentsPillLabel.allInnerTexts()
+    const finishedOk = finishedCount >= 1
+    const runningOk = !pillTexts.some((text) => /\d+ running/.test(text))
+    if (finishedOk && runningOk && quietSince < 0) {
+      quietSince = Date.now()
+    } else if (!(finishedOk && runningOk)) {
+      quietSince = -1
+    }
+    if (quietSince >= 0 && Date.now() - quietSince >= SETTLED_QUIET_WINDOW_MS) return
+    if (Date.now() >= deadline) {
+      // Final re-sample so the message reports the state at throw time.
+      const finalFinished = await finishedLine.count()
+      const finalPillTexts = await agentsPillLabel.allInnerTexts()
+      const unmet: string[] = []
+      if (finalFinished < 1) {
+        const finishedMsg =
+          'FINISHED not met: ' + finalFinished + ' "finished" event line(s) for "' + childLabel + '" rendered (need >= 1)'
+        unmet.push(finishedMsg)
+      }
+      const runningTexts = finalPillTexts.filter((text) => /\d+ running/.test(text))
+      if (runningTexts.length > 0) {
+        const runningMsg =
+          'NOT-RUNNING not met: the Agents pill renders "' + runningTexts.join('", "') + '" — the SPA\'s own claim that a generation span of the child is still running (useRunningActivity.ts::runningChildren, one item per generation)'
+        unmet.push(runningMsg)
+      }
+      if (unmet.length === 0) {
+        const windowMsg =
+          'both conditions held but the ' + SETTLED_QUIET_WINDOW_MS + 'ms quiet window did not complete — the pass state kept being broken (a "N running" claim re-appeared between samples)'
+        unmet.push(windowMsg)
+      }
+      throw new Error(
+        'waitForDelegationSettled("' + childLabel + '"): the steered delegation did not settle within ' + SETTLED_GATE_TIMEOUT_MS +
+          'ms — reload blocked so the post-reload pill invariant is not tested against a live delegation. Unmet: ' + unmet.join(' | '),
+      )
+    }
+    await parentView.waitForTimeout(SETTLED_POLL_INTERVAL_MS)
+  }
+}
 
 test('steered session is reachable in its own live view without leaking child output into the parent chat', async ({ page, context }) => {
   requireApiKey()
@@ -339,31 +442,29 @@ test('steered session is reachable in its own live view without leaking child ou
 
   // The pill assertion below is a POST-COMPLETION invariant — its own comment
   // says "once the delegation has finished" — so the reload must not race the
-  // model. Gated on the delegation's own terminal event line (kind "finished",
-  // rendered from the persisted subagent_end), not on any wall-clock. Run-1
-  // evidence (local live run, 2026-09-27): every attempt reloaded ~17-20s into
-  // a 40-51s delegation and the pill truthfully read "1 running" through the
-  // whole 15s check window — the assertion fired on a LIVE delegation, not a
-  // phantom one.
-  // Steered delegations terminate PER GENERATION. The steer this test sends
-  // above always opens a follow-up generation in the same child session under
-  // a NEW span (src/lib/delegationEvents.ts::lifecycleId — "a follow-up runs
-  // another generation in the same child session under a new span; collapsing
-  // those onto the session id would drop the second finish"), which emits no
-  // second birth line (birthKind D9) but DOES emit its own terminal finished
-  // line. So the delegation's real terminal event is the SECOND finished line,
-  // and this gate previously passing on the FIRST one raced the live steered
-  // generation: local live run 2 (2026-09-28) — gen-1 end 22:52:30Z satisfied
-  // this gate, the steered g2 span ran 22:52:31Z-22:53:19Z, and the pill
-  // TRUTHFULLY read "1 running" through the whole 15s check window (parent
-  // transcript, session_01M3JH22WKKZ spans call_bd29.../call_bd29...:g2).
-  // Exactly two finished lines is deterministic here: this test steers exactly
-  // once, and a steer to a delegated child is delivered into its next round
-  // (pkg/agent/steer_delegated_injection_test.go), so generations = 2.
-  await expect(
-    parentView.locator('[data-testid="delegation-event-line"][data-event-kind="finished"]').filter({ hasText: LABEL_A }),
-    'child A must have finished BOTH generations (initial + steered follow-up) before the reload — the pill check below is a post-completion invariant',
-  ).toHaveCount(2, { timeout: 240_000 })
+  // model. Run-1 evidence (local live run, 2026-09-27): reloading ~17-20s
+  // into a 40-51s delegation left the pill truthfully reading "1 running"
+  // through the whole 15s check window — the assertion fired on a LIVE
+  // delegation, not a phantom one.
+  //
+  // The gate is waitForDelegationSettled above — the condition definitions
+  // and the quiet-window reasoning live on the helper. Why NOT the previous
+  // "exactly two finished lines" oracle: it silently assumed the test's steer
+  // always opens a follow-up GENERATION in A. An earlier live investigation
+  // saw the steer INJECTED into A's still-live turn instead — the SAME
+  // generation, exactly ONE finished line, ever — and under that timing the
+  // old gate could only burn its whole 240s budget and fail (the defect this
+  // commit fixes). The condition below is correct under BOTH timings:
+  //   - same-generation injection: the single generation ends -> one finished
+  //     line, no "N running" claim -> the quiet window completes -> gate
+  //     releases.
+  //   - follow-up generation: gen-1's finished line lands, the g2 span re-arms
+  //     the pill's "N running" claim from its own lifecycleState
+  //     (useRunningActivity reads spans per generation), the window RESETS on
+  //     that claim, and the gate releases only after g2's finished line plus a
+  //     full quiet window. The observed ~1s spawn gap (run 2: gen-1 end
+  //     22:52:30Z -> g2 start 22:52:31Z) cannot pass the window.
+  await waitForDelegationSettled(parentView, LABEL_A)
 
   await parentView.reload()
   // CI run 36026415761: this segment used to wait 30s for the Activity bar to
