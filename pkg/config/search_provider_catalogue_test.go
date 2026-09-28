@@ -119,7 +119,11 @@ func TestCatalogueWalk_AddedProviderIsStorableAndSelectable(t *testing.T) {
 
 	// Selectable: the legacy chain is UNCHANGED by the append (the added
 	// provider carries no legacy position — the migration mirrors pre-ADR
-	// behaviour, so a test-only provider must not enter it).
+	// behaviour, so a test-only provider must not enter it). DDG is switched
+	// off here so the assertion cannot pass "by accident" via DDG being
+	// usable by default: the only way the answer stays duckduckgo is the
+	// final-fallback branch over the LEGACY chain.
+	w.DuckDuckGo.Enabled = false
 	if got := w.migrationWinnerID(); got != SearchProviderDuckDuckGo {
 		t.Fatalf("migration winner = %q after appending a position-less provider; legacy chain must be unchanged", got)
 	}
