@@ -564,7 +564,7 @@ func TestInstallSkillFromAuthorizedMarkdownUpload(t *testing.T) {
 	uploadPath := filepath.Join(uploadDir, "local-skill.md")
 	content := "---\nname: local-skill\ndescription: Use when a local uploaded skill is requested.\n---\n\nBody.\n"
 	require.NoError(t, os.WriteFile(uploadPath, []byte(content), 0o644))
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.mediaStore = store
 	ref, err := store.Store(uploadPath, media.MediaMeta{Filename: "local-skill.md", Source: "upload:webchat", CleanupPolicy: media.CleanupPolicyForgetOnly}, "upload:owner-session")
 	require.NoError(t, err)

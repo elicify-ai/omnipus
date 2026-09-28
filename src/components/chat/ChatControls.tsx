@@ -6,6 +6,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { createSession } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { ChatModeBadge } from './ChatModeBadge'
 
 interface ChatControlsProps {
@@ -40,14 +41,23 @@ export function ChatControls({ className }: ChatControlsProps) {
   // selection. Unlike the browser launcher above there is no session to
   // create first: the Library is a view over files on disk, not a live
   // attachment to a running agent, so it opens immediately.
+  //
+  // CRIT-001: this launcher REPLACES whatever panel is open (SP-7's
+  // single-panel shell, side-panel-shell-spec.md §8.1), so the outgoing
+  // panel's leave gate (the Library's unsaved-edit confirmation) runs FIRST —
+  // Cancel leaves the store and URL untouched.
   const handleOpenLibrary = () => {
-    if (!activeWorkspaceId) {
-      // Fall back to the virtual root rather than refusing outright — with no
-      // active workspace, "all workspaces" is still a useful, correct view.
-      useUiStore.getState().openLibraryPanel(undefined)
-      return
-    }
-    useUiStore.getState().openLibraryPanel(activeWorkspaceId)
+    const scope = activeWorkspaceId
+    const outgoingPanelId = useUiStore.getState().activePanel?.id ?? null
+    leaveGateThen(outgoingPanelId, () => {
+      if (!scope) {
+        // Fall back to the virtual root rather than refusing outright — with no
+        // active workspace, "all workspaces" is still a useful, correct view.
+        useUiStore.getState().openPanel('library', {})
+        return
+      }
+      useUiStore.getState().openPanel('library', { workspaceId: scope })
+    })
   }
 
   // ADR-039 D-A1: persistent "Open browser" launcher. The backend
@@ -76,7 +86,12 @@ export function ChatControls({ className }: ChatControlsProps) {
   // running tool call implies a session already exists, so it never hits
   // this codepath.
   const [creatingBrowserSession, setCreatingBrowserSession] = useState(false)
-  const handleOpenBrowser = async () => {
+  // CRIT-001/MIN-206: opening the Browser REPLACES whatever panel is open
+  // (SP-7), so the outgoing panel's leave gate (the Library's unsaved-edit
+  // confirmation) runs BEFORE the store moves — and before session creation:
+  // a Cancel aborts with no request sent. The open itself happens inside the
+  // gate's continuation (synchronously when clean).
+  const handleOpenBrowser = () => {
     if (!activeAgentId) {
       addToast({ message: 'Select an agent before opening the live browser.', variant: 'error' })
       return
@@ -85,42 +100,62 @@ export function ChatControls({ className }: ChatControlsProps) {
     // just-sent first message whose real session_started ack hasn't landed
     // yet (see sendMessage's no-active-session branch) — not a real backend
     // session the browser WS can usefully attach against. Same check as
-    // attachment-adapter.ts's ensureSession().
-    if (activeSessionId && activeSessionId !== '__pending') {
-      useUiStore.getState().openBrowserPanel(activeSessionId, activeAgentId)
-      return
-    }
-    if (creatingBrowserSession) return
-    setCreatingBrowserSession(true)
-    try {
-      // U2: the workspace this chat belongs to travels WITH the create.
-      //
-      // The panel about to open resolves which workspace's browser — and whose
-      // live logins — it shows by reading the workspace off this very session's
-      // meta, server-side (ADR-075 FR-016/FR-017); nothing on the attach frame
-      // carries it, deliberately, so a client cannot ask to drive a workspace's
-      // browser just by saying so. Creating the session with agent_id alone
-      // therefore handed the panel a session that named no workspace, and an
-      // agent on more than one workspace's team was refused as ambiguous —
-      // advised to "open this panel from a chat that belongs to the workspace
-      // you mean", which is exactly where the click came from. The workspace
-      // was in the route and in this store the whole time; it just never made
-      // the trip.
-      //
-      // `undefined` on the global/inbox chat is correct and stays correct: no
-      // workspace is not the same as a default one, and the refusal is right
-      // when there is genuinely nothing to disambiguate on.
-      const created = await createSession(activeAgentId, activeWorkspaceId ?? undefined)
-      setActiveSession(created.id, created.agent_id, null)
-      useUiStore.getState().openBrowserPanel(created.id, created.agent_id)
-    } catch (err) {
-      addToast({
-        message: err instanceof Error ? err.message : 'Could not start a browser session — try again.',
-        variant: 'error',
-      })
-    } finally {
-      setCreatingBrowserSession(false)
-    }
+    // attachment-adapter.ts's ensureSession(). Captured now so the values the
+    // gate approved are the values that open, even after a dialog round-trip.
+    const sessionId = activeSessionId && activeSessionId !== '__pending' ? activeSessionId : null
+    const agentId = activeAgentId
+    const workspaceId = activeWorkspaceId
+    const approvedPanel = useUiStore.getState().activePanel
+    leaveGateThen(approvedPanel?.id ?? null, () => {
+      if (sessionId) {
+        useUiStore.getState().openPanel('browser', { sessionId, agentId })
+        return
+      }
+      if (creatingBrowserSession) return
+      const panelAtCreationStart = useUiStore.getState().activePanel
+      setCreatingBrowserSession(true)
+      void (async () => {
+        try {
+          // ADR-075 — Browser tools: workspace-scoped, and usable by an
+          // agent (D1.13; pkg/gateway/browser_ws.go::handleAttach): the
+          // workspace this chat belongs to travels WITH the create.
+          //
+          // The panel about to open resolves which workspace's browser — and whose
+          // live logins — it shows by reading the workspace off this very session's
+          // meta, server-side (ADR-075 D1.13; browser_ws.go::handleAttach); nothing on the attach frame
+          // carries it, deliberately, so a client cannot ask to drive a workspace's
+          // browser just by saying so. Creating the session with agent_id alone
+          // therefore handed the panel a session that named no workspace, and an
+          // agent on more than one workspace's team was refused as ambiguous —
+          // advised to "open this panel from a chat that belongs to the workspace
+          // you mean", which is exactly where the click came from. The workspace
+          // was in the route and in this store the whole time; it just never made
+          // the trip.
+          //
+          // `undefined` on the global/inbox chat is correct and stays correct: no
+          // workspace is not the same as a default one, and the refusal is right
+          // when there is genuinely nothing to disambiguate on.
+          const created = await createSession(agentId, workspaceId ?? undefined)
+          setActiveSession(created.id, created.agent_id, null)
+          const current = useUiStore.getState().activePanel
+          if (current !== panelAtCreationStart) return
+          leaveGateThen(current?.id ?? null, () => {
+            if (useUiStore.getState().activePanel !== current) return
+            useUiStore.getState().openPanel('browser', {
+              sessionId: created.id,
+              agentId: created.agent_id,
+            })
+          })
+        } catch (err) {
+          addToast({
+            message: err instanceof Error ? err.message : 'Could not start a browser session — try again.',
+            variant: 'error',
+          })
+        } finally {
+          setCreatingBrowserSession(false)
+        }
+      })()
+    })
   }
 
   return (
@@ -171,6 +206,7 @@ export function ChatControls({ className }: ChatControlsProps) {
         // keystroke even when steering is also available.
         tabIndex={7}
         aria-label="Open browser"
+        data-panel-trigger="browser"
         aria-busy={creatingBrowserSession}
         title="Open a live browser session"
         className={cn(
@@ -196,6 +232,7 @@ export function ChatControls({ className }: ChatControlsProps) {
         onClick={handleOpenLibrary}
         tabIndex={8}
         aria-label="Open library"
+        data-panel-trigger="library"
         title="Browse this workspace's files"
         className={cn(
           'shrink-0 px-[var(--space-2)] h-8 gap-[var(--space-1)]',

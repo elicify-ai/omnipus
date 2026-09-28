@@ -4,9 +4,15 @@ import { ArrowSquareOut } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { useSessionStore } from '@/store/session'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 import { isSafeHref } from '@/lib/url-safe'
+import {
+  ToolResultSentinelBody,
+  isSentinelResolution,
+  resolveToolResult,
+} from './toolResultDisplay'
 
 interface WebFetchArgs {
   url?: string
@@ -32,13 +38,18 @@ function displayUrl(url: string): string {
   }
 }
 
-function WebFetchBlock({
+// Exported for ChatScreen.tsx's history-replay loop: a reloaded `fetch_url`/
+// `web_fetch` call must render the same dedicated row the live path shows
+// (ticket "chat tool-UI collapse", item 4).
+export function WebFetchBlock({
   toolName,
   args,
   result,
   isRunning,
   isError,
   isCancelled,
+  error,
+  sessionId,
 }: {
   toolName: string
   args: WebFetchArgs
@@ -46,8 +57,15 @@ function WebFetchBlock({
   isRunning: boolean
   isError?: boolean
   isCancelled?: boolean
+  /** Failed call's reason (frame.error via replay.go::applyPersistedFailureReason). Rendered in the expanded panel when there is no fetched content. */
+  error?: string
+  /** Session this call belongs to — required to fetch a ToolResultRef sentinel's full body session-scoped. The live path falls back to the active session. */
+  sessionId?: string
 }) {
   const [expanded, setExpanded] = useState(false)
+  // ctui-gate fix 1: live path has no sessionId prop — fall back to the
+  // active session (same fallback BashOutputBlock uses).
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
 
   // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
   // hides this row when shouldRenderToolCall says so, unless verbose chat is
@@ -60,15 +78,21 @@ function WebFetchBlock({
   }
 
   const url = args.url ?? '(unknown URL)'
-  const content = result != null ? String(result) : ''
+  // ctui-gate fix 1: resolve through the shared module — a `{ text }`
+  // envelope, an offload/truncation/marshal-error sentinel, or a structured
+  // failure renders its dedicated display instead of `String(result)`'s
+  // "[object Object]". The preview derives ONLY from a plain-string body.
+  const resolved = resolveToolResult(result)
+  const content = resolved.kind === 'text' ? resolved.text : ''
   const { preview, truncated } = content ? truncateContent(content) : { preview: '', truncated: false }
   // Only render the "open in new tab" action link for a real http(s)/mailto/tel
   // URL — never for javascript:/data:/etc. Reuses the same allow-list IframePreview
   // already applies to preview URLs (@/lib/url-safe), so both surfaces agree.
   const linkable = isSafeHref(url)
-  // Nothing to expand until the call finishes with actual content — mirrors
+  // Nothing to expand until the call finishes with actual content (a result,
+  // the failure reason, or a structured sentinel) — mirrors
   // GenericToolCall.tsx's `hasDetail` gate.
-  const hasDetail = !isRunning && !!content
+  const hasDetail = !isRunning && (!!content || !!error || isSentinelResolution(resolved))
 
   // Switched from a bare statusDot to the full getToolBadgeStatusConfig so
   // the status label (Running.../Done/Failed/Cancelled) is always rendered
@@ -127,12 +151,25 @@ function WebFetchBlock({
       {expanded && hasDetail && (
         <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
           <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-[var(--space-1)]">{url}</div>
-          <pre className="text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
-            {preview}
-            {truncated && (
-              <span className="text-[var(--color-muted)] italic">{'\n'}... (content truncated)</span>
-            )}
-          </pre>
+          {isSentinelResolution(resolved) ? (
+            <ToolResultSentinelBody
+              resolved={resolved}
+              sessionId={sessionId ?? activeSessionId ?? ''}
+            />
+          ) : (
+            <pre className="text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
+              {content ? (
+                <>
+                  {preview}
+                  {truncated && (
+                    <span className="text-[var(--color-muted)] italic">{'\n'}... (content truncated)</span>
+                  )}
+                </>
+              ) : error ? (
+                <span className="italic text-[var(--color-error)] break-words">{error}</span>
+              ) : null}
+            </pre>
+          )}
         </div>
       )}
     </div>

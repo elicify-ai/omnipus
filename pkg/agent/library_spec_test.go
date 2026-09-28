@@ -27,6 +27,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
@@ -136,7 +137,7 @@ func TestResolveMediaRefs_AnnouncesWorkspaceUpload_UsesRecordedPath(t *testing.T
 	// path must reflect this exact recorded value, not the plain fallback.
 	RecordUploadWorkPath(ref, ".library/Copy of elicify_company_profile (1).png")
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	store.SetWorkspaceLibraryProvider(func(id string) (media.WorkspaceLibraryResolver, error) {
 		if id != wsID {
 			return nil, os.ErrNotExist
@@ -174,7 +175,7 @@ func TestResolveMediaRefs_AnnouncesWorkspaceUpload_FallsBackWhenNotRecorded(t *t
 	// Deliberately do NOT call RecordUploadWorkPath — this is the "never
 	// recorded" case the fallback formula exists for.
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	store.SetWorkspaceLibraryProvider(func(id string) (media.WorkspaceLibraryResolver, error) {
 		return lib, nil
 	})
@@ -191,7 +192,7 @@ func TestResolveMediaRefs_AnnouncesWorkspaceUpload_FallsBackWhenNotRecorded(t *t
 // upload announcement at all — buildUploadAnnouncement must return "" for
 // these rather than fabricating a misleading path.
 func TestResolveMediaRefs_NonWorkspaceRef_NoAnnouncement(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	dir := t.TempDir()
 	pngPath := dir + "/plain.png"
 	require.NoError(t, os.WriteFile(pngPath, mustEncodeTestPNGLibSpec(t, 2, 2), 0o644))

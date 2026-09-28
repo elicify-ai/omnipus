@@ -315,6 +315,33 @@ func inferMediaType(filename, contentType string) string {
 func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.ResolvedRoute, *AgentInstance, error) {
 	registry := al.GetRegistry()
 
+	// ADR-091 identity — steered-session route pinning (2026-09-27): a
+	// message addressed INTO a steered child's session runs under the child's
+	// record-pinned agent (LifecycleRecord.AgentID), never the SPA's sticky
+	// agent-picker dropdown, a handoff pin, or the channel cascade. The child
+	// is not a chat surface that can be re-targeted: SteerLauncher.Launch
+	// pinned its agent, and reconstructSteeredTurn already refuses to rebuild
+	// the child's turn under any other. Live evidence this branch was
+	// missing: the e2e steered-session-reachability repro routed a steer
+	// typed into the child's own view as "Routed to explicit agent
+	// (dropdown) agent_id=jim" into a worker-pinned child, and the resulting
+	// jim turn re-executed the child's original delegate task inside the
+	// child's session. Unresolvable pinned agent fails closed — falling
+	// through would silently re-target the child, the exact defect this
+	// branch exists to prevent.
+	if pinned := al.pinnedSteeredAgentID(msg.SessionID); pinned != "" {
+		agent, ok := registry.GetAgent(pinned)
+		if !ok {
+			return routing.ResolvedRoute{}, nil, fmt.Errorf("steered session %q is pinned to agent %q, which is not registered", msg.SessionID, pinned)
+		}
+		logger.InfoCF("agent", "Routed to steered session's pinned agent", map[string]any{
+			"session_id": msg.SessionID,
+			"agent_id":   pinned,
+		})
+		sk := agentSessionKey(pinned, msg)
+		return routing.ResolvedRoute{AgentID: pinned, SessionKey: sk}, agent, nil
+	}
+
 	// Explicit agent_id in message metadata takes top priority. The user
 	// switching the SPA dropdown to a different agent is an authoritative
 	// re-targeting that must win over any prior handoff routing override —

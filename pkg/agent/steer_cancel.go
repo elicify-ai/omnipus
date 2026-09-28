@@ -215,6 +215,12 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	})
 	switch {
 	case mutateErr == nil:
+		// (e)② #947 defect 1 — the pair ends together (FD1=A): the
+		// terminal write just landed, so the child's ACTIVE session-owned goal
+		// ends with its session, the failureReason (already a readable
+		// "interrupted: the session was cancelled" shape) naming the cause.
+		// Idempotent; never speaks for a task-owned goal.
+		al.endSessionOwnedGoalOnTerminal(sessionID, goalEndingForTerminalState(nextState), failureReason)
 	case errors.Is(mutateErr, errTerminalReportStaleGeneration),
 		errors.Is(mutateErr, errTerminalReportAlreadyTerminal),
 		errors.Is(mutateErr, errTerminalReportStoppedDuringDelivery),
@@ -340,6 +346,20 @@ func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID stri
 	// generation it was stamped for — a concurrent Revive landing in the
 	// meantime must not be clobbered.
 	if rec.Generation != generation || rec.Terminal() || rec.Stop == nil || rec.Stop.Generation != generation {
+		return
+	}
+	// ADR-093 MAJ-001 (test-plan row "Web Stop on a chat root that has
+	// delegated"): a session with NO steering edge — a standing chat root —
+	// is never terminalised by its own Stop cascade. Finding 5's reason for
+	// terminalising a never-ran session is that its own PARENT would
+	// otherwise wait forever on it (hasRunningOrQueuedDescendant,
+	// steer_completion.go); a chat root has no parent to strand, and the
+	// MAJ-001 contract is that the record stays `running` carrying the
+	// current-generation Stop marker the cascade has just stamped — the
+	// exact state ADR-093 D4's revival continues from. Writing `cancelled`
+	// here would also CLEAR that marker (reportSteeredSessionTerminalUpward
+	// spends it in its Mutate), un-delivering the Stop the user pressed.
+	if rec.SteeredBy == nil {
 		return
 	}
 	al.reportSteeredSessionTerminalUpward(ctx, sessionID, generation,

@@ -80,7 +80,7 @@ async function resolveWorkspaceId(page: Page): Promise<string> {
  * that premature mid-turn blip, long before the screenshot tool has run and the
  * media frame exists. Without this guard, the subsequent img assertion's 90s
  * budget starts from that early point instead of from real turn completion,
- * silently eating into the time glm-5.2 has to finish the second tool call.
+ * silently eating into the time deepseek-v4.1-flash has to finish the second tool call.
  */
 async function waitForTurnFullyDone(page: Page, gapMs = 8_000): Promise<void> {
   const stopBtn = page.locator('[data-testid="stop-btn"]');
@@ -106,7 +106,7 @@ test(
   '(a) screenshot inline render: Mia screenshots example.com and renders an img',
   async ({ page }) => {
     // The screenshot flow exercises the LLM (tool selection) + Chromium
-    // (screenshot) + SPA (media render). glm-5.2 (the standard e2e model) is
+    // (screenshot) + SPA (media render). deepseek-v4.1-flash (the standard e2e model) is
     // reliable but slower than the old gemini pick, so use an explicit generous
     // budget rather than the 270s test.slow() ceiling.
     //
@@ -147,7 +147,7 @@ test(
 
     const countBefore = await assistantMessages(page).count();
     // Explicit, single-tool instruction — mirrors the reliable phrasing used by
-    // the delegate-based specs so glm-5.2 takes the screenshot itself instead of
+    // the delegate-based specs so deepseek-v4.1-flash takes the screenshot itself instead of
     // narrating or delegating.
     await input.fill(
       'Use the browser tools to take a screenshot of https://example.com and show it to me. ' +

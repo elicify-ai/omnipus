@@ -2,8 +2,14 @@ import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { useSessionStore } from '@/store/session'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
+import {
+  ToolResultSentinelBody,
+  isSentinelResolution,
+  resolveToolResult,
+} from './toolResultDisplay'
 
 interface ReadFileArgs {
   path?: string
@@ -15,13 +21,18 @@ function basename(p: string): string {
   return p.split(/[/\\]/).pop() ?? p
 }
 
-function FileReadBlock({
+// Exported for ChatScreen.tsx's history-replay loop: a reloaded `read_file`
+// call must render the same dedicated row the live path shows (ticket
+// "chat tool-UI collapse", item 4).
+export function FileReadBlock({
   toolName,
   args,
   result,
   isRunning,
   isError,
   isCancelled,
+  error,
+  sessionId,
 }: {
   toolName: string
   args: ReadFileArgs
@@ -29,8 +40,15 @@ function FileReadBlock({
   isRunning: boolean
   isError?: boolean
   isCancelled?: boolean
+  /** Failed call's reason (frame.error via replay.go::applyPersistedFailureReason). Rendered in the expanded body when there is no content. */
+  error?: string
+  /** Session this call belongs to — required to fetch a ToolResultRef sentinel's full body session-scoped. The live path falls back to the active session. */
+  sessionId?: string
 }) {
   const [expanded, setExpanded] = useState(false)
+  // ctui-gate fix 1: live path has no sessionId prop — fall back to the
+  // active session (same fallback BashOutputBlock uses).
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
 
   // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
   // hides this row when shouldRenderToolCall says so, unless verbose chat is
@@ -44,7 +62,13 @@ function FileReadBlock({
 
   const path = args.path ?? '(unknown file)'
   const name = basename(path)
-  const content = result != null ? String(result) : ''
+  // ctui-gate fix 1: resolve through the shared module — a `{ text }`
+  // envelope, an offload/truncation/marshal-error sentinel, or a structured
+  // failure renders its dedicated display instead of `String(result)`'s
+  // "[object Object]". The line count derives ONLY from a plain-string
+  // result (honest 0 for any other shape) — never from a stringified object.
+  const resolved = resolveToolResult(result)
+  const content = resolved.kind === 'text' ? resolved.text : ''
   const lines = content.split('\n')
   // Zero (not 1) for a genuinely empty read — `''.split('\n')` yields `['']`,
   // which would otherwise misreport an empty file as "1 lines".
@@ -88,17 +112,30 @@ function FileReadBlock({
       {/* File content panel — left-accent block, no bordered card. The
           content pane keeps its dark code-block styling
           (bg-[var(--color-code-surface)]). */}
-      {expanded && !isRunning && content && (
+      {expanded && !isRunning && (content || error || isSentinelResolution(resolved)) && (
         <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
           <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-[var(--space-1)]">{path}</div>
-          <pre className="p-[var(--space-2)] text-[length:var(--type-caption-size)] leading-5 font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-72 overflow-auto bg-[var(--color-code-surface)]">
-            {preview}
-            {isTruncated && (
-              <span className="text-[var(--color-muted)] italic">
-                {'\n'}... ({lineCount - 20} more lines)
-              </span>
-            )}
-          </pre>
+          {isSentinelResolution(resolved) ? (
+            <ToolResultSentinelBody
+              resolved={resolved}
+              sessionId={sessionId ?? activeSessionId ?? ''}
+            />
+          ) : (
+            <pre className="p-[var(--space-2)] text-[length:var(--type-caption-size)] leading-5 font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-72 overflow-auto bg-[var(--color-code-surface)]">
+              {content ? (
+                <>
+                  {preview}
+                  {isTruncated && (
+                    <span className="text-[var(--color-muted)] italic">
+                      {'\n'}... ({lineCount - 20} more lines)
+                    </span>
+                  )}
+                </>
+              ) : error ? (
+                <span className="italic text-[var(--color-error)] break-words">{error}</span>
+              ) : null}
+            </pre>
+          )}
         </div>
       )}
     </div>

@@ -46,10 +46,12 @@
 // own note) keeps environments without it from throwing.
 
 const CHANNEL_NAME = 'omnipus-library-handoff'
+/** @internal Compatibility id for pre-id single-popout callers. */
+export const LEGACY_LIBRARY_HANDOFF_ID = 'legacy-library-popout'
 
 export type LibraryHandoffMessage = // not-wire-format: same-origin BroadcastChannel payload between the docked Library panel and its pop-out window — a browser-local lifecycle signal that never crosses the gateway/SPA boundary and is never persisted
-  | { type: 'popout-closed'; workspaceId?: string }
-  | { type: 'workspace-changed'; workspaceId?: string }
+  | { type: 'popout-closed'; popoutId: string; workspaceId?: string }
+  | { type: 'workspace-changed'; popoutId: string; workspaceId?: string }
 
 function openChannel(): BroadcastChannel | null {
   if (typeof BroadcastChannel === 'undefined') return null
@@ -79,8 +81,14 @@ function postMessage(message: LibraryHandoffMessage): void {
  * a fallback for when no `workspace-changed` broadcast was ever received (see
  * module doc) — the continuous broadcast is the primary source of truth.
  */
-export function announceLibraryPopoutClosed(workspaceId?: string): void {
-  postMessage({ type: 'popout-closed', workspaceId })
+export function announceLibraryPopoutClosed(popoutId: string, workspaceId?: string): void
+/** @deprecated Pass the opener-generated pop-out id as the first argument. */
+export function announceLibraryPopoutClosed(workspaceId?: string): void
+export function announceLibraryPopoutClosed(...args: [string, string?] | [string?]): void {
+  const legacy = args.length < 2
+  const popoutId = legacy ? LEGACY_LIBRARY_HANDOFF_ID : args[0]!
+  const workspaceId = legacy ? args[0] : args[1]
+  postMessage({ type: 'popout-closed', popoutId, workspaceId })
 }
 
 /**
@@ -89,8 +97,14 @@ export function announceLibraryPopoutClosed(workspaceId?: string): void {
  * (including the initial mount), not only at teardown — see the module doc
  * for why `pagehide` alone is not a reliable moment to post this.
  */
-export function announceLibraryWorkspaceChanged(workspaceId?: string): void {
-  postMessage({ type: 'workspace-changed', workspaceId })
+export function announceLibraryWorkspaceChanged(popoutId: string, workspaceId?: string): void
+/** @deprecated Pass the opener-generated pop-out id as the first argument. */
+export function announceLibraryWorkspaceChanged(workspaceId?: string): void
+export function announceLibraryWorkspaceChanged(...args: [string, string?] | [string?]): void {
+  const legacy = args.length < 2
+  const popoutId = legacy ? LEGACY_LIBRARY_HANDOFF_ID : args[0]!
+  const workspaceId = legacy ? args[0] : args[1]
+  postMessage({ type: 'workspace-changed', popoutId, workspaceId })
 }
 
 /**
@@ -98,13 +112,15 @@ export function announceLibraryWorkspaceChanged(workspaceId?: string): void {
  * function that also closes the channel — always call it on unmount. No-ops
  * (returns a no-op unsubscribe) when BroadcastChannel isn't available.
  */
-export function onLibraryPopoutClosed(callback: (workspaceId?: string) => void): () => void {
+export function onLibraryPopoutClosed(
+  callback: (popoutId: string, workspaceId?: string) => void,
+): () => void {
   const channel = openChannel()
   if (!channel) return () => {}
   const handler = (event: MessageEvent<LibraryHandoffMessage>) => {
     const data = event.data
     if (data && data.type === 'popout-closed') {
-      callback(data.workspaceId)
+      callback(data.popoutId, data.workspaceId)
     }
   }
   channel.addEventListener('message', handler)
@@ -120,13 +136,15 @@ export function onLibraryPopoutClosed(callback: (workspaceId?: string) => void):
  * Returns an unsubscribe function that also closes the channel. No-ops when
  * BroadcastChannel isn't available.
  */
-export function onLibraryWorkspaceChanged(callback: (workspaceId?: string) => void): () => void {
+export function onLibraryWorkspaceChanged(
+  callback: (popoutId: string, workspaceId?: string) => void,
+): () => void {
   const channel = openChannel()
   if (!channel) return () => {}
   const handler = (event: MessageEvent<LibraryHandoffMessage>) => {
     const data = event.data
     if (data && data.type === 'workspace-changed') {
-      callback(data.workspaceId)
+      callback(data.popoutId, data.workspaceId)
     }
   }
   channel.addEventListener('message', handler)

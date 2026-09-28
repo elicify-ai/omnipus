@@ -19,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -29,7 +30,7 @@ import (
 //
 // Traces to: #254 silent media drops (MAJOR)
 func TestResolveMediaRefs_UnknownRef_Drop(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	messages := []providers.Message{
 		{Role: "user", Content: "see attached", Media: []string{"media://does-not-exist"}},
@@ -49,7 +50,7 @@ func TestResolveMediaRefs_UnknownRef_Drop(t *testing.T) {
 //
 // Traces to: #254 silent media drops (MAJOR)
 func TestResolveMediaRefs_MissingFile_Drop(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	// Register a file, then delete it from disk.
 	tmpFile := filepath.Join(t.TempDir(), "deleted.txt")
@@ -77,7 +78,7 @@ func TestResolveMediaRefs_MissingFile_Drop(t *testing.T) {
 //
 // Traces to: #254 resolveMediaRefs pass-through (MAJOR)
 func TestResolveMediaRefs_NonMediaPrefix_PassThrough(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	messages := []providers.Message{
 		{
@@ -100,7 +101,7 @@ func TestResolveMediaRefs_NonMediaPrefix_PassThrough(t *testing.T) {
 //
 // Traces to: #254
 func TestResolveMediaRefs_ValidRef_Resolved(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	// Write a minimal 1x1 PNG (8-byte) to disk.
 	tmpFile := filepath.Join(t.TempDir(), "img.png")
@@ -148,7 +149,7 @@ func TestResolveMediaRefs_ValidRef_Resolved(t *testing.T) {
 //
 // Traces to: #258 Fix 3 — oversize image silently dropped (MAJOR)
 func TestResolveMediaRefs_OversizeImage_UnavailableMarker(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	// Write a small image-like file and register it.
 	tmpFile := filepath.Join(t.TempDir(), "big.png")
@@ -518,7 +519,7 @@ func TestAgentLoop_NonImageError_PropagatesAsError(t *testing.T) {
 // data URL and lands in the Media array — the provider receives an image it
 // can actually see instead of an image/svg+xml block it would reject.
 func TestResolveMediaRefs_SVG_RasterizedToPNG(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	tmpFile := filepath.Join(t.TempDir(), "circle.svg")
 	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="40" fill="blue"/></svg>`
@@ -549,7 +550,7 @@ func TestResolveMediaRefs_SVG_RasterizedToPNG(t *testing.T) {
 // reason about the image from its code. The attachment is never dropped
 // silently and never produces the generic "unavailable" marker.
 func TestResolveMediaRefs_SVGRasterizeFails_TextInjection(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	tmpFile := filepath.Join(t.TempDir(), "broken.svg")
 	svg := `<svg xmlns="http://www.w3.org/2000/svg"><unclosed`

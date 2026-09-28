@@ -653,6 +653,11 @@ func Emit(ctx context.Context, logger *Logger, event string, sev Severity, field
 		Severity:  sev,
 		Fields:    cloneFields(fields),
 	}
+	// #914: Record rows bypass Logger.Log, so apply the same redaction
+	// here (field-name layer + credential patterns, nested values walked).
+	if logger.redactor != nil && rec.Fields != nil {
+		rec.Fields = logger.redactor.redactMap(rec.Fields)
+	}
 	data, err := json.Marshal(rec)
 	if err != nil {
 		slog.Error("audit: marshal record failed", "error", err, "event", event)

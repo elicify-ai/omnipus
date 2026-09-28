@@ -479,154 +479,16 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 		// our own formatted messages are the only thing printed.
 		SilenceUsage: true,
 
+		// SilenceErrors hands the error print to runMain (issue #877): cobra
+		// would otherwise print every returned error itself (v1.10.2 prints
+		// unless the root silences it — command.go, "If root command has
+		// SilenceErrors flagged, all subcommands should respect it"), and the
+		// print would be duplicated once runMain prints it. Cobra applies the
+		// root's flag to every subcommand, so one flag silences the whole tree.
+		SilenceErrors: true,
+
 		RunE: func(cmd *cobra.Command, args []string) error {
-			home := internal.GetOmnipusHome()
-			configPath := internal.GetConfigPath()
-
-			// FR-007: --url guard (remote unsupported in P0).
-			if flagURL != "" {
-				fmt.Fprintln(os.Stderr, "error: remote gateways are not supported yet")
-				os.Exit(1)
-			}
-
-			// 0 args → print roster + usage (FR-008/US-6).
-			if len(args) == 0 {
-				cfg, loadErr := loadConfigWithAgents(configPath, home)
-				if loadErr != nil {
-					fmt.Fprintln(os.Stderr, "error: failed to load config:", loadErr)
-					os.Exit(1)
-				}
-				roster := buildRoster(cfg)
-				if len(roster) == 0 && len(cfg.Agents.List) == 0 {
-					// Pre-onboard: no agents seeded yet.
-					fmt.Fprintln(os.Stderr, "No agents configured. Run `omnipus onboard` first.")
-					os.Exit(1)
-				}
-				printRosterAndUsage(os.Stdout, roster)
-				return nil
-			}
-
-			agentID := args[0]
-
-			// US-11/AC-1: if args[0] is a removed verb, print a helpful message
-			// before attempting the agent-lookup (which would print the confusing
-			// "unknown agent" error because the root uses ArbitraryArgs).
-			if removedVerbs[agentID] {
-				fmt.Fprintf(os.Stderr,
-					"%q was removed in the CLI redesign — run 'omnipus --help' for the current commands\n",
-					agentID,
-				)
-				os.Exit(1)
-			}
-
-			// Exactly 1 arg (agent, no prompt) → usage error.
-			if len(args) == 1 {
-				fmt.Fprintf(os.Stderr, "error: provide a prompt: omnipus %s \"<prompt>\"\n", agentID)
-				os.Exit(1)
-			}
-
-			// Join remaining args as the prompt (allows: omnipus jim word1 word2).
-			prompt := strings.Join(args[1:], " ")
-
-			// Empty prompt guard (edge case: omnipus jim "").
-			if strings.TrimSpace(prompt) == "" {
-				fmt.Fprintf(os.Stderr, "error: provide a prompt: omnipus %s \"<prompt>\"\n", agentID)
-				os.Exit(1)
-			}
-
-			// Load config to validate the agent.
-			cfg, loadErr := loadConfigWithAgents(configPath, home)
-			if loadErr != nil {
-				fmt.Fprintln(os.Stderr, "error: failed to load config:", loadErr)
-				os.Exit(1)
-			}
-
-			// FR-002: validate agent is a chat-target.
-			var agentFound bool
-			for _, a := range cfg.Agents.List {
-				if a.ID == agentID {
-					agentFound = true
-					if !a.IsChatTarget() {
-						fmt.Fprintf(os.Stderr, "error: %q is a worker agent and cannot be run directly\n", agentID)
-						os.Exit(1)
-					}
-					break
-				}
-			}
-			if !agentFound {
-				fmt.Fprintf(os.Stderr, "error: unknown agent %q — run `omnipus` to list available agents\n", agentID)
-				os.Exit(1)
-			}
-
-			// FR-006: load the CLI token.
-			token, tokenErr := clitoken.LoadCLIToken(home)
-			if tokenErr != nil {
-				if errors.Is(tokenErr, clitoken.ErrNoCLIToken) {
-					fmt.Fprintln(os.Stderr, "error: no CLI key found — run `omnipus start` to create one")
-					os.Exit(1)
-				}
-				fmt.Fprintln(os.Stderr, "error: failed to load CLI key:", tokenErr)
-				os.Exit(1)
-			}
-
-			// Build the local gateway address from config.
-			addr := fmt.Sprintf("localhost:%d", cfg.Gateway.Port)
-
-			// runOptions holds the common options for run.Run calls (first attempt
-			// and the auto-start retry share the same options).
-			runOptions := run.Options{
-				Agent:   agentID,
-				Prompt:  prompt,
-				Model:   flagModel,
-				Yes:     flagYes,
-				Timeout: flagTimeout,
-				URL:     flagURL,
-				Addr:    addr,
-				Token:   token,
-				Stdout:  os.Stdout,
-				Stderr:  os.Stderr,
-			}
-
-			// Dispatch to the run client.
-			runErr := run.Run(cmd.Context(), runOptions)
-
-			// Auto-start (P1/FR-016): when the gateway is not reachable and a
-			// non-interactive unlock mode is available, spawn the gateway and retry.
-			if errors.Is(runErr, run.ErrGatewayDown) {
-				result := autoStartAndRetry(cmd.Context(), home, addr, token,
-					hasNonInteractiveKeyMode, runOptions)
-				if result.orchErr != nil {
-					// Orchestration failed; message already printed. Exit non-zero.
-					os.Exit(1)
-				}
-				// Retry run error (if any) falls through to the sentinel switch
-				// below so the mapped message is printed exactly once.
-				runErr = result.runErr
-			}
-
-			if runErr == nil {
-				return nil
-			}
-
-			// Map sentinel errors to user-facing messages + non-zero exit.
-			// Sentinel values carry complete user-facing messages; print verbatim.
-			// Only the default (wrapped) case prepends "error:" to avoid duplication.
-			switch {
-			case errors.Is(runErr, run.ErrRemoteUnsupported):
-				fmt.Fprintln(os.Stderr, run.ErrRemoteUnsupported.Error())
-			case errors.Is(runErr, run.ErrGatewayDown):
-				fmt.Fprintln(os.Stderr, run.ErrGatewayDown.Error())
-			case errors.Is(runErr, run.ErrKeyInvalid):
-				fmt.Fprintln(os.Stderr, run.ErrKeyInvalid.Error())
-			case errors.Is(runErr, run.ErrTimeout):
-				fmt.Fprintln(os.Stderr, run.ErrTimeout.Error())
-			case errors.Is(runErr, run.ErrTurnFailed):
-				fmt.Fprintln(os.Stderr, run.ErrTurnFailed.Error())
-			default:
-				fmt.Fprintln(os.Stderr, "error:", runErr)
-			}
-			os.Exit(1)
-			return nil // unreachable; satisfies RunE signature
+			return runRootExecute(cmd, args, flagModel, flagYes, flagTimeout, flagURL)
 		},
 	}
 
@@ -653,9 +515,183 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 	return cmd
 }
 
-func Main() {
-	cmd := NewRootCommand()
-	if err := cmd.ExecuteContext(context.Background()); err != nil {
+// runRootExecute is the root command's RunE body: the positional
+// <agent> [<prompt>] execute path (FR-001/002/008) - URL guard, roster print,
+// removed-verb guard, prompt/agent validation, token load, run dispatch with
+// the auto-start retry, and the sentinel-error mapping to the process exit code.
+//
+// Extracted from NewRootCommand so neither function breaches the 240-line
+// function-size budget (founder ruling, 2026-09-15); behaviour is unchanged -
+// the per-run flags arrive as parameters because the closure captured them
+// from NewRootCommand's scope.
+func runRootExecute(cmd *cobra.Command, args []string, flagModel string, flagYes bool, flagTimeout time.Duration, flagURL string) error {
+	home := internal.GetOmnipusHome()
+	configPath := internal.GetConfigPath()
+
+	// FR-007: --url guard (remote unsupported in P0).
+	if flagURL != "" {
+		fmt.Fprintln(os.Stderr, "error: remote gateways are not supported yet")
 		os.Exit(1)
 	}
+
+	// 0 args → print roster + usage (FR-008/US-6).
+	if len(args) == 0 {
+		cfg, loadErr := loadConfigWithAgents(configPath, home)
+		if loadErr != nil {
+			fmt.Fprintln(os.Stderr, "error: failed to load config:", loadErr)
+			os.Exit(1)
+		}
+		roster := buildRoster(cfg)
+		if len(roster) == 0 && len(cfg.Agents.List) == 0 {
+			// Pre-onboard: no agents seeded yet.
+			fmt.Fprintln(os.Stderr, "No agents configured. Run `omnipus onboard` first.")
+			os.Exit(1)
+		}
+		printRosterAndUsage(os.Stdout, roster)
+		return nil
+	}
+
+	agentID := args[0]
+
+	// US-11/AC-1: if args[0] is a removed verb, print a helpful message
+	// before attempting the agent-lookup (which would print the confusing
+	// "unknown agent" error because the root uses ArbitraryArgs).
+	if removedVerbs[agentID] {
+		fmt.Fprintf(os.Stderr,
+			"%q was removed in the CLI redesign — run 'omnipus --help' for the current commands\n",
+			agentID,
+		)
+		os.Exit(1)
+	}
+
+	// Exactly 1 arg (agent, no prompt) → usage error.
+	if len(args) == 1 {
+		fmt.Fprintf(os.Stderr, "error: provide a prompt: omnipus %s \"<prompt>\"\n", agentID)
+		os.Exit(1)
+	}
+
+	// Join remaining args as the prompt (allows: omnipus jim word1 word2).
+	prompt := strings.Join(args[1:], " ")
+
+	// Empty prompt guard (edge case: omnipus jim "").
+	if strings.TrimSpace(prompt) == "" {
+		fmt.Fprintf(os.Stderr, "error: provide a prompt: omnipus %s \"<prompt>\"\n", agentID)
+		os.Exit(1)
+	}
+
+	// Load config to validate the agent.
+	cfg, loadErr := loadConfigWithAgents(configPath, home)
+	if loadErr != nil {
+		fmt.Fprintln(os.Stderr, "error: failed to load config:", loadErr)
+		os.Exit(1)
+	}
+
+	// FR-002: validate agent is a chat-target.
+	var agentFound bool
+	for _, a := range cfg.Agents.List {
+		if a.ID == agentID {
+			agentFound = true
+			if !a.IsChatTarget() {
+				fmt.Fprintf(os.Stderr, "error: %q is a worker agent and cannot be run directly\n", agentID)
+				os.Exit(1)
+			}
+			break
+		}
+	}
+	if !agentFound {
+		fmt.Fprintf(os.Stderr, "error: unknown agent %q — run `omnipus` to list available agents\n", agentID)
+		os.Exit(1)
+	}
+
+	// FR-006: load the CLI token.
+	token, tokenErr := clitoken.LoadCLIToken(home)
+	if tokenErr != nil {
+		if errors.Is(tokenErr, clitoken.ErrNoCLIToken) {
+			fmt.Fprintln(os.Stderr, "error: no CLI key found — run `omnipus start` to create one")
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "error: failed to load CLI key:", tokenErr)
+		os.Exit(1)
+	}
+
+	// Build the local gateway address from config.
+	addr := fmt.Sprintf("localhost:%d", cfg.Gateway.Port)
+
+	// runOptions holds the common options for run.Run calls (first attempt
+	// and the auto-start retry share the same options).
+	runOptions := run.Options{
+		Agent:   agentID,
+		Prompt:  prompt,
+		Model:   flagModel,
+		Yes:     flagYes,
+		Timeout: flagTimeout,
+		URL:     flagURL,
+		Addr:    addr,
+		Token:   token,
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
+	}
+
+	// Dispatch to the run client.
+	runErr := run.Run(cmd.Context(), runOptions)
+
+	// Auto-start (P1/FR-016): when the gateway is not reachable and a
+	// non-interactive unlock mode is available, spawn the gateway and retry.
+	if errors.Is(runErr, run.ErrGatewayDown) {
+		result := autoStartAndRetry(cmd.Context(), home, addr, token,
+			hasNonInteractiveKeyMode, runOptions)
+		if result.orchErr != nil {
+			// Orchestration failed; message already printed. Exit non-zero.
+			os.Exit(1)
+		}
+		// Retry run error (if any) falls through to the sentinel switch
+		// below so the mapped message is printed exactly once.
+		runErr = result.runErr
+	}
+
+	if runErr == nil {
+		return nil
+	}
+
+	// Map sentinel errors to user-facing messages + non-zero exit.
+	// Sentinel values carry complete user-facing messages; print verbatim.
+	// Only the default (wrapped) case prepends "error:" to avoid duplication.
+	switch {
+	case errors.Is(runErr, run.ErrRemoteUnsupported):
+		fmt.Fprintln(os.Stderr, run.ErrRemoteUnsupported.Error())
+	case errors.Is(runErr, run.ErrGatewayDown):
+		fmt.Fprintln(os.Stderr, run.ErrGatewayDown.Error())
+	case errors.Is(runErr, run.ErrKeyInvalid):
+		fmt.Fprintln(os.Stderr, run.ErrKeyInvalid.Error())
+	case errors.Is(runErr, run.ErrTimeout):
+		fmt.Fprintln(os.Stderr, run.ErrTimeout.Error())
+	case errors.Is(runErr, run.ErrTurnFailed):
+		fmt.Fprintln(os.Stderr, run.ErrTurnFailed.Error())
+	default:
+		fmt.Fprintln(os.Stderr, "error:", runErr)
+	}
+	os.Exit(1)
+	return nil // unreachable; satisfies RunE signature
+}
+
+// runMain executes cmd and maps the result to the process exit code
+// (issue #877: Main used to bind the error and drop it). It owns the single
+// print of a returned command error — the root sets SilenceErrors, so cobra
+// is quiet and this is the one place the error surfaces ("Error: <err>", the
+// same prefix cobra used). Written to cmd's error stream (os.Stderr on the
+// real root), which the #876 boot path showed is the stream that reaches the
+// operator. Exit codes a command owns itself (ExitSandboxConfig=78, usage
+// errors=2) os.Exit inside RunE/PreRunE and never return here, so runMain's
+// 1 cannot override them.
+func runMain(ctx context.Context, cmd *cobra.Command) int {
+	err := cmd.ExecuteContext(ctx)
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintln(cmd.ErrOrStderr(), "Error:", err)
+	return 1
+}
+
+func Main() {
+	os.Exit(runMain(context.Background(), NewRootCommand()))
 }

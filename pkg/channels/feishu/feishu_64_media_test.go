@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 )
 
 // newTestFeishuChannel builds a running FeishuChannel with no live Lark
@@ -34,7 +35,7 @@ func newTestFeishuChannel(t *testing.T) *FeishuChannel {
 // fix, sendMediaPart swallowed the resolve error and returned nil.
 func TestSendMedia_ResolveFailureReturnsError(t *testing.T) {
 	ch := newTestFeishuChannel(t)
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
@@ -57,7 +58,7 @@ func TestSendMedia_ResolveFailureReturnsError(t *testing.T) {
 // nil from sendMediaPart/SendMedia.
 func TestSendMedia_OpenFailureReturnsError(t *testing.T) {
 	ch := newTestFeishuChannel(t)
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	tmpDir := t.TempDir()
@@ -101,7 +102,7 @@ func TestSendMedia_OpenFailureReturnsError(t *testing.T) {
 // hardcoded single-part assumption) that the fix changed.
 func TestSendMedia_PartialFailureReturnsError(t *testing.T) {
 	ch := newTestFeishuChannel(t)
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
@@ -137,7 +138,7 @@ func TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning(t *testing.T) {
 	})
 
 	ch := newTestFeishuChannel(t)
-	ch.SetMediaStore(media.NewFileMediaStore())
+	ch.SetMediaStore(mediatest.NewFileMediaStore(t))
 
 	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "oc_test_chat",

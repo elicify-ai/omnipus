@@ -19,7 +19,8 @@
 //   Mail                              → workspaceId ?? 'app' (mailbox does
 //                                        not change the width bucket)
 
-import type { PanelContext, PanelId } from './types'
+import { PANEL_POLICIES } from './types'
+import type { BrowserPanelContext, PanelContext, PanelId } from './types'
 import { PANEL_MIN_PX } from './panelWidth'
 
 const PREFIX = 'panel-width'
@@ -35,8 +36,14 @@ export function panelWidthKey(username: string, panelId: PanelId, scope: string)
  * session, not a workspace, so it has ONE width per user regardless of
  * which session or screen it was opened from.
  */
-export function panelWidthScope(panelId: PanelId, context: PanelContext): string {
-  if (panelId === 'browser') return 'app'
+type LegacyBrowserWidthContext = Omit<BrowserPanelContext, 'workspaceId'> & {
+  workspaceId?: string
+}
+
+type PanelWidthContext = PanelContext | LegacyBrowserWidthContext
+
+export function panelWidthScope(panelId: PanelId, context: PanelWidthContext): string {
+  if (PANEL_POLICIES[panelId].scope !== 'workspace') return 'app'
   return context.workspaceId ?? 'app'
 }
 
@@ -47,7 +54,12 @@ export function readPanelWidth(
   context: PanelContext,
 ): number | null {
   const key = panelWidthKey(username, panelId, panelWidthScope(panelId, context))
-  const raw = window.localStorage.getItem(key)
+  let raw: string | null
+  try {
+    raw = window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
   if (raw === null) return null
   const parsed = Number(raw)
   if (!Number.isFinite(parsed) || parsed < PANEL_MIN_PX) return null
@@ -80,28 +92,35 @@ export function deletePanelWidth(
   context: PanelContext,
 ): void {
   const key = panelWidthKey(username, panelId, panelWidthScope(panelId, context))
-  window.localStorage.removeItem(key)
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // Storage is optional; reset still succeeds for the in-memory store.
+  }
 }
 
 /**
- * Wave-1 seam (MIN-204): prune this user's `panel-width:<user>:*` entries
+ * Optional maintenance seam (MIN-204): prune this user's `panel-width:<user>:*` entries
  * whose workspace no longer exists. Only the signed-in user's own entries
- * are ever touched — the key prefix guarantees it. Not wired in wave 0
- * (the demo has no workspace lifecycle; wave 1 wires the real workspace
- * list through this seam).
+ * are ever touched — the key prefix guarantees it. Callers supply the
+ * authoritative workspace list when they own a lifecycle event.
  */
 export function prunePanelWidths(
   username: string,
   isKnownWorkspace: (workspaceId: string) => boolean,
 ): number {
-  const prefix = `${PREFIX}:${username}:`
-  const doomed: string[] = []
-  for (let i = 0; i < window.localStorage.length; i++) {
-    const key = window.localStorage.key(i)
-    if (key === null || !key.startsWith(prefix)) continue
-    const scope = key.slice(prefix.length).split(':')[1]
-    if (scope && scope !== 'app' && !isKnownWorkspace(scope)) doomed.push(key)
+  try {
+    const prefix = `${PREFIX}:${username}:`
+    const doomed: string[] = []
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)
+      if (key === null || !key.startsWith(prefix)) continue
+      const scope = key.slice(prefix.length).split(':')[1]
+      if (scope && scope !== 'app' && !isKnownWorkspace(scope)) doomed.push(key)
+    }
+    for (const key of doomed) window.localStorage.removeItem(key)
+    return doomed.length
+  } catch {
+    return 0
   }
-  for (const key of doomed) window.localStorage.removeItem(key)
-  return doomed.length
 }

@@ -268,7 +268,7 @@ func TestJudgeUnavailableE7_GoalClaim_PillNoRoundNoUnmet(t *testing.T) {
 
 	c, cleanup := newEventCollector(t, al)
 	steered := false
-	met := al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, rec,
+	met, _ := al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, rec,
 		"[goal:evidence] wrote e7-marker.txt and read it back", func(string) { steered = true })
 	cleanup()
 

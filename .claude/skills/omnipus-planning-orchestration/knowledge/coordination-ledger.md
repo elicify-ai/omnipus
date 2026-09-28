@@ -19,7 +19,7 @@ of this prose.
 | File | Contents (one line per record) | Write rule |
 |---|---|---|
 | `CHIEF.md` | current chief session · named by · named-at — or `VACANT since <ts>` | Overwritten on handover or when a vacancy is noticed |
-| `squads/<squad-id>.md` | owning session (or "in-session") · lead · worktree (absolute path) · branch · claim (trees/files) · status · last-updated (timestamp + who). The row also carries the squad's landing announcement when one is pending | The squad's own file; updated on every status change |
+| `squads/<squad-id>.md` | owning session (or "in-session") · lead · worktree (absolute path) · branch · claim (trees/files) · status · last-updated (timestamp + who). The row also carries the squad's GOAL line, and its landing announcement when one is pending | The squad's own file; updated on every status change |
 | `HOLDS.md` | what (branch or tree) · held by · why · since · released-at | Append on hold; edit the line on release |
 | `LANDING-LOCK` | squad · branch · taken-at (absent or empty = free) | Created atomically (one writer wins); released right after the push |
 | `LANDING-LOG.md` | squad · branch · commit · checks evidence · founder-yes note · landed-at | Append only — never edited |
@@ -52,6 +52,16 @@ table above, for humans to read, not what you write to disk).
 
   ```
   LANDING-ANNOUNCEMENT squad=<squad-id> branch=<branch-name> announced-at=<ISO8601> by=<who>
+  ```
+
+  The squad's GOAL (SKILL.md §2, the goal judge) is its own line below the row — never
+  a row field: goal text is free prose that may contain `|`. Written by whoever starts
+  the squad (team-lead, for an in-session squad), kept until the squad is `landed` or
+  `released`. Neither parser reads it — the capacity monitor matches only lines starting
+  `squad=`, and the pre-push hook never reads squad files:
+
+  ```
+  GOAL squad=<squad-id> set-at=<ISO8601> by=<who> :: <end state, one line>
   ```
 
 - **`HOLDS.md` line** (template: `HOLDS.md.template`) — parsed by the pre-push hook:

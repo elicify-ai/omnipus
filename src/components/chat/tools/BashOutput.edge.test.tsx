@@ -6,16 +6,23 @@
  *
  * Uses ToolCallStartFrame / ToolCallResultFrame from generated asyncapi-types.ts.
  *
- * Note: BashOutputBlock is not exported from BashOutput.tsx — render functions
- * are captured via a makeAssistantToolUI mock, one per registered tool name
- * (bash canonical + the 5 legacy aliases), keyed by config.toolName.
+ * Note: render functions are captured via a makeAssistantToolUI mock, one per
+ * registered tool name (bash canonical + the 5 legacy aliases), keyed by
+ * config.toolName. BashOutputBlock itself is exported from BashOutput.tsx and
+ * is exercised directly in BashOutput.block.test.tsx (collapse behavior,
+ * header truncation).
+ *
+ * Since the collapse change (2026-09-26): the block starts COLLAPSED — the
+ * output panel, full command, and "Executing..." state only render after
+ * clicking the `bash-output-toggle` testid. Tests below that assert body
+ * content click first (see `expandBlock`).
  *
  * vi.hoisted() is used to initialise the capture container before vi.mock runs,
  * avoiding the temporal dead zone issue with const declarations.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
@@ -85,6 +92,12 @@ describe('bash — flat text-line status dot', () => {
    * first child is always the status indicator (dot or spinner). */
   function getIndicatorEl(container: HTMLElement) {
     return container.querySelector('button')?.children[0] as HTMLElement | undefined
+  }
+
+  /** The block starts collapsed (2026-09-26 change); body-content tests must
+   * click the DisclosureRow toggle first. */
+  function expandBlock(container: HTMLElement) {
+    fireEvent.click(container.querySelector('[data-testid="bash-output-toggle"]')!)
   }
 
   it('running: indicator is the spinning icon, not a dot', () => {
@@ -167,7 +180,7 @@ describe('bash — flat text-line status dot', () => {
     expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
   })
 
-  it('the output panel (expanded by default) uses a left accent line, not a full bordered frame', () => {
+  it('the output panel uses a left accent line, not a full bordered frame (after expanding)', () => {
     if (!captured.bashRender) {
       expect(BashOutputUI).toBeDefined()
       return
@@ -179,7 +192,8 @@ describe('bash — flat text-line status dot', () => {
         status: { type: 'complete' },
       }) as React.ReactElement
     )
-    // BashOutputBlock defaults to expanded — no click needed.
+    // Collapsed since 2026-09-26 — body-content tests expand first.
+    expandBlock(container)
     const panel = container.querySelector('.border-l-2') as HTMLElement | null
     expect(panel).toBeTruthy()
     expect(panel?.className).not.toContain('border-t')
@@ -197,6 +211,8 @@ describe('bash — flat text-line status dot', () => {
         status: { type: 'complete' },
       }) as React.ReactElement
     )
+    // Collapsed since 2026-09-26 — expand first.
+    expandBlock(container)
     const terminal = container.querySelector('[class*="color-code-surface"]') as HTMLElement | null
     expect(terminal).toBeTruthy()
     expect(terminal?.className).not.toContain('border')
@@ -250,6 +266,8 @@ describe('bash — flat text-line status dot', () => {
         status: { type: 'complete' },
       }) as React.ReactElement
     )
+    // Collapsed since 2026-09-26 — expand first so the assertion covers the expanded body too.
+    expandBlock(container)
     const root = container.firstElementChild as HTMLElement
     expect(
       root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
@@ -268,6 +286,8 @@ describe('bash — flat text-line status dot', () => {
         status: { type: 'running' },
       }) as React.ReactElement
     )
+    // Collapsed since 2026-09-26 — the 'Executing...' row lives in the body; expand first.
+    expandBlock(container)
     expect(getByText('Executing...')).toBeInTheDocument()
     const spinners = container.querySelectorAll('.animate-spin')
     // One in the header status indicator, one in the "Executing..." row.

@@ -64,6 +64,20 @@ type fsEvent struct {
 	removed bool
 }
 
+// dueDelivery is one debounce arm's completion, carried from a timer's own
+// callback goroutine to run()'s due branch: the path whose quiet period
+// elapsed, plus the generation of the arm that elapsed. The due branch
+// honors a delivery only while its generation is still that path's current
+// one — a delivery whose arm was superseded mid-flight (a raw event for the
+// same path arriving after the timer fired but before the due branch ran)
+// is recognized and dropped, never applied and never allowed to reclaim the
+// fresh arm's timers entry. See the raw-events branch of run() for why a
+// plain time.Timer.Reset cannot provide this.
+type dueDelivery struct {
+	relPath string
+	gen     uint64
+}
+
 // WatchUnavailableError is returned by Start, and is what a caller should
 // errors.As-match to distinguish "the platform/environment cannot watch"
 // from an ordinary setup failure — design §8's "that must be observable".
@@ -235,6 +249,13 @@ type Watcher struct {
 	// out. See watch_test.go.
 	testOnApply      func(relPath string, removed bool)
 	testOnSweepStart func()
+
+	// testOnTimerFired is test-only instrumentation: called from the debounce
+	// timer's own callback goroutine just before the delivery send, nil in
+	// every production Watcher. armSeq identifies the specific AfterFunc arm
+	// (1-based, in run()'s arm order) so a test can assert no single armed
+	// callback ever executes twice. See watch_test.go.
+	testOnTimerFired func(relPath string, armSeq uint64)
 }
 
 // watchBackend is the platform backend Start uses to begin watching. It
@@ -393,7 +414,13 @@ func (w *Watcher) run() {
 
 	pending := make(map[string]bool) // relPath -> removed
 	timers := make(map[string]*time.Timer)
-	dueCh := make(chan string, dueBuffer)
+	// gens is each path's debounce-arm generation: bumped every time a FRESH
+	// timer is armed for a path, captured by that arm's callback, and checked
+	// in the due branch so a delivery from a superseded arm is dropped. An
+	// entry lives as long as the Watcher does — bounded by the number of
+	// distinct paths ever armed, the same order as the collection manifest.
+	gens := make(map[string]uint64)
+	dueCh := make(chan dueDelivery, dueBuffer)
 
 	var burstCount int
 	var burstWindowStart time.Time
@@ -456,6 +483,30 @@ func (w *Watcher) run() {
 		return burstCount >= w.burstThreshold
 	}
 
+	// armTimer arms a FRESH debounce arm for relPath under a new generation:
+	// the previous arm, if any, is superseded and its delivery — if one is
+	// still in flight — will be dropped by the due branch's generation
+	// check. It is only ever called when timers holds no live entry for the
+	// path: either none was armed yet, or the entry's timer had already
+	// fired (t.Stop() returned false), and Reset must NOT be reached for in
+	// that case. Reset on an already-fired timer returns false AND
+	// re-schedules the fired callback to run again (stdlib time.Timer.Reset
+	// semantics), which is precisely the one-arm-executes-twice race the
+	// generation counter exists to close.
+	armTimer := func(relPath string) {
+		gens[relPath]++
+		gen := gens[relPath]
+		timers[relPath] = time.AfterFunc(w.debounce, func() {
+			if w.testOnTimerFired != nil {
+				w.testOnTimerFired(relPath, gen)
+			}
+			select {
+			case dueCh <- dueDelivery{relPath: relPath, gen: gen}:
+			case <-w.stopCh:
+			}
+		})
+	}
+
 	for {
 		select {
 		case <-w.stopCh:
@@ -512,23 +563,40 @@ func (w *Watcher) run() {
 			relPath := ev.relPath
 			pending[relPath] = ev.removed
 			if t, exists := timers[relPath]; exists {
-				// Same path changed again inside its own quiet period: reset
-				// the clock rather than adding a second timer. This is the
-				// debounce half of design §5's "one rule at two scales" —
-				// N saves to one file collapse to one update.
-				t.Reset(w.debounce)
+				// Same path changed again inside its own quiet period. With
+				// the arm's timer still armed (Stop true) this is the debounce
+				// half of design §5's "one rule at two scales" — reset the
+				// clock rather than adding a second timer; N saves to one
+				// file collapse to one update.
+				//
+				// With Stop false the timer has already fired and its
+				// callback may be mid-delivery, so Reset is forbidden: Reset
+				// on an already-fired timer re-schedules the SAME callback
+				// (one arm executing twice). Supersede the arm instead —
+				// armTimer mints a new generation the in-flight delivery no
+				// longer matches, and the due branch drops it.
+				if t.Stop() {
+					t.Reset(w.debounce)
+				} else {
+					armTimer(relPath)
+				}
 			} else {
-				timers[relPath] = time.AfterFunc(w.debounce, func() {
-					select {
-					case dueCh <- relPath:
-					case <-w.stopCh:
-					}
-				})
+				armTimer(relPath)
 			}
 
-		case relPath := <-dueCh:
-			delete(timers, relPath)
-			removed, ok := pending[relPath]
+		case due := <-dueCh:
+			if due.gen != gens[due.relPath] {
+				// Stale delivery: the arm that fired was superseded (a raw
+				// event for the same path arrived after that timer had fired
+				// but before this delivery was processed, so the loop armed a
+				// fresh arm under a new generation). Drop it WITHOUT touching
+				// timers or pending — the fresh arm owns both now, and
+				// reclaiming the entry here would delete a still-armed
+				// timer's map entry and let the path grow a second live arm.
+				continue
+			}
+			delete(timers, due.relPath)
+			removed, ok := pending[due.relPath]
 			if !ok {
 				// Superseded: a sweep already cleared pending for this path
 				// (stopAllTimers), or it was already applied via some other
@@ -538,7 +606,7 @@ func (w *Watcher) run() {
 				// this is a latency optimisation, not a correctness one.
 				continue
 			}
-			delete(pending, relPath)
+			delete(pending, due.relPath)
 			if sweeping {
 				// A sweep is already in flight (or about to run again) and
 				// will cover this path completely; applying it separately
@@ -546,7 +614,7 @@ func (w *Watcher) run() {
 				// write for no benefit.
 				continue
 			}
-			w.applyOne(relPath, removed)
+			w.applyOne(due.relPath, removed)
 
 		case <-sweepDoneCh:
 			sweepDoneCh = nil

@@ -11,15 +11,8 @@ import type { PanelContentProps, PanelDefinition } from '../types'
 import { BrowserPanelPlaceholder } from './BrowserPanelPlaceholder'
 import { CalendarPanelStandin, MailPanelStandin, TasksPanelStandin, TeamPanelStandin } from './standins'
 
-function LibraryPanelContent({ context, close, expand }: PanelContentProps) {
-  return (
-    <LibraryExplorer
-      initialWorkspaceId={context.workspaceId}
-      onClose={close}
-      onPopOut={expand}
-      className="h-full"
-    />
-  )
+function LibraryPanelContent({ context }: PanelContentProps) {
+  return <LibraryExplorer initialWorkspaceId={context.workspaceId} className="h-full" />
 }
 
 function BrowserPanelContent() {
@@ -31,15 +24,39 @@ export const DEMO_PANELS: PanelDefinition[] = [
     id: 'library',
     title: 'Library',
     content: LibraryPanelContent,
-    expandTarget: (context) =>
-      `/library?workspace=${context.workspaceId ?? ''}`,
+    expandTarget: (context) => `/library?workspace=${context.workspaceId ?? ''}`,
     // CRIT-001: the existing unsaved-edits guard, reused — the shell awaits
     // it before touching store/URL/content.
     beforeLeave: confirmDiscardLibraryEdits,
   },
-  { id: 'browser', title: 'Browser', content: BrowserPanelContent, expandTarget: () => '/browser' },
-  { id: 'mail', title: 'Mail', content: MailPanelStandin, expandTarget: () => '/mail' },
-  { id: 'tasks', title: 'Tasks', content: TasksPanelStandin, expandTarget: () => '/tasks' },
-  { id: 'team', title: 'Team', content: TeamPanelStandin, expandTarget: () => '/team' },
-  { id: 'calendar', title: 'Calendar', content: CalendarPanelStandin, expandTarget: () => '/calendar' },
+  {
+    id: 'browser',
+    title: 'Browser',
+    content: BrowserPanelContent,
+    expandTarget: () => '/browser',
+  },
+  {
+    id: 'mail',
+    title: 'Mail',
+    content: MailPanelStandin,
+    expandTarget: () => '/mail',
+  },
+  {
+    id: 'tasks',
+    title: 'Tasks',
+    content: TasksPanelStandin,
+    expandTarget: () => '/tasks',
+  },
+  {
+    id: 'team',
+    title: 'Team',
+    content: TeamPanelStandin,
+    expandTarget: () => '/team',
+  },
+  {
+    id: 'calendar',
+    title: 'Calendar',
+    content: CalendarPanelStandin,
+    expandTarget: () => '/calendar',
+  },
 ]

@@ -907,6 +907,13 @@ func TestSubagentLifecycleFrames_StartQueuedRunningTerminalEndOrder(t *testing.T
 	}
 }
 
+// TestGoalDelegation_Judged drives the judged-MET delegation path and pins
+// the parent-notification contract of the approved #947 design note
+// (lc947-defect1-design-note.md, decision (b) "consequence, accepted"): the
+// parent receives exactly TWO wake-eligible entries — the goal_status verdict
+// FIRST, then the deterministic <child>:<gen>:final completion handback —
+// each exactly once. (The pre-#947 contract was one entry; do not restore
+// it.)
 func TestGoalDelegation_Judged(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	lifecycle := session.NewLifecycleStore(t.TempDir())
@@ -987,17 +994,89 @@ func TestGoalDelegation_Judged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Drain(parent): %v", err)
 	}
-	if len(messages) != 1 {
-		t.Fatalf("parent messages = %d, want one goal_status", len(messages))
+	// Design note — #947 defect 1, decision (b) "consequence, accepted"
+	// (lc947-defect1-design-note.md), exact quote (this line is what makes
+	// TWO parent entries correct; the pre-#947 one-entry contract it
+	// supersedes must not be restored):
+	// "on met, the parent receives two wake-eligible entries — the goal_status
+	// verdict (ADR-091 D6/Q35, already implemented) and the completion handback
+	// carrying the child's actual answer. Both land before the single wake; the
+	// uniformity of "every terminal steered child has a `<child>:<gen>:final`
+	// entry" is worth more than the saved entry. Alternative rejected (met
+	// path terminalises without Deliver): creates two notification shapes for
+	// terminal children and saves nothing."
+	if len(messages) != 2 {
+		t.Fatalf("parent messages = %d, want exactly 2 (goal_status verdict + completion handback) — "+
+			"design note (b): two wake-eligible entries on met", len(messages))
 	}
-	status, err := messages[0].AsSessionMessageGoalStatus()
-	if err != nil {
-		t.Fatalf("AsSessionMessageGoalStatus: %v", err)
+	var statusCount, handbackCount int
+	for i, msg := range messages {
+		// Kind-gate FIRST: the generated As* accessors are lenient (a
+		// goal_status message carries the shared message_id field, so
+		// AsSessionMessageHandback decodes it into a hollow handback) —
+		// only the envelope's own kind selects the variant.
+		class, cerr := session.ClassifySessionMessage(msg)
+		if cerr != nil {
+			t.Fatalf("ClassifySessionMessage: %v", cerr)
+		}
+		if !class.WakeEligible {
+			t.Errorf("parent message %d kind %q is not wake-eligible; every met-path entry must wake the parent", i, class.Kind)
+		}
+		switch class.Kind {
+		case "goal_status":
+			statusCount++
+			if handbackCount > 0 {
+				// ORDER is part of the spec: the verdict precedes the
+				// handback (the verdict is delivered when the judge's met
+				// decision lands — goal_loop.go::writeGoalVerdictTranscript —
+				// the handback afterwards by the completion tail,
+				// steer_completion.go::completeSteeredTurnAfterGoal). A
+				// handback-first delivery is a spec finding to report, not
+				// an order for this test to adapt to.
+				t.Errorf("parent message %d is a goal_status verdict but the completion handback already landed — "+
+					"design note (b) delivers the verdict FIRST, then the handback", i)
+			}
+			if statusCount > 1 {
+				t.Errorf("goal_status verdict delivered %d times, want exactly 1", statusCount)
+				continue
+			}
+			v, aerr := msg.AsSessionMessageGoalStatus()
+			if aerr != nil {
+				t.Fatalf("AsSessionMessageGoalStatus: %v", aerr)
+			}
+			if v.Condition != generated.SessionMessageGoalStatusConditionMet ||
+				v.Direction != generated.SessionMessageGoalStatusDirectionSessionToParent ||
+				v.Evidence == nil || len(*v.Evidence) != len(verdicts) {
+				t.Errorf("goal_status = %+v, want met/session_to_parent with %d evidence rows", v, len(verdicts))
+			}
+		case "handback":
+			handbackCount++
+			if handbackCount > 1 {
+				t.Errorf("completion handback delivered %d times, want exactly 1", handbackCount)
+				continue
+			}
+			v, herr := msg.AsSessionMessageHandback()
+			if herr != nil {
+				t.Fatalf("AsSessionMessageHandback: %v", herr)
+			}
+			wantID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
+			if v.MessageId != wantID {
+				t.Errorf("handback MessageId = %q, want %q (deterministic <child>:<gen>:final)", v.MessageId, wantID)
+			}
+			if v.Mode != generated.SessionMessageHandbackModeFinal {
+				t.Errorf("handback mode = %q, want final", v.Mode)
+			}
+			if strings.TrimSpace(v.ResultSoFar) == "" {
+				t.Errorf("handback ResultSoFar is empty, want the child's final answer")
+			}
+		default:
+			t.Errorf("parent message %d is an unexpected %q in the inbox on the met path", i, class.Kind)
+		}
 	}
-	if status.Condition != generated.SessionMessageGoalStatusConditionMet ||
-		status.Direction != generated.SessionMessageGoalStatusDirectionSessionToParent ||
-		status.Evidence == nil || len(*status.Evidence) != len(verdicts) {
-		t.Fatalf("goal_status = %+v, want met/session_to_parent with %d evidence rows", status, len(verdicts))
+	if statusCount != 1 || handbackCount != 1 {
+		t.Fatalf("parent messages = %d (goal_status=%d, handback=%d), want exactly 1 goal_status verdict "+
+			"+ 1 completion handback (design note (b): two wake-eligible entries on met)",
+			len(messages), statusCount, handbackCount)
 	}
 }
 

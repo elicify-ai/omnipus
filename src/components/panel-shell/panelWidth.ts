@@ -24,9 +24,13 @@ export const CHAT_FLOOR_PX = 360
 export const PANEL_MIN_PX = 320
 export const PANEL_TAKEOVER_PX = 680
 
-/** The SP-17 maximum width: `min(70% of row, row − sidebar − 360px)`. */
+/** The SP-17 maximum width: `min(70% of row, row − sidebar − 360px)`.
+ * The 70% term is rounded to a whole pixel: binary floating point makes
+ * e.g. 1400 × 0.7 = 979.9999999999999, and a sub-pixel ceiling would clamp
+ * a legitimately-stored 980px width down by a fraction (§12 width dataset
+ * rows 1–2 expect exactly 980). */
 export function panelWidthCeiling(rowWidth: number, sidebarWidth: number): number {
-  return Math.min(rowWidth * 0.7, rowWidth - sidebarWidth - CHAT_FLOOR_PX)
+  return Math.min(Math.round(rowWidth * 0.7), rowWidth - sidebarWidth - CHAT_FLOOR_PX)
 }
 
 /** The default width: `clamp(0.45 × row, 320px, min(720px, ceiling))`. */

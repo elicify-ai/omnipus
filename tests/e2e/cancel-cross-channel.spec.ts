@@ -431,7 +431,7 @@ test(
  *
  * `mode.asyncArg` selects the delegation mode via the `delegate` tool's
  * `async` argument (`"true"` background / `"false"` await); `mode.closer` is
- * the final instruction line that nudges glm-5.2 to emit exactly that tool
+ * the final instruction line that nudges deepseek-v4.1-flash to emit exactly that tool
  * call and nothing else.
  */
 async function assertCancelCascadesToSubagent(
@@ -565,7 +565,7 @@ async function assertCancelCascadesToSubagent(
   // Stop click lands while it's live. A long inline essay streams for several
   // seconds; an instant-rejected task (e.g. a sandbox-escaping read) finishes in
   // ~0s before Stop can fire. Explicit single-tool instruction with a hard "no
-  // prose" guardrail so glm-5.2 reliably emits the delegation call.
+  // prose" guardrail so deepseek-v4.1-flash reliably emits the delegation call.
   await input.fill(
     [
       'Call the `delegate` tool exactly once, now, with these arguments:',
@@ -758,7 +758,7 @@ async function assertCancelCascadesToSubagent(
 test(
   'T24a — cancel cascades to background subagent (delegate async=true): transcript records turn_canceled with descendants',
   async ({ page }) => {
-    // glm-5.2 (the standard e2e model) is reliable but slower than the old gemini
+    // deepseek-v4.1-flash (the standard e2e model) is reliable but slower than the old gemini
     // pick — the delegation turn + the subagent's inline essay + cancel can exceed
     // the 270s test.slow() ceiling under suite load. Use an explicit higher budget.
     test.setTimeout(360_000)
@@ -773,7 +773,7 @@ test(
   'T24b — cancel cascades to awaited subagent (delegate async=false): transcript records turn_canceled with descendants',
   async ({ page }) => {
     // Await mode blocks the parent turn on the descendant's full run, so under
-    // glm-5.2's slower streaming this needs more headroom than the background variant.
+    // deepseek-v4.1-flash's slower streaming this needs more headroom than the background variant.
     test.setTimeout(420_000)
     await assertCancelCascadesToSubagent(page, {
       asyncArg: 'false',

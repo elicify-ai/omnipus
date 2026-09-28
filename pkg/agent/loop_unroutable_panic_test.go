@@ -16,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 	"github.com/elicify-ai/omnipus/pkg/voice"
 )
 
@@ -90,7 +91,7 @@ func TestUnroutableMessage_PanicStillPublishesTerminalFrame(t *testing.T) {
 	// (transcribeAudioInMessage), which runs unconditionally BEFORE
 	// processMessage re-attempts routing — a real provider/tool nil-deref
 	// analog that this code path is meant to survive.
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	audioPath := filepath.Join(tmpDir, "voice-note.ogg")
 	if err := os.WriteFile(audioPath, []byte("fake audio bytes"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)

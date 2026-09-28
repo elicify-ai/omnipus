@@ -250,7 +250,7 @@ describe('sendMessage — mid-turn steering send (bucket-level)', () => {
     expect(useConnectionStore.getState().connectionError).toContain('kept')
   })
 
-  it('does NOT bake live tool calls onto the previous assistant message (that logic is for turn-END, not mid-turn)', () => {
+  it('bakes live tool calls onto the closing assistant message at steer-close, keeping the live maps queued (bake-in-place — founder-reported 2026-09-26 fix)', () => {
     const send = connectWithSendSpy()
     startTurn(send)
 
@@ -289,10 +289,15 @@ describe('sendMessage — mid-turn steering send (bucket-level)', () => {
 
     const { messages, toolCalls, toolCallOrder } = useChatStore.getState()
     const assistantMsg = messages.find((m) => m.role === 'assistant')
-    // The live tool call must NOT have been baked onto the assistant message
-    // — the turn hasn't ended, so there's nothing to finalize yet.
-    expect(assistantMsg?.tool_calls ?? []).toHaveLength(0)
-    // The live toolCalls/toolCallOrder maps are untouched.
+    // Bake-in-place at steer-close (founder-reported 2026-09-26 fix): the
+    // closing bubble keeps its OWNED (or legacy-ownerless, via the
+    // fallback) calls in message.tool_calls so the historical renderer
+    // (VirtualAssistantMessageRow reads ONLY message.tool_calls) keeps
+    // showing the rows. The LIVE toolCalls/toolCallOrder maps stay
+    // untouched — a late tool_call_result still lands there, and turn
+    // end's bake re-merges by id with offsets preserved.
+    expect(assistantMsg?.tool_calls ?? []).toHaveLength(1)
+    expect(assistantMsg?.tool_calls?.[0]).toMatchObject({ id: 'tc_1', status: 'running' })
     expect(toolCalls['tc_1']).toBeDefined()
     expect(toolCallOrder).toEqual(['tc_1'])
   })

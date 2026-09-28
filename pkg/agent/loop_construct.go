@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 
@@ -59,6 +60,13 @@ func (nal *newAgentLoop) initializeCore() {
 		browserMgrs:             make(map[string]*browser.BrowserManager),
 		browserRegisteredAgents: make(map[string]bool),
 	}
+	// Loop-lifetime context: alive from construction, cancelled by Stop() and
+	// Close(). The revived-turn context accessor falls back to it before Run
+	// has stored its own run-scoped context (loop.go::inboundCtx), so a
+	// revival racing boot is cancelled by the same Stop that ends the loop
+	// instead of running detached on context.Background() (architect CC-2's
+	// cancellation half, held before Run).
+	nal.al.loopCtx, nal.al.loopCancel = context.WithCancel(context.Background())
 	// Concurrency-gate consolidation (2026-08-04): session admission's cap is
 	// resolved LIVE from the SAME central authority TaskExecutor's dispatch
 	// semaphore uses (Performance.EffectiveMaxParallelAgents), instead of the
@@ -143,6 +151,12 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 			// that decision is taken below, at this call site, which is the
 			// only place that knows it.
 			AuditLogRequested: true,
+			// #914: redaction is always on for the production audit log —
+			// no config key, no off switch. Without it, credentials typed
+			// into bash/web_serve/environment_setup commands were written
+			// verbatim and served by GET /api/v1/audit-log. The logger
+			// redacts credentials only; email addresses stay (MC-19).
+			RedactEnabled: true,
 		})
 		if auditErr != nil {
 			// The audit logger could not be built. Two different populations

@@ -319,14 +319,21 @@ describe('VirtualAssistantMessageRow (PlainMessageList fallback)', () => {
     })
 
     it('still uses GenericToolCall for a non-browser tool (no regression to unrelated tools)', async () => {
+      // `delegate` is the example tool: it has NO dedicated block on either
+      // render path — absent from ChatScreen.tsx::VirtualAssistantMessageRow's
+      // replay dispatch (falls through to GenericToolCall) and absent from
+      // OmnipusRuntimeProvider.tsx's live-path registrations (verified by grep
+      // 2026-09-26). read_file can no longer serve as this example: since the
+      // chat-tool-ui-collapse landing it renders FileReadBlock unconditionally
+      // (covered by the next test).
       const assistantMsg: ChatMessage = {
         id: 'msg_assistant',
         role: 'assistant',
-        content: 'Read the file.',
+        content: 'Delegating the subtask.',
         timestamp: new Date().toISOString(),
         status: 'done',
         tool_calls: [
-          { id: 'call_2', tool: 'read_file', params: { path: '/tmp/x' }, result: { text: 'contents' }, status: 'success' },
+          { id: 'call_2', tool: 'delegate', params: { task: 'summarize the log' }, result: { text: 'done' }, status: 'success' },
         ],
       }
       seedBucket([assistantMsg], { isStreaming: false })
@@ -337,7 +344,36 @@ describe('VirtualAssistantMessageRow (PlainMessageList fallback)', () => {
         container = result.container
       })
 
-      expect(container.querySelector('[data-testid="generic-tool-call-badge"]')?.textContent).toBe('read_file')
+      expect(container.querySelector('[data-testid="generic-tool-call-badge"]')?.textContent).toBe('delegate')
+    })
+
+    it('renders a replayed read_file call through FileReadBlock (file-read-toggle), not the raw-JSON GenericToolCall fallback', async () => {
+      // Since the chat-tool-ui-collapse landing, read_file/file.read is
+      // UNCONDITIONALLY intercepted to FileReadBlock in
+      // ChatScreen.tsx::VirtualAssistantMessageRow — no gating by list mode,
+      // live vs replay — and PlainMessageList renders through this exact same
+      // function. This test pins that on the PlainMessageList path so
+      // read_file's coverage moved with the redesign rather than disappearing.
+      const assistantMsg: ChatMessage = {
+        id: 'msg_assistant',
+        role: 'assistant',
+        content: 'Read the file.',
+        timestamp: new Date().toISOString(),
+        status: 'done',
+        tool_calls: [
+          { id: 'call_3', tool: 'read_file', params: { path: '/tmp/x' }, result: { text: 'contents' }, status: 'success' },
+        ],
+      }
+      seedBucket([assistantMsg], { isStreaming: false })
+
+      let container!: HTMLElement
+      await act(async () => {
+        const result = render(<ChatScreen />)
+        container = result.container
+      })
+
+      expect(container.querySelector('[data-testid="file-read-toggle"]')).toBeTruthy()
+      expect(container.querySelector('[data-testid="generic-tool-call-badge"]')).toBeNull()
     })
   })
 })

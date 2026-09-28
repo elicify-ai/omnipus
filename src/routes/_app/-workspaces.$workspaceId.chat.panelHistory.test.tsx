@@ -13,7 +13,7 @@ import { cleanup, render, act } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
 import { usePanelShellStore } from '@/components/panel-shell/panelShellStore'
-import type { PanelDefinition, PanelContentProps } from '@/components/panel-shell/types'
+import type { PanelDefinition } from '@/components/panel-shell/types'
 import { Route as LibraryRoute } from './library'
 import { Route as TeamRoute } from './workspaces.$workspaceId.team'
 import { Route as CalendarRoute } from './workspaces.$workspaceId.calendar'
@@ -37,7 +37,7 @@ class RowRO {
 }
 vi.stubGlobal('ResizeObserver', RowRO)
 
-function probe(_props: PanelContentProps) {
+function probe() {
   return <div data-testid="probe-content" />
 }
 

@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { generateId } from '@/lib/constants'
 import type { WizardCli, WizardType } from '@/components/agents/wizard/types'
+import type { ActivePanel, OpenPanel, PanelOpenArgs } from '@/components/panel-shell/types'
+import { capturePanelTriggerOrigin } from '@/components/panel-shell/panelFocus'
 
 export interface Toast {
   id: string
@@ -131,36 +133,44 @@ interface UiStore {
   openMediaLightbox: (content: MediaLightboxContent) => void
   closeMediaLightbox: () => void
 
-  // Live browser panel (ADR-038) — overlay showing a real-time screencast of
-  // an agent's shared browser session, with optional human take-control.
-  // A SINGLE global instance mounted at the app root (AppShell), mirroring
-  // mediaLightbox above. null = closed. Opened from the "Watch live"
-  // affordance on a running browser tool-call (BrowserTool.tsx).
-  // Open = ALWAYS docked as a flex column beside the chat (the ADR-040 D4
-  // pin/overlay split was retired 2026-07-16 by operator direction — the
-  // slide-out Sheet mode and its browserPanelPinned toggle are gone; the
-  // fullscreen /#/browser-live pop-out remains the only other layout).
-  browserPanel: { sessionId: string; agentId: string } | null
-  openBrowserPanel: (sessionId: string, agentId: string) => void
-  closeBrowserPanel: () => void
-
-  // Library panel (library-spec.md D-4) — docked file explorer over a
-  // workspace's work/ tree. A SINGLE global instance mounted at the app root
-  // (AppShell), mirroring browserPanel/mediaLightbox above. null = closed.
+  // Side-panel shell — ONE panel at a time (side-panel-shell-spec.md §8.1).
+  // Replaces the two independent slices this store used to carry
+  // (`browserPanel` / `libraryPanel`): they could hold values simultaneously,
+  // which is exactly the SP-7/SC-005 violation the single slice makes
+  // unrepresentable — opening a panel REPLACES whatever was open. The shell
+  // UI (SidePanelShell, mounted at the AppShell root) renders the panel's
+  // content from the registry (src/components/panel-shell/registry.tsx);
+  // nothing outside the shell reads `context` directly.
   //
-  // `workspaceId` is the ONLY thing that differs between the Library's two
-  // entry points (D-3) — both render the exact same LibraryExplorer:
-  //   - undefined → the virtual root (every workspace as a top-level node;
-  //     the sidebar's "Library" entry, Sidebar.tsx).
-  //   - a real id → scoped straight to that workspace's work/ tree (the
-  //     chat/header-bar entry point — wired by whoever owns that surface;
-  //     this store slice is the contract they call into).
-  // Open = ALWAYS docked, same flex-<aside> pattern as browserPanel — there
-  // is no Sheet/overlay variant here either (operator direction 2026-07-16;
-  // see LibraryPanel.tsx's own doc comment).
-  libraryPanel: { workspaceId?: string } | null
-  openLibraryPanel: (workspaceId?: string) => void
-  closeLibraryPanel: () => void
+  // `openPanel(id, context?)` / `closePanel()` / `setPanelWidth(px)` are the
+  // §8.1 contract, verbatim. Entry points (sidebar Library, ChatControls,
+  // "Watch live", the tab-strip toggle, deep links) call `openPanel`; every
+  // REPLACING transition goes through the outgoing panel's `beforeLeave`
+  // guard FIRST (CRIT-001/FR-013) — the guard lives at the call sites via
+  // `leaveGateThen` (src/components/panel-shell/leaveGate.ts), not in the
+  // store action, so the store stays a plain reducer (the RED pack asserts
+  // exactly this shape). `panelWidth` is the stored (unsettled) width the
+  // shell clamps against live geometry (MAJ-009); `guardPending`/
+  // `historyPushed` are the shell's transition flags.
+  //
+  // State table (F6):
+  //   guardPending=false/historyPushed=false — ordinary docked or idle state
+  //   guardPending=true /historyPushed=*     — leave decision pending; moves stop
+  //   guardPending=false/historyPushed=true  — one phone takeover entry exists
+  // A cancelled phone Back restores historyPushed=true; leaving takeover or
+  // an external close collapses that entry and returns both flags to false.
+  activePanel: ActivePanel | null
+  /** Monotonic token invalidating delayed work after any newer panel intent. */
+  panelIntentRevision: number
+  panelWidth: number | null
+  guardPending: boolean
+  historyPushed: boolean
+  openPanel: OpenPanel
+  closePanel: () => void
+  setPanelWidth: (px: number) => void
+  resetPanelWidth: () => void
+  setGuardPending: (pending: boolean) => void
+  setHistoryPushed: (pushed: boolean) => void
 }
 
 /** Discriminated payload for the global media lightbox: a raster image (by URL)
@@ -253,11 +263,34 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openMediaLightbox: (content) => set({ mediaLightbox: content }),
   closeMediaLightbox: () => set({ mediaLightbox: null }),
 
-  browserPanel: null,
-  openBrowserPanel: (sessionId, agentId) => set({ browserPanel: { sessionId, agentId } }),
-  closeBrowserPanel: () => set({ browserPanel: null }),
-
-  libraryPanel: null,
-  openLibraryPanel: (workspaceId) => set({ libraryPanel: { workspaceId } }),
-  closeLibraryPanel: () => set({ libraryPanel: null }),
+  activePanel: null,
+  panelIntentRevision: 0,
+  panelWidth: null,
+  guardPending: false,
+  historyPushed: false,
+  openPanel: (...args: PanelOpenArgs) => {
+    const [id, suppliedContext] = args
+    const context = suppliedContext ?? {}
+    capturePanelTriggerOrigin(id)
+    set((state) => ({
+      activePanel: { id, context } as ActivePanel,
+      panelIntentRevision: state.panelIntentRevision + 1,
+      // Opening a DIFFERENT panel re-reads that panel's own width (its stored
+      // value for its own scope, or the SP-17 default). Same panel re-open =
+      // keep the current width (a context refresh must not jump the divider).
+      panelWidth: state.activePanel?.id === id ? state.panelWidth : null,
+    }))
+  },
+  closePanel: () =>
+    set((state) => ({
+      activePanel: null,
+      panelIntentRevision: state.panelIntentRevision + 1,
+      panelWidth: null,
+      guardPending: false,
+      historyPushed: false,
+    })),
+  setPanelWidth: (px) => set({ panelWidth: px }),
+  resetPanelWidth: () => set({ panelWidth: null }),
+  setGuardPending: (pending) => set({ guardPending: pending }),
+  setHistoryPushed: (pushed) => set({ historyPushed: pushed }),
 }))

@@ -922,7 +922,7 @@ func (t *ExecTool) emitAuditOrDeny(ctx context.Context, command, cwd string, per
 	}
 	if t.auditFailClosed {
 		slog.Error("bash: audit logger degraded; refusing to execute (audit_fail_closed=true)",
-			"agent_id", agentID, "command", command, "error", logErr)
+			"agent_id", agentID, "command", audit.RedactCredentials(command), "error", logErr)
 		return &ToolResult{
 			IsError: true,
 			ForLLM:  "audit log write failed; refusing to execute (audit_fail_closed=true)",

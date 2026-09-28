@@ -234,10 +234,16 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		if errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound) {
 			return requestedSkillDispatchFailureResult(targetAgentID, strings.TrimSpace(dt.requestedSkill), err)
 		}
+		if result := steeringUnavailableResult(err); result != nil {
+			return result
+		}
 		return ErrorResult(fmt.Sprintf("delegate: launch: %v", err)).WithError(err)
 	}
 	dispatch, err := dt.t.launcher.Dispatch(dt.ctx, launch.SessionID, launch.Generation)
 	if err != nil {
+		if result := steeringUnavailableResult(err); result != nil {
+			return result
+		}
 		return ErrorResult(fmt.Sprintf("delegate: dispatch: %v", err)).WithError(err)
 	}
 
@@ -267,6 +273,25 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 			dispatch.ConcurrencyLimit, dispatch.QueuePosition, launch.SessionID)
 	}
 	return NewToolResult(result)
+}
+
+// steeringUnavailableResult is ADR-093 D5. An inactive conversation is a
+// normal, recoverable outcome: the model is told that a new message in this
+// conversation resumes the request, and is never shown store machinery text.
+// A nil result means err is some other failure and the caller formats it.
+func steeringUnavailableResult(err error) *ToolResult {
+	if !steer.IsSteeringUnavailable(err) {
+		return nil
+	}
+	// Gate SFH#6: a revival-failed refusal gets the truthful variant sentence —
+	// the standard sentence points at "send a new message", the exact action
+	// that just failed. Same no-raw-text surface: the cause stays on the
+	// result's WithError side (machine-readable), not in the user-visible
+	// string.
+	if errors.Is(err, steer.ErrSteeringRevivalFailed) {
+		return ErrorResult(steer.SteeringRevivalFailedMessage).WithError(err)
+	}
+	return ErrorResult(steer.SteeringUnavailableMessage).WithError(err)
 }
 
 // validateRequest validates and resolves the delegation request arguments.
@@ -448,16 +473,14 @@ func resolveDelegateTimeoutSeconds(args map[string]any) (time.Duration, error) {
 // the outcome of) the underlying delegation itself.
 //
 // NOTE ON LOCKING (Correctness-MAJOR-3, honesty template): this delegates
-// to session.TransitionSession (the single dual-store mediator, Defect #28)
-// with a nil UnifiedStore — not because a delegated child has no
-// chat-transcript meta.json (it does: pkg/agent/steer_launcher.go's Launch
-// mints one via sessions.NewSession/CreateSessionWithID for every child,
-// ordinary-root or steered, and writeChildMetaAndHistory sets its Title),
-// but because t.lifecycle here is typed MessageParentLifecycleStore (see
-// message_parent.go), a narrow interface with no *session.UnifiedStore
-// handle to pass — this call site simply has no store reference available,
-// so the mediator's UnifiedMeta-status mirror step is skipped rather than
-// wired to one. The mediator's atomic LifecycleStore.Mutate (the RMW primitive that holds the
+// to session.TransitionSession (the single dual-store mediator, Defect #28).
+// The UnifiedStore half is t.unified, installed by SetUnifiedStore from the
+// same shared store SteerLauncher.Launch mints every child's meta.json into
+// (issue #947: passing nil here left sessions/<id>/meta.json at status=active
+// after the lifecycle record had gone terminal). A nil t.unified — an unwired
+// tool, or a harness that never constructed the shared store — keeps the
+// mediator's "no chat-transcript meta" skip; it must not be the production
+// shape. The mediator's atomic LifecycleStore.Mutate (the RMW primitive that holds the
 // per-session striped lock across tail→fn→write) replaces the hand-rolled
 // Mutate call this helper used to make directly. The prior Load+Persist pair
 // was a non-atomic RMW: two concurrent transitions on the same session_id
@@ -474,11 +497,10 @@ func (t *DelegateTool) transitionLifecycle(sessionID string, state session.Lifec
 	if t.lifecycle == nil || sessionID == "" {
 		return
 	}
-	// nil UnifiedStore: t.lifecycle has no *session.UnifiedStore handle to
-	// pass (see the doc comment above) — the mediator skips the mirror.
 	// t.lifecycle (MessageParentLifecycleStore) satisfies
 	// session.LifecycleMutator, so no type assertion is needed.
-	if err := session.TransitionSession(t.lifecycle, nil, sessionID, state, failedReason); err != nil {
+	// t.unified may be nil; TransitionSession then skips the mirror.
+	if err := session.TransitionSession(t.lifecycle, t.unified, sessionID, state, failedReason); err != nil {
 		slog.Warn("delegate: transitionLifecycle: dual-store transition failed", "session_id", sessionID, "state", state, "error", err)
 	}
 }

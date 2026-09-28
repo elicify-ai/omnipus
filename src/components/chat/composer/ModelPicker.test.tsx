@@ -33,6 +33,22 @@ import { useConnectionStore } from '@/store/connection'
 
 // ── API mocks ─────────────────────────────────────────────────────────────────
 
+// Per-test provider fixtures. The DEFAULT list is byte-identical to the fixed
+// list this file always mocked (every pre-existing test below depends on it);
+// the subscription-provider tests at the bottom swap it via
+// setMockProviders() and their beforeEach restores the default.
+const providerFixtures = vi.hoisted(() => ({
+  list: [
+    {
+      id: 'openrouter',
+      name: 'openrouter',
+      display_name: 'OpenRouter',
+      status: 'connected',
+      models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo', 'openai/gpt-4o'],
+    },
+  ] as Array<Record<string, unknown>>,
+}))
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
@@ -54,15 +70,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
         description: 'Orchestrator', // no `model` — exercises the null activeAgentModel path
       },
     ]),
-    fetchProviders: vi.fn().mockResolvedValue([
-      {
-        id: 'openrouter',
-        name: 'openrouter',
-        display_name: 'OpenRouter',
-        status: 'connected',
-        models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo', 'openai/gpt-4o'],
-      },
-    ]),
+    fetchProviders: vi.fn(() => Promise.resolve(providerFixtures.list)),
   }
 })
 
@@ -550,5 +558,76 @@ describe('ModelPicker — disabled prop (read-only session)', () => {
     renderPicker()
     await waitForLoadedTrigger()
     expect(screen.getByTestId('composer-model-selector')).not.toBeDisabled()
+  })
+})
+
+// ── Subscription providers (ADR-068 FR-034) ──────────────────────────────────
+//
+// A sign-in provider (openai-chatgpt et al.) is `signed_in`, never
+// `connected` — the composer picker filtered on `status === 'connected'` and
+// silently dropped every subscription provider's models: the founder's live
+// instance showed 21 GPT models on a genuinely authenticated openai-chatgpt
+// row that the chat model picker refused to list. The picker must go through
+// providerStatus.isProviderUsable (connected OR signed_in), and `expired`
+// must stay EXCLUDED — a lapsed session's models cannot run, and offering
+// them would trade one dead end for another.
+
+describe('ModelPicker — subscription (signed_in) providers are usable', () => {
+  beforeEach(() => {
+    providerFixtures.list = [
+      {
+        id: 'openrouter',
+        name: 'openrouter',
+        display_name: 'OpenRouter',
+        status: 'connected',
+        models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo', 'openai/gpt-4o'],
+      },
+    ]
+  })
+
+  it('a signed_in provider with models appears in the picker and its model is selectable', async () => {
+    providerFixtures.list = [
+      {
+        id: 'openai-chatgpt',
+        name: 'openai-chatgpt',
+        display_name: 'ChatGPT',
+        status: 'signed_in',
+        models: ['gpt-5.6', 'gpt-5.6-sol'],
+      },
+    ]
+    renderPicker()
+    // RED pre-fix: with the signed_in provider filtered out the catalogue is
+    // empty, so ModelSelector renders its disabled empty-catalogue placeholder
+    // ("Connect a provider to pick a model") and never becomes a combobox —
+    // the exact dead end the founder hit.
+    await waitForLoadedTrigger()
+
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    const item = await vi.waitFor(() => screen.getByText('gpt-5.6-sol'))
+    fireEvent.click(item)
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().nextModel).toBe('gpt-5.6-sol')
+    })
+  })
+
+  it('an expired provider does NOT appear — a lapsed session cannot serve a model', async () => {
+    providerFixtures.list = [
+      {
+        id: 'openai-chatgpt',
+        name: 'openai-chatgpt',
+        display_name: 'ChatGPT',
+        status: 'expired',
+        models: ['gpt-5.6'],
+      },
+    ]
+    renderPicker()
+    // Boundary pin: the usable rule is {connected, signed_in}, not "anything
+    // but disconnected". The expired row is filtered out, so the picker falls
+    // to the same disabled empty-catalogue placeholder — and the model text
+    // is nowhere in the DOM.
+    await vi.waitFor(() => {
+      expect(screen.getByText('Connect a provider to pick a model')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('gpt-5.6')).not.toBeInTheDocument()
   })
 })

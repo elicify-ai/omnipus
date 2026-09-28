@@ -8,12 +8,12 @@
 // the same single pass as the plan engine's bootReconcile (N-15 — one sweep,
 // not two).
 //
-// The sweep reconciles every persisted non-terminal session that has no live
-// runtime turn (which, at the moment a fresh process boots, is ALL of them —
+// The sweep reconciles persisted non-terminal sessions that have no live
+// runtime turn (which, at the moment a fresh process boots, is all of them —
 // no goroutine from a prior process can still be running a turn) to
 // failed(interrupted) within a configurable budget, carrying its last
 // checkpoint + undelivered messages and emitting a session.failed hook so
-// plan recovery and idle settlement re-arm. Two INV-9 exemptions keep a
+// plan recovery and idle settlement re-arm. Three INV-9 exemptions keep a
 // legitimately-idle session from being swept:
 //
 //  1. a parked needs_input session that is still reconstructable
@@ -23,7 +23,13 @@
 //     plan_phase=awaiting_supervision (C1/FR-147), resolved via the named
 //     plan<->owner-session linkage (session.LifecycleRecord.OwnsPlanID ->
 //     plan.Plan.PlanPhase), NOT via owner_scope (which is `human` for a
-//     top-level owner and cannot itself identify the plan).
+//     top-level owner and cannot itself identify the plan); and
+//  3. a standing root (standingRootExemptFromSweep, ADR-093 D3): a
+//     top-level conversation that stays usable on its CURRENT generation —
+//     a restart must not mark an open chat unusable (the restart bug this
+//     branch fixes). Revival of a stopped or terminal root happens only
+//     through a later human message or a parent follow-up, never through
+//     this sweep.
 //
 // The durable C1 fix (this wave's other half, in plan_engine.go) persists
 // last_unmet_terminal_signature on the plan record; bootReconcile rehydrates
@@ -79,6 +85,13 @@ type SteerBootRecovery struct {
 	Classifier     steer.RecordClassifier
 	Deliverer      steer.UpwardDeliverer
 	OperatorNotice func(message string)
+	// EndSessionGoal is the FD1=A pair-end hook (#947 defect 1, decision
+	// (e)three): the boot sweep terminalises steered sessions found mid-flight
+	// at boot (failInterrupted); their session-owned goal ends with the
+	// session, the reason recording the interruption. Wired by the gateway
+	// from the live AgentLoop; nil (tests, embedders) skips the pair-end —
+	// same optional-dep posture as every other field here.
+	EndSessionGoal func(sessionID string, reason string)
 }
 
 type bootSessionMessageEnvelope struct {
@@ -408,7 +421,7 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 }
 
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
-	return r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
+	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
 			return nil
 		}
@@ -417,6 +430,10 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		current.NeedsInput = nil
 		return nil
 	})
+	if err == nil && r.EndSessionGoal != nil {
+		r.EndSessionGoal(rec.SessionID, failedReasonInterrupted+": the gateway restarted while the session was mid-flight")
+	}
+	return err
 }
 
 func (r *SteerBootRecovery) terminalMessage(rec *session.LifecycleRecord) (generated.SessionMessage, steer.Outcome, error) {
@@ -624,6 +641,30 @@ func (pe *PlanEngine) runBootSweep(ctx context.Context) BootSweepResult {
 // resolved.
 const DefaultLifecycleRetentionDays = 90
 
+// standingRootExemptFromSweep reports whether rec is a root the boot sweep
+// must leave alone (ADR-093 D3). A root has no SteeredBy edge. Its origin is
+// absent, or one of the standing kinds (chat, channel, heartbeat, scheduled):
+// the root stays usable on its CURRENT generation — the sweep must not mark
+// it failed(interrupted), and revival is only ever for a record a later Stop
+// or a terminal transition has ALREADY put into stopped/terminal state
+// (inboundRevivable's predicate), never something this sweep produces. A task
+// root never matches — persistLocked rejects origin kind task without a task
+// id — and is swept exactly as before.
+func standingRootExemptFromSweep(rec session.LifecycleRecord) bool {
+	if rec.SteeredBy != nil {
+		return false
+	}
+	if rec.Origin == nil {
+		return true
+	}
+	switch rec.Origin.Kind {
+	case session.OriginKindChat, session.OriginKindChannel, session.OriginKindHeartbeat, session.OriginKindScheduled:
+		return true
+	default:
+		return false
+	}
+}
+
 // bootSweep is the testable core of the boot sweep. It is a method on
 // PlanEngine (not a free function) because exemption (b) requires resolving a
 // paused owner session's plan through the engine's own planStore, and recovery
@@ -688,6 +729,27 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 			continue
 		}
 
+		// ADR-093 D3: a standing root (no SteeredBy edge, origin absent or
+		// one of the standing kinds) is never swept to failed(interrupted) —
+		// checked HERE, after exemptions (a)/(b) and the N-15 rebaseline,
+		// not at the top of the loop. Those three are independent
+		// reconciliation actions (each with its own BootSweepResult counter
+		// downstream code/observability relies on — the N-15 rebaseline in
+		// particular is an active repair, not a no-op) that must still run
+		// for a standing root exactly as for any other record; D3 only
+		// narrows the FINAL catch-all outcome below. Placing this check at
+		// the top swallowed every standing root before those exemptions
+		// could fire, silently zeroing PreservedNeedsInput,
+		// PreservedAwaitingCorrection and RebaselinedGoals for any record
+		// this clause also matched — reproduced 2026-09-26 (release run
+		// 36245049018): TestN15_GoalSemanticsRebaseline,
+		// TestBootSweep_NeedsInputReconstructable_Preserved,
+		// TestBoot_ParkedRecoverableWithoutCheckpoint and
+		// TestBootSweep_AwaitingCorrectionOwnerExempt all failed this way.
+		if standingRootExemptFromSweep(rec) {
+			continue
+		}
+
 		// Sweep: mark failed(interrupted), carrying last checkpoint +
 		// undelivered messages (FR-118). The session is non-terminal (the
 		// List filter guaranteed it), so this transition is legal on the same
@@ -721,6 +783,19 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 	// invariant; explicitly nil it for clarity (the swept session is no longer
 	// awaiting input — it was interrupted).
 	failed.NeedsInput = nil
+	// A current-generation Stop is an instruction ("do not run this
+	// generation"). Landing failed(interrupted) carries that instruction
+	// out, so the marker is spent — the same clear that
+	// steer_cancel.go's terminal write and
+	// steer_completion.go::completeSteeredTurn perform before a terminal
+	// persist. persistLocked rejects a terminal record that still carries
+	// one, and copying Stop wholesale made every boot warn and skip this
+	// session forever (issue #947). An older marker
+	// (Stop.Generation < Generation) is inert history and stays.
+	// failed is a shallow copy: nil its Stop field only.
+	if failed.Stop != nil && failed.Stop.Generation == failed.Generation {
+		failed.Stop = nil
+	}
 	if err := ls.Persist(&failed); err != nil {
 		return err
 	}

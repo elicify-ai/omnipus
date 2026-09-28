@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -66,7 +67,7 @@ func storeFile(t *testing.T, store media.MediaStore, name, contentType string, c
 func TestResolveMediaRefsWithOffload_AVIF_CopiesToWorkDir_InjectsPath(t *testing.T) {
 	for _, mime := range []string{"image/avif", "image/heic", "image/heif", "image/x-icon"} {
 		t.Run(mime, func(t *testing.T) {
-			store := media.NewFileMediaStore()
+			store := mediatest.NewFileMediaStore(t)
 			ref, srcPath := storeFile(t, store, "photo"+filepath.Ext("x.avif"), mime, []byte("unsupported-fake-bytes"))
 
 			workDir := filepath.Join(t.TempDir(), "work")
@@ -124,7 +125,7 @@ func TestResolveMediaRefsWithOffload_SanitizesTraversalFilename(t *testing.T) {
 	}
 	for _, payload := range payloads {
 		t.Run(payload, func(t *testing.T) {
-			store := media.NewFileMediaStore()
+			store := mediatest.NewFileMediaStore(t)
 			// Benign source on disk; only meta.Filename carries the payload
 			// (the real threat model: the user controls the filename metadata).
 			srcPath := filepath.Join(t.TempDir(), "src.avif")
@@ -181,7 +182,7 @@ func TestOffloadSink_NilReceiver_DegradesGracefully(t *testing.T) {
 // than failing the turn. The 4-arg wrapper preserves the existing behavior
 // exercised by the Wave-3-owned tests.
 func TestResolveMediaRefs_AVIF_NoSink_DegradesToMarker(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ref, _ := storeFile(t, store, "photo.avif", "image/avif", []byte("unsupported-fake-bytes"))
 
 	result := resolveMediaRefs(
@@ -199,7 +200,7 @@ func TestResolveMediaRefs_AVIF_NoSink_DegradesToMarker(t *testing.T) {
 // (guidance + filesystem path) AND the step-6 markup injection — the guidance
 // line prefixes the markup. The two steps compose; neither replaces the other.
 func TestResolveMediaRefsWithOffload_SVGFail_GuidancePlusMarkup(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ref, _ := storeFile(
 		t,
 		store,
@@ -235,7 +236,7 @@ func TestResolveMediaRefsWithOffload_SVGFail_GuidancePlusMarkup(t *testing.T) {
 // AVIF is not text-extractable, so step 6 does NOT fire — the content has the
 // guidance + path only, with no "[Attached file" document-injection block.
 func TestResolveMediaRefsWithOffload_AVIF_NoTextInjection(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ref, _ := storeFile(t, store, "photo.avif", "image/avif", []byte("unsupported-fake-bytes"))
 
 	workDir := filepath.Join(t.TempDir(), "work")
@@ -309,7 +310,7 @@ func TestSanitizeInjectedName_PromptInjection(t *testing.T) {
 // (no-sink) path, does not appear verbatim — the newlines are stripped before
 // insertion.
 func TestResolveMediaRefsWithOffload_FilenamePromptInjection_SanitizedInMarker(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	// A real decodable PNG whose encodeImageToDataURL returns "" because
 	// maxSize=0 forces the oversize branch → step-7 marker (no sink).
 	pngBytes := []byte{
@@ -378,7 +379,7 @@ func TestCopyToWorkDir_ContainmentRejectsEscape(t *testing.T) {
 // invariant ("every uploaded file reaches at least step 5") holds even when
 // normalization fails for the size reason, not just the format reason.
 func TestOffload_oversizeImage_WithSink_OffloadsNotMarker(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	pngBytes := []byte{
 		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
 		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,

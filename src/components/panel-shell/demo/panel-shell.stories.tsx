@@ -29,7 +29,11 @@ function FixtureHarness({ children }: { children: ReactNode }) {
     () =>
       new QueryClient({
         defaultOptions: {
-          queries: { retry: false, refetchOnWindowFocus: false, staleTime: Infinity },
+          queries: {
+            retry: false,
+            refetchOnWindowFocus: false,
+            staleTime: Infinity,
+          },
         },
       }),
   )
@@ -107,6 +111,7 @@ export const PanelLibrary: Story = {
 
 export const PanelBrowser: Story = {
   parameters: { globals: { viewport: { value: 'panel1280x800' } } },
+  play: openViaTrigger('browser'),
 }
 
 export const PanelMail: Story = {

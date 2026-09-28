@@ -66,7 +66,9 @@ async function loadSwitch(): Promise<{
         '(team must follow the workspace switch per its policy)',
     )
   }
-  return { resolveWorkspaceSwitch: fn }
+  return {
+    resolveWorkspaceSwitch: fn as (input: SwitchInput) => Promise<Decision>,
+  }
 }
 
 describe('SP-36 — the Team panel follows the workspace switch (always)', () => {

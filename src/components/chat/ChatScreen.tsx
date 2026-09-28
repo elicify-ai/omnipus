@@ -34,6 +34,11 @@ import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { WebServeBlock } from './tools/WebServeUI'
 import { SetGoalCardBlock, classifySetGoalCall } from './tools/SetGoalToolUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
+import { BashOutputBlock, isBashToolName } from './tools/BashOutput'
+import { FileReadBlock } from './tools/FileReadPreview'
+import { FileTreeBlock } from './tools/FileTreeView'
+import { WebSearchBlock } from './tools/WebSearchResult'
+import { WebFetchBlock } from './tools/WebFetchPreview'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
@@ -1455,6 +1460,80 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   error={tc.error}
                   durationMs={tc.duration_ms}
                   sessionId={activeSessionId ?? ''}
+                />
+              ))
+            }
+            // toolui-analysis item 2 + item 4 (founder-approved 2026-09-26):
+            // the dedicated tool rows route through the SAME components on
+            // replay as live, so a reloaded session matches what was on
+            // screen while the turn happened. These branches mirror the live
+            // makeAssistantToolUI registrations (OmnipusRuntimeProvider.tsx);
+            // everything they render is collapsed-by-default. They sit BEFORE
+            // the GoalSetupFailureLine override below because live, a
+            // registered dedicated UI pre-empts that fallback for these tools
+            // too (FallbackToolUI is only reached by unregistered tools).
+            if (isBashToolName(tc.tool)) {
+              return delegationSlotted(callId, inlineByCall.get(callId), (
+                <BashOutputBlock
+                  key={callId}
+                  toolName={tc.tool}
+                  args={(tc.params ?? {}) as { command?: string; description?: string; action?: string }}
+                  result={tc.result}
+                  isRunning={false}
+                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
+                  error={tc.error} sessionId={activeSessionId ?? ''}
+                />
+              ))
+            }
+            if (tc.tool === 'read_file' || tc.tool === 'file.read') {
+              return delegationSlotted(callId, inlineByCall.get(callId), (
+                <FileReadBlock
+                  key={callId}
+                  toolName={tc.tool}
+                  args={(tc.params ?? {}) as { path?: string }}
+                  result={tc.result}
+                  isRunning={false}
+                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
+                  error={tc.error} sessionId={activeSessionId ?? ''}
+                />
+              ))
+            }
+            if (tc.tool === 'list_dir' || tc.tool === 'list_directory' || tc.tool === 'file.list') {
+              return delegationSlotted(callId, inlineByCall.get(callId), (
+                <FileTreeBlock
+                  key={callId}
+                  toolName={tc.tool}
+                  args={(tc.params ?? {}) as { path?: string }}
+                  result={tc.result}
+                  isRunning={false}
+                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
+                  error={tc.error} sessionId={activeSessionId ?? ''}
+                />
+              ))
+            }
+            if (tc.tool === 'web_search' || tc.tool === 'search_web') {
+              return delegationSlotted(callId, inlineByCall.get(callId), (
+                <WebSearchBlock
+                  key={callId}
+                  toolName={tc.tool}
+                  args={(tc.params ?? {}) as { query?: string }}
+                  result={tc.result}
+                  isRunning={false}
+                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
+                  error={tc.error} sessionId={activeSessionId ?? ''}
+                />
+              ))
+            }
+            if (tc.tool === 'fetch_url' || tc.tool === 'web_fetch') {
+              return delegationSlotted(callId, inlineByCall.get(callId), (
+                <WebFetchBlock
+                  key={callId}
+                  toolName={tc.tool}
+                  args={(tc.params ?? {}) as { url?: string }}
+                  result={tc.result}
+                  isRunning={false}
+                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
+                  error={tc.error} sessionId={activeSessionId ?? ''}
                 />
               ))
             }

@@ -282,12 +282,13 @@ func TestMessageParentTool_NoSessionContext_Rejected(t *testing.T) {
 // TestMessageParentTool_TaskRun_NoParentSession_RedirectsToGoalClaim proves a
 // native task run's root turn — which carries tools.WithRunningTaskID on ctx
 // (task_executor.go, before processTaskDirect) but never
-// tools.WithDelegateSessionID (only pkg/agent/subturn.go's spawnSubTurn sets
-// that, for a real delegated child) — gets an error that tells the worker
-// what to do instead of the generic "no session context available for this
-// call" text, since a task-dispatch session structurally has no delegating
-// parent to message (task_executor.go's mintTaskLifecycleRecord leaves
-// SteeringSessionID empty on purpose).
+// tools.WithDelegateSessionID (production stamps that only for a real
+// delegated child, via pkg/agent/steer_reconstruct.go::reconstructSteeredTurn
+// → loop_run_turn.go::registerTurnContext) — gets an error that tells the
+// worker what to do instead of the generic "no session context available for
+// this call" text, since a task-dispatch session structurally has no
+// delegating parent to message (task_executor.go's mintTaskLifecycleRecord
+// leaves SteeringSessionID empty on purpose).
 func TestMessageParentTool_TaskRun_NoParentSession_RedirectsToGoalClaim(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
