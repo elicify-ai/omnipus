@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -17,6 +16,10 @@ import (
 // mailMutationLimiter guards every Mail panel mutation (MC-20): 10/min/IP,
 // write-sized. Declared in rest_mail.go next to its handlers.
 var mailMutationLimiter = newAPIRateLimiter(10, 1*time.Minute)
+
+// mailUIDToWire widens the IMAP uint32 domain into the signed 64-bit wire
+// domain without passing through architecture-sized int.
+func mailUIDToWire(uid uint32) int64 { return int64(uid) }
 
 // handleWorkspaceMail dispatches /api/v1/workspaces/{id}/mail/... from
 // HandleWorkspaces (rest still carries the "/{id}" prefix). The mux has no
@@ -116,7 +119,7 @@ func (a *restAPI) mailPairClient(w http.ResponseWriter, agentID, workspaceID str
 	if store == nil {
 		s := credentials.NewStore(a.credentialsStorePath())
 		if err := credentials.Unlock(s); err != nil {
-			slog.Error("rest: mail credential store locked", "agent_id", agentID, "error", err)
+			logsafeError("rest: mail credential store locked", "agent_id", agentID, "error", err)
 			jsonErr(w, http.StatusInternalServerError, "credential store unavailable")
 			return nil
 		}
@@ -124,7 +127,7 @@ func (a *restAPI) mailPairClient(w http.ResponseWriter, agentID, workspaceID str
 	}
 	password, perr := store.Get(mb.PasswordRef)
 	if perr != nil || strings.TrimSpace(password) == "" {
-		slog.Warn("rest: mail password did not resolve", "agent_id", agentID, "workspace_id", workspaceID)
+		logsafeWarn("rest: mail password did not resolve", "agent_id", agentID, "workspace_id", workspaceID)
 		jsonErr(w, http.StatusNotFound, "no mailbox configured for this agent and workspace")
 		return nil
 	}
@@ -139,7 +142,7 @@ func (a *restAPI) mailPairClient(w http.ResponseWriter, agentID, workspaceID str
 		DraftsFolder: mb.DraftsFolderName,
 	})
 	if cerr != nil {
-		slog.Warn("rest: mail transport construction failed", "agent_id", agentID, "error", cerr)
+		logsafeWarn("rest: mail transport construction failed", "agent_id", agentID, "error", cerr)
 		jsonErr(w, http.StatusNotFound, "no mailbox configured for this agent and workspace")
 		return nil
 	}
@@ -169,7 +172,7 @@ func auditMail(a *restAPI, event audit.EventName, decision audit.Decision, detai
 		Decision: string(decision),
 		Details:  details,
 	}); err != nil {
-		slog.Warn("audit write failed", "event", event, "error", err)
+		logsafeWarn("audit write failed", "event", event, "error", err)
 	}
 }
 
@@ -178,6 +181,6 @@ func auditMail(a *restAPI, event audit.EventName, decision audit.Decision, detai
 // `code` its machine-readable duplicate.
 func mailErr502(w http.ResponseWriter, err error) {
 	class := email.ClassifyMailError(err)
-	slog.Error("rest: mail upstream failure", "class", class, "error", err)
+	logsafeError("rest: mail upstream failure", "class", class, "error", err)
 	jsonErrCode(w, http.StatusBadGateway, "mail server error: "+class, class)
 }

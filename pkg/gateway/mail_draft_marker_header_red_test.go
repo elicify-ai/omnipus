@@ -84,7 +84,7 @@ const (
 // genuine user message.md — indistinguishable by name/type, distinguished
 // only by the marker header after the fix. Returns the env, the SMTP sink,
 // the folder uidvalidity, the new copy's uid and the update response.
-func mdhUploadFlow(t *testing.T, tag string) (*mailRedEnv, *smtpSink, uint32, int, gen.MailMessage) {
+func mdhUploadFlow(t *testing.T, tag string) (*mailRedEnv, *smtpSink, uint32, int64, gen.MailMessage) {
 	t.Helper()
 	env := newMailRedEnv(t)
 	imapPort, cl := startPlainIMAP(t)

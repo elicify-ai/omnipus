@@ -12129,11 +12129,13 @@ export interface components {
              */
             message_id: string | null;
             /**
+             * Format: int64
              * @description IMAP UID of the message within its folder (valid under uidvalidity).
              * @example 123
              */
             uid: number;
             /**
+             * Format: int64
              * @description IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A changed uidvalidity renumbers uids; the mid: ref form survives that (round-1 MAJ-005, D21).
              * @example 456
              */
@@ -12188,6 +12190,7 @@ export interface components {
             /** @description Whether more messages exist beyond this page. */
             truncated: boolean;
             /**
+             * Format: int64
              * @description The before_uid cursor for the next page when truncated is true; null when this page is the last one.
              * @example 87
              */
@@ -12204,11 +12207,13 @@ export interface components {
              */
             message_id: string | null;
             /**
+             * Format: int64
              * @description IMAP UID of the message within its folder.
              * @example 123
              */
             uid: number;
             /**
+             * Format: int64
              * @description IMAP UIDVALIDITY of the folder.
              * @example 456
              */
@@ -12328,7 +12333,10 @@ export interface components {
              * @example 2026-09-26T10:30:00Z
              */
             last_success_at: string | null;
-            /** @description Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable. */
+            /**
+             * Format: int64
+             * @description Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable.
+             */
             last_seen_uid: number | null;
             /**
              * Format: date-time
@@ -12418,9 +12426,15 @@ export interface components {
             subject: string;
             /** @description New editable Markdown source (D23). For an Omnipus draft it replaces the stored text/markdown part and re-stamps X-Omnipus-Render-Hash (MC-29); for a foreign draft it replaces the derived source, with the formatting-loss statement shown in the panel (D24). */
             body_markdown: string;
-            /** @description uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008). */
+            /**
+             * Format: int64
+             * @description uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
+             */
             uidvalidity: number;
-            /** @description uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008). */
+            /**
+             * Format: int64
+             * @description uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
+             */
             uid: number;
             /** @description New files added in the panel (D28). */
             attachments?: components["schemas"]["MailAttachmentInput"][];
@@ -12442,9 +12456,15 @@ export interface components {
             subject: string;
             /** @description The displayed/edited Markdown body, rendered at send time (MC-3). */
             body_markdown: string;
-            /** @description uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16). */
+            /**
+             * Format: int64
+             * @description uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
+             */
             uidvalidity: number;
-            /** @description uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16). */
+            /**
+             * Format: int64
+             * @description uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
+             */
             uid: number;
             /** @description Part indices from the current copy's MailMessage.attachments to carry onto the sent message. Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Optional — absent or empty-list semantics: absent carries ALL of the current copy's attachments (spec §2.2 default carry all); an explicit list carries exactly those parts. */
             keep_attachment_parts?: number[];

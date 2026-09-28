@@ -50,9 +50,15 @@ properties:
       formatting-loss statement shown in the panel (D24).
   uidvalidity:
     type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
     description: uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
   uid:
     type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
     description: uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
   attachments:
     type: array

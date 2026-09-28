@@ -8,7 +8,6 @@ package gateway
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -188,7 +187,7 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 	cleanupWarn := ""
 	if derr := client.DeleteDraft(r.Context(), cur.UID); derr != nil {
 		cleanupWarn = "the draft was updated, but deleting the old copy failed"
-		slog.Warn("rest: old draft copy delete failed", "agent_id", agentID, "error", derr)
+		logsafeWarn("rest: old draft copy delete failed", "agent_id", agentID, "error", derr)
 	}
 	draftSendForget(out.MessageID)
 	auditMail(a, audit.EventMailPanelDraftUpdated, audit.DecisionAllow, map[string]any{
@@ -203,7 +202,7 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		"attachments": mailAuditAttachments(in.Attachments),
 	})
 	resp := gen.MailMessage{
-		Folder: gen.MailMessageFolderDrafts, Uid: int(newUID), Uidvalidity: int(newUV),
+		Folder: gen.MailMessageFolderDrafts, Uid: mailUIDToWire(newUID), Uidvalidity: mailUIDToWire(newUV),
 		Subject: req.Subject, To: mailNonNilSlice(req.To), Cc: mailNonNilSlice(derefStrings(req.Cc)),
 		From: mb.Username, IsOmnipusDraft: cur.IsOmnipusDraft, IsDraft: true,
 		MarkdownLossy: false, HasHtml: true, Seen: false,
@@ -286,7 +285,10 @@ const imapDraftFlag = "\\Draft"
 // ref whose parts disagree with the request body is malformed input (400)
 // before any IMAP work. Non-uid refs (mid:) have no path parts to agree on.
 // Returns ("", true) when the request may proceed.
-func mailDraftRefBodyAgreement(ref string, bodyUID, bodyUV int) (string, bool) {
+func mailDraftRefBodyAgreement(ref string, bodyUID, bodyUV int64) (string, bool) {
+	if !mailDraftUIDPreconditionsValid(bodyUID, bodyUV) {
+		return "uid precondition is outside the IMAP uint32 range", false
+	}
 	if !strings.HasPrefix(ref, "uid:") {
 		return "", true
 	}
@@ -294,22 +296,30 @@ func mailDraftRefBodyAgreement(ref string, bodyUID, bodyUV int) (string, bool) {
 	if len(parts) != 3 {
 		return "", true
 	}
-	ru, e1 := strconv.Atoi(parts[1])
-	ui, e2 := strconv.Atoi(parts[2])
-	if e1 == nil && ru != bodyUV {
+	ru, e1 := strconv.ParseUint(parts[1], 10, 32)
+	ui, e2 := strconv.ParseUint(parts[2], 10, 32)
+	if e1 == nil && int64(ru) != bodyUV {
 		return "uid precondition does not match the addressed draft", false
 	}
-	if e2 == nil && ui != bodyUID {
+	if e2 == nil && int64(ui) != bodyUID {
 		return "uid precondition does not match the addressed draft", false
 	}
 	return "", true
 }
 
+func mailDraftUIDPreconditionsValid(bodyUID, bodyUV int64) bool {
+	const maxUint32 = int64(^uint32(0))
+	return bodyUID >= 0 && bodyUID <= maxUint32 && bodyUV >= 0 && bodyUV <= maxUint32
+}
+
 // mailDraftStaleness is the MC-16 POST-READ check: a body describing
 // anything other than the CURRENT copy is stale. Returns (409,
 // "stale_draft", ...) so callers emit the closed code on the wire.
-func mailDraftStaleness(cur *email.MailView, bodyUID, bodyUV int) (int, string, string) {
-	if bodyUV != int(cur.UIDValidity) || bodyUID != int(cur.UID) {
+func mailDraftStaleness(cur *email.MailView, bodyUID, bodyUV int64) (int, string, string) {
+	if !mailDraftUIDPreconditionsValid(bodyUID, bodyUV) {
+		return http.StatusBadRequest, "", "uid precondition is outside the IMAP uint32 range"
+	}
+	if bodyUV != int64(cur.UIDValidity) || bodyUID != int64(cur.UID) {
 		return http.StatusConflict, "stale_draft", "stale draft"
 	}
 	return 0, "", ""
@@ -503,13 +513,13 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		resp.SentSaved = false
 		sw := "the message was sent, but saving to the Sent folder failed"
 		resp.SaveWarning = &sw
-		slog.Warn("rest: draft sent copy APPEND failed", "agent_id", agentID, "error", aerr)
+		logsafeWarn("rest: draft sent copy APPEND failed", "agent_id", agentID, "error", aerr)
 	}
 	cleanupWarn := ""
 	expunged, derr := client.DeleteDraftStatus(r.Context(), cur.UID)
 	if derr != nil {
 		cleanupWarn = "the message was sent, but deleting the draft copy failed"
-		slog.Warn("rest: draft cleanup after send failed", "agent_id", agentID, "error", derr)
+		logsafeWarn("rest: draft cleanup after send failed", "agent_id", agentID, "error", derr)
 	}
 	resp.DraftCleanupWarning = nil
 	if cleanupWarn != "" {
