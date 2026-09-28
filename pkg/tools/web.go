@@ -1569,6 +1569,17 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 // buildDynamicSearchProviders constructs the whole ADR-096 provider map.
 // A constructor error is not swallowed: it is logged with the provider id
 // and the cause, and returned so the call can report "not usable: <cause>"
+// urlUserinfoRe matches the "user:password@" part of any URL quoted in an
+// error. Go's url.Parse error quotes the whole input, so a malformed
+// credentialed proxy URL would otherwise surface its password.
+var urlUserinfoRe = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s"]+@`)
+
+// redactURLUserinfo hides URL credentials in a message that is logged and
+// shown to the agent (gate round 2, security NEW-1). The cause stays readable.
+func redactURLUserinfo(msg string) string {
+	return urlUserinfoRe.ReplaceAllString(msg, "${1}***@")
+}
+
 // instead of a network hop (ADR-096 D16).
 func buildDynamicSearchProviders(opts WebSearchToolOptions, ingestBound int64) (map[string]SearchProvider, map[string]string) {
 	dynamic := map[string]SearchProvider{}
@@ -1579,9 +1590,9 @@ func buildDynamicSearchProviders(opts WebSearchToolOptions, ingestBound int64) (
 		}
 		logger.WarnCF("tool", "search provider not usable: constructor failed", map[string]any{
 			"provider": id,
-			"cause":    err.Error(),
+			"cause":    redactURLUserinfo(err.Error()),
 		})
-		failed[id] = err.Error()
+		failed[id] = redactURLUserinfo(err.Error())
 	}
 	if p, _, err := newPerplexitySearchProvider(opts, ingestBound); err != nil {
 		note(config.SearchProviderPerplexity, err)
