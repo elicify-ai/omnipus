@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, dismissStaleDialogOverlay, selectAgent, waitForConnected } from './fixtures/selectors'
+import { chatInput, dismissStaleDialogOverlay, selectAgent, waitForConnected, watchAndDenyToolApprovals } from './fixtures/selectors'
 
 const LABEL_A = 'ADR-091 child A'
 const LABEL_B = 'ADR-091 child B'
@@ -12,6 +12,7 @@ function requireApiKey(): void {
     throw new Error('BLOCKED: OPENROUTER_API_KEY_CI is required for steered-session reachability')
   }
 }
+
 
 test('steered session is reachable in its own live view without leaking child output into the parent chat', async ({ page, context }) => {
   requireApiKey()
@@ -26,12 +27,31 @@ test('steered session is reachable in its own live view without leaking child ou
   // against `<div data-testid="dialog-overlay"> intercepts pointer events`;
   // run 36123574726 attempt 3 shows a pending ask expiring at 11:27:30 with
   // NO deny ever recorded — no page ever dismissed it, because this spec's
-  // previous ONE-SHOT guard raced the rehydrating session_state frame: the
-  // frame can land after goto('/') returns, after the single count() check.
-  // dismissStaleDialogOverlay is poll-shaped for exactly that reason, and
-  // Escape maps to Deny while an approval is live, so the dismissal sticks
-  // (the next snapshot cannot rehydrate a resolved approval).
+  // previous ONE-SHOT guard raced the rehydrating session_state frame.
+  //
+  // Two guards now cover that, in order:
+  //
+  // 1. dismissStaleDialogOverlay is QUIET-WINDOW-shaped (see
+  //    fixtures/selectors.ts): a zero-overlay reading is only trusted once it
+  //    has held for a short post-hydration window, so a snapshot frame that
+  //    lands just after goto('/') restarts the window instead of racing it.
+  //    Release run 36337231197 retry #1 is the failure this closes: the old
+  //    poll returned on its FIRST zero and the previous attempt's approval
+  //    rehydrated moments later, blocking selectAgent for 357s of a 420s
+  //    budget. Escape maps to Deny while an approval is live, so the
+  //    dismissal sticks (the next snapshot cannot rehydrate a resolved
+  //    approval).
+  //
+  // 2. watchAndDenyToolApprovals (fixtures/selectors.ts) is the mid-run safety net: if any
+  //    approval card surfaces later — during the delegation chain — it is
+  //    DENIED (the safe operator default, the modal's default-focused button)
+  //    and the deny is recorded to the console AND as a test annotation, so a
+  //    denied card is visible in the report instead of pending silently for
+  //    the production approval timeout (600s, pkg/gateway/gateway.go).
   await dismissStaleDialogOverlay(page)
+  const denyWatcher = watchAndDenyToolApprovals(page, (at) =>
+    test.info().annotations.push({ type: 'tool-approval-denied', description: `denied at ${at}` }),
+  )
   await selectAgent(page, /Jim/i)
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 15_000 })
@@ -60,7 +80,7 @@ test('steered session is reachable in its own live view without leaking child ou
     'Call the `delegate` tool exactly once, right now, with these arguments:',
     '  agent_id: "worker"',
     `  label: "${LABEL_A}"`,
-    `  task: "Call the \`delegate\` tool exactly once with agent_id=\\"worker\\" and label=\\"${LABEL_B}\\" -- call the tool directly, do not describe it in prose. Give it this task verbatim: Call the \`delegate\` tool exactly once with agent_id=\\"worker\\" and label=\\"${LABEL_C}\\" -- call the tool directly, do not describe it in prose. Give it this task verbatim: Work for at least two tool steps, report progress, then finish with exactly ${CHILD_ONLY_SENTINEL}."`,
+    `  task: "Call the \`delegate\` tool exactly once with agent_id=\\"worker\\" and label=\\"${LABEL_B}\\" -- call the tool directly, do not describe it in prose. Give it this task verbatim: Call the \`delegate\` tool exactly once with agent_id=\\"worker\\" and label=\\"${LABEL_C}\\" -- call the tool directly, do not describe it in prose. Give it this task verbatim: Perform exactly two tool calls and no others: first call the list_tasks tool with role=assignee, then call the library_list tool with no arguments. Call each tool directly, do not describe it in prose. Do not call bash or any other tool. After the second tool call, finish with exactly ${CHILD_ONLY_SENTINEL}."`,
     'Do not reply in prose. Do not call any other tool. Call delegate now.',
     'Do not repeat or paraphrase any child output in this parent chat.',
   ].join('\n'))
@@ -294,6 +314,12 @@ test('steered session is reachable in its own live view without leaking child ou
 
   const parentView = await context.newPage()
   await parentView.goto(parentURL)
+  // The parent view is a SECOND page in this context: an approval card can
+  // rehydrate HERE too while an ask pends (reconcileWithSessionState,
+  // src/store/toolApproval.ts) — same mechanism, same deny+record handling.
+  const parentDenyWatcher = watchAndDenyToolApprovals(parentView, (at) =>
+    test.info().annotations.push({ type: 'tool-approval-denied', description: `parent-view card denied at ${at}` }),
+  )
   await expect(parentView.locator('[data-testid="chat-input"]').first()).toBeVisible({ timeout: 15_000 })
   // The parent's transcript must actually be mounted before absence means
   // anything — otherwise every check below passes against an empty thread.
@@ -318,11 +344,26 @@ test('steered session is reachable in its own live view without leaking child ou
   // evidence (local live run, 2026-09-27): every attempt reloaded ~17-20s into
   // a 40-51s delegation and the pill truthfully read "1 running" through the
   // whole 15s check window — the assertion fired on a LIVE delegation, not a
-  // phantom one. Every assertion above and below this gate is unchanged.
+  // phantom one.
+  // Steered delegations terminate PER GENERATION. The steer this test sends
+  // above always opens a follow-up generation in the same child session under
+  // a NEW span (src/lib/delegationEvents.ts::lifecycleId — "a follow-up runs
+  // another generation in the same child session under a new span; collapsing
+  // those onto the session id would drop the second finish"), which emits no
+  // second birth line (birthKind D9) but DOES emit its own terminal finished
+  // line. So the delegation's real terminal event is the SECOND finished line,
+  // and this gate previously passing on the FIRST one raced the live steered
+  // generation: local live run 2 (2026-09-28) — gen-1 end 22:52:30Z satisfied
+  // this gate, the steered g2 span ran 22:52:31Z-22:53:19Z, and the pill
+  // TRUTHFULLY read "1 running" through the whole 15s check window (parent
+  // transcript, session_01M3JH22WKKZ spans call_bd29.../call_bd29...:g2).
+  // Exactly two finished lines is deterministic here: this test steers exactly
+  // once, and a steer to a delegated child is delivered into its next round
+  // (pkg/agent/steer_delegated_injection_test.go), so generations = 2.
   await expect(
     parentView.locator('[data-testid="delegation-event-line"][data-event-kind="finished"]').filter({ hasText: LABEL_A }),
-    'child A must have finished before the reload — the pill check below is a post-completion invariant',
-  ).toBeVisible({ timeout: 240_000 })
+    'child A must have finished BOTH generations (initial + steered follow-up) before the reload — the pill check below is a post-completion invariant',
+  ).toHaveCount(2, { timeout: 240_000 })
 
   await parentView.reload()
   // CI run 36026415761: this segment used to wait 30s for the Activity bar to
@@ -362,5 +403,20 @@ test('steered session is reachable in its own live view without leaking child ou
       parentBarLabel,
       'after the delegation finished the pill must not still claim a running child',
     ).not.toHaveText(/\d+ running/)
+  }
+
+  // Stop the mid-run deny watchers and surface what they caught. The
+  // annotation rows are already attached (pushed at deny time); this summary
+  // makes the count visible in the list reporter even without opening the
+  // HTML report.
+  parentDenyWatcher.stop()
+  denyWatcher.stop()
+  const totalDenies = denyWatcher.denies.length + parentDenyWatcher.denies.length
+  if (test.info().annotations.some((a) => a.type === 'tool-approval-denied')) {
+    console.warn(
+      `[steered-session-reachability] SUMMARY: ${totalDenies} tool-approval card(s) appeared ` +
+        'mid-run and were DENIED (see the tool-approval-denied annotations) — child C reached ' +
+        'for an Ask-gated tool despite the pinned two-tool task.',
+    )
   }
 })
