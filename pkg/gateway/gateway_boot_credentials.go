@@ -446,6 +446,14 @@ func bootCredentials(
 		}
 	}
 
+	// ADR-096 D11: the web-search roles migration runs HERE — after
+	// injection (each provider's APIKey() reads the config default, process
+	// environment populated by InjectFromConfig) and before the agent loop
+	// builds its tools. Deliberately NOT a config-load migration: the
+	// environment is empty during config load, so a load-time migration
+	// would read no keys and record duckduckgo for every upgrade, permanently.
+	config.MigrateWebSearchRoles(cfg, configPath, nil)
+
 	// Build a ref→in-use map so we can distinguish a missing credential on
 	// something actually enabled/in-use (fatal) from one on a disabled
 	// channel or unused feature (Info + continue).

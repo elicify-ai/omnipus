@@ -14,7 +14,7 @@ description: >
 
 # Spec sync
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-09-27
 
 Companion to plan-spec (writes a spec) and grill-spec (reviews a spec). spec-sync
 runs after the fact: it makes sure a spec still describes what the code does, once
@@ -26,7 +26,7 @@ this skill is the procedure for using them to keep a spec honest.
 - Specs: `docs/internal/specs/<name>-spec.md`.
 - Reviews: `docs/internal/specs/<name>-spec-review.md`,
   `docs/internal/specs/<name>-spec-review-round2.md`.
-- ADRs: `docs/internal/architecture/ADR-NNN-<title>.md`. # agent-guard: allow
+- ADRs: `docs/internal/architecture/ADR-*.md` — an existing ADR keeps whatever filename it already has; a NEW ADR is named per architect's current rule (`ADR-<YYYYMMDD>-<slug>.md`; `.claude/agents/architect.md`, the "ADR naming" bullet, states the full rule). # agent-guard: allow
 - **Never** `docs/plan/`, `docs/specs/`, or `docs/internal/plan/` — those are not # agent-guard: allow
   real locations in this repo; a search that lands there is searching the wrong
   place, not finding an empty result.

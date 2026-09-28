@@ -7,7 +7,11 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { llmErrorAttributionValues, llmErrorCodes } from './api/generated/llm-error-messages'
+import {
+  llmErrorAttributionValues,
+  llmErrorCodes,
+  llmErrorProviderMessages,
+} from './api/generated/llm-error-messages'
 import {
   codeToAttribution,
   codeToDisplay,
@@ -17,6 +21,7 @@ import {
   readLLMErrorFromFrame,
   readLLMErrorFromReplayFrame,
   sanitizeLegacyErrorMessage,
+  type LLMError,
   type LLMErrorCode,
 } from './llm-error'
 
@@ -33,6 +38,9 @@ const ALL_CODES: LLMErrorCode[] = [
   'request_too_large',
   'provider_auth_failed',
   'rate_limited',
+  // provider-messages spec (C-5/C-6, D2): the billing verdict and the
+  // retirement verdict join the enum — contract wave landed the codes.
+  'quota_billing',
   'network',
   // Founder decision 2026-09-14: a streaming call aborted for total silence.
   'provider_stalled',
@@ -45,6 +53,8 @@ const ALL_CODES: LLMErrorCode[] = [
   'agent_not_configured',
   'workspace_unavailable',
   'model_unavailable',
+  // provider-messages spec (C-24/MR-1..MR-3, D2): retirement verdict.
+  'model_retired',
   // ADR-066 / ADR-067 / ADR-068 (A-CONTRACT commit):
   'needs_provider',
   'model_unassigned',
@@ -360,5 +370,152 @@ describe('llm-error — sanitizeLegacyErrorMessage (D5)', () => {
 
   it('passes an empty string through unchanged (never crashes on empty input)', () => {
     expect(sanitizeLegacyErrorMessage('')).toBe('')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// provider-messages spec RED tests — TDD rows 12 and 30.
+// Traces: RG-2, RG-3; C-14, MAJ-104, MIN-007; MAJ-001 iii; C-17.
+//
+// Oracles from the SPEC ONLY:
+//   - C-14: the SPA renders le.message ONLY when the entry carries the
+//     provider_message subtype flag — never keyed on error code alone.
+//     Own-limiter rate_limited rows never carry the flag, so their replay
+//     string stays byte-identical catalogue copy (RG-2/MIN-007 oracle).
+//   - Row 12 (RG-3): the templated codes (llmErrorProviderMessages keys:
+//     provider_auth_failed, rate_limited, quota_billing, model_retired)
+//     render le.message WHEN FLAGGED; every non-flagged code keeps catalogue
+//     copy.
+//   - MAJ-104/C-17: the flag rides the replay carrier (LLMErrorReplay), so
+//     the frame readers must propagate it — live (readLLMErrorFromFrame) and
+//     replay (readLLMErrorFromReplayFrame).
+//
+// ASSERTION-RED: getLLMErrorDisplay ignores provider_message today (the
+// trust gate does not exist), and the frame readers drop the flag field.
+// The unflagged halves are characterization pins — the spec keeps today's
+// rendering for every entry without the flag.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('provider-messages — subtype trust gate (rows 12, 30)', () => {
+  // The codes whose catalogue entries carry the provider_message template
+  // variant (§6/OBS-002) — derived from the generated catalogue, not from a
+  // hand-kept list.
+  const TEMPLATED = Object.keys(llmErrorProviderMessages) as LLMErrorCode[]
+
+  it('row 12/RG-3: a flagged entry renders le.message for every templated code', () => {
+    expect(TEMPLATED.length).toBe(4) // guard: the template map must not silently shrink
+    for (const code of TEMPLATED) {
+      const assembled = `PROBE-ASSEMBLED-SENTENCE-${code}`
+      const le: LLMError = {
+        code,
+        message: assembled,
+        retryable: false,
+        provider_message: true,
+      }
+      const display = getLLMErrorDisplay(le, false)
+      expect(display.message).toBe(assembled) // RED: catalogue copy renders today
+    }
+  })
+
+  it('row 30/RG-2/MIN-007: every code without the flag keeps byte-identical catalogue copy, even with a message set', () => {
+    for (const code of ALL_CODES) {
+      const le: LLMError = {
+        code,
+        message: `PROBE-INTERNAL-TEXT-${code}`, // e.g. the own-limiter's internal string
+        retryable: false,
+      }
+      const display = getLLMErrorDisplay(le, false)
+      if (code === 'delegated_task_limit') {
+        // The kept pre-existing trusted exception (spec: "the existing
+        // delegated_task_limit exception keeps working unchanged") — its
+        // controller-authored message renders even unflagged.
+        expect(display.message).toBe(le.message)
+        continue
+      }
+      expect(display.message).toBe(codeToDisplay[code]) // pin: passes today; the gate must never regress it
+    }
+  })
+
+  it('row 30: own-limiter rate_limited replay string stays byte-identical (RG-2 oracle)', () => {
+    // The own-limiter persists rate_limited rows with internal text and no
+    // flag — the trust gate is the FLAG, so the internal text must never
+    // render, live or on replay.
+    const le: LLMError = {
+      code: 'rate_limited',
+      message: 'provider returned 429 after 3 attempts',
+      retryable: false,
+    }
+    const display = getLLMErrorDisplay(le, false)
+    expect(display.message).toBe(codeToDisplay['rate_limited'])
+    expect(display.message).not.toBe(le.message)
+  })
+
+  it('MAJ-104/C-17: the live frame reader propagates the provider_message flag', () => {
+    const frame = {
+      type: 'error',
+      payload: {
+        llm_error: {
+          code: 'quota_billing',
+          message: 'PROBE-ASSEMBLED-SENTENCE',
+          retryable: false,
+          provider_message: true,
+        },
+      },
+    }
+    const le = readLLMErrorFromFrame(frame)
+    expect(le).toBeDefined()
+    expect(le?.provider_message).toBe(true) // RED: reader drops the flag today
+  })
+
+  it('MAJ-104/C-17: the replay frame reader propagates the provider_message flag', () => {
+    const replay = {
+      type: 'replay_error',
+      payload: {
+        llm_error: {
+          code: 'quota_billing',
+          message: 'PROBE-ASSEMBLED-SENTENCE',
+          retryable: false,
+          provider_message: true,
+        },
+      },
+    }
+    const le = readLLMErrorFromReplayFrame(replay)
+    expect(le).toBeDefined()
+    expect(le?.provider_message).toBe(true) // RED: reader drops the flag today
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// provider-messages spec RED tests — TDD row 6, TS half (C-3/C-4, OBS-002,
+// MAJ-103). Go half: pkg/api/generated/provider_messages_catalogue_test.go.
+//
+// Oracles from the SPEC ONLY (§6 + §7.1 item 5):
+//   - Bijection (C-3/C-4): the codes carrying a provider_message variant are
+//     exactly the spec §6 templated set — provider_auth_failed, rate_limited,
+//     quota_billing, model_retired — both directions.
+//   - Closed-slot token check (OBS-002): every template's slots come from the
+//     closed set {provider}, {answered_model}, {unavailable_model}.
+//
+// CHARACTERIZATION PIN, green-today-by-design: Wave 1 (contracts) landed this
+// contract data; these assertions guard it against drift. Expected values
+// derive from §6, not from the implementation.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('provider-messages — row 6 TS half: provider_message catalogue bijection + closed slots (C-3/C-4, OBS-002)', () => {
+  const SPEC_TEMPLATED = ['provider_auth_failed', 'rate_limited', 'quota_billing', 'model_retired']
+  const CLOSED_SLOTS = ['provider', 'answered_model', 'unavailable_model']
+
+  it('C-3/C-4 bijection: exactly the §6 templated codes carry a provider_message variant, both directions', () => {
+    const keys = Object.keys(llmErrorProviderMessages).sort()
+    expect(keys).toEqual([...SPEC_TEMPLATED].sort())
+    expect(keys.length).toBe(4)
+  })
+
+  it('OBS-002 closed-slot check: every template uses only the closed slot vocabulary', () => {
+    for (const [code, tmpl] of Object.entries(llmErrorProviderMessages)) {
+      const slots = [...String(tmpl).matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1])
+      expect(slots.length, `template for ${code} has at least one slot`).toBeGreaterThan(0)
+      for (const slot of slots) {
+        expect(CLOSED_SLOTS, `slot {${slot}} in ${code} must be in the closed set`).toContain(slot)
+      }
+    }
   })
 })

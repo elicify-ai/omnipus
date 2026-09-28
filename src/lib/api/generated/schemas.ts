@@ -1703,14 +1703,32 @@ type IntegrationProvidersResponse = {
   voice: Array<IntegrationProvider>;
   active_search?: string | undefined;
   active_voice?: string | undefined;
+  default_search?: string | undefined;
+  fallback_search?: (string | null) | undefined;
+  fallback_ignored_reason?: string | undefined;
+  native_search_in_effect?: boolean | undefined;
 };
 type IntegrationProvider = {
-  id: string;
+  id:
+    | "brave"
+    | "tavily"
+    | "perplexity"
+    | "duckduckgo"
+    | "searxng"
+    | "glm"
+    | "baidu"
+    | "exa"
+    | "elevenlabs"
+    | "groq"
+    | "audio-model";
   kind: "search" | "voice";
   display_name: string;
   configured: boolean;
   requires_key: boolean;
   active?: boolean | undefined;
+  usable?: boolean | undefined;
+  fallback?: boolean | undefined;
+  fallback_automatic?: boolean | undefined;
 };
 type Skill = {
   revision: ConfigurationRevision;
@@ -2979,12 +2997,27 @@ export const ReAuthResponse = z.object({
   expires_in: z.number().int(),
 });
 export const IntegrationProvider: z.ZodType<IntegrationProvider> = z.object({
-  id: z.string(),
+  id: z.enum([
+    "brave",
+    "tavily",
+    "perplexity",
+    "duckduckgo",
+    "searxng",
+    "glm",
+    "baidu",
+    "exa",
+    "elevenlabs",
+    "groq",
+    "audio-model",
+  ]),
   kind: z.enum(["search", "voice"]),
   display_name: z.string(),
   configured: z.boolean(),
   requires_key: z.boolean(),
   active: z.boolean().optional(),
+  usable: z.boolean().optional(),
+  fallback: z.boolean().optional(),
+  fallback_automatic: z.boolean().optional(),
 });
 export const IntegrationProvidersResponse: z.ZodType<IntegrationProvidersResponse> =
   z.object({
@@ -2992,11 +3025,16 @@ export const IntegrationProvidersResponse: z.ZodType<IntegrationProvidersRespons
     voice: z.array(IntegrationProvider),
     active_search: z.string().optional(),
     active_voice: z.string().optional(),
+    default_search: z.string().optional(),
+    fallback_search: z.string().nullish(),
+    fallback_ignored_reason: z.string().optional(),
+    native_search_in_effect: z.boolean().optional(),
   });
 export const IntegrationProviderUpdateRequest = z.object({
   kind: z.enum(["search", "voice"]),
   api_key: z.string().optional(),
   active: z.boolean().optional(),
+  fallback: z.boolean().optional(),
 });
 export const TranscribeResponse = z.object({
   text: z.string(),
@@ -8671,7 +8709,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/integrations/providers",
     alias: "getIntegrationProviders",
-    description: `Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+    description: `Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. ADR-096: the response also carries the resolved web-search roles (default_search, fallback_search) and each search row reports usable and its fallback flags, built from post-reload state. Requires authentication.
 `,
     requestFormat: "json",
     response: IntegrationProvidersResponse,
@@ -8692,7 +8730,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/integrations/providers/:id",
     alias: "updateIntegrationProvider",
-    description: `Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
+    description: `Stores an API key and/or assigns the provider its role (FR-12.1). ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none (&quot;No fallback&quot;), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 (&quot;needs an API key&quot;). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
 `,
     requestFormat: "json",
     parameters: [
@@ -14622,7 +14660,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message"]);
 
 export const AuthFrame = z
   .object({
@@ -14766,18 +14804,27 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
+    facts: z
+    .object({
+      provider: z.string().max(256).optional(),
+      model: z.string().max(256).optional(),
+      request_id: z.string().max(256).optional(),
+    })
+    .strict().optional(),
+    provider_message: z.boolean().optional(),
   })
   .strict();
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
+    provider_message: z.boolean().optional(),
   })
   .strict();
 
@@ -15048,6 +15095,48 @@ export const RateLimitFrame = z
     agent_id: z.string().optional(),
     tool: z.string().max(128).optional(),
     seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ProviderRetryFrame = z
+  .object({
+    type: z.literal("provider_retry"),
+    session_id: z.string().min(1).max(128),
+    turn_id: z.string().min(1).max(128),
+    provider: z.string().min(1).max(256),
+    model: z.string().min(1).max(256),
+    retry_at: z.string(),
+    retry_after_seconds: z.number().int().min(1),
+    sent_at: z.string(),
+    attempt: z.number().int().min(2),
+    max_attempts: z.number().int().min(1),
+    error_code: z.string().max(64),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ProviderFallbackFrame = z
+  .object({
+    type: z.literal("provider_fallback"),
+    session_id: z.string().min(1).max(128),
+    turn_id: z.string().min(1).max(128),
+    answered_model: z.string().min(1).max(256),
+    unavailable_model: z.string().min(1).max(256),
+    unavailable_code: z.enum(["rate_limited", "model_retired"]),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ProviderFallbackNote = z
+  .object({
+    type: z.literal("replay_provider_fallback"),
+    session_id: z.string().min(1).max(128),
+    entry_id: z.string().min(1).max(128),
+    timestamp: z.string(),
+    answered_model: z.string().min(1).max(256).optional(),
+    unavailable_model: z.string().min(1).max(256).optional(),
+    unavailable_code: z.enum(["rate_limited", "model_retired"]).optional(),
+    message: z.string().min(1).max(4096),
   })
   .strict();
 
@@ -15875,6 +15964,9 @@ export const WsFrame = z.discriminatedUnion("type", [
   ReplayErrorFrame,
   ToolResultProjectionFrame,
   RateLimitFrame,
+  ProviderRetryFrame,
+  ProviderFallbackFrame,
+  ProviderFallbackNote,
   LibraryChangedFrame,
   MediaFrame,
   AgentSwitchedFrame,
