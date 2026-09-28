@@ -46,12 +46,14 @@ function findOwnedPanelPopout(panelId: PanelId, popoutId: string): OwnedPanelPop
   const direct = ownedPopouts.get(`popout:${popoutId}`)
   if (direct?.identity.panelId === panelId) return direct
   if (panelId !== 'library' || popoutId !== LEGACY_LIBRARY_HANDOFF_ID) return undefined
+  // Old Library children predate pop-out ids. Falling back is unambiguous only
+  // while exactly one Library child is owned; otherwise no signal is routed.
   const libraries = [...ownedPopouts.values()].filter((entry) => entry.identity.panelId === 'library')
   return libraries.length === 1 ? libraries[0] : undefined
 }
 
 function findOwned(identity: PanelIdentity, handle: Window): OwnedPanelPopout | undefined {
-  const direct = ownedPopouts.get(panelIdentityKey(identity))
+  const direct = ownedPopouts.get(`identity:${panelIdentityKey(identity)}`)
   if (direct?.handle === handle) return direct
   return [...ownedPopouts.values()].find((entry) => entry.handle === handle)
 }

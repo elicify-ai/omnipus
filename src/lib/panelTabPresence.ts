@@ -23,16 +23,19 @@ const PRESENCE_CHANNEL_NAME = 'omnipus-panel-tab-presence'
 const PRESENCE_HEARTBEAT_MS = 1_000
 const PRESENCE_STALE_MS = 3_500
 
+/** Per-tab capability that prevents a replayed focus message targeting another tab. */
+type FocusNonce = string
+
 type PanelPresenceMessage = // not-wire-format: same-origin browser-tab lifecycle signal; never crosses the gateway or persists
-  | { type: 'presence'; tabId: string; identityKey: string; focusNonce: string; sentAt: number }
+  | { type: 'presence'; tabId: string; identityKey: string; focusNonce: FocusNonce; sentAt: number }
   | { type: 'leave'; tabId: string }
   | { type: 'request' }
-  | { type: 'focus'; tabId: string; focusNonce: string }
-  | { type: 'focus-failed'; tabId: string; focusNonce: string }
+  | { type: 'focus'; tabId: string; focusNonce: FocusNonce }
+  | { type: 'focus-failed'; tabId: string; focusNonce: FocusNonce }
 
 type PresenceEntry = { // not-wire-format: in-memory same-origin presence cache entry, never serialized or sent to the gateway
   identityKey: string
-  focusNonce: string
+  focusNonce: FocusNonce
   seenAt: number
 }
 
@@ -354,7 +357,11 @@ export function announcePanelTabPresence(initialIdentity: PanelIdentity): PanelP
 
   return {
     update(nextIdentity) {
-      if (stopped || !acceptPresence(nextIdentity)) return
+      if (stopped) return
+      if (!acceptPresence(nextIdentity)) {
+        warnInvalidIdentity()
+        return
+      }
       localIdentityByOpaqueKey.delete(identityKey)
       identity = nextIdentity
       identityKey = panelPresenceKey(nextIdentity)
