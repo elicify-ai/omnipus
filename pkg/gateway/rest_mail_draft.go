@@ -8,7 +8,6 @@ package gateway
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -188,7 +187,7 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 	cleanupWarn := ""
 	if derr := client.DeleteDraft(r.Context(), cur.UID); derr != nil {
 		cleanupWarn = "the draft was updated, but deleting the old copy failed"
-		slog.Warn("rest: old draft copy delete failed", "agent_id", agentID, "error", derr)
+		logsafeWarn("rest: old draft copy delete failed", "agent_id", agentID, "error", derr)
 	}
 	draftSendForget(out.MessageID)
 	auditMail(a, audit.EventMailPanelDraftUpdated, audit.DecisionAllow, map[string]any{
@@ -514,13 +513,13 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		resp.SentSaved = false
 		sw := "the message was sent, but saving to the Sent folder failed"
 		resp.SaveWarning = &sw
-		slog.Warn("rest: draft sent copy APPEND failed", "agent_id", agentID, "error", aerr)
+		logsafeWarn("rest: draft sent copy APPEND failed", "agent_id", agentID, "error", aerr)
 	}
 	cleanupWarn := ""
 	expunged, derr := client.DeleteDraftStatus(r.Context(), cur.UID)
 	if derr != nil {
 		cleanupWarn = "the message was sent, but deleting the draft copy failed"
-		slog.Warn("rest: draft cleanup after send failed", "agent_id", agentID, "error", derr)
+		logsafeWarn("rest: draft cleanup after send failed", "agent_id", agentID, "error", derr)
 	}
 	resp.DraftCleanupWarning = nil
 	if cleanupWarn != "" {

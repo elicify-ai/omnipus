@@ -6,7 +6,6 @@ package gateway
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -53,7 +52,7 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 				// "state_unreadable" is a load-failure class, deliberately
 				// outside pkg/email's MC-8 transport-failure enum - this is
 				// not a mail-server failure.
-				slog.Warn("rest: mail summary state load failed; rendering unreadable state",
+				logsafeWarn("rest: mail summary state load failed; rendering unreadable state",
 					"agent_id", agentID, "workspace_id", workspaceID, "error", err)
 				cls := "state_unreadable"
 				row.LastErrorClass = &cls

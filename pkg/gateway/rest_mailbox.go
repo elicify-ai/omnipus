@@ -195,7 +195,7 @@ func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID, workspaceID st
 	if strings.TrimSpace(mb.PasswordRef) != "" {
 		ok, err := a.credentialRefResolves(mb.PasswordRef)
 		if err != nil {
-			slog.Error("rest: mailbox credential check", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+			logsafeError("rest: mailbox credential check", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 			jsonErr(w, http.StatusInternalServerError,
 				"credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry")
 			return
@@ -341,7 +341,7 @@ func (sm *restAPISetAgentMailbox) storePassword() bool {
 	// stored mailbox can authenticate the moment its ref is persisted.
 	if sm.passwordProvided && !sm.clearPassword {
 		if _, err := sm.a.storeCredential(sm.refName, *sm.req.Password); err != nil {
-			slog.Error("rest: store mailbox credential", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
+			logsafeError("rest: store mailbox credential", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
 			jsonErr(sm.w, http.StatusInternalServerError, fmt.Sprintf("could not store mailbox password: %v", err))
 			return true
 		}
@@ -463,7 +463,7 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 	}); err != nil {
 		if errors.Is(err, errMailboxEntryMalformed) {
 			msg := fmt.Sprintf("mailboxes entry for agent %q is malformed (mixed legacy/nested shape)", sm.agentID)
-			slog.Error(
+			logsafeError(
 				"rest: configure mailbox: malformed entry",
 				"agent_id",
 				sm.agentID,
@@ -475,7 +475,7 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 			jsonErr(sm.w, http.StatusInternalServerError, msg)
 			return true
 		}
-		slog.Error("rest: configure mailbox", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
+		logsafeError("rest: configure mailbox", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
 		jsonErr(sm.w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return true
 	}
@@ -497,7 +497,7 @@ func (sm *restAPISetAgentMailbox) reloadAndPrepareResponse() {
 	// no-op path in unit tests without the full reload pipeline wired)
 	// internally, so a non-nil error here is always a genuine reload failure.
 	if confirmed, err := sm.a.triggerReloadAndWaitOutcome(); err != nil {
-		slog.Error(
+		logsafeError(
 			"rest: mailbox configure reload failed",
 			"agent_id",
 			sm.agentID,
@@ -510,7 +510,7 @@ func (sm *restAPISetAgentMailbox) reloadAndPrepareResponse() {
 			"config saved but in-memory reload failed; restart the gateway or retry")
 		return
 	} else if !confirmed {
-		slog.Warn(
+		logsafeWarn(
 			"rest: mailbox configure reload did not confirm within the poll window; "+
 				"email tools may not yet reflect the new mailbox state",
 			"agent_id", sm.agentID,
@@ -592,7 +592,7 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 	}); err != nil {
 		if errors.Is(err, errMailboxEntryMalformed) {
 			msg := fmt.Sprintf("mailboxes entry for agent %q is malformed (mixed legacy/nested shape)", agentID)
-			slog.Error(
+			logsafeError(
 				"rest: delete mailbox: malformed entry",
 				"agent_id",
 				agentID,
@@ -604,7 +604,7 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 			jsonErr(w, http.StatusInternalServerError, msg)
 			return
 		}
-		slog.Error("rest: delete mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+		logsafeError("rest: delete mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
@@ -615,10 +615,10 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 	// use) and the legacy per-agent key, so installs migrated from the
 	// pre-pair-addressing flat shape don't orphan their blob either.
 	if err := a.removeStoredCredential(mailboxCredKey(agentID, workspaceID)); err != nil {
-		slog.Error("rest: delete mailbox credential", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+		logsafeError("rest: delete mailbox credential", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 	}
 	if err := a.removeStoredCredential(legacyMailboxCredKey(agentID)); err != nil {
-		slog.Error("rest: delete legacy mailbox credential", "agent_id", agentID, "error", err)
+		logsafeError("rest: delete legacy mailbox credential", "agent_id", agentID, "error", err)
 	}
 
 	// triggerReloadAndWait (not a bare TriggerReload) — see setAgentMailbox's
@@ -629,7 +629,7 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 	// already durably persisted, so a genuine reload failure is logged, not
 	// surfaced as an error response (mirrors deleteAgent).
 	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
-		slog.Error(
+		logsafeError(
 			"rest: mailbox delete reload failed",
 			"agent_id",
 			agentID,
@@ -639,7 +639,7 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 			err,
 		)
 	} else if !confirmed {
-		slog.Warn(
+		logsafeWarn(
 			"rest: mailbox delete reload did not confirm within the poll window; "+
 				"deleted mailbox's email tools may still be live on the running instance",
 			"agent_id", agentID,
@@ -687,7 +687,7 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(mb.PasswordRef) != "" {
 				ok, err := a.credentialRefResolves(mb.PasswordRef)
 				if err != nil {
-					slog.Error(
+					logsafeError(
 						"rest: mailbox credential check",
 						"agent_id",
 						agentID,
@@ -778,17 +778,17 @@ func grantEmailToolAllows(homePath, agentID string) {
 			// mailbox will be saved Active but the email tools stay
 			// policy-hidden with no operator-visible signal, so this is an
 			// error, not a benign no-op.
-			slog.Error(
+			logsafeError(
 				"mailbox: agent not found in agent store — cannot grant email tool allows (mailbox will save Active but tools stay policy-hidden)",
 				"agent_id", agentID,
 			)
 			return
 		}
-		slog.Error("mailbox: could not grant email tool allows", "agent_id", agentID, "error", err)
+		logsafeError("mailbox: could not grant email tool allows", "agent_id", agentID, "error", err)
 		return
 	}
 	if len(granted) > 0 {
-		slog.Info("mailbox: granted email tool allows (absent email-tool policy filled, mailbox enabled)",
+		logsafeInfo("mailbox: granted email tool allows (absent email-tool policy filled, mailbox enabled)",
 			"agent_id", agentID, "tools", strings.Join(granted, ","))
 	}
 }
