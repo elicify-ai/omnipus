@@ -1,4 +1,5 @@
 import { type Page, expect } from '@playwright/test';
+import { selectCentralModel } from './select-model.js';
 
 export interface Credentials {
   username: string;
@@ -59,8 +60,8 @@ async function isAuthenticated(page: Page): Promise<boolean> {
  * Step 4 — provider: pick the OpenRouter Popular tile
  *           (picker-popular-openrouter) → type the key into the second-level
  *           panel (provider-detail-panel-api-key-input) → confirm
- *           (provider-detail-panel-continue) → choose the first model
- *           (onboarding-model-select, then the first onboarding-model-* item;
+ *           (provider-detail-panel-continue) → choose the central e2e model
+ *           (onboarding-model-select → the tests/e2e/e2e-model.json entry;
  *           choosing auto-probes it, FR-029) → "Finish" once the probe passed
  * Done   — "Start chatting" on the Meet-your-Assistant screen
  *
@@ -107,12 +108,16 @@ async function completeOnboarding(page: Page, creds: Credentials): Promise<void>
   await expect(page.getByTestId('onboarding-provider-summary')).toBeVisible();
 
   // Choosing a model auto-probes it (FR-029); Finish enables only when the
-  // probe for THAT model passed.
-  await page.getByTestId('onboarding-model-select').click();
-  await page
-    .locator('[data-testid^="onboarding-model-"]:not([data-testid="onboarding-model-select"])')
-    .first()
-    .click();
+  // probe for THAT model passed. The suite onboards on the CENTRAL e2e model
+  // (tests/e2e/e2e-model.json) — the same model every real-LLM turn in this
+  // suite runs on — never "whatever the catalog lists first".
+  // selectCentralModel types the slug into the picker's search box so the
+  // row renders out of the virtualised catalog list, and fails closed
+  // naming the setting if the catalog no longer offers it.
+  await selectCentralModel(page, {
+    triggerTestId: 'onboarding-model-select',
+    itemTestIdPrefix: 'onboarding-model-',
+  });
   const finishBtn = page.getByRole('button', { name: /^finish$/i });
   await expect(finishBtn).toBeEnabled({ timeout: 30_000 });
   await finishBtn.click();

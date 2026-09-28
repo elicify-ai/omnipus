@@ -32,14 +32,30 @@ jobs:
         # -tags goolm,stdjson required — main.go is //go:build stdjson gated.
         run: CGO_ENABLED=0 go build -tags goolm,stdjson -o omnipus ./cmd/omnipus/
 
+      - name: Read central e2e model
+        # One committed source of truth for the real-LLM model id. Every model
+        # literal in live config is banned (scripts/check-no-hardcoded-e2e-model.sh),
+        # so the run step below derives AGENT_MODEL/JUDGE_MODEL from it.
+        run: |
+          m=$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json)
+          if [ -z "$m" ]; then
+            echo "::error::tests/e2e/e2e-model.json: .model is missing, empty, or whitespace-only" >&2
+            exit 1
+          fi
+          echo "OMNIPUS_E2E_MODEL=$m" >> "$GITHUB_ENV"
+
       - name: Run evals
         env:
           OPENROUTER_API_KEY_EVAL: ${{ secrets.OPENROUTER_API_KEY_EVAL }}
           OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_EVAL }}
-          AGENT_MODEL: openrouter/z-ai/glm-5-turbo
-          JUDGE_MODEL: openrouter/anthropic/claude-sonnet-4.6
           OMNIPUS_BIN: ./omnipus
         run: |
+          # Agent AND judge follow the ONE central setting (founder decision
+          # 2026-09-27) — the openrouter/ prefix matches this runner's slug
+          # convention (callJudge strips it before the API call).
+          : "${OMNIPUS_E2E_MODEL:?OMNIPUS_E2E_MODEL is not set — the 'Read central e2e model' step must run first}"
+          export AGENT_MODEL="openrouter/$OMNIPUS_E2E_MODEL"
+          export JUDGE_MODEL="openrouter/$OMNIPUS_E2E_MODEL"
           mkdir -p evals/results
           go run ./evals/cmd/eval-runner \
             --scenarios evals/scenarios \
