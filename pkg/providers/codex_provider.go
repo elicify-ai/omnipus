@@ -9,6 +9,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	orc "github.com/elicify-ai/omnipus/pkg/providers/openai_responses_common"
@@ -18,6 +19,12 @@ const (
 	codexDefaultModel        = "gpt-5.3-codex"
 	codexDefaultInstructions = "You are Codex, a coding assistant."
 )
+
+// reasoningEffortUnsetToken is C5's literal unset token: "default" means send
+// nothing (D9). The owning symbol is pkg/agent/reasoning_effort.go's
+// unexported constant; this adapter mirrors the value because importing
+// pkg/agent from pkg/providers would be an import cycle.
+const reasoningEffortUnsetToken = "default"
 
 type CodexProvider struct {
 	client          *openai.Client
@@ -243,6 +250,22 @@ func buildCodexParams(
 	// See: https://platform.openai.com/docs/guides/prompt-caching
 	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" {
 		params.PromptCacheKey = openai.Opt(cacheKey)
+	}
+
+	// Reasoning effort (D32, spec test 42): llmOpts["reasoning_effort"]
+	// (WP-G's C5 output, pkg/agent/loop_run_turn.go::prepareLLMRequest) maps
+	// onto the Responses request's reasoning object as reasoning.effort=<level>
+	// and nothing else — no summary, no generate_summary rides along. The
+	// unset token "default", an empty string, a wrong-typed value, and a
+	// stale level the API no longer routes all degrade to the provider
+	// default (T1/SC-007): Reasoning stays the zero shared.ReasoningParam,
+	// whose "reasoning,omitzero" tag omits the whole object from the wire
+	// (D9 — absence is the send-nothing signal, never a placeholder).
+	if effort, ok := options["reasoning_effort"].(string); ok && effort != "" && effort != reasoningEffortUnsetToken {
+		switch effort {
+		case "none", "minimal", "low", "medium", "high", "xhigh":
+			params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffort(effort)}
+		}
 	}
 
 	if len(tools) > 0 || enableWebSearch {

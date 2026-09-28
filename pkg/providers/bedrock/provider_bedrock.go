@@ -185,7 +185,7 @@ func (p *Provider) Chat(
 		defer cancel()
 	}
 
-	payload, err := json.Marshal(buildConverseRequest(messages, tools, options))
+	payload, err := json.Marshal(buildConverseRequest(messages, tools, model, options))
 	if err != nil {
 		return nil, fmt.Errorf("bedrock converse request: %w", err)
 	}
@@ -259,6 +259,13 @@ type converseRequest struct {
 	System          []systemContentBlock `json:"system,omitempty"`
 	InferenceConfig *inferenceConfig     `json:"inferenceConfig,omitempty"`
 	ToolConfig      *toolConfiguration   `json:"toolConfig,omitempty"`
+	// AdditionalModelRequestFields carries family-native fields Bedrock
+	// Converse passes through to the model verbatim (D32's effort
+	// translation). Nil omits the whole key from the wire — never an empty
+	// object (D9). Outbound third-party API payload, not a gateway/SPA wire
+	// type (not-wire-format: Bedrock Converse passthrough field, upstream
+	// contract, no Omnipus contract schema applies).
+	AdditionalModelRequestFields json.RawMessage `json:"additionalModelRequestFields,omitempty"`
 }
 
 type bedrockMessage struct {
@@ -320,7 +327,7 @@ type inferenceConfig struct {
 	Temperature *float32 `json:"temperature,omitempty"`
 }
 
-func buildConverseRequest(messages []Message, tools []ToolDefinition, options map[string]any) converseRequest {
+func buildConverseRequest(messages []Message, tools []ToolDefinition, model string, options map[string]any) converseRequest {
 	converted, system := convertMessages(messages)
 	request := converseRequest{Messages: converted, System: system}
 	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok && maxTokens > 0 {
@@ -340,7 +347,88 @@ func buildConverseRequest(messages []Message, tools []ToolDefinition, options ma
 	if convertedTools := convertTools(tools); convertedTools != nil && len(convertedTools.Tools) > 0 {
 		request.ToolConfig = convertedTools
 	}
+	request.AdditionalModelRequestFields = effortAdditionalModelRequestFields(model, options)
 	return request
+}
+
+// reasoningEffortUnsetToken is C5's literal unset token: "default" means send
+// nothing (D9). The owning symbol is pkg/agent/reasoning_effort.go's
+// unexported constant; this adapter mirrors the value because importing
+// pkg/agent from pkg/providers would be an import cycle.
+const reasoningEffortUnsetToken = "default"
+
+// bedrockAnthropicEffortBudgets maps the named effort levels the
+// Anthropic-family effort control recognizes (catalog dataset row 11 — low,
+// medium, high) to a deterministic fixed thinking budget per level. Budgets
+// are internal constants: the spec bans an exposed budget_tokens or
+// "adaptive" control (D32), so no level ever maps to mode "adaptive".
+var bedrockAnthropicEffortBudgets = map[string]int{
+	"low":    2048,
+	"medium": 8192,
+	"high":   16384,
+}
+
+// bedrockNovaEffortLevels is the named-level set Nova's
+// reasoningConfig.maxReasoningEffort recognizes.
+var bedrockNovaEffortLevels = map[string]struct{}{
+	"low":    {},
+	"medium": {},
+	"high":   {},
+}
+
+// effortAdditionalModelRequestFields translates llmOpts["reasoning_effort"]
+// (WP-G's C5 output, pkg/agent/loop_run_turn.go::prepareLLMRequest) into the
+// model-family-shaped additionalModelRequestFields payload (D32, spec test
+// 43): Anthropic-family models (catalog ids prefixed "anthropic.") get the
+// current Anthropic request shape — thinking (type "enabled" with the level's
+// fixed budget) plus output_config.effort — while Nova-family models (catalog
+// ids prefixed "amazon.nova-") get reasoningConfig.maxReasoningEffort. The
+// unset token "default", an empty string, a wrong-typed value, and a level the
+// target family does not recognize (including "none" — the Converse default
+// for both families already is no reasoning) all return nil, which omits the
+// ENTIRE additionalModelRequestFields key from the wire (D9 — never an empty
+// object); an unrecognized level must degrade to the provider default, never
+// block the turn with a validation error (T1/SC-007). Vendor prefix is the
+// only family signal this adapter has — there is no family-detection helper
+// to reuse.
+func effortAdditionalModelRequestFields(model string, options map[string]any) json.RawMessage {
+	effort, ok := options["reasoning_effort"].(string)
+	if !ok || effort == "" || effort == reasoningEffortUnsetToken {
+		return nil
+	}
+	model = strings.TrimSpace(model)
+	var fields map[string]any
+	switch {
+	case strings.HasPrefix(model, "anthropic."):
+		budget, ok := bedrockAnthropicEffortBudgets[effort]
+		if !ok {
+			return nil
+		}
+		fields = map[string]any{
+			"thinking":      map[string]any{"type": "enabled", "budget_tokens": budget},
+			"output_config": map[string]any{"effort": effort},
+		}
+	case strings.HasPrefix(model, "amazon.nova-"):
+		if _, ok := bedrockNovaEffortLevels[effort]; !ok {
+			return nil
+		}
+		fields = map[string]any{
+			"reasoningConfig": map[string]any{"maxReasoningEffort": effort},
+		}
+	}
+	if fields == nil {
+		return nil
+	}
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		// Unreachable for string/int-only maps; degrade to omission (T1)
+		// rather than fail the request over an effort hint.
+		logger.WarnCF("bedrock", "reasoning effort fields dropped", map[string]any{
+			"model": model, "effort": effort, "error": err.Error(),
+		})
+		return nil
+	}
+	return raw
 }
 
 // convertMessages preserves the existing Converse mapping: system prompts are
