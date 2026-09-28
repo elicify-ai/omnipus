@@ -209,7 +209,7 @@ func (p *mailPreviewRoutes) handleSignatureMint(w http.ResponseWriter, r *http.R
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	var req gen.MintMailSignaturePreviewTokenJSONRequestBody
+	var req gen.MailSignaturePreviewTokenRequest
 	if !decodeMailJSON(p.api, w, r, "MailSignaturePreviewTokenRequest", &req) {
 		return
 	}
@@ -223,14 +223,22 @@ func (p *mailPreviewRoutes) handleSignatureMint(w http.ResponseWriter, r *http.R
 		jsonErr(w, http.StatusBadRequest, "signature_html must be 1..16384 characters")
 		return
 	}
+	sanitized, serr := email.SanitizeSignatureHTML(req.SignatureHtml)
+	if serr != nil {
+		jsonErr(w, http.StatusBadRequest, serr.Error())
+		return
+	}
 	// T38 (MIN-001 resolution): the signature's https images ride the
-	// existing MC-41-pinned proxy — extract at mint and bind LoadRemote so
-	// /mail-preview/img/{token}/{index} serves them, no load-images step.
-	remoteURLs := mailExtractRemoteImageURLs(req.SignatureHtml)
+	// existing MC-41-pinned proxy — extract from the FR-003-sanitized HTML,
+	// rewrite onto token-scoped paths, and bind LoadRemote so no load-images
+	// step is needed.
+	remoteURLs := mailExtractRemoteImageURLs(sanitized)
+	previewHTML := mailRewritePreviewSources(sanitized, nil, remoteURLs)
+	previewHTML = mailHardenAnchors(previewHTML)
 	token, merr := p.tokens.mint(sessionKey, mailPreviewGrant{
 		Kind:       mailPreviewKindSignature,
 		LoadRemote: true,
-		HTML:       mailSanitizeSignatureHTML(req.SignatureHtml, remoteURLs),
+		HTML:       previewHTML,
 		RemoteURLs: remoteURLs,
 	})
 	if merr != nil {
@@ -241,23 +249,6 @@ func (p *mailPreviewRoutes) handleSignatureMint(w http.ResponseWriter, r *http.R
 		return
 	}
 	jsonOK(w, gen.MailSignaturePreviewTokenResponse{Token: token, ExpiresInSeconds: int(MailSignaturePreviewTokenTTL / time.Second)})
-}
-
-// mailSanitizeSignatureHTML is the signature mint's sanitizer: the FR-003
-// stored-signature allowlist (pkg/email::SignaturePolicy — inline style,
-// tables, https+data img) plus the one preview-frame addition, the
-// token-scoped image path, so the https srcs extracted above render through
-// /mail-preview/img/{token}/{index}; then the same MC-40 anchor hardening
-// the message preview applies. Residue, deliberate: an https src the exact-
-// string rewrite misses (odd attribute spacing or case) survives sanitize
-// but is CSP-dead — the frame's img-src names only the proxy path and data:
-// (MC-37), so it never renders and never fetches.
-func mailSanitizeSignatureHTML(raw string, remoteURLs []string) string {
-	p := email.SignaturePolicy()
-	p.AllowAttrs("src").Matching(mailImageSrcRe).OnElements("img")
-	rewritten := mailRewritePreviewSources(raw, nil, remoteURLs)
-	html := p.Sanitize(rewritten)
-	return mailHardenAnchors(html)
 }
 
 // mailTokenPlaceholder stands in for the token inside sanitized HTML; it is
