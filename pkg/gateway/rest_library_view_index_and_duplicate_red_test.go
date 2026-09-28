@@ -1,6 +1,6 @@
 // Omnipus — RED tests for spec "Library views, anywhere"
 // (docs/internal/specs/library-views-anywhere-spec.md), §10 TDD Plan tests
-// 59 and 27.
+// 59, 27 and 60.
 //
 // Both are BLOCKED per the qa-lead RED protocol: each depends on a mechanism
 // that does not exist anywhere in the tree today, confirmed by reading the
@@ -10,6 +10,7 @@
 //
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestDiscovery_ZeroWalksOnWarmCache$' ./pkg/gateway/
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestLibraryCopy_AutoRenamesCollidingViewName$' ./pkg/gateway/
+//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestDiscovery_CacheInvalidatedOnWrite$' ./pkg/gateway/
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -61,4 +62,19 @@ func TestLibraryCopy_AutoRenamesCollidingViewName(t *testing.T) {
 		"shared helper (pkg/records::RewriteCopiedViewIdentity, D-DUPLICATE) does not exist — " +
 		"required before a Library copy of a name-colliding view can be shown to auto-suffix the " +
 		"copy's name, per FR-VA-019 / Dataset G-1 / TDD test 27.")
+}
+
+// TestDiscovery_CacheInvalidatedOnWrite is TDD Plan test 60 (R2-MAJ-006,
+// D-VIEW-INDEX): a `.view` write must invalidate only that path's cache
+// entry; a listing immediately after must reflect the write without a
+// whole-collection re-walk.
+//
+// BLOCKED: same root cause as test 59 — there is no D-VIEW-INDEX cache at
+// all (confirmed: `grep -rn "DiscoverViewFiles\|ViewIndex\|WalkContained"
+// pkg/gateway` returns zero matches), so there is nothing for a write to
+// invalidate and nothing for a listing to read from yet.
+func TestDiscovery_CacheInvalidatedOnWrite(t *testing.T) {
+	t.Fatal("BLOCKED: no per-collection D-VIEW-INDEX cache exists anywhere in pkg/gateway — required " +
+		"before a write's per-path invalidation, and a subsequent listing's cache-vs-rewalk behavior, " +
+		"can be shown at all, per D-VIEW-INDEX / TDD test 60.")
 }
