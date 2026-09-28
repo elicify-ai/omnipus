@@ -4732,9 +4732,217 @@
       "syntax": "Tooltip#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: Tooltip's own destructured prop `className` is declared at src/components/ui/tooltip.tsx:46:67 and flows unmodified to 1 sink(s) — src/components/ui/tooltip.tsx:107:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadViewport#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadViewport#style",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockMessageRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerInput#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerSend#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerAddAttachment#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRemove#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadViewport#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockMessageRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerInput#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerSend#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerAddAttachment#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRemove#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadViewport#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadViewport#style",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockMessageRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerInput#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerSend#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerAddAttachment#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRemove#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
     }
   ],
   "reviewedBoundaries": [
+    {
+      "path": "src/components/chat/ChatScreen.agent-mention.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
     {
       "path": "src/assets/brand-logos/brand-logos-sanitized.test.ts",
       "kind": "test",
@@ -5036,17 +5244,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.agent-mention.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.agent-picker-scoping.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.agents-command.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5056,72 +5254,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.browser-handover-notice.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.cap-footer.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.combobox-aria.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.composer-card.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.delegation-event-lines.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.delegation-events-wired.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.delegation-thread-visibility.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.empty-menu-shell.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.error-detail.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.f4-ghost-thinking-indicator.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.ghost-text.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.goal-aware-thinking-indicator.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.goal-outcome.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.goal-setup-failure-line.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5136,42 +5269,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.harmful-upload.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.issue-617-replay-outcome.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.judge-verdict-thread-card.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.mid-turn-send.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.no-hardcoded-commands.test.ts",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.outbound-queue.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.partitioned-menu.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.plain-list-parity.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5181,17 +5279,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.replay.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.rest-guard.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.send-button-intercept.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5201,62 +5289,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.skills-filter.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.slash-command-readiness.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.slash-commands-error.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.tab-ring.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.thinking-indicator-context.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.tool-order.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.tool-replay-parity.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.truncation-notice-live.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.truncation-notice.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.unknown-slash.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.virtualization.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5372,11 +5405,6 @@
     },
     {
       "path": "src/components/chat/UntrustedChildText.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/__tests__/goal-card-anchoring.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
