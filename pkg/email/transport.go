@@ -1140,6 +1140,12 @@ func buildEmailBody(from, to, subject, text, inReplyTo string) string {
 		if err == nil {
 			return string(out.Transmitted)
 		}
+		// Round-8 F8 (FR-018/FR-036): the documented "helper never fails"
+		// fallback was UNLOGGED on HEAD — outgoing mail silently lost its
+		// multipart/HTML render. One WARN naming the compose fallback; the
+		// plain shape below is unchanged.
+		slog.Warn("email transport: compose fallback: building the multipart body failed, sending the plain shape",
+			"error", err)
 	}
 	var sb strings.Builder
 	sb.WriteString("From: " + fromHdr + "\r\n")
