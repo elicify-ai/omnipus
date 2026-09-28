@@ -157,19 +157,39 @@ func TestSite_CountBoundary(t *testing.T) {
 // Validator rejections: wildcard, port, scheme, and an empty entry are all
 // refused before any request.
 func TestSite_InvalidHostnameRefusal(t *testing.T) {
+	// Spec test 47 / FR-026: each malformed entry is refused ON ITS OWN, before
+	// any request. One entry per call — the validator stops at the first bad
+	// entry, so a batched call would only ever test the first one (gate round 2).
 	f := newRolesSearchFixture(t, nil, nil)
-	res := f.run(map[string]any{
-		"query":           "golang",
-		"include_domains": []any{"*.wild.example.com", "bad.example.com:8080", "https://x.example.com", ""},
-	})
-	if !res.IsError {
-		t.Fatalf("expected refusal, got: %s", res.ForLLM)
+	bad := []string{
+		"*.wild.example.com",    // wildcard
+		"bad.example.com:8080",  // port
+		"https://x.example.com", // scheme
+		"",                      // empty
+		"user@example.com",      // userinfo
+		"example.com/path",      // path
 	}
-	if !strings.Contains(res.ForLLM, "rejected") {
-		t.Fatalf("expected rejected in refusal, got:\n%s", res.ForLLM)
-	}
-	if h := f.hitsOf("tavily"); h != 0 {
-		t.Fatalf("tavily hits = %d, want 0", h)
+	for _, host := range bad {
+		for _, key := range []string{"include_domains", "exclude_domains"} {
+			before := f.hitsOf("tavily")
+			res := f.run(map[string]any{"query": "golang", key: []any{host}})
+			if res == nil || !res.IsError {
+				got := ""
+				if res != nil {
+					got = res.ForLLM
+				}
+				t.Fatalf("%s %q was not refused:\n%s", key, host, got)
+			}
+			if !strings.Contains(res.ForLLM, "rejected") {
+				t.Fatalf("%s %q: refusal does not say rejected:\n%s", key, host, res.ForLLM)
+			}
+			if host != "" && !strings.Contains(res.ForLLM, host) {
+				t.Fatalf("%s %q: refusal does not name the rejected entry:\n%s", key, host, res.ForLLM)
+			}
+			if got := f.hitsOf("tavily"); got != before {
+				t.Fatalf("%s %q sent a request (hits %d -> %d)", key, host, before, got)
+			}
+		}
 	}
 }
 
