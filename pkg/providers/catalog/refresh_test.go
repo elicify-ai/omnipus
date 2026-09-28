@@ -248,6 +248,7 @@ func TestRefresh_Downgrade_Refused(t *testing.T) {
 
 	err := c.Refresh(context.Background())
 	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRegressed)
 
 	requireOneWarnWithReason(t, log, "regressed")
 	assert.Equal(t, "v2026.8.22", c.Version().String(), "no downgrade")
