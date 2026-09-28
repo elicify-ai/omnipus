@@ -85,6 +85,13 @@ type SteerBootRecovery struct {
 	Classifier     steer.RecordClassifier
 	Deliverer      steer.UpwardDeliverer
 	OperatorNotice func(message string)
+	// EndSessionGoal is the FD1=A pair-end hook (#947 defect 1, decision
+	// (e)three): the boot sweep terminalises steered sessions found mid-flight
+	// at boot (failInterrupted); their session-owned goal ends with the
+	// session, the reason recording the interruption. Wired by the gateway
+	// from the live AgentLoop; nil (tests, embedders) skips the pair-end —
+	// same optional-dep posture as every other field here.
+	EndSessionGoal func(sessionID string, reason string)
 }
 
 type bootSessionMessageEnvelope struct {
@@ -414,7 +421,7 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 }
 
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
-	return r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
+	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
 			return nil
 		}
@@ -423,6 +430,10 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		current.NeedsInput = nil
 		return nil
 	})
+	if err == nil && r.EndSessionGoal != nil {
+		r.EndSessionGoal(rec.SessionID, failedReasonInterrupted+": the gateway restarted while the session was mid-flight")
+	}
+	return err
 }
 
 func (r *SteerBootRecovery) terminalMessage(rec *session.LifecycleRecord) (generated.SessionMessage, steer.Outcome, error) {

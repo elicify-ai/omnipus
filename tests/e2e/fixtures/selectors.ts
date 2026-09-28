@@ -1,4 +1,4 @@
-import { type Locator, type Page, expect } from '@playwright/test';
+import { type Locator, type Page, errors, expect } from '@playwright/test';
 
 /**
  * Chat composer input — AssistantUI renders ComposerPrimitive.Input as a
@@ -171,6 +171,22 @@ export const tokenCounter = (page: Page) =>
   page.locator('[data-testid="session-token-counter"]');
 
 /**
+ * Budget for dismissStaleDialogOverlay: generous enough to drain a short
+ * queue of stacked approvals, far below any test budget, and free (instant)
+ * when there is nothing to clear.
+ */
+const DIALOG_DRAIN_BUDGET_MS = 15_000;
+
+/**
+ * Collapse whitespace and cap length — dismissal texts surface in test
+ * annotations, so keep them honest (the real dialog text) and bounded.
+ */
+const oneLineDialogText = (text: string): string => {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  return collapsed.length > 200 ? `${collapsed.slice(0, 200)}…` : collapsed;
+};
+
+/**
  * Dismiss any modal dialog-overlay left over from earlier state, and keep
  * dismissing until none remains. No-op (and instantly so) when no dialog is
  * open — the poll's first probe already reads 0.
@@ -216,57 +232,107 @@ export const tokenCounter = (page: Page) =>
  * Escape is pressed ONLY while an overlay is actually present: a bare Escape
  * with no dialog open cancels a streaming chat turn (the behaviour
  * cancel-cross-channel.spec.ts T23 pins), which must never happen here.
+ *
+ * RETURNS the dialogs it actually dismissed, as single-line truncated texts.
+ * A dismissal IS a server-side Deny (Escape on a live approval maps to Deny —
+ * see above), so a caller can make that Deny visible by annotating the test
+ * report per entry (bug-regression.spec.ts::dismissAndAnnotate pushes an
+ * `approval-drained` annotation for each). An empty array = nothing was
+ * dismissed. Callers that ignore the return value behave exactly as before.
+ *
+ * THROWS a genuine `errors.TimeoutError` (from @playwright/test) when an
+ * overlay outstays the 15s budget. expect.poll in the installed Playwright
+ * reports its budget expiry as a plain matcher-failure error, not a
+ * TimeoutError, so the poll is rewrapped below — giving callers a stable,
+ * class-checkable timeout. Behaviour is unchanged for callers that just let
+ * it propagate: still "throws when a dialog outstays 15s". The original
+ * error text is preserved in full inside the new message, so nothing is
+ * laundered away.
  */
 // Post-hydration quiet window (see the doc comment, reason 1): how long a
 // zero-overlay reading must HOLD before it is trusted. Chosen to cover the
 // session_state snapshot landing just after goto('/') on a cold start; it
 // spends ~2s when the page is genuinely clean and the same ~2s inside the
-// existing 15s bound when it is not — no caller's timeout is lengthened.
+// existing DIALOG_DRAIN_BUDGET_MS bound when it is not — no caller's budget
+// is lengthened.
 const DIALOG_QUIET_WINDOW_MS = 2_000;
-const DIALOG_POLL_INTERVAL_MS = 250;
-// Generous enough to drain a short queue of stacked approvals; far below any
-// test budget, and ~2s (the quiet window) when there is nothing to clear.
-const DIALOG_DISMISS_TIMEOUT_MS = 15_000;
 
-export const dismissStaleDialogOverlay = async (page: Page): Promise<void> => {
+export const dismissStaleDialogOverlay = async (page: Page): Promise<string[]> => {
   const overlay = page.locator('[data-testid="dialog-overlay"]');
-  const deadline = Date.now() + DIALOG_DISMISS_TIMEOUT_MS;
+  const dismissedDialogTexts: string[] = [];
+  // First moment of the CURRENT unbroken run of zero-overlay readings; -1
+  // while an overlay is present. A rehydrating overlay that lands mid-window
+  // resets it, so a late approval card restarts the window instead of racing
+  // it (release run 36337231197, retry #1: a first-zero return let the
+  // previous attempt's card rehydrate and block selectAgent for 357s).
   let zeroSince = -1;
-  while (Date.now() < deadline) {
-    // Re-read immediately before pressing. `count() > 0` then press is
-    // check-then-act: if the overlay closes in that window the Escape lands
-    // on the page instead, and a bare Escape with no dialog CANCELS A
-    // STREAMING TURN (the behaviour cancel-cross-channel.spec.ts T23 pins).
-    // Pressing on the overlay locator itself cannot hit the page: if the
-    // element is gone the press throws and the loop simply re-reads 0.
-    if ((await overlay.count()) > 0) {
-      zeroSince = -1;
-      try {
-        await overlay.first().press('Escape', { timeout: 1_000 });
-        console.log(
-          '[dismissStaleDialogOverlay] dismissed a dialog overlay via Escape (maps to Deny while an approval is live — ToolApprovalModal.tsx::handleDismissRequest)',
-        );
-      } catch {
-        // Overlay vanished between the count and the press — nothing to
-        // dismiss, and crucially no stray Escape reached the page.
-      }
-    } else if (zeroSince < 0) {
-      zeroSince = Date.now();
-    }
-    // A leftover modal overlay must be dismissable — it blocks every click
-    // beneath it, so leaving one up converts every later click assertion
-    // into a slow timeout instead of a clear failure. The quiet window is
-    // checked against the FIRST-zero timestamp, so a rehydrating overlay
-    // that lands mid-window restarts the window instead of racing it.
-    if (zeroSince >= 0 && Date.now() - zeroSince >= DIALOG_QUIET_WINDOW_MS) return;
-    await page.waitForTimeout(DIALOG_POLL_INTERVAL_MS);
+  try {
+    await expect
+      .poll(
+        async () => {
+          // Re-read immediately before pressing. `count() > 0` then press is
+          // check-then-act: if the overlay closes in that window the Escape lands
+          // on the page instead, and a bare Escape with no dialog CANCELS A
+          // STREAMING TURN (the behaviour cancel-cross-channel.spec.ts T23 pins).
+          // Pressing on the overlay locator itself cannot hit the page: if the
+          // element is gone the press throws and the poll simply re-reads 0.
+          if ((await overlay.count()) > 0) {
+            zeroSince = -1;
+            let dialogText: string | null = null;
+            let denied = false;
+            try {
+              // Read the dialog text BEFORE pressing so a dismissal can be
+              // reported honestly: only an Escape that actually landed is
+              // recorded — a failed read or a vanished overlay records nothing.
+              dialogText = await overlay
+                .first()
+                .textContent({ timeout: 1_000 })
+                .catch(() => null);
+              await overlay.first().press('Escape', { timeout: 1_000 });
+              denied = true;
+            } catch {
+              // Overlay vanished between the count and the press — nothing to
+              // dismiss, and crucially no stray Escape reached the page.
+            }
+            if (denied && dialogText !== null) {
+              dismissedDialogTexts.push(oneLineDialogText(dialogText));
+            }
+          }
+          const remaining = await overlay.count();
+          if (remaining > 0) {
+            zeroSince = -1;
+            return remaining;
+          }
+          if (zeroSince < 0) zeroSince = Date.now();
+          // Zero is only accepted once it has HELD for the quiet window; until
+          // then report "not yet settled" so the poll keeps sampling.
+          return Date.now() - zeroSince >= DIALOG_QUIET_WINDOW_MS ? 0 : -1;
+        },
+        // Budget rationale: see DIALOG_DRAIN_BUDGET_MS above. Intervals stay at
+        // or below the quiet window so a clean page settles in ~2s.
+        { timeout: DIALOG_DRAIN_BUDGET_MS, intervals: [250, 500, 1_000] },
+      )
+      // A leftover modal overlay must be dismissable — it blocks every click
+      // beneath it, so leaving one up converts every later click assertion
+      // into a slow timeout instead of a clear failure.
+      .toBe(0);
+  } catch (err) {
+    // Two failure modes reach here. (1) The poll budget expires: Playwright
+    // 1.61 reports that as a plain matcher-failure ExpectError, not a
+    // TimeoutError, so it is rewrapped below as a REAL errors.TimeoutError
+    // (class-checkable by the drain helpers in bug-regression.spec.ts), with
+    // the original message embedded in full. (2) A poll callback error such
+    // as a closed page propagates immediately and is NOT a timeout: it is
+    // rethrown unchanged so the drain helpers fail loudly with the real cause.
+    // Playwright does not export TargetClosedError, so it is matched by name.
+    if (err instanceof Error && err.name === 'TargetClosedError') throw err;
+    throw new errors.TimeoutError(
+      `dismissStaleDialogOverlay: dialog overlay still present (or kept rehydrating) after ` +
+        `${DIALOG_DRAIN_BUDGET_MS}ms of Escape-on-overlay retries. ` +
+        `Original error: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
-  throw new Error(
-    'dismissStaleDialogOverlay: a dialog overlay was still present (or kept rehydrating) ' +
-      `after ${DIALOG_DISMISS_TIMEOUT_MS}ms of Escape dismissals — it blocks every click ` +
-      'beneath it, so the caller would burn its budget in blocked-click retries. ' +
-      'See the fixtures/selectors.ts::dismissStaleDialogOverlay doc comment.',
-  );
+  return dismissedDialogTexts;
 };
 
 /**
