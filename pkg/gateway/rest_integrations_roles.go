@@ -472,7 +472,7 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 			return
 		}
 		if _, err := a.storeCredential(def.credRef, apiKey); err != nil {
-			slog.Error("integrations: credential store failed", "provider", id, "error", err)
+			slog.Error("integrations: credential store failed", "provider", def.id, "error", err)
 			jsonErr(w, http.StatusServiceUnavailable,
 				"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets")
 			return
@@ -483,7 +483,7 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		return applyIntegrationRoles(m, def, write)
 	}); err != nil {
-		slog.Error("integrations: config update failed", "provider", id, "error", err)
+		slog.Error("integrations: config update failed", "provider", def.id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "failed to save integration config")
 		return
 	}
@@ -492,9 +492,9 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 	if logger := a.agentLoop.AuditLogger(); logger != nil {
 		if err := audit.EmitSecuritySettingChange(
 			r.Context(), logger, "integrations.provider",
-			map[string]any{"provider": id},
+			map[string]any{"provider": def.id},
 			map[string]any{
-				"provider": id, "kind": def.kind, "key_set": write.keySet,
+				"provider": def.id, "kind": def.kind, "key_set": write.keySet,
 				"active": write.setActive, "fallback_set": write.fallbackSet,
 				"fallback": write.fallbackOn,
 			},
@@ -511,7 +511,7 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 		if reloadErr != nil {
 			reason = reloadErr.Error()
 		}
-		slog.Error("integrations: config saved but reload failed", "provider", id, "reason", reason)
+		slog.Error("integrations: config saved but reload failed", "provider", def.id, "reason", reason)
 		jsonErr(w, http.StatusInternalServerError,
 			fmt.Sprintf("%s integration saved but config reload failed: %s", def.displayName, reason))
 		return
