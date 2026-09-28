@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
@@ -34,6 +34,7 @@ interface DefaultWorkspaceRedirectProps {
 export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedirectProps) {
   const navigate = useNavigate()
   const documentLeavingRef = useRef(false)
+  const [documentLeaving, setDocumentLeaving] = useState(false)
 
   const { data: workspaces, isError, isLoading, isFetching, refetch } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
@@ -46,12 +47,18 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
   useEffect(() => {
     const markDocumentLeaving = () => {
       documentLeavingRef.current = true
+      setDocumentLeaving(true)
     }
-    window.addEventListener('beforeunload', markDocumentLeaving)
+    const restoreDocument = (event: PageTransitionEvent) => {
+      if (!event.persisted) return
+      documentLeavingRef.current = false
+      setDocumentLeaving(false)
+    }
     window.addEventListener('pagehide', markDocumentLeaving)
+    window.addEventListener('pageshow', restoreDocument)
     return () => {
-      window.removeEventListener('beforeunload', markDocumentLeaving)
       window.removeEventListener('pagehide', markDocumentLeaving)
+      window.removeEventListener('pageshow', restoreDocument)
     }
   }, [])
 
@@ -62,14 +69,14 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
       return
     }
     const target = workspaces?.find((w) => w.is_default) ?? workspaces?.[0]
-    if (target && !documentLeavingRef.current) {
+    if (target && !documentLeavingRef.current && !documentLeaving) {
       void navigate({
         to: `/workspaces/$workspaceId/${tab}`,
         params: { workspaceId: target.id },
         replace: true,
       })
     }
-  }, [workspaces, isLoading, isError, navigate, tab])
+  }, [workspaces, isLoading, isError, navigate, tab, documentLeaving])
 
   if (isError) {
     return (

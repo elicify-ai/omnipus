@@ -17,11 +17,12 @@ import { DefaultWorkspaceRedirect } from './DefaultWorkspaceRedirect'
 
 function renderRedirect(tab?: 'chat' | 'board' | 'calendar') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
       <DefaultWorkspaceRedirect tab={tab} />
     </QueryClientProvider>,
   )
+  return { ...rendered, client }
 }
 
 const DEFAULT_WS = {
@@ -75,25 +76,55 @@ describe('DefaultWorkspaceRedirect — folded-route redirect map', () => {
     })
   })
 
-  it('does not issue a late SPA redirect after a full-document navigation starts', async () => {
+  it('suppresses a late redirect when workspace data settles after pagehide', async () => {
     let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
     mockFetchWorkspaces.mockReturnValue(
       new Promise((resolve) => {
         resolveWorkspaces = resolve
       }),
     )
-    renderRedirect()
+    const { client } = renderRedirect()
     await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
 
-    window.dispatchEvent(new Event('beforeunload'))
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
     await act(async () => {
       resolveWorkspaces([DEFAULT_WS])
     })
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 100))
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
     })
 
     expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('redirects after persisted pageshow restores a document whose data settled while hidden', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+    expect(mockNavigate).not.toHaveBeenCalled()
+
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/workspaces/$workspaceId/chat',
+        params: { workspaceId: 'ws-default' },
+        replace: true,
+      })
+    })
   })
 })
 
