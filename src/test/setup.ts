@@ -6,10 +6,34 @@ import {
   resetTestIntersectionObservers,
 } from './intersectionObserver'
 
+// Captured before any test file can install fake timers, so the flush below
+// always waits on the real clock.
+const realSetTimeout = globalThis.setTimeout
+
 // Unmount rendered components after each test to prevent DOM bleed between tests
 // when running the full vitest suite (N5 fix: 5 tests failed due to leaked DOM state).
-afterEach(() => {
+//
+// Then yield one real macrotask before the test (and, for the last test, the
+// file) is allowed to finish. Radix FocusScope — inside every Dialog, Sheet,
+// AlertDialog and Popover — schedules a `setTimeout(0)` in its unmount cleanup
+// that builds `new CustomEvent(...)` from the GLOBAL constructor and dispatches
+// it on the unmounted container. If that timer fires after Vitest has torn the
+// file's jsdom environment down, the global is Node's own CustomEvent, jsdom
+// rejects it, and the shard fails on an unhandled
+// "TypeError: Failed to execute 'dispatchEvent' on 'EventTarget': parameter 1
+// is not of type 'Event'" (CI shard components-agents-settings, reported
+// against ProvidersSection.awsRegion.test.tsx). Node runs equal-duration
+// timers in scheduling order, so awaiting a 0ms timer scheduled AFTER
+// cleanup() guarantees that every 0ms timer queued synchronously during
+// cleanup() — FocusScope's included — has fired while jsdom is still live.
+// That is the whole guarantee. NOT covered: a timer with a longer delay, a
+// timer queued later (from a promise or from another timer's callback,
+// including a 0ms timer that re-queues itself), and timers on a fake clock
+// (they only fire when the test advances that clock). Regression guard:
+// src/test/setup.flushUnmountTimers.test.tsx.
+afterEach(async () => {
   cleanup()
+  await new Promise<void>((resolve) => realSetTimeout(resolve, 0))
 })
 
 // IntersectionObserver (ADR-083 EMB-065/066 — the inline-embed mount budget).

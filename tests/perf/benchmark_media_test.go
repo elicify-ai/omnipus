@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 )
 
 const mediaEntries = 10_000
@@ -20,7 +21,7 @@ func BenchmarkMediaStoreResolve(b *testing.B) {
 	b.ReportAllocs()
 
 	dir := b.TempDir()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(b)
 
 	// Create one real file to register under all 10k refs.
 	// FileMediaStore.Store requires the file to exist at registration time.
@@ -77,7 +78,7 @@ func TestMediaResolveSLO(t *testing.T) {
 	)
 
 	dir := t.TempDir()
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	sharedFile := filepath.Join(dir, "media_payload.bin")
 	payload := make([]byte, 128)

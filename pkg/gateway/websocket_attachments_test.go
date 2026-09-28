@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"os"
+	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -16,8 +17,9 @@ import (
 // agentLoop.GetWorkspaceLibrary — mirroring how the production gateway
 // wires the agent-loop-wide media store at boot (this lightweight test
 // harness, newTestRestAPI, does not do that wiring itself).
-func mediaStoreForWorkspace(api *restAPI) media.MediaStore {
-	store := media.NewFileMediaStore()
+func mediaStoreForWorkspace(t *testing.T, api *restAPI) media.MediaStore {
+	t.Helper()
+	store := newTestFileMediaStore(t)
 	store.SetWorkspaceLibraryProvider(func(id string) (media.WorkspaceLibraryResolver, error) {
 		lib := api.agentLoop.GetWorkspaceLibrary(id)
 		if lib == nil {

@@ -80,7 +80,8 @@ async function resolveWorkspaceId(page: Page): Promise<string> {
  * that premature mid-turn blip, long before the screenshot tool has run and the
  * media frame exists. Without this guard, the subsequent img assertion's 90s
  * budget starts from that early point instead of from real turn completion,
- * silently eating into the time glm-5.2 has to finish the second tool call.
+ * silently eating into the time the central e2e model (tests/e2e/e2e-model.json) has
+ * to finish the second tool call.
  */
 async function waitForTurnFullyDone(page: Page, gapMs = 8_000): Promise<void> {
   const stopBtn = page.locator('[data-testid="stop-btn"]');
@@ -106,9 +107,9 @@ test(
   '(a) screenshot inline render: Mia screenshots example.com and renders an img',
   async ({ page }) => {
     // The screenshot flow exercises the LLM (tool selection) + Chromium
-    // (screenshot) + SPA (media render). glm-5.2 (the standard e2e model) is
-    // reliable but slower than the old gemini pick, so use an explicit generous
-    // budget rather than the 270s test.slow() ceiling.
+    // (screenshot) + SPA (media render). The central e2e model
+    // (tests/e2e/e2e-model.json) is reliable but slower than the earlier pick,
+    // so use an explicit generous budget rather than the 270s test.slow() ceiling.
     //
     // Budget (WORST-CASE ceiling, recomputed the same way chat.spec.ts (b) /
     // recap-continuity.spec.ts were fixed: test.setTimeout is a hard governor,
@@ -147,8 +148,8 @@ test(
 
     const countBefore = await assistantMessages(page).count();
     // Explicit, single-tool instruction — mirrors the reliable phrasing used by
-    // the delegate-based specs so glm-5.2 takes the screenshot itself instead of
-    // narrating or delegating.
+    // the delegate-based specs so the central e2e model (tests/e2e/e2e-model.json)
+    // takes the screenshot itself instead of narrating or delegating.
     await input.fill(
       'Use the browser tools to take a screenshot of https://example.com and show it to me. ' +
         'Call browser_navigate then browser_screenshot yourself — do not delegate this.',

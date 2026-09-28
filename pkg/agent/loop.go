@@ -119,7 +119,7 @@ type AgentLoop struct {
 
 	// Turn tracking
 	turnSeq        atomic.Uint64
-	activeRequests sync.WaitGroup
+	activeRequests activeRequestTracker
 	// delegatedRateLimitSleep is a per-loop test seam. Production leaves it
 	// nil and callProvider uses sleepWithContext; tests can record the exact
 	// retry delays without a wall-clock assertion or process-global mutation.
@@ -600,117 +600,6 @@ type AgentLoop struct {
 	lastTurnResult   turnResult
 }
 
-// processOptions configures how a message is processed
-type processOptions struct {
-	SessionKey        string // Session identifier for history/context
-	Channel           string // Target channel for tool execution
-	ChatID            string // Target chat ID for tool execution
-	SenderID          string // Current sender ID for dynamic context
-	SenderDisplayName string // Current sender display name for dynamic context
-	// UserID is the authenticated gateway principal that initiated this turn,
-	// threaded from the WS connection (websocket.go wc.userID) via the dedicated
-	// bus.InboundMessage.GatewayUserID carrier (FR-017). It is stamped onto
-	// turn-scoped audit.Entry.User so CLI runs (principal "cli") and admin browser
-	// sessions are attributable. Empty for channel-originated turns (the platform
-	// sender in Sender.Username is not a gateway principal and is never read here)
-	// and unauthenticated env-token / dev-bypass paths — never guessed.
-	UserID                  string              // Authenticated gateway principal (FR-017)
-	UserMessage             string              // User message content (may include prefix)
-	ForcedSkills            []string            // Skills explicitly requested for this message
-	Media                   []string            // media:// refs from inbound message
-	InitialSteeringMessages []providers.Message // Steering messages from refactor/agent
-	// InitialSteeringCorrelationIDs (issue #870) is the parallel correlation-id
-	// slice for InitialSteeringMessages — index i's id belongs to message i,
-	// "" where none. Carried separately rather than folded into
-	// providers.Message: that struct is the literal LLM provider request
-	// wire shape, never a receipt-bookkeeping carrier.
-	InitialSteeringCorrelationIDs []string
-	DefaultResponse               string                // Response when LLM returns empty
-	SendResponse                  bool                  // Whether to send response via bus
-	SuppressToolFeedback          bool                  // Whether to suppress inline tool call and result feedback
-	NoHistory                     bool                  // If true, don't load session history (for heartbeat)
-	SkipInitialSteeringPoll       bool                  // If true, skip the steering poll at loop start (used by Continue)
-	TranscriptSessionID           string                // Session ID for transcript tool call recording (empty = disabled)
-	TranscriptStore               *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
-	// OriginKind identifies the durable execution origin when this turn does
-	// not have a lifecycle record to supply it. The zero value is an ordinary
-	// interactive turn. Publication policy resolves the record first.
-	OriginKind session.OriginKind
-
-	// WorkspaceID is the Spec-1 Workspace identifier for this turn.
-	// When set, the memory store uses the shared workspace room
-	// ($OMNIPUS_HOME/workspaces/<id>/.omnipus/) for memories scoped to "shared".
-	// Empty means no workspace is associated (private room only).
-	WorkspaceID string
-
-	// AutoDenyAsk, when true, makes every `ask`-policy tool call auto-DENIED
-	// without ever requesting human approval (issue #264, FR-009). Scheduled
-	// runs are headless — there is no operator to approve, so blocking on an
-	// approval prompt would stall the run forever. Only ProcessScheduled sets
-	// this; interactive paths leave it false so `ask` keeps prompting.
-	AutoDenyAsk bool
-
-	// Metadata carries the inbound message metadata (bus.InboundMessage.Metadata)
-	// through to the turn flow. The agent loop reads Metadata["model_name"] to
-	// detect a per-thread model switch (FR-011) and apply switch-time
-	// compress before the next LLM call.
-	Metadata map[string]string
-
-	// InitialDelegationDepth seeds the root turnState depth for a task run. A
-	// task created from within another task run carries a non-zero generation
-	// (task.Task.DelegationDepth); processTaskDirect seeds it here so the
-	// per-workspace delegation-graph edge's depth gate (currentDelegationDepth)
-	// trips on onward await/background delegation even though a task run
-	// otherwise starts a fresh turn at depth 0. Interactive/chat turns leave
-	// this 0.
-	InitialDelegationDepth int
-
-	// IsTaskRun marks a turn as a native task-dispatch run (set by
-	// processTaskDirect's runAgentLoop call; false for interactive chat,
-	// heartbeat, and the external-CLI task path, which never reaches
-	// assembleMessages at all). assembleMessages reads it to decide whether to
-	// append a terse TASK_STATUS/TASK_SUMMARY marker reminder to the
-	// breadcrumb block (review B3): a task's marker instruction lives only in
-	// its first user turn (buildPrompt, task_executor.go), and windowTrim
-	// (ADR-028) can evict that turn on a long, tool-heavy task run — this flag
-	// is what lets the reminder re-surface exactly when (and only when) that
-	// eviction has actually happened, piggybacking on the breadcrumb's own
-	// eviction-survives-everything delivery mechanism rather than adding a
-	// second, parallel injection path.
-	IsTaskRun bool
-
-	// RunningTaskID names the unified task this turn is executing (founder
-	// decision 2026-09-14: last-activity on task cards). processTaskDirect
-	// sets it from the tools.WithRunningTaskID context the task executor
-	// already stamps on the run; AgentLoop.TaskLiveLastActivity matches on
-	// it to expose the turn's live progress stamp for exactly this task.
-	// Empty for every non-task turn.
-	RunningTaskID string
-
-	// UserInitiated threads bus.InboundMessage.UserInitiated into the turn
-	// (ADR-049 Gap #8/r2, spec Part B FR-075/SD-B6/R6) — see that field's doc
-	// comment for the fail-closed origin contract. handleCommand reads this
-	// (never msg.UserInitiated directly, for the same "read the dedicated
-	// processOptions carrier, not the raw inbound field" discipline
-	// UserID/gatewayPrincipal already establishes) to decide whether /goal
-	// and /loop action or pass through inert as ordinary text. Every
-	// processOptions literal NOT built from userInitiated(msg) — ProcessScheduled,
-	// processTaskDirect, processTaskDirectExternalCLI, processSystemMessage —
-	// leaves this at its zero value (false), which is the correct fail-closed
-	// answer for every one of those non-user origins. Pre-ADR-091, the
-	// deleted spawnSubTurn did too, for a delegated child. ADR-091 fix lane
-	// RX-SUBTURN finding (comment-only; code unchanged): today's replacement
-	// entry point, steer_reconstruct.go::reconstructSteeredTurn, instead sets
-	// `UserInitiated: wake == nil` — TRUE for a steered session's first turn
-	// (delegate child, task child, etc.), by its own doc comment's
-	// deliberate design ("mark it as user-originated for the session-owned
-	// goal loop"). Whether that is an intentional broadening of this field's
-	// fail-closed contract for a launched child, or an unreviewed departure
-	// from the invariant this comment states, needs a team check — flagged,
-	// not resolved here.
-	UserInitiated bool
-}
-
 const (
 	defaultResponse           = "The model returned an empty response. This may indicate a provider error or token limit."
 	toolLimitResponse         = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
@@ -989,37 +878,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			// System messages with no session to serialize against are
 			// handled inline in a goroutine (no scope).
 			if msg.Channel == "system" {
-				// Track in activeRequests so graceful shutdown's
-				// WaitForActiveRequests drains this turn before teardown —
-				// otherwise its cost.json / session-context writes can outlive
-				// RunContext and race temp-dir cleanup (#265, macOS APFS).
-				// (The sessionWorker path above intentionally does NOT wrap
-				// the message: no other worker-dispatched message is wrapped
-				// either; each LLM call inside the turn tracks itself, and
-				// Close()/stopSessionWorkers cancels and drains the worker
-				// with a 5s budget.)
-				al.activeRequests.Add(1)
-				go func() {
-					defer al.activeRequests.Done()
-					defer func() {
-						if r := recover(); r != nil {
-							logger.ErrorCF("agent", "Panic in system-message goroutine",
-								map[string]any{
-									"panic":   r,
-									"channel": msg.Channel,
-									"chat_id": msg.ChatID,
-								})
-						}
-					}()
-					if _, err := al.processSystemMessage(runCtx, msg); err != nil {
-						logger.WarnCF("agent", "processSystemMessage returned error",
-							map[string]any{
-								"channel": msg.Channel,
-								"chat_id": msg.ChatID,
-								"error":   err.Error(),
-							})
-					}
-				}()
+				al.launchSystemMessage(runCtx, msg)
 				continue
 			}
 
@@ -1027,9 +886,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			if !ok {
 				// Unroutable — fall through to the original single-shot path so
 				// channels with no configured agent still get an error reply.
-				// Tracked in activeRequests so shutdown drains it (#265).
-				al.activeRequests.Add(1)
-				go al.dispatchUnroutableMessage(runCtx, msg)
+				al.launchUnroutableMessage(runCtx, msg)
 				continue
 			}
 
@@ -1081,6 +938,7 @@ func (al *AgentLoop) stopSessionWorkers() {
 
 func (al *AgentLoop) Stop() {
 	al.running.Store(false)
+	al.stopActiveRequestIntake()
 	// Cancel the Run context so the select wakes immediately rather than
 	// waiting for the next inbound message. Safe to call before Run (the
 	// atomic.Pointer is nil until Run stores a cancel func).
@@ -1096,15 +954,17 @@ func (al *AgentLoop) Stop() {
 	}
 }
 
-// WaitForActiveRequests blocks until all in-flight LLM calls tracked by
-// activeRequests have completed. Used by the graceful shutdown sequence to
-// ensure active turns finish before the process exits.
+// WaitForActiveRequests closes request intake and blocks until tracked work
+// completes. Callers that need a bounded wait should use
+// WaitForActiveRequestsContext instead.
 func (al *AgentLoop) WaitForActiveRequests() {
-	al.activeRequests.Wait()
+	done, _ := al.activeRequests.startWait()
+	<-done
 }
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	al.stopActiveRequestIntake()
 	// Cancel the loop-lifetime context FIRST, so a revived ordinary-root turn
 	// running on it stops writing through the stores the teardown below
 	// closes (same class as the recap/task/steered-turn drains that follow).
@@ -1156,6 +1016,16 @@ func (al *AgentLoop) Close() {
 	// already called it on context-cancellation, because workers cancel their
 	// own context; a double-cancel is a no-op.
 	al.stopSessionWorkers()
+
+	// Drain the detached request goroutines tracked by activeRequests — the
+	// ADR-093 revived ordinary-root turn, the system/unroutable dispatches,
+	// every in-flight LLM call (waitActiveRequestsDrain's doc has the full
+	// list and the placement rationale). The recap/task/steered drains each
+	// join their own class; this one was missing, and a caller that runs
+	// Close() alone (every test harness) raced a still-unwinding revived
+	// turn's writes against its own temp-dir removal
+	// (TestAdr093StopDuringRevivedTurn_DelegateRefuses).
+	al.waitActiveRequestsDrain(30 * time.Second)
 
 	// Drop every browser's manager connection (one per browsing key). In ADR-043
 	// shared-Chrome mode this closes each manager's WS connection + detaches
@@ -1342,6 +1212,47 @@ func (al *AgentLoop) waitRecapDrain(budget time.Duration) {
 		// All recaps drained cleanly.
 	case <-time.After(budget):
 		logger.WarnCF("agent", "Close: recap drain budget exceeded; proceeding with teardown",
+			map[string]any{"budget": budget.String()})
+	}
+}
+
+// waitActiveRequestsDrain blocks until the detached request goroutines tracked
+// by activeRequests have completed, OR until budget elapses — whichever comes
+// first. It never blocks indefinitely: a wedged turn goroutine (a provider
+// that never returns and ignores context cancellation) must not hold teardown
+// hostage. On timeout it logs a warning and proceeds so the rest of teardown
+// can run; the only cost is a turn's final writes that may not have landed.
+//
+// What activeRequests tracks here: the ADR-093 revived ordinary-root turn
+// (revive_support.go::runRevivedOrdinaryTurn), the system-message and
+// unroutable dispatch goroutines in Run's loop, and every in-flight LLM call
+// (loop_run_turn.go). Each writes session, transcript or lifecycle files.
+// The gateway's graceful shutdown waits bounded on this same counter BEFORE
+// Close (pkg/gateway/shutdown.go), so there the drain is a no-op; a caller
+// that runs Close() alone — every test harness's t.Cleanup(al.Close) — had
+// no join at all, and a revived turn still unwinding at Close() kept writing
+// through the stores the teardown below closes, racing the caller's
+// temp-dir removal (release/v0.1.1 red:
+// TestAdr093StopDuringRevivedTurn_DelegateRefuses, "TempDir RemoveAll
+// cleanup ... directory not empty").
+//
+// Placement in Close(): AFTER stopSessionWorkers, so worker-driven in-flight
+// calls are already cancelled and cannot hold the counter from here on; and
+// BEFORE the browser/MCP/store teardown, so the draining goroutines' final
+// writes land while their stores are still open.
+func (al *AgentLoop) waitActiveRequestsDrain(budget time.Duration) {
+	done, alreadyWaiting := al.activeRequests.startWait()
+	if alreadyWaiting {
+		logger.DebugCF("agent", "Close: active-request drain already attempted; skipping duplicate wait", nil)
+		return
+	}
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case <-done:
+		// All detached request goroutines drained cleanly.
+	case <-timer.C:
+		logger.WarnCF("agent", "Close: active-request drain budget exceeded; proceeding with teardown",
 			map[string]any{"budget": budget.String()})
 	}
 }
@@ -2058,9 +1969,9 @@ func (al *AgentLoop) handleReasoning(
 		return
 	}
 
-	// Check context cancellation before attempting to publish,
-	// since PublishOutbound's select may race between send and ctx.Done().
-	if ctx.Err() != nil {
+	// Check context cancellation before attempting to publish, since
+	// PublishOutbound's select may race between send and ctx.Done().
+	if reasoningPublishCanceledOnEntry(ctx, channelName) {
 		return
 	}
 
@@ -2206,6 +2117,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// (here, before the turn even starts), not when the deferred call
 	// actually runs at function exit — a bare form would always capture
 	// false and reproduce the exact bug this fixes.
+	// provider-messages §7.4 fallback note (MIN-103/FB-2): registered BEFORE
+	// the Finish and finalizeStreamer defers below, so LIFO runs it AFTER
+	// them — the queued fallback-note entries land in transcript.jsonl after
+	// the assistant answer entry, on the streaming path (finalizeStreamer
+	// writes the answer) and the non-streaming path alike.
+	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.writePendingFallbackNotes()
 	defer func() { rz.rc.rx.rr.rq.ri.rf.rt.ts.Finish(rz.rc.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested()) }()
 	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.finalizeStreamer(rz.rc.rx.ctx)
 	// ADR-087 D6.8, the ONE choke point (see preserveTruncatedAccumulator's

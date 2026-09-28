@@ -36,7 +36,7 @@ func TestServeMedia_WorkspaceRef_LibraryProviderErrors_Returns500Not404(t *testi
 	workspaceID := "ws-media-provider-fails"
 	mediaID := "11111111-1111-1111-1111-111111111111"
 
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(store)
 	api.mediaStore = store
 
@@ -75,7 +75,7 @@ func TestServeMedia_WorkspaceRef_NoProviderWired_Returns404(t *testing.T) {
 	workspaceID := "ws-media-no-provider"
 	mediaID := "22222222-2222-2222-2222-222222222222"
 
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(store)
 	api.mediaStore = store
 	// Deliberately no SetWorkspaceLibraryProvider call.
@@ -100,7 +100,7 @@ func TestServeMedia_LegacyRef_UnknownRef_Still404(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
 
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(store)
 	api.mediaStore = store
 
@@ -116,7 +116,7 @@ func TestServeMedia_WorkspaceRef_Stranded_Returns500NotFound404(t *testing.T) {
 	workspaceID := "ws-media-serve-stranded"
 	mediaID := buildStrandedWorkspaceLibrary(t, api.homePath, workspaceID)
 
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(store)
 	api.mediaStore = store
 
@@ -159,7 +159,7 @@ func TestServeMedia_WorkspaceRef_RoutineNotFound_Still404(t *testing.T) {
 	defer cleanup()
 	workspaceID := "ws-media-serve-routine-404"
 
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(store)
 	api.mediaStore = store
 
@@ -181,7 +181,7 @@ func TestServeMedia_WorkspaceRef_RoutineNotFound_Still404(t *testing.T) {
 func TestHandleMedia_WorkspaceRef_Resolves(t *testing.T) {
 	api, _ := newTestRestAPI(t)
 	workspaceID := "ws-1"
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(store)
 	api.mediaStore = store
 
@@ -209,7 +209,7 @@ func TestHandleMedia_WorkspaceRef_Resolves(t *testing.T) {
 
 func TestHandleMedia_LegacyUUID_StillResolves(t *testing.T) {
 	api, _ := newTestRestAPI(t)
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(store)
 	api.mediaStore = store
 	path := filepath.Join(t.TempDir(), "legacy.txt")
@@ -227,7 +227,7 @@ func TestHandleMedia_LegacyUUID_StillResolves(t *testing.T) {
 
 func TestHandleMedia_WorkspaceRef_BadWS_403(t *testing.T) {
 	api, _ := newTestRestAPI(t)
-	store := media.NewFileMediaStore()
+	store := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(store)
 	api.mediaStore = store
 	goodWorkspaceID := "ws-good"
@@ -270,7 +270,7 @@ func TestHandleMedia_Invalid_400(t *testing.T) {
 // Without the fix the response carries no ref and the agent never sees the file.
 func TestHandleUpload_RegistersMediaRef(t *testing.T) {
 	api := newUploadTestAPI(t)
-	api.mediaStore = media.NewFileMediaStore()
+	api.mediaStore = newTestFileMediaStore(t)
 	sessionID := "media-ref-session"
 
 	body, ct := buildMultipart(t, sessionID, map[string]string{"pic.png": "PNGDATA"})
@@ -308,12 +308,12 @@ func TestHandleUpload_UsesAgentLoopStore(t *testing.T) {
 	api := newUploadTestAPI(t)
 
 	// agentLoopStore simulates the store that restartServices installed.
-	agentLoopStore := media.NewFileMediaStore()
+	agentLoopStore := newTestFileMediaStore(t)
 	api.agentLoop.SetMediaStore(agentLoopStore)
 
 	// a.mediaStore is set to a DIFFERENT (old) store to detect if upload
 	// uses the stale reference. After the fix, the agentLoopStore must be used.
-	staleStore := media.NewFileMediaStore()
+	staleStore := newTestFileMediaStore(t)
 	api.mediaStore = staleStore
 
 	sessionID := "agent-loop-store-session"

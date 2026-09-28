@@ -163,7 +163,6 @@ pkg/agent/task_run_loop.go	TaskExecutor.finishRunTurn	30
 pkg/gateway/rest_channels.go	restAPISetChannelRouting.handleBound	30
 pkg/gateway/rest_preview.go	restAPI.serveStaticFile	30
 pkg/knowledge/authoring_tools.go	TasksTool.Execute	30
-pkg/knowledge/index_test.go	TestIndex_SegmentedNoteCollapsesToOneHit	30
 pkg/knowledge/knowledge_configure_create_view.go	composePartsForKind	30
 pkg/knowledge/links.go	parseMarkdownLink	30
 pkg/media/library/library.go	Library.uploadInternal	30

@@ -65,9 +65,40 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		return nil, fmt.Errorf("steer: reconstruct %q: load child address: %w", rec.SessionID, err)
 	}
 
+	// FIX (live-view gap, 2026-09-27): a steered child's own UnifiedMeta is
+	// minted with an empty Channel by design (steer_launcher.go's
+	// reportingTargetFor doc comment: "a steered session's OWN UnifiedMeta
+	// is minted with an empty Channel and is never given a PeerID at all")
+	// — that emptiness exists for the UPWARD reporting-target resolution
+	// (rec.SteeredBy.ReportingTarget), a separate field entirely. Reusing
+	// meta.Channel as the TURN's own opts.Channel broke live delivery to
+	// the child's OWN session view: WSHandler.GetStreamer
+	// (pkg/gateway/websocket_streamer.go) refuses a streamer unless
+	// channel=="webchat", so every steered turn silently fell back to a
+	// non-streaming provider call and never published a single live token
+	// or done frame for its own session — invisible to a browser attached
+	// directly to that child, regardless of audience/shadow-stream gating,
+	// which never got a chance to run. Live-verified against a debug-level
+	// gateway log correlated by session id: every "Provider supports
+	// streaming, checking for streamer" call for a steered child logged
+	// channel:"" and was never followed by "Using streaming for response";
+	// every root-session call logged channel:"webchat" and always got one
+	// (36/36 vs 9/9 across two live delegation runs). A steered child's own
+	// live view is a real webchat surface (ADR-091 D1: each child owns its
+	// own store-backed session, rendered through the identical ChatScreen/
+	// WS path a root session uses) — stamp it explicitly rather than
+	// inheriting the reporting-target's empty placeholder. An
+	// ordinary_root revival (rec.SteeredBy == nil) keeps meta.Channel
+	// untouched: that session's channel is real (webchat, whatsapp, ...)
+	// and must never be overwritten.
+	channel := meta.Channel
+	if rec.SteeredBy != nil {
+		channel = "webchat"
+	}
+
 	opts := processOptions{
 		SessionKey:          rec.SessionID,
-		Channel:             meta.Channel,
+		Channel:             channel,
 		ChatID:              meta.PeerID,
 		TranscriptSessionID: rec.SessionID,
 		TranscriptStore:     store,
@@ -119,6 +150,16 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		// ROOT, inherited from the edge, never the child's own id (which
 		// newTurnState defaulted it to above).
 		ts.routingSessionID = session.RoutingSessionID(rec.SteeredBy.RootSessionID)
+		// Delegate-session-id carrier (ADR-053/ADR-057 identity split):
+		// stamp the session's OWN LifecycleRecord.SessionID onto the turn's
+		// options — registerTurnContext turns it into
+		// tools.WithDelegateSessionID, and message_parent loads its record
+		// by it. An ordinary-root revival (rec.SteeredBy == nil) never
+		// enters this branch — ADR-093 D3's standing-root test — so its
+		// field stays "" and the carrier's empty-id no-op guard leaves
+		// those turns unstamped (message_parent's structural refusal keeps
+		// firing for them).
+		ts.opts.SteeredSessionID = rec.SessionID
 	}
 	return ts, nil
 }

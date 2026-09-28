@@ -188,7 +188,7 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 		// case (see LogInvalidSessionCookiePresent's doc). Log-only: the
 		// fail-closed 401 below is unchanged either way.
 		middleware.LogInvalidSessionCookiePresent(r, cfg)
-		http.Error(w, "unauthorized: missing Bearer token", http.StatusUnauthorized)
+		jsonErr(w, http.StatusUnauthorized, "unauthorized: missing Bearer token")
 		return AuthResult{Authenticated: false}
 	}
 	rawToken := strings.TrimPrefix(auth, prefix)
@@ -207,7 +207,7 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 	// account-based auth is configured, an unmatched token is rejected
 	// immediately rather than being checked against OMNIPUS_BEARER_TOKEN.
 	if bearerAccountsConfigured(cfg) {
-		http.Error(w, "unauthorized: invalid Bearer token", http.StatusUnauthorized)
+		jsonErr(w, http.StatusUnauthorized, "unauthorized: invalid Bearer token")
 		return AuthResult{Authenticated: false}
 	}
 
@@ -225,11 +225,11 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 			return AuthResult{Authenticated: true, User: &devBypassUser}
 		}
 		// No auth configured — deny by default (fail closed).
-		http.Error(w, "unauthorized: no users configured, complete onboarding first", http.StatusUnauthorized)
+		jsonErr(w, http.StatusUnauthorized, "unauthorized: no users configured, complete onboarding first")
 		return AuthResult{Authenticated: false}
 	}
 	if subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) != 1 {
-		http.Error(w, "unauthorized: invalid Bearer token", http.StatusUnauthorized)
+		jsonErr(w, http.StatusUnauthorized, "unauthorized: invalid Bearer token")
 		return AuthResult{Authenticated: false}
 	}
 	// Synthetic User for the env-token path: handlers reading *UserConfig

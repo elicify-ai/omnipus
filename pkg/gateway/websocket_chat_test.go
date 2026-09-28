@@ -246,7 +246,7 @@ func TestBuildTranscriptAttachments_WorkspaceRef(t *testing.T) {
 	require.NotNil(t, resp.Files[0].Ref)
 	ref := *resp.Files[0].Ref
 
-	store := mediaStoreForWorkspace(api)
+	store := mediaStoreForWorkspace(t, api)
 
 	attachments := buildTranscriptAttachments(store, []string{ref}, workspaceID)
 
@@ -279,7 +279,7 @@ func TestBuildTranscriptAttachments_WorkspaceRef(t *testing.T) {
 // metadata, not load-bearing for the turn itself.
 func TestBuildTranscriptAttachments_UnresolvableRefSkippedNotFatal(t *testing.T) {
 	api := newUploadTestAPI(t)
-	store := mediaStoreForWorkspace(api)
+	store := mediaStoreForWorkspace(t, api)
 
 	unresolvableRef := "media://workspace/ws-does-not-exist/00000000-0000-0000-0000-000000000000"
 	attachments := buildTranscriptAttachments(store, []string{unresolvableRef}, "ws-does-not-exist")
@@ -290,7 +290,7 @@ func TestBuildTranscriptAttachments_UnresolvableRefSkippedNotFatal(t *testing.T)
 func TestBuildTranscriptAttachments_NoStoreOrRefs(t *testing.T) {
 	assert.Nil(t, buildTranscriptAttachments(nil, []string{"media://workspace/ws1/id1"}, "ws1"))
 	api := newUploadTestAPI(t)
-	assert.Nil(t, buildTranscriptAttachments(mediaStoreForWorkspace(api), nil, "ws1"))
+	assert.Nil(t, buildTranscriptAttachments(mediaStoreForWorkspace(t, api), nil, "ws1"))
 }
 
 // TestHandleChatMessage_ForwardsModelNameToBus is the primary FR-010 happy-path

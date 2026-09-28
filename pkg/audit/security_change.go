@@ -92,6 +92,14 @@ func EmitSecuritySettingChange(ctx context.Context, logger *Logger, resource str
 		OldValue:  redactSensitive(oldValue),
 		NewValue:  redactSensitive(newValue),
 	}
+	// #914: redactSensitive is name-based only. When the logger redacts,
+	// also run its credential patterns over both values so a key sitting
+	// in a field with an innocent name is caught too. The name-based
+	// sentinel ("***redacted***") is left as-is: it matches no pattern.
+	if logger.redactor != nil {
+		record.OldValue = logger.redactor.redactValue(record.OldValue)
+		record.NewValue = logger.redactor.redactValue(record.NewValue)
+	}
 
 	data, err := json.Marshal(record)
 	if err != nil {

@@ -15,8 +15,9 @@
  * reply already showed must still be rendered after the steer lands (pre-fix
  * they collapsed to 0 within one frame) and at turn end.
  *
- * Real-model spec: needs OPENROUTER_API_KEY_CI (UAT provider/model ruling:
- * openrouter + z-ai/glm-5.3-flash; Omnipus sends tools every request), and is
+ * Real-model spec: needs OPENROUTER_API_KEY_CI (model = the central e2e
+ * setting, OMNIPUS_E2E_MODEL — see fixtures/e2e-model.ts; Omnipus sends tools
+ * every request), and is
  * long-running, so it rides the opt-in `e2e` CI gate, not the default map.
  */
 
@@ -38,23 +39,37 @@ test('tool rows of the closing reply survive a mid-turn steer', async ({ page })
   test.setTimeout(420_000)
 
   await restoreAdminSession(page)
-  await page.goto('/')
-  await page.waitForSelector('[data-testid="chat-input"]', { timeout: 30_000 })
-  await waitForConnected(page)
 
   // Tap the WS frames so the steer is timed from real tool_call_start
   // traffic (never from wall-clock guesses).
+  //
+  // Registered BEFORE page.goto('/'): the SPA opens the chat WebSocket on
+  // mount, and page.on('websocket') only fires for sockets OPENED AFTER the
+  // listener is registered (Playwright docs: the event is emitted "when a
+  // WebSocket request is initiated by the page" — there is no replay for an
+  // already-open socket). The listener originally sat AFTER goto() +
+  // waitForConnected(), i.e. after the socket was provably open
+  // (waitForConnected polls window.__ws_instances for readyState OPEN), so
+  // toolStarts/dones read 0 forever and this spec failed on CI (run
+  // 36260103324) no matter what the model did. Mirrors the proven pattern in
+  // subagent.spec.ts and delegation-hidden.spec.ts, including the /chat/ws
+  // path filter and payload.toString() frame parsing.
   let toolStarts = 0
   let dones = 0
   page.on('websocket', (ws) => {
-    ws.on('framereceived', (ev) => {
+    if (!new URL(ws.url()).pathname.endsWith('/chat/ws')) return
+    ws.on('framereceived', ({ payload }) => {
       try {
-        const j = JSON.parse(typeof ev.payload === 'string' ? ev.payload : '')
+        const j = JSON.parse(payload.toString())
         if (j.type === 'tool_call_start') toolStarts++
         if (j.type === 'done') dones++
       } catch { /* non-JSON frame */ }
     })
   })
+
+  await page.goto('/')
+  await page.waitForSelector('[data-testid="chat-input"]', { timeout: 30_000 })
+  await waitForConnected(page)
 
   const PROMPT = 'Do these steps strictly in order, one tool call per step, never skip one: ' +
     '(1) list the files in your workspace directory; ' +

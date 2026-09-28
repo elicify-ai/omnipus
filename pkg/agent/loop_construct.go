@@ -151,6 +151,12 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 			// that decision is taken below, at this call site, which is the
 			// only place that knows it.
 			AuditLogRequested: true,
+			// #914: redaction is always on for the production audit log —
+			// no config key, no off switch. Without it, credentials typed
+			// into bash/web_serve/environment_setup commands were written
+			// verbatim and served by GET /api/v1/audit-log. The logger
+			// redacts credentials only; email addresses stay (MC-19).
+			RedactEnabled: true,
 		})
 		if auditErr != nil {
 			// The audit logger could not be built. Two different populations

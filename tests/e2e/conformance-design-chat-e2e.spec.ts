@@ -23,7 +23,7 @@
 
 import { expect } from '@playwright/test'
 import { test } from './fixtures/plan-cleanup'
-import { chatInput, assistantMessages } from './fixtures/selectors'
+import { chatInput, assistantMessages, userMessages } from './fixtures/selectors'
 import { requireApiKey, startFreshChatWithAgent, startFreshChatWithJim } from './fixtures/conformance-helpers'
 
 // ── Conformance_t0_ChatGoalE2E ───────────────────────────────────────────────
@@ -51,8 +51,12 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   requireApiKey()
 
   // Real-LLM conformance: budget is the LLM round-trip + verifier turn.
-  // 420s = 60s compile/worker + 60s claim/idle + 60s verifier + 240s slack.
-  test.setTimeout(420_000)
+  // 480s = 20s fast-path + 3×(typing + 30s delivery check + 90s pill wait)
+  // + slack. A ceiling, not an oracle — the pass decider stays the done pill.
+  // (Was 420s; raised when the delivery check grew to 30s — see the steer
+  // loop below — so every failure lands on a MESSAGE-level assertion instead
+  // of a harness timeout.)
+  test.setTimeout(480_000)
 
   // Mia, not Jim: the goal's [check: true exit:0] machine criterion requires
   // the session agent to hold `bash` allow — Jim's ADR-090 policy denies bash,
@@ -77,22 +81,52 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // deterministically, so the VERDICT half of this walk never depends on a
   // real model's opinion of prose. A pure-prose "say goal met" goal left the
   // judge returning unmet + steer loops (Jim kept working, pill never
-  // reached done). "please continue" is pure steering
-  // (looksLikePureSteering) so it does NOT lift a second KindProse
-  // criterion.
+  // reached done).
+  //
+  // WHY THE CONDITION STAYS MARKER-ONLY (measured in this verification's
+  // runs 1-2): the prose after marker extraction decides the activation path
+  // (goal_compile.go goalIntentNeedsLLMCompile — any real prose flips the
+  // command to ADR-088 D1 instant activation, activateInstantGoal). The
+  // instant path starts the record criteria-empty for the worker to author
+  // via set_goal, and its adjudication then depends on the verifier LLM
+  // forming a judgment on authored/prose criteria — in run 2 the verifier
+  // "formed no judgment" (gateway log: `verifier: criterion unjudgeable …
+  // the verifier turn ran but formed no judgment`) and the goal ended
+  // `blocked`, with the model then refusing to re-claim a closed record. The
+  // marker path's criteria (the [check:] machine check + the floor DoD) are
+  // judged deterministically — `true` exits 0 — so the verdict half of the
+  // walk carries no model-variance. The cost: the marker path folds the
+  // prose into the worker prompt, so turn 1's prompt is bare "please
+  // continue" and the model wanders (list_tasks, library_list, a `git log`
+  // that sat on an unapproved ADR-092 D8 network pre-flight card —
+  // preflight.go ClassifyNetworkNeed flags git — and an AskUserQuestion
+  // card). Every one of those turn-1 behaviors is now CONTAINED: the
+  // Ask card is cancelled by dismissPendingAsk (loop top), and the claim
+  // instruction rides the steer text below, which this verification's runs
+  // delivered 5 times out of 5 (pressSequentially + the fail-fast delivery
+  // check). The release run's actual flake — steers never sending, a card
+  // eating the wait, and the 4s done-pill window being missed by a polling
+  // wait with blind spots — is fixed in the steer loop and waitForDone
+  // below; this test was NEVER flaky in its verdict half.
+  //
+  // The pill aria-label carries the condition truncated to its first 80
+  // graphemes (GoalPillTray.tsx truncateCondition); the whole condition is
+  // 33 graphemes, comfortably inside that window.
   const condition = '[check: true exit:0] please continue'
   await input.fill(`/goal ${condition}`)
   await input.press('Enter')
 
   // Assert the active-pill is rendered — this is the FR-113 "echoed in chat"
-  // moment, the conversational confirmation the LLM-driven compile wrote.
+  // moment: the goal_status WS frame (state="active") the activation wrote.
   const activePill = page.locator('[data-testid="goal-pill-active"]')
   await expect(activePill).toBeVisible({ timeout: 60_000 })
 
-  // Differentiation test: the active pill's aria-label carries GoalCondition
-  // (compiled.Prompt after marker extraction — "please continue" here, not
-  // the raw [check:] marker). Assert a fragment of OUR prompt is in that
-  // aria-label — proving the pill is bound to OUR goal.
+  // Differentiation test: the active pill's aria-label carries the goal
+  // condition (the frame's condition field = compiled.Prompt — the PROSE on
+  // the marker path, not the raw /goal text; measured in this file's run 3:
+  // label was "Goal: please continue, state active"). Assert a fragment of
+  // OUR condition is in that aria-label — proving the pill is bound to OUR
+  // goal, not some other.
   await expect(activePill.first()).toHaveAttribute('aria-label', /please continue/i, {
     timeout: 10_000,
   })
@@ -132,17 +166,45 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // guard script; this file's job is the visible pill walk.
   const donePill = page.locator('[data-testid="goal-pill-done"]')
 
-  // waitForDone polls rather than using a single web-first assertion because
-  // `judging` is a legitimate ephemeral mid-state and the pill may pass
-  // through it between polls; only `done` is the terminal we care about.
-  const waitForDone = async (budgetMs: number): Promise<boolean> => {
-    const deadline = Date.now() + budgetMs
-    while (Date.now() < deadline) {
-      if (await donePill.isVisible({ timeout: 1_000 }).catch(() => false)) return true
-      await page.waitForTimeout(500)
-    }
-    return false
-  }
+  // User bubbles whose text mentions goal_claim. The /goal line itself
+  // contains "goal_claim" by design, so this starts at 1 after the goal is
+  // filed; every DELIVERED steer bumps it by exactly one. The steer loop's
+  // fail-fast check counts it — see the comment at that assertion.
+  const claimUserBubbles = userMessages(page).filter({ hasText: 'goal_claim' })
+
+  // waitForDone wraps page.waitForFunction: an IN-PAGE check evaluated at
+  // rAF frequency, so a done pill that lives for only 4 seconds cannot be
+  // missed — the old per-tick poll could.
+  //
+  // WHY (measured, this verification's own run 1): GoalPillTray.tsx keeps a
+  // terminal pill on screen for TERMINAL_PILL_DISPLAY_MS = 4_000 ms and then
+  // stops rendering it. The verdict landed 23:26:15 (gateway log: judge MET
+  // verdict + the benign `goal-status upward delivery failed … lifecycle
+  // record not found` warn), the tray painted the done pill at 23:26:15 for
+  // 4s, and the test — busy typing the steer — never polled during that
+  // window. The walk happened; the test called it "no done pill" and steered
+  // into a closed record (both later goal_claim calls refused "no active
+  // goal", 23:26:25 and 23:28:08). Polling with blind spots vs a 4s window
+  // is a detection race the test loses by chance — exactly the kind of
+  // instrument gap docs/internal/false-green-patterns.md warns about.
+  //
+  // waitForFunction closes the gap: the predicate runs in-page on every
+  // animation frame, covering the seconds the test spends typing a steer,
+  // and fires the moment the pill mounts. The oracle is UNCHANGED: only the
+  // real done pill decides pass/fail. Ask-card handling is not folded in
+  // here — a card cannot hide the pill (backend-driven paint), and the
+  // composer-facing dismissal stays where the composer is used (loop top).
+  const waitForDone = (budgetMs: number): Promise<boolean> =>
+    page
+      .waitForFunction(
+        () => document.querySelector('[data-testid="goal-pill-done"]') !== null,
+        undefined,
+        { timeout: budgetMs },
+      )
+      .then(
+        () => true,
+        () => false,
+      )
 
   // "please continue" with nothing actually in progress is exactly the vague
   // prose door goal-work-first.spec.ts documents as model-dependent (holdout
@@ -176,6 +238,33 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
     await expect(input, 'composer must unlock once the pending question is cancelled').toBeEnabled({
       timeout: 15_000,
     })
+  }
+
+  // TOOL-APPROVAL MODAL (measured, this file's run 4): turn 1's prompt is
+  // bare steering prose, and this run's model spent it on repo orientation —
+  // a network-capable `bash git …` call. Under ADR-092, a network-capable
+  // binary on a chat with Auto-approve (and no enforcing kernel sandbox on
+  // macOS) escalates to the operator as the ToolApprovalModal — a full-screen
+  // Radix dialog whose overlay intercepts every pointer event until it is
+  // answered, so the composer cannot be clicked at all (run 4: the steer's
+  // input.click() retried 851× against the overlay for the rest of the
+  // budget). The operator action this test takes is DENY (the
+  // default-focused safe default, ToolApprovalModal.tsx denyButtonRef): the
+  // goal's check needs only bash `true`, never the network. This is an
+  // operator choice the ADR-092 flow exists to offer — it does not touch the
+  // oracle; the done pill still decides pass/fail, and the done pill's
+  // in-page wait is overlay-proof (the pill mounts in the DOM under the
+  // overlay; presence, not visibility, is what waitForFunction checks).
+  const toolApprovalDialog = page.locator('[data-testid="dialog-overlay"]')
+  const denyToolApproval = async (): Promise<void> => {
+    if (!(await toolApprovalDialog.isVisible({ timeout: 1_000 }).catch(() => false))) return
+    console.log('t0: tool-approval modal is blocking the composer — denying it (no network calls needed)')
+    await page
+      .getByRole('button', { name: 'Deny', exact: true })
+      .click()
+      .catch(() => {
+        /* modal may resolve itself between the check and the click */
+      })
   }
 
   // FAST PATH: the worker may have claimed during its own turn. A model that
@@ -224,28 +313,81 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // rejected, so this keeps asking up to three times with a full
   // adjudication budget after each. What is being tested is unchanged: the
   // walk from a met claim through the Judge to a done pill.
+  // Grounded evidence, not an echo of the criterion — see the block
+  // comment above this loop for why.
+  //
+  // RELEASE-FLAKE FIX (run 36305587114): the steer names the same
+  // network-capable binaries preflight.go's ClassifyNetworkNeed flags
+  // (networkCapableBinaries) so a steer-driven bash call cannot land on an
+  // unapproved ADR-092 D8 pre-flight escalation — in the release run three
+  // `bash git` calls ate ~85s each of the steer budget that way. And the
+  // modal they raise is answered by denyToolApproval at loop top (run 4).
+  const steerText =
+    'Verify the goal\'s check criterion yourself, then claim it. First call the bash tool ' +
+    'with the command `true; echo $?` and read the exit code it reports. Do not run git, curl, ' +
+    'npm, wget, ssh, docker or gh — any network-capable bash calls land on an approval card ' +
+    'nobody will answer. Then call the goal_claim tool with status "met" and, for the evidence ' +
+    'argument, your own one-line statement of what you personally observed from that bash call ' +
+    '(for applied work: "ran `true` via bash and observed exit code 0, as the check requires"). ' +
+    'Do not pass the criterion text itself as evidence — describe what you verified. ' +
+    'Do not reply with prose only — the tool calls are what is required.'
+
   const STEER_ATTEMPTS = 3
   for (let attempt = 1; attempt <= STEER_ATTEMPTS && !sawDone; attempt++) {
     // Clear a stray AskUserQuestion card first — see dismissPendingAsk's own
     // comment above for why one can be sitting here blocking the composer.
+    // The tool-approval modal (run 4's blocker) is likewise answered before
+    // the typing: denyToolApproval above.
     await dismissPendingAsk()
+    await denyToolApproval()
 
-    // Grounded evidence, not an echo of the criterion — see the block
-    // comment above this loop for why.
-    await input.fill(
-      'Verify the goal\'s check criterion yourself, then claim it. First call the bash tool ' +
-        'with the command `true; echo $?` and read the exit code it reports. Then call the ' +
-        'goal_claim tool with status "met" and, for the evidence argument, your own one-line ' +
-        'statement of what you personally observed from that bash call (for example: "ran ' +
-        '`true` via bash and observed exit code 0, as the check requires"). Do not pass the ' +
-        'criterion text itself as evidence — describe what you verified. Do not reply with ' +
-        'prose only — the tool calls are what is required.',
-    )
+    // Start the done-pill wait BEFORE the typing. GoalPillTray.tsx removes a
+    // terminal pill 4s after it paints (TERMINAL_PILL_DISPLAY_MS) — see
+    // waitForDone's block comment for the run that proved a poll can miss
+    // that window entirely. The wait is in-page (waitForFunction) and runs
+    // at rAF frequency DURING the multi-second typing below, so a verdict
+    // landing mid-typing is caught instead of missed; each attempt's wait
+    // spans its own typing + 90s poll, and the next attempt's wait starts
+    // within milliseconds of this one expiring, so there is no gap.
+    const doneWait = waitForDone(90_000)
+
+    // Type the steer the way a user does, per keystroke — NOT via fill().
+    // selectors.ts::startNewChat documents that fill() bypasses the input
+    // events this composer listens to on this textarea (T22 in
+    // cancel-cross-channel.spec.ts types for the same reason); in the flaky
+    // release run the fills demonstrably never became sends, and the failed
+    // snapshot's composer still held the steer text six times concatenated —
+    // a programmatic bulk-fill artifact no real user can produce blind.
+    // Plain text (no leading "/") cannot open the slash palette, so
+    // pressSequentially is safe here; the /goal line above KEEPS fill()
+    // deliberately — a per-key "/goal …" WOULD open the palette and make
+    // Enter select a palette row instead of sending.
+    const bubblesBefore = await claimUserBubbles.count()
+    await input.click()
+    await input.pressSequentially(steerText)
     await input.press('Enter')
 
+    // FAIL FAST: the steer must reach the transcript as a user message. In
+    // the flaky release run the steer text never left the composer, and the
+    // loop then burned its full 3×90s pill budget before failing on the
+    // done-pill assertion with nothing diagnosable in the failure message.
+    // The /goal line itself is the baseline (it contains "goal_claim" by
+    // design), so each delivered steer bumps this count by exactly one.
+    // This ADDS a check; it removes none — the done pill below remains the
+    // sole pass decider.
+    await expect(
+      claimUserBubbles,
+      `t0: steer ${attempt}/${STEER_ATTEMPTS} never became a user message — the composer did ` +
+        'not send it (this is the exact mechanism of release run 36305587114, where the steer ' +
+        'text sat in the composer while the loop burned its 90s pill budgets). Failing here ' +
+        'instead of riding out a pointless 90s wait.',
+    ).toHaveCount(bubblesBefore + 1, { timeout: 30_000 })
+
     // Adjudication is DEFERRED until after the reply is delivered (D13), so
-    // the walk is claim → judging (ephemeral) → done.
-    sawDone = await waitForDone(90_000)
+    // the walk is claim → judging (ephemeral) → done. doneWait has been
+    // running since BEFORE the typing — it covers the typing blind spot, and
+    // its 90s clock started at the dismiss above.
+    sawDone = await doneWait
     if (!sawDone && attempt < STEER_ATTEMPTS) {
       console.log(`t0: no done pill after steer ${attempt}/${STEER_ATTEMPTS} — asking again`)
     }

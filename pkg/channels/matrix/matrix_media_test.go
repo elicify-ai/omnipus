@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 )
 
 // newTestMatrixChannel builds a running MatrixChannel with no live mautrix
@@ -42,7 +43,7 @@ func newTestMatrixChannel(t *testing.T) *MatrixChannel {
 // (or how few) parts actually made it out.
 func TestSendMedia_ResolveFailureReturnsError(t *testing.T) {
 	ch := newTestMatrixChannel(t)
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
@@ -65,7 +66,7 @@ func TestSendMedia_ResolveFailureReturnsError(t *testing.T) {
 // through to an unconditional `return nil`.
 func TestSendMedia_OpenFailureReturnsError(t *testing.T) {
 	ch := newTestMatrixChannel(t)
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	tmpDir := t.TempDir()
@@ -113,7 +114,7 @@ func TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning(t *testing.T) {
 	})
 
 	ch := newTestMatrixChannel(t)
-	ch.SetMediaStore(media.NewFileMediaStore())
+	ch.SetMediaStore(mediatest.NewFileMediaStore(t))
 
 	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "!room:matrix.test",
@@ -188,7 +189,7 @@ func TestSendMedia_PartialFailureReturnsError(t *testing.T) {
 	base.SetRunning(true)
 	ch := &MatrixChannel{BaseChannel: base, client: client}
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	tmpDir := t.TempDir()
@@ -256,7 +257,7 @@ func TestSendMedia_MidLoopUploadFailureAfterPartialSuccessIsPermanent(t *testing
 	base.SetRunning(true)
 	ch := &MatrixChannel{BaseChannel: base, client: client}
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	tmpDir := t.TempDir()

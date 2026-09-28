@@ -36,6 +36,38 @@ type Tree struct {
 	C     TreeNode
 	Nodes []TreeNode
 
+	// RebuildAfterReboot, when set, lets a caller reconstruct dependencies
+	// that captured the PRE-CRASH *session.LifecycleStore instance (e.g. a
+	// Canceller or RecordClassifier built once at harness setup, wired to
+	// the store variable that existed before Crash) so they operate against
+	// the SAME reopened store Reboot installs into deps.LifecycleStore,
+	// instead of silently continuing to serialize through a now-orphaned
+	// lock pool that no reader of the reopened store shares.
+	//
+	// Each *session.LifecycleStore owns its own independent 64-shard
+	// striped lock (lifecycle_lock.go: "a property of THIS store instance
+	// ... not shared across LifecycleStore values") and its own in-memory
+	// parentIndex cache. Reboot below replaces deps.LifecycleStore with a
+	// brand-new instance (deliberately — this simulates a real process
+	// restart's fresh boot, not an in-place reset), but a dependency that
+	// captured the OLD instance before Crash (deps.Canceller,
+	// deps.Classifier) is NOT reassigned automatically, because Tree has no
+	// access to whatever wired it (e.g. an *agent.AgentLoop it doesn't
+	// hold). Left unset, Canceller/Classifier keep using the pre-crash
+	// store, which every current caller does today by omitting this hook —
+	// harmless for THIS package's own reads (Load-only; safe under
+	// O_APPEND's atomic single-write semantics and tail's torn-line
+	// tolerance, per lifecycle.go), but a genuine risk the day a caller
+	// mixes a WRITE through the reopened store with a write through the
+	// stale one: two independent lock pools give up the read-modify-write
+	// serialization Mutate exists to provide, over the same on-disk
+	// directory.
+	//
+	// nil (the default) is a no-op — Canceller/Classifier are left exactly
+	// as they were, matching every caller that predates this field. Return
+	// nil for either return value to leave that one dependency untouched.
+	RebuildAfterReboot func(lifecycle *session.LifecycleStore, sessions *session.UnifiedStore) (canceller steer.Canceller, classifier steer.RecordClassifier)
+
 	mu           sync.Mutex
 	t            fixtureT
 	deps         steer.Deps
@@ -291,6 +323,15 @@ func (tree *Tree) Reboot(ctx context.Context) error {
 	}
 	tree.deps.SessionStore = sessions
 	tree.deps.LifecycleStore = session.NewLifecycleStore(tree.lifecycleDir)
+	if tree.RebuildAfterReboot != nil {
+		canceller, classifier := tree.RebuildAfterReboot(tree.deps.LifecycleStore, tree.deps.SessionStore)
+		if canceller != nil {
+			tree.deps.Canceller = canceller
+		}
+		if classifier != nil {
+			tree.deps.Classifier = classifier
+		}
+	}
 	tree.crashed = false
 	bootHook := tree.deps.BootHook
 	tree.mu.Unlock()

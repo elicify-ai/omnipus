@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 )
 
 // buildWeComTwoPartMediaMessage stores two small local JPEGs in the given
@@ -59,7 +60,7 @@ func TestSendMedia_MidLoopSendFailureAfterPartialSuccessIsPermanent(t *testing.T
 	ch := newTestWeComChannel(t, bus.NewMessageBus())
 	ch.SetRunning(true)
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	initCalls := 0
@@ -120,7 +121,7 @@ func TestSendMedia_FirstPartSendFailureWithNothingSentIsTemporary(t *testing.T) 
 	ch := newTestWeComChannel(t, bus.NewMessageBus())
 	ch.SetRunning(true)
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	ch.commandSend = func(cmd wecomCommand, _ time.Duration) (wecomEnvelope, error) {
@@ -163,7 +164,7 @@ func TestSendMedia_MidLoopCaptionFailureAfterPartialSuccessIsPermanent(t *testin
 	ch := newTestWeComChannel(t, bus.NewMessageBus())
 	ch.SetRunning(true)
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	sendMsgCalls := 0

@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 )
 
 type recordingCancelInterceptor struct {
@@ -106,7 +107,7 @@ func TestDispatchIncoming_DeniedSenderDoesNotDownloadMedia(t *testing.T) {
 		t.Fatalf("NewChannel() error = %v", err)
 	}
 	ch.ctx = context.Background()
-	ch.SetMediaStore(media.NewFileMediaStore())
+	ch.SetMediaStore(mediatest.NewFileMediaStore(t))
 
 	mediaRequests := 0
 	ch.mediaClient = &http.Client{
@@ -428,7 +429,7 @@ func TestSendMedia_SendsActiveImage(t *testing.T) {
 	ch := newTestWeComChannel(t, bus.NewMessageBus())
 	ch.SetRunning(true)
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	imageData := wecomTestJPEGData(t)
@@ -525,7 +526,7 @@ func TestSendMedia_UsesTurnImageAndFinishesStream(t *testing.T) {
 	ch := newTestWeComChannel(t, bus.NewMessageBus())
 	ch.SetRunning(true)
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	imageData := wecomTestJPEGData(t)
@@ -632,7 +633,7 @@ func TestSendMedia_SendsActiveFile(t *testing.T) {
 	ch := newTestWeComChannel(t, bus.NewMessageBus())
 	ch.SetRunning(true)
 
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ch.SetMediaStore(store)
 
 	filePath := filepath.Join(t.TempDir(), "report.pdf")

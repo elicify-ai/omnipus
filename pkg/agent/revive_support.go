@@ -121,9 +121,18 @@ func (al *AgentLoop) clearRevivalFailure(sessionID string) {
 func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey string) {
 	// Tracked in activeRequests so shutdown drains it (#265), like the
 	// unroutable path.
-	al.activeRequests.Add(1)
+	if !al.beginActiveRequest() {
+		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
+			"site":        "runRevivedOrdinaryTurn",
+			"channel":     msg.Channel,
+			"chat_id":     msg.ChatID,
+			"session_id":  msg.SessionID,
+			"session_key": sessionKey,
+		})
+		return
+	}
 	go func() {
-		defer al.activeRequests.Done()
+		defer al.endActiveRequest()
 
 		var (
 			response  string

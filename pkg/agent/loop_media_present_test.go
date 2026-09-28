@@ -35,6 +35,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
+	"github.com/elicify-ai/omnipus/pkg/media/mediatest"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
@@ -120,7 +121,7 @@ func realPNGBytes() []byte {
 // filesystem path appear in content.
 func TestPresentation_Step1Gate_TextOnlyModel_RoutesToOffload(t *testing.T) {
 	const model = "deepseek/deepseek-chat"
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	pngPath := filepath.Join(t.TempDir(), "img.png")
 	require.NoError(t, os.WriteFile(pngPath, realPNGBytes(), 0o600))
@@ -152,7 +153,7 @@ func TestPresentation_Step1Gate_TextOnlyModel_RoutesToOffload(t *testing.T) {
 // passes and step 2 normalize runs — the image appears as a PNG data URL.
 func TestPresentation_Step1Gate_VisionModel_Proceeds(t *testing.T) {
 	const model = "anthropic/claude-sonnet-4"
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	pngPath := filepath.Join(t.TempDir(), "img.png")
 	require.NoError(t, os.WriteFile(pngPath, realPNGBytes(), 0o600))
@@ -180,7 +181,7 @@ func TestPresentation_Step1Gate_VisionModel_Proceeds(t *testing.T) {
 // means the gate is not wired; the optimistic default applies (assume
 // image-capable). The image proceeds to step 2 normalize as before T9.
 func TestPresentation_Step1Gate_NilCatalog_Optimistic(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	pngPath := filepath.Join(t.TempDir(), "img.png")
 	require.NoError(t, os.WriteFile(pngPath, realPNGBytes(), 0o600))
@@ -209,7 +210,7 @@ func TestPresentation_Step1Gate_NilCatalog_Optimistic(t *testing.T) {
 // routes through offload+markup because the gate blocks rasterization.
 func TestPresentation_Step1Gate_TextOnlyModel_SVG_GetsOffloadPlusMarkup(t *testing.T) {
 	const model = "z-ai/glm-5.2"
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 
 	svgPath := filepath.Join(t.TempDir(), "circle.svg")
 	require.NoError(t, os.WriteFile(svgPath, []byte(
@@ -439,7 +440,7 @@ func TestE2E_AnyFileAnyModel_UsefulTurn(t *testing.T) {
 	if model == "" {
 		t.Skip("skipping media E2E; set OMNIPUS_E2E_VISION_MODEL=<model-id> to run")
 	}
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ref, _ := storeFile(t, store, "photo.avif", "image/avif", []byte("unsupported-fake-bytes"))
 
 	workDir := filepath.Join(t.TempDir(), "work")
@@ -475,7 +476,7 @@ func TestE2E_TextOnlyModel_ImageSurvivesAsOffload(t *testing.T) {
 	if model == "" {
 		t.Skip("skipping media E2E; set OMNIPUS_E2E_NO_VISION_MODEL=<model-id> to run")
 	}
-	store := media.NewFileMediaStore()
+	store := mediatest.NewFileMediaStore(t)
 	ref, _ := storeFile(t, store, "img.png", "image/png", realPNGBytes())
 
 	workDir := filepath.Join(t.TempDir(), "work")

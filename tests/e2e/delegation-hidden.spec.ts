@@ -53,6 +53,16 @@
  * need no panel (zero subagent-collapsed, exactly one delegate chip);
  * closeActivityPanel is gone with its only call site.
  *
+ * UPDATE (2026-09-28, delegation-hidden-224 lane, CI run 36373062469 job
+ * 108773503946): the child's task asked for a bash `echo` — but the parent
+ * prompt names no target agent, so the child ran as Jim, whose explicit
+ * ADR-090 bash Deny made it refuse; the parent then woke on the hand-back,
+ * re-delegated the command to General Purpose and polled twice more — 5
+ * delegate calls where the tail pins exactly one (badge count 1 vs 5). The
+ * child's task now needs no tool at all ("reply with the single word done,
+ * use no tool"), which is agent-independent. Assertions, timeouts and the
+ * count(1) pin are unchanged.
+ *
  * UPDATE (2026-07-17): the two root causes the history block below
  * documents are now BOTH fixed.
  *   (1) `src/routes/_app/sessions.$sessionId.tsx`'s loader no longer
@@ -228,8 +238,8 @@ test(
   'default policy: a completed live delegation never shows a subagent-collapsed card (deleted by ADR-091); the Activity panel row + open control are verified while the panel is held open from in-flight through completion, and the delegate line + zero-card rule persist across the verbose-chat toggle (no reload)',
   async ({ page }) => {
     requireApiKey();
-    // 300s budget: one live delegate round-trip (parent delegate + subagent's
-    // bash echo) plus the Settings toggle + reopen. Matches the sibling
+    // 300s budget: one live delegate round-trip (parent delegate + a no-tool
+    // child reply) plus the Settings toggle + reopen. Matches the sibling
     // specs' documented 150-300s range for a single delegate call under
     // suite load (see handoff.spec.ts's (b) comment for the same figure).
     test.setTimeout(300_000);
@@ -252,28 +262,64 @@ test(
 
     // When: a real delegation completes. Deterministic prompt mirrors
     // handoff.spec.ts's (b) — explicit tool name, exact arguments, no prose.
+    // The child's task deliberately needs NO tool (changed 2026-09-28, CI run
+    // 36373062469 job 108773503946): the prompt names no target agent, so the
+    // child ran as Jim, whose explicit ADR-090 bash Deny made the old echo
+    // task refuse — the parent then woke on the hand-back, re-delegated the
+    // command to General Purpose and polled twice more, emitting 5 delegate
+    // calls where this test pins exactly one. A no-tool task is
+    // agent-independent: any child can reply "done" unaided.
     await input.fill(
       [
         'Call the `delegate` tool exactly once, right now, with these arguments:',
         `  label: "${label}"`,
-        '  task: "You are the subagent. Call the `bash` tool ONCE with action=\\"run\\" and command=\\"echo hello\\". Then reply with the single word \\"done\\". Do not use any other tool."',
+        '  task: "You are the subagent. Reply with the single word \\"done\\". Do not use any tool."',
         'Do not reply in prose. Do not call any other tool. Call delegate now.',
       ].join('\n'),
     );
     await input.press('Enter');
 
-    // IN-FLIGHT ANCHOR: the delegate chip renders the instant the parent
-    // emits the call — while the child's span is still open. It is the
+    // IN-FLIGHT ANCHOR: the delegated event line renders the moment the
+    // child's span lands (subagent_start arrives ~immediately after the
+    // parent emits the call) — while the span is still open. It is the
     // earliest reliably-mountable moment for the Activity bar: subagent_start
     // puts an agent item in `running`, satisfying ActivityBar.tsx's
-    // shouldMount (= hasOpenAgentChildren || panelOpen || hasFailedRecent,
-    // ActivityBar.tsx:94). This test's child ("echo hello" then "reply
-    // done") can complete in well under 30s under a fast model — CI run
-    // 36026415761: attempt 1 lost the old post-settings panel-open race at
-    // 28.9s, retry #1 won it at 27.2s; that coin flip is what this
-    // reordering removes.
-    const delegateChip = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]');
-    await expect(delegateChip.first()).toBeVisible({ timeout: 60_000 });
+    // mount gate (showAgents = agentOpen || failedAgents ||
+    // panelOpen-retention — `if (!showAgents && !showCommands) return null`,
+    // ActivityBar.tsx::ActivityBar). The no-tool child completes fast (one LLM turn, no
+    // tool round-trip — faster than the old "echo hello" child), but the
+    // panel open does not race the child's duration: it fires from this
+    // anchor within a render of the span's birth, and panelOpen (React state
+    // on the unchanged ChatScreen mount) holds the bar up through completion
+    // regardless of when subagent_end lands. The historical race this
+    // reordering removed was against the OLD post-settings panel open (CI run
+    // 36026415761: attempt 1 lost at 28.9s, retry #1 won it at 27.2s) — a
+    // race a faster child would only make worse, which is why the anchor, not
+    // the child's runtime, is what the open rests on.
+    //
+    // UPDATE 2026-09-27: fe1e2406a (delegation-chat-surface spec D2) hid the
+    // delegate tool-call badge from the default non-verbose thread, so the
+    // old `[data-testid="tool-call-badge"][data-tool="delegate"]` anchor was
+    // a dead locator. The grey event line IS the default-thread delegation
+    // surface now — and it is the line's OWN birth that proves "the call
+    // happened" while the delegation is still in flight. Birth-kind list +
+    // label filter, for the reasons subagent.spec.ts test (a) states in full.
+    const delegateLine = page
+      .locator(
+        '[data-testid="delegation-event-line"][data-event-kind="delegated"], [data-testid="delegation-event-line"][data-event-kind="started"]',
+      )
+      .filter({ hasText: label });
+    await expect(delegateLine.first()).toBeVisible({ timeout: 60_000 });
+
+    // And the other half of this file's charter, pinned directly now that
+    // fe1e2406a made it the actual policy: in the DEFAULT (verbose-off)
+    // thread the delegate tool-call badge is HIDDEN — zero badges, even while
+    // this test's own delegation is demonstrably in flight (the line above
+    // proves it is). Visibility here is computed per render from the same
+    // records the line derives from (shouldRenderToolCall's `delegate` case
+    // returns false when verbose chat is off), so a single count is exact,
+    // not a race.
+    await expect(page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]')).toHaveCount(0);
 
     // Open the panel WHILE the delegation is in flight; panelOpen (React
     // state on this unchanged ChatScreen mount) then keeps the bar mounted
@@ -346,12 +392,14 @@ test(
     // verbose chat would slip past the earlier assertion alone.
     await expect(collapsedBlocks).toHaveCount(0);
 
-    // And: the delegate tool-call chip — the parent thread's ONLY
-    // delegation surface now (toolVisibility.ts's shouldRenderToolCall,
-    // `delegate` case; ADR-091 D7/AC-7) — is still there. Its own
-    // visibility was never gated by verbose chat to begin with (the
-    // `delegate`/`run` case returns `true` unconditionally, isError
-    // included), so the toggle must not have disturbed it either.
+    // And: the delegate tool-call badge — the VERBOSE-chat delegation surface
+    // (shouldRenderToolCall's `delegate` case returns true only under verbose
+    // chat since fe1e2406a, delegation-chat-surface spec D2/AC-9) — is there
+    // exactly once, because this test made exactly one delegate call. This is
+    // the mirror of the default-half's count(0) above: together they pin the
+    // toggle actually flipping the badge surface OFF→ON; the grey event line
+    // renders in BOTH halves (independent of the toggle), which is why the
+    // line carries the default-view guarantee on its own.
     await expect(
       page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]'),
     ).toHaveCount(1);

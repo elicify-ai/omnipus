@@ -19,9 +19,15 @@
  * provided by global-setup.ts unless stated otherwise.
  */
 
-import { expect } from '@playwright/test'
+import { errors, expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, assistantMessages, newChatButton, waitForConnected } from './fixtures/selectors'
+import {
+  chatInput,
+  assistantMessages,
+  newChatButton,
+  waitForConnected,
+  dismissStaleDialogOverlay,
+} from './fixtures/selectors'
 
 // ─── Bug-1: Skip onboarding button must be gone ───────────────────────────────
 
@@ -176,7 +182,7 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
   test(
     '(Bug-3-a) two chats opened in parallel both receive replies',
     async ({ page, context }) => {
-      // Real LLM turns in two tabs; glm-5.2 (the standard e2e model) is reliable
+      // Real LLM turns in two tabs; the central e2e model (tests/e2e/e2e-model.json) is reliable
       // but slower than the old gemini pick, so budget the full slow ceiling.
       test.slow()
       // BDD: Given two browser tabs open to different chat sessions
@@ -208,13 +214,20 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
         await expect(assistantMessages(page2)).toHaveCount(0, { timeout: 10_000 })
       }
 
-      // Send messages on both tabs nearly simultaneously.
+      // Send messages on both tabs nearly simultaneously. Dismiss first
+      // (BOTH tabs): a retry attempt's fresh page rehydrates any approval the
+      // failed attempt left pending (session_state frame on every WS connect),
+      // and that Radix dialog's focus trap hijacks the composer's Enter press
+      // (activates the focused Deny button), so the message is never sent at
+      // all. Same guard as Bug-5-a/5-b's turns.
+      await dismissAndAnnotate(page)
+      await dismissAndAnnotate(page2)
       await input1.fill('Bug-3 concurrent test hello tab1')
       await input2.fill('Bug-3 concurrent test hello tab2')
       await input1.press('Enter')
       await input2.press('Enter')
 
-      // Both must get a settled reply. glm-5.2 (the standard e2e model) is
+      // Both must get a settled reply. The central e2e model (tests/e2e/e2e-model.json) is
       // reliable but slower than the old gemini pick, and concurrent turns share
       // the model, so allow generous headroom.
       const replyTimeout = 90_000
@@ -225,37 +238,140 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       // on send (ChatScreen.tsx ~860 emits data-message-id + data-status="running"
       // before any token arrives). Without the `:not([data-status="running"])`
       // exclusion the test would go green the instant Enter is pressed — even under
-      // total session starvation, the exact bug it guards. So we reuse the
-      // `assistantMessages` helper (selectors.ts), which excludes running
+      // total session starvation, the exact bug it guards. So the drain waits reuse
+      // the `assistantMessages` helper (selectors.ts), which excludes running
       // placeholders. This STILL tolerates a provider-interrupted reply: an
       // interrupted/incomplete message has data-status "incomplete"/"interrupted",
       // NOT "running", so it is still admitted as a serviced reply.
-      const anyAssistantReply = (p: typeof page) => assistantMessages(p)
-
-      // Wait for at least one settled assistant reply in tab 1.
-      await expect(anyAssistantReply(page).first()).toBeVisible({ timeout: replyTimeout })
-        .catch((e) => {
-          throw new Error(
-            `BUG-3: Tab 1 did not receive a reply within ${replyTimeout / 1000}s. ` +
-            `This indicates session starvation — while tab 2 was processing, ` +
-            `tab 1 was blocked. Original error: ${e.message}`,
-          )
-        })
+      await expectAnyAssistantMessageWithApprovalDrain(page, replyTimeout).catch((e) => {
+        throw new Error(
+          `BUG-3: Tab 1 did not receive a reply within ${replyTimeout / 1000}s. ` +
+          `This indicates session starvation — while tab 2 was processing, ` +
+          `tab 1 was blocked. Original error: ${e.message}`,
+        )
+      })
 
       // Wait for at least one assistant reply in tab 2.
-      await expect(anyAssistantReply(page2).first()).toBeVisible({ timeout: replyTimeout })
-        .catch((e) => {
-          throw new Error(
-            `BUG-3: Tab 2 did not receive a reply within ${replyTimeout / 1000}s. ` +
-            `This indicates session starvation — while tab 1 was processing, ` +
-            `tab 2 was blocked. Original error: ${e.message}`,
-          )
-        })
+      await expectAnyAssistantMessageWithApprovalDrain(page2, replyTimeout).catch((e) => {
+        throw new Error(
+          `BUG-3: Tab 2 did not receive a reply within ${replyTimeout / 1000}s. ` +
+          `This indicates session starvation — while tab 1 was processing, ` +
+          `tab 2 was blocked. Original error: ${e.message}`,
+        )
+      })
 
       await page2.close()
     },
   )
 })
+
+/**
+ * Dismiss any ADR-092 tool-approval dialog, and make the drain VISIBLE.
+ *
+ * Dismissing a dialog = Deny, server-side (Escape on a live approval maps to
+ * Deny — ToolApprovalModal.tsx::handleDismissRequest), so a drain is not
+ * neutral harness bookkeeping: the model continues past a REFUSED tool. CI
+ * must see when that happened, so every dismissal becomes a test annotation
+ * (visible in the report; the drain can no longer hide a Deny inside a green).
+ */
+async function dismissAndAnnotate(page: Page): Promise<void> {
+  const dismissedDialogs = await dismissStaleDialogOverlay(page)
+  for (const dialogText of dismissedDialogs) {
+    test.info().annotations.push({
+      type: 'approval-drained',
+      description:
+        `Approval dialog dismissed via Escape → server-side Deny — the run ` +
+        `continues past the refused tool: ${dialogText}`,
+    })
+  }
+}
+
+/**
+ * One poll-tick body shared by both drain waits: dismiss any approval dialog
+ * (annotating each dismissal), ride out ONLY its 15s budget expiry — which
+ * dismissStaleDialogOverlay throws as a genuine `errors.TimeoutError` by
+ * construction — and report the number of settled assistant messages. Any
+ * other error (a TargetClosedError from a closed page, a TypeError from a
+ * broken helper) propagates and fails the test loudly instead of being
+ * swallowed for the rest of the budget.
+ */
+async function drainApprovalDialogsAndCount(page: Page): Promise<number> {
+  try {
+    await dismissAndAnnotate(page)
+  } catch (err) {
+    if (!(err instanceof errors.TimeoutError)) throw err
+    // The overlay drainer's own 15s budget expired; keep counting anyway —
+    // this outer poll owns the overall budget and a later interval can still
+    // clear the dialog.
+  }
+  return assistantMessages(page).count()
+}
+
+/**
+ * Bug-5 count-wait that drains a pending ADR-092 tool-approval dialog while
+ * waiting for assistant messages.
+ *
+ * Mechanism this guards (CI run 36328177911, job 108646568376, E2E llm-light):
+ * a two-turn chat run is not guaranteed tool-free. When the model calls
+ * `bash` and the ADR-092 D7/D8 pre-flight escalates, the run blocks on the
+ * approval modal for up to the server approval timeout (600s,
+ * pkg/gateway/gateway.go::defaultToolApprovalTimeout): the turn's assistant
+ * message stays data-status="running", which assistantMessages() does not
+ * count, so a plain toHaveCount() times out even though nothing is broken.
+ * Worse, a retry attempt's fresh page rehydrates the still-pending approval
+ * as a reconnect stub (session_state.pending_approvals on every WS connect →
+ * toolApproval.ts::reconcileWithSessionState), and the Radix dialog's focus
+ * trap then captures the composer's Enter press and activates the focused
+ * Deny button — the new message is never sent at all (gateway log: bash
+ * "not approved (user)", duration 95003).
+ *
+ * dismissStaleDialogOverlay() is the sanctioned disposal (commit 585b70b1b,
+ * added for the same failure class in chat specs): Escape ON the overlay
+ * denies server-side, so the blocked run resolves, the model continues past
+ * the refused tool, and the turn finalizes. Dismissing before each poll
+ * interval keeps the counts reachable without widening a single timeout —
+ * the same counts are still required within the same budgets. Dismissals are
+ * annotated (`approval-drained`) so the report shows every Deny the drain
+ * recorded; see dismissAndAnnotate above.
+ */
+async function expectAssistantMessagesWithApprovalDrain(
+  page: Page,
+  count: number,
+  timeoutMs: number,
+): Promise<void> {
+  await expect
+    .poll(async () => drainApprovalDialogsAndCount(page), {
+      timeout: timeoutMs,
+      intervals: [500, 1_000, 2_000, 4_000],
+    })
+    .toBe(count)
+}
+
+/**
+ * Bug-3 variant: waits for AT LEAST ONE settled assistant message to be
+ * visible — the exact predicate of the plain wait it replaces
+ * (expect(assistantMessages(p).first()).toBeVisible()), poll-shaped so the
+ * approval drain fits inside, with the SAME budget the plain waits used. No
+ * weakening: the settled-reply requirement is unchanged (assistantMessages
+ * excludes the data-status="running" placeholder ChatScreen.tsx ~860 renders
+ * synchronously on send, so the test cannot go green the instant Enter is
+ * pressed — the session-starvation signal it guards); only the drain ticks
+ * are added.
+ */
+async function expectAnyAssistantMessageWithApprovalDrain(
+  page: Page,
+  timeoutMs: number,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await drainApprovalDialogsAndCount(page)
+        return assistantMessages(page).first().isVisible()
+      },
+      { timeout: timeoutMs, intervals: [500, 1_000, 2_000, 4_000] },
+    )
+    .toBe(true)
+}
 
 // ─── Bug-5: Replay frame ordering preserved on reconnect ─────────────────────
 
@@ -263,7 +379,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   test(
     '(Bug-5-a) navigating away and back to a session preserves message order',
     async ({ page }) => {
-      // Real LLM turn + replay; glm-5.2 (the standard e2e model) is reliable but
+      // Real LLM turn + replay; the central e2e model (tests/e2e/e2e-model.json) is reliable but
       // slower than the old gemini pick, so budget the full slow ceiling.
       test.slow()
       // BDD: Given a chat session with at least 1 assistant message
@@ -283,10 +399,15 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
       }
 
-      // Send a message and wait for reply.
+      // Send a message and wait for reply. Dismiss first: a retry attempt's
+      // fresh page rehydrates any approval the failed attempt left pending
+      // (session_state frame on every WS connect), and that dialog's focus
+      // trap hijacks the composer's Enter press (activates the focused Deny
+      // button), so the message is never sent. Same guard as Bug-5-b's turns.
+      await dismissAndAnnotate(page)
       await input.fill('Bug-5 replay order test message one')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 })
+      await expectAssistantMessagesWithApprovalDrain(page, 1, 90_000)
 
       // Capture the text of the first assistant message.
       const firstMessageText = await assistantMessages(page).first().textContent()
@@ -328,7 +449,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   test(
     '(Bug-5-b) two-turn session: turns appear in chronological order after replay',
     async ({ page }) => {
-      // Two real LLM turns + replay; glm-5.2 (the standard e2e model) is reliable
+      // Two real LLM turns + replay; the central e2e model (tests/e2e/e2e-model.json) is reliable
       // but slower than the old gemini pick, so budget the full slow ceiling.
       test.slow()
       // BDD: Given a session with 2 turns (user→assistant, user→assistant)
@@ -347,15 +468,21 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
       }
 
-      // Turn 1.
+      // Turn 1. Dismiss first: a retry attempt's fresh page rehydrates any
+      // approval the failed attempt left pending (session_state frame on
+      // every WS connect), and that dialog's focus trap hijacks the
+      // composer's Enter press (activates the focused Deny button), so the
+      // message is never sent.
+      await dismissAndAnnotate(page)
       await input.fill('Bug-5 turn 1 — first message')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 })
+      await expectAssistantMessagesWithApprovalDrain(page, 1, 90_000)
 
       // Turn 2.
+      await dismissAndAnnotate(page)
       await input.fill('Bug-5 turn 2 — second message')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(2, { timeout: 90_000 })
+      await expectAssistantMessagesWithApprovalDrain(page, 2, 90_000)
 
       // Capture original ordering.
       const originalTexts = await assistantMessages(page).allTextContents()

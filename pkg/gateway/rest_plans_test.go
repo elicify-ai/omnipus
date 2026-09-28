@@ -100,9 +100,9 @@ func newTestRestAPIWithPlans(t *testing.T) *restAPI {
 	// ORDER IS LOAD-BEARING, in two directions:
 	//
 	//  - Within this cleanup: pe.Stop() drains the WHOLE wake turn (wakeWG),
-	//    of which WaitForActiveRequests only ever covered the LLM call itself
-	//    (activeRequests is Add-ed inside runTurn around the provider call,
-	//    loop.go, not around the turn). So Stop first, then wait. Neither is
+	//    while WaitForActiveRequests only covers the LLM call itself because
+	//    callProviderOnce admits that request, not the whole turn. So Stop
+	//    first, then wait. Neither is
 	//    redundant: WaitForActiveRequests still covers turns this engine did
 	//    not dispatch — the Run pump and ExecuteBoardTask — which pe.Stop()
 	//    knows nothing about.
@@ -809,8 +809,8 @@ func (p *blockingWakeProvider) GetDefaultModel() string { return "test-model" }
 // ⚠ WHAT THIS TEST DOES NOT PROVE. It does NOT discriminate the harness's
 // pe.Stop() drain, and it must not be read as if it did. Verified by mutation:
 // with pe.Stop() removed from the cleanup this test is 5/5 GREEN. The reason is
-// structural — activeRequests is Add-ed inside runTurn around the PROVIDER CALL
-// (loop.go), which is exactly where the gate below holds the turn, so
+// structural — callProviderOnce admits only the PROVIDER CALL to activeRequests,
+// which is exactly where the gate below holds the turn, so
 // WaitForActiveRequests alone covers the held window. The windows pe.Stop()
 // actually adds are the ones this test cannot hold open from outside:
 //

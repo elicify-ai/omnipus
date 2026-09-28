@@ -18,15 +18,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// dispatchUnroutableMessage is the single-shot dispatcher for a message with
-// no resolvable steering target: processMessage, ADR-051 error translation,
-// and the C8 terminal-frame guarantee, tracked in activeRequests (#265) so
-// shutdown drains it. Run launches it as
-//
-//	al.activeRequests.Add(1)
-//	go al.dispatchUnroutableMessage(runCtx, msg)
+// dispatchUnroutableMessage is the single-shot dispatcher for an admitted
+// message with no resolvable steering target: processMessage, ADR-051 error
+// translation, and the C8 terminal-frame guarantee, tracked in activeRequests
+// (#265) so shutdown drains it. If shutdown has already closed intake,
+// launchUnroutableMessage drops the message before this function starts and no
+// terminal frame is emitted; channels stop first, so that frame is undeliverable.
 func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.InboundMessage) {
-	defer al.activeRequests.Done()
+	defer al.endActiveRequest()
 
 	var response string
 	var ag *AgentInstance
@@ -134,4 +133,18 @@ func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.I
 		al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
 		published = true
 	}
+}
+
+func (al *AgentLoop) launchUnroutableMessage(runCtx context.Context, msg bus.InboundMessage) {
+	if !al.beginActiveRequest() {
+		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
+			"site":        "launchUnroutableMessage",
+			"channel":     msg.Channel,
+			"chat_id":     msg.ChatID,
+			"session_id":  msg.SessionID,
+			"session_key": msg.SessionKey,
+		})
+		return
+	}
+	go al.dispatchUnroutableMessage(runCtx, msg)
 }

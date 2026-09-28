@@ -993,6 +993,9 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 				OperatorNotice: func(message string) {
 					slog.Warn("gateway: ADR-091 boot recovery notice", "message", message)
 				},
+				// (e)three (FD1=A, #947 defect 1): the boot sweep's
+				// failInterrupted terminal write also ends the session-owned goal.
+				EndSessionGoal: stg.agentLoop.EndSessionOwnedGoalOnTerminal,
 			}
 			return recovery.Run(ctx)
 		},

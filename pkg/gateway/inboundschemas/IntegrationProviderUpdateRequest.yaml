@@ -1,10 +1,16 @@
 type: object
 description: >
   Body for PUT /api/v1/integrations/providers/{id}. Configures a search or
-  voice-input integration provider (FR-12.1). Setting an api_key stores it
-  encrypted (AES-256-GCM) in credentials.json and writes only the credential
-  reference to config.json. Setting active=true selects this provider as the
-  active one for its kind. Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6).
+  voice-input integration provider (FR-12.1). ADR-096: storing a key is
+  separable from assigning a role — an api_key alone changes no role — and the
+  PUT makes its writes live in the same request by triggering a config reload
+  before it responds; the response is built from post-reload state (FR-033).
+  Integration edits are sensitive. In the core edition (local auth mode) the
+  request must carry a re-auth consent token in the X-Reauth-Token header — call
+  POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted
+  editions (platform auth mode) the SPA confirms the change with the operator
+  before sending and the wire guard is the authenticated session (ADR-0008
+  ruling 6).
 required:
   - kind
 additionalProperties: false
@@ -21,8 +27,31 @@ properties:
     description: >
       API key for the provider. Stored encrypted; omit to leave the current key
       unchanged. Required when first configuring a key-requiring provider.
+      Storing a key alone (with no role fields in the same request) changes no
+      role (ADR-096 D18 / AC-15).
     example: "BSA-abc123"
   active:
     type: boolean
-    description: When true, select this provider as the active one for its kind.
+    description: >
+      Assign the default role. Search: make this provider the web-search default
+      (tried first; it also switches the provider on, and never deletes another
+      provider's key reference — ADR-096 FR-005). Voice: make this provider the
+      active transcriber — behaviour unchanged (ADR-096 D19-neutral voice rule).
+      An explicit false is rejected with 400: roles are moved by setting another
+      provider active, they are not unset (ADR-096 D18 — a silently accepted
+      no-op is how a UI comes to lie).
+    example: true
+  fallback:
+    type: boolean
+    description: >
+      Assign the fallback role. Search only; a fallback field on a voice request
+      is rejected with 400. Search, true: make this provider the web-search
+      fallback — the provider tried once when the default fails with a hop-class
+      failure (ADR-096 D4, D17). Rejected with 400 when this id is also the
+      default in the same request, or is the stored default — a provider cannot
+      fall back to itself (ADR-096 FR-006 / R5's save rule). Search, false: set
+      the fallback to none ("No fallback"), regardless of which provider id is
+      addressed — an explicit none is a choice, and is never flipped when the
+      default changes (ADR-096 D4). An explicit false on a voice request is
+      rejected with 400 for the same reason an explicit false active is.
     example: true

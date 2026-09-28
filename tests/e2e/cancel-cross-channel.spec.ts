@@ -167,7 +167,7 @@ function safeMtimeMs(p: string): number {
  * A prompt that reliably produces multi-second, tool-free streaming output.
  *
  * Forbidding tools and demanding inline prose: on a bare "write 500 words" prompt,
- * gemini-2.5-flash intermittently shortcuts to the write_file TOOL (Jim has an
+ * the earlier pick intermittently shortcuts to the write_file TOOL (Jim has an
  * explicit "allow" policy entry for it), which ends the turn instantly with
  * zero inline stream and no cancellable window. Forcing long inline prose
  * keeps stop-btn live for several seconds so Stop/Escape/cancel land mid-stream.
@@ -404,39 +404,62 @@ test(
 //      And transcript.jsonl contains a {type: "turn_canceled"} entry
 //      And that entry has a non-empty descendants_canceled array.
 //
-// Both delegation modes were covered — both went through the single, unified
-// `delegate` tool (ADR-036), differentiated only by its `async` argument:
+// T24a/T24b once covered two delegation modes of the single unified `delegate`
+// tool (ADR-036), selected by its `async` argument:
 //   T24a — `delegate` async=true  (background): the descendant streams in the
 //                                   background while the parent turn stays live.
 //   T24b — `delegate` async=false (await):      the parent turn BLOCKS on the
 //                                   descendant's run until it returns (or is
 //                                   cancelled).
-// ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged):
-// ADR-091 D4 deleted the async=false/true argument outright — every
-// `delegate` call is now what T24a used to mean (background, non-blocking).
-// T24b's specific "parent turn BLOCKS" mode no longer exists; whether this
-// spec still meaningfully exercises two distinct modes, or should be
-// updated/retired, is a test-content question outside a comment-only lane —
-// flagged for the team. Pre-ADR-091, both routed through spawnSubTurn
-// (pkg/agent/subturn.go, since deleted); today a delegated child registers
-// via turn.go's registerActiveTurn/registerTurnIfAbsent (steer_launcher.go's
+// ADR-091 D4 deleted the async=false/true argument outright — every `delegate`
+// call is now what T24a used to mean (launcher-ack background, non-blocking),
+// and the tool rejects any call still carrying `async`
+// (pkg/tools/delegate_run.go's retired-argument loop → "invalid_argument:
+// async", pinned by pkg/tools/delegate_test.go's "retired async" case).
+// T24b's specific "parent turn BLOCKS" mode no longer exists. Pre-ADR-091,
+// both routed through spawnSubTurn (pkg/agent/subturn.go, since deleted);
+// today a delegated child registers via turn.go's
+// registerActiveTurn/registerTurnIfAbsent (steer_launcher.go's
 // dispatchSteeredSessionWithReservation) — so RequestCancel → InterruptSession
-// cascades to the
-// descendant in BOTH cases (the Go-level proof is TestCancel_SubAgentCascade).
-// This pair is the e2e proof that the cascade holds for background AND await.
+// cascades to the descendant in BOTH cases (the Go-level proof is
+// TestCancel_SubAgentCascade).
+//
+// FAILURE HISTORY (CI run 36327766952, 2026-09-27): the prompt used to
+// instruct the model to pass `async: true`/`async: false` verbatim. The
+// central e2e model (tests/e2e/e2e-model.json — the same model the release
+// branch's picker-first-option onboarding resolves to, so the model did NOT
+// change vs release) sent the instructed retired key in T24b attempt 1, the
+// gateway rejected the whole call with "unexpected property \"async\""
+// (gateway log 15:01:38), no delegation fired, and the activity-bar wait 150s
+// later died with a bare "element(s) not found". The three release llm-agents
+// runs before this stayed green only because deepseek happened to OMIT the
+// retired key there (zero "Tool argument validation failed" lines in their
+// gateway logs) — survivorship, not a model difference. As long as the prompt
+// named the retired argument the pair was flaky by construction: model
+// compliance = guaranteed red, model silence = green.
+//
+// RESOLUTION (this change): the pair now exercises the one surviving
+// launcher-ack path — the prompt never names any argument the current tool
+// schema does not declare, and the two variants differ only in their closer
+// wording (two samples of the same variance-prone LLM-driven cascade,
+// matching the spec's single T24 row). Renaming/retiring the pair stays with
+// the spec owner; the historical names are kept for CI triage continuity.
 
 /**
- * Drive the cancel-cascade scenario for one delegation mode and assert the
- * transcript records turn_canceled with a non-empty descendants_canceled.
+ * Drive the cancel-cascade scenario and assert the transcript records
+ * turn_canceled with a non-empty descendants_canceled.
  *
- * `mode.asyncArg` selects the delegation mode via the `delegate` tool's
- * `async` argument (`"true"` background / `"false"` await); `mode.closer` is
- * the final instruction line that nudges glm-5.2 to emit exactly that tool
- * call and nothing else.
+ * `mode.label` names the variant in failure diagnostics; `mode.closer` is the
+ * final instruction line that nudges the central e2e model (tests/e2e/e2e-model.json)
+ * to emit exactly one delegate
+ * tool call and nothing else. The prompt must NEVER name an argument the
+ * current tool schema does not declare: the tool rejects such a call outright
+ * (see the failure-history note above), so model compliance would produce a
+ * guaranteed rejection instead of a delegation.
  */
 async function assertCancelCascadesToSubagent(
   page: Page,
-  mode: { asyncArg: 'true' | 'false'; closer: string },
+  mode: { label: string; closer: string },
 ) {
   await page.goto('/')
 
@@ -563,15 +586,24 @@ async function assertCancelCascadesToSubagent(
 
   // The subagent task must keep the descendant RUNNING for several seconds so a
   // Stop click lands while it's live. A long inline essay streams for several
-  // seconds; an instant-rejected task (e.g. a sandbox-escaping read) finishes in
-  // ~0s before Stop can fire. Explicit single-tool instruction with a hard "no
-  // prose" guardrail so glm-5.2 reliably emits the delegation call.
+  // seconds; an instant-rejected tool task (e.g. a sandbox-escaping read)
+  // finishes in ~0s before Stop can fire. Explicit single-tool instruction
+  // with a hard "no prose" guardrail so the central e2e model
+  // (tests/e2e/e2e-model.json) reliably emits the delegation call.
+  //
+  // Do NOT name an argument the delegate schema no longer declares. The tool
+  // rejects any call carrying a retired key ("invalid_argument: async",
+  // pkg/tools/delegate_run.go's retired-argument loop), so a model that obeys
+  // such an instruction produces a guaranteed rejection — no delegation, no
+  // Activity Bar, and a bare "element(s) not found" failure at the wait
+  // deadline (CI run 36327766952, 2026-09-27: deepseek-v4.1-flash sent the
+  // instructed `async: false`; gateway log 15:01:38). Align the prompt with
+  // the CURRENT schema only.
   await input.fill(
     [
       'Call the `delegate` tool exactly once, now, with these arguments:',
       '  label: "cancel cascade test"',
       '  task: "You are a subagent. Do not use any tools. Write a detailed 800-word essay about renewable energy as continuous inline prose, writing without stopping until you reach 800 words."',
-      `  async: ${mode.asyncArg}`,
       mode.closer,
     ].join('\n'),
   )
@@ -740,7 +772,7 @@ async function assertCancelCascadesToSubagent(
   if (!cancelledEntry) {
     throw new Error(
       'BLOCKED or INCOMPLETE: no session transcript contains a {type:"turn_canceled"} entry ' +
-        `after cancel (mode=delegate async=${mode.asyncArg}). Scanned sessions: ${JSON.stringify(scanList)} ` +
+        `after cancel (mode=${mode.label}). Scanned sessions: ${JSON.stringify(scanList)} ` +
         `(new: ${JSON.stringify(newSessions)}). Chosen: ${chosenSession || '(none)'}. ` +
         `Entries found in chosen: ${JSON.stringify(entries.map((e) => ({ type: e.type, role: e.role })))}. ` +
         'Traces to: cancel-cross-channel-spec.md T24, US-4.1, FR-15.',
@@ -751,19 +783,19 @@ async function assertCancelCascadesToSubagent(
   expect(
     Array.isArray(cancelledEntry.descendants_canceled) &&
       (cancelledEntry.descendants_canceled as string[]).length > 0,
-    `turn_canceled entry must have a non-empty descendants_canceled array (cascade wired per FR-6a, mode=delegate async=${mode.asyncArg})`,
+    `turn_canceled entry must have a non-empty descendants_canceled array (cascade wired per FR-6a, mode=${mode.label})`,
   ).toBe(true)
 }
 
 test(
   'T24a — cancel cascades to background subagent (delegate async=true): transcript records turn_canceled with descendants',
   async ({ page }) => {
-    // glm-5.2 (the standard e2e model) is reliable but slower than the old gemini
-    // pick — the delegation turn + the subagent's inline essay + cancel can exceed
+    // The central e2e model (tests/e2e/e2e-model.json) is reliable but slower than the
+    // earlier pick — the delegation turn + the subagent's inline essay + cancel can exceed
     // the 270s test.slow() ceiling under suite load. Use an explicit higher budget.
     test.setTimeout(360_000)
     await assertCancelCascadesToSubagent(page, {
-      asyncArg: 'true',
+      label: 'delegate launcher-ack (ADR-091; historical name async=true)',
       closer: 'Do not reply in prose. Call the delegate tool immediately.',
     })
   },
@@ -773,11 +805,12 @@ test(
   'T24b — cancel cascades to awaited subagent (delegate async=false): transcript records turn_canceled with descendants',
   async ({ page }) => {
     // Await mode blocks the parent turn on the descendant's full run, so under
-    // glm-5.2's slower streaming this needs more headroom than the background variant.
+    // the central e2e model's (tests/e2e/e2e-model.json) slower streaming this needs
+    // more headroom than the background variant.
     test.setTimeout(420_000)
     await assertCancelCascadesToSubagent(page, {
-      asyncArg: 'false',
-      closer: 'Do not reply in prose. Do not call any other tool. Call delegate now with async set to false.',
+      label: 'delegate launcher-ack (ADR-091; historical name async=false)',
+      closer: 'No prose reply. No other tool. Call delegate now.',
     })
   },
 )

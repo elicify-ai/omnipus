@@ -683,7 +683,7 @@ func TestGoalAdjudication_RoundAdvancePersistFailure_Aborts_M3(t *testing.T) {
 	}
 
 	steerDelivered := false
-	met := al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, rec, "[goal:evidence] done, please verify",
+	met, _ := al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, rec, "[goal:evidence] done, please verify",
 		func(string) { steerDelivered = true })
 
 	if met {
