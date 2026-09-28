@@ -44,7 +44,7 @@ export function isLibraryEditorDirty(): boolean {
 // flip `open` true, and let whichever `LibraryExplorer` instance is mounted
 // render the dialog and report the user's choice back via
 // `resolveDiscardConfirmDialog`. Both Library entry points (the docked panel
-// via LibraryPanel.tsx, and the /library pop-out route) always keep a
+// via LibraryPanel.tsx, and the standalone /library route) always keep a
 // LibraryExplorer mounted for the whole time a navigation guard could fire —
 // including the pop-out's `useBlocker`, which runs before the route (and so
 // before LibraryExplorer) ever unmounts — so hosting the dialog inside

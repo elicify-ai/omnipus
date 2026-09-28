@@ -70,7 +70,7 @@ export interface BrowserLiveViewProps {
    * silently inherit annotate support it can't deliver on — the docked
    * panel (BrowserLivePanel.tsx) explicitly opts in.
    *
-   * UAT finding FE-4: the fullscreen pop-out (`routes/_app/browser-live.tsx`)
+   * UAT finding FE-4: the standalone route (`routes/_app/browser-live.tsx`)
    * is a separate `window.open` document with no chat store at all —
    * starting an annotation there and hitting Send could NEVER succeed
    * (submitAnnotation's own re-check always sees a mismatched/absent active
