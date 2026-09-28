@@ -52,12 +52,20 @@ func ResolveMaxContextRunes(configValue, contextWindow int) int {
 }
 
 // MeasureContextRunes calculates the total rune count of a message list.
-// Includes content, reasoning content, and estimates for tool calls.
+// Includes content, reasoning content, signed thinking blocks (ADR-095 D8:
+// Thinking + redacted Data lengths both count), and estimates for tool calls.
 func MeasureContextRunes(messages []providers.Message) int {
 	totalRunes := 0
 	for _, msg := range messages {
 		totalRunes += utf8.RuneCountInString(msg.Content)
 		totalRunes += utf8.RuneCountInString(msg.ReasoningContent)
+
+		// ADR-095 D8: thinking blocks are real request bytes — count them or
+		// thinking is under-counted against the budget. Never trimmed here.
+		for _, tb := range msg.ThinkingBlocks {
+			totalRunes += utf8.RuneCountInString(tb.Thinking)
+			totalRunes += utf8.RuneCountInString(tb.Data)
+		}
 
 		// Tool calls: serialize to JSON and count
 		if len(msg.ToolCalls) > 0 {
@@ -110,6 +118,11 @@ func TruncateContextSmart(messages []providers.Message, maxRunes int) []provider
 	for _, msg := range systemMsgs {
 		systemRunes += utf8.RuneCountInString(msg.Content)
 		systemRunes += utf8.RuneCountInString(msg.ReasoningContent)
+		// ADR-095 D8: system-side thinking blocks consume budget too.
+		for _, tb := range msg.ThinkingBlocks {
+			systemRunes += utf8.RuneCountInString(tb.Thinking)
+			systemRunes += utf8.RuneCountInString(tb.Data)
+		}
 	}
 
 	// Reserve space for truncation notice (estimate ~80 runes)
@@ -117,8 +130,12 @@ func TruncateContextSmart(messages []providers.Message, maxRunes int) []provider
 
 	// Allocate remaining space for other messages
 	remainingRunes := maxRunes - systemRunes - truncationNoticeEstimate
-	if remainingRunes <= 0 {
-		// System messages already exceed limit - return only system messages
+	if remainingRunes < 0 {
+		// System messages alone exceed the limit - return only system
+		// messages. The exact-zero case stays below: nothing else can fit,
+		// but the drop must still be announced by a truncation notice, never
+		// silent (and with ADR-095 D8 block counting, a blocks-heavy system
+		// message lands exactly on 0).
 		return systemMsgs
 	}
 
@@ -130,6 +147,14 @@ func TruncateContextSmart(messages []providers.Message, maxRunes int) []provider
 		msg := otherMsgs[i]
 		msgRunes := utf8.RuneCountInString(msg.Content) +
 			utf8.RuneCountInString(msg.ReasoningContent)
+
+		// ADR-095 D8: thinking blocks count toward the budget — the block load
+		// moves the keep/drop boundary exactly like content does. The kept
+		// message passes through by value, so its blocks are never stripped.
+		for _, tb := range msg.ThinkingBlocks {
+			msgRunes += utf8.RuneCountInString(tb.Thinking)
+			msgRunes += utf8.RuneCountInString(tb.Data)
+		}
 
 		// Estimate tool call size
 		if len(msg.ToolCalls) > 0 {

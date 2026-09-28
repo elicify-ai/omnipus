@@ -833,6 +833,10 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() {
 		Role:             "assistant",
 		Content:          rr.rq.ri.rf.response.Content,
 		ReasoningContent: rr.rq.ri.rf.response.ReasoningContent,
+		// ADR-095 D6/D7: the signed thinking blocks ride onto the history
+		// message so the next request echoes them byte-exact (and so the D8.5
+		// availability guard sees them and keeps thinking enabled).
+		ThinkingBlocks: rr.rq.ri.rf.response.ThinkingBlocks,
 	}
 	for _, tc := range rr.normalizedToolCalls {
 		argumentsJSON, marshalErr := json.Marshal(tc.Arguments)

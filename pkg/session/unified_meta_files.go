@@ -75,6 +75,11 @@ type u5IdentityFile struct {
 	WorkspaceID string        `json:"workspace_id,omitempty"`
 	TaskID      string        `json:"task_id,omitempty"`
 	Channel     string        `json:"channel"`
+	// ReasoningEffort rides the identity group (meta.json) so the /effort
+	// value survives a restart with its own session and a patch of another
+	// identity-group field never clobbers it — same targeted-writer group as
+	// Model/Provider, whose pairing the C5 resolution order relies on.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// InstanceID is the channel INSTANCE key ("whatsapp.eu"), not the bare
 	// type. Channel alone is not an identity when an install holds many
 	// instances of one platform — see UnifiedMeta.InstanceID.
@@ -143,6 +148,7 @@ func u5IdentityFromMeta(meta *UnifiedMeta) u5IdentityFile {
 		WorkspaceID:           meta.WorkspaceID,
 		TaskID:                meta.TaskID,
 		Channel:               meta.Channel,
+		ReasoningEffort:       meta.ReasoningEffort,
 		InstanceID:            meta.InstanceID,
 		PeerID:                meta.PeerID,
 		Partitions:            meta.Partitions,
@@ -204,6 +210,7 @@ func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, loop u5Loo
 			WorkspaceID:           identity.WorkspaceID,
 			TaskID:                identity.TaskID,
 			Channel:               identity.Channel,
+			ReasoningEffort:       identity.ReasoningEffort,
 			InstanceID:            identity.InstanceID,
 			PeerID:                identity.PeerID,
 			Partitions:            identity.Partitions,
@@ -352,6 +359,7 @@ func (us *UnifiedStore) u5WriteIdentityLocked(sessionID string, meta *UnifiedMet
 		cached.WorkspaceID = meta.WorkspaceID
 		cached.TaskID = meta.TaskID
 		cached.Channel = meta.Channel
+		cached.ReasoningEffort = meta.ReasoningEffort
 		cached.InstanceID = meta.InstanceID
 		cached.PeerID = meta.PeerID
 		cached.Partitions = slices.Clone(meta.Partitions)

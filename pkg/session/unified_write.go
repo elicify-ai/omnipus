@@ -60,6 +60,13 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	if patch.InstanceID != nil {
 		meta.InstanceID = *patch.InstanceID
 	}
+	if patch.ReasoningEffort != nil {
+		// Non-web conversation effort (thinking-reasoning-spec.md §9.5, C5):
+		// an identity-group field, so it rides the same targeted writer as
+		// Model/Provider — an empty string (the "/effort default" path) CLEARS.
+		meta.ReasoningEffort = *patch.ReasoningEffort
+		identityTouched = true
+	}
 	if patch.Owner != nil {
 		meta.Owner = *patch.Owner
 		identityTouched = true

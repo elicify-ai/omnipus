@@ -41,6 +41,13 @@ func estimateMessageTokens(msg providers.Message) int {
 		chars += utf8.RuneCountInString(msg.ReasoningContent)
 	}
 
+	// ADR-095 D8: signed thinking blocks are request bytes on the next call —
+	// count their Thinking text and redacted Data or thinking is under-counted
+	// against the budget. Never trimmed or stripped here; only counted.
+	for _, tb := range msg.ThinkingBlocks {
+		chars += len(tb.Thinking) + len(tb.Data)
+	}
+
 	for _, tc := range msg.ToolCalls {
 		chars += len(tc.ID) + len(tc.Type)
 		if tc.Function != nil {
