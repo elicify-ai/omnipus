@@ -120,10 +120,13 @@ func TestReadBoundary_Windows(t *testing.T) {
 			t.Fatalf("W8: grep path=%q must be admitted, got error: %s", root, res.ForLLM)
 		}
 		// Same stated deviation as TestReadBoundary_VolumeRootBounded: no
-		// limit-injection seam exists, so either DS-5 limit a root walk can
-		// hit first is accepted.
-		if reason := rbTruncation(res.ForLLM); reason != "max_files" && reason != "deadline" {
-			t.Fatalf("W8: truncation reason = %q, want max_files or deadline", reason)
+		// limit-injection seam exists, so any of the DS-5 limits a root walk
+		// can hit first is accepted. D7 (DS-5 limits 1-7) declares the limits
+		// are unchanged; max_bytes (filegrep's TotalBytes budget,
+		// DefaultMaxBytes = 256 MiB) is a valid bounded outcome per FR-011
+		// alongside max_files and deadline.
+		if reason := rbTruncation(res.ForLLM); reason != "max_files" && reason != "max_bytes" && reason != "deadline" {
+			t.Fatalf("W8: truncation reason = %q, want max_files, max_bytes, or deadline (D7/FR-011)", reason)
 		}
 		if rr := f.list.Execute(f.ctx, map[string]any{"path": root}); rr.IsError {
 			t.Fatalf("W8 parity: list_directory must admit %q, got: %s", root, rr.ForLLM)

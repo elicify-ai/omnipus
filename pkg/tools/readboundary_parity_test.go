@@ -354,8 +354,20 @@ func TestReadBoundary_VolumeRootBounded(t *testing.T) {
 		t.Fatalf("grep path=%q: DS-1 row 23 says admitted, got error: %s", root, res.ForLLM)
 	}
 	reason := rbTruncation(res.ForLLM)
-	if reason != "max_files" && reason != "deadline" {
-		t.Fatalf("grep path=%q: truncation reason = %q, want max_files or deadline (DS-5 limits 4 and 3):\n%.2000s", root, reason, res.ForLLM)
+	// D7 (DS-5 limits 1-7) declares the limits are unchanged; any of them
+	// that the volume-root walk hits FIRST bounds the search. max_files and
+	// deadline are the two named in the spec text (DS-5 rows 4, 3) and the
+	// original deviation comment; max_bytes (filegrep's TotalBytes budget,
+	// DefaultMaxBytes = 256 MiB) is the third one Ubuntu/macOS runners
+	// frequently hit first because `/` walks read a lot of content from
+	// small files (per-file cap is 4 MiB but the total is 256 MiB). It is a
+	// valid bounded outcome per FR-011 ("the D7 limits MUST apply unchanged")
+	// — the walk bounded itself; just at a different bound than the spec text
+	// predicted. Adding it to the oracle is consistent with the test's
+	// existing deviation rationale (no seam exists to inject grep's file
+	// limit), not a weakening.
+	if reason != "max_files" && reason != "max_bytes" && reason != "deadline" {
+		t.Fatalf("grep path=%q: truncation reason = %q, want max_files, max_bytes, or deadline (D7/FR-011, DS-5 limits 4, total-bytes, 3):\n%.2000s", root, reason, res.ForLLM)
 	}
 	if strings.Contains(res.ForLLM, "needle-volume-root-secret") {
 		t.Fatal("S-1.10: a protected Omnipus file's content appeared in a volume-root search")
