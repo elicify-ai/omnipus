@@ -7,9 +7,8 @@
 treat views as files that can be stored anywhere like a note only with a different icon" /
 "a view must be stored like a note, anywhere where it makes sense." Also: "Server first",
 per-view-kind icons (table, calendar, chart, …), and a view opens in the Library PREVIEW
-pane, not a modal. The top "Saved views" block goes away (#1013, tracked separately — not
-this spec's job to implement, noted here only because it changes what "reachable" means for
-US-5/US-6 below).
+pane, not a modal. The top "Saved views" block goes away — **in scope** (founder-direction
+amendment 2026-09-29, FR-VA-030: #1013 is folded into this spec; the PR closes #1013 and #1017).
 
 **Evidence baseline**: `feat/library-views-anywhere-spec` cut from `release/v0.1.1` @
 `ee7640c90` (read-only checkout used to verify every claim below). Round-1 fixes below were
@@ -2226,6 +2225,15 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
 
 ---
 
+- **FR-VA-030 *(founder-direction amendment, 2026-09-29 — #1013 folded in)***: The Library
+  MUST NOT render a separate top "Saved views" block (today `KnowledgeViewsList.tsx::KnowledgeViewsList`
+  inside `KnowledgePanel.tsx::KnowledgePanel`) and MUST NOT open a view in a modal
+  (`KnowledgeViewDialog`). Views appear ONLY as inline entries in the Library tree (FR-VA-001,
+  per-kind icon) and open in the preview pane (FR-VA-009 `case 'view'`). Agents are unaffected:
+  `knowledge_describe`/`knowledge_find` keep listing views. Test: RED row 73 (a knowledge
+  collection with saved views renders no "Saved views" block and no view dialog; the views are
+  tree entries).
+
 ## 13. Success Criteria
 
 - **SC-VA-001**: A view file placed anywhere inside a knowledge base (any depth, not the former
@@ -2368,6 +2376,7 @@ registration/wiring, not the test suite).
 | FR-VA-025 | — (cross-cutting, MAJ-009/R2-MIN-007) | — | 38, 67 |
 | FR-VA-026 | — (cross-cutting, OBS-003; **corrected in round 2, R2-MIN-007 — round 1 wrongly mapped this to test 10, a Library-listing test with no path-in-output assertion**) | — | 68 |
 | FR-VA-027 | — (cross-cutting, R2-MAJ-006) | — | 59, 60 |
+| FR-VA-030 | US-5, US-6 | founder-direction amendment 2026-09-29 (#1013) | 73 |
 
 Every FR appears above. Remaining gaps between the TDD plan's numbered tests and a scenario are
 flagged rather than silently left implicit, per "no false success": the implementing lead adds the
