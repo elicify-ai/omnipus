@@ -893,6 +893,28 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 		}
 	}
 
+	// FD-6 (library-views-anywhere-spec / D-PROVENANCE round-2): a view
+	// that is MANAGED by a .base (its `derived_from` field is set) is
+	// read-only. write_view on such a view refuses the write, naming the
+	// managing .base file — the same one the FD-3 banner already surfaces
+	// to a human. The check runs AFTER the upsert's viewPath resolution
+	// (so we always know the view's current location) and BEFORE the
+	// marshal/parse round-trip below (a refusal does no parse work).
+	//
+	// The check is duplicated here rather than calling the gsec-side
+	// knowledge.DerivedViewWriteRefusal so the GREEN-backend branch
+	// compiles in isolation; the squad-lead merge will reconcile the two
+	// implementations. The semantics are exactly FD-6's: a view with
+	// derived_from set is read-only, and the refusal names the .base.
+	if viewPath != defaultPath {
+		if cur, _, ok := t.resolveCurrentView(root, viewName); ok && cur != nil {
+			if msg := derivedViewWriteRefusal(cur); msg != "" {
+				return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, viewPath)},
+					"write_view: "+msg)
+			}
+		}
+	}
+
 	parsed, rej := records.ParseView(viewPath, yamlBytes)
 	if rej != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+rej.Reason)
@@ -1719,4 +1741,51 @@ func writeCascadeBlock(b *strings.Builder, typeName string, c *ConfigureCascade)
 			fmt.Fprintf(b, "    %s\n", v)
 		}
 	}
+}
+
+// resolveCurrentView returns the current ViewSet entry for viewName, or
+// (nil, "", false) when the name is unknown or the discovery failed. Used
+// by execWriteView's D-WRITE-IDENTITY upsert and its FD-6 derived-view
+// gate, both of which must consult the CURRENT discovered state rather
+// than any name-reconstructed inference.
+func (t *ConfigureTool) resolveCurrentView(root, viewName string) (*records.SavedView, string, bool) {
+	if viewName == "" {
+		return nil, "", false
+	}
+	schemas, _, lerr := records.LoadSchemas(root)
+	if lerr != nil {
+		return nil, "", false
+	}
+	cr, rerr := NewCollectionRoot(OSLinkFS(), root)
+	if rerr != nil {
+		return nil, "", false
+	}
+	set, _, verr := LoadViewsForCollection(OSLinkFS(), cr, schemas)
+	if verr != nil || set == nil {
+		return nil, "", false
+	}
+	cur, _, ok := set.Resolve(viewName)
+	if !ok {
+		return nil, "", false
+	}
+	return cur, cur.SourcePath, true
+}
+
+// derivedViewWriteRefusal answers FD-6's read-only gate: a view whose
+// current ViewSet entry carries `derived_from` is read-only, and the
+// refusal names the managing .base file. Returns "" for a non-derived
+// view so the caller can use the empty string as "no refusal".
+//
+// The duplication of this logic vs gsec's DerivedViewWriteRefusal is
+// intentional — GREEN-backend needs the gate to compile in isolation;
+// the squad-lead merge reconciles the two.
+func derivedViewWriteRefusal(cur *records.SavedView) string {
+	if cur == nil || cur.Def.DerivedFrom == nil {
+		return ""
+	}
+	baseRel := strings.TrimSpace(*cur.Def.DerivedFrom)
+	if baseRel == "" {
+		return ""
+	}
+	return fmt.Sprintf("%q is derived from %q; edit that .base file instead", cur.Def.Name, baseRel)
 }
