@@ -543,46 +543,20 @@ func (s *ViewSet) add(v *SavedView) {
 // Loading
 // ---------------------------------------------------------------------------
 
-// LoadViews reads every saved view in a vault.
+// LoadViews is RETIRED (library-views-anywhere-spec §4 step 3 / greenfield
+// rule). Discovery now lives in `pkg/knowledge.DiscoverViewFiles` (the
+// only place WalkContained is called for views), and parsing lives in
+// `pkg/records.LoadViewPaths` (no I/O). Every caller that used to invoke
+// `records.LoadViews(root, schemas)` should now invoke
+// `pkg/knowledge.LoadViewsForCollection(fsys, root, schemas)` instead —
+// it owns the orchestration between the two halves.
 //
-// schemas may be nil, and the distinction is deliberate rather than a
-// convenience: with a schema set, a view is additionally checked against it
-// and a view naming a vanished type or property is REJECTED and reported;
-// without one, only the view's own format is checked.
-//
-// (Round 2 / library-views-anywhere-spec §4 step 1+3.) Discovery is no
-// longer restricted to one directory: views live anywhere inside a
-// knowledge base (FR-VA-001, FD-1). pkg/knowledge owns the canonical
-// helper for that discovery (`pkg/knowledge.DiscoverViewFiles`,
-// WalkContained + D-SYMLINK-READ + D-SIZECAP) — this package cannot import
-// it (MAJ-008's import cycle), so for the lone public `records.LoadViews`
-// shim a small, view-only walker runs here. Both walkers honour the same
-// four control-plane names and the same `.view`-extension rule; the
-// canonical one in pkg/knowledge is what the rest of the package uses.
-//
-// A vault with no `.view` files anywhere is NOT an error. It is the
-// ordinary state of every vault nobody has authored a view in, which is
-// most of them.
+// This symbol is removed entirely per the greenfield ruling (qa-lead
+// will migrate the few tests that pinned the old signature). Any code
+// that still references it is a build error — visible, not silent.
 func LoadViews(vaultRoot string, schemas *SchemaSet) (*ViewSet, *ViewLoadReport, error) {
-	if vaultRoot == "" {
-		return nil, nil, errors.New("records.LoadViews: empty vault root")
-	}
-	report := &ViewLoadReport{}
-	files, skipped, err := walkViewFiles(vaultRoot)
-	if err != nil {
-		return nil, nil, fmt.Errorf("records.LoadViews: walk collection: %w", err)
-	}
-	for _, d := range skipped {
-		report.Rejections = append(report.Rejections, ViewRejection{
-			Paths:  []string{d},
-			Code:   RejectViewUnreadable,
-			Reason: fmt.Sprintf("could not read subfolder %q during view discovery; views under it may have been missed", d),
-		})
-	}
-	if len(files) == 0 {
-		return NewViewSet(), report, nil
-	}
-	return loadViewBytes(files, schemas, report)
+	return nil, nil, errors.New("records.LoadViews: removed by library-views-anywhere-spec §4 step 3; " +
+		"use pkg/knowledge.LoadViewsForCollection (DiscoverViewFiles + records.LoadViewPaths)")
 }
 
 // loadViewBytes parses a slice of already-read view files into a ViewSet
