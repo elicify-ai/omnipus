@@ -4647,6 +4647,13 @@ export interface components {
              * @example true
              */
             is_text_editable: boolean;
+            /**
+             * @description True when this entry's extension is the one chosen for view files (`.view`, library-views-anywhere-spec Q1/A) AND its path is inside an enclosing knowledge base (D-SCOPE, FD-1) — a `.view` file in a plain workspace folder that is not, and is not inside, any knowledge base reports `is_view` absent and lists as a plain, unrunnable file. Independent of whether the file parses as a valid `ViewDef` (US-4 AS-3 — a malformed view is still `is_view: true`, with its parse failure surfaced on the sibling `view.rejection` / `view.rejection_reason`).
+             * @example true
+             */
+            is_view?: boolean;
+            /** @description Per-entry facts about a `.view` file (library-views-anywhere-spec D-CONTRACT) — kind, label, authoritative name, enclosing collection id, derived-from, and any rejection / reason / conflict paths. Present IFF `is_view` is true on this entry: a single presence check gates the whole group, replacing six-to-nine independent "present iff inside a knowledge base" markers (R2-OBS-001) and mirroring the `mount` field's pattern of nesting related optional facts. */
+            view?: components["schemas"]["LibraryEntryView"];
         };
         /**
          * LibraryEntryMount
@@ -6720,7 +6727,7 @@ export interface components {
         };
         /**
          * ViewDef
-         * @description A saved query, stored as data (ADR-068 D10). A view names filters, grouping, sort and the properties to show; it lives in `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a human can diff it.
+         * @description A saved query, stored as data (ADR-068 D10). A view names filters, grouping, sort and the properties to show. A view is stored as an ORDINARY Library entry with the `.view` extension — anywhere inside a knowledge base, at any depth (library-views-anywhere-spec D-SCOPE/D-WALK, FD-1/FD-4); its `name:` is its authoritative identifier regardless of filename (Q3/B), so an agent can author one and a human can move and rename it like any other note. The filename's `.view` extension is the discovery filter; a view's identity on disk is decoupled from its identity on the wire.
          *     A view naming a property or enum value that does not exist is REJECTED at write time (D15), not stored and discovered broken later.
          *     THERE IS EXACTLY ONE VIEW FORMAT, AND IT CARRIES NO VERSION NUMBER. A view is: ONE `filter` tree of `all`/`any`/`not` over the ten SQL operators — the same grammar knowledge_find evaluates, so a view's filter needs no translation to be served — `grouping` keys that each carry a direction, an OPTIONAL `type`, plus `layout`, `formulas` and `property_config`.
          *     THE FLAT, AND-ONLY PREDECESSOR IS GONE. An earlier shape stored `filters` (a flat AND-list in a separate seven-operator vocabulary) and `group_by` (a bare name list with no direction). It was carried alongside this one only so files written under it stayed readable. Nothing was ever written under it outside this project's own tooling and no such file exists on disk, so it is deleted rather than versioned around: two formats in one schema is a permanent tax on every reader, and the second one had no remaining constituency.
@@ -6791,17 +6798,14 @@ export interface components {
              */
             layout?: "table" | "cards" | "board" | "calendar" | "gallery" | "map";
             /**
-             * @description WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on every view written before the kinds existed.
+             * @description WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on every view written before the kinds existed. Extracted to `ViewKind.yaml` so the same enum is referenced from `LibraryEntryView.kind` (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 / round-1 MIN-004) — the eight values and their meaning are spelled out on that schema.
              *
              *     IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what the agent asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
              *
-             *     The eight and what each stacks: `table` → table. `list` → list. `tiles` → tiles (needs an image property). `board` → columns (needs an enum property with at most 8 values). `calendar` → calendar (needs a date property). `summary` → figures then a grouped table with subtotals (needs a number). `trend` → figures then chart then table (needs a date and a number). `breakdown` → figures then crosstab (needs two groupable properties and a number).
-             *
              *     A kind is OFFERED only when the collection holds what it requires, and a refusal names the missing property (design §3 G1). That gate lives in the composer, which is the only thing that writes this field on the normal path.
              * @example summary
-             * @enum {string}
              */
-            kind?: "table" | "list" | "tiles" | "board" | "calendar" | "summary" | "trend" | "breakdown";
+            kind?: components["schemas"]["ViewKind"];
             /**
              * @description THE ORDERED STACK THE RENDERER WALKS (view-kinds-design-2026-09-03 §4). Optional.
              *
@@ -6846,10 +6850,18 @@ export interface components {
              */
             disabled?: boolean;
             /**
-             * @description Vault-relative path of the file this view was IMPORTED from, when it was imported rather than authored. Recorded so the provenance of a partially translated view is visible; the source is never re-read afterwards (FR-102).
+             * @description Collection-relative path of the file this view was IMPORTED from, when it was imported rather than authored. Recorded so the provenance of a partially translated view is visible and so the `.base` preview can group tabs by source (`pkg/gateway/rest_knowledge_base_views.go`'s grouping, F1) and an `![[X.base#View]]` embed can resolve back to the importing file.
+             *     It is NOT a re-derivation trigger. Re-derivation locates its managed views through `derived_from` AND its own pipeline-owned membership record — never through `source` alone (library-views-anywhere-spec D-PROVENANCE, FD-5 / R2-MAJ-001). The narrower invariant that survives is FR-105 / FR-018b: a view's `filter`/`type` data is never broadened on the operator's behalf by re-reading this field.
              * @example CRM/Deals.base
              */
             source?: string;
+            /**
+             * @description Collection-relative path of the `.base` file currently MANAGING this view through the import/re-derivation pipeline (library-views-anywhere-spec D-PROVENANCE, FR-VA-009a). Set ONLY by the pipeline (`pkg/vaultimport/run.go` / `rederive.go`); never accepted from a `create_view`/`write_view` caller. When present, `write_view` refuses the write naming this `.base` and the Library editor opens the view read-only (FD-6 / R2-MAJ-003).
+             *     The pipeline-owned membership record, not this field, is the sole authority for what re-derivation may rewrite or delete; a file merely carrying this field but absent from the record is ignored by re-derivation regardless of what its own `derived_from` says (R2-CRIT-001).
+             *     Hand-cleared (never trashed) when the `.base` is deleted (D-PROVENANCE `.base` lifecycle, FD-7); rewritten in place when the `.base` is renamed or moved (`pkg/gateway/rest_library_knowledge_cascade.go`'s Renamer, R2-MAJ-002).
+             * @example CRM/Deals.base
+             */
+            derived_from?: string;
             /**
              * @description Expressions from the imported source that could NOT be translated, preserved verbatim (FR-101). Present only on an imported view, and non-empty only when something was genuinely left behind. Never an approximation of the original.
              *
@@ -16324,6 +16336,55 @@ export interface components {
              * @enum {string}
              */
             readonly status?: "ok" | "broken";
+        };
+        /**
+         * ViewKind
+         * @description WHICH OF THE EIGHT NAMED VIEW KINDS A VIEW IS (view-kinds-design-2026-09-03 §2.3, §4). Shared between `ViewDef.kind` (what an agent or composer authored) and `LibraryEntryView.kind` (what the Library tree's icon must key off) — extracted to its own schema (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 / round-1 MIN-004) so the two references stay in lockstep by construction, not by two enums that happen to read the same eight strings today.
+         *     IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what was asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+         *     A view that does not declare a kind (legal under the schema — only `name` is required) reports `kind` absent on `LibraryEntryView`; the tree falls back to a generic view icon (library-views-anywhere-spec EC-3).
+         * @example summary
+         * @enum {string}
+         */
+        ViewKind: "table" | "list" | "tiles" | "board" | "calendar" | "summary" | "trend" | "breakdown";
+        /**
+         * ViewRejectionCode
+         * @description Every reason a `.view` file can fail to load — extracted to its own enum (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 2) so the SPA's duplicate / parse / oversize badges compare against one canonical list of reason codes, not against a hand-written wire literal that can drift from the server's actual `RejectView*` set.
+         *     Present on `LibraryEntryView.rejection` exactly when the file is `is_view: true` but broken, oversize, or duplicate-rejected; absent on a healthy view. The operator-facing text lives on the sibling `rejection_reason` field (`ViewRejection.Reason` on the server), and — for a duplicate-name collision only — the colliding paths live on the sibling `conflict_paths` field (`ViewRejection.Paths` on the server).
+         * @example view_duplicate_name
+         * @enum {string}
+         */
+        ViewRejectionCode: "view_unreadable" | "view_invalid_yaml" | "view_empty" | "view_missing_name" | "view_missing_type" | "view_duplicate_name" | "view_unknown_key" | "view_unknown_type" | "view_unknown_property" | "view_invalid_layout" | "view_filter_too_large" | "view_invalid_filter_node" | "view_invalid_formula" | "view_unknown_formula" | "view_invalid_kind" | "view_invalid_part" | "view_unknown_enum_value" | "view_too_large";
+        /**
+         * LibraryEntryView
+         * @description Per-entry facts about a `.view` file, surfaced directly on the `LibraryEntry` so the tree can show its kind icon and the preview can open it without a second round trip (library-views-anywhere-spec D-CONTRACT, US-4). PRESENT IFF `is_view` is true on the parent entry — a single presence check replaces what would otherwise be six-to-nine independent "present iff inside a knowledge base" markers (R2-OBS-001), and mirrors `mount`'s own pattern of nesting related optional facts on `LibraryEntry` (the `LibraryEntryMount.yaml` precedent).
+         *     A `.view` file outside every knowledge base never carries `is_view` (D-SCOPE, FD-1) and so never carries this object — it renders as a plain, unrunnable file (founder: "a view runs only inside a knowledge base").
+         * @example {
+         *       "kind": "summary",
+         *       "label": "Open deals by owner",
+         *       "name": "open-by-owner",
+         *       "collection_id": "kb_abc123"
+         *     }
+         */
+        LibraryEntryView: {
+            /** @description The view's authored kind (`ViewDef.kind`), absent when the file does not declare one (legal under the schema — only `name` is required) or fails to parse. Never a fabricated default (EC-3). */
+            kind?: components["schemas"]["ViewKind"];
+            /** @description The view's `DisplayLabel()` — the human-readable label the Library tree shows without a second round trip. Absent when the file fails to parse. */
+            label?: string;
+            /** @description The view's authoritative `Def.Name`. Present iff the file parsed successfully AND `is_view` is true on the parent; absent whenever `rejection` is present (the only handle the preview has on a broken or duplicate-rejected view is `rejection_reason` and, for a duplicate, `conflict_paths`). */
+            name?: string;
+            /**
+             * @description The opaque `kb_`-prefixed identifier of the ENCLOSING knowledge base (D-ADDRESS, R2-CRIT-003) — the same value `KnowledgeBaseViews.collection_id` carries for a `.base` file in the same collection, computed by the same `knowledgeCollectionID` function. The Library preview uses it together with `name` to call the existing `GET .../knowledge/view` endpoint directly, with no SPA-side enclosing-collection resolution step (BasePreview's own resolution path does not exist for non-`.base` entries, hence the round-2 contract addition).
+             *     Present exactly when this object is present — D-SCOPE already guarantees an enclosing knowledge base at that point.
+             */
+            collection_id?: string;
+            /** @description The loader's rejection code when the file is `is_view: true` but broken, oversize, or duplicate-rejected. Absent on a healthy view. When present, `rejection_reason` is also present, and — exactly when the code is `view_duplicate_name` — `conflict_paths` lists every colliding file (D-VALIDATE / R2-MAJ-005). */
+            rejection?: components["schemas"]["ViewRejectionCode"];
+            /** @description The operator-facing text the loader emitted with the rejection, verbatim from `ViewRejection.Reason` on the server. Present exactly when `rejection` is present. This is what the preview surfaces to a person opening a broken or duplicate-rejected view, so it never shows a blank or generic error. */
+            rejection_reason?: string;
+            /** @description Every file involved in a duplicate-name collision, collection- relative — the same two (or more) paths `ViewRejection.Paths` already carries on the server, now reaching the wire so a person can tell BOTH views apart. Present exactly when `rejection` is `view_duplicate_name`; absent otherwise (a parse failure names the single file involved through `path` on the entry itself). */
+            conflict_paths?: string[];
+            /** @description The collection-relative path of the `.base` file currently managing this view (the file's own `ViewDef.derived_from` field, D-PROVENANCE / FR-VA-009a). Present iff that field is set on the underlying `ViewDef` — the read-only / "derived" / "managed by" markers a UI surfaces from it are display-only and never influence what re-derivation may rewrite or delete (the pipeline-owned membership record is the authority for that, not this field, per R2-CRIT-001). */
+            derived_from?: string;
         };
     };
     responses: {

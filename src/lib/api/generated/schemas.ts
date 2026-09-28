@@ -384,12 +384,52 @@ type LibraryEntry = {
   mount?: LibraryEntryMount | undefined;
   is_knowledge_base?: boolean | undefined;
   is_text_editable: boolean;
+  is_view?: boolean | undefined;
+  view?:
+    | Partial<{
+        kind: kind;
+        label: string;
+        name: string;
+        collection_id: string;
+        rejection:
+          | "view_unreadable"
+          | "view_invalid_yaml"
+          | "view_empty"
+          | "view_missing_name"
+          | "view_missing_type"
+          | "view_duplicate_name"
+          | "view_unknown_key"
+          | "view_unknown_type"
+          | "view_unknown_property"
+          | "view_invalid_layout"
+          | "view_filter_too_large"
+          | "view_invalid_filter_node"
+          | "view_invalid_formula"
+          | "view_unknown_formula"
+          | "view_invalid_kind"
+          | "view_invalid_part"
+          | "view_unknown_enum_value"
+          | "view_too_large";
+        rejection_reason: string;
+        conflict_paths: Array<string>;
+        derived_from: string;
+      }>
+    | undefined;
 };
 type LibraryEntryMount = {
   name: string;
   host_path: string;
   broad: boolean;
 };
+type kind =
+  | "table"
+  | "list"
+  | "tiles"
+  | "board"
+  | "calendar"
+  | "summary"
+  | "trend"
+  | "breakdown";
 type LibraryUploadResponse = {
   entries: Array<LibraryEntry>;
 };
@@ -948,6 +988,7 @@ type ViewDef = {
   limit?: number | undefined;
   disabled?: boolean | undefined;
   source?: string | undefined;
+  derived_from?: string | undefined;
   untranslated?: Array<string> | undefined;
 };
 type VaultFindRequest = Partial<{
@@ -5044,6 +5085,16 @@ export const LibraryEntryMount: z.ZodType<LibraryEntryMount> = z.object({
   host_path: z.string().min(1),
   broad: z.boolean(),
 });
+export const kind = z.enum([
+  "table",
+  "list",
+  "tiles",
+  "board",
+  "calendar",
+  "summary",
+  "trend",
+  "breakdown",
+]);
 export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   name: z.string().min(1),
   path: z.string().min(1),
@@ -5055,6 +5106,39 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   mount: LibraryEntryMount.optional(),
   is_knowledge_base: z.boolean().optional(),
   is_text_editable: z.boolean(),
+  is_view: z.boolean().optional(),
+  view: z
+    .object({
+      kind: kind,
+      label: z.string(),
+      name: z.string().min(1),
+      collection_id: z.string(),
+      rejection: z.enum([
+        "view_unreadable",
+        "view_invalid_yaml",
+        "view_empty",
+        "view_missing_name",
+        "view_missing_type",
+        "view_duplicate_name",
+        "view_unknown_key",
+        "view_unknown_type",
+        "view_unknown_property",
+        "view_invalid_layout",
+        "view_filter_too_large",
+        "view_invalid_filter_node",
+        "view_invalid_formula",
+        "view_unknown_formula",
+        "view_invalid_kind",
+        "view_invalid_part",
+        "view_unknown_enum_value",
+        "view_too_large",
+      ]),
+      rejection_reason: z.string().min(1),
+      conflict_paths: z.array(z.string().min(1)),
+      derived_from: z.string().min(1),
+    })
+    .partial()
+    .optional(),
 });
 export const LibraryContentResponse = z.object({
   path: z.string(),
@@ -6133,6 +6217,7 @@ export const ViewDef: z.ZodType<ViewDef> = z.object({
   limit: z.number().int().gte(1).optional(),
   disabled: z.boolean().optional(),
   source: z.string().optional(),
+  derived_from: z.string().optional(),
   untranslated: z.array(z.string().min(1)).optional(),
 });
 export const VaultFindGroupBy: z.ZodType<VaultFindGroupBy> = z.object({

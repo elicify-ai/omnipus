@@ -96,3 +96,26 @@ properties:
       not a guarantee — GET .../content's is_text/too_large fields are the
       authoritative check at read time.
     example: true
+  is_view:
+    type: boolean
+    description: >
+      True when this entry's extension is the one chosen for view files
+      (`.view`, library-views-anywhere-spec Q1/A) AND its path is inside
+      an enclosing knowledge base (D-SCOPE, FD-1) — a `.view` file in a
+      plain workspace folder that is not, and is not inside, any knowledge
+      base reports `is_view` absent and lists as a plain, unrunnable file.
+      Independent of whether the file parses as a valid `ViewDef`
+      (US-4 AS-3 — a malformed view is still `is_view: true`, with its
+      parse failure surfaced on the sibling `view.rejection` /
+      `view.rejection_reason`).
+    example: true
+  view:
+    $ref: "./LibraryEntryView.yaml"
+    description: >
+      Per-entry facts about a `.view` file (library-views-anywhere-spec
+      D-CONTRACT) — kind, label, authoritative name, enclosing collection
+      id, derived-from, and any rejection / reason / conflict paths.
+      Present IFF `is_view` is true on this entry: a single presence check
+      gates the whole group, replacing six-to-nine independent "present
+      iff inside a knowledge base" markers (R2-OBS-001) and mirroring the
+      `mount` field's pattern of nesting related optional facts.

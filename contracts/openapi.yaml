@@ -515,9 +515,14 @@ components:
       title: ViewDef
       description: >
         A saved query, stored as data (ADR-068 D10). A view names filters,
-        grouping, sort and the properties to show; it lives in
-        `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one
-        and a human can diff it.
+        grouping, sort and the properties to show. A view is stored as an
+        ORDINARY Library entry with the `.view` extension — anywhere inside a
+        knowledge base, at any depth (library-views-anywhere-spec D-SCOPE/D-WALK,
+        FD-1/FD-4); its `name:` is its authoritative identifier regardless of
+        filename (Q3/B), so an agent can author one and a human can move and
+        rename it like any other note. The filename's `.view` extension is
+        the discovery filter; a view's identity on disk is decoupled from its
+        identity on the wire.
 
         A view naming a property or enum value that does not exist is REJECTED
         at write time (D15), not stored and discovered broken later.
@@ -708,29 +713,15 @@ components:
             visible gap; a silently flattened one is a wrong answer.
           example: "cards"
         kind:
-          type: string
-          enum:
-            - table
-            - list
-            - tiles
-            - board
-            - calendar
-            - summary
-            - trend
-            - breakdown
-          x-enum-varnames:
-            - Table
-            - List
-            - Tiles
-            - Board
-            - Calendar
-            - Summary
-            - Trend
-            - Breakdown
+          $ref: "./components/schemas/ViewKind.yaml"
           description: >
             WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW
             (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on
-            every view written before the kinds existed.
+            every view written before the kinds existed. Extracted to
+            `ViewKind.yaml` so the same enum is referenced from
+            `LibraryEntryView.kind` (library-views-anywhere-spec D-CONTRACT,
+            R2-MAJ-005 finding 3 / round-1 MIN-004) — the eight values and
+            their meaning are spelled out on that schema.
 
 
             IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The
@@ -739,15 +730,6 @@ components:
             later "make that summary group by month instead" can be answered by
             re-composing the same kind rather than by reverse-engineering a
             part stack.
-
-
-            The eight and what each stacks: `table` → table. `list` → list.
-            `tiles` → tiles (needs an image property). `board` → columns (needs
-            an enum property with at most 8 values). `calendar` → calendar
-            (needs a date property). `summary` → figures then a grouped table
-            with subtotals (needs a number). `trend` → figures then chart then
-            table (needs a date and a number). `breakdown` → figures then
-            crosstab (needs two groupable properties and a number).
 
 
             A kind is OFFERED only when the collection holds what it requires,
@@ -870,10 +852,43 @@ components:
         source:
           type: string
           description: >
-            Vault-relative path of the file this view was IMPORTED from, when
-            it was imported rather than authored. Recorded so the provenance of
-            a partially translated view is visible; the source is never re-read
-            afterwards (FR-102).
+            Collection-relative path of the file this view was IMPORTED from,
+            when it was imported rather than authored. Recorded so the
+            provenance of a partially translated view is visible and so the
+            `.base` preview can group tabs by source
+            (`pkg/gateway/rest_knowledge_base_views.go`'s grouping, F1) and an
+            `![[X.base#View]]` embed can resolve back to the importing file.
+
+            It is NOT a re-derivation trigger. Re-derivation locates its
+            managed views through `derived_from` AND its own pipeline-owned
+            membership record — never through `source` alone
+            (library-views-anywhere-spec D-PROVENANCE, FD-5 / R2-MAJ-001).
+            The narrower invariant that survives is FR-105 / FR-018b: a view's
+            `filter`/`type` data is never broadened on the operator's behalf by
+            re-reading this field.
+          example: "CRM/Deals.base"
+        derived_from:
+          type: string
+          description: >
+            Collection-relative path of the `.base` file currently MANAGING
+            this view through the import/re-derivation pipeline
+            (library-views-anywhere-spec D-PROVENANCE, FR-VA-009a). Set ONLY
+            by the pipeline (`pkg/vaultimport/run.go` / `rederive.go`); never
+            accepted from a `create_view`/`write_view` caller. When present,
+            `write_view` refuses the write naming this `.base` and the
+            Library editor opens the view read-only (FD-6 / R2-MAJ-003).
+
+            The pipeline-owned membership record, not this field, is the
+            sole authority for what re-derivation may rewrite or delete; a
+            file merely carrying this field but absent from the record is
+            ignored by re-derivation regardless of what its own
+            `derived_from` says (R2-CRIT-001).
+
+            Hand-cleared (never trashed) when the `.base` is deleted
+            (D-PROVENANCE `.base` lifecycle, FD-7); rewritten in place when
+            the `.base` is renamed or moved
+            (`pkg/gateway/rest_library_knowledge_cascade.go`'s Renamer,
+            R2-MAJ-002).
           example: "CRM/Deals.base"
         untranslated:
           type: array

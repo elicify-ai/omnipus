@@ -1,0 +1,38 @@
+title: ViewKind
+description: >
+  WHICH OF THE EIGHT NAMED VIEW KINDS A VIEW IS (view-kinds-design-2026-09-03 §2.3, §4).
+  Shared between `ViewDef.kind` (what an agent or composer authored) and
+  `LibraryEntryView.kind` (what the Library tree's icon must key off) — extracted
+  to its own schema (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 /
+  round-1 MIN-004) so the two references stay in lockstep by construction, not by
+  two enums that happen to read the same eight strings today.
+
+  IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks
+  `parts` and only `parts`; nothing switches on this field at render time. It
+  records what was asked for, so a later "make that summary group by month instead"
+  can be answered by re-composing the same kind rather than by reverse-engineering
+  a part stack.
+
+  A view that does not declare a kind (legal under the schema — only `name` is
+  required) reports `kind` absent on `LibraryEntryView`; the tree falls back to a
+  generic view icon (library-views-anywhere-spec EC-3).
+type: string
+enum:
+  - table
+  - list
+  - tiles
+  - board
+  - calendar
+  - summary
+  - trend
+  - breakdown
+x-enum-varnames:
+  - Table
+  - List
+  - Tiles
+  - Board
+  - Calendar
+  - Summary
+  - Trend
+  - Breakdown
+example: "summary"
