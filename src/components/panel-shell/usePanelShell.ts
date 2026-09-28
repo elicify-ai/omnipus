@@ -37,7 +37,7 @@ function usePanelWidthHydration(
   }, [username, widthScope])
 }
 
-export function usePanelShell(panels: PanelDefinition[], username: string) {
+export function usePanelShell(panels: readonly PanelDefinition[], username: string) {
   const activePanel = usePanelShellStore((s) => s.activePanel)
   const guardPending = usePanelShellStore((s) => s.guardPending)
 

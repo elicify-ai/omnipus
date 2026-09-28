@@ -65,6 +65,7 @@
 | SP-34 | Team panel content (wave 3) | The Team panel shows a LIST WITH SEARCH (agents, not the graph); the full agent-relationship graph stays a full-page-only view (Expand) | Founder | 2026-09-27 |
 | SP-35 | Delegation-graph editing (parked, out of scope) | Founder raised "how to edit the delegation graph" as a new, separate open design topic — NOT part of this feature; tracked by team-lead outside this spec | Founder | 2026-09-27 |
 | SP-36 | Team panel on workspace switch (closes SP-29's gap, raised by the wave-1 architect gate pass) | When the workspace switches while the Team panel is open, the panel FOLLOWS the switch and shows the new workspace's team. Built in wave 3 (Team becomes a panel then), not wave 1 | Founder | 2026-09-28 |
+| SP-37 | Browser panel sharing (revises SP-28 for the Browser panel; raised by the wave-1 security gate pass) | "browser panel should not be shareable": the Browser panel offers NO share or copy-link affordance and nothing in the UI presents its URL as shareable. The full-page expand (`/browser-live?session=…&agent=…`) stays as the owner's own navigation only, not a sharing feature; another account's attach is refused by a server-side session ownership check (tracked separately, must land before this panel lands on release). Other panels unchanged | Founder | 2026-09-28 |
 
 ## Open points — resolved (SP-11..SP-14); plan-spec raises any NEW unclear point as a founder question
 

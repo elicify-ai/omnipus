@@ -26,11 +26,11 @@ import { useSwipeToClose } from './useSwipeToClose'
 import { usePanelShellStore, PANEL_WIDTH_UNSET } from './panelShellStore'
 import { PANEL_MIN_PX, clampPanelWidth, panelDefaultWidth, panelWidthCeiling, isPhoneTakeover } from './panelWidth'
 import type { PanelDefinition } from './types'
-import { hasPanelTriggerOrigin } from './panelFocus'
+import { consumePanelOpenFocus, recordPanelTriggerClick } from './panelFocus'
 
 export interface SidePanelShellProps {
   /** The registered panels (§8.1 registry — adding a panel is one entry). */
-  panels: PanelDefinition[]
+  panels: readonly PanelDefinition[]
   /**
    * Width-memory user bucket (SP-13's per-user key). The demo passes a
    * fixed demo user; wave 1 passes the signed-in user's identity.
@@ -52,6 +52,14 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
   const storedWidth = usePanelShellStore((s) => s.panelWidth)
   const rowRef = useRef<HTMLDivElement>(null)
   const [rowWidth, setRowWidth] = useState(0)
+
+  // A document-level capture listener sees a real trigger click before that
+  // trigger's handler opens through the global store. This separates a user
+  // open (focus enters the panel) from a load/restore store write (MIN-002).
+  useEffect(() => {
+    document.addEventListener('click', recordPanelTriggerClick, true)
+    return () => document.removeEventListener('click', recordPanelTriggerClick, true)
+  }, [])
 
   // MIN-001: geometry is measured on the shell's own row via
   // ResizeObserver — truthful in the real app AND inside a Storybook stage.
@@ -137,7 +145,7 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
   } | null>(null)
 
   useEffect(() => {
-    if (panelOpen && activePanel !== null && hasPanelTriggerOrigin(activePanel.id)) {
+    if (panelOpen && activePanel !== null && consumePanelOpenFocus(activePanel.id)) {
       headerRef.current?.focus()
     }
   }, [activePanel?.id, activePanel?.context, panelOpen])

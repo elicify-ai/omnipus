@@ -52,7 +52,11 @@ export function PanelTabPresenceBridge() {
           onClick: () => {
             if (!focusPanelTab(identity)) {
               armPanelFocusFallback(identity)
-              useUiStore.getState().openPanel(activePanel.id, activePanel.context)
+              if (activePanel.id === 'browser') {
+                useUiStore.getState().openPanel('browser', activePanel.context)
+              } else {
+                useUiStore.getState().openPanel(activePanel.id, activePanel.context)
+              }
             }
           },
         },

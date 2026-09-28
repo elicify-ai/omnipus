@@ -36,7 +36,11 @@ export function panelWidthKey(username: string, panelId: PanelId, scope: string)
  * session, not a workspace, so it has ONE width per user regardless of
  * which session or screen it was opened from.
  */
-type PanelWidthContext = PanelContext | (BrowserPanelContext & { workspaceId?: string })
+type LegacyBrowserWidthContext = Omit<BrowserPanelContext, 'workspaceId'> & {
+  workspaceId?: string
+}
+
+type PanelWidthContext = PanelContext | LegacyBrowserWidthContext
 
 export function panelWidthScope(panelId: PanelId, context: PanelWidthContext): string {
   if (PANEL_POLICIES[panelId].scope !== 'workspace') return 'app'

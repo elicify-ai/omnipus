@@ -21,7 +21,7 @@ function BrowserPanelContent(props: PanelContentProps) {
   return <BrowserLivePanel shellProps={props} />
 }
 
-export const panels: PanelDefinition[] = [
+export const panels: readonly PanelDefinition[] = [
   {
     id: 'library',
     title: 'Library',
@@ -47,5 +47,3 @@ export const panels: PanelDefinition[] = [
   // by its own pack). One entry, no shell change (SP-4's test).
   mailPanelDefinition,
 ]
-
-export const PANEL_REGISTRY = panels
