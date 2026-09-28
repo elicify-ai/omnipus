@@ -66,7 +66,7 @@ func TestClassifyDialErr(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		got := classifyDialErr(ctx, rawDeadlineErr)
-		if got != context.Canceled {
+		if !errors.Is(got, context.Canceled) {
 			t.Fatalf("classifyDialErr(done ctx, _) = %v, want bare ctx.Err() (context.Canceled)", got)
 		}
 	})
@@ -120,7 +120,7 @@ func TestSMTPStep_ClassifiesDeadlineFlavored(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		got := smtpStep(ctx, timeoutNetError{}, "auth")
-		if got != context.Canceled {
+		if !errors.Is(got, context.Canceled) {
 			t.Fatalf("smtpStep(done ctx, _) = %v, want bare ctx.Err() (context.Canceled)", got)
 		}
 	})

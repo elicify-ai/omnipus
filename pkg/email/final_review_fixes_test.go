@@ -170,7 +170,7 @@ func (s *failingCycleTransport) Search(ctx context.Context, query string, opts S
 	return SearchResult{}, nil
 }
 func (s *failingCycleTransport) ReadMessage(ctx context.Context, uid uint32) (*Message, error) {
-	return nil, nil
+	return nil, errWatcherStubReadMessage
 }
 func (s *failingCycleTransport) Send(ctx context.Context, req SendRequest) error { return nil }
 func (s *failingCycleTransport) MarkSeen(ctx context.Context, uid uint32) error  { return nil }

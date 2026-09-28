@@ -71,7 +71,13 @@ func TestDefaultModeFirstLineMatchesConsumerContract(t *testing.T) {
 	if !reflect.DeepEqual(sortedKeys(raw), wantKeys) {
 		t.Fatalf("first line keys = %v, want exactly %v (consumer contract: fake-mail-server.ts)", sortedKeys(raw), wantKeys)
 	}
-	var line struct{ Imap, Smtp, Control, User, Password string }
+	var line struct {
+		Imap     string `json:"imap"`
+		Smtp     string `json:"smtp"`
+		Control  string `json:"control"`
+		User     string `json:"user"`
+		Password string `json:"password"`
+	}
 	if err := json.Unmarshal(out.Bytes(), &line); err != nil {
 		t.Fatalf("decode first line: %v", err)
 	}
