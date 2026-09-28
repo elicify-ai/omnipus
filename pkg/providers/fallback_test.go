@@ -49,11 +49,19 @@ func TestFallback_SecondCandidateSuccess(t *testing.T) {
 		makeCandidate("anthropic", "claude-opus"),
 	}
 
+	// provider-messages amendment (2026-09-27): §7.4 C-8 gives the chain a
+	// per-candidate rate-limit retry loop — a rate-limit failure now retries
+	// THIS candidate in place (up to 3 total calls) instead of falling
+	// through to the next candidate. This test's property is FAILOVER: a
+	// retriable failure on candidate 1 hands off to candidate 2. Inject a
+	// retriable NON-rate-limit failure (connection drop → FailoverTimeout)
+	// so the mark+fallback path runs; the rate-limit in-place loop has its
+	// own suite (fallback_retry_loop_test.go). Assertions unchanged.
 	attempt := 0
 	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
 		attempt++
 		if attempt == 1 {
-			return nil, errors.New("rate limit exceeded")
+			return nil, errors.New("connection reset by peer")
 		}
 		return &LLMResponse{Content: "from claude", FinishReason: "stop"}, nil
 	}
@@ -662,7 +670,10 @@ func TestFallback_FairSplitFloor_EnforcesMinimumBudget(t *testing.T) {
 				firstCandidateBudget = time.Until(d)
 			}
 			// Return a retriable error to advance to the next candidate.
-			return nil, errors.New("rate limit exceeded")
+			// §7.4 C-8: non-rate-limit retriable goes straight to mark+fallback,
+			// so candidate 1 fails without the ~2s in-place backoff wait that
+			// races this test's 2s parent deadline (C-12 would return Canceled).
+			return nil, errors.New("connection reset by peer")
 		}
 		// All other candidates succeed immediately.
 		return &LLMResponse{Content: "ok", FinishReason: "stop"}, nil

@@ -82,6 +82,52 @@ func (p *recordingPuller) firstHit() (time.Time, bool) {
 	return p.hits[0], true
 }
 
+// recoveringPuller fails the requested number of leading pulls, then serves
+// body. It models a transient startup transport failure without involving the
+// network or a wall-clock race.
+type recoveringPuller struct {
+	*recordingPuller
+	failures  int
+	deadlines []time.Duration
+}
+
+type observedDoneContext struct {
+	context.Context
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (c *observedDoneContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.observed) })
+	return c.Context.Done()
+}
+
+func newRecoveringPuller(body []byte, failures int) *recoveringPuller {
+	return &recoveringPuller{recordingPuller: newRecordingPuller(body), failures: failures}
+}
+
+func (p *recoveringPuller) Pull(ctx context.Context) ([]byte, error) {
+	p.mu.Lock()
+	p.hits = append(p.hits, time.Now())
+	shouldFail := len(p.hits) <= p.failures
+	body := p.body
+	if deadline, ok := ctx.Deadline(); ok {
+		p.deadlines = append(p.deadlines, time.Until(deadline))
+	}
+	p.mu.Unlock()
+	p.once.Do(func() { close(p.ready) })
+	if shouldFail {
+		return nil, errStubPull
+	}
+	return body, nil
+}
+
+func (p *recoveringPuller) attemptTimeouts() []time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]time.Duration(nil), p.deadlines...)
+}
+
 // testDocument builds a valid 2.0.0 document at the given version carrying one
 // provider and one model, so a pulled document is distinguishable from the
 // embedded snapshot by version alone.
@@ -277,20 +323,168 @@ func TestRefreshLoop_24h_NoRequestPathPulls(t *testing.T) {
 		"1,000 REST reads and 10 turns must add zero pulls — the ticker is the only pull trigger")
 }
 
+// TestRefreshLoop_StartupFailureRetriesBeforeTicker is the release-CI
+// regression: when the first GitHub catalog pull fails transiently, the
+// gateway must recover during startup rather than serving the older embedded
+// snapshot until the 24 h ticker. The pulled document is the observable
+// outcome; the exact retry schedule is deliberately not asserted.
+func TestRefreshLoop_StartupFailureRetriesBeforeTicker(t *testing.T) {
+	home := t.TempDir()
+	puller := newRecoveringPuller(
+		testDocument(t, fmt.Sprintf("v%d.1.1", time.Now().UTC().Year()+1)),
+		1,
+	)
+	cat := catalog.Boot(
+		context.Background(),
+		catalog.EmbeddedSnapshot,
+		puller,
+		catalog.NewFileStore(home),
+		nil,
+	)
+
+	startCatalogRefreshLoopForTest(t, cat, catalog.NewFileStore(home), time.Hour, 5*time.Second, 0)
+
+	require.Eventually(t, func() bool {
+		served, ok := cat.Served()
+		return ok && served.From == catalog.ServedPulled
+	}, 5*time.Second, 10*time.Millisecond,
+		"a transient startup failure must recover before the 24 h ticker")
+	require.Equal(t, 2, puller.hitCount(), "one failed startup pull followed by one successful retry")
+	timeouts := puller.attemptTimeouts()
+	require.Len(t, timeouts, 2)
+	for _, timeout := range timeouts {
+		require.Positive(t, timeout)
+		require.LessOrEqual(t, timeout, 4*time.Second,
+			"startup must not reuse the 30 s daily-refresh timeout")
+	}
+}
+
+func TestCatalogStartupRefreshPolicy(t *testing.T) {
+	t.Run("transient failures recover within the bound", func(t *testing.T) {
+		calls := 0
+		var waits []time.Duration
+		attempts, err := runCatalogStartupRefresh(context.Background(), func(int) error {
+			calls++
+			switch calls {
+			case 1:
+				return fmt.Errorf("checksum sidecar temporarily unavailable: %w", catalog.ErrChecksumMismatch)
+			case 2:
+				return errStubPull
+			}
+			return nil
+		}, func(_ context.Context, delay time.Duration) bool {
+			waits = append(waits, delay)
+			return true
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, 3, attempts)
+		require.Equal(t, 3, calls)
+		require.Equal(t, []time.Duration{500 * time.Millisecond, time.Second}, waits)
+	})
+
+	t.Run("persistent transient failure stops after three attempts", func(t *testing.T) {
+		calls := 0
+		var waits []time.Duration
+		attempts, err := runCatalogStartupRefresh(context.Background(), func(int) error {
+			calls++
+			return errStubPull
+		}, func(_ context.Context, delay time.Duration) bool {
+			waits = append(waits, delay)
+			return true
+		})
+
+		require.ErrorIs(t, err, errStubPull)
+		require.Equal(t, 3, attempts)
+		require.Equal(t, 3, calls)
+		require.Equal(t, []time.Duration{500 * time.Millisecond, time.Second}, waits)
+	})
+
+	t.Run("permanent rejections are not retried", func(t *testing.T) {
+		for name, permanentErr := range map[string]error{
+			"invalid document":  catalog.ErrInvalid,
+			"asset too large":   catalog.ErrTooLarge,
+			"regressed version": catalog.ErrRegressed,
+		} {
+			t.Run(name, func(t *testing.T) {
+				calls := 0
+				attempts, err := runCatalogStartupRefresh(context.Background(), func(int) error {
+					calls++
+					return fmt.Errorf("published catalog rejected: %w", permanentErr)
+				}, func(context.Context, time.Duration) bool {
+					t.Fatal("permanent catalog rejection must not enter retry backoff")
+					return false
+				})
+
+				require.ErrorIs(t, err, permanentErr)
+				require.Equal(t, 1, attempts)
+				require.Equal(t, 1, calls)
+			})
+		}
+	})
+
+	t.Run("gateway cancellation interrupts retry backoff", func(t *testing.T) {
+		baseCtx, cancel := context.WithCancel(context.Background())
+		ctx := &observedDoneContext{Context: baseCtx, observed: make(chan struct{})}
+		done := make(chan bool, 1)
+		go func() {
+			done <- waitForCatalogRetry(ctx, time.Hour)
+		}()
+
+		select {
+		case <-ctx.observed:
+		case <-time.After(time.Second):
+			cancel()
+			t.Fatal("retry waiter never registered the cancellation channel")
+		}
+		cancel()
+		select {
+		case completedWait := <-done:
+			require.False(t, completedWait)
+		case <-time.After(time.Second):
+			t.Fatal("retry backoff did not stop after gateway cancellation")
+		}
+	})
+
+	t.Run("gateway cancellation during refresh does not announce a retry", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		attempts, err := runCatalogStartupRefresh(ctx, func(int) error {
+			cancel()
+			return context.Canceled
+		}, func(context.Context, time.Duration) bool {
+			t.Fatal("canceled refresh must not enter retry backoff")
+			return false
+		})
+
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 1, attempts)
+	})
+
+	t.Run("fast recovery attempts fit model picker window", func(t *testing.T) {
+		const modelPickerRecoveryWindow = 15 * time.Second
+		fastRecoveryWindow := 2*catalogStartupFastTimeout + catalogStartupRetryBackoff
+
+		require.Less(t, fastRecoveryWindow, modelPickerRecoveryWindow)
+		require.Equal(t, 4*time.Second, catalogStartupAttemptTimeout(1, 30*time.Second))
+		require.Equal(t, 4*time.Second, catalogStartupAttemptTimeout(2, 30*time.Second))
+		require.Equal(t, 30*time.Second, catalogStartupAttemptTimeout(3, 30*time.Second))
+	})
+}
+
 // TestRefreshLoop_TickerFires proves the other half of T43: the loop really
 // does pull again on each tick, so the "no request-path pulls" assertion above
 // is not passing merely because the loop is inert.
 func TestRefreshLoop_TickerFires(t *testing.T) {
 	home := t.TempDir()
-	puller := newRecordingPuller(nil) // every pull fails; only the count matters
+	puller := newRecordingPuller(testDocument(t, fmt.Sprintf("v%d.1.1", time.Now().UTC().Year()+1)))
 	cat := catalog.Boot(context.Background(), catalog.EmbeddedSnapshot, puller,
 		catalog.NewFileStore(home), nil)
 
 	startCatalogRefreshLoopForTest(t, cat, catalog.NewFileStore(home), 20*time.Millisecond, time.Second, 0)
 
-	require.Eventually(t, func() bool { return puller.hitCount() >= 3 },
+	require.Eventually(t, func() bool { return puller.hitCount() >= 2 },
 		5*time.Second, 10*time.Millisecond,
-		"the ticker must keep pulling after the startup pull")
+		"a successful startup pull must be followed by a distinct ticker pull")
 }
 
 // TestRefreshLoop_NoCatalog_NoPanic guards the nil-catalog short circuit: the
