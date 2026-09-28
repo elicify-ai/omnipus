@@ -72,6 +72,13 @@ describe('panel-tab presence security boundaries', () => {
     expect(accept({ ...valid, extra: true })).toBe(false)
   })
 
+  it('uses the SHA-256 digest of the local identity key', async () => {
+    const api = await loadFresh()
+    expect(api.panelPresenceKey({ panelId: 'library', workspaceId: 'ws-1' })).toBe(
+      '5a23e89edbf04a20244e17e4345e38099a3367b9b9a035d685a9cd401440ddbb',
+    )
+  })
+
   it('returns false and forgets an app handle whose focus throws', async () => {
     const api = await loadFresh()
     const identity = { panelId: 'library' as PanelId, workspaceId: 'ws-1' }

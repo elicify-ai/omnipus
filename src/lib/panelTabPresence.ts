@@ -1,5 +1,7 @@
-export type PanelIdentity = { // not-wire-format: SPA-local panel identity shared only between same-origin browser tabs, never sent to the gateway
-  panelId: string
+import type { PanelId } from '@/components/panel-shell/types'
+
+export type PanelIdentity = { // not-wire-format: SPA-local identity; only its SHA-256 key is shared between tabs, never sent to the gateway
+  panelId: PanelId
   workspaceId?: string
   sessionId?: string
   agentId?: string
@@ -7,10 +9,8 @@ export type PanelIdentity = { // not-wire-format: SPA-local panel identity share
 
 type PanelWindowHandle = Pick<Window, 'closed' | 'focus'>
 
-type MutableHandleRegistry = ReadonlyMap<string, PanelWindowHandle> & { // not-wire-format: in-memory adapter for browser Window handles, never serialized or sent to the gateway
-  delete?: (key: string) => boolean
-  set?: (key: string, handle: PanelWindowHandle) => unknown
-}
+type MutableHandleRegistry = ReadonlyMap<string, PanelWindowHandle> & // not-wire-format: in-memory adapter for browser Window handles, never serialized or sent to the gateway
+  Pick<Map<string, PanelWindowHandle>, 'delete' | 'set'>
 
 type PanelOpenOutcome =
   | { kind: 'focused' }
@@ -18,26 +18,26 @@ type PanelOpenOutcome =
   | { kind: 'opened' }
   | { kind: 'blocked' }
 
-const WORKSPACE_SCOPED_PANELS = new Set([
+const WORKSPACE_SCOPED_PANELS = new Set<PanelId>([
   'library',
   'mail',
   'tasks',
   'team',
   'calendar',
-])
+]) satisfies ReadonlySet<PanelId>
 
 const PRESENCE_CHANNEL_NAME = 'omnipus-panel-tab-presence'
 const PRESENCE_HEARTBEAT_MS = 1_000
 const PRESENCE_STALE_MS = 3_500
 
 type PanelPresenceMessage = // not-wire-format: same-origin browser-tab lifecycle signal; never crosses the gateway or persists
-  | { type: 'presence'; tabId: string; identity: PanelIdentity; sentAt: number }
+  | { type: 'presence'; tabId: string; identityKey: string; sentAt: number }
   | { type: 'leave'; tabId: string }
   | { type: 'request' }
   | { type: 'focus'; tabId: string }
 
 type PresenceEntry = { // not-wire-format: in-memory same-origin presence cache entry, never serialized or sent to the gateway
-  identity: PanelIdentity
+  identityKey: string
   seenAt: number
 }
 
@@ -48,10 +48,88 @@ export type PanelPresenceAnnouncement = { // not-wire-format: SPA-local lifecycl
 
 const panelTabHandles = new Map<string, Window>()
 const presenceByTab = new Map<string, PresenceEntry>()
+const localIdentityByOpaqueKey = new Map<string, PanelIdentity>()
+const localFocusFallbackKeys = new Set<string>()
 const presenceSubscribers = new Set<() => void>()
 let monitorChannel: BroadcastChannel | null = null
 let monitorConsumers = 0
 let monitorSweep: ReturnType<typeof setInterval> | null = null
+let broadcastUnavailableWarned = false
+
+const SHA256_INITIAL = [
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+  0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+]
+
+const SHA256_ROUND = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+] as const
+
+function rotateRight(value: number, bits: number): number {
+  return (value >>> bits) | (value << (32 - bits))
+}
+
+/** Synchronous SHA-256 keeps the presence check inside the user gesture. */
+function sha256Hex(value: string): string {
+  const input = new TextEncoder().encode(value)
+  const paddedLength = Math.ceil((input.length + 9) / 64) * 64
+  const bytes = new Uint8Array(paddedLength)
+  bytes.set(input)
+  bytes[input.length] = 0x80
+  const bitLength = input.length * 8
+  const view = new DataView(bytes.buffer)
+  view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x100000000), false)
+  view.setUint32(paddedLength - 4, bitLength >>> 0, false)
+
+  const hash = [...SHA256_INITIAL]
+  const words = new Uint32Array(64)
+  for (let offset = 0; offset < bytes.length; offset += 64) {
+    for (let index = 0; index < 16; index += 1) {
+      words[index] = view.getUint32(offset + index * 4, false)
+    }
+    for (let index = 16; index < 64; index += 1) {
+      const first = words[index - 15]!
+      const second = words[index - 2]!
+      const sigma0 = rotateRight(first, 7) ^ rotateRight(first, 18) ^ (first >>> 3)
+      const sigma1 = rotateRight(second, 17) ^ rotateRight(second, 19) ^ (second >>> 10)
+      words[index] = (words[index - 16]! + sigma0 + words[index - 7]! + sigma1) >>> 0
+    }
+
+    let [a, b, c, d, e, f, g, h] = hash
+    for (let index = 0; index < 64; index += 1) {
+      const upper = rotateRight(e!, 6) ^ rotateRight(e!, 11) ^ rotateRight(e!, 25)
+      const choose = (e! & f!) ^ (~e! & g!)
+      const first = (h! + upper + choose + SHA256_ROUND[index]! + words[index]!) >>> 0
+      const lower = rotateRight(a!, 2) ^ rotateRight(a!, 13) ^ rotateRight(a!, 22)
+      const majority = (a! & b!) ^ (a! & c!) ^ (b! & c!)
+      const second = (lower + majority) >>> 0
+      h = g
+      g = f
+      f = e
+      e = (d! + first) >>> 0
+      d = c
+      c = b
+      b = a
+      a = (first + second) >>> 0
+    }
+    hash[0] = (hash[0]! + a!) >>> 0
+    hash[1] = (hash[1]! + b!) >>> 0
+    hash[2] = (hash[2]! + c!) >>> 0
+    hash[3] = (hash[3]! + d!) >>> 0
+    hash[4] = (hash[4]! + e!) >>> 0
+    hash[5] = (hash[5]! + f!) >>> 0
+    hash[6] = (hash[6]! + g!) >>> 0
+    hash[7] = (hash[7]! + h!) >>> 0
+  }
+  return hash.map((word) => word.toString(16).padStart(8, '0')).join('')
+}
 
 function createTabId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -61,27 +139,38 @@ function createTabId(): string {
 }
 
 function openPresenceChannel(): BroadcastChannel | null {
-  if (typeof BroadcastChannel === 'undefined') return null
+  if (typeof BroadcastChannel === 'undefined') {
+    warnBroadcastUnavailable()
+    return null
+  }
   try {
     return new BroadcastChannel(PRESENCE_CHANNEL_NAME)
   } catch {
+    warnBroadcastUnavailable()
     return null
   }
 }
 
-function isPresenceMessage(value: unknown): value is PanelPresenceMessage {
+function warnBroadcastUnavailable(): void {
+  if (broadcastUnavailableWarned) return
+  broadcastUnavailableWarned = true
+  console.warn('Panel tab presence is unavailable because BroadcastChannel could not be opened.')
+}
+
+export function acceptPanelPresenceMessage(value: unknown): value is PanelPresenceMessage {
   if (!isRecord(value) || typeof value.type !== 'string') return false
   if (value.type === 'request') return Object.keys(value).length === 1
   if (value.type === 'leave' || value.type === 'focus') {
-    return Object.keys(value).length === 2 && isNonEmptyString(value.tabId)
+    return Object.keys(value).length === 2 && isTabId(value.tabId)
   }
   return (
     value.type === 'presence' &&
     Object.keys(value).length === 4 &&
-    isNonEmptyString(value.tabId) &&
+    isTabId(value.tabId) &&
+    isOpaqueIdentityKey(value.identityKey) &&
     typeof value.sentAt === 'number' &&
     Number.isFinite(value.sentAt) &&
-    acceptPresence(value.identity)
+    value.sentAt >= 0
   )
 }
 
@@ -101,28 +190,16 @@ function removeStalePresence(now = Date.now()): void {
 
 function handleMonitorMessage(event: MessageEvent<unknown>): void {
   const message = event.data
-  if (!isPresenceMessage(message)) return
+  if (!acceptPanelPresenceMessage(message)) return
   if (message.type === 'presence') {
-    const previous = presenceByTab.get(message.tabId)
-    if (previous) {
-      const previousKey = panelIdentityKey(previous.identity)
-      const nextKey = panelIdentityKey(message.identity)
-      const handle = panelTabHandles.get(previousKey)
-      if (handle && previousKey !== nextKey) {
-        panelTabHandles.delete(previousKey)
-        if (!handle.closed) panelTabHandles.set(nextKey, handle)
-      }
-    }
     presenceByTab.set(message.tabId, {
-      identity: message.identity,
+      identityKey: message.identityKey,
       seenAt: Date.now(),
     })
     notifyPresenceSubscribers()
     return
   }
   if (message.type === 'leave') {
-    const entry = presenceByTab.get(message.tabId)
-    if (entry) panelTabHandles.delete(panelIdentityKey(entry.identity))
     if (presenceByTab.delete(message.tabId)) notifyPresenceSubscribers()
   }
 }
@@ -167,25 +244,27 @@ export function startPanelTabPresenceMonitor(onChange?: () => void): () => void 
 
 /** Announce one full-page panel until its route unmounts or the page leaves. */
 export function announcePanelTabPresence(initialIdentity: PanelIdentity): PanelPresenceAnnouncement {
+  if (!acceptPresence(initialIdentity)) return { update: () => {}, stop: () => {} }
   const channel = openPresenceChannel()
   if (!channel) return { update: () => {}, stop: () => {} }
 
   const tabId = createTabId()
   let identity = initialIdentity
+  let identityKey = panelPresenceKey(initialIdentity)
+  localIdentityByOpaqueKey.set(identityKey, initialIdentity)
   let stopped = false
   const publish = () => {
-    channel.postMessage({ type: 'presence', tabId, identity, sentAt: Date.now() } satisfies PanelPresenceMessage)
+    channel.postMessage({ type: 'presence', tabId, identityKey, sentAt: Date.now() } satisfies PanelPresenceMessage)
   }
   const onMessage = (event: MessageEvent<unknown>) => {
     const message = event.data
-    if (!isPresenceMessage(message)) return
+    if (!acceptPanelPresenceMessage(message)) return
     if (message.type === 'request') publish()
     if (message.type === 'focus' && message.tabId === tabId) {
       try {
         window.focus()
       } catch {
-        // Browser focus is explicitly best-effort; the visible affordance is
-        // the reliable part of the contract.
+        channel.postMessage({ type: 'leave', tabId } satisfies PanelPresenceMessage)
       }
     }
   }
@@ -197,6 +276,7 @@ export function announcePanelTabPresence(initialIdentity: PanelIdentity): PanelP
     channel.removeEventListener('message', onMessage)
     channel.postMessage({ type: 'leave', tabId } satisfies PanelPresenceMessage)
     channel.close()
+    localIdentityByOpaqueKey.delete(identityKey)
   }
   const heartbeat = setInterval(publish, PRESENCE_HEARTBEAT_MS)
   channel.addEventListener('message', onMessage)
@@ -206,7 +286,10 @@ export function announcePanelTabPresence(initialIdentity: PanelIdentity): PanelP
   return {
     update(nextIdentity) {
       if (stopped || !acceptPresence(nextIdentity)) return
+      localIdentityByOpaqueKey.delete(identityKey)
       identity = nextIdentity
+      identityKey = panelPresenceKey(nextIdentity)
+      localIdentityByOpaqueKey.set(identityKey, identity)
       publish()
     },
     stop,
@@ -215,14 +298,22 @@ export function announcePanelTabPresence(initialIdentity: PanelIdentity): PanelP
 
 export function getPanelTabPresence(): PanelIdentity[] {
   removeStalePresence()
-  return [...presenceByTab.values()].map((entry) => entry.identity)
+  return [...presenceByTab.values()]
+    .map((entry) => localIdentityByOpaqueKey.get(entry.identityKey))
+    .filter((identity): identity is PanelIdentity => identity !== undefined)
 }
 
-export function getPanelTabHandleRegistry(): Map<string, Window> {
-  return panelTabHandles
+export function getPanelTabPresenceKeys(): readonly string[] {
+  removeStalePresence()
+  return [...presenceByTab.values()].map((entry) => entry.identityKey)
+}
+
+export function getPanelTabHandleRegistry(): ReadonlyMap<string, Window> {
+  return new Map(panelTabHandles)
 }
 
 export function registerPanelTabHandle(identity: PanelIdentity, handle: Window): void {
+  if (!acceptPresence(identity)) throw new TypeError('Invalid panel identity')
   panelTabHandles.set(panelIdentityKey(identity), handle)
 }
 
@@ -243,15 +334,17 @@ export function focusPanelTab(identity: PanelIdentity): boolean {
       try {
         handle.focus()
       } catch {
-        // Focus is best-effort; do not create a duplicate on failure.
+        panelTabHandles.delete(key)
+        return false
       }
       return true
     }
   }
 
   removeStalePresence()
+  const opaqueKey = panelPresenceKey(identity)
   const match = [...presenceByTab.entries()]
-    .filter(([, entry]) => panelIdentityKey(entry.identity) === key)
+    .filter(([, entry]) => entry.identityKey === opaqueKey)
     .sort((a, b) => b[1].seenAt - a[1].seenAt)[0]
   if (!match || !monitorChannel) return false
   monitorChannel.postMessage({ type: 'focus', tabId: match[0] } satisfies PanelPresenceMessage)
@@ -265,11 +358,10 @@ export function resolveExistingPanelTab(identity: PanelIdentity): 'focused' | 'a
     if (handle.closed) {
       panelTabHandles.delete(key)
     } else {
-      focusPanelTab(identity)
-      return 'focused'
+      if (focusPanelTab(identity)) return 'focused'
     }
   }
-  return getPanelTabPresence().some((entry) => panelIdentityKey(entry) === key) ? 'affordance' : null
+  return getPanelTabPresenceKeys().includes(panelPresenceKey(identity)) ? 'affordance' : null
 }
 
 export function panelIdentityKey(identity: PanelIdentity): string {
@@ -279,14 +371,26 @@ export function panelIdentityKey(identity: PanelIdentity): string {
   return `${identity.panelId}:${identity.workspaceId ?? 'app'}`
 }
 
+export function panelPresenceKey(identity: PanelIdentity): string {
+  return sha256Hex(panelIdentityKey(identity))
+}
+
+export function armPanelFocusFallback(identity: PanelIdentity): void {
+  localFocusFallbackKeys.add(panelIdentityKey(identity))
+}
+
+export function consumePanelFocusFallback(identity: PanelIdentity): boolean {
+  return localFocusFallbackKeys.delete(panelIdentityKey(identity))
+}
+
 export function resolvePanelOpen(input: {
   identity: PanelIdentity
-  handles: ReadonlyMap<string, PanelWindowHandle>
+  handles: MutableHandleRegistry
   presence: PanelIdentity[]
   open: () => Window | null
 }): PanelOpenOutcome {
   const key = panelIdentityKey(input.identity)
-  const registry = input.handles as MutableHandleRegistry
+  const registry = input.handles
   const existing = input.handles.get(key)
 
   if (existing) {
@@ -294,12 +398,12 @@ export function resolvePanelOpen(input: {
       try {
         existing.focus()
       } catch {
-        // Window focus is best-effort. Do not create a duplicate merely
-        // because the browser declined to bring the existing tab forward.
+        registry.delete(key)
+        return resolvePanelOpen({ ...input, handles: registry })
       }
       return { kind: 'focused' }
     }
-    registry.delete?.(key)
+    registry.delete(key)
   }
 
   if (input.presence.some((identity) => panelIdentityKey(identity) === key)) {
@@ -314,8 +418,22 @@ export function resolvePanelOpen(input: {
   }
   if (!opened || opened.closed) return { kind: 'blocked' }
 
-  registry.set?.(key, opened)
+  registry.set(key, opened)
   return { kind: 'opened' }
+}
+
+export function resolveRegisteredPanelOpen(input: {
+  identity: PanelIdentity
+  open: () => Window | null
+}): PanelOpenOutcome {
+  const presenceKey = panelPresenceKey(input.identity)
+  const present = getPanelTabPresenceKeys().includes(presenceKey)
+  return resolvePanelOpen({
+    identity: input.identity,
+    handles: panelTabHandles,
+    presence: present ? [input.identity] : [],
+    open: input.open,
+  })
 }
 
 export function acceptPresence(message: unknown): boolean {
@@ -327,7 +445,7 @@ export function acceptPresence(message: unknown): boolean {
   }
 
   const panelId = message.panelId
-  if (typeof panelId !== 'string') return false
+  if (!isPanelId(panelId)) return false
 
   if (panelId === 'browser') {
     return (
@@ -348,4 +466,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
+}
+
+function isPanelId(value: unknown): value is PanelId {
+  return value === 'library' || value === 'browser' || value === 'mail' || value === 'tasks' || value === 'team' || value === 'calendar'
+}
+
+function isOpaqueIdentityKey(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+}
+
+function isTabId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9-]{8,128}$/.test(value)
 }

@@ -6,6 +6,7 @@ import {
   getPanelTabPresence,
   registerPanelTabHandle,
   startPanelTabPresenceMonitor,
+  type PanelIdentity,
 } from './panelTabPresence'
 
 describe('panel tab presence lifecycle', () => {
@@ -14,7 +15,7 @@ describe('panel tab presence lifecycle', () => {
   })
 
   it('tracks a manual tab, focuses it on request, and clears it on navigation away', async () => {
-    const identity = { panelId: 'library', workspaceId: 'ws-1' }
+    const identity = { panelId: 'library', workspaceId: 'ws-1' } satisfies PanelIdentity
     const stopMonitor = startPanelTabPresenceMonitor()
     const announcement = announcePanelTabPresence(identity)
     const focus = vi.spyOn(window, 'focus').mockImplementation(() => {})
@@ -36,7 +37,7 @@ describe('panel tab presence lifecycle', () => {
   })
 
   it('focuses an app-opened handle directly without navigating it', () => {
-    const identity = { panelId: 'library', workspaceId: 'ws-1' }
+    const identity = { panelId: 'library', workspaceId: 'ws-1' } satisfies PanelIdentity
     const handle = { closed: false, focus: vi.fn() } as unknown as Window
     registerPanelTabHandle(identity, handle)
 

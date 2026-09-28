@@ -13,6 +13,7 @@ vi.mock('@/lib/panelTabPresence', async (importOriginal) => {
     getPanelTabPresence: vi.fn(() => [{ panelId: 'library', workspaceId: 'ws-1' }]),
     resolveExistingPanelTab: vi.fn(() => 'affordance' as const),
     resolvePanelOpen: vi.fn(() => ({ kind: 'affordance' as const })),
+    resolveRegisteredPanelOpen: vi.fn(() => ({ kind: 'affordance' as const })),
     startPanelTabPresenceMonitor: vi.fn(() => () => {}),
   }
 })
@@ -95,6 +96,7 @@ describe('failed already-open focus reopens the panel locally', () => {
     })
     render(
       <>
+        <PanelTabPresenceBridge />
         <LibraryPanel shellProps={shellProps({ workspaceId: 'ws-1' })} />
         <ToastContainer />
       </>,
@@ -118,6 +120,7 @@ describe('failed already-open focus reopens the panel locally', () => {
     })
     render(
       <>
+        <PanelTabPresenceBridge />
         <BrowserLivePanel shellProps={shellProps(context)} />
         <ToastContainer />
       </>,
