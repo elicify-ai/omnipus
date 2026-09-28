@@ -10,8 +10,14 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field } from '@/components/ui/field'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { formatMailBytes } from './mail-format'
+import { MailMarkdownEditor } from './MailMarkdownEditor'
+import {
+  collectMailRecipients,
+  isValidMailRecipient,
+  MailRecipientInput,
+  type MailRecipientValue,
+} from './MailRecipientInput'
 
 /** The compose send payload, as handed to `onSend`. Cc/Bcc ride the wire
  * too (D26) — the oracle pins the required fields via objectContaining. */
@@ -37,26 +43,36 @@ const MAX_ATTACHMENTS = 10
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024
 
 interface ComposeValues {
-  to: string
-  cc: string
-  bcc: string
+  to: MailRecipientValue
+  cc: MailRecipientValue
+  bcc: MailRecipientValue
   subject: string
   body: string
 }
 
-function splitRecipients(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean)
+type ComposeErrors = Partial<Record<'to' | 'cc' | 'bcc' | 'body', string>>
+
+const EMPTY_RECIPIENTS: MailRecipientValue = { recipients: [], draft: '' }
+
+function recipientError(recipients: string[]): string | undefined {
+  return recipients.some((recipient) => !isValidMailRecipient(recipient))
+    ? 'Correct the invalid email address.'
+    : undefined
 }
 
 export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: MailComposeDialogProps) {
-  const [values, setValues] = useState<ComposeValues>({ to: '', cc: '', bcc: '', subject: '', body: '' })
+  const [values, setValues] = useState<ComposeValues>({
+    to: EMPTY_RECIPIENTS,
+    cc: EMPTY_RECIPIENTS,
+    bcc: EMPTY_RECIPIENTS,
+    subject: '',
+    body: '',
+  })
   const [attachments, setAttachments] = useState<File[]>([])
-  const [errors, setErrors] = useState<{ to?: string; body?: string }>({})
+  const [errors, setErrors] = useState<ComposeErrors>({})
   const [attachError, setAttachError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const bodyRef = useRef('')
 
   // Fresh fields on every open; reply prefills To, the Re: subject and the
   // In-Reply-To header carried through to sendMailMessage.
@@ -64,19 +80,27 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
     if (!open) return
     const reply = mode === 'reply' && replyTo
     setValues({
-      to: reply ? replyTo.from : '',
-      cc: '',
-      bcc: '',
+      // Keep the reply address in the input until Enter/comma/send so the
+      // longstanding accessible textbox contract remains intact.
+      to: { recipients: [], draft: reply ? replyTo.from : '' },
+      cc: EMPTY_RECIPIENTS,
+      bcc: EMPTY_RECIPIENTS,
       subject: reply ? `Re: ${replyTo.subject}` : '',
       body: '',
     })
     setAttachments([])
     setErrors({})
     setAttachError(null)
-  }, [open, mode, replyTo])
+    bodyRef.current = ''
+  }, [open, mode, replyTo?.from, replyTo?.messageId, replyTo?.subject])
 
-  const set = (key: keyof ComposeValues) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    setValues((prev) => ({ ...prev, [key]: e.target.value }))
+  const setSubject = (event: React.ChangeEvent<HTMLInputElement>) =>
+    setValues((previous) => ({ ...previous, subject: event.target.value }))
+
+  const setRecipients = (key: 'to' | 'cc' | 'bcc') => (value: MailRecipientValue) => {
+    setValues((previous) => ({ ...previous, [key]: value }))
+    setErrors((previous) => ({ ...previous, [key]: undefined }))
+  }
 
   const handleFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return
@@ -100,20 +124,25 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
   }
 
   const handleSend = () => {
-    const to = splitRecipients(values.to)
-    const nextErrors: { to?: string; body?: string } = {}
+    const to = collectMailRecipients(values.to)
+    const cc = collectMailRecipients(values.cc)
+    const bcc = collectMailRecipients(values.bcc)
+    const nextErrors: ComposeErrors = {}
     if (to.length === 0) nextErrors.to = 'Add at least one recipient.'
-    if (values.body.trim() === '') nextErrors.body = 'Write a message before sending.'
-    if (Object.keys(nextErrors).length > 0 || attachError) {
+    nextErrors.to ??= recipientError(to)
+    nextErrors.cc = recipientError(cc)
+    nextErrors.bcc = recipientError(bcc)
+    if (bodyRef.current.trim() === '') nextErrors.body = 'Write a message before sending.'
+    if (Object.values(nextErrors).some(Boolean) || attachError) {
       setErrors(nextErrors)
       return
     }
     onSend({
       to,
-      cc: splitRecipients(values.cc),
-      bcc: splitRecipients(values.bcc),
+      cc,
+      bcc,
       subject: values.subject,
-      body_markdown: values.body,
+      body_markdown: bodyRef.current,
       in_reply_to: mode === 'reply' && replyTo ? replyTo.messageId : null,
       attachments,
     })
@@ -121,7 +150,7 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent className="flex h-[calc(100dvh-var(--space-5))] max-h-[calc(100dvh-var(--space-5))] w-[calc(100%-var(--space-5))] max-w-5xl flex-col gap-[var(--space-2)] overflow-y-auto p-[var(--space-3)]">
+      <DialogContent className="mail-compose-dialog flex h-[calc(100dvh-var(--space-5))] max-h-[calc(100dvh-var(--space-5))] w-[calc(100%-var(--space-5))] max-w-5xl flex-col gap-[var(--space-2)] overflow-y-auto p-[var(--space-3)]">
         <DialogHeader className="shrink-0 pr-[var(--space-6)]">
           <DialogTitle>{mode === 'reply' ? 'Reply' : 'Compose message'}</DialogTitle>
           <DialogDescription>
@@ -136,37 +165,71 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
             data-compose-header-row
             className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
           >
-            <Input className="rounded-none border-0 bg-transparent px-0" value={values.to} onChange={set('to')} placeholder="name@example.com" />
+            {(controlProps) => (
+              <MailRecipientInput
+                {...controlProps}
+                aria-label="To"
+                value={values.to}
+                onChange={setRecipients('to')}
+              />
+            )}
           </Field>
           <Field
             label="Cc"
+            error={errors.cc}
             data-compose-header-row
-            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)]"
+            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
           >
-            <Input className="rounded-none border-0 bg-transparent px-0" value={values.cc} onChange={set('cc')} placeholder="name@example.com" />
+            {(controlProps) => (
+              <MailRecipientInput
+                {...controlProps}
+                aria-label="Cc"
+                value={values.cc}
+                onChange={setRecipients('cc')}
+              />
+            )}
           </Field>
           <Field
             label="Bcc"
+            error={errors.bcc}
             data-compose-header-row
-            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)]"
+            className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
           >
-            <Input className="rounded-none border-0 bg-transparent px-0" value={values.bcc} onChange={set('bcc')} placeholder="name@example.com" />
+            {(controlProps) => (
+              <MailRecipientInput
+                {...controlProps}
+                aria-label="Bcc"
+                value={values.bcc}
+                onChange={setRecipients('bcc')}
+              />
+            )}
           </Field>
           <Field
             label="Subject"
             data-compose-header-row
             className="grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 py-[var(--space-0-5)]"
           >
-            <Input className="rounded-none border-0 bg-transparent px-0" value={values.subject} onChange={set('subject')} placeholder="Subject" />
+            <Input className="rounded-none border-0 bg-transparent px-0" value={values.subject} onChange={setSubject} placeholder="Subject" />
           </Field>
         </div>
         <Field
-          label="Message (Markdown)"
+          label="Message"
           error={errors.body}
+          required
           data-compose-message-region
           className="flex min-h-[calc(var(--space-8)+var(--space-4))] flex-1 flex-col gap-[var(--space-1)] space-y-0"
         >
-          <Textarea className="min-h-0 flex-1" value={values.body} onChange={set('body')} placeholder="Write your message in Markdown" />
+          {(controlProps) => (
+            <MailMarkdownEditor
+              {...controlProps}
+              markdown={values.body}
+              onMarkdownChange={(body) => {
+                bodyRef.current = body
+                setValues((previous) => ({ ...previous, body }))
+                setErrors((previous) => ({ ...previous, body: undefined }))
+              }}
+            />
+          )}
         </Field>
         <div
           data-testid="compose-attachments-row"
