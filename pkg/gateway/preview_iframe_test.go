@@ -120,9 +120,11 @@ func TestServePreview_FrameAncestorsHeader(t *testing.T) {
 	// are all in the RFC 3986 unreserved set, so percent-encoding is identity.
 	const origin = "http://127.0.0.1:5000"
 	prefix := "/preview/agent-1/" + token
+	// style-src carries 'unsafe-inline' per the founder ruling of 2026-09-28:
+	// previewed content may carry inline styles; Omnipus's own app CSP does not.
 	want := "default-src 'none';\n" +
 		"script-src " + origin + prefix + " 'unsafe-inline' 'unsafe-eval';\n" +
-		"style-src " + origin + prefix + ";\n" +
+		"style-src " + origin + prefix + " 'unsafe-inline';\n" +
 		"img-src " + origin + prefix + " data:;\n" +
 		"font-src " + origin + prefix + " data:;\n" +
 		"media-src " + origin + prefix + ";\n" +

@@ -158,7 +158,9 @@ func TestServeWeb_RealStaticSite_IndexHTML(t *testing.T) {
 // Supersedes the pre-ADR-094 oracle, which pinned the workspace-style CSP
 // ('self'/'unsafe-inline' sources) instead of the template.
 // Traces to: adr-094-preview-isolation-spec.md FR-014; the template below is
-// the spec's, transcribed verbatim.
+// the spec's, transcribed verbatim — with style-src's 'unsafe-inline' per the
+// founder ruling of 2026-09-28 (previewed content may carry inline styles;
+// Omnipus's own app CSP does not).
 func TestServeWeb_RealStaticSite_CSPAllowsOwnStylesheet(t *testing.T) {
 	api, ss := newServeWebTestAPI(t)
 
@@ -190,9 +192,11 @@ func TestServeWeb_RealStaticSite_CSPAllowsOwnStylesheet(t *testing.T) {
 	// are all in the RFC 3986 unreserved set, so percent-encoding is identity.
 	const origin = "http://127.0.0.1:8080"
 	prefix := "/preview/site-agent-csp/" + token
+	// style-src carries 'unsafe-inline' per the founder ruling of 2026-09-28:
+	// previewed content may carry inline styles; Omnipus's own app CSP does not.
 	want := "default-src 'none';\n" +
 		"script-src " + origin + prefix + " 'unsafe-inline' 'unsafe-eval';\n" +
-		"style-src " + origin + prefix + ";\n" +
+		"style-src " + origin + prefix + " 'unsafe-inline';\n" +
 		"img-src " + origin + prefix + " data:;\n" +
 		"font-src " + origin + prefix + " data:;\n" +
 		"media-src " + origin + prefix + ";\n" +
@@ -206,11 +210,14 @@ func TestServeWeb_RealStaticSite_CSPAllowsOwnStylesheet(t *testing.T) {
 		"ADR-094 FR-014: the static Mode 2 CSP must be byte-identical to the spec template")
 
 	// The purpose row: the app's own stylesheet is allowed — via the
-	// template's single style-src source, origin+prefix. The linked
-	// style.css loads from under the token prefix; 'self' (any same-origin
-	// path) and third-party sources stay out.
-	assert.Equal(t, []string{origin + prefix}, cspDirectiveSources(t, csp, "style-src"),
-		"the app's own stylesheet must be allowed via the template's prefix source — "+
+	// template's style-src sources, origin+prefix and, since the founder
+	// ruling of 2026-09-28, 'unsafe-inline' (a previewed document's inline
+	// styles are previewed content). The linked style.css loads from under
+	// the token prefix; 'self' (any same-origin path) and third-party
+	// sources stay out.
+	assert.Equal(t, []string{origin + prefix, "'unsafe-inline'"}, cspDirectiveSources(t, csp, "style-src"),
+		"the app's own stylesheet must be allowed via the template's prefix source and inline "+
+			"styles per the founder ruling of 2026-09-28 — "+
 			"linked stylesheets from under the token prefix load, nothing wider")
 }
 

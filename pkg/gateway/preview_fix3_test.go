@@ -184,10 +184,14 @@ func (h *fix3Harness) fix3UpstreamEmit(t *testing.T, status int, location string
 // fix3Mode2CSPTemplate transcribes the spec's Mode 2 CSP template verbatim
 // (the static tripwire oracle; spec "Mode 2 response headers" / ADR-094
 // §2.3): ${ORIGIN}, ${PREFIX} percent-encoded, ${ORIGIN-WS}.
+//
+// style-src carries 'unsafe-inline' per the founder ruling of 2026-09-28:
+// previewed content on the preview address may carry inline styles;
+// Omnipus's own app CSP does not.
 func fix3Mode2CSPTemplate(origin, wsOrigin, prefix string) string {
 	return "default-src 'none';\n" +
 		"script-src " + origin + prefix + " 'unsafe-inline' 'unsafe-eval';\n" +
-		"style-src " + origin + prefix + ";\n" +
+		"style-src " + origin + prefix + " 'unsafe-inline';\n" +
 		"img-src " + origin + prefix + " data:;\n" +
 		"font-src " + origin + prefix + " data:;\n" +
 		"media-src " + origin + prefix + ";\n" +

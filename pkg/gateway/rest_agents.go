@@ -412,7 +412,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// explicit partial/degraded flag is a legitimate alternative but requires
 	// a coordinated SPA update, not a decision to make unilaterally here.
 	if len(errs) > 0 {
-		logsafeError("rest: list agent sessions: store read failed", "agent_id", agentID, "errors", errs)
+		logsafeError("rest: list agent sessions: store read failed", "agent_id", agentID, "errors", errors.Join(errs...))
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", errors.Join(errs...)))
 		return
 	}

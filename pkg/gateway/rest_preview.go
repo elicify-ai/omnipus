@@ -25,13 +25,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
 
@@ -197,14 +198,120 @@ func (a *restAPI) handleServePreviewPreflight(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// serveStaticFile serves the file at absDir/relPath with path-traversal guards,
-// symlink resolution, MIME detection, and buffered/streaming delivery.
-// Used by HandlePreview's static-mode branch. dedupKey keys the serve.served
-// audit dedup set; auditToken feeds the audit details — they are separate
-// because the Mode 1 static branch dedups under a "label:" key but must keep
-// the LABEL out of the audit details (FR-026 redaction), so it audits with an
+// previewServeRelPath converts the wire relPath to the root-relative fs path
+// serveStaticFile opens through os.Root. The wire form mirrors the pre-fix11
+// handler's Join/Clean semantics: a leading slash is dropped (Join treated
+// "/x" as relative), inner dot segments resolve (Clean — "a/../b" serves
+// "b"), and only a path that still escapes after cleaning ("../x",
+// "a/../../b") or carries a NUL is refused — exactly the shapes the old
+// HasPrefix guard answered 403.
+func previewServeRelPath(relPath string) (string, error) {
+	if relPath == "" || relPath == "." {
+		return ".", nil
+	}
+	if strings.ContainsRune(relPath, 0) {
+		return "", previewErrPathRefused
+	}
+	rel := path.Clean(strings.TrimPrefix(relPath, "/"))
+	if rel == "." {
+		return ".", nil
+	}
+	if !fs.ValidPath(rel) {
+		return "", previewErrPathRefused
+	}
+	return rel, nil
+}
+
+// previewErrPathRefused marks a wire path shape the served directory must
+// never answer: traversal that survives cleaning, or a NUL byte.
+var previewErrPathRefused = errors.New("preview path refused")
+
+// previewPathEscapes reports whether err is os.Root's path-escape refusal.
+// os.Root exposes no exported sentinel for it: measured on go1.26.6, the
+// error is a *fs.PathError whose Err renders as "path escapes from parent",
+// matching neither fs.ErrNotExist nor fs.ErrInvalid. If a Go upgrade ever
+// changes that text, escapes degrade to a 500 and the pinned
+// TestServePreview_SymlinkEscape_Returns403 turns red — the drift is caught,
+// not silent.
+func previewPathEscapes(err error) bool {
+	var pe *fs.PathError
+	if !errors.As(err, &pe) {
+		return false
+	}
+	return pe.Err.Error() == "path escapes from parent"
+}
+
+// previewServeErrStatus maps a root-operation error to the (status, message)
+// the pre-fix11 handler emitted: ENOENT → 404 "file not found"; the
+// path-escape refusal → 403 "access denied: path is outside the registered
+// directory"; anything else → 500 with the step's own message.
+func previewServeErrStatus(err error, internalMsg string) (int, string) {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return http.StatusNotFound, "file not found"
+	case previewPathEscapes(err):
+		return http.StatusForbidden, "access denied: path is outside the registered directory"
+	default:
+		return http.StatusInternalServerError, internalMsg
+	}
+}
+
+// previewServeAuditFail writes one 403/404 failure response and audits it —
+// the ONE shared shape so every serveStaticFile refusal keeps the same
+// serve.path_invalid event the pre-fix11 handler emitted.
+func (a *restAPI) previewServeAuditFail(
+	w http.ResponseWriter, r *http.Request,
+	agentID, auditToken string,
+	status int, msg string,
+	startedAt time.Time,
+) {
+	a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, status, startedAt)
+	jsonErr(w, status, msg)
+}
+
+// previewServeRootFailure responds to a root-operation error: 403/404 audit a
+// serve.path_invalid event; a 500 logs server-side only (the pre-fix11 500s
+// never audited). logPath names the refused path in the 500's log.
+func (a *restAPI) previewServeRootFailure(
+	w http.ResponseWriter, r *http.Request,
+	agentID, auditToken, logPath string,
+	err error,
+	logMsg, internalMsg string,
+	startedAt time.Time,
+) {
+	status, msg := previewServeErrStatus(err, internalMsg)
+	if status == http.StatusInternalServerError {
+		logsafeError(logMsg, "path", logPath, "error", err)
+		jsonErr(w, status, msg)
+		return
+	}
+	a.previewServeAuditFail(w, r, agentID, auditToken, status, msg, startedAt)
+}
+
+// previewIndexRelPath is the directory-index target: the directory's own
+// index.html, root-relative.
+func previewIndexRelPath(rel string) string {
+	if rel == "." {
+		return "index.html"
+	}
+	return rel + "/index.html"
+}
+
+// serveStaticFile serves the file at absDir/relPath with STRUCTURAL path
+// confinement, MIME detection, and buffered/streaming delivery. Used by
+// HandlePreview's static-mode branch. dedupKey keys the serve.served audit
+// dedup set; auditToken feeds the audit details — they are separate because
+// the Mode 1 static branch dedups under a "label:" key but must keep the
+// LABEL out of the audit details (FR-026 redaction), so it audits with an
 // empty auditToken (token_prefix "<invalid>") while the Mode 2 path passes
 // the registration token for both.
+//
+// fix11 (CodeQL go/path-injection, CWE-22): confinement is structural — every
+// file operation goes through os.OpenRoot(absDir), which refuses any path
+// resolving outside the root, symlinks included; fix10's prefix-string
+// guards are gone. Behaviour is preserved: the same statuses, messages, audit
+// events (previewServeErrStatus/previewServeAuditFail), the index.html
+// directory step, the streaming threshold, and the CSP header set.
 func (a *restAPI) serveStaticFile(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -225,126 +332,48 @@ func (a *restAPI) serveStaticFile(
 	mode1 := previewHostLabelFromContext(r.Context()) != ""
 	// Mode 2 static CSP prefix, percent-encoded the same way the dev proxy
 	// builds it. Mode 1 ignores the value (previewMode1CSP). auditToken is
-	// the registration token on the Mode 2 path and empty on the label path;
-	// no branch here so serveStaticFile's complexity stays put.
+	// the registration token on the Mode 2 path and empty on the label path.
 	previewPrefix := middleware.PreviewPathPrefix + url.PathEscape(agentID) + "/" + url.PathEscape(auditToken)
-
-	// Confinement bases, computed once: the registered directory with a
-	// trailing separator, and the same directory symlink-resolved. On macOS,
-	// /var/folders/... resolves to /private/var/folders/..., and on
-	// Linux/Termux /tmp can be a symlink to a real path under /private or
-	// /data — without resolving the base, a symlink-equivalent ancestor (not
-	// an attacker's symlink-escape) causes the safety check to mis-fire and
-	// reject legitimate requests. fix10: computed for EVERY served path, not
-	// only when relPath is non-trivial, because the final confinement guard
-	// below runs unconditionally.
-	dirWithSep := absDir
-	if !strings.HasSuffix(dirWithSep, string(filepath.Separator)) {
-		dirWithSep += string(filepath.Separator)
-	}
-	resolvedBase := absDir
-	resolvedBaseWithSep := dirWithSep
-	if rb, baseErr := filepath.EvalSymlinks(absDir); baseErr == nil {
-		resolvedBase = rb
-		resolvedBaseWithSep = rb
-		if !strings.HasSuffix(resolvedBaseWithSep, string(filepath.Separator)) {
-			resolvedBaseWithSep += string(filepath.Separator)
-		}
-	}
-
-	var absPath string
-	if relPath == "" || relPath == "." {
-		absPath = absDir
-	} else {
-		candidate := filepath.Join(absDir, filepath.FromSlash(relPath))
-		cleaned := filepath.Clean(candidate)
-		if cleaned != absDir && !strings.HasPrefix(cleaned, dirWithSep) {
-			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusForbidden, startedAt)
-			jsonErr(w, http.StatusForbidden, "access denied: path is outside the registered directory")
-			return
-		}
-		if resolved, evalErr := filepath.EvalSymlinks(cleaned); evalErr == nil {
-			if resolved != absDir && resolved != resolvedBase &&
-				!strings.HasPrefix(resolved, dirWithSep) &&
-				!strings.HasPrefix(resolved, resolvedBaseWithSep) {
-				a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusForbidden, startedAt)
-				jsonErr(w, http.StatusForbidden, "access denied: path is outside the registered directory")
-				return
-			}
-			cleaned = resolved
-		} else if !errors.Is(evalErr, os.ErrNotExist) {
-			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusForbidden, startedAt)
-			jsonErr(w, http.StatusForbidden, "access denied: path could not be resolved")
-			return
-		}
-		absPath = cleaned
-	}
-
-	// fix10 (CodeQL go/path-injection, CWE-22): the value reaching the file
-	// operations below is confined on its FINAL form, with the guard shape
-	// the tainted-path query recognises (strings.HasPrefix evaluated true
-	// over the cleaned, symlink-resolved path). Defense in depth — the
-	// checks above already confined candidate and resolved — this proves
-	// absPath is the registered directory itself or beneath it, whatever
-	// reached it.
-	if absPath != absDir && absPath != resolvedBase &&
-		!strings.HasPrefix(absPath, dirWithSep) &&
-		!strings.HasPrefix(absPath, resolvedBaseWithSep) {
-		a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusForbidden, startedAt)
-		jsonErr(w, http.StatusForbidden, "access denied: path is outside the registered directory")
-		return
-	}
-
-	info, err := os.Stat(absPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusNotFound, startedAt)
-			jsonErr(w, http.StatusNotFound, "file not found")
-			return
-		}
-		logsafeError("rest: serveStaticFile: stat failed", "path", absPath, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not stat path")
-		return
-	}
-	if info.IsDir() {
-		indexPath := filepath.Join(absPath, "index.html")
-		indexInfo, indexErr := os.Stat(indexPath)
-		if indexErr != nil || indexInfo.IsDir() {
-			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusNotFound, startedAt)
-			jsonErr(w, http.StatusNotFound, "no index.html in directory")
-			return
-		}
-		absPath = indexPath
-		info = indexInfo
-	}
 
 	emitFirstServed := a.markFirstServed(dedupKey)
 
-	if info.Size() <= workspaceStreamingThreshold {
-		data, readErr := os.ReadFile(absPath)
-		if readErr != nil {
-			logsafeError("rest: serveStaticFile: ReadFile failed", "path", absPath, "error", readErr)
-			jsonErr(w, http.StatusInternalServerError, "could not read file")
-			return
-		}
-		setPreviewStaticHeaders(w, mode1, mainOrigin, previewPrefix)
-		w.Header().Set("Content-Type", contentTypeForPath(absPath))
-		w.WriteHeader(http.StatusOK)
-		if r.Method != http.MethodHead {
-			if _, writeErr := w.Write(data); writeErr != nil {
-				slog.Debug("rest: serveStaticFile: write failed", "error", writeErr)
-			}
-		}
-		if emitFirstServed {
-			a.auditServeSuccess(r, "serve.served", agentID, auditToken, http.StatusOK, startedAt, int64(len(data)))
-		}
+	root, rootErr := os.OpenRoot(absDir)
+	if rootErr != nil {
+		a.previewServeRootFailure(w, r, agentID, auditToken, absDir, rootErr,
+			"rest: serveStaticFile: open root failed", "could not open registered directory", startedAt)
+		return
+	}
+	defer func() { _ = root.Close() }()
+
+	rel, relErr := previewServeRelPath(relPath)
+	if relErr != nil {
+		a.previewServeAuditFail(w, r, agentID, auditToken, http.StatusForbidden,
+			"access denied: path is outside the registered directory", startedAt)
 		return
 	}
 
-	f, openErr := os.Open(absPath)
+	info, statErr := root.Stat(rel)
+	if statErr != nil {
+		a.previewServeRootFailure(w, r, agentID, auditToken, rel, statErr,
+			"rest: serveStaticFile: stat failed", "could not stat path", startedAt)
+		return
+	}
+	if info.IsDir() {
+		rel = previewIndexRelPath(rel)
+		info, statErr = root.Stat(rel)
+		// Any failure — missing, unreadable, or itself a directory — is the
+		// pre-fix11 "no index.html in directory" 404.
+		if statErr != nil || info.IsDir() {
+			a.previewServeAuditFail(w, r, agentID, auditToken, http.StatusNotFound,
+				"no index.html in directory", startedAt)
+			return
+		}
+	}
+
+	f, openErr := root.Open(rel)
 	if openErr != nil {
-		logsafeError("rest: serveStaticFile: Open failed", "path", absPath, "error", openErr)
-		jsonErr(w, http.StatusInternalServerError, "could not open file")
+		a.previewServeRootFailure(w, r, agentID, auditToken, rel, openErr,
+			"rest: serveStaticFile: Open failed", "could not open file", startedAt)
 		return
 	}
 	defer func() {
@@ -352,8 +381,59 @@ func (a *restAPI) serveStaticFile(
 			slog.Debug("rest: serveStaticFile: file close error", "error", closeErr)
 		}
 	}()
+
+	contentType := contentTypeForPath(rel)
+	if info.Size() <= workspaceStreamingThreshold {
+		a.serveStaticBuffered(w, r, f, contentType, mode1, mainOrigin, previewPrefix,
+			emitFirstServed, agentID, auditToken, startedAt)
+		return
+	}
+	a.serveStaticStreamed(w, r, f, contentType, mode1, mainOrigin, previewPrefix,
+		emitFirstServed, agentID, auditToken, startedAt)
+}
+
+// serveStaticBuffered delivers a file at or below workspaceStreamingThreshold:
+// read fully from the already-confined *os.File, then written with the
+// preview header set. Buffered audit counts the bytes read (HEAD included —
+// the pre-fix11 behaviour).
+func (a *restAPI) serveStaticBuffered(
+	w http.ResponseWriter, r *http.Request,
+	f *os.File, contentType string,
+	mode1 bool, mainOrigin, previewPrefix string,
+	emitFirstServed bool, agentID, auditToken string,
+	startedAt time.Time,
+) {
+	data, readErr := io.ReadAll(f)
+	if readErr != nil {
+		logsafeError("rest: serveStaticFile: ReadFile failed", "error", readErr)
+		jsonErr(w, http.StatusInternalServerError, "could not read file")
+		return
+	}
 	setPreviewStaticHeaders(w, mode1, mainOrigin, previewPrefix)
-	w.Header().Set("Content-Type", contentTypeForPath(absPath))
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		if _, writeErr := w.Write(data); writeErr != nil {
+			slog.Debug("rest: serveStaticFile: write failed", "error", writeErr)
+		}
+	}
+	if emitFirstServed {
+		a.auditServeSuccess(r, "serve.served", agentID, auditToken, http.StatusOK, startedAt, int64(len(data)))
+	}
+}
+
+// serveStaticStreamed delivers a file above the threshold: headers first, then
+// io.Copy straight from the confined *os.File to the response writer. Streamed
+// audit counts the bytes copied (0 on HEAD — the pre-fix11 behaviour).
+func (a *restAPI) serveStaticStreamed(
+	w http.ResponseWriter, r *http.Request,
+	f *os.File, contentType string,
+	mode1 bool, mainOrigin, previewPrefix string,
+	emitFirstServed bool, agentID, auditToken string,
+	startedAt time.Time,
+) {
+	setPreviewStaticHeaders(w, mode1, mainOrigin, previewPrefix)
+	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
 	var bytesOut int64
 	if r.Method != http.MethodHead {
