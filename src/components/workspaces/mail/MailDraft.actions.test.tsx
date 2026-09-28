@@ -14,6 +14,12 @@ import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 
+vi.mock('./LazyMailMarkdownEditor', () => ({
+  LazyMailMarkdownEditor: ({ markdown, onMarkdownChange }: { markdown: string; onMarkdownChange(value: string): void }) => (
+    <textarea aria-label="Message" value={markdown} onChange={(event) => onMarkdownChange(event.target.value)} />
+  ),
+}))
+
 async function loadPane(): Promise<React.ComponentType<Record<string, unknown>>> {
   const specifier = './' + 'MailPreviewPane'
   try {
@@ -58,6 +64,7 @@ describe('Draft panel actions (US-4, US-7)', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /edit/i }))
     const body = screen.getByRole('textbox', { name: /body|message/i })
+    expect(body).toHaveValue('old')
     fireEvent.change(body, { target: { value: 'new body' } })
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ bodyMarkdown: 'new body', to: 'a@b.test', subject: 'Hello' }))

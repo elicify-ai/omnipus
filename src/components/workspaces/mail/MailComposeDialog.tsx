@@ -10,8 +10,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field } from '@/components/ui/field'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { formatMailBytes } from './mail-format'
+import { LazyMailMarkdownEditor } from './LazyMailMarkdownEditor'
 
 /** The compose send payload, as handed to `onSend`. Cc/Bcc ride the wire
  * too (D26) — the oracle pins the required fields via objectContaining. */
@@ -75,7 +75,7 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
     setAttachError(null)
   }, [open, mode, replyTo])
 
-  const set = (key: keyof ComposeValues) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+  const set = (key: Exclude<keyof ComposeValues, 'body'>) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setValues((prev) => ({ ...prev, [key]: e.target.value }))
 
   const handleFiles = (files: FileList | null) => {
@@ -161,12 +161,17 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
           </Field>
         </div>
         <Field
-          label="Message (Markdown)"
+          label="Message"
           error={errors.body}
           data-compose-message-region
           className="flex min-h-[calc(var(--space-8)+var(--space-4))] flex-1 flex-col gap-[var(--space-1)] space-y-0"
         >
-          <Textarea className="min-h-0 flex-1" value={values.body} onChange={set('body')} placeholder="Write your message in Markdown" />
+          {open && (
+            <LazyMailMarkdownEditor
+              markdown={values.body}
+              onMarkdownChange={(body) => setValues((previous) => ({ ...previous, body }))}
+            />
+          )}
         </Field>
         <div
           data-testid="compose-attachments-row"

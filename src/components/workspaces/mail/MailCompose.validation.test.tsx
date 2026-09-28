@@ -15,6 +15,12 @@ import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 
+vi.mock('./LazyMailMarkdownEditor', () => ({
+  LazyMailMarkdownEditor: ({ markdown, onMarkdownChange }: { markdown: string; onMarkdownChange(value: string): void }) => (
+    <textarea aria-label="Message" value={markdown} onChange={(event) => onMarkdownChange(event.target.value)} />
+  ),
+}))
+
 async function loadCompose(): Promise<React.ComponentType<Record<string, unknown>>> {
   const specifier = './' + 'MailComposeDialog'
   try {

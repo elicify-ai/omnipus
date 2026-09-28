@@ -375,6 +375,16 @@ export default defineConfig({
           if (chunk.moduleIds?.some((id) => id.includes('node_modules/pdfjs-dist'))) {
             return 'assets/pdfjs-[hash].js'
           }
+          // The people-facing mail editor is a compose-time dependency, not
+          // a Mail-panel dependency. Name the naturally dynamic chunk at emit
+          // time (the same preload-safe approach as PDF.js above) so the
+          // production module-graph test can prove Tiptap stays off the entry
+          // path without forcing it through manualChunks.
+          if (chunk.moduleIds?.some((id) =>
+            id.includes('node_modules/@tiptap') || id.endsWith('/MailMarkdownEditor.tsx')
+          )) {
+            return 'assets/mail-editor-[hash].js'
+          }
           return 'assets/[name]-[hash].js'
         },
         // Vite 8 dropped the object form of manualChunks. The function form

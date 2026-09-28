@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { MailComposeDialog } from './MailComposeDialog'
 
 describe('MailComposeDialog layout', () => {
-  it('uses the panel space for compact headers and a growing message editor', () => {
+  it('uses the panel space for compact headers and a growing message editor', async () => {
     render(
       <MailComposeDialog
         open
@@ -38,7 +38,7 @@ describe('MailComposeDialog layout', () => {
       expect(row).toContainElement(input)
     }
 
-    const message = screen.getByRole('textbox', { name: /message/i })
+    const message = await screen.findByRole('textbox', { name: /message/i }, { timeout: 20_000 })
     const messageRegion = message.closest('[data-compose-message-region]')
 
     expect(messageRegion).not.toBeNull()
@@ -48,7 +48,8 @@ describe('MailComposeDialog layout', () => {
       'flex-1',
       'flex-col',
     )
-    expect(message).toHaveClass('min-h-0', 'flex-1')
+    expect(message).toHaveAttribute('contenteditable', 'true')
+    expect(screen.getByRole('toolbar', { name: /message formatting/i })).toBeInTheDocument()
     expect(screen.getByTestId('compose-attachments-row')).toHaveClass(
       'flex',
       'shrink-0',
