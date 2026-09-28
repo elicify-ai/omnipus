@@ -577,6 +577,7 @@ func TestGoal984_RoundBoundArmRoutesChildThroughTail(t *testing.T) {
 	}
 	handbackID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
 	var handbacks int
+	var deliveredHandbackID string
 	for _, entry := range entries {
 		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
 			continue
@@ -587,10 +588,53 @@ func TestGoal984_RoundBoundArmRoutesChildThroughTail(t *testing.T) {
 		}
 		if cls.Kind == "handback" {
 			handbacks++
+			handback, herr := entry.Message.AsSessionMessageHandback()
+			if herr != nil {
+				t.Fatalf("AsSessionMessageHandback: %v", herr)
+			}
+			deliveredHandbackID = handback.MessageId
 		}
 	}
 	if handbacks != 1 {
 		t.Fatalf("parent handback entries = %d, want exactly 1 (%s)", handbacks, handbackID)
+	}
+	if deliveredHandbackID != handbackID {
+		t.Fatalf("handback MessageId = %q, want %q (deterministic <child>:<gen>:final)", deliveredHandbackID, handbackID)
+	}
+}
+
+// TestGoalParkUpwardText_StripsControlLinesAndPrefersEvidence pins the
+// helper's documented parent-facing text contract for both park outcomes:
+// a waiting question falls back to final content without its GOAL_STATUS
+// control line, while a blocked tool claim uses its evidence instead of the
+// turn's prose.
+func TestGoalParkUpwardText_StripsControlLinesAndPrefersEvidence(t *testing.T) {
+	tests := []struct {
+		name         string
+		evidence     string
+		finalContent string
+		want         string
+	}{
+		{
+			name:         "waiting question strips control line",
+			evidence:     " \t ",
+			finalContent: "Which storage format should I use?\n  GOAL_STATUS: waiting_on_user  ",
+			want:         "Which storage format should I use?",
+		},
+		{
+			name:         "blocked claim prefers trimmed evidence",
+			evidence:     "  Missing credentials for the upstream API.  ",
+			finalContent: "I cannot continue until credentials are configured.\nGOAL_STATUS: waiting_on_user",
+			want:         "Missing credentials for the upstream API.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := goalParkUpwardText(tt.evidence, tt.finalContent); got != tt.want {
+				t.Fatalf("goalParkUpwardText(%q, %q) = %q, want %q", tt.evidence, tt.finalContent, got, tt.want)
+			}
+		})
 	}
 }
 
