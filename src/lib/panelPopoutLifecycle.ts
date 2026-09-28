@@ -106,9 +106,19 @@ function isContextForPanel(panelId: PanelId, value: unknown): value is PanelCont
       typeof value.agentId === 'string' && value.agentId.length > 0
   }
   if ('sessionId' in value || 'agentId' in value) return false
-  return ['workspaceId', 'mailboxId', 'path', 'folder'].every((key) =>
-    value[key] === undefined || (typeof value[key] === 'string' && value[key].length > 0),
-  )
+  const optionalNonEmptyString = (candidate: unknown) =>
+    candidate === undefined || (typeof candidate === 'string' && candidate.length > 0)
+  const optionalNullableNonEmptyString = (candidate: unknown) =>
+    candidate === undefined || candidate === null ||
+    (typeof candidate === 'string' && candidate.length > 0)
+  const optionalOpaqueString = (candidate: unknown) =>
+    candidate === undefined || candidate === null || typeof candidate === 'string'
+  return optionalNonEmptyString(value.workspaceId) &&
+    optionalNullableNonEmptyString(value.mailboxId) &&
+    optionalNonEmptyString(value.path) &&
+    (value.folder === undefined || value.folder === null ||
+      value.folder === 'inbox' || value.folder === 'sent' || value.folder === 'drafts') &&
+    optionalOpaqueString(value.messageRef)
 }
 
 function acceptMessage(value: unknown): value is PanelPopoutMessage {

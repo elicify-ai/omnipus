@@ -126,6 +126,42 @@ describe('DefaultWorkspaceRedirect — folded-route redirect map', () => {
       })
     })
   })
+
+  it('warns when a settled redirect is suppressed, then retries when the document becomes visible', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(
+      '[workspace redirect] settled redirect skipped while the document is leaving',
+    )
+
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-default' },
+      replace: true,
+    }))
+    if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility)
+  })
 })
 
 // ---------------------------------------------------------------------------

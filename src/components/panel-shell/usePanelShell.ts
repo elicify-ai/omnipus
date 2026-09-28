@@ -168,7 +168,17 @@ async function expandActivePanel(options: {
     flushSync(() => finishClose(activePanel.id, 'chat'))
     const search = new URLSearchParams(definition.fullScreen.toSearch(context))
     search.set('popout', popoutId)
-    openedPopup.location.replace(`/#/panel/${definition.id}?${search.toString()}`)
+    const fullScreenUrl = `/#/panel/${definition.id}?${search.toString()}`
+    const absoluteUrlBytes = new TextEncoder().encode(
+      new URL(fullScreenUrl, window.location.href).href,
+    ).byteLength
+    if (absoluteUrlBytes > 8 * 1024) {
+      console.warn(
+        '[side-panel] Full-screen panel URL exceeds 8 KB; opening it without truncation.',
+        { panelId: definition.id, bytes: absoluteUrlBytes },
+      )
+    }
+    openedPopup.location.replace(fullScreenUrl)
     return 'opened'
   } catch (error) {
     console.error('[side-panel] Expand handoff failed', error)

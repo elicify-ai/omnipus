@@ -76,7 +76,6 @@ describe('LibraryPanel shared presentation', () => {
     await waitFor(() => expect(currentContext?.()).toEqual({
       workspaceId: 'workspace-a',
       path: 'Notes/Current.md',
-      folder: undefined,
     }))
   })
 

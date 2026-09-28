@@ -15,6 +15,13 @@ function asWorkspaceContext(context: PanelContext | null): WorkspacePanelContext
   return context !== null && context.sessionId === undefined ? context : null
 }
 
+function asLibraryAddress(context: WorkspacePanelContext): LibraryAddress {
+  return {
+    workspaceId: context.workspaceId,
+    path: context.path,
+  }
+}
+
 /** The Library content shared by the docked shell and its chrome-less route. */
 export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
   const activePanel = useUiStore((state) => state.activePanel)
@@ -25,7 +32,7 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
     suppliedContext ?? {},
   )
   const suppliedKey = suppliedContext
-    ? JSON.stringify([suppliedContext.workspaceId, suppliedContext.path, suppliedContext.folder])
+    ? JSON.stringify([suppliedContext.workspaceId, suppliedContext.path])
     : ''
   const lastSuppliedKeyRef = useRef(suppliedKey)
 
@@ -47,11 +54,14 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
   if (!suppliedContext) return null
   if (shellProps?.presentation === 'docked' && activePanel?.id !== 'library') return null
 
-  const updateAddress = (next: LibraryAddress) => setCurrentContext(next)
+  const updateAddress = (next: LibraryAddress) => setCurrentContext({
+    workspaceId: next.workspaceId,
+    path: next.path,
+  })
   const explorer = shellProps?.presentation === 'fullscreen'
     ? (
         <LibraryExplorer
-          address={currentContext}
+          address={asLibraryAddress(currentContext)}
           onAddressChange={updateAddress}
           layout="split"
           className="h-full"
@@ -67,11 +77,10 @@ export function LibraryPanel({ shellProps }: LibraryPanelProps = {}) {
               workspaceId: workspaceId ?? undefined,
             }))
           }}
-          onSelectionChange={({ path, folder }) => {
+          onSelectionChange={({ path }) => {
             setCurrentContext((current) => ({
               ...current,
               path: path ?? undefined,
-              folder: path ? undefined : folder || undefined,
             }))
           }}
         />

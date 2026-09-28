@@ -73,6 +73,23 @@ function FullScreenPanelRoute() {
     announcePanelPopoutClosed(definition.id, popoutId, contextRef.current)
   }, [definition, popoutId])
 
+  const requestClose = useCallback(() => {
+    if (!definition) return
+    void (async () => {
+      if (definition.beforeLeave) {
+        try {
+          if (!(await definition.beforeLeave())) return
+        } catch (error) {
+          console.error('[side-panel] Full-screen leave guard failed; close cancelled.', error)
+          return
+        }
+      }
+      announceClosed()
+      window.close()
+      void navigate({ to: '/' })
+    })()
+  }, [announceClosed, definition, navigate])
+
   useEffect(() => {
     if (!definition || initialContext === null) return undefined
     const identity = panelIdentityFromContext(definition.id, initialContext)
@@ -86,6 +103,17 @@ function FullScreenPanelRoute() {
       announcement.stop()
     }
   }, [announceClosed, definition, initialContext])
+
+  useEffect(() => {
+    if (!definition?.beforeLeaveRequired) return undefined
+    const promptBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!definition.beforeLeaveRequired?.()) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', promptBeforeUnload)
+    return () => window.removeEventListener('beforeunload', promptBeforeUnload)
+  }, [definition])
 
   if (!definition || initialContext === null) return <InvalidPanel />
 
@@ -104,11 +132,7 @@ function FullScreenPanelRoute() {
           <Content
             context={initialContext}
             presentation="fullscreen"
-            close={() => {
-              announceClosed()
-              window.close()
-              void navigate({ to: '/' })
-            }}
+            close={requestClose}
             expand={() => {}}
             registerExpandContext={registerExpandContext}
             onWidthSettle={() => {}}

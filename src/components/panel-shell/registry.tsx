@@ -33,17 +33,16 @@ export const panels: readonly PanelDefinition[] = [
     title: 'Library',
     content: LibraryPanelContent,
     fullScreen: {
-      toSearch: ({ workspaceId, path, folder }) => ({
+      toSearch: ({ workspaceId, path }) => ({
         ...(workspaceId ? { workspace: workspaceId } : {}),
-        ...(path ? { path } : folder ? { folder } : {}),
+        ...(path ? { path } : {}),
       }),
       fromSearch: (search) => {
         const workspaceId = optionalSearchString(search.workspace)
         const path = optionalSearchString(search.path)
-        const folder = path === undefined ? optionalSearchString(search.folder) : undefined
         return {
           ...(workspaceId ? { workspaceId } : {}),
-          ...(path ? { path } : folder ? { folder } : {}),
+          ...(path ? { path } : {}),
         }
       },
     },

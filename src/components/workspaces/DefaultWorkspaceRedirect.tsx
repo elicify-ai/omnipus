@@ -34,6 +34,7 @@ interface DefaultWorkspaceRedirectProps {
 export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedirectProps) {
   const navigate = useNavigate()
   const documentLeavingRef = useRef(false)
+  const skippedRedirectWarnedRef = useRef(false)
   const [documentLeaving, setDocumentLeaving] = useState(false)
 
   const { data: workspaces, isError, isLoading, isFetching, refetch } = useQuery({
@@ -47,18 +48,24 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
   useEffect(() => {
     const markDocumentLeaving = () => {
       documentLeavingRef.current = true
+      skippedRedirectWarnedRef.current = false
       setDocumentLeaving(true)
     }
-    const restoreDocument = (event: PageTransitionEvent) => {
-      if (!event.persisted) return
+    const restoreDocument = () => {
       documentLeavingRef.current = false
+      skippedRedirectWarnedRef.current = false
       setDocumentLeaving(false)
+    }
+    const restoreVisibleDocument = () => {
+      if (document.visibilityState === 'visible') restoreDocument()
     }
     window.addEventListener('pagehide', markDocumentLeaving)
     window.addEventListener('pageshow', restoreDocument)
+    document.addEventListener('visibilitychange', restoreVisibleDocument)
     return () => {
       window.removeEventListener('pagehide', markDocumentLeaving)
       window.removeEventListener('pageshow', restoreDocument)
+      document.removeEventListener('visibilitychange', restoreVisibleDocument)
     }
   }, [])
 
@@ -69,7 +76,14 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
       return
     }
     const target = workspaces?.find((w) => w.is_default) ?? workspaces?.[0]
-    if (target && !documentLeavingRef.current && !documentLeaving) {
+    if (target && (documentLeavingRef.current || documentLeaving)) {
+      if (!skippedRedirectWarnedRef.current) {
+        skippedRedirectWarnedRef.current = true
+        console.warn('[workspace redirect] settled redirect skipped while the document is leaving')
+      }
+      return
+    }
+    if (target) {
       void navigate({
         to: `/workspaces/$workspaceId/${tab}`,
         params: { workspaceId: target.id },

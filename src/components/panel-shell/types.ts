@@ -57,11 +57,13 @@ export interface WorkspacePanelContext {
   /** Library / Tasks / Team / Calendar / Mail scope (undefined = virtual root → `app` bucket). */
   workspaceId?: string
   /** Mail's mailbox context (per the email spec, wave 2). */
-  mailboxId?: string
+  mailboxId?: string | null
   /** Library's selected work-tree item. */
   path?: string
-  /** Library's browsed folder when no item is selected. */
-  folder?: string
+  /** Mail's selected system folder. */
+  folder?: 'inbox' | 'sent' | 'drafts' | null
+  /** Mail's opaque selected-message reference. */
+  messageRef?: string | null
   sessionId?: never
   agentId?: never
 }
@@ -74,6 +76,7 @@ export interface BrowserPanelContext {
   mailboxId?: never
   path?: never
   folder?: never
+  messageRef?: never
 }
 
 export type PanelContext = WorkspacePanelContext | BrowserPanelContext
