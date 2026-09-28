@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const mockNavigate = vi.fn()
@@ -73,6 +73,27 @@ describe('DefaultWorkspaceRedirect — folded-route redirect map', () => {
         replace: true,
       })
     })
+  })
+
+  it('does not issue a late SPA redirect after a full-document navigation starts', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new Event('beforeunload'))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
+
+    expect(mockNavigate).not.toHaveBeenCalled()
   })
 })
 

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
@@ -33,12 +33,27 @@ interface DefaultWorkspaceRedirectProps {
  */
 export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedirectProps) {
   const navigate = useNavigate()
+  const documentLeavingRef = useRef(false)
 
   const { data: workspaces, isError, isLoading, isFetching, refetch } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
   })
+
+  // The workspace query may settle after a full-document navigation has begun.
+  // Do not let that late result replace the destination with a hash-router URL.
+  useEffect(() => {
+    const markDocumentLeaving = () => {
+      documentLeavingRef.current = true
+    }
+    window.addEventListener('beforeunload', markDocumentLeaving)
+    window.addEventListener('pagehide', markDocumentLeaving)
+    return () => {
+      window.removeEventListener('beforeunload', markDocumentLeaving)
+      window.removeEventListener('pagehide', markDocumentLeaving)
+    }
+  }, [])
 
   useEffect(() => {
     if (isLoading) return
@@ -47,7 +62,7 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
       return
     }
     const target = workspaces?.find((w) => w.is_default) ?? workspaces?.[0]
-    if (target) {
+    if (target && !documentLeavingRef.current) {
       void navigate({
         to: `/workspaces/$workspaceId/${tab}`,
         params: { workspaceId: target.id },
