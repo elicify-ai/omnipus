@@ -58,6 +58,9 @@ properties:
     example: "2026-09-26T10:30:00Z"
   last_seen_uid:
     type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
     nullable: true
     description: >
       Highest UID the watcher has seen (MC-31 baselining applies); null

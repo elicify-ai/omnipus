@@ -6,7 +6,6 @@ package gateway
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -22,7 +21,7 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 	out := gen.MailSummaryList{Items: []struct {
 		AgentId        string                               `json:"agent_id"`
 		LastErrorClass *string                              `json:"last_error_class"`
-		LastSeenUid    *int                                 `json:"last_seen_uid"`
+		LastSeenUid    *int64                               `json:"last_seen_uid"`
 		LastSuccessAt  *time.Time                           `json:"last_success_at"`
 		NextAttemptAt  *time.Time                           `json:"next_attempt_at"`
 		UnseenTotal    int                                  `json:"unseen_total"`
@@ -53,7 +52,7 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 				// "state_unreadable" is a load-failure class, deliberately
 				// outside pkg/email's MC-8 transport-failure enum - this is
 				// not a mail-server failure.
-				slog.Warn("rest: mail summary state load failed; rendering unreadable state",
+				logsafeWarn("rest: mail summary state load failed; rendering unreadable state",
 					"agent_id", agentID, "workspace_id", workspaceID, "error", err)
 				cls := "state_unreadable"
 				row.LastErrorClass = &cls
@@ -69,7 +68,7 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 			}
 			row.UnseenTotal = st.UnseenTotal
 			if st.LastSeenUID > 0 {
-				u := int(st.LastSeenUID)
+				u := mailUIDToWire(st.LastSeenUID)
 				row.LastSeenUid = &u
 			}
 			if s := st.LastErrorClass; s != "" {
@@ -89,7 +88,7 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 		out.Items = append(out.Items, struct {
 			AgentId        string                               `json:"agent_id"`
 			LastErrorClass *string                              `json:"last_error_class"`
-			LastSeenUid    *int                                 `json:"last_seen_uid"`
+			LastSeenUid    *int64                               `json:"last_seen_uid"`
 			LastSuccessAt  *time.Time                           `json:"last_success_at"`
 			NextAttemptAt  *time.Time                           `json:"next_attempt_at"`
 			UnseenTotal    int                                  `json:"unseen_total"`

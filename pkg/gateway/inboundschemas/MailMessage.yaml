@@ -43,10 +43,16 @@ properties:
     example: "<abc123@example.com>"
   uid:
     type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
     description: IMAP UID of the message within its folder.
     example: 123
   uidvalidity:
     type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
     description: IMAP UIDVALIDITY of the folder.
     example: 456
   folder:

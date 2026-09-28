@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -160,7 +159,7 @@ func (a *restAPI) handleMailSendInner(w http.ResponseWriter, r *http.Request, wo
 		resp.SentSaved = false
 		sw := "the message was sent, but saving to the Sent folder failed"
 		resp.SaveWarning = &sw
-		slog.Error("rest: mail sent copy APPEND failed", "agent_id", agentID, "error", aerr)
+		logsafeError("rest: mail sent copy APPEND failed", "agent_id", agentID, "error", aerr)
 	}
 	attCount := len(atts)
 	auditMail(a, audit.EventMailPanelSend, audit.DecisionAllow, map[string]any{

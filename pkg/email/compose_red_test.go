@@ -78,6 +78,60 @@ func TestComposeMultipart_HeaderInjectionGuard(t *testing.T) {
 	}
 }
 
+func TestComposeAttachmentContentTypeRejectsHeaderInjection(t *testing.T) {
+	base := ComposeInput{
+		From:     "ada@box.test",
+		To:       []string{"a@x.test"},
+		Subject:  "attachment",
+		Markdown: "body",
+	}
+
+	for name, contentType := range map[string]string{
+		"CRLF":             "application/pdf\r\nX-Injected: yes",
+		"lone CR":          "application/pdf\rX-Injected: yes",
+		"lone LF":          "application/pdf\nX-Injected: yes",
+		"malformed syntax": `application/pdf; name="unterminated`,
+	} {
+		t.Run(name+" is rejected", func(t *testing.T) {
+			in := base
+			in.Attachments = []Attachment{{
+				Name:        "report.pdf",
+				ContentType: contentType,
+				Data:        []byte("pdf"),
+			}}
+			out, err := Compose(in)
+			if err == nil {
+				t.Fatalf("Compose accepted invalid MIME content type %q; output contains injected header=%v", contentType, strings.Contains(string(out.Transmitted), "X-Injected: yes"))
+			}
+		})
+	}
+
+	t.Run("valid media type parameters are preserved", func(t *testing.T) {
+		in := base
+		in.Attachments = []Attachment{{
+			Name:        "report.pdf",
+			ContentType: "application/pdf; name=x.pdf",
+			Data:        []byte("pdf"),
+		}}
+		out, err := Compose(in)
+		if err != nil {
+			t.Fatalf("Compose rejected a valid parameterized media type: %v", err)
+		}
+		if !strings.Contains(string(out.Transmitted), "Content-Type: application/pdf") {
+			t.Fatalf("composed message lost the valid application/pdf media type:\n%s", out.Transmitted)
+		}
+		var found bool
+		for _, leaf := range mdhComposeLeaves(t, out.Transmitted) {
+			if leaf.ContentType == "application/pdf" && leaf.Filename == "report.pdf" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("parameterized media type did not round-trip as a parseable application/pdf attachment:\n%s", out.Transmitted)
+		}
+	})
+}
+
 func TestPlainTextPart_ASTDerivation_HardWraps(t *testing.T) {
 	// MC-30 / DS-2: plain text comes from the same Markdown parse as the HTML.
 	// Links are "text (href)", list items are indented, code stays literal, and

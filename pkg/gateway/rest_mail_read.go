@@ -103,7 +103,7 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 	var out gen.MailMessagePage
 	out.Truncated = truncated
 	if truncated && len(rows) > 0 {
-		c := int(rows[len(rows)-1].UID)
+		c := mailUIDToWire(rows[len(rows)-1].UID)
 		out.NextBeforeUid = &c
 	}
 	for _, row := range rows {
@@ -130,8 +130,8 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 			Seen           bool                              `json:"seen"`
 			Subject        string                            `json:"subject"`
 			To             []string                          `json:"to"`
-			Uid            int                               `json:"uid"`
-			Uidvalidity    int                               `json:"uidvalidity"`
+			Uid            int64                             `json:"uid"`
+			Uidvalidity    int64                             `json:"uidvalidity"`
 		}{
 			Cc:             mailNonNilSlice(row.Cc),
 			Date:           row.Date,
@@ -145,8 +145,8 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 			Seen:           row.Seen,
 			Subject:        row.Subject,
 			To:             mailNonNilSlice(row.To),
-			Uid:            int(row.UID),
-			Uidvalidity:    int(uv),
+			Uid:            mailUIDToWire(row.UID),
+			Uidvalidity:    mailUIDToWire(uv),
 		})
 	}
 	out.Messages = mailNonNilSlice(out.Messages)
@@ -191,8 +191,8 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 		MarkdownLossy:  v.MarkdownLossy,
 		Subject:        v.Subject,
 		To:             mailNonNilSlice(v.To),
-		Uid:            int(v.UID),
-		Uidvalidity:    int(v.UIDValidity),
+		Uid:            mailUIDToWire(v.UID),
+		Uidvalidity:    mailUIDToWire(v.UIDValidity),
 		BodyText:       v.TextBody,
 		Seen:           mailFlagHas(v.Flags, "\\Seen"),
 		ReadByAgent:    mailFlagHas(v.Flags, "$OmnipusAgentRead"),

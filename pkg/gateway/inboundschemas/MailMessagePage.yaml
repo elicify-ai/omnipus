@@ -21,6 +21,9 @@ properties:
     description: Whether more messages exist beyond this page.
   next_before_uid:
     type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
     nullable: true
     description: >
       The before_uid cursor for the next page when truncated is true; null
