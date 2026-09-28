@@ -146,6 +146,12 @@ type UpwardEvent struct {
 	ChildSessionID string
 	Outcome        Outcome
 	Message        generated.SessionMessage
+
+	// SuppressWake stores the entry and emits its normal frames without
+	// waking the recipient. The zero value preserves the message class's
+	// normal behavior. It is used only for a session-goal met verdict whose
+	// final handback is the one parent wake for that logical completion.
+	SuppressWake bool
 }
 
 // DeliveryOutcome is Delivery.Outcome's enum (I-5).

@@ -919,6 +919,28 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 			logger.WarnCF("agent", "goal: could not persist the met claim onto the goal record",
 				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": cerr.Error()})
 		}
+		// Q2 B: a met claim is pending intent until the session's whole
+		// delegated subtree is quiet. Installing the phase before the read
+		// lets terminal writers close the delivery-before-terminal race; the
+		// CAS promotion below prevents that wake from also scheduling Judge.
+		gl.al.goalSetCompletionPhase(gl.rec.GoalID, goalCompletionWaitingDescendants)
+		blocked, blockErr := gl.al.hasRunningOrQueuedDescendant(gl.sessionID)
+		if blockErr != nil || blocked {
+			if blockErr != nil {
+				logger.WarnCF("agent", "goal: completion claim held because descendant state could not be read",
+					map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": blockErr.Error()})
+			}
+			// A terminal transition may have landed just before the waiting
+			// phase was recorded. Re-check immediately so that race cannot
+			// strand the claim; an actually-live descendant remains a no-op.
+			gl.al.resumeDeferredGoalForSession(gl.sessionID, gl.rec.GoalID)
+			return
+		}
+		if !gl.al.goalPromoteCompletionToAdjudicating(gl.rec.GoalID) {
+			// A concurrent terminal writer already dispatched the one fresh-
+			// claim turn. The stale claim must never reach the Judge as well.
+			return
+		}
 		gl.result.goalDeferredAdjudication = &goalDeferredAdjudicationWork{
 			agentInst: gl.agentInst, workspaceID: gl.opts.WorkspaceID,
 			sessionID: gl.sessionID, claimText: claimText,

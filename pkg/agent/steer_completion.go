@@ -79,6 +79,8 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 	if err != nil {
 		return err
 	}
+	al.goalSetSteeredCompletionWrite(rec.SessionID, true)
+	defer al.goalSetSteeredCompletionWrite(rec.SessionID, false)
 	deliverer := al.getUpwardDeliverer()
 	if deliverer == nil {
 		return errSteerUpwardDelivererNotWired
@@ -195,6 +197,7 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 		// goal, no action), and it never speaks for a task-owned goal.
 		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
 			goalEndingForTerminalState(nextState), goalSessionEndedReasonForState(nextState))
+		al.resumeDeferredGoalAfterDescendantTerminal(rec.SessionID)
 		return nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
@@ -258,6 +261,9 @@ var completeStateWriteTestHook func(sessionID string)
 // unclassifiable message is reported, never swallowed.
 func reportUndeliveredWake(op string, event steer.UpwardEvent, parentSessionID string, generation int, delivery steer.Delivery) {
 	if delivery.Outcome != steer.DeliveryStoredNotWoken {
+		return
+	}
+	if event.SuppressWake {
 		return
 	}
 	if class, err := session.ClassifySessionMessage(event.Message); err == nil && !class.WakeEligible {
@@ -584,6 +590,9 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 			case session.LifecycleQueued:
 				return true, nil
 			case session.LifecycleRunning:
+				if al.goalSteeredCompletionWriteActive(child.SessionID) {
+					return true, nil
+				}
 				if ts := al.getActiveTurnState(child.SessionID); ts != nil && ts.IsAlive() {
 					return true, nil
 				}

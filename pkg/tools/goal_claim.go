@@ -111,18 +111,10 @@ func (t *GoalClaimTool) Category() ToolCategory { return CategoryTasks }
 
 // Description implements Tool.
 func (t *GoalClaimTool) Description() string {
-	return "Claim THIS session's active goal as done, blocked, or waiting on the operator (ADR-084). " +
-		"status:met means you believe the goal's acceptance criteria are satisfied: it starts an " +
-		"adjudication that runs AFTER your reply is delivered — the operator sees your response " +
-		"immediately, a verdict arrives later on its own, and it may disagree with your claim. A met " +
-		"claim requires a non-empty evidence argument (your own one-line statement of what you " +
-		"verified) or the call is refused before anything is recorded — no partial credit for trying. " +
-		"status:waiting_on_user and status:blocked both end the turn without any adjudication: " +
-		"waiting_on_user means you need an answer from the operator to continue; blocked means you " +
-		"cannot proceed and it is not something the operator can answer directly — for either, give the " +
-		"reason in one line as evidence so the operator can see why. This tool refuses on " +
-		"a delegated sub-turn (it reports the OWNER session's completion only) and on a session with no " +
-		"active goal."
+	return "Claim this session's active goal as met, blocked, or waiting_on_user. " +
+		"A met claim requires evidence and is judged after the reply. If delegated work is still " +
+		"running, the claim waits; review every handback and claim met again when it finishes. " +
+		"Blocked and waiting_on_user end the turn without judging, so include a short reason."
 }
 
 // Parameters implements Tool.

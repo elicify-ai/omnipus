@@ -152,11 +152,10 @@ func TestGoalChildCompletion947_MetArmCompletesChildAndDeliversHandback(t *testi
 	if err != nil {
 		t.Fatalf("Drain(parent): %v", err)
 	}
-	if len(messages) != 2 {
-		t.Errorf("parent messages after met verdict = %d, want 2 (goal_status verdict + "+
-			"completion handback); the met arm delivers the verdict but strands the handback", len(messages))
+	if len(messages) != 1 {
+		t.Fatalf("unacknowledged parent messages after met verdict = %d, want exactly the final handback", len(messages))
 	}
-	var sawStatus, sawHandback bool
+	var sawHandback bool
 	for _, msg := range messages {
 		// Kind-gate FIRST: the generated As* accessors are lenient (a
 		// goal_status message carries the shared message_id field, so
@@ -167,18 +166,6 @@ func TestGoalChildCompletion947_MetArmCompletesChildAndDeliversHandback(t *testi
 			t.Fatalf("ClassifySessionMessage: %v", cerr)
 		}
 		switch class.Kind {
-		case "goal_status":
-			v, aerr := msg.AsSessionMessageGoalStatus()
-			if aerr != nil {
-				t.Fatalf("AsSessionMessageGoalStatus: %v", aerr)
-			}
-			sawStatus = true
-			if v.Condition != generated.SessionMessageGoalStatusConditionMet {
-				t.Errorf("goal_status condition = %q, want met", v.Condition)
-			}
-			if v.Evidence == nil || len(*v.Evidence) == 0 {
-				t.Errorf("goal_status evidence rows = %v, want the met verdict evidence", v.Evidence)
-			}
 		case "handback":
 			v, herr := msg.AsSessionMessageHandback()
 			if herr != nil {
@@ -196,9 +183,6 @@ func TestGoalChildCompletion947_MetArmCompletesChildAndDeliversHandback(t *testi
 				t.Errorf("handback ResultSoFar is empty, want the child's final answer")
 			}
 		}
-	}
-	if !sawStatus {
-		t.Errorf("no goal_status verdict message reached the parent inbox")
 	}
 	if !sawHandback {
 		t.Errorf("no completion handback reached the parent inbox — the parent waits on a worker whose turn already ended")

@@ -92,6 +92,9 @@ type SteerBootRecovery struct {
 	// from the live AgentLoop; nil (tests, embedders) skips the pair-end —
 	// same optional-dep posture as every other field here.
 	EndSessionGoal func(sessionID string, reason string)
+	// DescendantTerminal re-runs the Q2 B quiet-subtree check after a boot
+	// repair actually lands a descendant's terminal lifecycle state.
+	DescendantTerminal func(sessionID string)
 }
 
 type bootSessionMessageEnvelope struct {
@@ -396,7 +399,8 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 	if err != nil {
 		return err
 	}
-	return r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
+	landed := false
+	err = r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() {
 			return nil
 		}
@@ -416,11 +420,17 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 			return fmt.Errorf("message %s kind %q is not terminal", envelope.MessageID, envelope.Kind)
 		}
 		current.NeedsInput = nil
+		landed = true
 		return nil
 	})
+	if err == nil && landed && r.DescendantTerminal != nil {
+		r.DescendantTerminal(rec.SessionID)
+	}
+	return err
 }
 
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
+	landed := false
 	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
 			return nil
@@ -428,10 +438,14 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		current.State = session.LifecycleFailed
 		current.FailedReason = failedReasonInterrupted
 		current.NeedsInput = nil
+		landed = true
 		return nil
 	})
 	if err == nil && r.EndSessionGoal != nil {
 		r.EndSessionGoal(rec.SessionID, failedReasonInterrupted+": the gateway restarted while the session was mid-flight")
+	}
+	if err == nil && landed && r.DescendantTerminal != nil {
+		r.DescendantTerminal(rec.SessionID)
 	}
 	return err
 }

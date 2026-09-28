@@ -24,6 +24,7 @@ import (
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -36,6 +37,248 @@ import (
 // tail. The goroutine is already off the turn's critical path; this bound is
 // what keeps it from being unbounded in TIME.
 const goalJudgeRedriveAttempts = 3
+
+const goalCompletionReevaluationPrompt = "All delegated work has finished; review the handbacks and claim completion again if appropriate."
+
+type goalCompletionPhase uint8
+
+const (
+	goalCompletionNone goalCompletionPhase = iota
+	goalCompletionWaitingDescendants
+	goalCompletionAdjudicating
+	goalCompletionReevaluationDispatched
+)
+
+func (al *AgentLoop) goalSetCompletionPhase(goalID string, phase goalCompletionPhase) {
+	if goalID == "" {
+		return
+	}
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if phase == goalCompletionNone {
+		delete(s.completionPhase, goalID)
+		return
+	}
+	s.completionPhase[goalID] = phase
+}
+
+func (al *AgentLoop) goalPromoteCompletionToAdjudicating(goalID string) bool {
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.completionPhase[goalID] != goalCompletionWaitingDescendants {
+		return false
+	}
+	s.completionPhase[goalID] = goalCompletionAdjudicating
+	return true
+}
+
+func (al *AgentLoop) goalClearCompletionPhase(goalID string) {
+	al.goalSetCompletionPhase(goalID, goalCompletionNone)
+}
+
+func (al *AgentLoop) goalCompletionWaiting(goalID string) bool {
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.completionPhase[goalID] == goalCompletionWaitingDescendants
+}
+
+func (al *AgentLoop) goalCompletionFenceActive(sessionID string) bool {
+	rec := activeGoalForSession(sessionID)
+	if rec == nil {
+		return false
+	}
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	phase := s.completionPhase[rec.GoalID]
+	return phase == goalCompletionWaitingDescendants || phase == goalCompletionAdjudicating
+}
+
+func (al *AgentLoop) goalSetSteeredCompletionWrite(sessionID string, active bool) {
+	if sessionID == "" {
+		return
+	}
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if active {
+		s.steeredCompletionWrites[sessionID] = true
+		return
+	}
+	delete(s.steeredCompletionWrites, sessionID)
+}
+
+func (al *AgentLoop) goalSteeredCompletionWriteActive(sessionID string) bool {
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.steeredCompletionWrites[sessionID]
+}
+
+// resumeDeferredGoalAfterDescendantTerminal is the post-terminal half of Q2
+// B. It resolves the descendant's steering parent and schedules at most one
+// deterministic turn once that parent's whole subtree is quiet. The stale
+// met claim is never adjudicated; the new turn must make a fresh claim.
+func (al *AgentLoop) resumeDeferredGoalAfterDescendantTerminal(descendantSessionID string) {
+	if al == nil || descendantSessionID == "" {
+		return
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	descendant, err := lifecycle.Load(descendantSessionID)
+	if err != nil || descendant == nil || !descendant.Terminal() || descendant.SteeredBy == nil {
+		return
+	}
+	parentID := descendant.SteeredBy.SteeringSessionID
+	parent, parentErr := lifecycle.Load(parentID)
+	if parentErr != nil || parent == nil || parent.Terminal() || parent.Stopped() {
+		return
+	}
+	rec := activeGoalForSession(parentID)
+	if rec == nil {
+		return
+	}
+	// The phase is process-local. After a restart, reconstruct only the safe
+	// pending case from durable evidence: a met claim newer than the latest
+	// verdict (or with no verdict yet). Re-evaluation still requires a fresh
+	// claim, so an uncertain timestamp can cause extra work but never a false
+	// met transition.
+	al.goalRestoreWaitingCompletion(rec)
+	al.resumeDeferredGoalForSession(parentID, rec.GoalID)
+}
+
+// ResumeDeferredGoalAfterDescendantTerminal is the boot-recovery wiring seam
+// for the same post-terminal check used by the live completion paths.
+func (al *AgentLoop) ResumeDeferredGoalAfterDescendantTerminal(descendantSessionID string) {
+	al.resumeDeferredGoalAfterDescendantTerminal(descendantSessionID)
+}
+
+func (al *AgentLoop) resumeDeferredGoalForSession(sessionID, goalID string) {
+	if al == nil || sessionID == "" || goalID == "" {
+		return
+	}
+	s := goalTriggers()
+	s.mu.Lock()
+	if s.completionPhase[goalID] != goalCompletionWaitingDescendants {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	blocked, err := al.hasRunningOrQueuedDescendant(sessionID)
+	if err != nil {
+		logger.WarnCF("agent", "goal: deferred completion remains pending because descendant state could not be read",
+			map[string]any{"session_id": sessionID, "goal_id": goalID, "error": err.Error()})
+		return
+	}
+	if blocked {
+		return
+	}
+
+	s.mu.Lock()
+	if s.completionPhase[goalID] != goalCompletionWaitingDescendants {
+		s.mu.Unlock()
+		return
+	}
+	s.completionPhase[goalID] = goalCompletionReevaluationDispatched
+	s.mu.Unlock()
+
+	if al.dispatchGoalCompletionReevaluation(sessionID, goalID) {
+		return
+	}
+	// Notification did not hand off a turn. Restore waiting so a later
+	// terminal hook or the active-goal keeper can retry.
+	s.mu.Lock()
+	if s.completionPhase[goalID] == goalCompletionReevaluationDispatched {
+		s.completionPhase[goalID] = goalCompletionWaitingDescendants
+	}
+	s.mu.Unlock()
+}
+
+func (al *AgentLoop) goalRestoreWaitingCompletion(rec *goal.Goal) {
+	if rec == nil || rec.LatestClaim == nil || rec.LatestClaim.Status != generated.GoalLatestClaimStatusMet {
+		return
+	}
+	if rec.LatestVerdict != nil {
+		judgedAt, err := time.Parse(time.RFC3339Nano, rec.LatestVerdict.JudgedAt)
+		if err == nil && !rec.LatestClaim.ClaimedAt.After(judgedAt) {
+			return
+		}
+	}
+	s := goalTriggers()
+	s.mu.Lock()
+	if s.completionPhase[rec.GoalID] == goalCompletionNone {
+		s.completionPhase[rec.GoalID] = goalCompletionWaitingDescendants
+	}
+	s.mu.Unlock()
+}
+
+// deferMetWhileDescendantsActive is the final Q2 B quietness fence. It runs
+// after the Judge returns but before any verdict is persisted or published.
+// A live descendant or an unreadable subtree discards the stale met result
+// without consuming a round and returns the goal to pending re-evaluation.
+func (ag *agentLoopRunGoalAdjudication) deferMetWhileDescendantsActive() bool {
+	if ag == nil || ag.verdict == nil || !ag.verdict.Met {
+		return false
+	}
+	blocked, err := ag.al.hasRunningOrQueuedDescendant(ag.sessionID)
+	if err == nil && !blocked {
+		return false
+	}
+	ag.al.goalSetCompletionPhase(ag.rec.GoalID, goalCompletionWaitingDescendants)
+	if err != nil {
+		logger.WarnCF("agent", "goal: met verdict discarded because descendant state could not be read",
+			map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID, "error": err.Error()})
+		return true
+	}
+	logger.InfoCF("agent", "goal: met verdict discarded because delegated work is still active",
+		map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID})
+	ag.al.resumeDeferredGoalForSession(ag.sessionID, ag.rec.GoalID)
+	return true
+}
+
+func (al *AgentLoop) dispatchGoalCompletionReevaluation(sessionID, goalID string) bool {
+	if al.asyncNotifier == nil {
+		return false
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil || rec == nil || rec.Terminal() || rec.Stopped() {
+		return false
+	}
+	if rec.SteeredBy == nil {
+		return al.dispatchGoalAsyncFollowUp(sessionID, goalID, goalCompletionSourceKind, goalCompletionReevaluationPrompt)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = al.asyncNotifier.Notify(ctx, AsyncNotifyEvent{
+		Channel:             steerReportingSelfChannel,
+		ChatID:              sessionID,
+		AgentID:             rec.AgentID,
+		TranscriptSessionID: sessionID,
+		SourceKind:          goalCompletionSourceKind,
+		SenderCanonicalID:   goalLoopFollowUpSenderID,
+		Content:             goalCompletionReevaluationPrompt,
+		Metadata: map[string]any{
+			"steer_message_id": uuid.NewString(),
+			"steer_generation": rec.Generation,
+		},
+	})
+	if err != nil {
+		logger.WarnCF("agent", "goal: completion re-evaluation turn dispatch failed",
+			map[string]any{"session_id": sessionID, "goal_id": goalID, "error": err.Error()})
+		return false
+	}
+	return true
+}
 
 // goalJudgeRedriveBackoff is the short backoff between re-drive attempts
 // (design note (c): "short backoff (e.g. 5s/15s/30s)"). It is deliberately
@@ -317,4 +560,43 @@ func (al *AgentLoop) deliverGoalParkUpward(sessionID string, blocked bool, text 
 		return
 	}
 	reportUndeliveredWake("goal: park delivery", event, steerParentSessionID(rec), rec.Generation, delivery)
+}
+
+// ackMetVerdictEntry acknowledges the session-goal met verdict's inbox entry
+// after the hand-back produces the parent wake. The met verdict is delivered
+// with its wake suppressed; the completion handback that follows it is the
+// one parent wake for the whole "met". Leaving the verdict unacknowledged
+// would let boot recovery re-deliver and re-wake it after a restart.
+//
+// Best-effort by design: the completion tail runs first, so a crash before the
+// handback wake leaves both entries unacknowledged for boot recovery. Once the
+// handback has woken the parent, its deterministic durable entry remains the
+// one recovery wake carrier until normal consumption acknowledges it.
+func (al *AgentLoop) ackMetVerdictEntry(sessionID, goalID string, round int) {
+	inbox := al.GetMessageInboxStore()
+	if inbox == nil {
+		return
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		logger.WarnCF("agent", "goal: met verdict acknowledgement skipped because the child lifecycle could not be loaded",
+			map[string]any{"session_id": sessionID, "goal_id": goalID, "error": err.Error()})
+		return
+	}
+	if rec == nil || rec.SteeredBy == nil {
+		return
+	}
+	ownerKey := deliverOwnerKey(rec)
+	if ownerKey == "" {
+		return
+	}
+	id := goalVerdictUpwardMessageID(goalID, round)
+	if ackErr := inbox.Ack(ownerKey, []string{id}); ackErr != nil {
+		logger.WarnCF("agent", "goal: met verdict acknowledgement failed; boot recovery may re-wake it once",
+			map[string]any{"session_id": sessionID, "goal_id": goalID, "message_id": id, "error": ackErr.Error()})
+	}
 }

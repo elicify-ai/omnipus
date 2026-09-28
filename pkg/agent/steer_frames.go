@@ -468,6 +468,10 @@ func (al *AgentLoop) deliverSteeringReceiptsForInjection(childSessionKey string,
 // missing-goal-record case — Deliver()'s own edge lookup already covers
 // "no steering parent to deliver to" the same way every other Deliver call
 // site in this package does (best-effort, never fails the caller).
+func goalVerdictUpwardMessageID(goalID string, round int) string {
+	return fmt.Sprintf("%s-verdict-%d", goalID, round)
+}
+
 func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID string, verdict *task.JudgeVerdict) {
 	if verdict == nil || sessionID == "" {
 		return
@@ -500,7 +504,7 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 	}
 	if err := sm.FromSessionMessageGoalStatus(generated.SessionMessageGoalStatus{
 		Kind:            generated.SessionMessageGoalStatusKindGoalStatus,
-		MessageId:       fmt.Sprintf("%s-verdict-%d", rec.GoalID, verdict.Round),
+		MessageId:       goalVerdictUpwardMessageID(rec.GoalID, verdict.Round),
 		SessionId:       sessionID,
 		SenderIdentity:  verdict.JudgeAgentID,
 		CreatedAt:       time.Now().UTC(),
@@ -515,7 +519,26 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
 		return
 	}
-	event := steer.UpwardEvent{ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: sm}
+	// A session-goal met verdict is visible and durable but does not wake its
+	// steering parent. The final handback is the one parent wake. Task-owned
+	// and unmet verdicts retain their normal wake because no final handback
+	// substitutes for them.
+	suppressWake := false
+	if verdict.Met && rec.OwnerKind == generated.GoalOwnerKindSession {
+		lifecycle := al.GetSessionLifecycleStore()
+		if lifecycle != nil {
+			childRec, lerr := lifecycle.Load(sessionID)
+			if lerr == nil && childRec != nil {
+				suppressWake = childRec.SteeredBy != nil
+			}
+		}
+	}
+	event := steer.UpwardEvent{
+		ChildSessionID: sessionID,
+		Outcome:        steer.OutcomeGoalVerdict,
+		Message:        sm,
+		SuppressWake:   suppressWake,
+	}
 	delivery, err := deliverer.Deliver(ctx, event)
 	if err != nil {
 		logger.WarnCF("agent", "goal-status upward delivery failed",

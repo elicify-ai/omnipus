@@ -376,6 +376,7 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	if classErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: classify message: %w", classErr)
 	}
+	wakeEligible := class.WakeEligible && !event.SuppressWake
 	if matchErr := validateOutcomeMessage(event.Outcome, class); matchErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: %w", matchErr)
 	}
@@ -414,7 +415,7 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	// deliverSubagentMessage/State/End's frame ids are deterministic and
 	// AppendTranscriptStrict rejects (id-dedupes) a repeat write.
 	if res.Deduped {
-		shortCircuit := !class.WakeEligible
+		shortCircuit := !wakeEligible
 		if !shortCircuit {
 			acked, ackedErr := deliverEntryIsAcked(inbox, ownerKey, event.ChildSessionID, res.MessageID)
 			if ackedErr != nil {
@@ -441,7 +442,7 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		al.deliverSubagentEnd(ownerKey, childRec, event.Outcome)
 	}
 
-	if !class.WakeEligible {
+	if !wakeEligible {
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
 

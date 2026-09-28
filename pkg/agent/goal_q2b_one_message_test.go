@@ -295,7 +295,6 @@ func TestGoalQ2B_ConcurrentDescendantsReevaluateOnceThenWakeParentOnce(t *testin
 		rec    *session.LifecycleRecord
 		answer string
 	}{{first, "first result"}, {second, "second result"}} {
-		item := item
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
