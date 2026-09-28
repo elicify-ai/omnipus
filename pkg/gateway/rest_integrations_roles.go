@@ -119,26 +119,10 @@ func searchProviderEnabled(web *config.WebToolsConfig, id string) bool {
 	if web == nil {
 		return false
 	}
-	switch id {
-	case config.SearchProviderPerplexity:
-		return web.Perplexity.Enabled
-	case config.SearchProviderBrave:
-		return web.Brave.Enabled
-	case config.SearchProviderTavily:
-		return web.Tavily.Enabled
-	case config.SearchProviderGLM:
-		return web.GLMSearch.Enabled
-	case config.SearchProviderBaidu:
-		return web.BaiduSearch.Enabled
-	case config.SearchProviderExa:
-		return web.Exa.Enabled
-	case config.SearchProviderSearXNG:
-		return web.SearXNG.Enabled
-	case config.SearchProviderDuckDuckGo:
-		return web.DuckDuckGo.Enabled
-	default:
-		return false
-	}
+	// Derived from the one catalogue (FR-035), like every other per-provider
+	// lookup in this file: a provider added there is checked here with no edit.
+	def, ok := config.SearchProviderDefByID(id)
+	return ok && def.Enabled(web)
 }
 
 // integrationRoleSnapshot resolves the roles through the ONE resolver
