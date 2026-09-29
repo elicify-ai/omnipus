@@ -120,6 +120,17 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		jsonErr(w, http.StatusNotFound, "no mailbox configured for this agent and workspace")
 		return
 	}
+	// F10 (foreign-draft half), 2026-09-29, Option B: SignatureHTML is gated
+	// on the SAME condition as Draft. A foreign-seeded draft
+	// (cur.IsOmnipusDraft == false) gets no signature baked into its stored
+	// body at Save time — the signature is added exactly once, at Send, by
+	// handleMailDraftSendInner's own unconditional SignatureHTML use. Baking
+	// it in here too was the root cause of the double-signed / corrupted
+	// send. See mail_f10_foreign_draft_double_sign_red_test.go.
+	signatureHTML := ""
+	if cur.IsOmnipusDraft {
+		signatureHTML = mb.SignatureHTML
+	}
 	in := email.ComposeInput{
 		From:          mb.Username,
 		Subject:       req.Subject,
@@ -129,7 +140,7 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		Bcc:           derefStrings(req.Bcc),
 		MessageID:     bracketMessageID(cur.MessageID),
 		Draft:         cur.IsOmnipusDraft,
-		SignatureHTML: mb.SignatureHTML,
+		SignatureHTML: signatureHTML,
 	}
 	for _, idx := range req.KeepAttachmentParts {
 		// FR-035/D28: keep values are each attachment's own stable PartIndex
