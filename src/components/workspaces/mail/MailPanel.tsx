@@ -826,6 +826,8 @@ function AttachmentList({ workspaceId, agentId, folder, messageRef, attachments 
   messageRef: string
   attachments: MailMessage['attachments']
 }) {
+  const addToast = useUiStore((s) => s.addToast)
+
   return (
     <ul aria-label="Attachments" className="flex flex-col gap-[var(--space-1)]">
       {attachments.map((attachment) => (
@@ -840,7 +842,9 @@ function AttachmentList({ workspaceId, agentId, folder, messageRef, attachments 
             variant="ghost"
             size="sm"
             onClick={() => {
-              void downloadMailAttachment({ workspaceId, agentId, folder, messageRef, partIndex: attachment.part_index, filename: attachment.filename, retry: true })
+              downloadMailAttachment({ workspaceId, agentId, folder, messageRef, partIndex: attachment.part_index, filename: attachment.filename, retry: true }).catch(
+                (err: unknown) => addToast({ message: mailErrorCode(err), variant: 'error' }),
+              )
             }}
           >
             Download
