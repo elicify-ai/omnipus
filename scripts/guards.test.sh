@@ -51,6 +51,32 @@ assert_output_contains() {
   fi
 }
 
+assert_timed_exit_line() {
+  local label="$1" prefix="$2" log="$3" line
+  line="$(grep -F -- "$prefix start=" "$log" | grep -E ' start=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z dur=[0-9]+s$')"
+  if [ -n "$line" ]; then
+    echo "  PASS [$label]: $line"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [$label]: timed line missing '$prefix start=<UTC> dur=<Ns>'"
+    FAIL=$((FAIL + 1))
+    ERRORS+=("[$label] expected timed line containing '$prefix'")
+  fi
+}
+
+assert_positive_timed_exit_line() {
+  local label="$1" prefix="$2" log="$3" line
+  line="$(grep -F -- "$prefix start=" "$log" | grep -E ' start=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z dur=[1-9][0-9]*s$')"
+  if [ -n "$line" ]; then
+    echo "  PASS [$label]: $line"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [$label]: timed line missing '$prefix start=<UTC> dur=<positive seconds>s'"
+    FAIL=$((FAIL + 1))
+    ERRORS+=("[$label] expected a positive duration for '$prefix'")
+  fi
+}
+
 assert_file_exists() {
   local label="$1" path="$2"
   if [ -f "$path" ]; then
@@ -142,6 +168,8 @@ write_guard "$ROOT" "check-foo.test.sh" 0
 CODE="$(run_guards "$ROOT")"
 assert_exit_code "t2-exit" 0 "$CODE"
 assert_output_contains "t2-guard-line" "check-foo.sh exit=0" "$(cat "$ROOT/.out.log")"
+assert_timed_exit_line "t2-timed-guard-line" "check-foo.sh exit=0" "$ROOT/.out.log"
+assert_timed_exit_line "t2-timed-companion-line" ">> companion(check-foo.test.sh) exit=0" "$ROOT/.out.log"
 rm -rf "$ROOT"
 
 # ── T3: the guard itself fails → the runner fails (planted offender) ───────
@@ -153,6 +181,7 @@ write_guard "$ROOT" "check-foo.test.sh" 0
 CODE="$(run_guards "$ROOT")"
 assert_exit_code "t3-exit" 1 "$CODE"
 assert_output_contains "t3-guard-line" "check-foo.sh exit=1" "$(cat "$ROOT/.out.log")"
+assert_timed_exit_line "t3-timed-guard-line" "check-foo.sh exit=1" "$ROOT/.out.log"
 rm -rf "$ROOT"
 
 # ── T4: companion fails though the guard itself passes → runner still fails ─
@@ -163,6 +192,7 @@ write_guard "$ROOT" "check-foo.sh" 0
 write_guard "$ROOT" "check-foo.test.sh" 1
 CODE="$(run_guards "$ROOT")"
 assert_exit_code "t4-exit" 1 "$CODE"
+assert_timed_exit_line "t4-timed-failing-companion-line" ">> companion(check-foo.test.sh) exit=1" "$ROOT/.out.log"
 rm -rf "$ROOT"
 
 # ── T5: guard with no companion, not exempt → runner fails ─────────────────
@@ -232,6 +262,7 @@ write_guard "$ROOT" "check-foo-selfcheck.sh" 0 "selfcheck.ran"
 CODE="$(run_guards "$ROOT")"
 assert_exit_code "t10-exit" 0 "$CODE"
 assert_file_exists "t10-companion-ran" "$ROOT/selfcheck.ran"
+assert_timed_exit_line "t10-timed-selfcheck-line" ">> companion(check-foo-selfcheck.sh) exit=0" "$ROOT/.out.log"
 assert_output_contains "t10-count" "guards resolved (companions subtracted): 1" "$(cat "$ROOT/.out.log")"
 rm -rf "$ROOT"
 
@@ -247,6 +278,7 @@ CODE="$(run_guards "$ROOT")"
 assert_exit_code "t11-exit" 0 "$CODE"
 assert_file_exists "t11-dottest-ran" "$ROOT/dottest.ran"
 assert_file_exists "t11-flag-ran" "$ROOT/flag.ran"
+assert_timed_exit_line "t11-timed-flag-line" ">> companion(check-foo.sh --self-test) exit=0" "$ROOT/.out.log"
 rm -rf "$ROOT"
 
 # ── T12: a failing --self-test flag companion fails the runner ─────────────
@@ -256,6 +288,7 @@ ROOT="$(fresh_root)"
 write_self_test_guard "$ROOT" "check-foo.sh" 1 0
 CODE="$(run_guards "$ROOT")"
 assert_exit_code "t12-exit" 1 "$CODE"
+assert_timed_exit_line "t12-timed-failing-flag-line" ">> companion(check-foo.sh --self-test) exit=1" "$ROOT/.out.log"
 rm -rf "$ROOT"
 
 # ── T13: every guard still runs even after an earlier one fails ────────────
@@ -270,6 +303,50 @@ CODE="$(run_guards "$ROOT")"
 assert_exit_code "t13-exit" 1 "$CODE"
 assert_file_exists "t13-zulu-still-ran" "$ROOT/zulu.ran"
 assert_output_contains "t13-zulu-line" "check-zulu.sh exit=0" "$(cat "$ROOT/.out.log")"
+rm -rf "$ROOT"
+
+# ── T14: a slow guard reports elapsed seconds, not a constant zero ──────────
+echo ""
+echo "T14: a slow guard reports a positive elapsed duration"
+ROOT="$(fresh_root)"
+write_guard "$ROOT" "check-slow.test.sh" 0
+write_guard "$ROOT" "check-slow.sh" 0
+printf '#!/usr/bin/env bash\nsleep 2\nexit 0\n' > "$ROOT/scripts/check-slow.sh"
+CODE="$(run_guards "$ROOT")"
+assert_exit_code "t14-exit" 0 "$CODE"
+assert_positive_timed_exit_line "t14-positive-duration" "check-slow.sh exit=0" "$ROOT/.out.log"
+rm -rf "$ROOT"
+
+# ── T15: a failing -selfcheck.sh still has a timed failure line ─────────────
+echo ""
+echo "T15: a failing -selfcheck.sh companion reports its nonzero exit"
+ROOT="$(fresh_root)"
+write_guard "$ROOT" "check-foo.sh" 0
+write_guard "$ROOT" "check-foo-selfcheck.sh" 1
+CODE="$(run_guards "$ROOT")"
+assert_exit_code "t15-exit" 1 "$CODE"
+assert_timed_exit_line "t15-timed-failing-selfcheck-line" ">> companion(check-foo-selfcheck.sh) exit=1" "$ROOT/.out.log"
+rm -rf "$ROOT"
+
+# ── T16: clock failure must not skip checks or hide the final summary ───────
+echo ""
+echo "T16: a failed UTC clock lookup still runs every guard and reports failure"
+ROOT="$(fresh_root)"
+write_guard "$ROOT" "check-alpha.sh" 0 "alpha.ran"
+write_guard "$ROOT" "check-alpha.test.sh" 0 "alpha-companion.ran"
+write_guard "$ROOT" "check-zulu.sh" 0 "zulu.ran"
+write_guard "$ROOT" "check-zulu.test.sh" 0 "zulu-companion.ran"
+mkdir -p "$ROOT/bin"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 9' > "$ROOT/bin/date"
+chmod +x "$ROOT/bin/date"
+CODE="$(PATH="$ROOT/bin:$PATH" run_guards "$ROOT")"
+assert_exit_code "t16-exit" 1 "$CODE"
+assert_file_exists "t16-first-companion-ran" "$ROOT/alpha-companion.ran"
+assert_file_exists "t16-later-guard-ran" "$ROOT/zulu.ran"
+assert_file_exists "t16-later-companion-ran" "$ROOT/zulu-companion.ran"
+assert_output_contains "t16-clock-error" "GUARD RUNNER TIMING FAILURE:" "$(cat "$ROOT/.out.log")"
+assert_output_contains "t16-summary" "=== summary ===" "$(cat "$ROOT/.out.log")"
+assert_output_contains "t16-timed-guard" "check-zulu.sh exit=0 start=unavailable dur=" "$(cat "$ROOT/.out.log")"
 rm -rf "$ROOT"
 
 echo ""
