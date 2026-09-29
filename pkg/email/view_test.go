@@ -389,6 +389,20 @@ func TestDeleteDraft_UIDExpunge(t *testing.T) {
 	if len(after) != 0 {
 		t.Fatalf("draft survived UID EXPUNGE: %d messages", len(after))
 	}
+	// A filtered page alone cannot prove UID EXPUNGE ran: check the raw
+	// mailbox, where an unexpunged \Deleted draft would still count.
+	server, _, dialErr := cl.dialIMAP(context.Background())
+	if dialErr != nil {
+		t.Fatalf("dial to check UID expunge: %v", dialErr)
+	}
+	defer server.Close()
+	selected, selectErr := server.Select("Drafts", nil).Wait()
+	if selectErr != nil {
+		t.Fatalf("select Drafts after UID expunge: %v", selectErr)
+	}
+	if selected.NumMessages != 0 {
+		t.Fatalf("UID EXPUNGE did not remove the targeted draft: %d stored messages, want 0", selected.NumMessages)
+	}
 }
 
 func TestDeleteDraft_DeferredWithoutUIDPLUS(t *testing.T) {
@@ -404,7 +418,21 @@ func TestDeleteDraft_DeferredWithoutUIDPLUS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("page after: %v", err)
 	}
-	if len(after) != 1 {
-		t.Fatalf("deferred path must NOT expunge: %d messages", len(after))
+	if len(after) != 0 {
+		t.Fatalf("deferred old copy is still listed: %d messages, want 0", len(after))
+	}
+	// The server still holds the flagged copy; this proves the empty page is
+	// filtering \Deleted, not an unsafe plain EXPUNGE of unrelated messages.
+	server, _, dialErr := cl.dialIMAP(context.Background())
+	if dialErr != nil {
+		t.Fatalf("dial to verify deferred copy: %v", dialErr)
+	}
+	defer server.Close()
+	selected, selectErr := server.Select("Drafts", nil).Wait()
+	if selectErr != nil {
+		t.Fatalf("select Drafts to verify deferred copy: %v", selectErr)
+	}
+	if selected.NumMessages != 1 {
+		t.Fatalf("deferred copy was expunged: %d stored messages, want 1", selected.NumMessages)
 	}
 }

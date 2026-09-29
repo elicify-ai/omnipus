@@ -31,6 +31,8 @@ type draftSendRecord struct {
 	cleanupWarn string
 	expunged    bool
 	messageID   string
+	uid         uint32
+	uidvalidity uint32
 	recordedAt  time.Time
 }
 
@@ -319,7 +321,7 @@ func mailDraftStaleness(cur *email.MailView, bodyUID, bodyUV int64) (int, string
 	if !mailDraftUIDPreconditionsValid(bodyUID, bodyUV) {
 		return http.StatusBadRequest, "", "uid precondition is outside the IMAP uint32 range"
 	}
-	if bodyUV != int64(cur.UIDValidity) || bodyUID != int64(cur.UID) {
+	if bodyUV != int64(cur.UIDValidity) || bodyUID != int64(cur.UID) || mailViewHidden(cur) {
 		return http.StatusConflict, "stale_draft", "stale draft"
 	}
 	return 0, "", ""
@@ -383,16 +385,13 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	if status, code, msg := mailDraftStaleness(cur, req.Uid, req.Uidvalidity); status != 0 {
-		if code != "" {
-			jsonErrCode(w, status, msg, code)
-		} else {
-			jsonErr(w, status, msg)
-		}
-		return
-	}
 	key := bracketMessageID(cur.MessageID)
-	if rec, ok := draftSendLookup(key); ok {
+	// A completed send may leave its source UID \Deleted on a server without
+	// UIDPLUS. Replay only the recorded revision, never an older copy of the
+	// same Message-ID after a replacement APPEND.
+	if rec, ok := draftSendLookup(key); ok &&
+		!cur.SupersededDraft && req.Uid == int64(cur.UID) && req.Uidvalidity == int64(cur.UIDValidity) &&
+		rec.uid == cur.UID && rec.uidvalidity == cur.UIDValidity {
 		resp := gen.MailSendResponse{MessageId: rec.messageID, SentSaved: rec.sentSaved}
 		if rec.saveWarning != "" {
 			swr := rec.saveWarning
@@ -403,6 +402,14 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 			resp.DraftCleanupWarning = &cwr
 		}
 		jsonOK(w, resp)
+		return
+	}
+	if status, code, msg := mailDraftStaleness(cur, req.Uid, req.Uidvalidity); status != 0 {
+		if code != "" {
+			jsonErrCode(w, status, msg, code)
+		} else {
+			jsonErr(w, status, msg)
+		}
 		return
 	}
 	subject := cur.Subject
@@ -529,7 +536,7 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 	draftSendRecords[key] = draftSendRecord{
 		sentSaved: resp.SentSaved, saveWarning: cleanupWarningOf(resp),
 		cleanupWarn: cleanupWarn, expunged: expunged,
-		messageID: key, recordedAt: time.Now(),
+		messageID: out.MessageID, uid: cur.UID, uidvalidity: cur.UIDValidity, recordedAt: time.Now(),
 	}
 	draftSendMu.Unlock()
 	auditMail(a, audit.EventMailPanelDraftSent, audit.DecisionAllow, map[string]any{

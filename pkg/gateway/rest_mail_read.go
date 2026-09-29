@@ -164,6 +164,13 @@ func mailFlagHas(flags []string, name string) bool {
 	return false
 }
 
+// mailViewHidden keeps a fetched deleted copy off detail, attachment and
+// preview routes. An unflagged predecessor is also hidden once a newer
+// non-deleted draft with the same Message-ID exists.
+func mailViewHidden(v *email.MailView) bool {
+	return mailFlagHas(v.Flags, "\\Deleted") || v.SupersededDraft
+}
+
 func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request, workspaceID, agentID, folder, ref string) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -178,6 +185,10 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 			return client.ReadView(c, folder, ref)
 		})
 	if handled {
+		return
+	}
+	if mailViewHidden(mv) {
+		jsonErr(w, http.StatusNotFound, "message not found")
 		return
 	}
 	v := mv
@@ -303,6 +314,10 @@ func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, w
 			return client.ReadView(c, folder, ref)
 		})
 	if handled {
+		return
+	}
+	if mailViewHidden(mv) {
+		jsonErr(w, http.StatusNotFound, "message not found")
 		return
 	}
 	v := mv

@@ -60,8 +60,18 @@ func (a *restAPI) handleWorkspaceMail(w http.ResponseWriter, r *http.Request, re
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	// Draft cases shadow the generic folder-message cases for folder
 	// "drafts": the switch takes the FIRST matching case, so the drafts
-	// cases must precede the generic ones below.
+	// cases must precede the generic ones below. GET is the one exception:
+	// the contract's generic read path enumerates folder=drafts as valid
+	// and defines no `get` on the literal drafts path item (contracts/
+	// openapi.yaml) — a draft's detail read always belonged on the same
+	// read path every other folder uses (US-7: the human must be able to
+	// open an agent's draft to edit it). Only PUT/DELETE are the draft
+	// panel's own mutations.
 	case len(tail) == 5 && tail[1] == "folders" && tail[2] == "drafts" && tail[3] == "messages":
+		if r.Method == http.MethodGet {
+			a.handleMailFolderMessage(w, r, workspaceID, tail[0], tail[2], tail[4])
+			return
+		}
 		a.handleMailDraftAction(w, r, workspaceID, tail[0], tail[4])
 	case len(tail) == 6 && tail[1] == "folders" && tail[2] == "drafts" && tail[3] == "messages" && tail[5] == "send":
 		if r.Method != http.MethodPost {
