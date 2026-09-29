@@ -51,7 +51,7 @@ func TestFixtureVault_DescendingGroupViewsAreServable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading schemas: %v", err)
 	}
-	views, viewRep, err := records.LoadViews(root, schemas)
+	views, viewRep, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("loading views: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestFixtureVault_MostConnectedMatchesTheOracle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading schemas: %v", err)
 	}
-	views, _, err := records.LoadViews(root, schemas)
+	views, _, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("loading views: %v", err)
 	}

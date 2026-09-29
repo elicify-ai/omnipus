@@ -144,7 +144,7 @@ func TestCreateView_SucceedsAndIsImmediatelyDiscoverable(t *testing.T) {
 	})
 	require.False(t, res.IsError, "unexpected refusal: %s", res.ForLLM)
 
-	set, report, err := records.LoadViews(root, nil)
+	set, report, err := loadTestCollectionViews(t, root, nil)
 	require.NoError(t, err)
 	require.Empty(t, report.Rejections)
 	_, ok := set.Get("freshly-written")

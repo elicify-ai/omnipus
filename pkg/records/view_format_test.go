@@ -8,6 +8,7 @@ package records
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -21,11 +22,10 @@ import (
 // off view.go. Where a number appears (64 leaves, depth 8) it is FR-023c's,
 // quoted at the assertion.
 //
-// Every view here is written to a real vault directory and read back through
-// LoadViews, never hand-built as a struct. The requirement is about files on
-// disk, and a struct literal skips the whole decode — which is where the
-// interesting failures live, because a key that decodes to nothing produces a
-// view that parsed cleanly and lost half of itself.
+// Every view here is written to a real fixture file and its bytes are passed
+// through LoadViewPaths, never hand-built as a struct. The requirement is about
+// decoding file contents; a struct literal skips that decode — where a key can
+// silently disappear while the rest of the view parses cleanly.
 // ---------------------------------------------------------------------------
 
 // widgetSchemaFixture declares the record type the view fixtures below query.
@@ -69,10 +69,15 @@ func viewVault(t *testing.T, views map[string]string) (*ViewSet, *ViewLoadReport
 	if !sreport.OK() {
 		t.Fatalf("fixture schemas did not load: %v", sreport.Rejections)
 	}
-	for filename, body := range views {
-		root = writeVaultView(t, root, filename, body)
+	names := make([]string, 0, len(views))
+	for filename := range views {
+		names = append(names, filename)
 	}
-	set, report, err := LoadViews(root, schemas)
+	sort.Strings(names)
+	for _, filename := range names {
+		root = writeVaultView(t, root, filename, views[filename])
+	}
+	set, report, err := loadViewFixtures(t, root, schemas, names...)
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}

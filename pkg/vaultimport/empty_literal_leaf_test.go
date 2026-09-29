@@ -226,7 +226,7 @@ func emptyLiteralReloadedLeaf(t *testing.T, root, outputRelPath string) generate
 	if err != nil {
 		t.Fatalf("reloading schemas: %v", err)
 	}
-	views, viewRep, err := records.LoadViews(root, schemas)
+	views, viewRep, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("reloading views: %v", err)
 	}
@@ -259,7 +259,7 @@ func emptyLiteralRows(t *testing.T, root, outputRelPath string) []string {
 	if !schemaRep.OK() {
 		t.Fatalf("the importer wrote schemas the real loader rejects: %v", schemaRep.Rejections)
 	}
-	views, viewRep, err := records.LoadViews(root, schemas)
+	views, viewRep, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("reloading views: %v", err)
 	}

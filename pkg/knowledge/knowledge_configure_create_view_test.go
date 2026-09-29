@@ -262,7 +262,7 @@ func TestKnowledgeConfigure_CreateView_G3_RecordsUnitExclusion(t *testing.T) {
 
 		schemas, _, lerr := records.LoadSchemas(root)
 		require.NoError(t, lerr)
-		set, report, lerr := records.LoadViews(root, schemas)
+		set, report, lerr := loadTestCollectionViews(t, root, schemas)
 		require.NoError(t, lerr)
 		require.True(t, report.OK(), "%v", report.Rejections)
 		v, ok := set.Get("g3-with-unit")
@@ -287,7 +287,7 @@ func TestKnowledgeConfigure_CreateView_G3_RecordsUnitExclusion(t *testing.T) {
 
 		schemas, _, lerr := records.LoadSchemas(root)
 		require.NoError(t, lerr)
-		set, _, lerr := records.LoadViews(root, schemas)
+		set, _, lerr := loadTestCollectionViews(t, root, schemas)
 		require.NoError(t, lerr)
 		v, ok := set.Get("g3-no-unit")
 		require.True(t, ok)
@@ -458,7 +458,7 @@ func TestKnowledgeConfigure_CreateView_SummaryRoundTripsThroughLoadViews(t *test
 
 	schemas, _, lerr := records.LoadSchemas(root)
 	require.NoError(t, lerr)
-	set, report, lerr := records.LoadViews(root, schemas)
+	set, report, lerr := loadTestCollectionViews(t, root, schemas)
 	require.NoError(t, lerr)
 	require.True(t, report.OK(), "%v", report.Rejections)
 
@@ -546,7 +546,7 @@ func TestKnowledgeConfigure_CreateView_SevenOfEightKindsAreSchemaValid(t *testin
 	// header warns against.
 	schemas, _, lerr := records.LoadSchemas(root)
 	require.NoError(t, lerr)
-	set, report, lerr := records.LoadViews(root, schemas)
+	set, report, lerr := loadTestCollectionViews(t, root, schemas)
 	require.NoError(t, lerr)
 	require.True(t, report.OK(), "%v", report.Rejections)
 	for _, tc := range cases {

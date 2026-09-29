@@ -55,7 +55,7 @@ properties:
 func loadBridgeView(t *testing.T, root string, schemas *SchemaSet, body string) (*SavedView, *ViewRejection) {
 	t.Helper()
 	root = writeVaultView(t, root, "b.yaml", body)
-	views, report, err := LoadViews(root, schemas)
+	views, report, err := loadViewFixtures(t, root, schemas, "b.yaml")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}

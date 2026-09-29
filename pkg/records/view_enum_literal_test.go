@@ -86,7 +86,7 @@ func TestView_EnumLiteralIsCheckedAtLoad(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				root, schemas := viewFixtureSchemas(t, "")
 				root = writeVaultView(t, root, "v.yaml", tc.body)
-				set, report, err := LoadViews(root, schemas)
+				set, report, err := loadViewFixtures(t, root, schemas, "v.yaml")
 				if err != nil {
 					t.Fatalf("LoadViews: %v", err)
 				}
@@ -151,7 +151,7 @@ func TestView_EnumLiteralIsCheckedAtLoad(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				root, schemas := viewFixtureSchemas(t, "")
 				root = writeVaultView(t, root, "v.yaml", tc.body)
-				set, report, err := LoadViews(root, schemas)
+				set, report, err := loadViewFixtures(t, root, schemas, "v.yaml")
 				if err != nil {
 					t.Fatalf("LoadViews: %v", err)
 				}

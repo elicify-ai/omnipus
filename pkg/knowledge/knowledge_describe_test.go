@@ -62,7 +62,7 @@ properties:
   region: { type: enum, values: [north, south] }
   lead:   { type: person }
 `)
-	write(".omnipus-vault/views/shipped-by-maker.yaml", `
+	write("shipped-by-maker.view", `
 name: shipped-by-maker
 type: widget
 label: Shipped widgets by maker
@@ -91,7 +91,7 @@ func describeFixtureData(t *testing.T, root string, integrity *IntegrityReport) 
 	if !schemaReport.OK() {
 		t.Fatalf("fixture schemas did not load: %v", schemaReport.Rejections)
 	}
-	views, viewReport, err := records.LoadViews(root, schemas)
+	views, viewReport, err := loadTestCollectionViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}
@@ -403,13 +403,13 @@ func TestDescribe_RejectedSchemasAndViewsAreReported(t *testing.T) {
 		}
 	}
 	write(".omnipus-vault/records/broken.yaml", "type: broken\nproperties:\n  a: {type: text}\n")
-	write(".omnipus-vault/views/broken.yaml", "name: v\ntype: broken\n")
+	write("broken.view", "name: v\ntype: broken\n")
 
 	schemas, schemaReport, err := records.LoadSchemas(root)
 	if err != nil {
 		t.Fatalf("LoadSchemas: %v", err)
 	}
-	views, viewReport, err := records.LoadViews(root, schemas)
+	views, viewReport, err := loadTestCollectionViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}
@@ -704,14 +704,14 @@ func TestDescribe_ManyViewsAreCataloguedNotDumped(t *testing.T) {
 			nWidget+nFoundry, viewsInlineThreshold)
 	}
 	for i := 0; i < nWidget; i++ {
-		writeUnderMarker(t, root, "views", fmt.Sprintf("w%02d.yaml", i),
+		writeCollectionView(t, root, fmt.Sprintf("w%02d.view", i),
 			fmt.Sprintf("name: widget-view-%02d\ntype: widget\nfilter: {property: state, op: \"=\", value: shipped}\n", i))
 	}
 	for i := 0; i < nFoundry; i++ {
-		writeUnderMarker(t, root, "views", fmt.Sprintf("f%02d.yaml", i),
+		writeCollectionView(t, root, fmt.Sprintf("f%02d.view", i),
 			fmt.Sprintf("name: foundry-view-%02d\ntype: foundry\nfilter: {property: region, op: \"=\", value: north}\n", i))
 	}
-	views, vreport, err := records.LoadViews(root, schemas)
+	views, vreport, err := loadTestCollectionViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}

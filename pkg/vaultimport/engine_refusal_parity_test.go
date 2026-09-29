@@ -516,7 +516,7 @@ func w4TreeDeps(t *testing.T, root string) (knowledgefind.Deps, *records.ViewSet
 	if !schemaRep.OK() {
 		t.Fatalf("the importer wrote schemas the loader rejects: %v", schemaRep.Rejections)
 	}
-	views, viewRep, err := records.LoadViews(root, schemas)
+	views, viewRep, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}

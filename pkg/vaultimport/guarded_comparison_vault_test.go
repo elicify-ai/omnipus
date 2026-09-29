@@ -103,7 +103,7 @@ func w4Serve(t *testing.T) (root string, rep *Report, s w4Served) {
 	if !schemaRep.OK() {
 		t.Fatalf("the importer wrote schemas the real loader rejects: %v", schemaRep.Rejections)
 	}
-	views, viewRep, err := records.LoadViews(root, schemas)
+	views, viewRep, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("loading the views this run wrote: %v", err)
 	}

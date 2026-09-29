@@ -365,7 +365,7 @@ var (
 //
 // EVERY ARTEFACT GOES THROUGH THE PRODUCTION READER. The schema through
 // records.LoadSchemas, the notes through records.ParseRecord +
-// propindex.BuildNoteRows, the view through records.LoadViews, and the loader
+// propindex.BuildNoteRows, the view through records.LoadViewPaths, and the loader
 // through records.NewViewFindLoader. Nothing here is hand-assembled, because a
 // hand-assembled view would skip exactly the validation (ValidateViewAgainstSchemas,
 // validateViewFormulas) that a real imported file has to survive.
@@ -417,7 +417,7 @@ source: 06-Bases/Tasks.base
 `), 0o600); err != nil {
 		t.Fatalf("WriteFile(view): %v", err)
 	}
-	views, viewReport, err := records.LoadViews(root, set)
+	views, viewReport, err := loadFindViewFixtures(t, root, set, "due-soon.yaml")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}

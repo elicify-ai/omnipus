@@ -63,7 +63,7 @@ properties:
 `), 0o600); err != nil {
 		t.Fatalf("WriteFile(view): %v", err)
 	}
-	views, viewReport, err := records.LoadViews(root, set)
+	views, viewReport, err := loadFindViewFixtures(t, root, set, "countdown.yaml")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}

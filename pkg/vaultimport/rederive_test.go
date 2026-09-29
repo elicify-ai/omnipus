@@ -94,7 +94,7 @@ func loadRederivedViews(t *testing.T, root string) (*records.SchemaSet, *records
 	t.Helper()
 	set, _, err := records.LoadSchemas(root)
 	require.NoError(t, err)
-	vs, report, err := records.LoadViews(root, set)
+	vs, report, err := loadImportedViews(t, root, set)
 	require.NoError(t, err)
 	require.True(t, report.OK(), "fixture views must load cleanly: %+v", report.Rejections)
 	return set, vs

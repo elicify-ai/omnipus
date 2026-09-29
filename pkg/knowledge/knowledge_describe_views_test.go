@@ -36,7 +36,7 @@ import (
 // So the expected values below are read off the CONTRACT (ViewDef and
 // VaultFilterNode in contracts/openapi.yaml) and the view FILES the fixtures
 // write, never off the renderer. Every view is written to a real vault
-// directory and loaded through records.LoadViews, because a struct literal
+// directory and loaded through LoadViewsForCollection, because a struct literal
 // would skip the decode — and it was the decode half of the format that this
 // renderer was blind to.
 //
@@ -81,8 +81,8 @@ func describeViewVault(t *testing.T, filename, viewBody string) *records.SavedVi
 	if !sreport.OK() {
 		t.Fatalf("the fixture schemas did not load: %v", sreport.Rejections)
 	}
-	writeUnderMarker(t, root, "views", filename, viewBody)
-	set, report, err := records.LoadViews(root, schemas)
+	writeCollectionView(t, root, filename, viewBody)
+	set, report, err := loadTestCollectionViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}
@@ -125,7 +125,7 @@ func writeUnderMarker(t *testing.T, root, sub, filename, body string) {
 // MUTATION: delete any single `r.add(...)` in renderViewClauses or
 // renderViewSharedTail. This test fails naming the clause that vanished.
 func TestDescribeViews_WholeViewIsDescribed(t *testing.T) {
-	v := describeViewVault(t, "active.yaml", `
+	v := describeViewVault(t, "active.view", `
 name: active-widgets
 type: widget
 label: Active widgets
@@ -210,7 +210,7 @@ untranslated: ["inFolder(\"99-Temp\")"]
 // because a description that only says "something is hidden" is not the same
 // as one that says what.
 func TestDescribeViews_FilterOnlyViewIsNeverUnfiltered(t *testing.T) {
-	v := describeViewVault(t, "north.yaml", `
+	v := describeViewVault(t, "north.view", `
 name: north-only
 type: widget
 layout: table
@@ -243,7 +243,7 @@ filter:
 // declarations silently". A description that shows the property and not the
 // direction repeats that loss one layer up.
 func TestDescribeViews_GroupingKeepsItsDirection(t *testing.T) {
-	v := describeViewVault(t, "grouped.yaml", `
+	v := describeViewVault(t, "grouped.view", `
 name: grouped
 type: widget
 grouping:
@@ -263,7 +263,7 @@ grouping:
 // must state it, because the alternative is a reader who cannot tell which way
 // the groups come out.
 func TestDescribeViews_OmittedGroupDirectionShowsTheEffectiveOne(t *testing.T) {
-	v := describeViewVault(t, "grouped2.yaml", `
+	v := describeViewVault(t, "grouped2.view", `
 name: grouped2
 type: widget
 grouping:
@@ -289,7 +289,7 @@ grouping:
 // (`columns`), so asserting "does not draw" against it would pin the exact
 // bug this test used to encode. See TestDescribeViews_RenderedLayoutIsNotNamedUnrenderable.
 func TestDescribeViews_UnrenderableLayoutIsNamed(t *testing.T) {
-	v := describeViewVault(t, "map.yaml", `
+	v := describeViewVault(t, "map.view", `
 name: map-view
 type: widget
 layout: map
@@ -313,7 +313,7 @@ layout: map
 func TestDescribeViews_RenderedLayoutIsNotNamedUnrenderable(t *testing.T) {
 	for _, layout := range []string{"table", "cards", "board", "calendar", "gallery"} {
 		t.Run(layout, func(t *testing.T) {
-			v := describeViewVault(t, layout+".yaml", `
+			v := describeViewVault(t, layout+".view", `
 name: `+layout+`-view
 type: widget
 layout: `+layout+`
@@ -335,7 +335,7 @@ layout: `+layout+`
 // description that differs between two calls over the same file, which makes
 // every downstream diff and every golden test worthless.
 func TestDescribeViews_FormulasAndDisplayConfigAreShownDeterministically(t *testing.T) {
-	v := describeViewVault(t, "formulas.yaml", `
+	v := describeViewVault(t, "formulas.view", `
 name: with-formulas
 type: widget
 formulas:
@@ -368,7 +368,7 @@ property_config:
 // list has chosen a view that can never answer. The renderer dropped the flag
 // silently before.
 func TestDescribeViews_DisabledIsReported(t *testing.T) {
-	body := renderViewBody(describeViewVault(t, "off.yaml",
+	body := renderViewBody(describeViewVault(t, "off.view",
 		"name: off\ntype: widget\ndisabled: true\nfilter: {property: state, op: \"=\", value: shipped}\n"))
 	if !strings.Contains(body, "DISABLED") {
 		t.Fatalf("a view FR-105 disabled is described as if it could be used; it returns nothing and is refused at serve time.\nrendered:\n%s", body)
@@ -443,7 +443,7 @@ func TestDescribeViews_EveryViewDefKeyIsAccountedFor(t *testing.T) {
 // against a DELIBERATELY SHORT accounted list — which is exactly the state the
 // renderer is in the moment somebody adds a key to ViewDef.yaml.
 func TestDescribeViews_AnUnaccountedKeyIsReportedNotDropped(t *testing.T) {
-	v := describeViewVault(t, "gap.yaml", `
+	v := describeViewVault(t, "gap.view", `
 name: gap
 type: widget
 filter: {property: state, op: "=", value: shipped}
@@ -533,7 +533,7 @@ func ptrTo[T any](v T) *T { return &v }
 // narrowing-key subtests fail.
 func TestDescribeViews_UnfilteredIsClaimedOnlyForAnEmptyView(t *testing.T) {
 	t.Run("a genuinely unconstrained view says so", func(t *testing.T) {
-		v := describeViewVault(t, "all.yaml", "name: everything\ntype: widget\n")
+		v := describeViewVault(t, "all.view", "name: everything\ntype: widget\n")
 		body := renderViewBody(v)
 		if body != "    every record of this type, every property\n" {
 			t.Fatalf("a view declaring nothing but its identity IS unconstrained and must say so plainly; got %q", body)
@@ -544,7 +544,7 @@ func TestDescribeViews_UnfilteredIsClaimedOnlyForAnEmptyView(t *testing.T) {
 		// `grouping: []` is a list of no keys. It constrains nothing, so
 		// reporting it as an unshown constraint would be a false alarm — and a
 		// renderer that cries wolf gets ignored.
-		v := describeViewVault(t, "empty.yaml", "name: empty-grouping\ntype: widget\ngrouping: []\n")
+		v := describeViewVault(t, "empty.view", "name: empty-grouping\ntype: widget\ngrouping: []\n")
 		if body := renderViewBody(v); body != "    every record of this type, every property\n" {
 			t.Fatalf("an empty grouping list narrows nothing; got %q", body)
 		}
@@ -562,7 +562,7 @@ func TestDescribeViews_UnfilteredIsClaimedOnlyForAnEmptyView(t *testing.T) {
 			"an untranslated expression": "name: f\ntype: widget\nuntranslated: [\"inFolder(\\\"99-Temp\\\")\"]\n",
 		} {
 			t.Run(name, func(t *testing.T) {
-				got := renderViewBody(describeViewVault(t, "n.yaml", body))
+				got := renderViewBody(describeViewVault(t, "n.view", body))
 				if strings.Contains(got, "every record of this type") {
 					t.Fatalf("%s constrains what this view returns, and the description says it returns every record.\nrendered:\n%s", name, got)
 				}
@@ -627,7 +627,7 @@ func TestDescribeViews_PopulatedKeysReadTheGeneratedTypeNotATranscription(t *tes
 // MUTATION: delete the `kind` branch or the `parts` branch in
 // renderViewClauses — the matching assertion below fails by name.
 func TestDescribeViews_KindAndPartsAreRendered(t *testing.T) {
-	v := describeViewVault(t, "stacked.yaml", `
+	v := describeViewVault(t, "stacked.view", `
 name: stacked
 type: widget
 kind: summary

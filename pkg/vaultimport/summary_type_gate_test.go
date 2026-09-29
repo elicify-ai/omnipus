@@ -240,7 +240,7 @@ views:
 	if costProp.Type != records.TypeText {
 		t.Fatalf("this fixture only tests what it means to test while `cost` reads as TEXT; it read as %s, for which sum may well be defined", costProp.Type)
 	}
-	views, viewRep, err := records.LoadViews(root, schemas)
+	views, viewRep, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}

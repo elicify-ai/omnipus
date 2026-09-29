@@ -350,10 +350,10 @@ func TestDescribeViews_UnusableViewIsMarkedInTheListing(t *testing.T) {
 	writeUnderMarker(t, root, "records", "widget.yaml", describeViewWidgetSchema)
 	schemas, _, err := records.LoadSchemas(root)
 	require.NoError(t, err)
-	writeUnderMarker(t, root, "views", "twice.yaml",
+	writeCollectionView(t, root, "twice.view",
 		"name: twice\ntype: widget\ndisabled: true\nuntranslated:\n  - 'file.inFolder(\"99-Temp\")'\n")
-	writeUnderMarker(t, root, "views", "plain.yaml", "name: plain\ntype: widget\n")
-	views, report, err := records.LoadViews(root, schemas)
+	writeCollectionView(t, root, "plain.view", "name: plain\ntype: widget\n")
+	views, report, err := loadTestCollectionViews(t, root, schemas)
 	require.NoError(t, err)
 	require.Truef(t, report.OK(), "the fixture views were rejected: %v", report.Rejections)
 

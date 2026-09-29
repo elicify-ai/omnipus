@@ -200,9 +200,22 @@ func TestLibraryContentPut_IndexRefreshFailureIsHonestAboutCompleteness(t *testi
 	}
 }
 
+// loadSavedCollectionViews follows the real collection discovery path rather
+// than selecting output files by hand. A writer using the retired directory
+// must not produce a false green here.
+func loadSavedCollectionViews(t *testing.T, path string, schemas *records.SchemaSet) (*records.ViewSet, *records.ViewLoadReport, error) {
+	t.Helper()
+	fsys := knowledge.OSLinkFS()
+	root, err := knowledge.NewCollectionRoot(fsys, path)
+	if err != nil {
+		t.Fatalf("collection root %s: %v", path, err)
+	}
+	return knowledge.LoadViewsForCollection(fsys, root, schemas)
+}
+
 // TestLibraryContentPut_BaseSaveReDerivesViews — D-119's web half: PUT a
 // `.base` inside a knowledge base through the Library text door, and the raw
-// bytes must become the view YAMLs an import would have written — the file
+// bytes must become a discoverable view an import would have written — the file
 // loads as a view with `source` naming the base, instead of the save being
 // write-only.
 func TestLibraryContentPut_BaseSaveReDerivesViews(t *testing.T) {
@@ -224,7 +237,7 @@ views:
 
 	set, _, err := records.LoadSchemas(vault)
 	require.NoError(t, err)
-	vs, report, err := records.LoadViews(vault, set)
+	vs, report, err := loadSavedCollectionViews(t, vault, set)
 	require.NoError(t, err)
 	require.True(t, report.OK(), "the re-derived views must load cleanly: %+v", report.Rejections)
 
@@ -265,7 +278,7 @@ views:
 
 	set, _, err := records.LoadSchemas(vault)
 	require.NoError(t, err)
-	vs, _, err := records.LoadViews(vault, set)
+	vs, _, err := loadSavedCollectionViews(t, vault, set)
 	require.NoError(t, err)
 	_, ok := vs.Get("projects--open")
 	assert.True(t, ok, "the previously derived view must survive the broken edit")

@@ -214,7 +214,7 @@ func TestLayout_WrittenViewStillLoads(t *testing.T) {
 			if err != nil {
 				t.Fatalf("loading schemas: %v", err)
 			}
-			_, viewRep, err := records.LoadViews(root, schemas)
+			_, viewRep, err := loadImportedViews(t, root, schemas)
 			if err != nil {
 				t.Fatalf("loading views: %v", err)
 			}

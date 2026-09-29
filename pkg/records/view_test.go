@@ -99,7 +99,7 @@ property_config:
   state:
     display_name: Stage
 `)
-	set, report, err := LoadViews(root, schemas)
+	set, report, err := loadViewFixtures(t, root, schemas, "by-state.view")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestView_UnknownKeyIsRefusedNotDropped(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root, schemas := viewFixtureSchemas(t, "")
 			root = writeVaultView(t, root, "typo.yaml", tc.body)
-			set, report, err := LoadViews(root, schemas)
+			set, report, err := loadViewFixtures(t, root, schemas, "typo.yaml")
 			if err != nil {
 				t.Fatalf("LoadViews: %v", err)
 			}
@@ -236,7 +236,7 @@ func TestView_DuplicateNameRejectsBothAndNamesBothPaths(t *testing.T) {
 	root = writeVaultView(t, root, "a.view", body)
 	root = writeVaultView(t, root, "b.view", body)
 
-	set, report, err := LoadViews(root, schemas)
+	set, report, err := loadViewFixtures(t, root, schemas, "a.view", "b.view")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestView_ValidationAgainstSchemas(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root, schemas := viewFixtureSchemas(t, "")
 			root = writeVaultView(t, root, "v.yaml", tc.body)
-			set, report, err := LoadViews(root, schemas)
+			set, report, err := loadViewFixtures(t, root, schemas, "v.yaml")
 			if err != nil {
 				t.Fatalf("LoadViews: %v", err)
 			}
@@ -341,7 +341,7 @@ func TestView_ValidationAgainstSchemas(t *testing.T) {
 // asserted rather than assumed.
 func TestView_ValidationIsSkippedWithoutSchemas(t *testing.T) {
 	root := writeVaultView(t, "", "v.yaml", "name: v\ntype: gadget\ngrouping: [{property: colour}]\n")
-	set, report, err := LoadViews(root, nil)
+	set, report, err := loadViewFixtures(t, root, nil, "v.yaml")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestView_ValidationIsSkippedWithoutSchemas(t *testing.T) {
 // ways are two views, and folding here would silently make them one.
 func TestView_LookupIsExactNotFolded(t *testing.T) {
 	root := writeVaultView(t, "", "a.yaml", "name: Open-Deals\ntype: widget\n")
-	set, _, err := LoadViews(root, nil)
+	set, _, err := loadViewFixtures(t, root, nil, "a.yaml")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}

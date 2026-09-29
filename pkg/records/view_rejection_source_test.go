@@ -17,7 +17,7 @@ func TestViewRejection_CarriesTheDeclaredSource(t *testing.T) {
 		"name: invoices--broken\ntype: widget\ngroup-by: colour\nsource: CRM/Invoices.base\n")
 	_, schemas := viewFixtureSchemas(t, root)
 
-	set, report, err := LoadViews(root, schemas)
+	set, report, err := loadViewFixtures(t, root, schemas, "invoices--broken.yaml")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestViewRejection_AuthoredViewHasNoSource(t *testing.T) {
 		"name: hand-written\ntype: widget\ngroup-by: colour\n")
 	_, schemas := viewFixtureSchemas(t, root)
 
-	_, report, err := LoadViews(root, schemas)
+	_, report, err := loadViewFixtures(t, root, schemas, "hand-written.yaml")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestViewRejection_DuplicateGroupWithMixedSourcesIsAttributedToNoBase(t *tes
 		"name: clash\ntype: widget\nsource: CRM/Deals.base\n")
 	_, schemas := viewFixtureSchemas(t, root)
 
-	_, report, err := LoadViews(root, schemas)
+	_, report, err := loadViewFixtures(t, root, schemas, "one.yaml", "two.yaml")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestViewRejection_DuplicateGroupWithOneSourceIsAttributedToIt(t *testing.T)
 		"name: clash\ntype: widget\nsource: CRM/Invoices.base\n")
 	_, schemas := viewFixtureSchemas(t, root)
 
-	_, report, err := LoadViews(root, schemas)
+	_, report, err := loadViewFixtures(t, root, schemas, "one.yaml", "two.yaml")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}

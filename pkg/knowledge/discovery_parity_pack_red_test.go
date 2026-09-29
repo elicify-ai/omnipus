@@ -12,8 +12,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
 // TestDiscovery_SkipsControlDirsButIndexesDotFolders is TDD Plan test 33
@@ -119,7 +117,6 @@ func TestWriteView_SwappedSymlinkReadRefused(t *testing.T) {
 // capped/rejected.
 func TestDiscovery_RefusesOversizeViewFile(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(records.ViewsDir(root), 0o755))
 
 	// 256 KiB is D-SIZECAP's own stated floor; well past it so the assertion
 	// cannot be defeated by an off-by-one in whatever cap eventually ships.
@@ -128,9 +125,9 @@ func TestDiscovery_RefusesOversizeViewFile(t *testing.T) {
 		padding[i] = '#'
 	}
 	body := "name: too-big\nlabel: \"" + string(padding) + "\"\n"
-	require.NoError(t, os.WriteFile(filepath.Join(records.ViewsDir(root), "too-big.yaml"), []byte(body), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "too-big.view"), []byte(body), 0o600))
 
-	set, report, err := records.LoadViews(root, nil)
+	set, report, err := loadTestCollectionViews(t, root, nil)
 	require.NoError(t, err)
 
 	tooLarge := false

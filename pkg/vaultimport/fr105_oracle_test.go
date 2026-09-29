@@ -297,7 +297,7 @@ func TestImport_UntranslatableFilterDisablesNeverBroadens(t *testing.T) {
 	if !schemaRep.OK() {
 		t.Fatalf("the importer wrote schemas the real loader rejects: %v", schemaRep.Rejections)
 	}
-	views, viewRep, err := records.LoadViews(root, schemas)
+	views, viewRep, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("reloading the views this run wrote: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestImport_EveryProducedViewIsCoveredByTheOracle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reloading schemas: %v", err)
 	}
-	views, _, err := records.LoadViews(root, schemas)
+	views, _, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("reloading views: %v", err)
 	}

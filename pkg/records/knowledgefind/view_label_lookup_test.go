@@ -35,10 +35,9 @@ import (
 // ("Due within a week") differs from its slug ("due-soon"), queried both
 // ways.
 //
-// deadlineVault (file_and_formula_test.go) already writes exactly this
-// shape through the PRODUCTION loader (records.LoadViews +
-// records.NewViewFindLoader), so no fixture here can silently diverge from
-// what a real vault stores.
+// deadlineVault (file_and_formula_test.go) writes exactly this shape and
+// decodes its file bytes through records.LoadViewPaths before passing the
+// result to records.NewViewFindLoader.
 func TestKnowledgeFind_ResolvesSavedViewByDisplayLabel(t *testing.T) {
 	deps, _ := deadlineVault(t)
 	deps.Now = time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
@@ -115,7 +114,7 @@ properties:
 			t.Fatalf("WriteFile(%s): %v", slug, err)
 		}
 	}
-	views, viewReport, err := records.LoadViews(root, set)
+	views, viewReport, err := loadFindViewFixtures(t, root, set, "deadlines-a.yaml", "deadlines-b.yaml")
 	if err != nil {
 		t.Fatalf("LoadViews: %v", err)
 	}

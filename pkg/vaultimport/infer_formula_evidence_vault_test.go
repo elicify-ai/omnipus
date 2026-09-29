@@ -201,7 +201,7 @@ views:
 	if !schemaRep.OK() {
 		t.Fatalf("the importer wrote schemas the real loader rejects: %v", schemaRep.Rejections)
 	}
-	views, viewRep, err := records.LoadViews(root, schemas)
+	views, viewRep, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("loading the views this run wrote: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestFixtureVault_FormulaEvidencedViewsNeverBroadenAgainstTheOracle(t *testi
 	if err != nil {
 		t.Fatalf("loading schemas: %v", err)
 	}
-	views, viewRep, err := records.LoadViews(root, schemas)
+	views, viewRep, err := loadImportedViews(t, root, schemas)
 	if err != nil {
 		t.Fatalf("loading views: %v", err)
 	}
