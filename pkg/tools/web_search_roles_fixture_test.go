@@ -260,9 +260,11 @@ func (f *rolesSearchFixture) runCtx(ctx context.Context, args map[string]any) *T
 // network-class failure for any HTTP client that dials it.
 //
 // It does NOT use httptest.NewServer-then-Close: that pattern frees the OS
-// port back into the ephemeral pool while the test keeps using the URL, and
-// pkg/tools runs many httptest servers under t.Parallel() elsewhere in this
-// package — one of them can rebind that exact port before this test's own
+// port back into the machine-wide ephemeral pool while the test keeps using
+// the URL. `go test ./...` runs many package test binaries as separate OS
+// processes concurrently, and any of those other processes' own listeners
+// (an httptest server in a different package, or anything else on the
+// machine) can be handed that exact freed port before this test's own
 // request lands, turning "network failure" into "200 from a stranger's
 // server" (observed in CI: PR #1000 race run 36462420598, job
 // 109064538871 — TestR8_NoFallbackInvented_WhenDDGDisabled saw a live tavily
