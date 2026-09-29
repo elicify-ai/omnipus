@@ -107,14 +107,6 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 
 `search_depth` is a ceiling, not a fixed value. When an agent's `search_web` call asks for a `depth` (`low`/`medium`/`high`, mapped to Tavily's `fast`/`basic`/`advanced`), Omnipus clamps it down to this ceiling if it asks for more — it is never raised above it. When the agent's call carries no `depth` at all, Omnipus searches at this ceiling directly. A brand-new install ships `basic` (Tavily's cheapest tier); if the key is ever missing or empty — including on an install upgrading from before this setting existed — Omnipus falls back to `advanced`, the depth the code used unconditionally before this release, so an existing install's search depth (and its Tavily bill) does not change on upgrade. Deeper searches cost more per call, so this is also the operator's cost ceiling for Tavily. Env var: `OMNIPUS_TOOLS_WEB_TAVILY_SEARCH_DEPTH`.
 
-### SearXNG
-
-| Config        | Type   | Default                 | Description               |
-|---------------|--------|-------------------------|---------------------------|
-| `enabled`     | bool   | false                   | Enable SearXNG search     |
-| `base_url`    | string | `http://localhost:8888` | SearXNG instance URL      |
-| `max_results` | int    | 5                       | Maximum number of results |
-
 ### GLM Search
 
 | Config          | Type   | Default                                           | Description                              |

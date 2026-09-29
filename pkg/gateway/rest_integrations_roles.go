@@ -215,6 +215,15 @@ func (a *restAPI) buildIntegrationResponse(cfg *config.Config) (gen.IntegrationP
 			entry.Active = &active
 			entry.Fallback = &isFallback
 			entry.FallbackAutomatic = &fallbackAuto
+			// Only Tavily's depth cap is surfaced in this response. Providers
+			// without a depth axis, and voice rows, omit the optional field.
+			if def, ok := config.SearchProviderDefByID(d.id); ok && def.HonoursDepth && d.id == config.SearchProviderTavily {
+				depth := cfg.Tools.Web.Tavily.SearchDepth
+				if depth == "" {
+					depth = "advanced" // The same legacy-empty cap as TavilySearchProvider.effectiveDepth.
+				}
+				entry.SearchDepthCap = &depth
+			}
 			resp.Search = append(resp.Search, entry)
 		} else {
 			active := d.id == activeVoice
@@ -454,8 +463,8 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 		}
 	}
 
-	// Keyless search providers with prerequisites (SearXNG base_url) must
-	// have those set before activation — today's check, unchanged.
+	// Keyless search providers with prerequisites must have them set
+	// before activation.
 	if def.kind == "search" && !def.requiresKey && body.Active != nil && *body.Active {
 		if ok, reason := a.integrationActivationReady(a.agentLoop.GetConfig(), def); !ok {
 			jsonErr(w, http.StatusBadRequest, reason)
@@ -590,8 +599,6 @@ func applySearchIntegrationRoles(m map[string]any, def integrationDef, write int
 		switch def.id {
 		case "duckduckgo":
 			mapChild(web, "duckduckgo")["enabled"] = true
-		case "searxng":
-			mapChild(web, "searxng")["enabled"] = true
 		default:
 			if sec, ok := searchRefSectionByID(def.id); ok {
 				mapChild(web, sec)["enabled"] = true

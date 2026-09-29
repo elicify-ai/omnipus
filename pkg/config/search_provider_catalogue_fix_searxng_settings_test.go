@@ -6,11 +6,15 @@ package config
 // tests exercise the real catalogue and config load/save/migration boundaries.
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 func TestFixF2_SearXNGAbsentFromCatalogueAndConfigType(t *testing.T) {
@@ -163,6 +167,134 @@ func TestFixF2_UnmigratedSearXNGOnlyChoosesUsableDuckDuckGo(t *testing.T) {
 	}
 }
 
+// The founder's 2026-09-29 ruling separates an UNMIGRATED file from the
+// already-migrated case below: load first scrubs the removed provider without
+// writing a new marker, then the existing #944 roles migration decides the
+// default. This fixture has no keyed search providers, so credential injection
+// between load and migration cannot affect the winner. A second boot is a
+// byte-identical no-op. Unlike the other unmigrated fixtures, this one pins an
+// EXPLICIT obsolete default, not just a legacy searxng provider block.
+func TestFixF2_UnmigratedExplicitSearXNGDefaultUsesNormalMigration(t *testing.T) {
+	path := webRolesTestConfig(t, `{
+		"enabled": true,
+		"default_provider": "searxng",
+		"fallback_provider": "none",
+		"duckduckgo": {"enabled": true},
+		"searxng": {"enabled": true, "base_url": "https://searx.example", "api_key_ref": "OLD_SEARXNG_KEY"}
+	}`)
+	before := readWebSection(t, path)
+	if got := before["default_provider"]; got != "searxng" {
+		t.Fatalf("fixture must explicitly name the retired default, got %v", got)
+	}
+	if _, present := before["roles_migrated_at"]; present {
+		t.Fatal("fixture already has a roles_migrated_at marker; normal migration could not be tested")
+	}
+
+	cfg, err := LoadConfig(path) // Gateway boot: cleanup during config load.
+	if err != nil {
+		t.Fatalf("LoadConfig with unmarked SearXNG default: %v", err)
+	}
+	afterLoad, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config after load-time cleanup: %v", err)
+	}
+	if bytes.Contains(bytes.ToLower(afterLoad), []byte("searxng")) {
+		t.Errorf("load-time cleanup left removed SearXNG on disk: %s", afterLoad)
+	}
+	if _, present := readWebSection(t, path)["roles_migrated_at"]; present {
+		t.Error("load-time SearXNG cleanup wrote roles_migrated_at; the existing #944 migration owns that marker")
+	}
+
+	MigrateWebSearchRoles(cfg, path, nil) // Gateway boot: after config load (and credential injection).
+	afterFirst, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config after first boot: %v", err)
+	}
+	if bytes.Contains(bytes.ToLower(afterFirst), []byte("searxng")) {
+		t.Errorf("first boot left removed SearXNG on disk after roles migration: %s", afterFirst)
+	}
+	web := readWebSection(t, path)
+	rawDefault, present := web["default_provider"]
+	if !present {
+		rawDefault = "" // An absent default is the roles-undecided state.
+	}
+	defaultID, ok := rawDefault.(string)
+	if !ok {
+		t.Errorf("migrated default_provider must be a string or absent, got %T (%v)", rawDefault, rawDefault)
+	} else {
+		if defaultID == "searxng" || (defaultID != "" && !cfg.Tools.Web.UsableSearchProvider(defaultID)) {
+			t.Errorf("migration chose default_provider %q; removed SearXNG is forbidden and any other non-empty default must be usable", defaultID)
+		}
+		if got := cfg.Tools.Web.DefaultProvider; got != defaultID {
+			t.Errorf("first boot memory default_provider = %q, disk = %q", got, defaultID)
+		}
+	}
+	if got := web["fallback_provider"]; got != "none" {
+		t.Errorf("normal roles migration fallback_provider = %v, want none", got)
+	}
+	firstMarker := webRolesMarkerOrFail(t, path)
+	assertRFC3339(t, firstMarker)
+
+	secondCfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig on second boot: %v", err)
+	}
+	MigrateWebSearchRoles(secondCfg, path, nil)
+	afterSecond, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config after second boot: %v", err)
+	}
+	if !bytes.Equal(afterFirst, afterSecond) {
+		t.Errorf("second boot changed config.json instead of leaving the migrated file byte-identical:\nfirst: %s\nsecond: %s", afterFirst, afterSecond)
+	}
+	if got := secondCfg.Tools.Web.DefaultProvider; got != defaultID {
+		t.Errorf("second boot changed in-memory default_provider from %q to %q", defaultID, got)
+	}
+	if got := webRolesMarkerOrFail(t, path); got != firstMarker {
+		t.Errorf("second boot changed roles_migrated_at from %q to %q", firstMarker, got)
+	}
+}
+
+// captureLoggerWarnings reads the production logger's JSON file sink. Tests
+// using it must stay serial because EnableFileLogging changes global state.
+func captureLoggerWarnings(t *testing.T) func() string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "gateway.log")
+	if err := logger.EnableFileLogging(path); err != nil {
+		t.Fatalf("enable file logging: %v", err)
+	}
+	t.Cleanup(logger.DisableFileLogging)
+	return func() string {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read logger output: %v", err)
+		}
+		return string(data)
+	}
+}
+
+func searxngWarningMessages(t *testing.T, output string) []string {
+	t.Helper()
+	var warnings []string
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		var event struct {
+			Level   string `json:"level"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("decode logger output %q: %v", line, err)
+		}
+		if event.Level == "warn" && strings.Contains(strings.ToLower(event.Message), "searxng") {
+			warnings = append(warnings, event.Message)
+		}
+	}
+	return warnings
+}
+
 // A file with roles_migrated_at will never re-run MigrateWebSearchRoles. The
 // normal load must instead retire stale role strings explicitly, persist that
 // repair immediately, and explain it once. A removed DEFAULT is deliberately
@@ -191,12 +323,19 @@ func TestFixF2_AlreadyMigratedSearXNGRolesAreClearedOnLoad(t *testing.T) {
 			if before := readWebSection(t, path); before["default_provider"] != tc.defaultID || before["fallback_provider"] != tc.fallbackID {
 				t.Fatalf("stale-role fixture does not carry the requested roles: %v", before)
 			}
-			logs := captureWarnings(t)
+			readLogs := captureLoggerWarnings(t)
 			cfg, err := LoadConfig(path)
 			if err != nil {
 				t.Fatalf("already-migrated config with removed roles must load: %v", err)
 			}
-			web := readWebSection(t, path) // ONE load, before any save or migration.
+			web := readWebSection(t, path) // Cleanup must finish during the first load, before roles migration.
+			loadBytes, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read config after first load: %v", err)
+			}
+			if bytes.Contains(bytes.ToLower(loadBytes), []byte("searxng")) {
+				t.Errorf("first load left removed SearXNG anywhere on disk: %s", loadBytes)
+			}
 			if got := cfg.Tools.Web.DefaultProvider; got != tc.wantDefault {
 				t.Errorf("in-memory default = %q, want %q", got, tc.wantDefault)
 			}
@@ -215,23 +354,60 @@ func TestFixF2_AlreadyMigratedSearXNGRolesAreClearedOnLoad(t *testing.T) {
 			if got := web["roles_migrated_at"]; got != "2026-09-01T12:00:00Z" {
 				t.Errorf("clearing stale roles changed the migration marker to %v", got)
 			}
-			var warnings []string
-			for _, line := range strings.Split(logs.String(), "\n") {
-				if strings.Contains(strings.ToLower(line), "searxng") {
-					warnings = append(warnings, line)
-				}
-			}
+			firstLog := readLogs()
+			warnings := searxngWarningMessages(t, firstLog)
 			if len(warnings) != 1 {
-				t.Fatalf("one clear warning must name removed SearXNG, got %d lines: %q", len(warnings), logs.String())
+				t.Errorf("one clear warning must name removed SearXNG, got %d lines: %q", len(warnings), firstLog)
 			}
-			warning := strings.ToLower(warnings[0])
-			if !strings.Contains(warning, "warn") || !strings.Contains(warning, "removed") {
-				t.Errorf("warning must say the configured provider was removed: %q", warnings[0])
-			}
-			for _, role := range tc.clearedRoles {
-				if !strings.Contains(warning, role) {
-					t.Errorf("warning does not identify cleared role %q: %q", role, warnings[0])
+			if len(warnings) > 0 {
+				warning := strings.ToLower(warnings[0])
+				if !strings.Contains(warning, "removed") {
+					t.Errorf("warning must say the configured provider was removed: %q", warnings[0])
 				}
+				for _, role := range tc.clearedRoles {
+					if !strings.Contains(warning, role) {
+						t.Errorf("warning does not identify cleared role %q: %q", role, warnings[0])
+					}
+				}
+			}
+
+			// The gateway calls this after load and credential injection. A
+			// non-empty marker must make the normal migration a no-op, even
+			// when cleanup deliberately left the default undecided.
+			MigrateWebSearchRoles(cfg, path, nil)
+			afterFirst, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read config after first boot: %v", err)
+			}
+			if !bytes.Equal(loadBytes, afterFirst) {
+				t.Errorf("roles migration rewrote an already-migrated config after cleanup:\nload: %s\nmigration: %s", loadBytes, afterFirst)
+			}
+
+			secondCfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatalf("LoadConfig on second boot: %v", err)
+			}
+			MigrateWebSearchRoles(secondCfg, path, nil)
+			afterSecond, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read config after second boot: %v", err)
+			}
+			if !bytes.Equal(afterFirst, afterSecond) {
+				t.Errorf("second boot changed already-migrated config.json:\nfirst: %s\nsecond: %s", afterFirst, afterSecond)
+			}
+			if got := secondCfg.Tools.Web.DefaultProvider; got != tc.wantDefault {
+				t.Errorf("second boot silently replaced default_provider with %q, want %q", got, tc.wantDefault)
+			}
+			if got := secondCfg.Tools.Web.FallbackProvider; got != tc.wantFallback {
+				t.Errorf("second boot changed fallback_provider to %q, want %q", got, tc.wantFallback)
+			}
+			if got := readWebSection(t, path)["roles_migrated_at"]; got != "2026-09-01T12:00:00Z" {
+				t.Errorf("second boot changed the original migration marker to %v", got)
+			}
+			secondLog := readLogs()
+			searxngWarningsAfterSecond := searxngWarningMessages(t, secondLog)
+			if len(searxngWarningsAfterSecond) != 1 {
+				t.Errorf("cleanup warning must occur once across both boots, got %d SearXNG lines: %q", len(searxngWarningsAfterSecond), secondLog)
 			}
 		})
 	}

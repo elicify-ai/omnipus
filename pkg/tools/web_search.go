@@ -73,7 +73,7 @@ func searchProviderCatalogueIDs() []string {
 }
 
 // searchProviderKeyed reports whether an id needs an API key to be usable.
-// SearXNG needs a base URL instead, DuckDuckGo nothing at all. Derived from
+// Catalogue-defined base-URL providers need a URL; DuckDuckGo needs nothing. Derived from
 // the catalogue (D15).
 func searchProviderKeyed(id string) bool {
 	def, ok := config.SearchProviderDefByID(id)
@@ -83,8 +83,8 @@ func searchProviderKeyed(id string) bool {
 // unusableReason maps a not-currently-usable id onto the spec's fixed reason
 // vocabulary (spec 338–341): "no API key", "switched off", "unknown id".
 // Enabled-but-keyless is "no API key"; anything else not usable is "switched
-// off" (a SearXNG enabled with an empty base URL reports "switched off" too —
-// the vocabulary has no separate word for a missing base URL; flagged).
+// off" (a catalogue-defined base-URL provider with a missing URL also
+// reports "switched off"; there is no separate vocabulary for that).
 func unusableReason(cfg *config.WebToolsConfig, id string) string {
 	if !slices.Contains(searchProviderCatalogueIDs(), id) {
 		return "unknown id"
@@ -1841,19 +1841,6 @@ func (p *BraveSearchProvider) SearchWithCaps(ctx context.Context, req searchRequ
 		return strings.Join(lines, "\n"), nil
 	}
 	return "", fmt.Errorf("all api keys failed, last error: %w", lastErr)
-}
-
-// honoursDepth/honoursSiteFilters: SearXNG supports neither (matrix).
-func (p *SearXNGSearchProvider) honoursDepth() bool {
-	return catalogueHonoursDepth(config.SearchProviderSearXNG)
-}
-func (p *SearXNGSearchProvider) honoursSiteFilters() bool {
-	return catalogueHonoursSiteFilters(config.SearchProviderSearXNG)
-}
-
-// SearchWithCaps delegates to the legacy search (base-URL aware already).
-func (p *SearXNGSearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
-	return p.Search(ctx, req.query, req.count, req.rangeFilter)
 }
 
 // honoursDepth/honoursSiteFilters: Baidu supports neither (matrix).
