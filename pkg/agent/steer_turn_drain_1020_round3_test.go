@@ -302,12 +302,70 @@ func TestSteeredTurnDrain1020Round3_DeliveryFailureConsumesLateSteerAsSameGenera
 // own terminal delivery, in the same committing window S1 exercises. It
 // must never be refused, and it must never be accepted-yet-stranded
 // (accepted with no error while the record ends up with no consumer).
+//
+// Squad-lead review finding (receipt 1020r4c/s3-fake-wake-baseline.log):
+// the ORIGINAL fixture called EnqueueSteeringWake with a fabricated
+// message id ("round3-s3-descendant-wake") that was never stored anywhere.
+// EnqueueSteeringWake's own doc comment says it "queues an upward wake
+// into an already-live turn while RETAINING THE INBOX MESSAGE IDENTITY" —
+// a wake is only the in-memory nudge for an entry that is already durable
+// in the message inbox; the durable-wake fallback this test exercises has
+// nothing to redeliver when no such entry exists, so the old fixture
+// passed while proving nothing. Production's real writer, on the real
+// upward path, is steer_audience.go::SteerUpwardDeliverer.Deliver's
+// `res, appendErr := inbox.Append(ownerKey, msg)` (line ~390) — it durably
+// stores the descendant's message BEFORE the sibling call at line ~472
+// enqueues the wake using res.MessageID. This fixture now does the same:
+// append a real wake-eligible entry into the CHILD's own inbox (child is
+// the "owner" for its own descendant's message) via the same
+// MessageInboxStore.Append, then enqueue the wake with THAT entry's real
+// message id.
+//
+// Observable chosen for "never stranded": deliverEntryIsAcked
+// (steer_audience.go) is production's own primitive for "is this durable
+// entry still waiting for a consumer" — Drain still returning it means
+// unacked; not returning it means acked. Right after the terminal commit
+// the entry must still be unacked (proves the durable copy survived — only
+// the round-4 correction's in-memory drop is expected here, never a
+// durable loss). Then, bounded, this test waits to see whether ANYTHING
+// gives the entry a consumer: either the child is revived to a new
+// generation (whose own turn would then be the consumer), or the entry
+// becomes acked by some other route. processFinishingItems's wake branch
+// (pkg/agent/steer_completion.go) currently does neither — it only logs —
+// so this is expected to stay RED until the backend-lead wires an actual
+// durable-wake fallback for the post-finish case; the failure names that
+// exact gap rather than a generic mismatch.
 func TestSteeredTurnDrain1020Round3_DescendantWakeDuringOwnTerminalDeliveryNeverStranded(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
 	child := launchRunningChild(t, al, rootID, "round3-s3-wake")
+	startGeneration := child.Generation
+
+	inbox := al.GetMessageInboxStore()
+	const descendantSessionID = "round3-s3-grandchild"
+	var descendantMsg generated.SessionMessage
+	if err := descendantMsg.FromSessionMessageHandback(generated.SessionMessageHandback{
+		MessageId:      descendantSessionID + ":1:final",
+		SessionId:      descendantSessionID,
+		CreatedAt:      time.Now().UTC(),
+		Depth:          2,
+		SenderIdentity: testDefaultAgentID,
+		Mode:           generated.SessionMessageHandbackModeFinal,
+		ResultSoFar:    "ROUND3-S3-DESCENDANT-WAKE",
+		Artifacts:      []string{},
+		OpenQuestions:  []string{},
+	}); err != nil {
+		t.Fatalf("FromSessionMessageHandback(descendant entry): %v", err)
+	}
+	// child is the OWNER here: it is the recipient of its own descendant's
+	// upward message, exactly mirroring inbox.Append(ownerKey, msg) at
+	// steer_audience.go::SteerUpwardDeliverer.Deliver.
+	appendRes, appendErr := inbox.Append(child.SessionID, descendantMsg)
+	if appendErr != nil {
+		t.Fatalf("Append(descendant inbox entry): %v", appendErr)
+	}
 
 	var hookErr error
 	var hookCalls int
@@ -315,7 +373,7 @@ func TestSteeredTurnDrain1020Round3_DescendantWakeDuringOwnTerminalDeliveryNever
 		hookCalls++
 		hookErr = al.EnqueueSteeringWake(
 			sessionID, testDefaultAgentID, sessionID,
-			"round3-s3-descendant-wake",
+			appendRes.MessageID,
 			providers.Message{Role: "user", Content: "ROUND3-S3-DESCENDANT-WAKE"},
 		)
 	}
@@ -328,16 +386,55 @@ func TestSteeredTurnDrain1020Round3_DescendantWakeDuringOwnTerminalDeliveryNever
 		t.Fatalf("completeStateWriteTestHook calls = %d, want exactly 1", hookCalls)
 	}
 	if hookErr != nil {
-		t.Errorf("BLOCKED: round-3 spec item 2/S3 (a descendant's wake arriving during the child's own terminal delivery must be ACCEPTED, never refused) is not implemented — steeringQueue.pushItemScopeChecked (pkg/agent/steering.go) refused this wake (%v) because steeringTerminalTransition.committing was already true", hookErr)
+		t.Fatalf("BLOCKED: round-3 spec item 2/S3 (a descendant's wake arriving during the child's own terminal delivery must be ACCEPTED, never refused) is not implemented — steeringQueue.pushItemScopeChecked (pkg/agent/steering.go) refused this wake (%v)", hookErr)
 	}
 	rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
-	if hookErr == nil && rec.Terminal() {
-		if got := al.pendingSteeringCountForScope(child.SessionID); got != 0 {
-			t.Errorf("descendant wake accepted (no error) but %d item(s) remain queued on a now-terminal child with no consumer — round-3 spec S3 requires it never be lost, but nothing revives or drains a post-finish wake today", got)
+	if !rec.Terminal() {
+		t.Fatalf("child did not reach terminal; state=%q", rec.State)
+	}
+	if got := al.pendingSteeringCountForScope(child.SessionID); got != 0 {
+		t.Errorf("descendant wake accepted (no error) but %d item(s) remain queued in the in-memory steering queue on a now-terminal child — round-3 spec S3 requires it never be lost", got)
+	}
+
+	// The durable copy must survive the in-memory drop: right after the
+	// terminal commit the entry is still unacked (a consumer has not run
+	// yet), never silently vanished.
+	acked, ackedErr := deliverEntryIsAcked(inbox, child.SessionID, descendantSessionID, appendRes.MessageID)
+	if ackedErr != nil {
+		t.Fatalf("deliverEntryIsAcked (immediately after commit): %v", ackedErr)
+	}
+	if acked {
+		t.Fatalf("descendant entry %q reported ACKED immediately after the terminal commit — no consumer has run yet, so this can only mean the durable copy itself was lost, not merely the in-memory one", appendRes.MessageID)
+	}
+
+	// Bounded wait for a real consumer: either the child is revived to a
+	// new generation (whose own turn would then be the consumer), or the
+	// entry becomes acked by some other route. Never a sleep-as-assertion
+	// — matches the codebase's own poll idiom
+	// (steer_boundary_containment_test.go::launchAndAwaitSteeredChild).
+	al.drainSteeredTurns(3 * time.Second)
+	deadline := time.Now().Add(3 * time.Second)
+	var revived bool
+	for time.Now().Before(deadline) {
+		rec, err = al.GetSessionLifecycleStore().Load(child.SessionID)
+		if err != nil {
+			t.Fatalf("Load(child) while waiting for a consumer: %v", err)
 		}
+		revived = rec.Generation != startGeneration
+		acked, ackedErr = deliverEntryIsAcked(inbox, child.SessionID, descendantSessionID, appendRes.MessageID)
+		if ackedErr != nil {
+			t.Fatalf("deliverEntryIsAcked (while waiting for a consumer): %v", ackedErr)
+		}
+		if revived || acked {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !revived && !acked {
+		t.Fatalf("BLOCKED: round-3 spec S3's durable-wake fallback for a post-finish wake is not implemented — processFinishingItems (pkg/agent/steer_completion.go) drops the in-memory wake with only an INFO log line (\"post-finish wake on a terminalised child\") and never revives the child, wakes anyone, or otherwise arranges a consumer; descendant entry %q under owner %q remains durably stored (proven above) but is permanently unacknowledged with no consumer — generation stayed %d, acked=%v", appendRes.MessageID, child.SessionID, rec.Generation, acked)
 	}
 }
 
