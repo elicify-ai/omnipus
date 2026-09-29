@@ -765,6 +765,38 @@ func (h *PathHandle) Open() (fs.File, error) {
 	return f, nil
 }
 
+var errReadSourceNotRegular = errors.New("not a regular file")
+
+// OpenNonBlockingRead opens an ordinary read_file target once through the
+// already-authorized handle, then checks the kind on that same descriptor.
+// Directories remain openable so the existing directory-read error is kept;
+// a FIFO or device is refused without ever blocking the turn.
+func (h *PathHandle) OpenNonBlockingRead() (fs.File, error) {
+	var f *os.File
+	var err error
+	if h.root == nil {
+		if err := h.recheckUnrestrictedCarveOut(); err != nil {
+			return nil, err
+		}
+		f, err = os.OpenFile(h.abs, regularReadOpenFlags(), 0)
+	} else {
+		f, err = h.root.OpenFile(h.rel, regularReadOpenFlags(), 0)
+	}
+	if err != nil {
+		return nil, wrapOpenErr(err)
+	}
+	info, statErr := f.Stat()
+	if statErr != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("failed to stat opened file: %w", statErr)
+	}
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errReadSourceNotRegular
+	}
+	return f, nil
+}
+
 // OpenRegularNonBlocking opens through the already-authorized anchored handle
 // and verifies the opened object. On Unix the platform flags include
 // O_NONBLOCK, so a concurrent replacement with a FIFO cannot block the turn.

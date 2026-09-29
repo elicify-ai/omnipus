@@ -626,10 +626,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if _, imageNamed, _ := imageFormat(nil, path); imageNamed {
 		file, err = handle.OpenRegularNonBlocking()
 	} else {
-		file, err = handle.Open()
+		file, err = handle.OpenNonBlockingRead()
 	}
 	if err != nil {
-		if errors.Is(err, ErrImageSourceNotRegular) {
+		if errors.Is(err, ErrImageSourceNotRegular) || errors.Is(err, errReadSourceNotRegular) {
 			return ErrorResult(err.Error())
 		}
 		// Emit a path.access_denied audit entry on workspace-guard rejections.
