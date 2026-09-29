@@ -939,7 +939,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// striped mutex with their parent, making a recursive List deadlock.
 		lifecycle := gl.al.GetSessionLifecycleStore()
 		if lifecycle == nil {
-			gl.al.goalSetCompletionPhase(gl.rec.GoalID, goalCompletionWaitingDescendants)
+			gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
 			logger.WarnCF("agent", "goal: completion claim held because no lifecycle store is wired",
 				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID})
 			return
@@ -951,25 +951,26 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		publicationMu.Lock()
 		// Q2=B gate round 1 type-design finding 1: install-and-promote must
 		// be one critical section. The previous shape called
-		// goalSetCompletionPhase(waiting) then goalPromoteCompletionToAdjudicating
+		// an unconditional Waiting install then goalPromoteCompletionToAdjudicating
 		// across two lock acquisitions, which let a racing second claim
 		// downgrade an Adjudicating phase back to Waiting — its CAS then
 		// succeeded, the second claim scheduled its own adjudication, and
 		// two Judge calls landed for one goal. The install below uses the
 		// ONE transition primitive (goalInstallWaitingCompletion) and
-		// refuses to downgrade Adjudicating/ReevaluationDispatched; on
-		// refusal, the second claim exits silently so the first claim's
-		// dispatch is the only Judge call.
+		// refuses to downgrade Adjudicating; on refusal, the second claim
+		// coalesces with the first and is traced at INFO, leaving only the
+		// first Judge call.
 		installed := gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
 		publicationMu.Unlock()
 		if !installed {
-			// Either the phase was already Adjudicating (a Judge call is in
-			// flight — this is the second-claim race the type design
-			// finding names) or it was ReevaluationDispatched (a queued
-			// re-evaluation already scheduled the fresh-claim turn).
-			// Either way: the first claim already owns the round; this
-			// second claim returns without recording deferred work. The
-			// stale claim must never reach the Judge as well.
+			// The latest claim is durable, but adjudication already owns this
+			// round. A second claim must not schedule a second Judge call.
+			s := goalTriggers()
+			s.mu.Lock()
+			phase := s.completionPhase[gl.rec.GoalID]
+			s.mu.Unlock()
+			logger.InfoCF("agent", "goal: met claim coalesced into the in-flight adjudication",
+				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "phase": phase.String()})
 			return
 		}
 		blocked, blockErr := gl.al.hasRunningOrQueuedDescendant(gl.sessionID)

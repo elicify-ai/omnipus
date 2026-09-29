@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -117,27 +116,27 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		UserInitiated: wake == nil,
 	}
 	if wake == nil {
-		// Q2=B gate round 1 silent-failure-hunter finding 1: a queued
-		// dispatch's wake payload was stamped onto rec.PendingUserMessage
-		// by commitSteeredDispatchStateWithPendingMessage before the
-		// LifecycleQueued write. Use it as the turn's UserMessage so the
-		// re-evaluation prompt (or any other queued wake content) reaches
-		// the agent instead of the ORIGINAL launch instruction looked up
-		// from the transcript. Cleared here so a subsequent wake on the
-		// SAME record never replays it.
-		if rec.PendingUserMessage != "" {
-			opts.UserMessage = rec.PendingUserMessage
-			rec.PendingUserMessage = ""
+		// A queued promotion consumes ALL wake content in arrival order. Take
+		// the current list (not the earlier Load snapshot) and clear it in a
+		// single durable mutation BEFORE the turn can start. If that write
+		// fails, return an error: running while the prompts remain persisted
+		// would replay the same content on a later promotion.
+		if len(rec.PendingUserMessages) > 0 {
+			var pending []string
 			if persistErr := al.GetSessionLifecycleStore().Mutate(rec.SessionID, func(r *session.LifecycleRecord) error {
 				if r == nil {
-					return nil
+					return session.ErrLifecycleNotFound
 				}
-				r.PendingUserMessage = ""
+				if len(r.PendingUserMessages) == 0 {
+					return fmt.Errorf("steer: reconstruct %q: queued wakes disappeared before promotion", rec.SessionID)
+				}
+				pending = append([]string(nil), r.PendingUserMessages...)
+				r.PendingUserMessages = nil
 				return nil
 			}); persistErr != nil {
-				logger.WarnCF("agent", "steer: could not clear pending wake message after consumption (a duplicate promotion would replay the same content)",
-					map[string]any{"session_id": rec.SessionID, "error": persistErr.Error()})
+				return nil, fmt.Errorf("steer: reconstruct %q: consume queued wakes: %w", rec.SessionID, persistErr)
 			}
+			opts.UserMessage = strings.Join(pending, "\n\n")
 		} else {
 			entries, readErr := store.ReadTranscript(rec.SessionID)
 			if readErr != nil {

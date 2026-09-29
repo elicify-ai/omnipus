@@ -95,6 +95,8 @@ type SteerBootRecovery struct {
 	// DescendantTerminal re-runs the Q2 B quiet-subtree check after a boot
 	// repair actually lands a descendant's terminal lifecycle state.
 	DescendantTerminal func(sessionID string)
+	// orderSessionIDs lets tests force an adversarial visit order.
+	orderSessionIDs func([]string) []string
 }
 
 type bootSessionMessageEnvelope struct {
@@ -139,8 +141,37 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, id := range ids {
+	if r.orderSessionIDs != nil {
+		ids = r.orderSessionIDs(ids)
+	}
+	// Do not notify a pending owner while another session in this same sweep
+	// can still be interrupted. Keep the original receiver unchanged so direct
+	// callers of the repair helpers continue to notify inline.
+	var pendingTerminal []string
+	sweep := *r
+	if r.DescendantTerminal != nil {
+		sweep.DescendantTerminal = func(id string) {
+			pendingTerminal = append(pendingTerminal, id)
+		}
+	}
+	abortIfCancelled := func() error {
 		if err := ctx.Err(); err != nil {
+			// Firing any collected callback before every session is visited can
+			// revive an unvisited owner. Leave the durable terminal records for
+			// the next boot sweep and report every pending ID to the operator.
+			for _, pendingID := range pendingTerminal {
+				message := fmt.Sprintf("session %s descendant-terminal follow-up was deferred: boot recovery cancelled; retry at next boot", pendingID)
+				notice("deferred-terminal:"+pendingID, message)
+				if r.OperatorNotice == nil {
+					logger.WarnCF("agent", message, map[string]any{"session_id": pendingID, "error": err.Error()})
+				}
+			}
+			return err
+		}
+		return nil
+	}
+	for _, id := range ids {
+		if err := abortIfCancelled(); err != nil {
 			return err
 		}
 		// I-9 currently distinguishes a load error from a missing record, but
@@ -162,7 +193,7 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 		case steer.ClassOrdinaryRoot:
 			// Existing root boot recovery remains authoritative.
 		case steer.ClassSteered:
-			r.recoverSteered(ctx, id, notice)
+			sweep.recoverSteered(ctx, id, notice)
 		case steer.ClassLegacyDelegate:
 			r.failLegacy(id, notice)
 		case steer.ClassDamagedChild, steer.ClassInvalidEdge, steer.ClassUnreadable:
@@ -171,7 +202,15 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 			notice("refused:"+id, fmt.Sprintf("session %s refused at boot: unknown classification %q", id, class))
 		}
 	}
-	return nil
+	for len(pendingTerminal) > 0 {
+		if err := abortIfCancelled(); err != nil {
+			return err
+		}
+		id := pendingTerminal[0]
+		pendingTerminal = pendingTerminal[1:]
+		r.DescendantTerminal(id)
+	}
+	return abortIfCancelled()
 }
 
 func (r *SteerBootRecovery) sessionIDs() ([]string, error) {

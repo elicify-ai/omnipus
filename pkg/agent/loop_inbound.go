@@ -937,20 +937,13 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		gate := al.steerAdmission()
 		admitted, _, _ := gate.tryAdmit(sessionID, generation)
 		if !admitted {
-			// At the cap. The wake entry is deliberately left UNCONSUMED —
-			// no marker, no acknowledgement — so the turn the FIFO promotion
-			// eventually starts (admission.go::drainSteerQueue ->
-			// dispatchSteeredSessionReserved) still finds it pending.
-			//
-			// Q2=B gate round 1 silent-failure-hunter finding 1: the queued
-			// wake payload must survive the FIFO wait, otherwise the
-			// re-evaluation prompt is lost and the promoted turn's
-			// reconstructSteeredTurn (wake==nil branch) falls back to the
-			// ORIGINAL launch instruction looked up from the transcript —
-			// exactly the wrong message. Stamp the wake's content onto the
-			// lifecycle record in the SAME critical section as the queued-
-			// state write so a promoted turn reads the prompt back. Cleared
-			// by reconstructSteeredTurn on consumption.
+			// At the cap. Do not record a consumed marker or acknowledge any
+			// inbox entry yet; this wake must reach the promoted turn. System
+			// wakes need not have an inbox entry, so append their content to
+			// the lifecycle record in the same durable mutation that queues
+			// the session. The promotion consumes the whole ordered list before
+			// starting; otherwise it would replay the launch instruction or
+			// lose an earlier wake when a second one arrives.
 			if _, commitErr := commitSteeredDispatchStateWithPendingMessage(lifecycle, sessionID, generation, session.LifecycleQueued, msg.Content); commitErr != nil {
 				gate.removeQueued(sessionID, generation)
 				return "", commitErr

@@ -864,12 +864,10 @@ func commitSteeredDispatchState(
 
 // commitSteeredDispatchStateWithPendingMessage is commitSteeredDispatchState
 // plus a pending wake payload stamp (Q2=B gate round 1 silent-failure-hunter
-// finding 1). The wake's content is written into rec.PendingUserMessage in
-// the SAME atomic Mutate that flips the state to LifecycleQueued, so a
-// promoted dispatch always reads the queued wake's prompt back — even when
-// the promotion happens after the wake itself has long since returned. An
-// empty pendingMessage is the same as the plain commitSteeredDispatchState
-// (no field written).
+// finding 1). The wake's content is appended in the SAME atomic Mutate that
+// flips the state to LifecycleQueued, so every queued wake reaches the next
+// promoted turn in arrival order. An empty pendingMessage is the same as the
+// plain commitSteeredDispatchState (no field written).
 func commitSteeredDispatchStateWithPendingMessage(
 	lifecycle *session.LifecycleStore, sessionID string, gen int, state session.LifecycleState, pendingMessage string,
 ) (*session.LifecycleRecord, error) {
@@ -886,7 +884,7 @@ func commitSteeredDispatchStateWithPendingMessage(
 		}
 		rec.State = state
 		if pendingMessage != "" {
-			rec.PendingUserMessage = pendingMessage
+			rec.PendingUserMessages = append(rec.PendingUserMessages, pendingMessage)
 		}
 		committed = rec
 		return nil

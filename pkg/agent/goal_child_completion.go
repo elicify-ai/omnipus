@@ -49,6 +49,21 @@ const (
 	goalCompletionReevaluationDispatched
 )
 
+func (phase goalCompletionPhase) String() string {
+	switch phase {
+	case goalCompletionNone:
+		return "none"
+	case goalCompletionWaitingDescendants:
+		return "waiting_descendants"
+	case goalCompletionAdjudicating:
+		return "adjudicating"
+	case goalCompletionReevaluationDispatched:
+		return "reevaluation_dispatched"
+	default:
+		return fmt.Sprintf("unknown(%d)", phase)
+	}
+}
+
 // goalTransitionCompletionPhase is the ONE primitive every completion-phase
 // write goes through (type-design-analyzer finding 1: install-and-promote must
 // be one critical section; finding 2: no scattered lock/check/write sites).
@@ -80,9 +95,8 @@ func (al *AgentLoop) goalTransitionCompletionPhase(goalID string, from []goalCom
 }
 
 // completionPhaseMatchesAny reports whether current is one of allowed. An
-// empty allowed list never matches — callers that want unconditional set
-// should call the helper directly. goalCompletionNone is matched against a
-// missing map entry (the canonical "no phase" representation).
+// empty allowed list never matches. goalCompletionNone matches a missing map
+// entry (the canonical "no phase" representation).
 func completionPhaseMatchesAny(current goalCompletionPhase, allowed []goalCompletionPhase) bool {
 	for _, p := range allowed {
 		if current == p {
@@ -123,28 +137,17 @@ func (al *AgentLoop) goalPromoteCompletionToAdjudicating(goalID string) bool {
 		goalCompletionAdjudicating)
 }
 
-// goalSetCompletionPhase is retained for callers that need an unconditional
-// install. New code MUST use goalTransitionCompletionPhase instead — every
-// Q2=B phase write goes through the single primitive.
-func (al *AgentLoop) goalSetCompletionPhase(goalID string, phase goalCompletionPhase) {
-	if goalID == "" {
-		return
-	}
-	s := goalTriggers()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if phase == goalCompletionNone {
-		delete(s.completionPhase, goalID)
-		return
-	}
-	s.completionPhase[goalID] = phase
-}
-
-// goalClearCompletionPhase clears the phase unconditionally. New code should
-// prefer goalTransitionCompletionPhase when the caller needs to express the
-// "from" precondition (restate-during-adjudication, endSessionOwnedGoalOnTerminal).
+// goalClearCompletionPhase clears any known phase through the single
+// transition primitive, including an absent entry (None).
 func (al *AgentLoop) goalClearCompletionPhase(goalID string) {
-	al.goalSetCompletionPhase(goalID, goalCompletionNone)
+	al.goalTransitionCompletionPhase(goalID,
+		[]goalCompletionPhase{
+			goalCompletionNone,
+			goalCompletionWaitingDescendants,
+			goalCompletionAdjudicating,
+			goalCompletionReevaluationDispatched,
+		},
+		goalCompletionNone)
 }
 
 func (al *AgentLoop) goalCompletionWaiting(goalID string) bool {
@@ -247,13 +250,9 @@ func (al *AgentLoop) resumeDeferredGoalForSession(sessionID, goalID string) {
 	if al == nil || sessionID == "" || goalID == "" {
 		return
 	}
-	s := goalTriggers()
-	s.mu.Lock()
-	if s.completionPhase[goalID] != goalCompletionWaitingDescendants {
-		s.mu.Unlock()
+	if !al.goalCompletionWaiting(goalID) {
 		return
 	}
-	s.mu.Unlock()
 
 	blocked, err := al.hasRunningOrQueuedDescendant(sessionID)
 	if err != nil {
@@ -265,24 +264,18 @@ func (al *AgentLoop) resumeDeferredGoalForSession(sessionID, goalID string) {
 		return
 	}
 
-	s.mu.Lock()
-	if s.completionPhase[goalID] != goalCompletionWaitingDescendants {
-		s.mu.Unlock()
+	if !al.goalTransitionCompletionPhase(goalID,
+		[]goalCompletionPhase{goalCompletionWaitingDescendants}, goalCompletionReevaluationDispatched) {
 		return
 	}
-	s.completionPhase[goalID] = goalCompletionReevaluationDispatched
-	s.mu.Unlock()
 
 	if al.dispatchGoalCompletionReevaluation(sessionID, goalID) {
 		return
 	}
 	// Notification did not hand off a turn. Restore waiting so a later
 	// terminal hook or the active-goal keeper can retry.
-	s.mu.Lock()
-	if s.completionPhase[goalID] == goalCompletionReevaluationDispatched {
-		s.completionPhase[goalID] = goalCompletionWaitingDescendants
-	}
-	s.mu.Unlock()
+	al.goalTransitionCompletionPhase(goalID,
+		[]goalCompletionPhase{goalCompletionReevaluationDispatched}, goalCompletionWaitingDescendants)
 }
 
 // goalClearCompletionPhaseFromRestate invalidates the completion phase on
@@ -322,12 +315,8 @@ func (al *AgentLoop) goalRestoreWaitingCompletion(rec *goal.Goal) {
 			return
 		}
 	}
-	s := goalTriggers()
-	s.mu.Lock()
-	if s.completionPhase[rec.GoalID] == goalCompletionNone {
-		s.completionPhase[rec.GoalID] = goalCompletionWaitingDescendants
-	}
-	s.mu.Unlock()
+	al.goalTransitionCompletionPhase(rec.GoalID,
+		[]goalCompletionPhase{goalCompletionNone}, goalCompletionWaitingDescendants)
 }
 
 // deferMetWhileDescendantsActive is the final Q2 B quietness fence. It runs
@@ -342,7 +331,8 @@ func (ag *agentLoopRunGoalAdjudication) deferMetWhileDescendantsActive() bool {
 	if err == nil && !blocked {
 		return false
 	}
-	ag.al.goalSetCompletionPhase(ag.rec.GoalID, goalCompletionWaitingDescendants)
+	ag.al.goalTransitionCompletionPhase(ag.rec.GoalID,
+		[]goalCompletionPhase{goalCompletionAdjudicating}, goalCompletionWaitingDescendants)
 	if err != nil {
 		logger.WarnCF("agent", "goal: met verdict discarded because descendant state could not be read",
 			map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID, "error": err.Error()})
