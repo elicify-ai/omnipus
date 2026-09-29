@@ -51,7 +51,7 @@ units (no path between them in either direction) can share a wave.
 |---|---|---|---|
 | **Small** | A typo, a one-line follow-up, a mechanical edit with no design choice. Carries no RED step and is exempt from red-before-green evidence | One code-reviewer pass on the work branch | Minutes to an hour |
 | **Standard** | Real implementation work that is not structural: build with tests in the same step, then review | The 3 fixed reviewers: code-reviewer, silent-failure-hunter, pr-test-analyzer | A few hours to a day |
-| **Feature** | Structural, security-relevant, cross-tree, or anything needing a spec — the size that runs as a squad | Full RED/GREEN/CHECK plus the 8-reviewer gate (6 plugin reviewers + architect + security-lead) | Days |
+| **Feature** | Structural, security-relevant, cross-tree, or anything needing a spec — the size that runs as a squad | Full RED/GREEN/CHECK plus the 5-reviewer gate (3 mandatory plugin reviewers + architect + security-lead) | Days |
 
 - **Urgent is not a size**: urgent work is small or standard and moves to the front of
   the dispatch queue.

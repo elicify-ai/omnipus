@@ -396,7 +396,8 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 	if err != nil {
 		return err
 	}
-	return r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
+	var pairEnded bool
+	err = r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() {
 			return nil
 		}
@@ -406,18 +407,24 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 				return fmt.Errorf("message %s is a non-terminal handback", envelope.MessageID)
 			}
 			current.State = session.LifecycleCompleted
+			pairEnded = true
 		case "error":
 			if !envelope.Fatal {
 				return fmt.Errorf("message %s is a non-fatal error", envelope.MessageID)
 			}
 			current.State = session.LifecycleFailed
 			current.FailedReason = failedReasonFromBootText(envelope.Text)
+			pairEnded = true
 		default:
 			return fmt.Errorf("message %s kind %q is not terminal", envelope.MessageID, envelope.Kind)
 		}
 		current.NeedsInput = nil
 		return nil
 	})
+	if err == nil && pairEnded && r.EndSessionGoal != nil {
+		r.EndSessionGoal(rec.SessionID, failedReasonInterrupted+": the gateway restarted after the session's final report was delivered")
+	}
+	return err
 }
 
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
@@ -800,6 +807,21 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 		return err
 	}
 	pe.reconcileUnifiedMetaStatus(&failed)
+	// F3 (#984 follow-up): a STEERED record swept to failed(interrupted) ends
+	// its session-owned goal with it — FD1=A "the pair ends together", the
+	// same seam SteerBootRecovery.EndSessionGoal wires at boot. Gated on the
+	// steered edge: ordinary roots are exempt from the sweep upstream
+	// (standingRootExemptFromSweep) and task-origin records carry no steered
+	// edge, so the founder rule "a cancel never ends an ancestor goal" holds
+	// structurally. Best-effort, after the durable write.
+	if rec.SteeredBy != nil {
+		pe.mu.Lock()
+		pairEnd := pe.steeredGoalEndHook
+		pe.mu.Unlock()
+		if pairEnd != nil {
+			pairEnd(rec.SessionID, failedReasonInterrupted+": the gateway restarted while the session was mid-flight")
+		}
+	}
 	// Fire the session.failed hook best-effort (FR-118 deliverable 3): a hook
 	// panic is recovered and LOGGED (the doc above promises "recovered and
 	// logged"), never blocking the sweep. The earlier `recover()` silently

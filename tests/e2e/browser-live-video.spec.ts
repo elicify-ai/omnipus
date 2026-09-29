@@ -333,9 +333,18 @@ test.beforeEach(async ({ page }) => {
   await installWebrtcDebug(page);
 });
 
-test("live browser view streams genuinely playing video with real audio and realtime input", async ({
-  page,
-}, testInfo) => {
+// DISABLED (2026-09-28): intermittent hang under CI, root cause not yet found —
+// a real Playwright failure captured on a related run was
+// `locator.click: Test timeout of 720000ms exceeded`. Founder-ruled: stop
+// investigating for now, disable instead. Tracked as
+// https://github.com/elicify-ai/omnipus/issues/1015 ("Live-video e2e tests
+// disabled — intermittent hang"). Do not delete this test's body — re-enable
+// (test.fixme -> test) once #1015's root cause is fixed and verified stable.
+test.fixme(
+  "live browser view streams genuinely playing video with real audio and realtime input",
+  async ({
+    page,
+  }, testInfo) => {
   // Budget (worst-case ceiling, same accounting discipline as media.spec.ts):
   //   Agent picker + Jim selection + input visibility ...................... ~35s
   //   assistantMessages toHaveCount ceiling ................................ 240s

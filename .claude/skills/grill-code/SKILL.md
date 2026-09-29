@@ -6,9 +6,9 @@ description: >
   conformance (generated wire types only), frontend conformance (design system, states,
   accessibility) when the diff touches src/, and the standard correctness/error-handling/
   security/testing/observability/overcomplexity lenses -- against actual code, never against
-  a developer agent's claim. Runs as a complement to the 8-reviewer gate, not a replacement
+  a developer agent's claim. Runs as a complement to the 5-reviewer gate, not a replacement
   for it: dispatch it after GREEN/CHECK and before (or alongside) the gate, so an unready
-  branch is caught before it spends the seven plugin reviewers' and security-lead's time.
+  branch is caught before it spends the gate's five reviewers' time.
   Read-only -- produces a findings report, never edits code. Works on a full feature with a
   spec, or a bare git diff with no spec at all. Triggers on "grill code", "grill my code",
   "grill the code", "grill implementation", "review implementation", "audit code", "check
@@ -42,12 +42,15 @@ the code and reading CI's result, never from a local full run.
 This skill is one input to the size/feature process (`docs/internal/design/dev-team-setup-design-2026-09-25.md`
 and the size-based flow it defines), not the whole gate. For a feature-size change the flow
 is: spec (`plan-spec`) -> two `grill-spec` rounds -> team-lead plan -> RED -> GREEN -> CHECK
--> **the 8-reviewer gate** (the six `pr-review-toolkit` plugin reviewers, plus an architect
-pass and a security-lead pass) -> the founder's yes -> landing. Dispatch `grill-code`
-**after CHECK, before or alongside the 8-reviewer gate** -- it is a fast, spec-aware
+-> **the 5-reviewer gate** (the 3 mandatory `pr-review-toolkit` plugin reviewers --
+`code-reviewer`, `silent-failure-hunter`, `pr-test-analyzer` -- plus an architect pass and a
+security-lead pass; `code-simplifier`, `comment-analyzer` and `type-design-analyzer` are the
+same plugin's remaining reviewers, dispatched on explicit request only, founder 2026-09-29)
+-> the founder's yes -> landing. Dispatch `grill-code`
+**after CHECK, before or alongside the 5-reviewer gate** -- it is a fast, spec-aware
 pre-check that catches an unready branch (missing requirement, unwired feature, hand-written
-wire type, a test that asserts nothing) before it spends all eight reviewers' time. It never
-substitutes for any of the eight, and it never blocks the gate from also running.
+wire type, a test that asserts nothing) before it spends all five reviewers' time. It never
+substitutes for any of the five, and it never blocks the gate from also running.
 
 For a small or standard-size change (no spec, maybe no ADR), `grill-code` still works: point
 it at the diff and it runs the code-quality lenses (Phase 5) and the reachability lens
@@ -343,8 +346,8 @@ spec-absent mode, to `code-review.md` in the current working directory. Structur
 
 Present the executive summary, list every CRITICAL and MAJOR finding, state the verdict.
 On BLOCK/REVISE: "Address these findings, then re-run `/grill-code [path]` before the
-8-reviewer gate." On PASS: "Reachability and spec compliance verified. Ready for the
-8-reviewer gate."
+5-reviewer gate." On PASS: "Reachability and spec compliance verified. Ready for the
+5-reviewer gate."
 
 ## Rules of Engagement
 

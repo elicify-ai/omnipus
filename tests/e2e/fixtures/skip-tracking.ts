@@ -91,14 +91,19 @@ import { execSync } from 'child_process';
 
 // ── Formally tracked skips ──────────────────────────────────────────────────────
 //
-// As of 2026-09-16 the suite contains NO raw test.skip() / test.fixme() calls.
-// Every former raw skip was converted to one of the three treatments the policy
-// below defines: a preflight that fails fast (missing env var), a BLOCKED
-// failure that goes red (missing implementation / broken environment), or — for
-// genuine configuration preconditions only — a softSkip() call with an entry
-// here. Each entry references the GitHub issue that tracks the underlying
-// condition. Update the `until` date when the issue is resolved or the deadline
-// is formally extended.
+// As of 2026-09-16 the suite contained NO raw test.skip() / test.fixme() calls;
+// as of 2026-09-28, browser-live-video.spec.ts's one test is a raw test.fixme()
+// again (issue #1015, entry below) — an intermittent CI hang the founder ruled
+// to disable rather than continue investigating. A raw fixme/skip bypasses the
+// manifest capture this file otherwise relies on (see the module doc comment
+// above), which is exactly why it still needs an entry here: the allow-list is
+// the only place tracking it. Every OTHER former raw skip was converted to one
+// of the three treatments the policy below defines: a preflight that fails fast
+// (missing env var), a BLOCKED failure that goes red (missing implementation /
+// broken environment), or — for genuine configuration preconditions only — a
+// softSkip() call with an entry here. Each entry references the GitHub issue
+// that tracks the underlying condition. Update the `until` date when the issue
+// is resolved or the deadline is formally extended.
 export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?: string }[] = [
   // chat.spec.ts (f) — #105 RESOLVED: investigation found the outbound-queue
   // store mechanics (useChatStore's outboundQueue/pendingDrainQueue/
@@ -125,23 +130,44 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
   // violation, before the injection was reverted. Entry removed; the
   // underlying assumption was stale, not a real product gap.
 
-  // browser-live-video.spec.ts — #613 RESOLVED by deletion of the raw skip.
-  // The spec contains no skip at all anymore: its test body is a complete
-  // unconditional assertion sequence whose honesty gate THROWS on a JPEG
-  // fallback or a dead capture (see the sink-detection block and the
-  // first-frame readiness bar), so every run of the suite produces exactly
-  // the evidence issue #613 asks for ("confirm browser-live-video e2e passes
-  // post-96419349"). The entry had become stale by the file's own deletion
+  // browser-live-video.spec.ts — #613 RESOLVED by deletion of the raw skip
+  // (2026-09-16). The spec contained no skip at all for a time: its test body
+  // was a complete unconditional assertion sequence whose honesty gate THROWS
+  // on a JPEG fallback or a dead capture (see the sink-detection block and the
+  // first-frame readiness bar), so every run of the suite produced exactly
+  // the evidence issue #613 asked for ("confirm browser-live-video e2e passes
+  // post-96419349"). That entry had become stale by the file's own deletion
   // criterion — its note described a raw test.skip that no longer existed
-  // anywhere in the spec — and is removed. #613 itself is still OPEN
-  // and may now be closable; closing it is a human decision, not one made
-  // from the cleanup lane that removed this entry.
+  // anywhere in the spec — and was removed. #613 itself is still OPEN and may
+  // be closable; closing it is a human decision, not one made from the
+  // cleanup lane that removed the old entry.
+  //
+  // UPDATE 2026-09-28 (#1015, entry below): the same test regained a raw
+  // test.fixme() — a different, unrelated cause (an intermittent CI hang, not
+  // the JPEG-fallback/dead-capture condition #613 covered). This is a NEW
+  // skip, not a reopening of #613: the test body and its honesty gate are
+  // unchanged, and #613's own resolution above still stands. Tracked
+  // separately via SKIP_ALLOWLIST so the manifest gate is not blind to it.
 
   {
     test: '(D) real backend: pairing WS frame delivered after channel enable',
     issue: 'https://github.com/elicify-ai/omnipus/issues/299',
     until: '2026-12-31',
     note: 'Genuine configuration precondition, not a defect: a -tags lite build deliberately omits whatsmeow (WhatsApp native unavailable by design — issue #299, the lite-build capability-gating issue this spec\'s own header already traces to), so this backend can never emit the pairing QR the test waits on. Converted 2026-09-16 from a raw test.skip() to softSkip() so the skip is counted in every skip-manifest.json instead of bypassing governance. The until date is a forced re-look, not a resolution promise — lite builds will not gain whatsmeow; if no better mechanism exists by then (e.g. a shard-level lite profile), extend the date with justification rather than silently.',
+  },
+
+  // browser-live-video.spec.ts's one test is a raw test.fixme() (added
+  // 2026-09-28), not a softSkip() — it is listed here so the module doc
+  // comment's claim ("bypass this gate today... is the reason the
+  // SKIP_ALLOWLIST should also cover any test that uses them") holds in
+  // practice, even though this entry does not change what the manifest
+  // gate itself counts (raw fixme/skip calls are still invisible to
+  // manifest.unauthorized_skips — see the header comment above).
+  {
+    test: 'live browser view streams genuinely playing video with real audio and realtime input',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/1015',
+    until: '2026-12-31',
+    note: 'Intermittent CI hang, root cause not found: a real Playwright failure captured on a related run was "locator.click: Test timeout of 720000ms exceeded" (the test\'s own 720s test.setTimeout firing while stuck inside a click call). Founder-ruled 2026-09-28 to stop investigating and disable instead, rather than leave the suite red/flaky. Unrelated to #613 (see the note above this array). The until date is a forced re-look, not a resolution promise, matching this file\'s convention for the other entry above — extend with justification if #1015 is still open by then.',
   },
 ];
 
