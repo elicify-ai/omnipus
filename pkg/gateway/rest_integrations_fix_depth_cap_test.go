@@ -53,17 +53,17 @@ func TestFix1055_IntegrationGETReportsEffectiveTavilyDepthCap(t *testing.T) {
 				switch row["id"] {
 				case "tavily":
 					foundTavily = true
-					cap, present := row["search_depth_cap"]
+					depthCap, present := row["search_depth_cap"]
 					if !present {
 						t.Fatal("BLOCKED: optional search_depth_cap on IntegrationProvider GET row not implemented — required by #1055 depth-cap acceptance criterion")
 					}
-					if cap != tc.want {
-						t.Fatalf("Tavily search_depth_cap = %v, want %q from effective operator setting", cap, tc.want)
+					if depthCap != tc.want {
+						t.Fatalf("Tavily search_depth_cap = %v, want %q from effective operator setting", depthCap, tc.want)
 					}
 				case "duckduckgo":
 					foundDDG = true
-					if cap, present := row["search_depth_cap"]; present {
-						t.Fatalf("DuckDuckGo must have no depth-cap field, got %v", cap)
+					if depthCap, present := row["search_depth_cap"]; present {
+						t.Fatalf("DuckDuckGo must have no depth-cap field, got %v", depthCap)
 					}
 				}
 			}
