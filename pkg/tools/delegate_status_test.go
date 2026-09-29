@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -149,5 +150,45 @@ func TestDelegateStatus_FromRecordNotStreaming(t *testing.T) {
 	}
 	if !strings.Contains(got.ForLLM, "running, no message yet, started 25 s ago") {
 		t.Fatalf("status = %q, want lifecycle state and record age without a fabricated message time", got.ForLLM)
+	}
+}
+
+// Issue #1011 D1 review: an artifact report is stored without a note when
+// the child omits one; `delegate action=status` must then show the paths the
+// child shared, not the bare kind name "artifact".
+func TestDelegateStatus_ArtifactWithoutNoteShowsPaths(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	tool, lifecycle, inbox, _ := newADR053TestTool(t)
+	tool.SetClock(func() time.Time { return now })
+	ctx := WithTranscriptSessionID(context.Background(), "parent-status")
+
+	if err := lifecycle.Persist(&session.LifecycleRecord{
+		SessionID: "child-artifact", Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-status",
+		SteeredBy:   &session.SteeredBy{SteeringSessionID: "parent-status", RootSessionID: "parent-status"},
+		WorkspaceID: "ws-status", AgentID: "worker", ParentAgentID: "orchestrator",
+		CreatedAt: now.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("persist lifecycle record: %v", err)
+	}
+	var msg generated.SessionMessage
+	if err := msg.FromSessionMessageArtifact(generated.SessionMessageArtifact{
+		MessageId: "artifact-status", SessionId: "child-artifact", CreatedAt: now.Add(-40 * time.Second),
+		Depth: 1, SenderIdentity: "worker", Paths: []string{"reports/a.md", "reports/b.csv"},
+	}); err != nil {
+		t.Fatalf("encode artifact message: %v", err)
+	}
+	if _, err := inbox.Append("parent-status", msg); err != nil {
+		t.Fatalf("append artifact message: %v", err)
+	}
+
+	got := tool.Execute(ctx, map[string]any{"action": "status", "session_id": "child-artifact"})
+	if got.IsError {
+		t.Fatalf("status failed: %s", got.ForLLM)
+	}
+	if !strings.Contains(got.ForLLM, "running, reports/a.md, reports/b.csv, 40 s ago") {
+		t.Fatalf("status = %q, want the artifact's paths as the status line", got.ForLLM)
 	}
 }
