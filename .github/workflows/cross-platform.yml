@@ -251,8 +251,11 @@ jobs:
         run: |
           set -uo pipefail
           log="$RUNNER_TEMP/readboundary-windows.log"
-          go test -tags goolm,stdjson -count=1 -p 1 -v -run '^TestReadBoundary_Windows$' ./pkg/tools/ > "$log" 2>&1
-          status=$?
+          if go test -tags goolm,stdjson -count=1 -p 1 -v -run '^TestReadBoundary_Windows$' ./pkg/tools/ > "$log" 2>&1; then
+            status=0
+          else
+            status=$?
+          fi
           cat "$log"
           if [ "$status" -ne 0 ]; then
             echo "::error::go test exited $status" >&2

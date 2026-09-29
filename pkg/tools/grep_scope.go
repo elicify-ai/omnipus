@@ -835,7 +835,7 @@ func (g grepGateFS) Open(name string) (fs.File, error) {
 		// A standalone gate can be constructed around an fs.FS without an
 		// existing os.Root. Bind and verify its host root before opening the
 		// entry; production roots arrive pre-bound from guardGrepRoot.
-		canonical, err := filepath.EvalSymlinks(g.root)
+		canonical, err := resolveRealpathUnderWorkDir(g.root, "")
 		if err != nil {
 			return nil, err
 		}
