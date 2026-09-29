@@ -84,15 +84,36 @@ function activePanelWorkspaceId(activePanel: ActivePanel): string | undefined {
  * other workspace-scoped panel) but changes `$workspaceId`. Without also
  * comparing the workspace, re-requesting the SAME panel id for a DIFFERENT
  * workspace is wrongly treated as "already adopted" and the panel keeps
- * rendering the OLD workspace's data. */
+ * rendering the OLD workspace's data.
+ *
+ * For `mail` specifically, the workspace/panel-type match alone is still not
+ * enough: the URL's `agent` param (SP-23's mailbox directive, read the same
+ * way `adoptionContext` does) can name a DIFFERENT mailbox while `panel=mail`
+ * and `$workspaceId` both stay unchanged (a same-page `?agent=` swap). Treat
+ * that as NOT already adopted so the effect adopts the newly named mailbox
+ * instead of silently keeping the old one on screen.
+ *
+ * Only compare when the URL carries an EXPLICIT `agent` string. An absent
+ * `agent` key is not a "no mailbox" directive here — the chat_link scheme
+ * (email-mail-view-spec.md §17) transfers the mailbox into the panel
+ * context via `openPanel` and lands on a bare `chat?panel=mail` with no
+ * `agent` param at all; treating that absence as "clear the mailbox" would
+ * wipe the context the link just set. */
 function isAlreadyAdopted(
   activePanel: ActivePanel | null,
   named: WorkspacePanelId,
   workspaceId: string,
+  search: SearchRecord,
 ): boolean {
-  return activePanel !== null
-    && activePanel.id === named
-    && activePanelWorkspaceId(activePanel) === workspaceId
+  if (activePanel === null
+    || activePanel.id !== named
+    || activePanelWorkspaceId(activePanel) !== workspaceId) {
+    return false
+  }
+  if (named === 'mail' && typeof search.agent === 'string') {
+    return activePanel.context.mailboxId === search.agent
+  }
+  return true
 }
 
 /**
@@ -166,12 +187,12 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     if (named !== undefined) {
       if (hasForeignKey(rawSearch)) replaceSearch(named)
       const { activePanel: current, openPanel } = useUiStore.getState()
-      if (isAlreadyAdopted(current, named, workspaceId)) return
+      if (isAlreadyAdopted(current, named, workspaceId, rawSearch)) return
       const context = adoptionContext(named, workspaceId, rawSearch)
       if (current !== null) {
         leaveGateThen(current.id, () => {
           const { activePanel: still, openPanel: open } = useUiStore.getState()
-          if (!isAlreadyAdopted(still, named, workspaceId)) open(named, context)
+          if (!isAlreadyAdopted(still, named, workspaceId, rawSearch)) open(named, context)
         })
       } else {
         openPanel(named, context)
