@@ -29,7 +29,6 @@
 // assume F3 already covers this — it doesn't; F3's own axis is workspace,
 // not mailbox.
 
-import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, act } from '@testing-library/react'
 
