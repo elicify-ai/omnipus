@@ -146,7 +146,7 @@ Run seven independent review assignments in waves of at most three workers: corr
 
 Verification remains Chromium, Firefox and WebKit; applicable keyboard flows and axe checks; 12/14/20px root settings; 200% zoom; 320px reflow; reduced motion; forced colours; non-overlapping hit regions in pointer and touch modes; and the D17 in-context touch check at phone and tablet sizes. Obtain representative human screen-reader evidence for navigation, a validating form, dialog/sheet, collection state and a long-running job. Automation does not substitute for that evidence.
 
-The approved production budget remains **zero Storybook payload, at most 25 KiB additional compressed initial JavaScript/CSS, and at most 250 KiB additional total embedded assets**, compared with the same starting revision and build environment. Run applicable frontend and CI checks, GitNexus change detection before commits, and verify the actual running application. No screenshot suite.
+The approved production budget remains **zero Storybook payload, at most 25 KiB additional compressed initial JavaScript/CSS, and at most 320 KiB additional total embedded assets**, compared with the same starting revision and build environment. The total-raw ceiling was raised from 250 KiB to 320 KiB on 2026-09-29 (founder decision D50) to cover the Mail composer's lazy-loaded Tiptap/ProseMirror engine (~432 kB raw); the first-load gzip ceiling remains 25 KiB. Run applicable frontend and CI checks, GitNexus change detection before commits, and verify the actual running application. No screenshot suite.
 
 Report **code correct and tested** separately from **reachable by users**. Final acceptance still requires the founder's judgment that the running app looks like Omnipus.
 

@@ -2,9 +2,24 @@
 // (MIT): Tiptap's official Markdown input/output with only the mail toolbar.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Editor } from '@tiptap/core'
+import { Blockquote } from '@tiptap/extension-blockquote'
+import { Bold } from '@tiptap/extension-bold'
+import { Code as TiptapCode } from '@tiptap/extension-code'
+import { Document } from '@tiptap/extension-document'
+import { HardBreak } from '@tiptap/extension-hard-break'
+import { Heading } from '@tiptap/extension-heading'
+import { Italic } from '@tiptap/extension-italic'
+import { Link as TiptapLink } from '@tiptap/extension-link'
+import { BulletList } from '@tiptap/extension-list/bullet-list'
+import { ListItem } from '@tiptap/extension-list/item'
+import { ListKeymap } from '@tiptap/extension-list/keymap'
+import { OrderedList } from '@tiptap/extension-list/ordered-list'
+import { Paragraph } from '@tiptap/extension-paragraph'
+import { Strike } from '@tiptap/extension-strike'
+import { Text } from '@tiptap/extension-text'
+import { UndoRedo } from '@tiptap/extensions/undo-redo'
 import { Markdown } from '@tiptap/markdown'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
-import { StarterKit } from '@tiptap/starter-kit'
 import {
   ArrowClockwise,
   ArrowCounterClockwise,
@@ -73,16 +88,28 @@ export function normalizeMailLink(value: string): string | null {
 
 export function createMailEditorExtensions() {
   return [
-    StarterKit.configure({
-      heading: { levels: [1, 2, 3] },
-      link: {
-        autolink: true,
-        defaultProtocol: 'https',
-        linkOnPaste: true,
-        openOnClick: false,
-        isAllowedUri: isAllowedMailLink,
-      },
+    Blockquote,
+    Bold,
+    BulletList,
+    TiptapCode,
+    Document,
+    HardBreak,
+    Heading.configure({ levels: [1, 2, 3] }),
+    Italic,
+    ListItem,
+    ListKeymap,
+    TiptapLink.configure({
+      autolink: true,
+      defaultProtocol: 'https',
+      linkOnPaste: true,
+      openOnClick: false,
+      isAllowedUri: isAllowedMailLink,
     }),
+    OrderedList,
+    Paragraph,
+    Strike,
+    Text,
+    UndoRedo,
     Markdown.configure({ markedOptions: { gfm: true, breaks: false } }),
   ]
 }
