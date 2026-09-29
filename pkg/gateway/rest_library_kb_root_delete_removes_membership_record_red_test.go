@@ -1,64 +1,100 @@
-// Omnipus — RED tests for spec "Library views, anywhere"
-// (docs/internal/specs/library-views-anywhere-spec.md), FR-VA-039, TDD Plan
-// rows 88, 89 (va-qa3 dispatch, P4, team-lead ruling 2026-09-29).
-//
-// Oracle, verbatim: "Permanently deleting a knowledge base's ROOT folder
-// (the plain root.Delete path) and permanently deleting its marker folder
-// (.obsidian / .omnipus-vault — KB demotion: the folder stops being a
-// knowledge base) MUST both remove that collection's outside-vault
-// membership record (view_membership.json entry), including its pending
-// moves and completed receipts, under the dedicated membership lock
-// (FR-VA-038). If that removal fails, the delete/demotion itself fails
-// with a visible error; it never succeeds while leaving the record
-// behind." Row 88: delete the KB root, recreate a KB at the SAME path,
-// plant a view with the same name and derived_from; assert NO authority
-// (not derived, not read-only, no managed rewrite). Row 89: same via
-// marker-folder delete + recreate; plus inject a record-removal failure
-// and assert the delete fails visibly and the root/marker is still there.
-//
-// Verified by reading (2026-09-29): both delete paths go through the SAME
-// handleLibraryEntryDelete (pkg/gateway/rest_library_write.go) — a plain
-// KB-root delete is just `root.Delete(rel)`; a marker-folder delete
-// additionally calls releaseKnowledgeBaseIfDemoted (rest_library_knowledge_
-// cascade.go), which only calls ReleaseDemotedCollection — an in-memory
-// KnowledgeLifecycle.byRoot unregister (stops indexing), NOT a membership-
-// record removal. There is no DemoteKnowledgeBase/RemoveMarker symbol
-// (confirmed by grep). There is no pipeline-owned membership record
-// anywhere (zero hits for "ViewMembership"/"view_membership" outside
-// comments/generated spec-prose — the SAME finding this dispatch's other
-// P3/P4 files document) — so there is nothing for either delete path to
-// remove, no membership lock to remove it under (FR-VA-038, also absent),
-// and no removal-failure seam to inject a failure into for row 89's
-// second half.
-//
-// BLOCKED per the qa-lead RED protocol: both rows depend on a membership
-// record, and its removal-on-delete step, that do not exist anywhere.
-//
-// Run (one at a time, per omnipus-shared-rules rule 2):
-//
-//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestKBRootDelete_RemovesMembershipRecordSoRecreatedKBHasNoAuthority$' ./pkg/gateway/
-//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestMarkerFolderDelete_RemovesMembershipRecordAndFailsVisiblyIfRemovalFails$' ./pkg/gateway/
-//
+// Omnipus — FR-VA-039 / TDD rows 88–89: permanent KB deletion and last
+// marker demotion must remove the private record before the path can be reused.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 package gateway
 
-import "testing"
+import (
+	"net/http"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/stretchr/testify/require"
+)
+
+func seedKBRecordForDeletion(t *testing.T, api *restAPI, vault string) string {
+	t.Helper()
+	plantTrackedView(t, api.homePath, vault, "Projects.base", "Open.view")
+	stagePendingViewMove(t, api.homePath, vault, redRetryID, "Open.view", "Renamed.view", false,
+		pendingViewMember("Projects.base", "Projects.base", "Open.view", "Renamed.view"), time.Now().UTC())
+	plantTrackedView(t, api.homePath, vault, "Other.base", "Other.view")
+	require.NoError(t, knowledge.WithViewMembership(api.homePath, vault, func(m *knowledge.ViewMembership) error {
+		if m.CompletedMoves == nil {
+			m.CompletedMoves = make(map[string]knowledge.CompletedViewMove)
+		}
+		m.CompletedMoves["previous"] = knowledge.CompletedViewMove{
+			From: "Past.view", To: "Later.view", CompletedAt: time.Now().UTC(),
+		}
+		return knowledge.SaveViewMembership(m)
+	}))
+	path, err := knowledge.IndexDirFor(api.homePath, vault)
+	require.NoError(t, err)
+	record := filepath.Join(path, knowledge.ViewMembershipFileName)
+	require.FileExists(t, record)
+	return record
+}
+
+func assertRecreatedKBHasNoOldAuthority(t *testing.T, api *restAPI, vault string) {
+	t.Helper()
+	makeKnowledgeBase(t, vault, "Recreated KB")
+	// Deliberately plant a marker-only copy, not plantTrackedView: an old
+	// record must not silently authorize it at the reused absolute path.
+	markerOnly := []byte("name: open\nkind: table\nsource: Projects.base\nderived_from: Projects.base\n")
+	copyPath := filepath.Join(vault, "Open.view")
+	require.NoError(t, os.WriteFile(copyPath, markerOnly, 0o600))
+	m := loadRecordedViews(t, api.homePath, vault)
+	require.Empty(t, m.Bases, "a reused path must not inherit prior write authority")
+	require.Empty(t, m.PendingMoves, "an old Retry receipt must not become discoverable")
+	require.Empty(t, m.CompletedMoves, "completed IDs must not leak into a new KB")
+	written, err := m.RewriteManagedView("Projects.base", "open", markerOnly)
+	require.Error(t, err, "an old base must not rewrite the newly planted copy")
+	require.False(t, written)
+	deleted, err := m.DeleteManagedView("Projects.base", "open")
+	require.NoError(t, err)
+	require.False(t, deleted, "an old base must not delete the newly planted copy")
+	body, err := os.ReadFile(copyPath)
+	require.NoError(t, err)
+	require.Equal(t, markerOnly, body)
+}
 
 func TestKBRootDelete_RemovesMembershipRecordSoRecreatedKBHasNoAuthority(t *testing.T) {
-	t.Fatal("BLOCKED: FR-VA-039/row 88 needs a real membership record whose removal (on KB-root " +
-		"delete) could be asserted, then a recreated KB at the SAME path with a same-name/" +
-		"same-derived_from view checked for NO authority — no such record exists anywhere in the " +
-		"codebase (confirmed by grep), and handleLibraryEntryDelete's plain root.Delete path has no " +
-		"membership-record-removal step to observe (see this file's header). There is nothing to " +
-		"plant the 'recreate at same path' fixture against.")
+	api, ws, vault, _ := twoKBWorkspace(t)
+	record := seedKBRecordForDeletion(t, api, vault)
+	w := libDelete(t, api, "/api/v1/library/"+ws+"/entries?path=vault-a")
+	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+	require.NoFileExists(t, record, "permanent root deletion removes the outside-vault record")
+	require.NoDirExists(t, vault)
+	require.NoError(t, os.MkdirAll(vault, 0o755))
+	assertRecreatedKBHasNoOldAuthority(t, api, vault)
 }
 
 func TestMarkerFolderDelete_RemovesMembershipRecordAndFailsVisiblyIfRemovalFails(t *testing.T) {
-	t.Fatal("BLOCKED: FR-VA-039/row 89 needs the SAME missing membership record above, PLUS a " +
-		"removal-failure injection seam whose failure must make the marker-folder delete/demotion " +
-		"itself fail visibly — releaseKnowledgeBaseIfDemoted only calls ReleaseDemotedCollection " +
-		"(an in-memory index-lifecycle unregister), confirmed by reading it in full; there is no " +
-		"membership-record removal step there to inject a failure into, and no membership lock " +
-		"(FR-VA-038) to remove it under.")
+	t.Run("success_and_recreate", func(t *testing.T) {
+		api, ws, vault, _ := twoKBWorkspace(t)
+		record := seedKBRecordForDeletion(t, api, vault)
+		w := libDelete(t, api, "/api/v1/library/"+ws+"/entries?path=vault-a/.omnipus-vault")
+		require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+		require.NoFileExists(t, record)
+		require.DirExists(t, vault, "demotion leaves the collection folder in place")
+		require.NoDirExists(t, knowledge.MarkerDir(vault))
+		assertRecreatedKBHasNoOldAuthority(t, api, vault)
+	})
+	t.Run("record_removal_failure_keeps_marker", func(t *testing.T) {
+		api, ws, vault, _ := twoKBWorkspace(t)
+		record := seedKBRecordForDeletion(t, api, vault)
+		// An occupied directory in place of the record deterministically makes
+		// os.Remove fail, even as root. It tests cleanup failure, not a corrupt
+		// JSON fallback, and avoids chmod's platform/user-dependent behavior.
+		require.NoError(t, os.Remove(record))
+		require.NoError(t, os.Mkdir(record, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(record, "blocker"), []byte("x"), 0o600))
+		w := libDelete(t, api, "/api/v1/library/"+ws+"/entries?path=vault-a/.omnipus-vault")
+		require.NotEqual(t, http.StatusNoContent, w.Code,
+			"failed record cleanup must be visible, never a successful demotion")
+		require.True(t, w.Code >= 400 && w.Code < 600, "failure must be HTTP error: %d", w.Code)
+		require.DirExists(t, knowledge.MarkerDir(vault), "failed cleanup must not delete the last marker")
+	})
 }

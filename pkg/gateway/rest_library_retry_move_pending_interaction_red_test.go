@@ -1,96 +1,128 @@
-// Omnipus — RED tests for spec "Library views, anywhere"
-// (docs/internal/specs/library-views-anywhere-spec.md), FR-VA-032/034
-// interaction, va-qa3 brief P7 (a)(b)(c) — new team-lead test requests added
-// after P1 started, not yet written anywhere.
-//
-// Each case is its own test, independent of the P3 cases (a different
-// pending-move interaction class), using the same pending_move_id-keyed
-// record shape P3 assumes (see rest_library_retry_move_red_test.go's
-// header for the full root-cause finding this file shares).
-//
-// (a) A tracked nested KB is ADDED to a folder's subtree AFTER that
-//     folder's move went pending (FR-VA-032/034 interaction). Retry on that
-//     pending move MUST return retry_preflight_failed; the membership
-//     record and file bytes must be unchanged (no partial replay).
-// (b) TWO pending folder-move journal entries exist at once; the OTHER one
-//     (not the one being retried) gains a tracked nested KB in the
-//     meantime. Retry of the first pending move MUST refuse and replay
-//     NEITHER move — both records remain pending/untouched.
-// (c) Retry of a case-only folder rename (Foo -> foo) on a case-insensitive
-//     filesystem (APFS) MUST fail CLOSED: retry_preflight_failed, no
-//     mutation to the record or the filesystem.
-//
-// BLOCKED, all three, for the same root cause
-// rest_library_retry_move_red_test.go's header documents in full: there is
-// no retry-move route, handler, agent op, or pending-move/
-// view_membership.json record anywhere in the codebase to construct EITHER
-// a single pending move or two concurrent ones against, and no
-// preflight-check seam that could detect "a nested KB was added since" or
-// "the destination now differs only by case" at all.
-//
-// Case (c) additionally needs a filesystem-case-collision fixture; per the
-// brief, this run's environment is checked below and the finding stated
-// honestly rather than assumed.
-//
-// Run (one at a time, per omnipus-shared-rules rule 2):
-//
-//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRetryMove_NestedKBAddedToPendingFolderMoveSubtreeAfterPending_RefusesPreflight$' ./pkg/gateway/
-//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRetryMove_OtherConcurrentPendingMoveGainsNestedKB_NeitherMoveReplayed$' ./pkg/gateway/
-//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRetryMove_CaseOnlyFolderRenameFailsClosedOnCaseInsensitiveFilesystem$' ./pkg/gateway/
-//
+// Omnipus — FR-VA-032/034 P7: pending folder moves must fail closed when
+// nested roots change or a case-only path aliases the destination.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 package gateway
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/stretchr/testify/require"
 )
 
-// TestRetryMove_NestedKBAddedToPendingFolderMoveSubtreeAfterPending_RefusesPreflight
-// is P7(a).
+func pendingFolderRetryFixture(t *testing.T, folder, dest, id string) (*restAPI, string, string) {
+	t.Helper()
+	api, ws, vault, _ := twoKBWorkspace(t)
+	fromBase := folder + "/Projects.base"
+	fromView := folder + "/Open.view"
+	toBase := dest + "/Projects.base"
+	toView := dest + "/Open.view"
+	plantTrackedView(t, api.homePath, vault, fromBase, fromView)
+	stagePendingViewMove(t, api.homePath, vault, id, folder, dest, true,
+		pendingViewMember(fromBase, toBase, fromView, toView), time.Now().UTC())
+	return api, ws, vault
+}
+
 func TestRetryMove_NestedKBAddedToPendingFolderMoveSubtreeAfterPending_RefusesPreflight(t *testing.T) {
-	t.Fatal("BLOCKED: P7(a) needs a real pending folder-move record to add a nested KB against and " +
-		"then retry — no pending-move/view_membership.json record, no retry-move route/handler/op, " +
-		"and no preflight re-check step exist anywhere in the codebase (see " +
-		"rest_library_retry_move_red_test.go's header for the full grep evidence). There is nothing " +
-		"to plant the interaction against.")
+	api, ws, vault := pendingFolderRetryFixture(t, "Folder", "Moved", redRetryID)
+	nested := filepath.Join(vault, "Folder", "NestedKB")
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+	makeKnowledgeBase(t, nested, "Nested KB")
+	plantTrackedView(t, api.homePath, nested, "Nested.base", "Nested.view")
+	before := loadRecordedViews(t, api.homePath, vault)
+	fileBefore, err := os.ReadFile(filepath.Join(vault, "Folder", "Open.view"))
+	require.NoError(t, err)
+	requireRetryError(t, retryMoveHTTP(t, api, ws, redRetryID), http.StatusConflict,
+		redRetryID, gen.RetryMoveErrorCodeRetryPreflightFailed)
+	require.Equal(t, before, loadRecordedViews(t, api.homePath, vault), "no pending receipt can be consumed")
+	after, err := os.ReadFile(filepath.Join(vault, "Folder", "Open.view"))
+	require.NoError(t, err)
+	require.Equal(t, fileBefore, after)
+	require.NoDirExists(t, filepath.Join(vault, "Moved"))
+	require.Equal(t, "Nested.view", loadRecordedViews(t, api.homePath, nested).Bases["Nested.base"]["open"])
 }
 
-// TestRetryMove_OtherConcurrentPendingMoveGainsNestedKB_NeitherMoveReplayed
-// is P7(b).
-func TestRetryMove_OtherConcurrentPendingMoveGainsNestedKB_NeitherMoveReplayed(t *testing.T) {
-	t.Fatal("BLOCKED: P7(b) needs TWO concurrent pending-move records in the SAME " +
-		"view_membership.json to exist at once, plus a retry-move handler that inspects one while " +
-		"leaving the other alone — none of the record type, its writer, or the handler exist " +
-		"anywhere in the codebase (see rest_library_retry_move_red_test.go's header). There is no " +
-		"'first pending move' or 'other one' to construct.")
+func TestRetryMove_OtherConcurrentPendingJournalGainsNestedKB_NeitherMoveReplayed(t *testing.T) {
+	api, ws, vault := pendingFolderRetryFixture(t, "Alpha", "AlphaMoved", redRetryID)
+	plantTrackedView(t, api.homePath, vault, "Beta/Projects.base", "Beta/Open.view")
+	otherID := "test-other-pending-folder"
+	stagePendingViewMove(t, api.homePath, vault, otherID, "Beta", "BetaMoved", true,
+		pendingViewMember("Beta/Projects.base", "BetaMoved/Projects.base", "Beta/Open.view", "BetaMoved/Open.view"), time.Now().UTC())
+
+	// Two membership receipts alone would not exercise the actual recovery
+	// hazard: Renamer.RecoverPending replays EVERY pending journal. Persist two
+	// genuine folder-rename plans before adding the tracked nested KB to Beta.
+	collection, err := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), vault)
+	require.NoError(t, err)
+	store := knowledge.NewJournalStore(knowledge.DefaultJournalDir(vault))
+	renamer := &knowledge.Renamer{Root: collection, Store: store}
+	for _, subject := range []struct{ from, to string }{{"Alpha", "AlphaMoved"}, {"Beta", "BetaMoved"}} {
+		plan, planErr := renamer.Plan(knowledge.RenameRequest{From: subject.from, To: subject.to, Folder: true})
+		require.NoError(t, planErr)
+		require.NoError(t, store.Write(plan.Journal))
+	}
+	journalsBefore, err := store.List()
+	require.NoError(t, err)
+	require.Len(t, journalsBefore, 2, "the other pending journal must really be recoverable")
+
+	nested := filepath.Join(vault, "Beta", "NestedKB")
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+	makeKnowledgeBase(t, nested, "Nested KB")
+	plantTrackedView(t, api.homePath, nested, "Nested.base", "Nested.view")
+	before := loadRecordedViews(t, api.homePath, vault)
+	alphaBytes, err := os.ReadFile(filepath.Join(vault, "Alpha", "Open.view"))
+	require.NoError(t, err)
+	betaBytes, err := os.ReadFile(filepath.Join(vault, "Beta", "Open.view"))
+	require.NoError(t, err)
+
+	// Chief's P7(b) ruling: "named paths only" limits authority re-enrollment;
+	// recovery still sees both journals, so a tracked nested KB under Beta
+	// must refuse Alpha's Retry BEFORE replaying either journal.
+	failure := requireRetryError(t, retryMoveHTTP(t, api, ws, redRetryID), http.StatusConflict,
+		redRetryID, gen.RetryMoveErrorCodeRetryPreflightFailed)
+	visible := failure.Error
+	if failure.Paths != nil {
+		visible += strings.Join(*failure.Paths, " ")
+	}
+	require.Contains(t, visible, "Beta/NestedKB", "the refusal must identify the blocking nested KB")
+	require.Equal(t, before, loadRecordedViews(t, api.homePath, vault), "both pending receipts must remain intact")
+	journalsAfter, err := store.List()
+	require.NoError(t, err)
+	require.Equal(t, journalsBefore, journalsAfter, "neither pending rename journal may be consumed")
+	require.NoDirExists(t, filepath.Join(vault, "AlphaMoved"))
+	require.NoDirExists(t, filepath.Join(vault, "BetaMoved"))
+	alphaAfter, err := os.ReadFile(filepath.Join(vault, "Alpha", "Open.view"))
+	require.NoError(t, err)
+	betaAfter, err := os.ReadFile(filepath.Join(vault, "Beta", "Open.view"))
+	require.NoError(t, err)
+	require.Equal(t, alphaBytes, alphaAfter)
+	require.Equal(t, betaBytes, betaAfter)
+	require.Equal(t, "Nested.view", loadRecordedViews(t, api.homePath, nested).Bases["Nested.base"]["open"])
 }
 
-// TestRetryMove_CaseOnlyFolderRenameFailsClosedOnCaseInsensitiveFilesystem
-// is P7(c). The brief requires an honest statement of the test
-// environment's case sensitivity rather than an assumed one.
 func TestRetryMove_CaseOnlyFolderRenameFailsClosedOnCaseInsensitiveFilesystem(t *testing.T) {
-	dir := t.TempDir()
-	upper := filepath.Join(dir, "Foo")
-	if err := os.MkdirAll(upper, 0o755); err != nil {
-		t.Fatalf("fixture setup failed: %v", err)
+	api, ws, vault := pendingFolderRetryFixture(t, "Foo", "foo", redRetryID)
+	source, destination := filepath.Join(vault, "Foo"), filepath.Join(vault, "foo")
+	fromStat, err := os.Stat(source)
+	require.NoError(t, err)
+	toStat, err := os.Stat(destination)
+	if err != nil || !os.SameFile(fromStat, toStat) {
+		t.Fatal("BLOCKED: P7(c) requires a case-insensitive filesystem for Foo/foo aliasing; this test's workspace filesystem distinguishes the two names. A case-sensitive pass would not prove the specified collision")
 	}
-	lowerStat, statErr := os.Stat(filepath.Join(dir, "foo"))
-	caseInsensitive := statErr == nil && lowerStat != nil
-	envNote := "this test run's temp filesystem is NOT case-insensitive (stat(\"foo\") after " +
-		"creating \"Foo\" failed) — this is NOT run on real case-insensitive APFS behavior; the " +
-		"case-collision condition below is asserted directly rather than observed from the OS."
-	if caseInsensitive {
-		envNote = "this test run's temp filesystem IS case-insensitive (stat(\"foo\") after " +
-			"creating \"Foo\" succeeded) — the case-collision condition is real APFS/case-insensitive " +
-			"behavior, observed, not simulated."
-	}
-	t.Fatal("BLOCKED: P7(c) needs a real retry-move preflight check to run against a case-only " +
-		"rename (Foo -> foo) and observe it fail closed — no retry-move route/handler/op or " +
-		"pending-move record exists anywhere in the codebase (see " +
-		"rest_library_retry_move_red_test.go's header), so there is no preflight step to exercise " +
-		"regardless of filesystem case sensitivity. Environment note (per the brief's honesty " +
-		"requirement): " + envNote)
+	before := loadRecordedViews(t, api.homePath, vault)
+	viewBytes, err := os.ReadFile(filepath.Join(source, "Open.view"))
+	require.NoError(t, err)
+	requireRetryError(t, retryMoveHTTP(t, api, ws, redRetryID), http.StatusConflict,
+		redRetryID, gen.RetryMoveErrorCodeRetryPreflightFailed)
+	require.Equal(t, before, loadRecordedViews(t, api.homePath, vault))
+	after, err := os.ReadFile(filepath.Join(source, "Open.view"))
+	require.NoError(t, err)
+	require.Equal(t, viewBytes, after)
 }

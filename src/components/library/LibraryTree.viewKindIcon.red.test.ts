@@ -42,7 +42,7 @@
 //	npx vitest run src/components/library/LibraryTree.viewKindIcon.red.test.ts
 import { describe, it, expect } from 'vitest'
 import { createElement } from 'react'
-import { render } from '@testing-library/react'
+import { render, queryAllByRole } from '@testing-library/react'
 import { LibraryEntryRow } from './LibraryEntryRow'
 import type { LibraryEntry } from '@/lib/api'
 import type { components } from '@/lib/api/generated/openapi-types'
@@ -100,18 +100,42 @@ function renderRow(e: LibraryEntry) {
   )
 }
 
-// accessibleNames collects every aria-label/title in the rendered row that
-// names the KIND ICON specifically — the "accessible name ... stating the
-// kind in words" MIN-008 requires, however the implementing lead attaches
-// it (aria-label directly, or a tooltip component that ends up rendering
-// one). The row's own "Actions for <entry.name>" menu button (confirmed:
-// LibraryEntryRow.tsx's only pre-existing aria-label today) is excluded —
-// it names the FILE, not the kind, and would otherwise leak the fixture's
-// own filename into a false match.
+// Read the actual icon's text alternative, not the row filename's title or
+// the Actions button's label. A label inside aria-hidden is not accessible.
+// Include equivalent aria-labelledby and SVG <title> names, not only aria-label.
 function accessibleNames(container: HTMLElement): string[] {
-  return Array.from(container.querySelectorAll('[aria-label], [title]'))
-    .filter((el) => !(el.getAttribute('aria-label') ?? '').startsWith('Actions for '))
-    .map((el) => el.getAttribute('aria-label') ?? el.getAttribute('title') ?? '')
+  const icon = container.querySelector('button[data-testid^="library-row-"] svg')
+  const names: string[] = []
+  for (let element: Element | null = icon; element && element.tagName !== 'BUTTON'; element = element.parentElement) {
+    if (element.closest('[aria-hidden="true"]')) continue
+    const ids = element.getAttribute('aria-labelledby')?.trim().split(/\s+/) ?? []
+    const referenced = ids.map((id) => container.ownerDocument.getElementById(id)?.textContent?.trim()).filter(Boolean).join(' ')
+    const title = Array.from(element.children).find((child) => child.tagName.toLowerCase() === 'title')?.textContent
+    const name = element.getAttribute('aria-label') ?? (referenced || element.getAttribute('title') || title)
+    if (name) names.push(name)
+  }
+  return names
+}
+
+// A tooltip or a label on a generic, non-image element is not enough: the
+// icon (or its image-role wrapper) must be reachable with its accessible name.
+function iconHasAccessibleName(container: HTMLElement, name: RegExp): boolean {
+  const svg = container.querySelector('button[data-testid^="library-row-"] svg')
+  return svg !== null && queryAllByRole(container, 'img', { name })
+    .some((image) => image === svg || image.contains(svg))
+}
+
+// Phosphor glyph geometry, not the text alternative: changing only an aria
+// label must not make one reused icon look like nine different icons in test 15.
+// The design-system table specifies Phosphor for the eight view kinds.
+function iconGeometry(container: HTMLElement): string {
+  const icon = container.querySelector('button[data-testid^="library-row-"] svg')
+  expect(icon, 'each row must render a view-kind glyph').not.toBeNull()
+  const geometry = Array.from(icon?.querySelectorAll('path, rect, circle, line, polyline, polygon') ?? [])
+    .map((shape) => shape.outerHTML)
+    .join('|')
+  expect(geometry, 'the icon must contain drawable geometry').not.toBe('')
+  return geometry
 }
 
 describe('Library tree row — per-kind view icon (US-5 AS-1, TDD test 15)', () => {
@@ -127,40 +151,33 @@ describe('Library tree row — per-kind view icon (US-5 AS-1, TDD test 15)', () 
           "LibraryEntryRow never reads entry.view.kind today — it only dispatches on " +
           'is_dir/isVault/fileTypeMeta(name, mime), so no kind-naming accessible name exists yet.',
       ).toBe(true)
+      expect(iconHasAccessibleName(container, new RegExp(`\\b${kind}\\b`, 'i')),
+        `the ${kind} glyph must be an accessible image named for its kind, not a hidden icon or a generic tooltip`).toBe(true)
     },
   )
 
   it('a view with NO kind shows the fallback view icon (EC-3), never the generic unknown-file icon', () => {
     const withKind = renderRow(viewEntry('table', 'item.view'))
     const withoutKind = renderRow(viewEntry(undefined, 'item.view'))
-    const namesWithKind = accessibleNames(withKind.container)
+    const unknown = renderRow({ ...viewEntry(undefined, 'item.unknown-extension'), is_view: false })
     const namesWithoutKind = accessibleNames(withoutKind.container)
-    // EC-3's fallback must still be a VIEW icon, not the same "unknown file"
-    // treatment a non-view file with an unrecognized extension gets — so its
-    // accessible-name set must differ from the "table" kind's, and must not
-    // itself claim to be "table" (or any other real kind).
-    expect(
-      namesWithoutKind.length > 0,
-      "a view with no view.kind must still carry SOME accessible name (the fallback view icon), " +
-        `not silently render with none. Found: ${JSON.stringify(namesWithoutKind)}`,
-    ).toBe(true)
-    expect(namesWithoutKind).not.toEqual(namesWithKind)
+    expect(namesWithoutKind.some((n) => /\bview\b/i.test(n)),
+      `the fallback icon must be named as a view: ${JSON.stringify(namesWithoutKind)}`).toBe(true)
+    expect(iconHasAccessibleName(withoutKind.container, /\bview\b/i),
+      'the fallback glyph needs a screen-reader-reachable view name').toBe(true)
+    expect(iconGeometry(withoutKind.container)).not.toBe(iconGeometry(withKind.container))
+    expect(iconGeometry(withoutKind.container)).not.toBe(iconGeometry(unknown.container))
   })
 
   it('9 distinct icon states: the 8 kinds plus the fallback never collide on the same accessible name', () => {
     const renders = [...ALL_VIEW_KINDS.map((k) => viewEntry(k, 'item.view')), viewEntry(undefined, 'item.view')]
-    const signatures = renders.map((e) => {
-      const { container } = renderRow(e)
-      return accessibleNames(container).slice().sort().join('|')
-    })
-    const distinct = new Set(signatures)
-    expect(
-      distinct.size,
-      `expected 9 distinct icon-state signatures (8 kinds + fallback per US-5's Independent Test), ` +
-        `got ${distinct.size} distinct value(s) across ${signatures.length} renders: ` +
-        `${JSON.stringify(signatures)}. Today every one of these renders identically (fileTypeMeta ` +
-        "keyed only on name/mime), since entry.view.kind is never read.",
-    ).toBe(9)
+    const rendered = renders.map((e) => renderRow(e).container)
+    const glyphs = rendered.map(iconGeometry)
+    const names = rendered.map((container) => accessibleNames(container).slice().sort().join('|'))
+    expect(new Set(glyphs).size,
+      'US-5 requires nine distinct visual icon states; nine different labels on one glyph do not count').toBe(9)
+    expect(new Set(names).size,
+      'US-5/MIN-008 requires nine distinct accessible kind/fallback names').toBe(9)
   })
 })
 
@@ -177,14 +194,10 @@ describe('Library tree row icon — accessible name states the kind in words (US
           `(e.g. "Calendar view") — found no aria-label/title naming "${kind}" among: ` +
           `${JSON.stringify(names)}.`,
       ).toBeTruthy()
-      // "in words", not a bare kind token with no context (MIN-008's own
-      // example is "Calendar view", not "calendar") — require at least one
-      // extra word/character beyond the bare kind token.
-      expect(
-        (match ?? '').length,
-        `accessible name "${match}" for kind "${kind}" is no longer than the bare kind token — ` +
-          'MIN-008 asks for the kind stated "in words" (e.g. "Calendar view"), not a bare token.',
-      ).toBeGreaterThan(kind.length)
+      // Testing Library applies the accessible-name algorithm here, so a
+      // tooltip on a hidden glyph cannot pass as a screen-reader alternative.
+      expect(iconHasAccessibleName(container, new RegExp(`\\b${kind}\\b`, 'i')),
+        `MIN-008 requires the ${kind} icon (or its image-role wrapper) to expose its kind to a screen reader`).toBe(true)
     },
   )
 })

@@ -7,16 +7,9 @@
 // views MUST be REFUSED (same LibraryMoveConflictError
 // view_tracked_transfer_refused, naming the tracked paths)."
 //
-// Verified by reading (2026-09-29): libraryFolderInCollection
-// (pkg/gateway/rest_library_knowledge_cascade.go) only checks whether the
-// MOVED FOLDER ITSELF is a knowledge base (detectKnowledgeBaseInRoot(root,
-// rel)) — if that folder is a plain subfolder of the enclosing collection
-// but contains a NESTED knowledge base one or more levels DEEPER in its own
-// subtree, that nested-KB check never fires, and the folder is governed as
-// an ordinary managed folder of the OUTER collection, or falls to plain
-// filesystem semantics — either way with no subtree walk for a nested KB or
-// its tracked views. There is no RenameWithViewMembership guard anywhere
-// (confirmed: zero hits for that name in pkg/).
+// The fixture enrolls a view in the nested KB's outside-vault membership
+// record, not just a derived_from marker. The response oracle is FR-VA-034;
+// execution remains unverified until the discovery branch compiles.
 //
 // Run (one at a time, per omnipus-shared-rules rule 2):
 //
@@ -27,7 +20,6 @@
 package gateway
 
 import (
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,22 +44,16 @@ func TestLibraryRename_RefusesSameCollectionFolderMoveContainingNestedKBWithTrac
 	nested := filepath.Join(outer, "NestedKB")
 	require.NoError(t, os.MkdirAll(nested, 0o755))
 	makeKnowledgeBase(t, nested, "Nested KB")
-	plantTrackedView(t, nested, "Projects.base", "Open.view")
+	plantTrackedView(t, api.homePath, nested, "Projects.base", "Open.view")
+	before := loadRecordedViews(t, api.homePath, nested)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/rename",
 		`{"from":"vault-a/Outer","to":"vault-a/Outer2"}`)
 
-	if w.Code != http.StatusConflict {
-		t.Fatalf("FR-VA-034/row 83: renaming/moving 'Outer' — a same-collection folder whose subtree "+
-			"contains a NESTED knowledge base (Outer/NestedKB) with a tracked view "+
-			"(NestedKB/Open.view, derived_from: Projects.base) — must be refused with 409 "+
-			"view_tracked_transfer_refused, naming the tracked path. Got HTTP %d: %s\n"+
-			"libraryFolderInCollection only checks whether the MOVED folder itself "+
-			"(detectKnowledgeBaseInRoot(root, \"Outer\")) is a knowledge base — it never walks the "+
-			"subtree for a NESTED one, so the nested KB and its tracked view were silently carried "+
-			"along by the rename. There is no RenameWithViewMembership guard anywhere in the codebase.",
-			w.Code, w.Body.String())
-	}
-	require.Contains(t, w.Body.String(), "view_tracked_transfer_refused")
-	require.Contains(t, w.Body.String(), "vault-a/Outer/NestedKB/Open.view")
+	requireTrackedConflict(t, w, "vault-a/Outer/NestedKB/Open.view")
+	require.Equal(t, before, loadRecordedViews(t, api.homePath, nested), "the nested KB remains enrolled after refusal")
+	require.DirExists(t, nested)
+	require.FileExists(t, filepath.Join(nested, "Open.view"))
+	require.NoDirExists(t, filepath.Join(vaultA, "Outer2"))
+	require.Equal(t, "Open.view", loadRecordedViews(t, api.homePath, nested).Bases["Projects.base"]["open"])
 }

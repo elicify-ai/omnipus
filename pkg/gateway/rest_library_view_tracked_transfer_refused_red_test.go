@@ -13,22 +13,10 @@
 // `derived_from` stripped (D-DUPLICATE) and carries no authority; the
 // source is untouched.
 //
-// Verified by reading (2026-09-29): handleLibraryTransfer
-// (pkg/gateway/rest_library_write.go) has NO knowledge-base-boundary check
-// and NO view/`.base` provenance check at all — it only calls checkCreateName
-// (destination-name collision) and, for a same-workspace MOVE, the
-// same-collection note-rename branch (libraryManagedEntryInCollection +
-// sameCollectionDestination); a cross-collection destination always falls
-// through to the plain library.MoveInto/CopyInto path. mapLibraryErr
-// (pkg/gateway/rest_library.go) never emits a `LibraryMoveConflictError`
-// body for any case — its switch only knows library.Err* sentinels, none of
-// which represents "tracked view leaving its collection". There is also no
-// pipeline-owned membership record anywhere (confirmed: zero non-test,
-// non-generated hits for "ViewMembership"/"view_membership" outside comments
-// — same finding va-qa2 recorded for tests 50/51). Each test below plants a
-// view carrying `derived_from` (the only provenance marker that exists
-// today) as the closest real proxy for "tracked", calls the REAL HTTP
-// handler, and observes the real (wrong) outcome.
+// After merging GREEN-security, each fixture below enrolls the view in the
+// real outside-vault record. The response oracle is the spec, not the prior
+// implementation. Execution remains UNVERIFIED until the discovery seam
+// compiles; a package build error is not a behavioral RED receipt.
 //
 // Run (one at a time, per omnipus-shared-rules rule 2):
 //
@@ -50,6 +38,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,12 +61,9 @@ func twoKBWorkspace(t *testing.T) (api *restAPI, ws, vaultA, vaultB string) {
 	return api, ws, vaultA, vaultB
 }
 
-// plantTrackedView writes a `.base` file declaring one view and the `.view`
-// file itself, `derived_from`-marked to that `.base` — the provenance marker
-// FR-VA-031's "tracked" concept is defined over (a view in its `.base`'s
-// membership record; `derived_from` is the closest real proxy, per this
-// file's header).
-func plantTrackedView(t *testing.T, vault, baseRel, viewRel string) {
+// plantTrackedView creates both files AND the private pipeline-owned membership
+// entry. A marker alone is not authority (FR-VA-031, FR-VA-033).
+func plantTrackedView(t *testing.T, home, vault, baseRel, viewRel string) {
 	t.Helper()
 	basePath := filepath.Join(vault, filepath.FromSlash(baseRel))
 	require.NoError(t, os.MkdirAll(filepath.Dir(basePath), 0o755))
@@ -87,6 +73,13 @@ func plantTrackedView(t *testing.T, vault, baseRel, viewRel string) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(viewPath), 0o755))
 	require.NoError(t, os.WriteFile(viewPath,
 		[]byte("name: open\nlabel: Open\nkind: table\nsource: "+baseRel+"\nderived_from: "+baseRel+"\n"), 0o644))
+	require.NoError(t, knowledge.WithViewMembership(home, vault, func(m *knowledge.ViewMembership) error {
+		if m.Bases[baseRel] == nil {
+			m.Bases[baseRel] = make(map[string]string)
+		}
+		m.Bases[baseRel]["open"] = viewRel
+		return knowledge.SaveViewMembership(m)
+	}))
 }
 
 // transferBody builds the JSON body handleLibraryTransfer's
@@ -102,21 +95,15 @@ func transferBody(ws, fromPath, toPath string) string {
 // view_tracked_transfer_refused, tracked_paths naming the view.
 func TestLibraryTransfer_RefusesCrossKBMoveOfTrackedView(t *testing.T) {
 	api, ws, vaultA, _ := twoKBWorkspace(t)
-	plantTrackedView(t, vaultA, "Projects.base", "Open.view")
+	plantTrackedView(t, api.homePath, vaultA, "Projects.base", "Open.view")
+	before := loadRecordedViews(t, api.homePath, vaultA)
 
 	w := libPostJSON(t, api, "/api/v1/library/move", transferBody(ws, "vault-a/Open.view", "vault-b/Open.view"))
 
-	if w.Code != http.StatusConflict {
-		t.Fatalf("FR-VA-031/row 74: moving a tracked .view (derived_from: Projects.base) out of its "+
-			"collection into a different knowledge base must be refused with 409 "+
-			"view_tracked_transfer_refused. Got HTTP %d: %s\n"+
-			"handleLibraryTransfer has no knowledge-base-boundary or provenance check at all — the move "+
-			"silently succeeded — and there is no pipeline-owned membership record to consult for "+
-			"'tracked' in the first place (per this file's header). Those are the missing seams.",
-			w.Code, w.Body.String())
-	}
-	require.Contains(t, w.Body.String(), "view_tracked_transfer_refused")
-	require.Contains(t, w.Body.String(), "vault-a/Open.view")
+	requireTrackedConflict(t, w, "vault-a/Open.view")
+	require.Equal(t, before, loadRecordedViews(t, api.homePath, vaultA), "refusing a transfer leaves authority unchanged")
+	require.FileExists(t, filepath.Join(vaultA, "Open.view"))
+	require.NoFileExists(t, filepath.Join(workDir(api, ws), "vault-b", "Open.view"))
 }
 
 // TestLibraryTransfer_RefusesCrossKBMoveOfBaseWithTrackedViews is TDD Plan
@@ -125,22 +112,15 @@ func TestLibraryTransfer_RefusesCrossKBMoveOfTrackedView(t *testing.T) {
 // view paths.
 func TestLibraryTransfer_RefusesCrossKBMoveOfBaseWithTrackedViews(t *testing.T) {
 	api, ws, vaultA, _ := twoKBWorkspace(t)
-	plantTrackedView(t, vaultA, "Projects.base", "Open.view")
+	plantTrackedView(t, api.homePath, vaultA, "Projects.base", "Open.view")
+	before := loadRecordedViews(t, api.homePath, vaultA)
 
 	w := libPostJSON(t, api, "/api/v1/library/move", transferBody(ws, "vault-a/Projects.base", "vault-b/Projects.base"))
 
-	if w.Code != http.StatusConflict {
-		t.Fatalf("FR-VA-031/row 75: moving a .base file that has tracked views (Open.view, "+
-			"derived_from: Projects.base) out of its collection must be refused with 409 "+
-			"view_tracked_transfer_refused, naming the tracked view path(s). Got HTTP %d: %s\n"+
-			"handleLibraryTransfer has no check for '.base has tracked views' at all — the move "+
-			"silently succeeded, leaving Open.view behind with a derived_from that now names nothing "+
-			"in Vault A. Missing seam: the pipeline-owned membership record FR-VA-031 keys 'tracked' "+
-			"off does not exist anywhere in the codebase.",
-			w.Code, w.Body.String())
-	}
-	require.Contains(t, w.Body.String(), "view_tracked_transfer_refused")
-	require.Contains(t, w.Body.String(), "vault-a/Open.view")
+	requireTrackedConflict(t, w, "vault-a/Open.view")
+	require.Equal(t, before, loadRecordedViews(t, api.homePath, vaultA), "refusing a transfer leaves authority unchanged")
+	require.FileExists(t, filepath.Join(vaultA, "Projects.base"))
+	require.NoFileExists(t, filepath.Join(workDir(api, ws), "vault-b", "Projects.base"))
 }
 
 // TestLibraryTransfer_RefusesCrossKBFolderMoveContainingTrackedView is TDD
@@ -148,21 +128,15 @@ func TestLibraryTransfer_RefusesCrossKBMoveOfBaseWithTrackedViews(t *testing.T) 
 // whose subtree contains a tracked `.view`, must be refused the same way.
 func TestLibraryTransfer_RefusesCrossKBFolderMoveContainingTrackedView(t *testing.T) {
 	api, ws, vaultA, _ := twoKBWorkspace(t)
-	plantTrackedView(t, vaultA, "Projects.base", "Sub/Open.view")
+	plantTrackedView(t, api.homePath, vaultA, "Projects.base", "Sub/Open.view")
+	before := loadRecordedViews(t, api.homePath, vaultA)
 
 	w := libPostJSON(t, api, "/api/v1/library/move", transferBody(ws, "vault-a/Sub", "vault-b/Sub"))
 
-	if w.Code != http.StatusConflict {
-		t.Fatalf("FR-VA-031/row 76: moving a FOLDER whose subtree contains a tracked .view "+
-			"(Sub/Open.view, derived_from: Projects.base) to a different knowledge base must be "+
-			"refused with 409 view_tracked_transfer_refused, naming the tracked path. Got HTTP %d: "+
-			"%s\nhandleLibraryTransfer treats a folder move identically to a file move (plain "+
-			"library.MoveInto) — it never walks the subtree for tracked views, because there is no "+
-			"membership record to check against for any path, folder or file.",
-			w.Code, w.Body.String())
-	}
-	require.Contains(t, w.Body.String(), "view_tracked_transfer_refused")
-	require.Contains(t, w.Body.String(), "vault-a/Sub/Open.view")
+	requireTrackedConflict(t, w, "vault-a/Sub/Open.view")
+	require.Equal(t, before, loadRecordedViews(t, api.homePath, vaultA), "refusing a transfer leaves authority unchanged")
+	require.FileExists(t, filepath.Join(vaultA, "Sub", "Open.view"))
+	require.NoDirExists(t, filepath.Join(workDir(api, ws), "vault-b", "Sub"))
 }
 
 // TestLibraryTransfer_RefusesMoveOfTrackedViewToPlainWorkspaceStorage is TDD
@@ -171,20 +145,16 @@ func TestLibraryTransfer_RefusesCrossKBFolderMoveContainingTrackedView(t *testin
 // storage, not only into another knowledge base.
 func TestLibraryTransfer_RefusesMoveOfTrackedViewToPlainWorkspaceStorage(t *testing.T) {
 	api, ws, vaultA, _ := twoKBWorkspace(t)
-	plantTrackedView(t, vaultA, "Projects.base", "Open.view")
+	plantTrackedView(t, api.homePath, vaultA, "Projects.base", "Open.view")
 	require.NoError(t, os.MkdirAll(filepath.Join(workDir(api, ws), "scratch"), 0o755))
+	before := loadRecordedViews(t, api.homePath, vaultA)
 
 	w := libPostJSON(t, api, "/api/v1/library/move", transferBody(ws, "vault-a/Open.view", "scratch/Open.view"))
 
-	if w.Code != http.StatusConflict {
-		t.Fatalf("FR-VA-031/row 79 (team-lead clarification): moving a tracked .view into plain, "+
-			"non-knowledge-base workspace storage ('scratch/') must be refused with 409 "+
-			"view_tracked_transfer_refused, exactly as a transfer into another knowledge base is. "+
-			"Got HTTP %d: %s\nhandleLibraryTransfer has no concept of 'destination is not a knowledge "+
-			"base' either — the same missing membership-record check this whole FR needs.",
-			w.Code, w.Body.String())
-	}
-	require.Contains(t, w.Body.String(), "view_tracked_transfer_refused")
+	requireTrackedConflict(t, w, "vault-a/Open.view")
+	require.Equal(t, before, loadRecordedViews(t, api.homePath, vaultA), "refusing a transfer leaves authority unchanged")
+	require.FileExists(t, filepath.Join(vaultA, "Open.view"))
+	require.NoFileExists(t, filepath.Join(workDir(api, ws), "scratch", "Open.view"))
 }
 
 // TestLibraryTransfer_CopyOutOfTrackedViewStripsMarkerAndLeavesSourceUntouched
@@ -193,7 +163,7 @@ func TestLibraryTransfer_RefusesMoveOfTrackedViewToPlainWorkspaceStorage(t *test
 // — it carries no authority — and the source must be untouched.
 func TestLibraryTransfer_CopyOutOfTrackedViewStripsMarkerAndLeavesSourceUntouched(t *testing.T) {
 	api, ws, vaultA, _ := twoKBWorkspace(t)
-	plantTrackedView(t, vaultA, "Projects.base", "Open.view")
+	plantTrackedView(t, api.homePath, vaultA, "Projects.base", "Open.view")
 
 	w := libPostJSON(t, api, "/api/v1/library/copy", transferBody(ws, "vault-a/Open.view", "vault-b/Open.view"))
 	require.Equal(t, http.StatusCreated, w.Code, "a copy out of the collection must stay ALLOWED per "+
@@ -206,13 +176,9 @@ func TestLibraryTransfer_CopyOutOfTrackedViewStripsMarkerAndLeavesSourceUntouche
 
 	dstBody, dstErr := os.ReadFile(filepath.Join(workDir(api, ws), "vault-b", "Open.view"))
 	require.NoError(t, dstErr, "the copy must land at the destination path")
-	if strings.Contains(string(dstBody), "derived_from:") {
-		t.Fatalf("FR-VA-031 clarification/row 80: a copy of a tracked view taken OUT of its collection "+
-			"must have derived_from stripped — it carries no authority. The copy at vault-b/Open.view "+
-			"still reads:\n%s\nhandleLibraryTransfer's copy mode (library.CopyInto) has no per-file "+
-			"provenance-stripping step at all (confirmed: zero hits for "+
-			"'RewriteCopiedViewIdentity'/'StripDerivedFrom' anywhere in pkg/) — the shared pkg/records "+
-			"rewrite function D-DUPLICATE calls for is the missing seam.",
-			dstBody)
-	}
+	require.False(t, strings.Contains(string(dstBody), "derived_from:"),
+		"FR-VA-031/row 80: copy must have its derived_from stripped and carry no authority: %s", dstBody)
+	require.Equal(t, "Open.view", loadRecordedViews(t, api.homePath, vaultA).Bases["Projects.base"]["open"])
+	require.Empty(t, loadRecordedViews(t, api.homePath, filepath.Join(workDir(api, ws), "vault-b")).Bases,
+		"the destination copy must never gain source management authority")
 }

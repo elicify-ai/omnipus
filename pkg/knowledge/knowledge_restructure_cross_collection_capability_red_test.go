@@ -10,8 +10,8 @@
 // op has NO destination-collection parameter at all. Read in full
 // (pkg/knowledge/knowledge_restructure.go):
 //   - Parameters(): "op", "collection", "path", "new_name", "new_folder",
-//     "allow_ambiguity", "trashed_at", "folder" — one "collection" argument,
-//     never two.
+//     "allow_ambiguity", "trashed_at", "folder", "pending_move_id" — one
+//     "collection" argument, never a destination collection.
 //   - execRenameMove resolves `to` as
 //     path.Join(normalizeMoveFolder(new_folder), newName) and then opens
 //     `NewCollectionRoot(OSLinkFS(), target.col.Root)` — target.col is the

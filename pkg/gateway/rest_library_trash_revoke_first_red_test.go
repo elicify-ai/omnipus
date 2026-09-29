@@ -1,85 +1,110 @@
-// Omnipus — RED tests for spec "Library views, anywhere"
-// (docs/internal/specs/library-views-anywhere-spec.md), FR-VA-036, TDD Plan
-// row 85 (va-qa3 dispatch, P4, team-lead ruling 2026-09-29).
-//
-// Requirement: Library folder trash AND the knowledge_restructure trash op
-// revoke memberships FIRST, then trash — never using the pending-move plan
-// or Retry. Test arc: revocation persisted (views released) -> trash fails
-// (injected) -> response is a visible `trash_incomplete` naming the paths
-// (REST: 409 LibraryMoveConflictError code trash_incomplete on
-// DELETE /library/{workspace_id}/entries) -> trashing again succeeds
-// idempotently. ALSO a nested-root folder trash: the subtree contains
-// nested KB roots; the op takes sorted locks on the enclosing root and
-// every nested root, and revokes memberships in ALL affected roots BEFORE
-// trashing; recorded views inside the trashed folder are released even
-// when their `.base` lives outside it. Assert NO authority remains at ANY
-// point: a copy planted at a trashed path is never deleted or rewritten by
-// a later `.base` save.
-//
-// Verified by reading (2026-09-29): handleLibraryEntryDelete
-// (pkg/gateway/rest_library_write.go, full function read) has ZERO
-// `.base`/view-membership awareness — a governed note/folder is routed to
-// trashNoteInCollection with no revoke step; an ungoverned path just calls
-// root.Delete. mapLibraryErr never emits a `trash_incomplete` code (its
-// switch only knows library.Err* sentinels). There is no subtree-walk
-// helper for NESTED knowledge-base roots anywhere (detectKnowledgeBaseInRoot
-// answers only "is this ONE path a KB", never a recursive subtree walk;
-// confirmed by grep for "nested.*[Rr]oot"/"discoverNested" — only
-// ErrNestedKnowledgeBase, a KB-inside-KB CREATION refusal, unrelated).
-// knowledge_restructure's execTrash (pkg/knowledge/knowledge_restructure.go)
-// touches only the text/properties index (bumpIndexEpochOrWarn,
-// RemoveFromIndexesForFolderTrash) — nothing membership-related. There is
-// no pipeline-owned membership record anywhere (same finding every other
-// P2-P4 test file in this dispatch documents).
-//
-// BLOCKED, every case, for the SAME root cause: there is no revoke step at
-// all (nothing to persist "views released", nothing to inject a failure
-// AFTER), no trash_incomplete code path, and no nested-root subtree-walk —
-// none of the fixtures below can be constructed against real code.
-//
-// Run (one at a time, per omnipus-shared-rules rule 2):
-//
-//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestLibraryTrash_RevokesBeforeTrashingAndReportsTrashIncompleteOnInjectedFailure$' ./pkg/gateway/
-//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestLibraryTrash_RetryingAfterTrashIncompleteSucceedsIdempotently$' ./pkg/gateway/
-//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestLibraryTrash_NestedRootFolderTakesSortedLocksAndRevokesAllRootsBeforeTrashing$' ./pkg/gateway/
-//	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestLibraryTrash_NoAuthorityRemainsAtAnyPointForACopyPlantedAtTheTrashedPath$' ./pkg/gateway/
-//
+// Omnipus — FR-VA-036 / TDD row 85: Library trash revokes recorded
+// authority before acting, reports post-revocation failure, and can repeat.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 package gateway
 
-import "testing"
+import (
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/stretchr/testify/require"
+)
+
+func incompleteTrashFixture(t *testing.T) (*restAPI, string, string, string) {
+	t.Helper()
+	api, ws, vault, _ := twoKBWorkspace(t)
+	plantTrackedView(t, api.homePath, vault, "Projects.base", "Sub/Open.view")
+	// Block the trash destination with a regular file. Preflight and marker
+	// stripping still work; the engine must fail AFTER the record save.
+	blocked := filepath.Join(knowledge.MarkerDir(vault), "trash")
+	require.NoError(t, os.WriteFile(blocked, []byte("blocked"), 0o600))
+	return api, ws, vault, blocked
+}
+
+func requireTrashIncomplete(t *testing.T, api *restAPI, ws, folder, path string, additionalPaths ...string) {
+	t.Helper()
+	w := libDelete(t, api, "/api/v1/library/"+ws+"/entries?path="+folder)
+	require.Equal(t, http.StatusConflict, w.Code, "post-revocation trash failure must be visible: %s", w.Body.String())
+	var body gen.LibraryMoveConflictError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, gen.LibraryMoveConflictErrorCodeTrashIncomplete, body.Code)
+	require.NotNil(t, body.Paths)
+	for _, expected := range append([]string{path}, additionalPaths...) {
+		require.Contains(t, *body.Paths, expected, "incomplete trash must identify every affected view")
+	}
+	require.NotContains(t, w.Body.String(), "pending_move_id", "trash is not a rename Retry receipt")
+}
 
 func TestLibraryTrash_RevokesBeforeTrashingAndReportsTrashIncompleteOnInjectedFailure(t *testing.T) {
-	t.Fatal("BLOCKED: FR-VA-036 needs a real revoke-memberships-then-trash pipeline to inject a " +
-		"trash-step failure into and observe a 409 LibraryMoveConflictError code trash_incomplete — " +
-		"handleLibraryEntryDelete has zero .base/view-membership awareness at all (confirmed by " +
-		"reading pkg/gateway/rest_library_write.go in full: a governed path goes straight to " +
-		"trashNoteInCollection, no revoke step exists), and mapLibraryErr never emits trash_incomplete " +
-		"for any error. There is no revoke step to persist 'views released' before, and no failure " +
-		"injection seam.")
+	api, ws, vault, _ := incompleteTrashFixture(t)
+	requireTrashIncomplete(t, api, ws, "vault-a/Sub", "vault-a/Sub/Open.view")
+	require.DirExists(t, filepath.Join(vault, "Sub"), "trash failed without moving the source")
+	require.Empty(t, loadRecordedViews(t, api.homePath, vault).Bases,
+		"all authority must have been revoked before the injected trash failure")
+	body, err := os.ReadFile(filepath.Join(vault, "Sub", "Open.view"))
+	require.NoError(t, err)
+	require.False(t, strings.Contains(string(body), "derived_from:"), "the released view marker is stripped")
 }
 
 func TestLibraryTrash_RetryingAfterTrashIncompleteSucceedsIdempotently(t *testing.T) {
-	t.Fatal("BLOCKED: this needs the SAME missing trash_incomplete outcome above to exist first — " +
-		"there is no incomplete-trash state to retry against, since no revoke-then-trash pipeline " +
-		"exists at all.")
+	api, ws, vault, blocked := incompleteTrashFixture(t)
+	requireTrashIncomplete(t, api, ws, "vault-a/Sub", "vault-a/Sub/Open.view")
+	require.NoError(t, os.Remove(blocked))
+	w := libDelete(t, api, "/api/v1/library/"+ws+"/entries?path=vault-a/Sub")
+	require.Equal(t, http.StatusNoContent, w.Code, "repeat trash must finish without re-enrolling: %s", w.Body.String())
+	require.NoDirExists(t, filepath.Join(vault, "Sub"))
+	require.Empty(t, loadRecordedViews(t, api.homePath, vault).Bases)
+	copies, err := filepath.Glob(filepath.Join(knowledge.MarkerDir(vault), "trash", "*", "Sub", "Open.view"))
+	require.NoError(t, err)
+	require.Len(t, copies, 1)
 }
 
 func TestLibraryTrash_NestedRootFolderTakesSortedLocksAndRevokesAllRootsBeforeTrashing(t *testing.T) {
-	t.Fatal("BLOCKED: FR-VA-036's nested-root case needs (a) a subtree-walk that discovers every " +
-		"nested knowledge-base root inside a trashed folder — no such helper exists anywhere " +
-		"(detectKnowledgeBaseInRoot only answers 'is this ONE path a KB', confirmed by grep for " +
-		"nested-root/discovery helpers — zero hits beyond the unrelated ErrNestedKnowledgeBase " +
-		"creation-refusal check), (b) sorted locks across all affected roots — no membership lock " +
-		"exists (see FR-VA-038's finding), and (c) a revoke step per root — none exists. There is " +
-		"nothing to plant a 'recorded view outside the trashed folder, .base inside it' fixture " +
-		"against.")
+	api, ws, outer, _ := twoKBWorkspace(t)
+	plantTrackedView(t, api.homePath, outer, "Projects.base", "Outer/Outer.view")
+	nested := filepath.Join(outer, "Outer", "NestedKB")
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+	makeKnowledgeBase(t, nested, "Nested KB")
+	plantTrackedView(t, api.homePath, nested, "Nested.base", "Nested.view")
+	blocked := filepath.Join(knowledge.MarkerDir(outer), "trash")
+	require.NoError(t, os.WriteFile(blocked, []byte("blocked"), 0o600))
+	requireTrashIncomplete(t, api, ws, "vault-a/Outer", "vault-a/Outer/Outer.view",
+		"vault-a/Outer/NestedKB/Nested.view")
+	require.DirExists(t, nested, "injected trash failure leaves the nested root in place")
+	require.Empty(t, loadRecordedViews(t, api.homePath, outer).Bases,
+		"outside-folder base must release its view inside the folder")
+	require.Empty(t, loadRecordedViews(t, api.homePath, nested).Bases,
+		"the nested KB must also revoke before the parent trash starts")
+	require.FileExists(t, filepath.Join(nested, "Nested.view"))
 }
 
-func TestLibraryTrash_NoAuthorityRemainsAtAnyPointForACopyPlantedAtTheTrashedPath(t *testing.T) {
-	t.Fatal("BLOCKED: asserting 'a copy planted at a trashed path is never deleted or rewritten by a " +
-		"later .base save' presupposes a working revoke-then-trash pipeline whose trashed-path " +
-		"authority state could be inspected at each step — none of that pipeline exists (see this " +
-		"file's header). There is no authority-tracking concept to assert 'none remains' about.")
+func TestLibraryTrash_CopyPlantedAtTrashedPathCannotBeRewrittenOrDeleted(t *testing.T) {
+	api, ws, vault, _ := twoKBWorkspace(t)
+	plantTrackedView(t, api.homePath, vault, "Projects.base", "Sub/Open.view")
+	w := libDelete(t, api, "/api/v1/library/"+ws+"/entries?path=vault-a/Sub")
+	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+	copyPath := filepath.Join(vault, "Sub", "Open.view")
+	require.NoError(t, os.MkdirAll(filepath.Dir(copyPath), 0o755))
+	planted := []byte("name: open\nkind: table\nderived_from: Projects.base\n")
+	require.NoError(t, os.WriteFile(copyPath, planted, 0o600))
+	require.NoError(t, knowledge.WithViewMembership(api.homePath, vault, func(m *knowledge.ViewMembership) error {
+		deleted, err := m.DeleteManagedView("Projects.base", "open")
+		require.NoError(t, err)
+		require.False(t, deleted, "a later base save cannot delete the planted copy")
+		written, err := m.RewriteManagedView("Projects.base", "open", planted)
+		require.Error(t, err, "a later base save cannot rewrite an unrecorded copy")
+		require.False(t, written)
+		return nil
+	}))
+	body, err := os.ReadFile(copyPath)
+	require.NoError(t, err)
+	require.Equal(t, planted, body)
+	require.Empty(t, loadRecordedViews(t, api.homePath, vault).Bases)
 }
