@@ -17,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Select,
   SelectContent,
@@ -382,7 +383,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     if (detailQuery.isSuccess && detail !== null && detail.seen === false && folder !== 'drafts' && selectedRef !== null && !seenMutation.isPending) {
       seenMutation.mutate(selectedRef)
     }
-  })
+  }, [detailQuery.isSuccess, detail?.seen, folder, selectedRef])
 
   // Compose dialog state: null = closed. reply carries the open message's
   // identity for In-Reply-To (US-5 AS-3).
@@ -826,6 +827,8 @@ function AttachmentList({ workspaceId, agentId, folder, messageRef, attachments 
   messageRef: string
   attachments: MailMessage['attachments']
 }) {
+  const addToast = useUiStore((s) => s.addToast)
+
   return (
     <ul aria-label="Attachments" className="flex flex-col gap-[var(--space-1)]">
       {attachments.map((attachment) => (
@@ -840,7 +843,9 @@ function AttachmentList({ workspaceId, agentId, folder, messageRef, attachments 
             variant="ghost"
             size="sm"
             onClick={() => {
-              void downloadMailAttachment({ workspaceId, agentId, folder, messageRef, partIndex: attachment.part_index, filename: attachment.filename, retry: true })
+              downloadMailAttachment({ workspaceId, agentId, folder, messageRef, partIndex: attachment.part_index, filename: attachment.filename, retry: true }).catch(
+                (err: unknown) => addToast({ message: mailErrorCode(err), variant: 'error' }),
+              )
             }}
           >
             Download
@@ -877,7 +882,7 @@ function ListSkeleton() {
   return (
     <div aria-hidden="true" className="flex flex-col gap-[var(--space-2)]">
       {[0, 1, 2].map((row) => (
-        <div key={row} className="h-12 rounded-md bg-[color-mix(in_srgb,var(--color-surface-3)_100%,transparent)] animate-pulse" />
+        <Skeleton key={row} className="h-12" />
       ))}
     </div>
   )

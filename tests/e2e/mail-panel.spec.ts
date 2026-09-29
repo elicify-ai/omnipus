@@ -174,4 +174,59 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     await page.getByRole('tab', { name: /^sent$/i }).click()
     await expect(page.getByText('With file')).toBeVisible()
   })
+
+  // pr-test-analyzer finding (feature-gate round 1): Mail had no real-browser
+  // coverage for the CRIT-001/FR-013 "Escape race" class that
+  // panelEscape.ts / _fullscreen.panel.$panelId.tsx already handle for other
+  // panels (side-panel-expand-multitab.spec.ts W4 is the sibling case for
+  // Library). Expected behaviour, from the shell contract, not from running
+  // the app: Expand opens Mail full-screen in a NEW tab and closes the
+  // docked panel in the original one (W4); Escape in the full-screen tab
+  // closes that tab and RE-DOCKS the panel in the original tab with the
+  // SAME folder/message context it was expanded with (usePanelShell.ts::
+  // expandActivePanel's registerPanelPopout/onClosed re-open, mirrored by
+  // MailPanel's own onLocationChange -> registerExpandContext reporting) —
+  // never a bare close with the docked panel gone, and never a navigation
+  // away from the workspace chat route.
+  test('expand to fullscreen, then Escape, returns to the docked panel with the open message intact (CRIT-001/FR-013)', async ({ browser }) => {
+    const page = await mailPage(browser)
+    await openMail(page)
+    const inboxTab = page.getByRole('tab', { name: /inbox/i })
+    await expect(inboxTab).toHaveAttribute('aria-selected', 'true')
+
+    const [detailResponse] = await Promise.all([
+      page.waitForResponse((response) => {
+        const url = new URL(response.url())
+        return response.request().method() === 'GET'
+          && /\/folders\/inbox\/messages\/[^/]+$/.test(url.pathname)
+      }),
+      page.getByText('Quarterly').click(),
+    ])
+    expect(detailResponse.status()).toBe(200)
+    await expect(page.getByText('The numbers are in.')).toBeVisible()
+
+    // Expand: a new tab opens with the full-screen route, and the docked
+    // panel in the original tab disappears (W4's own assertion for Library).
+    const opened = page.context().waitForEvent('page')
+    await page.getByTestId('panel-expand').click()
+    const pop = await opened
+    await expect(pop).toHaveURL(/\/panel\/mail/)
+    await expect(page.getByTestId('side-panel')).toHaveCount(0)
+
+    // The full-screen tab carries the SAME message context over (the
+    // context this test exercises on the way back).
+    await expect(pop.getByTestId('fullscreen-panel')).toBeVisible()
+    await expect(pop.getByText('The numbers are in.')).toBeVisible()
+
+    // Escape in the full-screen tab must close it and re-dock Mail in the
+    // ORIGINAL tab — not just close the tab and leave nothing docked, and
+    // not navigate the original tab away from workspace chat.
+    await pop.keyboard.press('Escape')
+    await pop.waitForEvent('close')
+
+    await expect(page).toHaveURL(/\/workspaces\/[^/]+\/chat/)
+    await expect(page.getByTestId('mail-panel')).toBeVisible()
+    await expect(inboxTab).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByText('The numbers are in.')).toBeVisible()
+  })
 })

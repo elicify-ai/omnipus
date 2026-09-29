@@ -10,8 +10,8 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
 import { clearLibraryAttachments } from '@/lib/library-attachment'
-import { confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
 import { resolveWorkspaceSwitch } from '@/components/panel-shell/workspaceSwitch'
+import { getPanelDefinition } from '@/components/panel-shell/registry'
 import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
 import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 import { ChatControls } from '@/components/chat/ChatControls'
@@ -107,10 +107,7 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
       panelId: activePanel.id,
       openedWorkspaceId,
       nextWorkspaceId: workspaceId,
-      beforeLeave:
-        activePanel.id === 'library' && openedWorkspaceId
-          ? confirmDiscardLibraryEdits
-          : undefined,
+      beforeLeave: openedWorkspaceId ? getPanelDefinition(activePanel.id)?.beforeLeave : undefined,
     }).then((decision) => {
       if (previousRouteWorkspaceRef.current !== workspaceId) return
       if (decision.action === 'cancel') {
