@@ -25,6 +25,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/microcosm-cc/bluemonday"
 )
 
@@ -489,42 +490,34 @@ func (p *mailPreviewRoutes) serveImage(w http.ResponseWriter, r *http.Request, t
 	_, _ = w.Write(data)
 }
 
-// mailAddrForbidden reports whether an IP may never be dialed (MC-41):
-// loopback, private ranges, link-local unicast/multicast (link-local also
-// covers the cloud metadata address 169.254.169.254), multicast, and
-// unspecified.
-// mailCGNATRange is RFC 6598's shared address space (100.64.0.0/10) —
-// net.IP.IsPrivate() only recognizes RFC 1918's three ranges (10.0.0.0/8,
-// 172.16.0.0/12, 192.168.0.0/16), so a CGNAT-range address sails through the
-// checks below unblocked without this explicit clause. The canonical SSRF
-// checker (pkg/security/ssrf.go::SSRFChecker, blockedCIDRs) already covers
-// this range; mailAddrForbidden adds it directly rather than delegating,
-// since delegating would require threading a possibly-nil, globally
-// configurable SSRFChecker (restAPI.ssrfChecker is nil when SSRF protection
-// is disabled) into this narrow, always-on image-proxy pinning check — a
-// bigger behavioral change than the finding calls for.
-var mailCGNATRange = mustParseCIDR("100.64.0.0/10")
+// mailImageSSRFChecker enforces MC-41's pinned remote-image fetch IP screen
+// using the canonical SSRF checker (pkg/security/ssrf.go::SSRFChecker)
+// instead of a hand-rolled duplicate range list (the delta-review round-2
+// finding: the prior round's hand-rolled mailAddrForbidden added the RFC
+// 6598 CGNAT range directly rather than delegating, and — being a
+// duplicate, not a delegation — missed every other range the canonical
+// checker already covers: TEST-NET-1/2/3, the benchmarking range, the IETF
+// protocol-assignments range, and IPv6-embedded-IPv4 unwrapping).
+//
+// A zero-value security.SSRFChecker is used here deliberately, NOT
+// restAPI.ssrfChecker (which is nil when SSRF protection is globally
+// disabled by the operator): MC-41's pinned image-proxy screen is an
+// always-on security boundary that must never depend on the general SSRF
+// toggle. SSRFChecker's zero value is documented (pkg/security/ssrf.go,
+// SSRFChecker's doc comment) as safe to use directly — it lazily populates
+// the full built-in private/reserved-range block list on first use and
+// fails CLOSED, exactly matching NewSSRFChecker(nil)'s behavior, with no
+// allowlist.
+var mailImageSSRFChecker security.SSRFChecker
 
-// mustParseCIDR parses a compile-time-constant CIDR literal. Panics only on
-// a programmer error (a malformed literal), never on caller input.
-func mustParseCIDR(s string) *net.IPNet {
-	_, n, err := net.ParseCIDR(s)
-	if err != nil {
-		panic("mail: invalid CIDR literal " + s + ": " + err.Error())
-	}
-	return n
-}
-
-func mailAddrForbidden(ip net.IP) bool {
+// mailImageAddrForbidden reports whether ip may never be dialed for the
+// MC-41 pinned remote-image fetch, delegating to the canonical SSRF
+// checker's CheckIP rather than re-implementing an IP-range block list.
+func mailImageAddrForbidden(ip net.IP) bool {
 	if ip == nil {
 		return true
 	}
-	if v4 := ip.To4(); v4 != nil && mailCGNATRange.Contains(v4) {
-		return true
-	}
-	return ip.IsLoopback() || ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() || ip.IsUnspecified()
+	return mailImageSSRFChecker.CheckIP(ip) != nil
 }
 
 // fetchRemoteImage performs the MC-41 pinned fetch: https only; DNS resolved
@@ -544,7 +537,7 @@ func (p *mailPreviewRoutes) fetchRemoteImage(ctx context.Context, rawURL string)
 	}
 	pinned := ""
 	for _, ia := range addrs {
-		if !mailAddrForbidden(ia.IP) {
+		if !mailImageAddrForbidden(ia.IP) {
 			pinned = ia.IP.String()
 			break
 		}
