@@ -296,7 +296,7 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 				"--no-chrome",
 				"--model <configured model> (only when a model is configured)",
 				"--dangerously-skip-permissions",
-				"--max-turns <configured max turns> (only when a turn cap is configured)",
+				"--max-turns <the agent's tool-iteration limit> (always passed; a run without a turn cap is refused)",
 			},
 			Notes: "The prompt is delivered via stdin, with no positional prompt argument at all — never via a --prompt flag. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is passed unconditionally (operator decision, issue #488, reversing the original FR-5.3/US-5 stance of using --permission-mode acceptEdits instead) — this matches codex/opencode, which already ran permission-bypassed; see the tracked issue for the sandbox-boundary follow-up this reversal implies for claude specifically. Operator cli_args are appended after this list; a redundant --dangerously-skip-permissions or an attempt to change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the latter because the driver's own NDJSON stream parser requires stream-json output.",
 		},
@@ -571,13 +571,29 @@ func computeAgentStatus(agentID string, activeIDs map[string]bool, soul string, 
 	return "idle"
 }
 
-// applyAgentOverrides copies per-agent execution overrides onto a
-// defaults-seeded wire Agent. MaxToolIterations: per-agent value wins when
-// set (>0); 0 means "inherit" and leaves the effective default in place.
-func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
-	if ac.MaxToolIterations > 0 {
-		ag.MaxToolIterations = ac.MaxToolIterations
+// applyAgentMaxToolIterations sets the four #904 tool-iteration fields of a
+// wire Agent from the single resolver (config.ResolveMaxToolIterations):
+// the effective value, its source, the agent's own stored value (absent when
+// it has none) and whether that own value is ignored because it is above the
+// global (D1). ac may be nil (no own value). Every Agent response path
+// (list/get/create/update) funnels through here — no handler re-derives it.
+func applyAgentMaxToolIterations(ag *gen.Agent, defaults *config.AgentDefaults, ac *config.AgentConfig) {
+	r := config.ResolveMaxToolIterations(defaults, ac)
+	ag.MaxToolIterations = r.Effective
+	ag.MaxToolIterationsSource = gen.MaxToolIterationsSource(r.Source)
+	ag.MaxToolIterationsOverrideIgnored = r.OverrideIgnored
+	ag.MaxToolIterationsOverride = nil
+	if r.HasOverride {
+		override := r.Override
+		ag.MaxToolIterationsOverride = &override
 	}
+}
+
+// applyAgentOverrides copies per-agent execution overrides onto a
+// defaults-seeded wire Agent. The tool-iteration limit is resolved against
+// defaults (the global) through applyAgentMaxToolIterations.
+func applyAgentOverrides(ag *gen.Agent, defaults *config.AgentDefaults, ac *config.AgentConfig) {
+	applyAgentMaxToolIterations(ag, defaults, ac)
 	// memory_enabled (ADR-052 FR-039): every response path (list/get/create/
 	// update) funnels through this function, so populating it here once
 	// covers all of them. Previously never set here — the wire field is
@@ -640,20 +656,16 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
 func buildAgentDefaults(cfg *config.Config) gen.Agent {
-	// Effective per-turn tool-round cap: mirror the runtime resolution
-	// (pkg/agent/instance.go) — defaults value when set, else 200 — so the
-	// wire never reports a meaningless 0 (a zeroed default was the visible
-	// half of the 2026-07-03 P0: the UI showed and re-persisted 0s).
-	maxIter := cfg.Agents.Defaults.MaxToolIterations
-	if maxIter <= 0 {
-		maxIter = 200
-	}
-	return gen.Agent{
-		TimeoutSeconds:    cfg.Agents.Defaults.TimeoutSeconds,
-		MaxToolIterations: maxIter,
+	ag := gen.Agent{
+		TimeoutSeconds: cfg.Agents.Defaults.TimeoutSeconds,
 		// Required string fields — initialized to empty (overwritten per-agent).
 		Soul: "",
 	}
+	// Tool-iteration limit (#904): seeded as "no own value" from the single
+	// resolver so the required fields are always set; applyAgentOverrides
+	// re-resolves with the agent's own value.
+	applyAgentMaxToolIterations(&ag, &cfg.Agents.Defaults, nil)
+	return ag
 }
 
 func applyAgentEditableFields(agent *gen.Agent, cfg config.AgentConfig) {
@@ -714,7 +726,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
 		applyAgentEditableFields(&ag, ac)
-		applyAgentOverrides(&ag, &ac)
+		applyAgentOverrides(&ag, &cfg.Agents.Defaults, &ac)
 		// ADR-066 D2/D9: the persisted rung-1 override plus the three derived
 		// read-only window fields the Advanced panel renders.
 		applyAgentContextWindow(&ag, cfg, &ac)
@@ -794,7 +806,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked
 			applyAgentEditableFields(&ag, ac)
-			applyAgentOverrides(&ag, &ac)
+			applyAgentOverrides(&ag, &cfg.Agents.Defaults, &ac)
 			// ADR-066 D2/D9 — see listAgents.
 			applyAgentContextWindow(&ag, cfg, &ac)
 			ag.Model = &model
@@ -947,12 +959,38 @@ func (a *restAPI) withToolPolicyCoverageGuard(
 			jsonErr(w, http.StatusNotFound, err.Error())
 			return false
 		}
+		var refusal *requestRefusalError
+		if errors.As(err, &refusal) {
+			if refusal.field != "" {
+				jsonErrField(w, http.StatusBadRequest, refusal.msg, refusal.field)
+			} else {
+				jsonErr(w, http.StatusBadRequest, refusal.msg)
+			}
+			return false
+		}
 		logsafeError(persistErrLogMsg, "error_type", fmt.Sprintf("%T", err))
 		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return false
 	}
 	return true
 }
+
+// requestRefusalError is returned from a persist closure when a check that
+// must run under a.configMu (so it sees the config in force at write time)
+// refuses the request; withToolPolicyCoverageGuard maps it to 400 with msg.
+// Used by the #904 per-agent tool-iteration D10 check (above the global).
+// field, when set, is sent as ErrorResponse.field (the request field the
+// refusal is about).
+type requestRefusalError struct {
+	msg   string
+	field string
+}
+
+// maxToolIterationsFieldName is ErrorResponse.field on every per-agent
+// tool-iteration refusal (#904): the SPA attributes the error by it.
+const maxToolIterationsFieldName = "max_tool_iterations"
+
+func (e *requestRefusalError) Error() string { return e.msg }
 
 type configurationMutationError struct {
 	Result agentstore.MutationResult

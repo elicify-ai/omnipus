@@ -32,7 +32,7 @@ func TestConfigWatcherPoll_RejectedReloadMarksDegraded(t *testing.T) {
 	// two services fields (configureHealthAndWatcher).
 	svc := &services{}
 	configChan, stop := setupConfigWatcherPolling(configPath, home, false,
-		credentials.NewStore(filepath.Join(home, "credentials.json")), nil, svc.markReloadDegraded)
+		credentials.NewStore(filepath.Join(home, "credentials.json")), nil, svc.markReloadDegraded, nil)
 	t.Cleanup(stop)
 
 	// Make sure the rewrite is seen as a change even on a coarse-mtime
@@ -62,8 +62,8 @@ func TestConfigWatcherPoll_RejectedReloadMarksDegraded(t *testing.T) {
 	assert.Contains(t, reloadErr.Error(), `action "Deny" must be one of allow, ask, deny`)
 
 	select {
-	case cfg := <-configChan:
-		t.Fatalf("a rejected config must not be handed to the reload loop, got %+v", cfg)
+	case change := <-configChan:
+		t.Fatalf("a rejected config must not be handed to the reload loop, got %+v", change)
 	default:
 	}
 
@@ -72,9 +72,9 @@ func TestConfigWatcherPoll_RejectedReloadMarksDegraded(t *testing.T) {
 	fixed := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"sandbox":{"command_rules":[]}}`)
 	require.NoError(t, os.WriteFile(configPath, fixed, 0o600))
 	select {
-	case cfg := <-configChan:
-		require.NotNil(t, cfg)
-		assert.Empty(t, cfg.Sandbox.CommandRules)
+	case change := <-configChan:
+		require.NotNil(t, change.cfg)
+		assert.Empty(t, change.cfg.Sandbox.CommandRules)
 	case <-time.After(15 * time.Second):
 		t.Fatal("the fixed config was never handed to the reload loop")
 	}

@@ -1335,16 +1335,17 @@ func TestCreateAgent_ValidateInbound_SubagentWithExecutorRejected(t *testing.T) 
 	assert.Contains(t, resp["error"], "AgentCreateRequestSubagent")
 }
 
-// TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsRejected asserts
-// that a subagent_3p create carrying `max_tool_iterations` is rejected 400 at
-// the schema gate when ValidateInbound is enabled: AgentCreateRequestSubagent3p
-// has no max_tool_iterations property (the field matrix's "exclude" decision
-// for this variant — the external CLI runs its own turn loop, so Omnipus
-// cannot cap its per-turn tool-call budget).
-func TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsRejected(t *testing.T) {
+// TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsAccepted — #904
+// D14 inverts the old "excluded for subagent_3p" field-matrix decision:
+// AgentCreateRequestSubagent3p now carries max_tool_iterations (1–1000,
+// optional), so a subagent_3p create with a value within the global is
+// accepted under inbound validation and the value is kept as the worker's
+// own limit (spec Scenario "External-CLI worker created with its own limit").
+func TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsAccepted(t *testing.T) {
+	mtiUnsetEnv(t)
 	api := newTestRestAPIWithValidation(t)
 
-	body := `{"type":"subagent_3p","name":"Bad 3p","soul":"s","executor":{"cli":"codex","cli_path":"/usr/local/bin/codex"},"max_tool_iterations":50}`
+	body := `{"type":"subagent_3p","name":"Lim 3p","description":"external worker","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"max_tool_iterations":50}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -1352,10 +1353,12 @@ func TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsRejected(t *test
 
 	api.createAgent(w, r)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	var resp map[string]string
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "AgentCreateRequestSubagent3p")
+	assert.EqualValues(t, 50, resp["max_tool_iterations_override"])
+	assert.EqualValues(t, 50, resp["max_tool_iterations"])
+	assert.Equal(t, "agent", resp["max_tool_iterations_source"])
 }
 
 // --- Fix #5: validateSkillIDs fail-open when no skills are installed ---

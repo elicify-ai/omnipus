@@ -2,6 +2,8 @@
 
 **Created**: 2026-06-08
 **Status**: Revised post-grill-spec round 2 (2026-06-08) — 18 additional findings addressed; ready for re-grill or taskify
+
+Status: Draft
 **Input**: Design interview (2026-06-07/08) — 7-question session establishing architecture, data model, UI layout, and scope.
 
 ---

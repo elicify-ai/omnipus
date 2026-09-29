@@ -518,6 +518,7 @@ const readerLengthParamDesc = "Amount to read. Plain text: bytes (silently cappe
 
 func (t *ReadFileTool) Description() string {
 	return "Read text and supported documents, or inspect a PNG or JPEG image in the current model turn. " +
+		"`path` may be workspace-relative or absolute. " +
 		readerImageInspectionParagraph +
 		"Text supports pagination via `offset` and `length` as bytes. " +
 		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
@@ -552,18 +553,6 @@ func (t *ReadFileTool) Parameters() map[string]any {
 		},
 		"required": []string{"path"},
 	}
-}
-
-// AutoApproveVerdict implements AutoApproveClassifier: read_file runs under
-// Auto only when its path is inside the workspace or a mount (ADR-092 D9,
-// J2) — a read anywhere else asks.
-func (t *ReadFileTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
-	path, ok := args["path"].(string)
-	if !ok {
-		return autoAsks("read_file: path argument missing")
-	}
-	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpRead, path, t.patterns,
-		fspolicy.PathGrantAccessRead)
 }
 
 func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -637,10 +626,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if _, imageNamed, _ := imageFormat(nil, path); imageNamed {
 		file, err = handle.OpenRegularNonBlocking()
 	} else {
-		file, err = handle.Open()
+		file, err = handle.OpenNonBlockingRead()
 	}
 	if err != nil {
-		if errors.Is(err, ErrImageSourceNotRegular) {
+		if errors.Is(err, ErrImageSourceNotRegular) || errors.Is(err, errReadSourceNotRegular) {
 			return ErrorResult(err.Error())
 		}
 		// Emit a path.access_denied audit entry on workspace-guard rejections.
@@ -1171,7 +1160,8 @@ func (t *ListDirTool) Name() string {
 func (t *ListDirTool) Description() string {
 	return "List files and directories in a path. Large directories page with offset/limit " +
 		"(entries), the same way read_file pages a file with offset/length (bytes). `path` " +
-		"defaults to \".\" (the workspace root) when omitted. A directory that is a knowledge " +
+		"may be workspace-relative or absolute, and defaults to \".\" (the workspace root) when " +
+		"omitted. A directory that is a knowledge " +
 		"base is marked KB: instead of DIR: — use knowledge_list or knowledge_describe on it " +
 		"rather than reading its files directly."
 }
@@ -1200,18 +1190,6 @@ func (t *ListDirTool) Parameters() map[string]any {
 			},
 		},
 	}
-}
-
-// AutoApproveVerdict implements AutoApproveClassifier: list_directory runs
-// under Auto only when its path (default ".", the work folder) is inside the
-// workspace or a mount (ADR-092 D9, J2).
-func (t *ListDirTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
-	path, ok := args["path"].(string)
-	if !ok {
-		path = "."
-	}
-	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpList, path, t.patterns,
-		fspolicy.PathGrantAccessRead)
 }
 
 func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolResult {

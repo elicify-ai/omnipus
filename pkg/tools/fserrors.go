@@ -46,6 +46,17 @@ var ErrApprovalUnavailable = errors.New("access denied: no interactive approver 
 // ancestors to realpath it (e.g. a permission error, or ENAMETOOLONG).
 var ErrPathInvalid = errors.New("invalid path")
 
+// ErrHandleReadOnly means a write-capable *PathHandle method (WriteFile,
+// MkdirAll) was called on a handle ResolvePath built read-only at the type
+// level (T2, type-design-analyzer finding on the 8-reviewer #920 gate):
+// today, exactly the handle readConfinedMountHandle (resolvepath.go) builds
+// for the Judge's read-confined FSOpRead/FSOpList reach into a workspace
+// mount. No production call site was ever expected to write through one of
+// these handles — readConfinedMountHandle only ever resolves FSOpRead/
+// FSOpList — but that was previously an invariant held by caller discipline
+// alone; PathHandle.readOnly and this sentinel make the type itself refuse.
+var ErrHandleReadOnly = errors.New("resolvepath: this path handle is read-only")
+
 // PermissionDeniedResult builds a structured *ToolResult for a filesystem
 // resolution denial, sharing the ONE "permission_denied" wire producer
 // (PermissionDeniedPayload, result.go — contracts/asyncapi.yaml's

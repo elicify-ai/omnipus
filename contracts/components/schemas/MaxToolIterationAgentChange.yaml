@@ -1,0 +1,33 @@
+title: MaxToolIterationAgentChange
+description: >
+  One agent whose own tool-iteration limit is (or would be) lowered to a new
+  global limit (issue #904, tool-iteration-limit spec D11). Used by the
+  lowering preview, the 409 drift body and the PUT /performance response.
+type: object
+additionalProperties: false
+required:
+  - agent_id
+  - agent_name
+  - old_value
+  - new_value
+properties:
+  agent_id:
+    type: string
+    description: ID of the affected agent.
+    example: "agent-a"
+  agent_name:
+    type: string
+    description: Display name of the affected agent.
+    example: "Researcher"
+  old_value:
+    type: integer
+    description: >
+      The agent's own value before lowering. No upper bound: a hand-edited
+      stored value may exceed 1000 and is shown truthfully.
+    example: 250
+  new_value:
+    type: integer
+    minimum: 1
+    maximum: 1000
+    description: The agent's own value after lowering (the new global limit).
+    example: 200

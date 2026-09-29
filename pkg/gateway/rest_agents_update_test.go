@@ -292,7 +292,10 @@ func TestUpdateAgent_ContextWindowOverride_NullClears(t *testing.T) {
 		putAgentJSON(t, api, "agent-a", `{"context_window_override":32768}`).Code)
 
 	// An unrelated write must NOT clear it.
-	keep := putAgentJSON(t, api, "agent-a", `{"max_tool_iterations":25}`)
+	// #904: 15, not 25 — this harness's global is 20 and a per-agent value
+	// above the global is now refused (D10); the point here is only "an
+	// unrelated write", so any in-range value at or below the global serves.
+	keep := putAgentJSON(t, api, "agent-a", `{"max_tool_iterations":15}`)
 	require.Equal(t, http.StatusOK, keep.Code, "body: %s", keep.Body.String())
 	var kept gen.Agent
 	require.NoError(t, json.Unmarshal(keep.Body.Bytes(), &kept))
@@ -572,11 +575,11 @@ func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 		{"skills", `{"skills":["web-research"]}`},
 		{"fallback_models", `{"fallback_models":[{"model":"m","provider":"p"}]}`},
 		{"model_params", `{"model_params":{"temperature":0.5}}`},
-		// W2a: max_tool_iterations joins the forbidden set on subagent_3p PUT
-		// (the external CLI runs its own turn loop — Omnipus cannot cap its
-		// per-turn tool-call budget). subagent3pForbiddenUpdateFields in
-		// agent_field_rules.go is the single source of truth for this list.
-		{"max_tool_iterations", `{"max_tool_iterations":8}`},
+		// #904 D14 (founder decision 2026-09-26): max_tool_iterations LEFT the
+		// forbidden set — external-CLI workers get the same per-agent limit,
+		// passed as the CLI's turn cap. Its acceptance is pinned by
+		// TestAgentUpdate_Worker_MaxToolIterationsAccepted
+		// (rest_agents_max_tool_iterations_test.go).
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

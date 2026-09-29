@@ -4,7 +4,13 @@
 
 package gateway
 
-import "github.com/elicify-ai/omnipus/pkg/config"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
+)
 
 // blockedPaths lists dotted configuration paths that the generic
 // PUT /api/v1/config endpoint must refuse to mutate at any nesting depth.
@@ -35,6 +41,13 @@ var blockedPaths = []config.ConfigKey{
 	// exclusively through the agent store / dedicated /api/v1/agents
 	// endpoints.
 	config.AgentsList,
+	// #904 D8/D15/D21: the global tool-iteration limit and its env-import
+	// marker have one write path, PUT /api/v1/performance (step-up re-auth,
+	// D11/D16 lowering consent, audit). agents.defaults itself stays
+	// writable; updateConfig preserves these two leaves across its
+	// one-level merge (preserveProtectedAgentDefaults).
+	config.AgentsDefaultsMaxToolIterations,
+	config.AgentsDefaultsMaxToolIterationsEnvImported,
 }
 
 // matchBlockedPath reports whether body contains any entry in blocked at any
@@ -66,16 +79,26 @@ func matchBlockedPath(body map[string]any, blocked []config.ConfigKey) (string, 
 	// Collect every dotted path present in body. This handles both nested
 	// objects (recursive walk) and dot-path literal keys (leaf keys with
 	// dots are emitted verbatim as part of the path).
+	//
+	// Matching folds case EXACTLY the way encoding/json does: config.json is
+	// decoded with encoding/json, which binds an object key to a struct field
+	// when bytes.EqualFold says they are equal — Unicode simple folding, not
+	// just ASCII. So {"agents":{"defaults":{"MAX_TOOL_ITERATIONS":5}}} and
+	// {"gateway":{"uſers":[…]}} (U+017F LONG S ≡ 's') reach the same field as
+	// the plain spelling. strings.ToLower alone missed the second form (#904
+	// gate round 2, security-lead N1). collectPaths folds every path it
+	// records with jsonFoldKey; the blocked entry is folded the same way.
 	present := collectPaths(body)
 	for _, bp := range blocked {
-		if _, ok := present[string(bp)]; ok {
+		if _, ok := present[jsonFoldKey(string(bp))]; ok {
 			return string(bp), true
 		}
 	}
 	return "", false
 }
 
-// collectPaths walks body and returns the set of dotted paths it contains.
+// collectPaths walks body and returns the set of dotted paths it contains,
+// folded with jsonFoldKey (see matchBlockedPath for why matching folds case).
 // Each leaf and each intermediate map key contributes a path. Keys that
 // themselves contain dots (dot-path literals) are treated as already-dotted
 // paths and are merged with any prefix from their ancestors.
@@ -101,7 +124,7 @@ func collectPaths(body map[string]any) map[string]struct{} {
 	var walk func(prefix string, v any)
 	walk = func(prefix string, v any) {
 		if prefix != "" {
-			out[prefix] = struct{}{}
+			out[jsonFoldKey(prefix)] = struct{}{}
 		}
 		m, ok := v.(map[string]any)
 		if !ok {
@@ -121,4 +144,94 @@ func collectPaths(body map[string]any) map[string]struct{} {
 	}
 	walk("", body)
 	return out
+}
+
+// jsonFoldKey folds s so that jsonFoldKey(x) == jsonFoldKey(y) exactly when
+// bytes.EqualFold(x, y) — the equivalence encoding/json uses to bind an object
+// key to a struct field (encoding/json/fold.go::appendFoldedName): ASCII
+// letters are upper-cased, every other rune maps to the smallest rune of its
+// Unicode simple-fold orbit. A '.' is ASCII and never folds, so folding a
+// dotted path folds each segment independently.
+func jsonFoldKey(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r < utf8.RuneSelf {
+			if 'a' <= r && r <= 'z' {
+				r -= 'a' - 'A'
+			}
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteRune(foldRuneLikeJSON(r))
+	}
+	return b.String()
+}
+
+// foldRuneLikeJSON returns the smallest rune in r's simple-fold orbit
+// (encoding/json/fold.go::foldRune).
+func foldRuneLikeJSON(r rune) rune {
+	for {
+		r2 := unicode.SimpleFold(r)
+		if r2 <= r {
+			return r2
+		}
+		r = r2
+	}
+}
+
+// nonASCIIKeyNearBlockedPath reports the first object key containing a
+// non-ASCII rune that sits in a map holding a blocked path — the body root
+// or any ancestor of a blocked entry (gateway, agents, agents.defaults, …).
+// Every config.Config key is ASCII, so such a key there is either garbage or
+// an attempt to reach a protected field through a case-folding quirk; it is
+// refused outright, independent of jsonFoldKey (defence in depth).
+func nonASCIIKeyNearBlockedPath(body map[string]any, blocked []config.ConfigKey) (string, bool) {
+	ancestors := map[string]struct{}{"": {}}
+	for _, bp := range blocked {
+		p := string(bp)
+		for i := strings.IndexByte(p, '.'); i >= 0; i = nextDot(p, i) {
+			ancestors[jsonFoldKey(p[:i])] = struct{}{}
+		}
+	}
+	var found string
+	var walk func(prefix string, m map[string]any) bool
+	walk = func(prefix string, m map[string]any) bool {
+		_, protected := ancestors[jsonFoldKey(prefix)]
+		for k, child := range m {
+			path := k
+			if prefix != "" {
+				path = prefix + "." + k
+			}
+			if protected && !isASCII(k) {
+				found = path
+				return true
+			}
+			if cm, ok := child.(map[string]any); ok && walk(path, cm) {
+				return true
+			}
+		}
+		return false
+	}
+	if walk("", body) {
+		return found, true
+	}
+	return "", false
+}
+
+func nextDot(p string, i int) int {
+	j := strings.IndexByte(p[i+1:], '.')
+	if j < 0 {
+		return -1
+	}
+	return i + 1 + j
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }

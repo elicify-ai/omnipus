@@ -40,7 +40,7 @@ func newRemoveSkillFixture(t *testing.T) (tool *systools.SkillRemoveTool, worksp
 	if err != nil {
 		t.Fatalf("NewSkillInstaller: %v", err)
 	}
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.SkillInstaller = installer
 	return systools.NewSkillRemoveTool(deps), workspace, operatorFile, installedSkill
 }

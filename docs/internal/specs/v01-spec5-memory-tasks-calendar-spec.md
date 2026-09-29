@@ -3,6 +3,8 @@
 - **Spec:** 5 of 6 (v0.1.0 Foundation)
 - **Source ADR:** [ADR-019](../architecture/ADR-019-v01-workspaces-foundation.md) — FR-7 (memory structure + logs) + FR-8 (tasks/calendar)
 - **Status:** Draft → pending `/grill-spec` (GATE C)
+
+Status: Draft
 - **Cross-spec (Phase 3.5):** rooms are keyed to Spec-1's `Workspace` (the shared room is `<workspace>/.omnipus/`); the Orchestrator (Spec-3) advances `blocked_by` DAGs via `SetOnComplete`; `task_status_changed` is the existing WS frame (Spec-3 grounding).
 - **Scope guard:** v0.1.0 ships **structure + frozen log formats only** — the ranking/graph/Dreamcatcher/weights **behaviour is deferred** (no release scheduled; ADR NFR-6; the v0.2.0 label was retired 2026-09-25).
 - **Lessons pre-applied:** ground hard; contract-first; CI-authority; new deps = ADR decision; freeze persisted formats (NFR-1/NFR-7); compiler/test gate.

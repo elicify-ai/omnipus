@@ -830,7 +830,9 @@ describe('CreateAgentModal — Executor (Spec-4)', () => {
 })
 
 describe('CreateAgentModal — Advanced step fields', () => {
-  it('omits unsupported native timeout_seconds and forwards max_tool_iterations', async () => {
+  // #904 US-3 AS-2 / FR-004: the wizard no longer seeds 200 — an untouched
+  // limit is ABSENT from the create body, so the agent rides the global.
+  it('omits unsupported native timeout_seconds and an untouched max_tool_iterations (rides the global)', async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined)
     renderModal({ open: true, onClose: vi.fn(), onCreate })
     await fillAndAdvanceToStep3()
@@ -838,8 +840,20 @@ describe('CreateAgentModal — Advanced step fields', () => {
     await waitFor(() => expect(onCreate).toHaveBeenCalled())
     const call = onCreate.mock.calls.at(-1)![0]
     expect(call.timeout_seconds).toBeUndefined()
-    expect(call.max_tool_iterations).toBe(200)
+    expect('max_tool_iterations' in call).toBe(false)
     expect('steering_mode' in call).toBe(false)
+  })
+
+  // #904 US-3 AS-1 / FR-014: a limit typed in Advanced is forwarded as-is.
+  it('forwards a typed max_tool_iterations from Advanced', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+    await fillAndAdvanceToStep3()
+    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
+    fireEvent.change(await screen.findByLabelText(/^Max tool calls per turn/), { target: { value: '40' } })
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+    expect(onCreate.mock.calls.at(-1)![0].max_tool_iterations).toBe(40)
   })
 
   it('forwards model_params from Advanced', async () => {
@@ -872,14 +886,14 @@ describe('CreateAgentModal — Advanced step fields', () => {
     const call = onCreate.mock.calls.at(-1)![0]
     expect(call.steering_mode).toBeUndefined()
     expect('executor' in call).toBe(false)
-    // A native Subagent legitimately carries max_tool_iterations (O, default
-    // 200/turn per the field matrix) — only steering_mode/executor are gated.
-    expect(call.max_tool_iterations).toBe(200)
+    // #904 US-3 AS-2: an untouched limit is absent (no 200 seed) — the
+    // Subagent rides the global.
+    expect('max_tool_iterations' in call).toBe(false)
   })
 
-  // subagent_3p never carries max_tool_iterations (the external CLI runs its
-  // own loop — agent-types-field-matrix.md, Decisions #1 (resolved
-  // 2026-07-03): excluded) but DOES carry timeout_seconds (process-level
+  // subagent_3p: an UNTOUCHED max_tool_iterations is absent (#904 D14 lets a
+  // worker set one, US-3 AS-4; left empty it rides the global) and it DOES
+  // carry timeout_seconds (process-level
   // kill for a hung CLI) and always sends the external-cli executor block.
   it('subagent_3p create has NO max_tool_iterations, HAS timeout_seconds, and executor.kind=external-cli', async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined)

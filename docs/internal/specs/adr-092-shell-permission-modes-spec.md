@@ -1,6 +1,8 @@
 # ADR-092 Implementation Specification — Shell permission modes (Ask / Auto / God Mode)
 
 - **Spec status:** Draft for lead review (plan-spec output; not committed — lead commits)
+
+Status: Draft
 - **ADR implemented:** [ADR-092 — Shell permission modes](../architecture/ADR-092-shell-permission-modes.md) (revised 2026-09-23 after a two-pass grill returned BLOCK — see the ADR's Revision note)
 - **Evidence baseline:** `release/v0.1.1` @ `838d8092c` (read-only)
 - **Correction note (2026-09-23, docs lane L7):** FR-001, FR-023, FR-033, FR-043 and §6.1/§6.2 are corrected to match the built code (marked *[corrected 2026-09-23]*); §3.10 adds FR-051 to FR-062 for ADR-092 D9 (Auto for tools other than `bash`), with scenarios S54 to S64.

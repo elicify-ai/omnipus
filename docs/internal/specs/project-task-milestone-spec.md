@@ -3,6 +3,8 @@
 **Created**: 2026-06-09
 **Branch**: `feat/level1-project-task-mgmt`
 **Status**: Revised — all MAJOR and MINOR findings from grill-spec addressed (2026-06-09). Ready for implementation.
+
+Status: Draft
 **Builds on**: `docs/internal/specs/project-task-management-level1-spec.md` (Level 1 REST + board)
 
 ---

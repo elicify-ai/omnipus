@@ -85,6 +85,21 @@ type restAPI struct {
 	configMu     sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
 	taskStore    *task.Store         // unified task persistence
 	taskExecutor *agent.TaskExecutor // task execution engine
+
+	// limitAgentStore is the agent store the #904 global tool-iteration
+	// lowering (PUT /performance, D11) reads and writes. Nil in production
+	// (agentstore.New(homePath) is used); tests inject I/O and revision
+	// faults here (rest_performance_max_tool_iterations.go).
+	limitAgentStore maxToolIterationsAgentStore
+
+	// pendingApply is the #904 "Performance settings saved but not applied
+	// yet" state (PerformanceSettings.pending_apply); zero value = nothing
+	// pending. reloadOutcome is the gateway's registry-reload outcome record
+	// (shared with services; nil in test constructions without the boot
+	// path). See rest_performance_pending_apply.go.
+	pendingApply  performancePendingApply
+	reloadOutcome *reloadOutcomeTracker
+
 	// liveTaskActivity (founder decision 2026-09-14) is the read seam
 	// Task.last_activity_at is stamped from: the live progress stamp of a
 	// running task's turn (advancing on streamed reasoning as well as
@@ -736,6 +751,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	rae.cm.RegisterHTTPHandler("/api/v1/security/retention", rae.a.adminWrap(rae.a.HandleRetention))
 	rae.cm.RegisterHTTPHandler("/api/v1/security/retention/sweep", rae.a.adminWrap(rae.a.HandleRetentionSweep))
 	rae.cm.RegisterHTTPHandler("/api/v1/performance", rae.a.adminWrap(rae.a.HandlePerformance))
+	// #904 D11: read-only lowering preview — the same gate as GET
+	// /performance, no step-up token (the confirmed PUT consumes it).
+	rae.cm.RegisterHTTPHandler("/api/v1/performance/max-tool-iterations/preview",
+		rae.a.adminWrap(rae.a.HandleMaxToolIterationsPreview))
 	// Wave 5 security endpoints (SEC-01/02/03).
 	rae.cm.RegisterHTTPHandler("/api/v1/security/sandbox-status", rae.a.withAuth(rae.a.HandleSandboxStatus))
 	// /api/v1/security/sandbox-config is registered above with adminWrap — do NOT

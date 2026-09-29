@@ -1,5 +1,7 @@
 # Cross-Channel `/cancel` Command Spec — v2 (Revised)
 
+Status: Draft
+
 **Status:** Draft — revised after `/grill-spec` review on 2026-05-14
 **Owner:** Daniel
 **Target release:** v0.1 (in-flight bug fix — see Decision #10)

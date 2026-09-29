@@ -35,13 +35,18 @@ type restAPIUpdateAgent struct {
 	req                         gen.AgentUpdateRequest
 	now                         time.Time
 	clearsContextWindowOverride bool
-	updatedExecutor             *config.ExecutorConfig
-	newName                     string
-	newModel                    string
-	defaultAgentIDChanged       bool
-	modelIdentityChanged        bool
-	mutationResult              agentstore.MutationResult
-	activationFailed            string
+	// clearsMaxToolIterations is true when the body carried an explicit
+	// "max_tool_iterations": null — "Use global limit" (#904 D9, FR-008).
+	// The generated *int collapses null and absent to nil, so the raw body
+	// is peeked exactly as for context_window_override.
+	clearsMaxToolIterations bool
+	updatedExecutor         *config.ExecutorConfig
+	newName                 string
+	newModel                string
+	defaultAgentIDChanged   bool
+	modelIdentityChanged    bool
+	mutationResult          agentstore.MutationResult
+	activationFailed        string
 }
 
 // restAPIUpdateAgentFlow carries the shared state of updateAgent across its stages.
@@ -276,7 +281,42 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 			}
 		}
 	}
+	return uf.validateMaxToolIterations()
+}
+
+// validateMaxToolIterations is the #904 fast-path check of the per-agent
+// tool-iteration limit (FR-006, FR-007, FR-008): an explicit null clears the
+// own value; a number must be within 1..1000 and not above the global in
+// force (D10). The D10 check is repeated under configMu in persistAgent,
+// which closes the window against REST global writes (see the residual
+// cases documented there).
+func (uf *restAPIUpdateAgentFlow) validateMaxToolIterations() bool {
+	uf.ru.clearsMaxToolIterations = false
+	if uf.ru.req.MaxToolIterations == nil {
+		var peek map[string]json.RawMessage
+		if json.Unmarshal(uf.rawBody, &peek) == nil {
+			if v, present := peek["max_tool_iterations"]; present &&
+				string(bytes.TrimSpace(v)) == "null" {
+				uf.ru.clearsMaxToolIterations = true
+			}
+		}
+		return false
+	}
+	if err := config.ValidateAgentMaxToolIterations(*uf.ru.req.MaxToolIterations, &uf.cfg.Agents.Defaults); err != nil {
+		jsonErrField(uf.w, http.StatusBadRequest, err.Error(), maxToolIterationsFieldName)
+		return true
+	}
 	return false
+}
+
+// suppliedFields is suppliedRESTAgentFields plus an explicit
+// max_tool_iterations clear, which the generated struct cannot express.
+func (uf *restAPIUpdateAgentFlow) suppliedFields() []string {
+	fields := suppliedRESTAgentFields(&uf.ru.req)
+	if uf.ru.clearsMaxToolIterations {
+		fields = append(fields, "max_tool_iterations")
+	}
+	return fields
 }
 
 // rejectSystemAgentDisable inspects the raw update body before strict wire-shape
@@ -369,7 +409,7 @@ func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 		return true
 	}
 
-	if fieldErr := agentmutation.ValidateOperatorFields(uf.foundAgent, suppliedRESTAgentFields(&uf.ru.req)); fieldErr != nil {
+	if fieldErr := agentmutation.ValidateOperatorFields(uf.foundAgent, uf.suppliedFields()); fieldErr != nil {
 		var classified *agentmutation.FieldError
 		if errors.As(fieldErr, &classified) && classified.Code == agentmutation.ProtectedField {
 			jsonErr(uf.w, http.StatusForbidden, classified.Error())
@@ -715,8 +755,14 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	// degraded_reason (ADR-068 FR-014, ADR-067 US-6), so the saved config and
 	// the running agent always describe the same model. fastAgentUpsert swaps
 	// only this agent, never a full reload, so the WebSocket survives (#73).
+	// #904: AgentInstance snapshots its tool-iteration limit at construction
+	// (resolveRuntimeLimits), so a set or cleared own value needs the same
+	// single-agent rebuild for the agent's next turn to use it (D18: a
+	// running turn keeps the instance it started with).
+	maxToolIterationsChanged := uf.ru.req.MaxToolIterations != nil || uf.ru.clearsMaxToolIterations
 	needsReload := uf.ru.req.Soul != nil || uf.ru.defaultAgentIDChanged || contextWindowOverrideChanged ||
-		uf.ru.req.Skills != nil || uf.ru.req.ModelParams != nil || uf.ru.modelIdentityChanged
+		uf.ru.req.Skills != nil || uf.ru.req.ModelParams != nil || uf.ru.modelIdentityChanged ||
+		maxToolIterationsChanged
 	if needsReload {
 		// fastAgentUpsert returns a non-empty message only when neither the
 		// single-agent swap nor its full-reload fallback could publish the
@@ -845,10 +891,10 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 				// P-F2: echo fallback_models on the PUT response too —
 				// this loop previously never called applyAgentOverrides at all, so
 				// updateAgent's own response (unlike list/get) never reflected that
-				// field even though it persists correctly above. Runs before the
-				// request-value overrides below so an explicit req.MaxToolIterations
-				// (also touched by applyAgentOverrides) still wins.
-				applyAgentOverrides(&ag, &ac)
+				// field even though it persists correctly above. The #904
+				// tool-iteration fields come from the resolver over the
+				// just-persisted record — never the raw request value.
+				applyAgentOverrides(&ag, &liveCfg.Agents.Defaults, &ac)
 				// ADR-066 D2/D9: echo the just-persisted rung-1 override and
 				// re-derive the effective window from liveCfg, so the form
 				// round-trips instead of coming back blank.
@@ -856,10 +902,6 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 				break
 			}
 		}
-	}
-	// Override defaults with request values when provided.
-	if uf.ru.req.MaxToolIterations != nil {
-		ag.MaxToolIterations = *uf.ru.req.MaxToolIterations
 	}
 	ag.Revision = uf.ru.mutationResult.Revision
 	applyAgentEditableFields(&ag, uf.foundAgent)
@@ -872,7 +914,7 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 		ag.Message = &message
 	}
 	ag.ActivationStatus = &activation
-	changed := suppliedRESTAgentFields(&uf.ru.req)
+	changed := uf.suppliedFields()
 	ag.ChangedFields = &changed
 	jsonOK(uf.w, ag)
 }
@@ -886,6 +928,30 @@ type restAPIUpdateAgentPersistAgent struct {
 // persistAgent persists the requested agent changes while the config guard holds its lock.
 func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 	rp := &restAPIUpdateAgentPersistAgent{ru: ru}
+
+	// #904 D10, the deciding check: the global may have changed since the
+	// fast-path check in validateMaxToolIterations. This closure runs under
+	// a.configMu. PUT /api/v1/performance — the only REST write of the global
+	// — also holds configMu and refreshes the in-memory config before
+	// releasing it, so no REST global write or D11 lowering can land between
+	// this read and the record write. What configMu does NOT cover: a hand
+	// edit of config.json lowering the global, applied by the file-watcher
+	// or manual reload (both read config.json outside configMu). In that
+	// interleaving the agent can end up above the new global; the resolver
+	// then caps and flags it (D1) — never unbounded. Second stale case: after
+	// a PUT /performance answered performance_reload_failed at stage
+	// "refresh", config.json holds the new global but the in-memory config
+	// this check reads still holds the old one until the next reload or
+	// restart. If the saved global is LOWER, a value between the two passes
+	// here and is then capped and flagged (D1) once the saved global is
+	// loaded — never unbounded; if it is HIGHER, a value between the two is
+	// refused until then.
+	if rp.ru.req.MaxToolIterations != nil {
+		if err := config.ValidateAgentMaxToolIterations(*rp.ru.req.MaxToolIterations,
+			&rp.ru.a.agentLoop.GetConfig().Agents.Defaults); err != nil {
+			return &requestRefusalError{msg: err.Error(), field: maxToolIterationsFieldName}
+		}
+	}
 
 	store := agentstore.New(rp.ru.a.homePath)
 
@@ -1040,8 +1106,14 @@ func (rp *restAPIUpdateAgentPersistAgent) updateIdentityAndModel(agentRec *confi
 	if rp.ru.req.ModelParams != nil {
 		agentRec.ModelParams = mergeAgentModelParams(agentRec.ModelParams, agentModelParamsFromWire(rp.ru.req.ModelParams))
 	}
+	// #904: set the own tool-iteration limit (bounds and D10 checked in
+	// validateMaxToolIterations and again under configMu in persistAgent),
+	// or clear it on an explicit null — 0 is omitted from the record, so the
+	// key is removed and the agent rides the global (FR-008).
 	if rp.ru.req.MaxToolIterations != nil {
 		agentRec.MaxToolIterations = *rp.ru.req.MaxToolIterations
+	} else if rp.ru.clearsMaxToolIterations {
+		agentRec.MaxToolIterations = 0
 	}
 	// ADR-066 D2 rung 1: the per-agent context-window override.
 	// Nil-and-not-null leaves the persisted value untouched; an

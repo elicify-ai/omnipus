@@ -1,0 +1,16 @@
+title: MaxToolIterationsSavedState
+description: >
+  State of the global tool-iteration limit as saved in config.json
+  (agents.defaults.max_tool_iterations), used for the Settings warning
+  (issue #904, tool-iteration-limit spec D13). The file is never rewritten to
+  correct it; the value in force is PerformanceSettings.max_tool_iterations.
+  "ok" = saved value within 1–1000 and in force as saved; "missing" = key
+  absent (the shipped default is in force); "below_min" = saved value below 1
+  (0 and negative included; the shipped default is in force); "above_max" =
+  saved value above 1000 (1000 is in force).
+type: string
+enum:
+  - ok
+  - missing
+  - below_min
+  - above_max

@@ -498,7 +498,8 @@ describe('CreateAgentWizard — missing-field hint (B3 fix)', () => {
 // ── W2b: field-matrix gating (docs/internal/architecture/agent-types-field-matrix.md) ──
 
 describe('CreateAgentWizard — initialPayload gating (field-matrix)', () => {
-  it('Subagent payload omits steering_mode but keeps max_tool_iterations + timeout_seconds', async () => {
+  // #904 US-3 AS-2 / FR-004: no 200 seed — an untouched limit is absent.
+  it('Subagent payload omits steering_mode and an untouched max_tool_iterations, keeps timeout_seconds', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     renderWizard({ initialType: 'Subagent', onSubmit })
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Worker' } })
@@ -513,7 +514,7 @@ describe('CreateAgentWizard — initialPayload gating (field-matrix)', () => {
     // steering_mode is a Main-surface concept — a Subagent payload must not
     // carry the key at all (not even as undefined via a seeded default).
     expect('steering_mode' in payload).toBe(false)
-    expect(payload.max_tool_iterations).toBe(200)
+    expect('max_tool_iterations' in payload).toBe(false)
     expect(payload.timeout_seconds).toBe(300)
   })
 
@@ -530,10 +531,9 @@ describe('CreateAgentWizard — initialPayload gating (field-matrix)', () => {
     fireEvent.click(await screen.findByTestId('wizard-create'))
     await waitFor(() => expect(onSubmit).toHaveBeenCalled())
     const payload = onSubmit.mock.calls.at(-1)![0]
-    // The external CLI runs its own loop — max_tool_iterations is excluded
-    // (agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
-    // excluded), and steering_mode never applied to a worker in the first
-    // place.
+    // #904 D14: a worker MAY set its own limit, but an untouched field is
+    // absent (rides the global, US-3 AS-2); steering_mode never applied to
+    // a worker in the first place.
     expect('steering_mode' in payload).toBe(false)
     expect('max_tool_iterations' in payload).toBe(false)
     expect(payload.timeout_seconds).toBe(300)
@@ -541,7 +541,9 @@ describe('CreateAgentWizard — initialPayload gating (field-matrix)', () => {
 })
 
 describe('CreateAgentWizard — Advanced disclosure (slim variant for subagent_3p, W2b)', () => {
-  it('shows Timeout + Rate limits but NOT sampling/steering/max-tool-calls for an external wizard', async () => {
+  // #904 D14 (US-4 AS-3, FR-013) supersedes the field matrix's exclusion:
+  // the external wizard now shows "Max tool calls per turn" too.
+  it('shows Timeout + Rate limits + Max tool calls per turn but NOT sampling/steering for an external wizard', async () => {
     renderWizard({ initialType: 'subagent_3p', initialCli: 'claude-code' })
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'External' } })
     fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'runs claude-code' } })
@@ -558,7 +560,7 @@ describe('CreateAgentWizard — Advanced disclosure (slim variant for subagent_3
     expect(screen.queryByText('Temperature')).toBeNull()
     expect(screen.queryByText('Max tokens')).toBeNull()
     expect(screen.queryByText('Steering mode')).toBeNull()
-    expect(screen.queryByText('Max tool calls per turn')).toBeNull()
+    expect(screen.getByLabelText(/^Max tool calls per turn/)).toBeInTheDocument()
     expect(screen.queryByText('Shell deny patterns')).toBeNull()
   })
 

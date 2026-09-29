@@ -64,7 +64,7 @@ The chat switch is the one place that can turn Auto-approve **on** when the agen
 
 **What Auto-approve does now, with and without a kernel sandbox:**
 
-- **Every tool except the shell (`bash`)** is unaffected by whether a kernel sandbox is active. The kernel sandbox was never what kept `write_file`, `read_file` and the rest inside your workspace — an application-level check inside Omnipus itself always did that (see "What Auto-approve runs and what still asks" below), and that check runs the same way with or without a kernel sandbox.
+- **Every tool except the shell (`bash`)** is unaffected by whether a kernel sandbox is active. The kernel sandbox was never what kept `write_file`, `edit_file` and the other writing tools inside your workspace — an application-level check inside Omnipus itself always did that (see "What Auto-approve runs and what still asks" below), and that check runs the same way with or without a kernel sandbox.
 - **The shell (`bash`) is different.** With a kernel sandbox active (Linux or macOS, Process Sandbox set to Enforce), a shell command that tries to reach outside the workspace or the network is caught two ways: Omnipus checks the command's text before running it, **and** the operating system itself blocks anything that check missed. Without a kernel sandbox — on Windows, or with the Process Sandbox set to Permissive or Off — only the first, text-based check exists, so *(changed again 2026-09-24, "like a coding assistant's own default")* Omnipus is stricter about what it will run without asking: a command runs without a prompt only if it is one of a short list of commands that can only read (listing files, printing a file's contents, `git status`/`log`/`diff`/`show`, and a few more — see the list under "What Auto-approve runs and what still asks" below), or an operator has explicitly written a rule allowing it. Every other shell command asks first, even one that only touches files already inside your workspace — the approval card explains why: *"No kernel sandbox is enforcing, so shell commands that could change files or reach the network ask first."*
 <!-- verify-ui-string -->
   - **Concrete risk this still leaves open:** a command that has been deliberately disguised so its text does not look like what it actually does — for example, splitting a program name across quotes, or using shell substitution to build the real command at run time — can slip past a text-based check, INCLUDING the read-only allowlist above (which only recognizes a command by its literal, un-disguised name). With a kernel sandbox, the operating system still blocks it regardless of how the text was disguised. Without one, asking first for every non-read-only command is the remaining protection — there is no second, operating-system-level check behind it, and an unattended/scheduled run has nobody to answer, so it refuses rather than guessing.
@@ -157,11 +157,13 @@ Tools set to Allow or Deny show no marker, because Auto-approve does not affect 
 
 Auto-approve only matters for a tool set to **Ask**. Omnipus judges each call on its own, not the tool as a whole.
 
-**Most tools run without a prompt.** That includes reading and searching your workspace, web search and opening web pages, the browser (clicking, typing, navigating, screenshots), memory and the knowledge base, tasks, plans and goals, handing work to another agent, and read-only listings of settings, agents and workspaces. For example, with Auto-approve on, Mia editing a knowledge-base note set to Ask no longer shows an approval card.
+**Most tools run without a prompt.** That includes reading, listing and searching files (below), web search and opening web pages, the browser (clicking, typing, navigating, screenshots), memory and the knowledge base, tasks, plans and goals, handing work to another agent, and read-only listings of settings, agents and workspaces. For example, with Auto-approve on, Mia editing a knowledge-base note set to Ask no longer shows an approval card.
 
-**File tools run only inside the workspace or a mounted folder.** `read_file`, `list_directory`, `write_file`, `edit_file` and `append_file` run without a prompt when the path they touch is inside the agent's workspace or a folder you mounted into it. Anything outside asks, **including reads**. For example, `write_file` to `notes/plan.md` runs; `read_file` of `/etc/hosts` asks. The same rule applies to the file `send_file` sends. `browser_screenshot` saves its picture into the workspace under a name Omnipus picks, so it normally runs. Omnipus secret files, such as the master key, are never covered.
+**Reading, listing and searching run anywhere outside Omnipus's protected files.** *(Changed 2026-09-27 — before, `read_file` and `list_directory` asked for anything outside the workspace and its mounted folders.)* `read_file`, `list_directory` and `grep` run without a prompt inside the workspace, inside a mounted folder, and outside both. For example, `read_file` of `/etc/hosts` runs. What they can never reach is described under "What reading, searching and listing can reach" below.
 
-This is stricter than the shell. Under Auto-approve, the shell command `cat /etc/hosts` runs, because the sandbox lets commands read outside the workspace, while `read_file /etc/hosts` asks. That difference is deliberate.
+**Writing and sending run only inside the workspace or a mounted folder.** `write_file`, `edit_file` and `append_file` run without a prompt when the path they touch is inside the agent's workspace or a folder you mounted into it. Anything outside asks. For example, `write_file` to `notes/plan.md` runs; `write_file` to your Desktop asks. The same rule applies to the file `send_file` sends. `browser_screenshot` saves its picture into the workspace under a name Omnipus picks, so it normally runs. Omnipus secret files, such as the master key, are never covered.
+
+For reading, this now matches the shell. Under Auto-approve, the shell command `cat /etc/hosts` runs, because the sandbox lets commands read outside the workspace, and `read_file` of `/etc/hosts` runs too. Only writing and sending keep the workspace rule above.
 
 **Messages and files sent to chat channels go out with no prompt.** `send_message` runs under Auto-approve, and so does `send_file` for a file inside the workspace or a mounted folder. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, set those two tools to Ask and tick **Never auto-approve** for that agent, or set them to Deny. Email is different: `send_email` and `reply` keep asking whenever they're set to Ask, even with Auto-approve on.
 
@@ -197,6 +199,31 @@ Under Auto-approve, a command that would touch an Omnipus secret file, such as t
 **How this is enforced, briefly.** Every shell command runs through a loopback proxy Omnipus starts for it; approving a network prompt is what tells that proxy which address(es) this chat's commands may reach. The approval is remembered for the rest of the chat only, never written to your `config.json` — that file's own `sandbox.egress_allow_list` field (a separate, permanent, operator-set list of addresses every chat can reach without ever asking) is untouched by an approval; the two lists are additive, not one replacing the other.
 
 Auto-approve does not check what a command means. A command that deletes files inside your workspace, or stops a process, runs without a prompt, because it stays inside the sandbox. Use a `deny` or `ask` command rule for commands like that.
+
+### What reading, searching and listing can reach
+
+`read_file` (open one file), `list_directory` (list one folder) and `grep` (search many files by name and content) follow one rule. They reach any file your account can read, with these exceptions, which no tool policy or Auto-approve setting opens:
+
+- Omnipus's protected files: the master key, saved credentials, `config.json`, sign-in tokens, backups and a few other files Omnipus keeps for itself.
+- Other agents' own files and other workspaces.
+
+**Where `grep` searches.** With no folder given, `grep` searches the agent's workspace and every folder mounted into it. Given a folder, it searches there instead: a path inside the workspace, a mounted folder's name, or an absolute path such as `/var/log` or `C:\Logs`. A path containing `..` works too, and reaches the same place it would for `read_file`. Matches inside the workspace are shown relative to it; everything else is shown as a full path that `read_file` can open. The search limits are unchanged, so a search of a whole disk stops at them and says it was cut short.
+
+**What `grep` skips or hides while it searches:**
+
+- Links (symlinks) it meets inside a folder are not followed. A link you name directly as the folder to search is followed, as `read_file` would.
+- The Linux system folders `/proc`, `/sys` and `/dev` are skipped, and device files, pipes and sockets are never read. They hold no user content, and some of them can hang a search. `read_file` of a file you name in those folders works as before.
+- Agent notes files such as `SOUL.md`, `HEARTBEAT.md`, `AGENT.md` and `MEMORY.md`, and the instruction files of installed skills (`SKILL.md`, `AGENT.md`, `AGENTS.md` in Omnipus's own skills folder), never show up in results, by name or by content. `read_file` refuses them too. `list_directory` still shows their names; this difference is deliberate. A skill's other files, such as its helper scripts, can be found.
+
+**Denying `read_file` alone does not stop an agent reading.** The policies for `read_file` and `grep` are separate, and `grep` returns the matching lines of any file it can reach (up to the usual limits and surrounding lines). A custom agent with `grep` allowed and `read_file` denied can still read that way. To confine what an agent reads, deny `read_file`, `grep` and `bash` for it.
+
+**The Judge reads only the work under review.** While the Judge reviews a goal or a plan step, `read_file`, `list_directory` and `grep` reach only the workspace under review and the folders mounted into it. Anything else is refused, and an extra reading path an operator adds in the configuration cannot widen it.
+
+**The Plan Supervisor is not limited this way.** It is allowed to use `grep`, and its `grep` follows the same rule as every other agent's. That means it can search outside the workspace, including Omnipus's own session transcripts, tasks, plans and memory files, which are not among the protected files. This is an accepted choice: all agents follow one rule, rather than the Plan Supervisor having a special limit.
+
+**Personal secret folders outside Omnipus are not protected yet.** Folders such as `~/.ssh`, `~/.aws`, `~/.gnupg` and your browser profiles are not among Omnipus's protected files. With Auto-approve on, an agent whose reading tools are set to Ask can read and search them without a prompt, just as the shell could already read them. Protecting them for every tool is tracked in issue [#921](https://github.com/elicify-ai/omnipus/issues/921). Until then, if that matters for an agent, deny its reading tools and `bash`, or tick **Never auto-approve** for it.
+
+Each `grep` search that runs is recorded in the audit log — see "How to review security activity" below.
 
 ### Scheduled and unattended runs
 
@@ -454,6 +481,8 @@ Before an entry is written, Omnipus replaces recognised credentials with `[REDAC
 
 Logs written before this redaction was switched on (issue #914) are not rewritten. They may contain credentials typed into shell commands. If that matters for your installation, rotate those credentials.
 
+Every `grep` search that runs adds one `path.search_roots` entry, however many files it matched. Expanded, it lists the folders searched and the folder the agent asked for. It never contains the search term or any file content. A `grep` refused because of the folder it named adds a `path.access_denied` entry with the tool, the path and the reason, the same as a refused `read_file`.
+
 ## Limits and things to watch
 
 - Security controls reduce risk but do not make every agent action safe. Read approval details before allowing a request.
@@ -461,6 +490,7 @@ Logs written before this redaction was switched on (issue #914) are not rewritte
 - Kernel-level protection varies by operating system and kernel capability. Trust the status shown on your Security screen for this installation.
 - On Linux, the kernel version decides which sandbox rights you get. Kernels 5.19 and newer give kernel-level file protection; 5.13–5.18 run application-level checks only and are not recommended. When Omnipus falls back, it reports the fallback on the Security screen and logs a `sandbox.degraded` warning. See [sandbox limitations](operations/sandbox-limitations.md).
 - The Open filesystem model allows agents to read anything your account can read, except protected Omnipus secret files.
+- Personal secret folders outside Omnipus, such as `~/.ssh` and `~/.aws`, are not protected from reading and searching yet (issue [#921](https://github.com/elicify-ai/omnipus/issues/921)). See "What reading, searching and listing can reach" above.
 - Secret filtering is best-effort and can be switched off. It only knows registered credential values. Rotate a secret if you think it was exposed.
 - Removing a credential is permanent. Services that refer to it may stop working.
 - Losing the master key makes the encrypted credential store permanently inaccessible.

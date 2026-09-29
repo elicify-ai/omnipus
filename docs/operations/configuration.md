@@ -6,7 +6,7 @@ This page is the operator entry point for file-level configuration. User-facing 
 
 By default, Omnipus reads `config.json` from `$OMNIPUS_HOME`, which defaults to `~/.omnipus`. Set `OMNIPUS_HOME` to move the whole data directory, or pass `--config` to select a particular configuration file.
 
-Environment variables can override supported fields. They use uppercase names with underscores, such as `OMNIPUS_GATEWAY_LOG_LEVEL`. Keep credentials out of `config.json`; store them through Settings or the credential commands so the file contains references instead of plaintext secrets.
+Environment variables can override supported fields. They use uppercase names with underscores, such as `OMNIPUS_GATEWAY_LOG_LEVEL`. One former override is retired: `OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS` is copied into `config.json` once, on the first start after upgrading, and ignored after that. The limit it set, `agents.defaults.max_tool_iterations`, is changed in Settings, Performance; see [tool calls per turn](../settings.md#tool-calls-per-turn). Keep credentials out of `config.json`; store them through Settings or the credential commands so the file contains references instead of plaintext secrets.
 
 The gateway listens on port `5000` by default. The web app, application programming interface, WebSocket connection, and preview routes share this listener. Set `gateway.public_url` when a reverse proxy exposes a different public origin.
 

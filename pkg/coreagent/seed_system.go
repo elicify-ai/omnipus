@@ -99,8 +99,11 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// for every agent tier, including the Judge. Unlike inspect_session
 			// (structurally scoped to the verifier role) this is not a new
 			// capability class for the Judge — it already holds read_file and
-			// list_directory above, and grep is the same read-only,
-			// own-workspace-confined surface (FR-020), just recursive.
+			// list_directory above, and grep is the same read-only surface,
+			// just recursive. During a review turn all three reach exactly
+			// the workspace plus its mounted folders (read-confined, #920
+			// read-boundary-consistency-spec.md FR-012; the superseded
+			// unified-search-and-grep-spec.md FR-020 no longer applies).
 			"grep": allow,
 		})
 		// JUDGE-FR-058 (D10, C5): the Judge's MCP closure. Stamped DIRECTLY
@@ -165,19 +168,26 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		//     merely the policy string.
 		//
 		//     READ THIS BEFORE ASSUMING grep BELOW CONTRADICTS THIS BULLET:
-		//     it does carry the SAME unspecified-reach exposure this bullet
-		//     argues against for read_file/list_directory — grep is also a
-		//     filesystem read, confined to the same unreinforced Workspace
-		//     field (FR-020). It is granted anyway, ONLY because ADR-088's
+		//     it carries a WIDER exposure than this bullet argues against
+		//     for read_file/list_directory. Since #920
+		//     (read-boundary-consistency-spec.md FR-001/FR-016, founder
+		//     decision D10) grep with a `path` follows the ordinary read
+		//     rule — anywhere outside the secret set, including
+		//     $OMNIPUS_HOME sessions, tasks, plans and memory — and
+		//     PlanSupervisor is NOT read-confined (only the Judge's review
+		//     turn is). The founder accepted that risk explicitly (spec
+		//     Security section, item 4); no PlanSupervisor-specific grep
+		//     confinement exists or may be added. The superseded
+		//     unified-search-and-grep-spec.md FR-020 confinement no longer
+		//     applies. It is granted anyway, ONLY because ADR-088's
 		//     founder ruling (unified-search-and-grep-spec.md MV-8/FR-009)
 		//     is explicit and unqualified: "explicit allow for EVERY agent
 		//     tier ... system agents", with grep specifically singled out as
 		//     the founder-ruled exception (R2-MAJ-002) — not a
 		//     re-evaluation of the read_file/list_directory reasoning above,
-		//     which stands unchanged for those two names. If PlanSupervisor's
-		//     Workspace is ever stated and re-enforced (closing the gap this
-		//     bullet describes), that fix tightens grep's real reach here
-		//     too, same as it would read_file's.
+		//     which stands unchanged for those two names. Re-enforcing
+		//     PlanSupervisor's Workspace would change only grep's DEFAULT
+		//     area (no `path`), not its reach with a `path`.
 		//   - No inspect_session, even though the Judge holds it: it is
 		//     structurally inert here. The real control on that tool is the
 		//     engine-set, fail-closed verifier-session scope lock
