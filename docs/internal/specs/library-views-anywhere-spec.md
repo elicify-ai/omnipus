@@ -1762,6 +1762,20 @@ shape from round 1.
 
 ---
 
+### Accepted residual risk (team-lead decision, 2026-09-29; security-lead confirms in the gate)
+
+- **Unique-claimant identity match after an external move.** If an external (non-Omnipus) move
+  removed a managed view's original file and a single file with the same `name` and the same
+  `derived_from` then appears anywhere in the collection, the pipeline treats it as that managed
+  view (identity-in-record + `derived_from`, the architect ruling on external moves) and may
+  re-derive or delete it on the next `.base` change. **Accepted because:** planting that file
+  requires write access to the collection, which already allows deleting or overwriting those
+  bytes directly — the match grants no new privilege; Omnipus is single-owner (no cross-account
+  writer in the same collection); two or more claimants are refused outright (Dataset F-10 / test
+  46: neither touched). **Explicitly rejected:** content-hash authority (it would reopen the
+  copied-marker hole, R2-CRIT-001). The gate's security-lead review must confirm this risk
+  acceptance.
+
 ## 10. TDD Plan
 
 | Order | Test Name | Level | Traces to | Description |
@@ -2239,8 +2253,15 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   mode other than a same-collection move) MUST be REFUSED when it involves a tracked derived `.view`
   (a view in its `.base`'s membership record) or a `.base` that has tracked views — including a folder
   transfer containing either. The refusal is a visible REST error naming the tracked paths and the
-  reason; the Library UI shows it as a message; agent move/rename paths (`knowledge_configure`
-  rename/move) return the same refusal. Nothing is moved, copied, released or re-keyed. Tests 74, 75, 76.
+  reason; the Library UI shows it as a message; agent move/rename paths (`knowledge_restructure`
+  rename/move — corrected 2026-09-29: `knowledge_configure` refuses rename/move and redirects to
+  `knowledge_restructure`, see `knowledge_configure.go::vaultConfigureCascadeOps`) return the same refusal. Nothing is moved, copied, released or re-keyed. Tests 74, 75, 76.
+  **Clarification (team-lead, 2026-09-29, of the founder's "refuse"):** the refusal applies to any
+  MOVE of a tracked derived `.view`, or of a `.base` with tracked views, OUT of its source collection —
+  to another knowledge base OR to ordinary (non-knowledge-base) workspace storage. COPIES out stay
+  allowed: the copy has `derived_from` stripped (the D-DUPLICATE shared strip) and carries no
+  authority. Tests 74-76 plus 79 (move to plain workspace storage refused) and 80 (copy out allowed,
+  marker stripped, source untouched).
 - **FR-VA-032 *(founder-direction amendment, 2026-09-29, architect ruling Q-B = B)***: When an
   Omnipus-mediated move fails after the membership revocation (revoke-before-rename: preflight → persist
   revocation → rename → markers → enroll; see #1042 for full crash atomicity), the visible "incomplete"
@@ -2249,6 +2270,26 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   second time), never grants authority to a path whose identity is not the revoked view's, and restores
   management on success. Available to the user (UI action on the error) and to agents (same backend
   operation). Tests 77, 78.
+  **Amendment (team-lead, 2026-09-29) — Retry mechanics and contract:** revocation atomically writes a
+  trusted PENDING-MOVE record outside the vault (beside the collection's `manifest.json`,
+  `pending-moves.json`, keyed by `pending_move_id`: collection, old/new `.base`-or-folder path, view
+  names, old/new view paths, timestamp). Retry replays ONLY from that record, never from file content.
+  The record EXPIRES 7 days after its timestamp (a named constant); Retry on an expired record returns a
+  visible `retry_expired` error. If the rename already landed, Retry verifies and enrolls; otherwise it
+  re-runs the same saved, preflighted request under the collection lock; a preflight that now fails
+  (destination occupied, source changed or disappeared) returns a visible `retry_preflight_failed`
+  error. Neither error grants authority. On success the pending record is replaced by an inert
+  "completed" receipt for that `pending_move_id`, kept 7 days: a repeat Retry on it returns success with
+  `outcome: already_complete` (no-op); an unknown id returns a visible `retry_not_found`; an expired
+  pending or completed id returns `retry_expired`. Contract: `POST
+  /library/{workspace_id}/retry-move` (`RetryMoveRequest` → `RetryMoveResult`; `RetryMoveError` codes
+  `retry_not_found` 404, `retry_expired` 410, `retry_identity_mismatch` 409, `retry_preflight_failed`
+  409, `retry_locked` 503); moves that fail after revocation return `LibraryMoveIncompleteError`
+  (`move_incomplete`, paths, `pending_move_id`); FR-VA-031 refusals return 409
+  `ViewTransferRefusedError` (`view_tracked_transfer_refused`, `tracked_paths`). Agent surface:
+  `knowledge_restructure` op `retry_move` (arg `pending_move_id`), prose results carrying the same
+  fields. Tests 77/78 cover expired, preflight_failed, already-landed, the normal retry, repeat-after-success
+  (no-op via the completed receipt) and unknown id (not_found).
 
 ## 13. Success Criteria
 
@@ -2393,7 +2434,7 @@ registration/wiring, not the test suite).
 | FR-VA-026 | — (cross-cutting, OBS-003; **corrected in round 2, R2-MIN-007 — round 1 wrongly mapped this to test 10, a Library-listing test with no path-in-output assertion**) | — | 68 |
 | FR-VA-027 | — (cross-cutting, R2-MAJ-006) | — | 59, 60 |
 | FR-VA-030 | US-5, US-6 | founder-direction amendment 2026-09-29 (#1013) | 73 |
-| FR-VA-031 | US-2, US-3 | founder-direction amendment 2026-09-29 (architect Q-A) | 74, 75, 76 |
+| FR-VA-031 | US-2, US-3 | founder-direction amendment 2026-09-29 (architect Q-A) | 74, 75, 76, 79, 80 |
 | FR-VA-032 | US-2 | founder-direction amendment 2026-09-29 (architect Q-B) | 77, 78 |
 
 Every FR appears above. Remaining gaps between the TDD plan's numbered tests and a scenario are
