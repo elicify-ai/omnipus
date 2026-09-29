@@ -102,33 +102,7 @@ func TestFixK6_RolesCrossProduct(t *testing.T) {
 				}
 				t.Run(dState+"/"+fState+"/ddg="+ddgLabel, func(t *testing.T) {
 					fx := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
-						switch dState {
-						case "unusable":
-							c.Tavily.APIKeyRef = envRefMissingTav
-						case "unknown":
-							c.DefaultProvider = "altavista"
-						case "absent":
-							c.DefaultProvider = ""
-						}
-						switch fState {
-						case "none":
-							c.FallbackProvider = config.SearchProviderNone
-						case "same":
-							c.FallbackProvider = c.DefaultProvider
-						case "other-usable":
-							c.FallbackProvider = config.SearchProviderPerplexity
-							c.Perplexity = config.PerplexityConfig{Enabled: true, APIKeyRef: envRefPerplexity}
-						case "other-unusable":
-							c.FallbackProvider = config.SearchProviderBrave
-							c.Brave = config.BraveConfig{Enabled: true, APIKeyRef: envRefMissingBrav}
-						case "unknown":
-							// A different unknown id than the unknown
-							// default's: the cross-product's "unknown
-							// fallback" state is a fallback id not in the
-							// catalogue, distinct from the default.
-							c.FallbackProvider = "lycos"
-						}
-						c.DuckDuckGo.Enabled = ddgOn
+						configureRolesSearchCase(c, dState, fState, ddgOn)
 					}, nil)
 
 					// 1. The resolver tuple equals the spec's tuple.
@@ -182,4 +156,34 @@ func TestFixK6_RolesCrossProduct(t *testing.T) {
 			}
 		}
 	}
+}
+
+func configureRolesSearchCase(c *config.WebToolsConfig, dState, fState string, ddgOn bool) {
+	switch dState {
+	case "unusable":
+		c.Tavily.APIKeyRef = envRefMissingTav
+	case "unknown":
+		c.DefaultProvider = "altavista"
+	case "absent":
+		c.DefaultProvider = ""
+	}
+	switch fState {
+	case "none":
+		c.FallbackProvider = config.SearchProviderNone
+	case "same":
+		c.FallbackProvider = c.DefaultProvider
+	case "other-usable":
+		c.FallbackProvider = config.SearchProviderPerplexity
+		c.Perplexity = config.PerplexityConfig{Enabled: true, APIKeyRef: envRefPerplexity}
+	case "other-unusable":
+		c.FallbackProvider = config.SearchProviderBrave
+		c.Brave = config.BraveConfig{Enabled: true, APIKeyRef: envRefMissingBrav}
+	case "unknown":
+		// A different unknown id than the unknown
+		// default's: the cross-product's "unknown
+		// fallback" state is a fallback id not in the
+		// catalogue, distinct from the default.
+		c.FallbackProvider = "lycos"
+	}
+	c.DuckDuckGo.Enabled = ddgOn
 }

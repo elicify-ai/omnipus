@@ -619,6 +619,11 @@ func TestReadImage_AccessAuditAndMetadataPrivacy(t *testing.T) {
 		t.Fatalf("metadata guard text: %q", guarded.ForLLM)
 	}
 
+	checkReadImageAuditRows(t, auditLogger, auditDir, inside, outside, adjudicationID, judgeAgentID, sessionID)
+}
+
+func checkReadImageAuditRows(t *testing.T, auditLogger *audit.Logger, auditDir, inside, outside, adjudicationID, judgeAgentID, sessionID string) {
+	t.Helper()
 	rows := readAuditRows(t, auditLogger, auditDir)
 	var reads, denials []auditRow
 	for _, row := range rows {
@@ -661,45 +666,7 @@ func TestReadImage_ExistingReadingContracts(t *testing.T) {
 	root := t.TempDir()
 	tool := NewReadFileTool(root, false, MaxReadFileSize)
 
-	// R1: exact pagination window. The pattern makes off-by-one windows
-	// visible: the window must end precisely at the requested boundary.
-	text := strings.Repeat("abcdefghij", 10) // 100 chars
-	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte(text), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	paged := tool.Execute(context.Background(), map[string]any{"path": "notes.txt", "offset": float64(10), "length": float64(25)})
-	if paged.IsError {
-		t.Fatalf("paginated text: %s", paged.ForLLM)
-	}
-	wantWindow := text[10 : 10+25]
-	if !strings.HasSuffix(paged.ForLLM, wantWindow) {
-		t.Fatalf("text window = %q, want suffix %q", paged.ForLLM, wantWindow)
-	}
-	if strings.HasSuffix(paged.ForLLM, wantWindow+"f") {
-		t.Fatal("text window overshot the requested length")
-	}
-
-	// Edge: empty text stays the empty-file marker, not an image or an error.
-	if err := os.WriteFile(filepath.Join(root, "empty.txt"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	empty := tool.Execute(context.Background(), map[string]any{"path": "empty.txt"})
-	if empty.IsError || !strings.Contains(empty.ForLLM, "[END OF FILE - no content at this offset]") || len(empty.InspectionImages) != 0 {
-		t.Fatalf("empty text: %#v", empty)
-	}
-
-	// A13: direct SVG read stays text (with pagination), never visual.
-	svg := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect x="4" y="4" width="56" height="40" fill="#0af"/></svg>`
-	if err := os.WriteFile(filepath.Join(root, "diagram.svg"), []byte(svg), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	svgRead := tool.Execute(context.Background(), map[string]any{"path": "diagram.svg", "offset": float64(0), "length": float64(40)})
-	if svgRead.IsError || len(svgRead.InspectionImages) != 0 {
-		t.Fatalf("direct SVG read: %#v", svgRead)
-	}
-	if !strings.HasSuffix(svgRead.ForLLM, svg[:40]) || strings.Contains(svgRead.ForLLM, "[image:") {
-		t.Fatalf("direct SVG read lost text semantics: %q", svgRead.ForLLM)
-	}
+	checkReadImageTextAndSVGContracts(t, root, tool)
 
 	// A7: identification by bytes, not filename — PNG content under a
 	// non-image extension is an image candidate; a NUL-bearing blob under a
@@ -767,6 +734,49 @@ func TestReadImage_ExistingReadingContracts(t *testing.T) {
 	idx := strings.LastIndex(capped.ForLLM, "\n\n")
 	if idx < 0 || capped.ForLLM[idx+2:] != strings.Repeat("T", MaxReadFileSize) {
 		t.Fatalf("capped text body length = %d, want exactly %d", len(capped.ForLLM)-(idx+2), MaxReadFileSize)
+	}
+}
+
+func checkReadImageTextAndSVGContracts(t *testing.T, root string, tool *ReadFileTool) {
+	t.Helper()
+	// R1: exact pagination window. The pattern makes off-by-one windows
+	// visible: the window must end precisely at the requested boundary.
+	text := strings.Repeat("abcdefghij", 10) // 100 chars
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paged := tool.Execute(context.Background(), map[string]any{"path": "notes.txt", "offset": float64(10), "length": float64(25)})
+	if paged.IsError {
+		t.Fatalf("paginated text: %s", paged.ForLLM)
+	}
+	wantWindow := text[10 : 10+25]
+	if !strings.HasSuffix(paged.ForLLM, wantWindow) {
+		t.Fatalf("text window = %q, want suffix %q", paged.ForLLM, wantWindow)
+	}
+	if strings.HasSuffix(paged.ForLLM, wantWindow+"f") {
+		t.Fatal("text window overshot the requested length")
+	}
+
+	// Edge: empty text stays the empty-file marker, not an image or an error.
+	if err := os.WriteFile(filepath.Join(root, "empty.txt"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty := tool.Execute(context.Background(), map[string]any{"path": "empty.txt"})
+	if empty.IsError || !strings.Contains(empty.ForLLM, "[END OF FILE - no content at this offset]") || len(empty.InspectionImages) != 0 {
+		t.Fatalf("empty text: %#v", empty)
+	}
+
+	// A13: direct SVG read stays text (with pagination), never visual.
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect x="4" y="4" width="56" height="40" fill="#0af"/></svg>`
+	if err := os.WriteFile(filepath.Join(root, "diagram.svg"), []byte(svg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svgRead := tool.Execute(context.Background(), map[string]any{"path": "diagram.svg", "offset": float64(0), "length": float64(40)})
+	if svgRead.IsError || len(svgRead.InspectionImages) != 0 {
+		t.Fatalf("direct SVG read: %#v", svgRead)
+	}
+	if !strings.HasSuffix(svgRead.ForLLM, svg[:40]) || strings.Contains(svgRead.ForLLM, "[image:") {
+		t.Fatalf("direct SVG read lost text semantics: %q", svgRead.ForLLM)
 	}
 }
 
