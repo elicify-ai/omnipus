@@ -168,15 +168,11 @@ func grepOpenedRootMatches(root *os.Root, expected fs.FileInfo) bool {
 }
 
 // grepGateFIFOSwapHook is the A3 test-only seam (Opus security-lead
-// review): invoked in refuseNonRegular (the OLD code's Stat-then-check
-// window, between Stat and the kind check) and via refuseNonRegularViaOpen
-// (the A3 fix's open-then-stat window, BEFORE the non-blocking open —
-// the seam fires before the open there too so the open sees the FIFO).
+// review): invoked in refuseNonRegular (the OLD Stat-then-check path)
+// and just BEFORE the non-blocking, root-confined open in the live path.
 // Production never sets it — the pointer stays nil and the cost is one
-// atomic load per Open. A test sets it (installGrepGateFIFOSwapHook)
-// to remove a regular file and replace it with a FIFO synchronously,
-// driving the "regular at Stat, FIFO at Open" race that the OLD code
-// path's Stat-then-Open hangs on.
+// atomic load per Open. Tests replace a regular file with a FIFO here
+// to prove the open never blocks.
 var grepGateFIFOSwapHook atomic.Pointer[func(name string)]
 
 func setGrepGateFIFOSwapHook(fn func(name string)) (restore func()) {
@@ -190,6 +186,26 @@ func setGrepGateFIFOSwapHook(fn func(name string)) (restore func()) {
 
 func runGrepGateFIFOSwapHook(name string) {
 	if hook := grepGateFIFOSwapHook.Load(); hook != nil {
+		(*hook)(name)
+	}
+}
+
+// grepGatePreReopenHook fires after the opened file's kind has been checked.
+// A test swaps its on-disk name here; the verified descriptor, never a
+// second open of that name, must be handed to the reader.
+var grepGatePreReopenHook atomic.Pointer[func(name string)]
+
+func setGrepGatePreReopenHook(fn func(name string)) (restore func()) {
+	var next *func(string)
+	if fn != nil {
+		next = &fn
+	}
+	prev := grepGatePreReopenHook.Swap(next)
+	return func() { grepGatePreReopenHook.Store(prev) }
+}
+
+func runGrepGatePreReopenHook(name string) {
+	if hook := grepGatePreReopenHook.Load(); hook != nil {
 		(*hook)(name)
 	}
 }
@@ -448,7 +464,7 @@ func (t *GrepTool) workspaceScopeRoot(policy fspolicy.FSPolicy, realWorkDir, rea
 	if subPath == "." {
 		// The workspace folder itself, named by some other spelling: the
 		// workspace root alone (a mount is not inside the workspace folder).
-		return filegrep.Root{Name: "", FS: guardGrepRoot(policy.WorkDir, wr.FS(), policy)}, 0, nil
+		return filegrep.Root{Name: "", FS: guardGrepRoot(policy.WorkDir, wr.FS(), wr, policy)}, 0, nil
 	}
 	return t.resolveScopedRoot(wr, policy.WorkDir, subPath, "", "your workspace", policy, opened)
 }
@@ -524,7 +540,7 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 		if !grepOpenedRootMatches(root, expected) {
 			return lost(fmt.Errorf("absolute root %q changed before opening", realAbs)), 0, nil
 		}
-		return filegrep.Root{Name: name, FS: guardGrepRoot(realAbs, root.FS(), policy)}, 0, nil
+		return filegrep.Root{Name: name, FS: guardGrepRoot(realAbs, root.FS(), root, policy)}, 0, nil
 	}
 	// Security A1: a path under a mount anchors at the mount root, not at
 	// the immediate parent. The containment check reuses isWithinWorkspace
@@ -722,13 +738,13 @@ func isKernelPseudoPath(abs string) bool {
 // for every grep root type — workspace, mount, scoped and absolute — so no
 // root is a second, more permissive code path (ADR-081 D4 design step 4).
 // The Library search bar keeps GuardCarveOuts alone (FR-028).
-func guardGrepRoot(hostAbs string, fsys fs.FS, policy fspolicy.FSPolicy) fs.FS {
+func guardGrepRoot(hostAbs string, fsys fs.FS, bound *os.Root, policy fspolicy.FSPolicy) fs.FS {
 	guarded := guardCarveOuts(hostAbs, fsys, policy)
 	carve, ok := guarded.(carveOutFS)
 	if !ok {
 		return guarded // unreachableRootFS: nothing to walk, nothing to gate
 	}
-	return grepGateFS{fsys: carve, raw: carve.fsys, root: carve.root, policy: policy}
+	return grepGateFS{fsys: carve, raw: carve.fsys, bound: bound, root: carve.root, policy: policy}
 }
 
 // grepGateFS withholds, by name and content, what read_file would refuse and
@@ -750,11 +766,13 @@ func guardGrepRoot(hostAbs string, fsys fs.FS, policy fspolicy.FSPolicy) fs.FS {
 // walk-relative name; the walk never follows a symlink, so the as-written
 // and resolved spellings coincide for everything whose content is read.
 type grepGateFS struct {
-	fsys fs.FS // carveOutFS
-	// raw is the os.Root FS beneath carveOutFS, used only for the cheap
-	// kind check before an Open (carveOutFS.Stat would repeat the full
-	// secret-set identity check its own Open already performs).
-	raw    fs.FS
+	fsys fs.FS // carveOutFS, used for Stat and ReadDir
+	// raw identifies the optional singleEntryFS restriction beneath
+	// carveOutFS; a direct Open must preserve its one-file boundary.
+	raw fs.FS
+	// bound is the already-admitted os.Root. Opening a name through this
+	// descriptor preserves confinement when the host root moves later.
+	bound  *os.Root
 	root   string // absolute, symlink-resolved host path fsys is anchored at
 	policy fspolicy.FSPolicy
 }
@@ -788,20 +806,50 @@ func (g grepGateFS) refusal(op, name string) error {
 }
 
 func (g grepGateFS) Open(name string) (fs.File, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+	}
 	if name != "." && g.withheld(name) {
 		return nil, g.refusal("open", name)
 	}
-	// A3 fix: non-blocking open + kind check on the opened file (the
-	// OLD code did Stat-then-Open as two steps; an entry that was
-	// regular at Stat time but a FIFO at Open time blocked the gate
-	// Open forever — FIFO read blocks until a writer appears).
-	// Opening with regularReadOpenFlags() (O_NONBLOCK on unix) lets a
-	// FIFO open succeed without a writer; the kind check below
-	// refuses it before the blocking g.fsys.Open(name).
-	if err := refuseNonRegularViaOpen(g.abs(name), name); err != nil {
+	// Bypassing carveOutFS.Open must not bypass its secret-set decision.
+	if fspolicy.IsCarveOut(g.abs(name), g.policy) {
+		return nil, g.refusal("open", name)
+	}
+	// singleEntryFS.Open exposes only its chosen file and the two ignore
+	// files. Preserve that restriction before using the bound root directly.
+	if single, ok := g.raw.(singleEntryFS); ok && name != "." && name != single.name && !isGrepIgnoreFileName(name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+	bound := g.bound
+	if bound == nil {
+		// A standalone gate can be constructed around an fs.FS without an
+		// existing os.Root. Bind and verify its host root before opening the
+		// entry; production roots arrive pre-bound from guardGrepRoot.
+		canonical, err := filepath.EvalSymlinks(g.root)
+		if err != nil {
+			return nil, err
+		}
+		expected, err := grepPreOpenIdentity(canonical)
+		if err != nil {
+			return nil, err
+		}
+		bound, err = os.OpenRoot(g.root)
+		if err != nil {
+			return nil, err
+		}
+		defer bound.Close()
+		if !grepOpenedRootMatches(bound, expected) {
+			return nil, g.refusal("open", name)
+		}
+	}
+	f, err := openRegularGrepEntry(bound, name)
+	if err != nil {
 		return nil, err
 	}
-	return g.fsys.Open(name)
+	// A swap now changes the name on disk, not the verified descriptor.
+	runGrepGatePreReopenHook(name)
+	return f, nil
 }
 
 func (g grepGateFS) Stat(name string) (fs.FileInfo, error) {
@@ -850,14 +898,9 @@ func (g grepGateFS) ReadDir(name string) ([]fs.DirEntry, error) {
 // the repo's structured logger.WarnCF, the same log-safe shape
 // guardCarveOuts already uses for its own refusal (grep.go).
 //
-// The seam between Stat and the kind check is the OLD-code race window
-// the A3 fix removes. Kept here for the RED test (Opus security-lead
-// review A3): with this code path AND the seam installed, an entry
-// that is regular at Stat time but a FIFO at Open time causes the
-// following g.fsys.Open(name) to block on a FIFO (the bug the fix
-// removes). The A3 fix in refuseNonRegularViaOpen replaces this Stat-
-// then-Open with a non-blocking Open + kind check on the opened file —
-// no race window, the FIFO is caught before any blocking Open.
+// Retained because TestRefuseNonRegular_NotExistLeftToOpen calls it directly.
+// Live grep reads instead use openRegularGrepEntry: one root-confined,
+// non-blocking open whose own descriptor is checked and returned.
 func refuseNonRegular(fsys fs.FS, name string) error {
 	info, err := fs.Stat(fsys, name)
 	if err != nil {
@@ -880,64 +923,45 @@ func refuseNonRegular(fsys fs.FS, name string) error {
 	return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%s is not searched: %w", describeFileKind(info.Mode()), fs.ErrPermission)}
 }
 
-// refuseNonRegularViaOpen is the A3 fix: open the file with
-// regularReadOpenFlags() (O_NONBLOCK on unix), then check the kind on the
-// opened file. The opened kind check is the only one that matters — a
-// Stat-then-Open races with a FIFO swap because a FIFO read blocks until a
-// writer connects, leaving the walk slot pinned past the 10 s deadline
-// (D13 / DS-5 row 3). Opening with O_NONBLOCK lets a FIFO open succeed
-// without a writer; the kind check refuses it before the actual reader.
-// Mirrors pkg/tools/resolvepath.go::PathHandle.OpenRegularNonBlocking.
-func refuseNonRegularViaOpen(hostAbs, name string) error {
-	// A3 seam (paired with refuseNonRegular's seam — A3 fires once via
-	// sync.Once, so the OLD code path's race window OR the NEW code
-	// path's pre-open window drives the swap; either way the kind
-	// check on the opened file sees the FIFO and refuses).
+// openRegularGrepEntry performs the ONE content open, through the admitted
+// os.Root with O_NONBLOCK on Unix. It checks the opened descriptor's kind
+// and returns that SAME descriptor, never reopening an unverified name.
+// Directories remain openable for fs.FS traversal; FIFOs and devices do not.
+func openRegularGrepEntry(bound *os.Root, name string) (fs.File, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+	}
 	runGrepGateFIFOSwapHook(name)
-	f, err := os.OpenFile(hostAbs, regularReadOpenFlags(), 0)
+	f, err := bound.OpenFile(name, regularReadOpenFlags(), 0)
 	if err != nil {
-		// ENOENT: the entry is genuinely missing; leave the absence
-		// to the actual Open that follows (it surfaces ENOENT to the
-		// engine). Every other error — permission denied on an
-		// ancestor, transient fs-specific I/O — fails closed (F1/S3,
-		// the pre-fix code's fail-OPEN hazard on non-ENOENT Stat errors).
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil
+			return nil, err
 		}
 		logger.WarnCF("tool", "grep: could not open an entry to determine its kind — refusing it (fail closed)", map[string]any{
 			"path": name, "error": err.Error(),
 		})
-		return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("entry kind could not be determined, refusing to open it: %w: %w", fs.ErrPermission, err)}
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("entry kind could not be determined, refusing to open it: %w: %w", fs.ErrPermission, err)}
 	}
 	info, statErr := f.Stat()
-	// Close whether or not Stat succeeded — we only need the info.
-	_ = f.Close()
 	if statErr != nil {
-		return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("could not stat opened file: %w", statErr)}
+		_ = f.Close()
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("could not stat opened file: %w", statErr)}
 	}
-	if info.IsDir() || info.Mode().IsRegular() {
-		return nil
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%s is not searched: %w", describeFileKind(info.Mode()), fs.ErrPermission)}
 	}
-	return &fs.PathError{Op: "open", Path: name, Err: fmt.Errorf("%s is not searched: %w", describeFileKind(info.Mode()), fs.ErrPermission)}
+	return f, nil
 }
 
-// regularOnlyFS applies the kind check to an unguarded container FS whose
-// only use is reading ancestor .gitignore/.ignore files
-// (filegrep.LoadAncestorIgnore) — the one read above a scoped root that no
-// grepGateFS covers. root is the absolute host path the FS is anchored
-// at, used by the A3 non-blocking open (regularOnlyFS's fsys alone is
-// fs.FS, with no OpenFile-with-flags method).
+// regularOnlyFS reads ancestor .gitignore/.ignore files through the same
+// already-bound os.Root as the scoped search, without a host-path reopen.
 type regularOnlyFS struct {
-	fsys fs.FS
-	root string
+	bound *os.Root
 }
 
 func (r regularOnlyFS) Open(name string) (fs.File, error) {
-	abs := filepath.Join(r.root, filepath.FromSlash(name))
-	if err := refuseNonRegularViaOpen(abs, name); err != nil {
-		return nil, err
-	}
-	return r.fsys.Open(name)
+	return openRegularGrepEntry(r.bound, name)
 }
 
 // sameFileCheck reports whether the *os.Root bound at root still names the

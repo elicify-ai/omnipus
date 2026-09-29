@@ -74,7 +74,7 @@
 // into a normal `*_test.go` file is also acceptable once the seam is in
 // place and the tag is no longer needed to keep the default build green.
 //
-//go:build fix3seam && unix
+//go:build unix
 
 package tools
 
