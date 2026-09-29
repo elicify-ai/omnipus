@@ -1,89 +1,108 @@
+import { useState } from 'react'
+import { CaretUpDown, Check } from '@phosphor-icons/react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { cn } from '@/lib/utils'
+import { Command, CommandList, CommandItem } from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { IntegrationProvider } from '@/lib/api'
 
-// WebSearchGroup — the ADR-096 web-search role-picker pieces for
-// Settings → Integrations, drawn the way the spec draws them: ONE row per
-// provider, and the role radios live ON the provider's row (spec § Settings
-// screen, "Default" / "Fallback" / "Same row" — the two radio groups exist
-// semantically across rows, not as separate visual lists, which duplicated
-// every provider name and broke the section's own tests).
+// WebSearchGroup — #1055's card + Change design for Settings → Integrations,
+// replacing ADR-096's one-row-per-provider radios (#1055 Approved design;
+// #1056 additionally removes the retired local-search provider offering,
+// which the backend no longer sends).
 //
-// Three exported pieces, composed by IntegrationsSection:
-//   - WebSearchGroup           — the group surface: help text + conditional
-//                                notices (FR-012, FR-028, FR-031, R5, D10),
-//                                rendered once above the rows;
-//   - WebSearchRowRoles        — one row's default + fallback radios. The
-//                                fallback radio on the default's row is
-//                                disabled, with its reason visible on the row
-//                                ("A provider cannot fall back to itself.");
-//                                the R3 automatic fallback is labelled;
-//   - WebSearchNoFallbackChoice — the visible "No fallback" choice — an
-//                                option of the fallback group, rendered after
-//                                the rows. Not an unselected blank.
+// Two exported pieces, composed by IntegrationsSection:
+//   - WebSearchGroup       — the group surface: intro copy, the undecided /
+//                            native-search / fallback-ignored notices (FR-012,
+//                            FR-028, FR-031, R5, D10), and the Default search /
+//                            Fallback cards, in the DefaultModelCard visual
+//                            pattern (card + current choice + status +
+//                            "Change" button opening a catalogued Popover +
+//                            Command combobox — the same primitives
+//                            DefaultModelCard's ModelSelector is built from).
+//   - orderSearchProviders — ready-first, stable ordering for the service
+//                            list IntegrationsSection renders below the cards.
 //
-// SearXNG is offered as no new choice (ADR-096 D10 — descoped): it appears
-// with no radios at all, and shows as the current default only as text.
-// Depth and site-filter controls are deliberately absent: the landed
-// contract carries no depth or capability field, so any control here would
-// offer a value nothing would read — exactly what US-5 forbids.
+// No RadioGroup anywhere in this file (#1055): role assignment happens only
+// through a card's "Change" selector. Depth cap is read-only text on the
+// Default card (#1055's depth-cap line) — never an editing control.
 //
 // Wire types come from src/lib/api/generated (Hard Constraint #8); this file
 // never re-declares them.
 
-// Provider ids the screen does not offer as a new default or fallback.
-// SearXNG is the one descoped provider (ADR-096 D10): the migration may have
-// recorded it as the resolved default, so the screen shows it as the current
-// default as text, but offers no editor for it.
-const NOT_CHOOSABLE: ReadonlySet<string> = new Set(['searxng'])
+/** Ready-first, stable ordering: usable providers first (original relative
+ *  order preserved), then everything else (original relative order
+ *  preserved) — the service list below the cards, "ready" before "needs
+ *  setup". */
+export function orderSearchProviders(
+  providers: readonly IntegrationProvider[],
+): IntegrationProvider[] {
+  const ready = providers.filter((p) => p.usable === true)
+  const needsSetup = providers.filter((p) => p.usable !== true)
+  return [...ready, ...needsSetup]
+}
 
-/** The row grid shared by the provider rows, the column-header row, and the
- *  "No fallback" choice line, so the radio columns align across all of them. */
-export const WEB_SEARCH_ROW_GRID =
-  'grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-[var(--space-2-5)]'
+/** Why a provider can't be picked from a role selector right now. */
+function selectorDisabledReason(p: IntegrationProvider): string {
+  return p.requires_key && !p.configured ? 'Add a key first' : 'Needs configuration'
+}
 
-/** The radio circle's checked state — accent-ringed dot. Tokens only; the
- *  catalogued RadioGroupItem contributes the hit target and state machine. */
-function RoleRadioDot({ checked }: { checked: boolean }) {
-  return (
-    <span
-      aria-hidden="true"
-      data-testid="role-radio-dot"
-      className={cn(
-        'block h-[var(--space-3)] w-[var(--space-3)] rounded-full border',
-        checked
-          ? 'border-[var(--color-accent)] bg-[var(--color-accent)]'
-          : 'border-[var(--color-muted)] bg-transparent',
-      )}
-    />
-  )
+/** Why an already-chosen default/fallback stopped being usable. */
+function unusableReason(p: IntegrationProvider): string {
+  return p.requires_key && !p.configured ? 'key missing' : 'needs configuration'
 }
 
 export interface WebSearchGroupProps {
+  /** The full search-provider list (`data.search`). */
+  providers: readonly IntegrationProvider[]
   /** `default_search` — absent when the roles are not yet decided (migration deferred). */
   defaultSearch?: string
+  /** `fallback_search` — null means an explicit "No fallback"; absent means undecided. */
+  fallbackSearch?: string | null
   /** `fallback_ignored_reason` — `same_as_default` when R5 healed the interpretation. */
   fallbackIgnoredReason?: string
   /** `native_search_in_effect` (FR-031). */
   nativeSearchInEffect?: boolean
+  /** True while a role/key save is in flight — disables both cards' Change buttons. */
+  saving: boolean
+  onSetDefault: (id: string) => void
+  onSetFallback: (id: string) => void
+  onSetNoFallback: () => void
+  /** Opens the key-entry editor for the named provider's service row (the
+   *  card's "Fix" action on an unusable default/fallback). */
+  onFixProvider: (id: string) => void
 }
 
-/** The group-level surface: help text + notices. Rendered once, above the
- *  provider rows. */
+/** The group-level surface: intro copy, notices, and the two role cards. */
 export function WebSearchGroup({
+  providers,
   defaultSearch,
+  fallbackSearch,
   fallbackIgnoredReason,
   nativeSearchInEffect,
+  saving,
+  onSetDefault,
+  onSetFallback,
+  onSetNoFallback,
+  onFixProvider,
 }: WebSearchGroupProps) {
+  const rolesOnWire = defaultSearch !== undefined
+  const duckduckgo = providers.find((p) => p.id === 'duckduckgo')
+  const showDuckDuckGoTip = fallbackSearch === null && duckduckgo?.usable === true
+
+  const handleFallbackSelect = (id: string | null) => {
+    if (id === null) onSetNoFallback()
+    else onSetFallback(id)
+  }
+
   return (
     <div className="space-y-[var(--space-3)]" data-testid="websearch-group">
-      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-        The order of this list does not choose who is tried first. You choose the default and the fallback;
-        the default gets the first try, and the fallback one retry on a retryable failure.
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+        Your agents search with the default service. If it fails, the fallback takes over.
       </p>
 
-      {defaultSearch === undefined && (
+      {!rolesOnWire && (
         <Card className="p-[var(--space-3)]" data-testid="roles-undecided">
           <p className="text-[length:var(--type-body-compact-size)]">
             <span className="font-medium">Search roles are not decided yet.</span>{' '}
@@ -106,6 +125,32 @@ export function WebSearchGroup({
         </Card>
       )}
 
+      {rolesOnWire && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-[var(--space-3)]">
+          <SearchRoleCard
+            role="default"
+            label="Default search"
+            providers={providers}
+            currentId={defaultSearch ?? null}
+            saving={saving}
+            onSelect={(id) => { if (id !== null) onSetDefault(id) }}
+            onFix={onFixProvider}
+          />
+          <SearchRoleCard
+            role="fallback"
+            label="Fallback"
+            providers={providers}
+            currentId={fallbackSearch ?? null}
+            excludeId={defaultSearch}
+            allowNone
+            duckDuckGoTip={showDuckDuckGoTip}
+            saving={saving}
+            onSelect={handleFallbackSelect}
+            onFix={onFixProvider}
+          />
+        </div>
+      )}
+
       {fallbackIgnoredReason && (
         <Card className="p-[var(--space-3)]" role="status" data-testid="fallback-ignored-notice">
           <p className="text-[length:var(--type-body-compact-size)]">
@@ -116,169 +161,186 @@ export function WebSearchGroup({
           </p>
         </Card>
       )}
+
+      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        The order of this list does not choose who is tried first. You choose the default and the fallback;
+        the default gets the first try, and the fallback one retry on a retryable failure.
+      </p>
     </div>
   )
 }
 
-export interface WebSearchRowRolesProps {
-  /** The row's provider. */
-  provider: IntegrationProvider
-  /** `default_search` — absent when undecided. */
-  defaultSearch?: string
-  /** `fallback_search` — null means an explicit "No fallback"; absent means undecided. */
-  fallbackSearch?: string | null
+interface SearchRoleCardProps {
+  role: 'default' | 'fallback'
+  label: string
+  /** The full search-provider list. */
+  providers: readonly IntegrationProvider[]
+  /** The role's current value: a provider id, or null for an explicit "None" (fallback only). */
+  currentId: string | null
+  /** A provider id to drop from the selector entirely (fallback: the current default). */
+  excludeId?: string
+  /** Whether the selector offers a "None" choice (fallback only). */
+  allowNone?: boolean
+  /** Whether to show the "DuckDuckGo works without a key" tip (fallback only, when None). */
+  duckDuckGoTip?: boolean
   saving: boolean
-  onSetDefault: (id: string) => void
-  onSetFallback: (id: string) => void
+  onSelect: (id: string | null) => void
+  onFix: (id: string) => void
 }
 
-/** One search row's role radios — the default radio and the fallback radio
- *  the spec puts on every provider row. Returns a two-cell fragment so the
- *  row's grid can place each radio in its labelled column. A not-choosable
- *  provider (SearXNG) renders nothing: no radios, no cells.
- *
- *  Each radio sits in its own single-option catalogued RadioGroup — one DOM
- *  row cannot be a descendant of the two cross-row groups the roles imply,
- *  so the group semantics (one default across all rows, one fallback across
- *  all rows) are carried by the controlled values and the per-group labels,
- *  not by one shared group container. Clicking an already-selected radio
- *  fires nothing: a selection that changes nothing must not open a gated
- *  save. */
-export function WebSearchRowRoles({
-  provider,
-  defaultSearch,
-  fallbackSearch,
+/** One role's card: current choice + status, "Change" opening a Popover +
+ *  Command combobox (DefaultModelCard's visual pattern), and, when the
+ *  stored choice has gone unusable, a visible error with a "Fix" action. */
+function SearchRoleCard({
+  role,
+  label,
+  providers,
+  currentId,
+  excludeId,
+  allowNone,
+  duckDuckGoTip,
   saving,
-  onSetDefault,
-  onSetFallback,
-}: WebSearchRowRolesProps) {
-  if (NOT_CHOOSABLE.has(provider.id)) return null
+  onSelect,
+  onFix,
+}: SearchRoleCardProps) {
+  const [sectionOpen, setSectionOpen] = useState(false)
+  const [popoverOpen, setPopoverOpen] = useState(false)
 
-  const isDefaultRow = provider.id === defaultSearch
-  const isFallbackRow = fallbackSearch === provider.id
-  const automatic = provider.fallback_automatic === true
+  const current = currentId ? providers.find((p) => p.id === currentId) : undefined
+  const unusable = current?.usable === false
+  const selectable = providers.filter((p) => p.id !== excludeId)
 
-  const handleDefaultSelect = (value: string) => {
-    if (value === (defaultSearch ?? '')) return // already the default — no gated save
-    onSetDefault(value)
-  }
-  const handleFallbackSelect = (value: string) => {
-    if (value === (fallbackSearch ?? '')) return // already the fallback — no gated save
-    onSetFallback(value)
+  const handleSelect = (id: string | null) => {
+    setPopoverOpen(false)
+    setSectionOpen(false)
+    if (id === currentId) return // already the stored value — no gated save
+    onSelect(id)
   }
 
   return (
-    <>
-      <div className="flex items-center justify-center">
-        <RadioGroup
-          value={isDefaultRow ? provider.id : ''}
-          onValueChange={handleDefaultSelect}
-          aria-label={`Web search default — ${provider.display_name}`}
-          disabled={saving}
-          className="w-auto"
-        >
-          <RadioGroupItem
-            value={provider.id}
-            data-testid={`default-radio-${provider.id}`}
-            aria-label={`Set ${provider.display_name} as the web search default`}
-            className="h-[var(--space-4)] w-[var(--space-4)] justify-center rounded-full p-0"
-          >
-            <RoleRadioDot checked={isDefaultRow} />
-          </RadioGroupItem>
-        </RadioGroup>
-      </div>
-      <div className="flex flex-col items-center gap-[var(--space-0-5)]">
-        <RadioGroup
-          value={isFallbackRow ? provider.id : ''}
-          onValueChange={handleFallbackSelect}
-          aria-label={`Web search fallback — ${provider.display_name}`}
-          disabled={saving}
-          className="w-auto"
-        >
-          <RadioGroupItem
-            value={provider.id}
-            disabled={isDefaultRow}
-            data-testid={`fallback-radio-${provider.id}`}
-            aria-label={`Set ${provider.display_name} as the web search fallback`}
-            className="h-[var(--space-4)] w-[var(--space-4)] justify-center rounded-full p-0"
-          >
-            <RoleRadioDot checked={isFallbackRow} />
-          </RadioGroupItem>
-        </RadioGroup>
-        {isDefaultRow && (
-          <span
-            data-testid={`fallback-disabled-reason-${provider.id}`}
-            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] text-center"
-          >
-            A provider cannot fall back to itself.
-          </span>
-        )}
-        {!isDefaultRow && automatic && (
-          <span
-            data-testid={`automatic-fallback-${provider.id}`}
-            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] text-center"
-          >
-            Automatic fallback
-          </span>
-        )}
-      </div>
-    </>
-  )
-}
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]" data-testid={`${role}-search-card`}>
+      <div className="flex items-start justify-between gap-[var(--space-2-5)]">
+        <div className="min-w-0">
+          <p className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+            {label}
+          </p>
 
-export interface WebSearchNoFallbackChoiceProps {
-  /** `fallback_search` — null means this choice is the checked one. */
-  fallbackSearch?: string | null
-  saving: boolean
-  onSetNoFallback: () => void
-}
+          <p className="mt-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+            {current ? (
+              <>
+                <span>{current.display_name}</span>
+                {role === 'fallback' && current.fallback_automatic === true && (
+                  <span className="text-[var(--color-muted)]"> (automatic)</span>
+                )}
+                {!unusable && (
+                  <Badge variant="muted" className="ml-[var(--space-2)]">Ready</Badge>
+                )}
+              </>
+            ) : (
+              <span className="text-[var(--color-muted)]">None</span>
+            )}
+          </p>
 
-/** The visible "No fallback" choice — the extra option of the fallback
- *  group, rendered after the provider rows. Spec § Settings screen,
- *  "Fallback": "A second radio, plus a visible 'No fallback' choice. Not an
- *  unselected blank." Clicking it when an explicit none is already stored
- *  fires nothing. */
-export function WebSearchNoFallbackChoice({
-  fallbackSearch,
-  saving,
-  onSetNoFallback,
-}: WebSearchNoFallbackChoiceProps) {
-  const isNone = fallbackSearch === null
-  return (
-    <div
-      className={WEB_SEARCH_ROW_GRID}
-      data-testid="no-fallback-choice"
-    >
-      <div className="min-w-0">
-        <div className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
-          No fallback
+          {role === 'default' && current?.search_depth_cap && (
+            <p className="mt-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+              Depth cap: {current.search_depth_cap}
+            </p>
+          )}
+
+          {current && unusable && (
+            <p
+              className="mt-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]"
+              role="alert"
+            >
+              {current.display_name}: {unusableReason(current)} —{' '}
+              {role === 'default' ? 'searches will fail' : 'the fallback will not run'}
+            </p>
+          )}
+
+          {!current && role === 'fallback' && duckDuckGoTip && (
+            <p className="mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+              DuckDuckGo works without a key — try it as your fallback.
+            </p>
+          )}
         </div>
-        <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-          The default gets the only try; a failure is a failure.
+
+        <div className="flex items-center gap-[var(--space-2)] shrink-0">
+          {current && unusable && (
+            <Button size="sm" onClick={() => onFix(current.id)}>
+              Fix
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setSectionOpen((open) => !open)}
+            disabled={saving}
+          >
+            Change
+          </Button>
         </div>
       </div>
-      <span aria-hidden="true" />
-      <div className="flex items-center justify-center">
-        <RadioGroup
-          value={isNone ? 'none' : ''}
-          onValueChange={(value) => {
-            if (value === 'none' && fallbackSearch !== null) onSetNoFallback()
-          }}
-          aria-label="Web search fallback — none"
-          disabled={saving}
-          className="w-auto"
-        >
-          <RadioGroupItem
-            value="none"
-            data-testid="fallback-radio-none"
-            aria-label="No fallback — the default gets the only try"
-            className="h-[var(--space-4)] w-[var(--space-4)] justify-center rounded-full p-0"
-          >
-            <RoleRadioDot checked={isNone} />
-          </RadioGroupItem>
-        </RadioGroup>
-      </div>
-      <span aria-hidden="true" />
-    </div>
+
+      {sectionOpen && (
+        <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              role="combobox"
+              variant="outline"
+              size="sm"
+              aria-expanded={popoverOpen}
+              aria-label={label}
+              disabled={saving}
+              className="w-full justify-between"
+            >
+              <span className="truncate">
+                {current ? current.display_name : allowNone ? 'None' : 'Select…'}
+              </span>
+              <CaretUpDown size={14} className="shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-[--radix-popover-trigger-width] p-0" aria-label={label}>
+            <Command>
+              <CommandList>
+                {allowNone && (
+                  <CommandItem value="none" onSelect={() => handleSelect(null)}>
+                    <Check
+                      size={14}
+                      className="mr-[var(--space-2)] shrink-0"
+                      style={{ opacity: currentId === null ? 1 : 0 }}
+                    />
+                    None
+                  </CommandItem>
+                )}
+                {selectable.map((p) => {
+                  const disabled = p.usable !== true
+                  return (
+                    <CommandItem
+                      key={p.id}
+                      value={p.id}
+                      disabled={disabled}
+                      onSelect={() => handleSelect(p.id)}
+                    >
+                      <Check
+                        size={14}
+                        className="mr-[var(--space-2)] shrink-0"
+                        style={{ opacity: currentId === p.id ? 1 : 0 }}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{p.display_name}</span>
+                      {disabled && (
+                        <span className="ml-[var(--space-2)] shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                          {selectorDisabledReason(p)}
+                        </span>
+                      )}
+                    </CommandItem>
+                  )
+                })}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+      )}
+    </Card>
   )
 }
