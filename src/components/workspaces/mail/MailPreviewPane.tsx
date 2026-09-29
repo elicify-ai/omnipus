@@ -16,11 +16,13 @@ import { Button } from '@/components/ui/button'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { HistoricalMessageMarkdown } from '@/components/chat/historical-markdown'
+import type { MailMessage } from '@/lib/api/generated/openapi-types'
+import { MailAttachmentsEditor } from './MailAttachmentsEditor'
 import { MailMarkdownEditor } from './MailMarkdownEditor'
+import { MailRecipientRow } from './MailRecipientRow'
 import { MailSenderRow, MailSignaturePreview } from './MailSignaturePreview'
 import {
   collectMailRecipients,
-  MailRecipientInput,
   splitMailRecipients,
   type MailRecipientValue,
 } from './MailRecipientInput'
@@ -33,12 +35,23 @@ export interface MailPreviewPaneProps {
   subject: string
   bodyMarkdown: string
   to: string
+  cc?: string[]
+  bcc?: string[] | null
+  attachments?: MailMessage['attachments']
   senderName?: string
   senderAddress?: string
   signatureHtml?: string
   /** Shown in the 'sent' state (US-4 AS-4). */
   sentOn?: string
-  onSave(next: { to: string; subject: string; bodyMarkdown: string }): void | Promise<boolean>
+  onSave(next: {
+    to: string
+    subject: string
+    bodyMarkdown: string
+    cc?: string[]
+    bcc?: string[]
+    keepAttachmentParts?: number[]
+    attachments?: File[]
+  }): void | Promise<boolean>
   onSend(): void
   onDiscard(): void
 }
@@ -47,26 +60,35 @@ function toRecipientValue(value: string): MailRecipientValue {
   return { recipients: splitMailRecipients(value), draft: '' }
 }
 
-export function MailPreviewPane({ state, subject, bodyMarkdown, to, senderName, senderAddress, signatureHtml, sentOn, onSave, onSend, onDiscard }: MailPreviewPaneProps) {
+export function MailPreviewPane({ state, subject, bodyMarkdown, to, cc, bcc, attachments, senderName, senderAddress, signatureHtml, sentOn, onSave, onSend, onDiscard }: MailPreviewPaneProps) {
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editTo, setEditTo] = useState<MailRecipientValue>(() => toRecipientValue(to))
+  const [editCc, setEditCc] = useState<MailRecipientValue>(() => toRecipientValue((cc ?? []).join(', ')))
+  const [editBcc, setEditBcc] = useState<MailRecipientValue>(() => toRecipientValue((bcc ?? []).join(', ')))
+  const [keptAttachments, setKeptAttachments] = useState<MailMessage['attachments']>(attachments ?? [])
+  const [newFiles, setNewFiles] = useState<File[]>([])
+  const [attachError, setAttachError] = useState<string | null>(null)
   const [editSubject, setEditSubject] = useState(subject)
   const [editBody, setEditBody] = useState(bodyMarkdown)
   const editBodyRef = useRef(bodyMarkdown)
 
-  // The dirty-check needs the serialized "to" string the parent stores;
-  // collectMailRecipients re-derives it deterministically (chips + draft).
   const editToString = collectMailRecipients(editTo).join(', ')
+  const editCcString = collectMailRecipients(editCc).join(', ')
+  const editBccString = collectMailRecipients(editBcc).join(', ')
 
-  // CRIT-001: report unsaved draft-editor text to the shared Mail leave
-  // guard (mailUnsavedGuard.ts) — dirty only while editing with a change
-  // from the saved draft, clearing on "Back to preview" / Save / unmount.
+  // CRIT-001: preserve recipient and file edits as well as text when a user
+  // tries to leave Mail; Save and Back to preview clear the shared guard.
   useEffect(() => {
-    const changed = editing && (editToString !== to || editSubject !== subject || editBody !== bodyMarkdown)
+    const changed = editing && (
+      editToString !== to || editCcString !== (cc ?? []).join(', ') || editBccString !== (bcc ?? []).join(', ')
+      || editSubject !== subject || editBody !== bodyMarkdown || newFiles.length > 0
+      || keptAttachments.length !== (attachments ?? []).length
+      || keptAttachments.some((item, index) => item.part_index !== attachments?.[index]?.part_index)
+    )
     setMailEditorDirty('draft', changed)
     return () => setMailEditorDirty('draft', false)
-  }, [editing, editToString, editSubject, editBody, to, subject, bodyMarkdown])
+  }, [editing, editToString, editCcString, editBccString, editSubject, editBody, newFiles, keptAttachments, to, cc, bcc, subject, bodyMarkdown, attachments])
 
   if (state === 'missing') {
     return (
@@ -111,21 +133,9 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, senderName, 
       <section aria-label="Draft" className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-[var(--color-surface-0)]">
         <div className="shrink-0 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
           {senderName && senderAddress && <MailSenderRow name={senderName} address={senderAddress} padded />}
-          <Field
-            label="To"
-            required
-            data-compose-header-row
-            className="mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] space-y-0 px-[var(--space-3)] py-[var(--space-0-5)] [&>[role=alert]]:col-start-2 [&>[role=alert]]:pb-[var(--space-1)]"
-          >
-            {(controlProps) => (
-              <MailRecipientInput
-                {...controlProps}
-                aria-label="To"
-                value={editTo}
-                onChange={setEditTo}
-              />
-            )}
-          </Field>
+          <MailRecipientRow label="To" value={editTo} onChange={setEditTo} padded />
+          <MailRecipientRow label="Cc" value={editCc} onChange={setEditCc} padded />
+          <MailRecipientRow label="Bcc" value={editBcc} onChange={setEditBcc} padded />
           <Field
             label="Subject"
             data-compose-header-row
@@ -157,6 +167,16 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, senderName, 
           )}
         </Field>
         <MailSignaturePreview html={signatureHtml} placement="editor" />
+        <div className="px-[var(--space-3)] pb-[var(--space-2)]">
+          <MailAttachmentsEditor
+            files={newFiles}
+            existing={keptAttachments}
+            onFilesChange={setNewFiles}
+            onRemoveExisting={(partIndex) => setKeptAttachments((items) => items.filter((item) => item.part_index !== partIndex))}
+            error={attachError}
+            onErrorChange={setAttachError}
+          />
+        </div>
         <div className="flex shrink-0 items-center gap-[var(--space-1)] border-t border-[var(--color-border)] bg-[var(--color-surface-0)] px-[var(--space-3)] py-[var(--space-2)]">
           <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(false)}>
             Back to preview
@@ -164,12 +184,25 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, senderName, 
           <div className="min-w-0 flex-1" />
           <Button
             size="sm"
-            disabled={saving}
+            disabled={saving || attachError !== null}
             onClick={async () => {
+              if (attachError) return
               setSaving(true)
               try {
-                const toString = collectMailRecipients(editTo).join(', ')
-                const saved = await onSave({ to: toString, subject: editSubject, bodyMarkdown: editBodyRef.current })
+                const ccRecipients = collectMailRecipients(editCc)
+                const bccRecipients = collectMailRecipients(editBcc)
+                const saved = await onSave({
+                  to: collectMailRecipients(editTo).join(', '),
+                  subject: editSubject,
+                  bodyMarkdown: editBodyRef.current,
+                  // Optional props distinguish an unloaded field from an
+                  // intentionally cleared one. An edited empty field is sent
+                  // only when its saved value was supplied by the caller.
+                  ...(cc !== undefined || ccRecipients.length > 0 ? { cc: ccRecipients } : {}),
+                  ...(bcc !== undefined || bccRecipients.length > 0 ? { bcc: bccRecipients } : {}),
+                  ...(attachments !== undefined ? { keepAttachmentParts: keptAttachments.map((item) => item.part_index) } : {}),
+                  ...(newFiles.length > 0 ? { attachments: newFiles } : {}),
+                })
                 if (saved !== false) setEditing(false)
               } finally {
                 setSaving(false)
@@ -210,6 +243,11 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, senderName, 
         <div className="flex shrink-0 items-center gap-[var(--space-1)]">
           <Button variant="secondary" size="sm" onClick={() => {
             setEditTo(toRecipientValue(to))
+            setEditCc(toRecipientValue((cc ?? []).join(', ')))
+            setEditBcc(toRecipientValue((bcc ?? []).join(', ')))
+            setKeptAttachments(attachments ?? [])
+            setNewFiles([])
+            setAttachError(null)
             setEditSubject(subject)
             setEditBody(bodyMarkdown)
             editBodyRef.current = bodyMarkdown

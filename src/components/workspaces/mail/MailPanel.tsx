@@ -48,7 +48,7 @@ import type {
 } from '@/lib/api'
 import { MailFolderRail } from './MailFolderRail'
 import { MailMessageList } from './MailMessageList'
-import { MailPreviewPane } from './MailPreviewPane'
+import { MailPreviewPane, type MailPreviewPaneProps } from './MailPreviewPane'
 import { MailHtmlFrame } from './MailHtmlFrame'
 import { MailComposeDialog } from './MailComposeDialog'
 import type { MailComposeBody } from './MailComposeDialog'
@@ -283,15 +283,23 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
 
   // ── Draft actions (US-7, D12/D23) ────────────────────────────────────
   const draftSave = useMutation({
-    mutationFn: (next: { to: string; subject: string; bodyMarkdown: string }) => {
+    mutationFn: async (next: Parameters<MailPreviewPaneProps['onSave']>[0]) => {
       const d = detail as MailMessage
+      const newAttachments = await Promise.all((next.attachments ?? []).map(async (file) => ({
+        filename: file.name,
+        content_type: file.type || 'application/octet-stream',
+        data_base64: await fileToBase64(file),
+      })))
       return saveMailDraft(workspaceId, agentId as string, selectedRef as string, {
         to: next.to.split(',').map((s) => s.trim()).filter(Boolean),
+        cc: next.cc ?? d.cc,
+        bcc: next.bcc ?? d.bcc ?? [],
         subject: next.subject,
         body_markdown: next.bodyMarkdown,
         uidvalidity: d.uidvalidity,
         uid: d.uid,
-        keep_attachment_parts: d.attachments.map((a) => a.part_index),
+        attachments: newAttachments.length > 0 ? newAttachments : undefined,
+        keep_attachment_parts: next.keepAttachmentParts ?? d.attachments.map((item) => item.part_index),
       })
     },
     onSuccess: (updated) => {
@@ -312,10 +320,13 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
       const d = detail as MailMessage
       return sendMailDraft(workspaceId, agentId as string, selectedRef as string, {
         to: d.to,
+        cc: d.cc,
+        bcc: d.bcc ?? [],
         subject: d.subject,
         body_markdown: d.body_markdown ?? '',
         uidvalidity: d.uidvalidity,
         uid: d.uid,
+        keep_attachment_parts: d.attachments.map((item) => item.part_index),
       })
     },
     onSuccess: (res) => {
@@ -675,6 +686,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
                     subject={detail.subject ?? ''}
                     bodyMarkdown={detail.body_markdown ?? detail.body_text ?? ''}
                     to={detail.to.join(', ')}
+                    cc={detail.cc}
+                    bcc={detail.bcc}
+                    attachments={detail.attachments}
                     senderName={senderName}
                     senderAddress={senderAddress}
                     signatureHtml={selectedMailbox?.signature_html}
