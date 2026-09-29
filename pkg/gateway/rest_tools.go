@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -15,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/entity"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // --- Tools ---
@@ -397,6 +399,12 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 
 // reloadAndRespond waits for the runtime reload and returns the updated tool registry response.
 func (rau *restAPIUpdateAgentTools) reloadAndRespond() {
+	// This request may legitimately wait up to 90s for a reload, longer than the
+	// shared server's 30s WriteTimeout. Extend only this response's deadline.
+	if err := http.NewResponseController(rau.w).SetWriteDeadline(time.Now().Add(100 * time.Second)); err != nil {
+		logger.WarnCF("rest", "agent tools update: could not extend write deadline; continuing reload",
+			map[string]any{"agent_id": rau.agentID, "error": err.Error()})
+	}
 	// Trigger a reload AND WAIT for it (triggerReloadAndWaitOutcome, not a bare
 	// TriggerReload — mirrors createAgent/updateAgent/deleteAgent) so the
 	// agent's atomic toolPolicy pointer (pkg/agent/instance.go:290 —
