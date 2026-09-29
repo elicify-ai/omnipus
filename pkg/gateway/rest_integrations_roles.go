@@ -571,8 +571,17 @@ func applyIntegrationRoles(m map[string]any, def integrationDef, write integrati
 
 // applySearchIntegrationRoles patches tools.web in the raw config map:
 //
-//   - a stored key writes this provider's api_key_ref (and nothing else —
-//     FR-005: no other provider's ref is ever deleted);
+//   - a stored key writes this provider's api_key_ref AND switches that
+//     provider's own section on (enabled:true) — founder decision
+//     2026-09-29, "Key save switches on": otherwise a keyed provider could
+//     never become usable from the Settings screen, since the only other
+//     place enabled was ever set true is a default-role save, which the
+//     screen will not offer for a provider the catalogue does not yet
+//     report usable. No other provider's ref or enabled flag is ever
+//     touched (FR-005, extended by the founder decision to enabled too);
+//   - a key-only save (no active, no fallback) assigns no role
+//     (default_provider / fallback_provider stay untouched) and does not
+//     stamp roles_migrated_at;
 //   - the default role writes default_provider and switches the provider on
 //     (the spec's "Setting the default sets enabled:true");
 //   - the fallback role writes the id, or the literal "none" for "No
@@ -589,6 +598,12 @@ func applySearchIntegrationRoles(m map[string]any, def integrationDef, write int
 		if sec, ok := searchRefSectionByID(def.id); ok {
 			section := mapChild(web, sec)
 			section["api_key_ref"] = def.credRef
+			// Founder decision 2026-09-29 ("Key save switches on"): saving a
+			// key for a keyed provider also enables that provider's own
+			// section. This does not assign a role and does not stamp
+			// roles_migrated_at — those stay governed by write.setActive /
+			// write.fallbackSet below.
+			section["enabled"] = true
 		}
 	}
 
