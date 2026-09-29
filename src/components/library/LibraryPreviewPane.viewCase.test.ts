@@ -86,17 +86,35 @@ describe('LibraryPreviewPane — rejected .view shows reason and conflict paths 
 })
 
 describe('LibraryPreviewPane — view case loading/empty/refusal states render distinctly (R2-MIN-007, US-6 AS-6, TDD test 70)', () => {
-  it('is BLOCKED: there is no "view" case at all yet to have distinct states', () => {
-    // US-6 AS-6 requires the 'view' case's loading/empty/unservable states
-    // to render distinctly, reusing BasePreview's existing state renderers
-    // where the shape applies. There is no 'view' case in renderBody at all
-    // (TDD test 14's own finding — no `case 'view':`, no reference to
-    // ViewPartsRenderer), so there is no component here whose three states
-    // could even be inspected.
-    throw new Error(
-      "BLOCKED: LibraryPreviewPane has no case 'view': branch (TDD test 14) — required before its " +
-        'loading/empty/unservable states can be shown to render distinctly, per US-6 AS-6 / ' +
-        'R2-MIN-007 / TDD test 70.'
+  it("the view case has a distinct branch for EACH of loading, empty(zero rows), and unservable/refusal", () => {
+    // Oracle: US-6 AS-6 verbatim — "Given the preview pane opening a view,
+    // When it is loading, returns zero rows, or the underlying view is
+    // `unservable` (F7's `ViewServeRefusal`), Then each state renders
+    // distinctly (a loading state, an empty state, and a refusal state
+    // naming the remedy) — reusing BasePreview's existing refusal rendering
+    // where the same shape applies, rather than inventing a fourth,
+    // uncatalogued state." Three named states, one case block; if the case
+    // does not exist at all (confirmed by TDD test 14, above), none of its
+    // three required branches can exist either.
+    const src = readPaneSource()
+    const viewCaseBody = src.match(/case\s+'view'\s*:([\s\S]*?)(?=\n\s*case\s+'|\n\s*default:\s*\{)/)
+    expect(
+      viewCaseBody,
+      "renderBody has no case 'view': branch at all (TDD test 14's own finding, confirmed above) " +
+        '— there is no view-case body whose loading/empty/refusal branches US-6 AS-6 requires could ' +
+        'even be inspected.',
+    ).toBeTruthy()
+    const body = viewCaseBody?.[1] ?? ''
+    expect(body, 'no loading-state branch (e.g. an isLoading check) found inside the view case').toMatch(
+      /isLoading/,
     )
+    expect(
+      body,
+      'no empty-state (zero-rows) branch found inside the view case',
+    ).toMatch(/rows(\.length)?\s*(===|<=)\s*0|no\s+rows|\bempty\b/i)
+    expect(
+      body,
+      "no unservable/refusal-state branch (F7's ViewServeRefusal) found inside the view case",
+    ).toMatch(/unservable|ViewServeRefusal|refusal/i)
   })
 })
