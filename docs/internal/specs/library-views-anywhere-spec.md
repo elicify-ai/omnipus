@@ -2272,14 +2272,18 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   visible `retry_expired` error. If the rename already landed, Retry verifies and enrolls; otherwise it
   re-runs the same saved, preflighted request under the collection lock; a preflight that now fails
   (destination occupied, source changed or disappeared) returns a visible `retry_preflight_failed`
-  error. Neither error grants authority. The record is cleared on success. Contract: `POST
+  error. Neither error grants authority. On success the pending record is replaced by an inert
+  "completed" receipt for that `pending_move_id`, kept 7 days: a repeat Retry on it returns success with
+  `outcome: already_complete` (no-op); an unknown id returns a visible `retry_not_found`; an expired
+  pending or completed id returns `retry_expired`. Contract: `POST
   /library/{workspace_id}/retry-move` (`RetryMoveRequest` → `RetryMoveResult`; `RetryMoveError` codes
   `retry_not_found` 404, `retry_expired` 410, `retry_identity_mismatch` 409, `retry_preflight_failed`
   409, `retry_locked` 503); moves that fail after revocation return `LibraryMoveIncompleteError`
   (`move_incomplete`, paths, `pending_move_id`); FR-VA-031 refusals return 409
   `ViewTransferRefusedError` (`view_tracked_transfer_refused`, `tracked_paths`). Agent surface:
   `knowledge_restructure` op `retry_move` (arg `pending_move_id`), prose results carrying the same
-  fields. Tests 77/78 cover expired, preflight_failed, already-landed and the normal retry.
+  fields. Tests 77/78 cover expired, preflight_failed, already-landed, the normal retry, repeat-after-success
+  (no-op via the completed receipt) and unknown id (not_found).
 
 ## 13. Success Criteria
 
