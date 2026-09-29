@@ -12,6 +12,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { formatMailBytes } from './mail-format'
 import { MailMarkdownEditor } from './MailMarkdownEditor'
+import { MailSenderRow, MailSignaturePreview } from './MailSignaturePreview'
 import {
   collectMailRecipients,
   isValidMailRecipient,
@@ -36,6 +37,9 @@ export interface MailComposeDialogProps {
   open: boolean
   mode: 'new' | 'reply'
   replyTo?: { from: string; subject: string; messageId: string }
+  senderName?: string
+  senderAddress?: string
+  signatureHtml?: string
   onSend(body: MailComposeBody): void
   onClose(): void
 }
@@ -61,7 +65,7 @@ function recipientError(recipients: string[]): string | undefined {
     : undefined
 }
 
-export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: MailComposeDialogProps) {
+export function MailComposeDialog({ open, mode, replyTo, senderName, senderAddress, signatureHtml, onSend, onClose }: MailComposeDialogProps) {
   const [values, setValues] = useState<ComposeValues>({
     to: EMPTY_RECIPIENTS,
     cc: EMPTY_RECIPIENTS,
@@ -167,6 +171,7 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
           </DialogDescription>
         </DialogHeader>
         <div className="shrink-0 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+          {senderName && senderAddress && <MailSenderRow name={senderName} address={senderAddress} />}
           <Field
             label="To"
             error={errors.to}
@@ -240,6 +245,7 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
             />
           )}
         </Field>
+        <MailSignaturePreview html={signatureHtml} className="px-0" />
         <div
           data-testid="compose-attachments-row"
           className="flex shrink-0 flex-wrap items-center gap-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2)]"

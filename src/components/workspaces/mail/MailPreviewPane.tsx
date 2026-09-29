@@ -17,6 +17,7 @@ import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { HistoricalMessageMarkdown } from '@/components/chat/historical-markdown'
 import { MailMarkdownEditor } from './MailMarkdownEditor'
+import { MailSenderRow, MailSignaturePreview } from './MailSignaturePreview'
 import {
   collectMailRecipients,
   MailRecipientInput,
@@ -32,6 +33,9 @@ export interface MailPreviewPaneProps {
   subject: string
   bodyMarkdown: string
   to: string
+  senderName?: string
+  senderAddress?: string
+  signatureHtml?: string
   /** Shown in the 'sent' state (US-4 AS-4). */
   sentOn?: string
   onSave(next: { to: string; subject: string; bodyMarkdown: string }): void | Promise<boolean>
@@ -43,7 +47,7 @@ function toRecipientValue(value: string): MailRecipientValue {
   return { recipients: splitMailRecipients(value), draft: '' }
 }
 
-export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSave, onSend, onDiscard }: MailPreviewPaneProps) {
+export function MailPreviewPane({ state, subject, bodyMarkdown, to, senderName, senderAddress, signatureHtml, sentOn, onSave, onSend, onDiscard }: MailPreviewPaneProps) {
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editTo, setEditTo] = useState<MailRecipientValue>(() => toRecipientValue(to))
@@ -106,6 +110,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
     return (
       <section aria-label="Draft" className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-[var(--color-surface-0)]">
         <div className="shrink-0 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+          {senderName && senderAddress && <MailSenderRow name={senderName} address={senderAddress} className="px-[var(--space-3)]" />}
           <Field
             label="To"
             required
@@ -151,6 +156,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
             />
           )}
         </Field>
+        <MailSignaturePreview html={signatureHtml} className="py-[var(--space-2)]" />
         <div className="flex shrink-0 items-center gap-[var(--space-1)] border-t border-[var(--color-border)] bg-[var(--color-surface-0)] px-[var(--space-3)] py-[var(--space-2)]">
           <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(false)}>
             Back to preview
@@ -225,6 +231,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, sentOn, onSa
         <div className="text-[length:var(--type-body-size)] text-[var(--color-secondary)]">
           <HistoricalMessageMarkdown content={bodyMarkdown} />
         </div>
+        <MailSignaturePreview html={signatureHtml} className="mt-[var(--space-3)] px-0" />
       </div>
     </section>
   )

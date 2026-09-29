@@ -191,6 +191,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
     }
     return workspaceMailboxes[0]?.agent_id ?? null
   }, [mailboxId, intent.agentId, workspaceMailboxes])
+  const selectedMailbox = workspaceMailboxes.find((mailbox) => mailbox.agent_id === agentId)
+  const senderName = agentId === null ? undefined : agentNamesById.get(agentId) ?? agentId
+  const senderAddress = selectedMailbox?.username ?? 'Address unavailable'
   const folder: string = intent.folder ?? 'inbox'
   // The open message ref — session state, not persisted (a fresh panel opens
   // with the list, not a message). Reset when folder/mailbox changes.
@@ -672,6 +675,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
                     subject={detail.subject ?? ''}
                     bodyMarkdown={detail.body_markdown ?? detail.body_text ?? ''}
                     to={detail.to.join(', ')}
+                    senderName={senderName}
+                    senderAddress={senderAddress}
+                    signatureHtml={selectedMailbox?.signature_html}
                     sentOn={folder === 'sent' ? formatMailDate(detail.date) : undefined}
                     onSave={(next) => draftSave.mutateAsync(next).then(() => true, () => false)}
                     onSend={() => draftSend.mutate()}
@@ -724,6 +730,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
         open={compose !== null}
         mode={compose?.mode ?? 'new'}
         replyTo={compose?.mode === 'reply' && replyTarget !== null ? replyTarget : undefined}
+        senderName={senderName}
+        senderAddress={senderAddress}
+        signatureHtml={selectedMailbox?.signature_html}
         onSend={(body) => {
           composeSend.mutate(body)
           setCompose(null)
