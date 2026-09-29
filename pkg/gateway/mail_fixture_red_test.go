@@ -128,6 +128,20 @@ func TestMailDraftSend_StaleUIDValidityIs409(t *testing.T) {
 func TestAttachmentDownload_HTMLIsNeverInline(t *testing.T) {
 	// MC-42 / C8: an .html part is always Content-Disposition: attachment,
 	// nosniff, extension-typed, RFC 6266 dual filename, and no CSP.
+	//
+	// Delta-review round 2, item 2 (security-lead): htmlAttachRaw's part
+	// used to self-declare Content-Type: text/html — IDENTICAL to the
+	// extension-derived type — so the ct == "text/html" assertion below
+	// could not tell "extension decides" from "self-declared type
+	// decides"; the two coincided for that input. htmlAttachRaw's part now
+	// self-declares application/octet-stream instead, so this assertion
+	// actually proves MC-42/Hard Constraint #6 ("extension decides ...
+	// never the MIME part's self-declared type when it disagrees with a
+	// dangerous extension") rather than passing vacuously. This subsumes
+	// the differentiating fixture a prior round (ae35a4415) added in a
+	// SEPARATE file/test for the same disagreement — that file/test is
+	// deleted to keep exactly ONE copy of this fixture; the path-traversal
+	// filename below is not something that other test also covered.
 	env := newMailRedEnv(t)
 	msgPath := mailMessagesPath("inbox") + "/uid:1:1"
 	requireMailLive(t, env.mux, http.MethodGet, msgPath, "MC-42 / spec §2.3")
@@ -167,10 +181,15 @@ const draftRaw = "From: mia@example.test\r\nTo: a@example.test\r\nSubject: draft
 	"Date: Mon, 02 Jan 2006 15:04:05 +0000\r\nMessage-ID: <draft@example.test>\r\n" +
 	"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nhello\r\n"
 
+// htmlAttachRaw's second part self-declares application/octet-stream —
+// deliberately DISAGREEING with its ".html" filename extension — so
+// TestAttachmentDownload_HTMLIsNeverInline's content-type assertion proves
+// the extension wins over a disagreeing self-declared type (MC-42/Hard
+// Constraint #6), not merely that the two happen to coincide.
 const htmlAttachRaw = "From: a@b.test\r\nTo: mailbox@test.local\r\nSubject: files\r\n" +
 	"Date: Mon, 02 Jan 2006 15:04:05 +0000\r\nMessage-ID: <files@b.test>\r\n" +
 	"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=bnd\r\n\r\n" +
 	"--bnd\r\nContent-Type: text/plain\r\n\r\nhi\r\n" +
-	"--bnd\r\nContent-Type: text/html; charset=utf-8\r\n" +
+	"--bnd\r\nContent-Type: application/octet-stream\r\n" +
 	"Content-Disposition: attachment; filename=\"../../evil.html\"\r\n\r\n" +
 	"<script>alert(1)</script>\r\n--bnd--\r\n"
