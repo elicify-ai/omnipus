@@ -501,7 +501,23 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	if !wakeEligible {
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
+	return d.wakeOwnerOrStore(ctx, al, lifecycle, ownerKey, childRec, event, msg, res)
+}
 
+// wakeOwnerOrStore resolves the steering session's own record and either
+// queues the wake into its live turn, notifies it asynchronously, or leaves
+// the already-durably-stored entry unwoken — the second half of Deliver,
+// reached only once the message is appended and confirmed wake-eligible.
+func (d *SteerUpwardDeliverer) wakeOwnerOrStore(
+	ctx context.Context,
+	al *AgentLoop,
+	lifecycle *session.LifecycleStore,
+	ownerKey string,
+	childRec *session.LifecycleRecord,
+	event steer.UpwardEvent,
+	msg generated.SessionMessage,
+	res *session.AppendResult,
+) (steer.Delivery, error) {
 	ownerRec, ownerErr := lifecycle.Load(ownerKey)
 	if ownerErr != nil || ownerRec == nil {
 		// Edge case: the steering session's own record is gone (deleted
