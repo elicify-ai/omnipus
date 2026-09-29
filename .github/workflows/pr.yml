@@ -580,45 +580,75 @@ jobs:
           test -d pkg/gateway/spa/assets || { echo "::error::SPA sync failed: pkg/gateway/spa/assets missing" >&2; exit 1; }
 
       - name: Run pkg/gateway real-Chrome tests
-        # Same skip-detection + pass-floor pattern as the pkg/tools/browser
-        # step above, extended to close a second #615-shaped hole: this
-        # package duplicates the skipIfNoBrowser convention as
-        # browserWSSkipIfNoBrowser (pkg/gateway/browser_ws_test.go), and the
-        # main "Tests" job never sets OMNIPUS_BROWSER_E2E — so every test
-        # gated by it, including TestBrowserWS_Input_Navigate_SSRFBlocked_
-        # FullRoundTrip (a security control, not just coverage), has been
-        # running in NO environment at all.
-        #
-        # Targeted -run rather than a whole-package run, deliberately: unlike
-        # pkg/tools/browser (a package that IS the browser feature),
-        # pkg/gateway is a ~2,000-test package where only these four tests
-        # are Chrome-gated. A whole-package pass-floor here would either be
-        # guessed without ever having been measured (this job cannot run the
-        # full gateway suite twice just to derive one), or duplicate the main
-        # "Tests" job's own (now-fixed) assertion pass-for-pass for zero new
-        # signal. Naming the four exactly means the floor below is exact and
-        # verified by grep, not estimated — but it also means a FUTURE test
-        # gated by browserWSSkipIfNoBrowser won't be swept in here
-        # automatically; grep for new call sites the next time this list is
-        # touched.
+        # Keep the named ownership inventory aligned with its source file, and
+        # require a named pass for every selected test. A successful go test
+        # exit alone does not prove that any particular test ran.
         run: |
           set -euo pipefail
-          go test -v -tags goolm,stdjson -count=1 -timeout 300s \
-            -run '^(TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip|TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection|TestBrowserWS_Attach_AnnouncesWebRTCAvailabilityOnSameConnection|TestHandleBrowserInspect_Success_MarshalsTagTextHtml)$' \
-            ./pkg/gateway 2>&1 | tee /tmp/gateway-browser-e2e.log
-
-          if grep -qE 'skipping browser E2E test|no managed Chrome for' /tmp/gateway-browser-e2e.log; then
-            echo "::error::browserWSSkipIfNoBrowser skipped — pkg/gateway real-Chrome coverage is NOT running despite OMNIPUS_BROWSER_E2E=1" >&2
-            grep -E 'skipping browser E2E test|no managed Chrome for' /tmp/gateway-browser-e2e.log >&2
+          baseline_tests=(
+            TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip
+            TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection
+            TestBrowserWS_Attach_AnnouncesWebRTCAvailabilityOnSameConnection
+            TestHandleBrowserInspect_Success_MarshalsTagTextHtml
+          )
+          ownership_tests=(
+            TestBrowserWS_SessionOwnership_Attach_OwnerAllowed
+            TestBrowserWS_SessionOwnership_RESTCreatedSession_OwnerCanAttach
+            TestBrowserWS_SessionOwnership_Inspect_UnknownSessionRefused
+            TestBrowserWS_SessionOwnership_Inspect_ResolvedWorkspaceMustMatchChat
+            TestBrowserWS_SessionOwnership_Attach_ResolvedWorkspaceMustMatchChat
+            TestBrowserWS_SessionOwnership_Attach_UnknownSessionRefused
+            TestBrowserWS_SessionOwnership_Attach_NonOwnerRefused
+            TestBrowserWS_SessionOwnership_Attach_RefusalPreservesCurrentView
+            TestBrowserWS_SessionOwnership_Input_NonOwnerRefused
+            TestBrowserWS_SessionOwnership_Control_NonOwnerRefused
+            TestBrowserWS_SessionOwnership_TabAction_NonOwnerRefused
+            TestBrowserWS_SessionOwnership_Viewport_NonOwnerRefused
+            TestBrowserWS_SessionOwnership_Detach_NonOwnerRefused
+            TestBrowserWS_SessionOwnership_Detach_RefusalPreservesCurrentView
+            TestBrowserWS_SessionOwnership_InputOffer_NonOwnerRefused
+            TestBrowserWS_SessionOwnership_WebrtcOffer_NonOwnerRefused
+          )
+          ownership_source=pkg/gateway/browser_ws_session_ownership_test.go
+          inventory_count=$(grep -Ec '^func TestBrowserWS_SessionOwnership_[A-Za-z0-9_]+\(t \*testing\.T\)' "$ownership_source")
+          if [ "$inventory_count" -ne "${#ownership_tests[@]}" ]; then
+            echo "::error::Ownership test inventory changed ($inventory_count in source, ${#ownership_tests[@]} selected)." >&2
             exit 1
           fi
+          for test in "${ownership_tests[@]}"; do
+            if ! grep -Fq "func ${test}(t *testing.T)" "$ownership_source"; then
+              echo "::error::Ownership test $test missing from source." >&2
+              exit 1
+            fi
+          done
+          media_tests=(
+            TestWebRTCEndToEndInProcess
+            TestWebRTCEndToEndInProcess_RefusedDetachPreservesViewer
+          )
+          media_source=pkg/gateway/browser_webrtc_e2e_test.go
+          for test in "${media_tests[@]}"; do
+            if ! grep -Fq "func ${test}(t *testing.T)" "$media_source"; then
+              echo "::error::Gateway media test $test missing from source." >&2
+              exit 1
+            fi
+          done
+          selected=("${baseline_tests[@]}" "${ownership_tests[@]}" "${media_tests[@]}")
+          pattern=$(IFS='|'; printf '%s' "${selected[*]}")
+          go test -v -tags goolm,stdjson -count=1 -timeout 900s \
+            -run "^(${pattern})$" ./pkg/gateway 2>&1 | tee /tmp/gateway-browser-e2e.log
 
-          passes=$(grep -c -- '--- PASS' /tmp/gateway-browser-e2e.log || true)
-          echo "pkg/gateway real-Chrome passing tests: $passes"
-          if [ "$passes" -lt 4 ]; then
-            echo "::error::Only $passes of the 4 known browserWSSkipIfNoBrowser-gated pkg/gateway tests passed. Coverage has silently shrunk (or one of the four was renamed/removed without updating this step)." >&2
+          if grep -q -- '--- SKIP' /tmp/gateway-browser-e2e.log; then
+            echo "::error::A selected gateway browser test skipped." >&2
+            grep -- '--- SKIP' /tmp/gateway-browser-e2e.log >&2
             exit 1
           fi
+          for test in "${selected[@]}"; do
+            if ! grep -Eq -- "^--- PASS: ${test}( \\(|$)" /tmp/gateway-browser-e2e.log; then
+              echo "::error::Gateway browser test $test did not pass by name." >&2
+              exit 1
+            fi
+          done
+          echo "pkg/gateway real-Chrome named passes: ${#selected[@]} (ownership: ${#ownership_tests[@]}), skipped: 0"
 
   typecheck:
     name: TypeScript Type Check
