@@ -263,6 +263,11 @@ func (sq *steeringQueue) runTerminalTransitionWithFinishing(
 			sq.mu.Unlock()
 			return false, false, nil
 		}
+		// The finishing mark remains installed, but the queue mutex must be
+		// released before the durable transition: a steer arriving even inside
+		// commitSteeredTerminal is accepted into finishingItems. Keeping the
+		// mutex here deadlocks the committing goroutine when it enqueues.
+		sq.mu.Unlock()
 
 		terminal, err = transition()
 		sq.mu.Lock()
