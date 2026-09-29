@@ -2315,10 +2315,14 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   then trash. **Ruling (team-lead, 2026-09-29): trash does NOT use the pending-move plan or Retry** —
   revoke-first puts the views in their intended delete end state (released, no authority). If the trash
   itself then fails, the operation returns a visible `trash_incomplete` error naming the paths; trashing
-  again completes it idempotently. `PendingViewMove` stays rename/move-only. REST: `DELETE
-  /library/{workspace_id}/entries` (`deleteLibraryEntry`, which has no 409 today) gains a 409 typed body
-  `LibraryTrashIncompleteError` (`code: trash_incomplete`, `paths`); the agent `knowledge_restructure`
-  trash op returns the same fields in prose. Test 85 (revoke persisted → trash fails → re-trash succeeds;
+  again completes it idempotently. `PendingViewMove` stays rename/move-only. REST (team-lead correction,
+  2026-09-29): `trash_incomplete` is added to the `LibraryMoveConflictError` code enum (with `paths`) and
+  `DELETE /library/{workspace_id}/entries` (`deleteLibraryEntry`, no 409 today) gains a 409 using that
+  same schema — no separate trash error schema; the agent `knowledge_restructure` trash op returns the
+  same fields in prose. **Nested roots:** a folder trash whose subtree contains nested knowledge-base
+  roots takes sorted locks (enclosing + every nested root) and revokes the memberships in ALL affected
+  roots BEFORE the trash; recorded views inside the trashed folder are released even when their `.base`
+  lives outside it. Test 85 (revoke persisted → trash fails → re-trash succeeds;
   no authority remains at any point).
 - **FR-VA-037 *(team-lead ruling, 2026-09-29)***: Incomplete discovery (an unreadable subtree, SkipUnreadable)
   MUST NOT retire any member of the record — the member is kept and a visible warning is shown. Test 86.
