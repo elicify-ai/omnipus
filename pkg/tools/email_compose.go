@@ -185,6 +185,20 @@ func resolveMailAttachments(ctx context.Context, toolName string, refs []any) ([
 			return nil, fmt.Errorf("%s: attachments: %s: %w", toolName, ref, err)
 		}
 
+		// Stat before reading: an oversized candidate is rejected on its
+		// size alone, so it is never fully materialized in memory just to
+		// be discarded a moment later.
+		info, err := handle.Stat()
+		if err != nil {
+			_ = handle.Close()
+			return nil, fmt.Errorf("%s: attachments: %s: %w", toolName, ref, err)
+		}
+		if int64(total)+info.Size() > int64(maxMailAttachmentBytes) {
+			_ = handle.Close()
+			return nil, fmt.Errorf("%s: attachments: %s would take the message over the 25 MiB total attachment limit (MC-32)",
+				toolName, ref)
+		}
+
 		data, err := handle.ReadFile()
 		if err != nil {
 			_ = handle.Close()
@@ -193,6 +207,9 @@ func resolveMailAttachments(ctx context.Context, toolName string, refs []any) ([
 		if err := handle.Close(); err != nil {
 			return nil, fmt.Errorf("%s: attachments: %s: %w", toolName, ref, err)
 		}
+		// The file may have grown between Stat and ReadFile (TOCTOU); the
+		// read-time length is re-checked so the total-budget guarantee
+		// still holds even though the reject-early check above already ran.
 		if total+len(data) > maxMailAttachmentBytes {
 			return nil, fmt.Errorf("%s: attachments: %s would take the message over the 25 MiB total attachment limit (MC-32)",
 				toolName, ref)
