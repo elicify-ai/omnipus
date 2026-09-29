@@ -97,6 +97,69 @@ describe('DefaultWorkspaceRedirect — folded-route redirect map', () => {
     expect(mockNavigate).not.toHaveBeenCalled()
   })
 
+  it('does not redirect between WebKit beforeunload and pagehide when workspaces settle', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    // WebKit can run microtasks and timers after beforeunload but before
+    // pagehide; the token URL is still navigating during this interval.
+    window.dispatchEvent(new Event('beforeunload'))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+    expect(mockNavigate).not.toHaveBeenCalled()
+
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    expect(mockNavigate).not.toHaveBeenCalled()
+    if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility)
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-default' },
+      replace: true,
+    }))
+  })
+
+  it('offers a way back when beforeunload is cancelled without pagehide', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new Event('beforeunload'))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+    expect(mockNavigate).not.toHaveBeenCalled()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to workspace' }))
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-default' },
+      replace: true,
+    }))
+  })
+
   it('redirects after persisted pageshow restores a document whose data settled while hidden', async () => {
     let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
     mockFetchWorkspaces.mockReturnValue(

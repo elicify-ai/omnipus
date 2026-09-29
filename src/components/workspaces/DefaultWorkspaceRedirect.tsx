@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
@@ -34,8 +34,16 @@ interface DefaultWorkspaceRedirectProps {
 export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedirectProps) {
   const navigate = useNavigate()
   const documentLeavingRef = useRef(false)
+  const beforeUnloadPendingRef = useRef(false)
   const skippedRedirectWarnedRef = useRef(false)
   const [documentLeaving, setDocumentLeaving] = useState(false)
+
+  const restoreDocument = useCallback(() => {
+    beforeUnloadPendingRef.current = false
+    documentLeavingRef.current = false
+    skippedRedirectWarnedRef.current = false
+    setDocumentLeaving(false)
+  }, [])
 
   const { data: workspaces, isError, isLoading, isFetching, refetch } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
@@ -43,31 +51,38 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
     staleTime: 30_000,
   })
 
-  // The workspace query may settle after a full-document navigation has begun.
-  // Do not let that late result replace the destination with a hash-router URL.
+  // WebKit can run workspace-query callbacks between beforeunload and pagehide.
+  // Suppress the redirect at the earliest signal, then resume on pageshow or
+  // explicit user action if the navigation was cancelled without pagehide.
   useEffect(() => {
     const markDocumentLeaving = () => {
       documentLeavingRef.current = true
       skippedRedirectWarnedRef.current = false
       setDocumentLeaving(true)
     }
-    const restoreDocument = () => {
-      documentLeavingRef.current = false
-      skippedRedirectWarnedRef.current = false
-      setDocumentLeaving(false)
+    const markBeforeUnload = () => {
+      beforeUnloadPendingRef.current = true
+      markDocumentLeaving()
     }
     const restoreVisibleDocument = () => {
-      if (document.visibilityState === 'visible') restoreDocument()
+      // A visible event is not proof that an in-flight navigation was
+      // cancelled. In particular it must not undo the early beforeunload
+      // guard before pagehide commits the new document.
+      if (!beforeUnloadPendingRef.current && document.visibilityState === 'visible') {
+        restoreDocument()
+      }
     }
+    window.addEventListener('beforeunload', markBeforeUnload)
     window.addEventListener('pagehide', markDocumentLeaving)
     window.addEventListener('pageshow', restoreDocument)
     document.addEventListener('visibilitychange', restoreVisibleDocument)
     return () => {
+      window.removeEventListener('beforeunload', markBeforeUnload)
       window.removeEventListener('pagehide', markDocumentLeaving)
       window.removeEventListener('pageshow', restoreDocument)
       document.removeEventListener('visibilitychange', restoreVisibleDocument)
     }
-  }, [])
+  }, [restoreDocument])
 
   useEffect(() => {
     if (isLoading) return
@@ -120,6 +135,17 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
     return (
       <div className="flex items-center justify-center h-full min-h-[200px] p-[var(--space-5)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
         No workspaces yet. Create one to get started.
+      </div>
+    )
+  }
+
+  if (!isLoading && documentLeaving && beforeUnloadPendingRef.current) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-[var(--space-2)] h-full min-h-[200px] p-[var(--space-5)] text-center">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+          Still here? Continue to your workspace.
+        </p>
+        <Button variant="outline" onClick={restoreDocument}>Continue to workspace</Button>
       </div>
     )
   }
