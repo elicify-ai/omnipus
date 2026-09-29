@@ -51,8 +51,8 @@ function renderDraft(message: MailMessage = draft) {
 }
 
 async function openEditor() {
-  fireEvent.click(await screen.findByRole('button', { name: /Review request/ }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+  fireEvent.click(await screen.findByRole('button', { name: /Review request/ }, { timeout: 30000 }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit' }, { timeout: 30000 }))
   return screen.getByRole('region', { name: 'Draft' })
 }
 

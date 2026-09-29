@@ -34,7 +34,7 @@ function renderMessage(current: MailMessage) {
 }
 
 async function openMessage(body = 'Notes from Alice') {
-  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Quarterly review/ }, { timeout: 30000 }))
   const preview = screen.getByTestId('mail-reading-zone')
   await within(preview).findByText(body)
   return preview

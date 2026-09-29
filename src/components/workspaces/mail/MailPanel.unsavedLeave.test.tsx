@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PanelContentProps,
   WorkspacePanelContext,
@@ -94,6 +94,12 @@ async function cancelLeave(beforeLeave: () => Promise<boolean>) {
   await expect(decision).resolves.toBe(false);
 }
 
+// Preload the real lazy chunk in setup, so its cold transform does not spend
+// the first test's 30s budget while the Suspense fallback is still visible.
+beforeAll(async () => {
+  await import("./MailPanel");
+});
+
 beforeEach(() => {
   fetchAgents.mockReset().mockResolvedValue([{ id: "mia", name: "Mia" }]);
   fetchMailboxes.mockReset().mockResolvedValue([
@@ -129,11 +135,9 @@ describe("Mail unsaved-edit leave guard", () => {
     const guard = requireMailLeaveGuard();
     renderMail({ workspaceId: "ws-1", mailboxId: "mia" }, "docked");
 
-    // MailPanel rides the shell's on-open dynamic-chunk path (React.lazy in
-    // mailPanelDefinition.tsx) — a cold import of its graph (tiptap,
-    // markdown/katex) takes 3.7-11s in this environment, well past
-    // findByRole's default 1000ms wait. Explicit timeout matches the
-    // precedent in src/routes/_app/-workspaces.$workspaceId.chat.mailPanel.test.tsx.
+    // The real React.lazy path still mounts MailPanel; the setup hook above
+    // absorbs its cold import. Keep the existing async UI wait for mailbox
+    // readiness, as in the sibling fullscreen-context Mail tests.
     const composeButton = await screen.findByRole(
       "button",
       { name: "Compose" },
