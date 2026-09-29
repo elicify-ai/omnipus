@@ -115,6 +115,8 @@ export interface MailPanelProps {
   mailboxId?: string | null
   /** Full-page routes use split; the docked panel defaults to Library's stacked layout. */
   layout?: ListPreviewLayoutMode
+  /** Only fullscreen receives the shell's leave-guarded close callback. */
+  onReturnToChat?: () => void
   /** URL-provided initial folder for the full-page route. */
   initialFolder?: string
   /** URL-provided initial message for the full-page route. */
@@ -133,7 +135,7 @@ const FOLDERS_KEY = ['mail-folders'] as const
 const MESSAGES_KEY = ['mail-messages'] as const
 const DETAIL_KEY = ['mail-detail'] as const
 
-export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialFolder, initialMessageRef, onLocationChange }: MailPanelProps) {
+export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturnToChat, initialFolder, initialMessageRef, onLocationChange }: MailPanelProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
 
@@ -463,6 +465,11 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
           </SelectContent>
         </Select>
         <div className="min-w-0 flex-1" />
+        {onReturnToChat && (
+          <Button variant="ghost" size="sm" onClick={() => onReturnToChat()}>
+            Return to chat
+          </Button>
+        )}
         <Button size="sm" className="gap-[var(--space-1)]" onClick={() => setCompose({ mode: 'new' })}>
           Compose
         </Button>
