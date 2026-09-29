@@ -22,17 +22,15 @@ properties:
     type: string
     description: >
       Provider identifier, from the single integration catalogue — not free-form.
-      The search ids (brave, tavily, perplexity, duckduckgo, searxng, glm, baidu,
-      exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids
+      The search ids (brave, tavily, perplexity, duckduckgo, glm, baidu, exa)
+      derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids
       (elevenlabs, groq, audio-model) are listed so voice rows stay valid under
-      this shared schema. searxng appears as a default only on installs whose
-      configuration already resolved to it (ADR-096 D10).
+      this shared schema.
     enum:
       - brave
       - tavily
       - perplexity
       - duckduckgo
-      - searxng
       - glm
       - baidu
       - exa
@@ -56,8 +54,8 @@ properties:
     description: >
       Search rows: true when this provider's credential entry resolves in the
       credential store (the vault test, ADR-096 D13) — and, for the keyless
-      rows, when their prerequisite holds (duckduckgo always; searxng when
-      base_url is set). It says nothing about runtime usability: a configured
+      search row, when its prerequisite holds (duckduckgo always).
+      It says nothing about runtime usability: a configured
       provider can still be switched off or fail to have its key reach search.
       For whether search can use the provider right now, see usable.
       Voice rows: true when the provider's credential resolves; audio-model
@@ -90,9 +88,9 @@ properties:
     description: >
       Search rows only; unset on voice rows. The tool's usability test (ADR-096
       Definitions): switched on and a required key resolves to a non-empty
-      process value — or, for DuckDuckGo, simply switched on — or, for SearXNG,
-      switched on with a non-empty base_url. False when the key name is set but
-      the resolved key is empty ("key not reaching search"). This is the badge
+      process value — or, for DuckDuckGo, simply switched on. False when the
+      key name is set but the resolved key is empty ("key not reaching search").
+      This is the badge
       test; configured (the secret is in the vault) is not it.
     example: true
   fallback:

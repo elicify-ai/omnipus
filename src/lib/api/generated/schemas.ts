@@ -1646,7 +1646,6 @@ type IntegrationProvider = {
     | "tavily"
     | "perplexity"
     | "duckduckgo"
-    | "searxng"
     | "glm"
     | "baidu"
     | "exa"
@@ -2935,7 +2934,6 @@ export const IntegrationProvider: z.ZodType<IntegrationProvider> = z.object({
     "tavily",
     "perplexity",
     "duckduckgo",
-    "searxng",
     "glm",
     "baidu",
     "exa",
