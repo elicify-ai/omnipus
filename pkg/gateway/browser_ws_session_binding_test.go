@@ -200,16 +200,17 @@ func TestGateway_SessionIDIsBinding(t *testing.T) {
 
 	// The wiring half: everything above proves the resolver honours the
 	// preference, but not that handleAttach actually PASSES it. Before FR-017
-	// the attach call site passed a literal "" — which is exactly the input
-	// the first sub-test shows is refused — so a multi-workspace agent was
+	// the attach call site passed a literal "" — a multi-workspace agent was
 	// refused on every attach, from every chat, forever. This drives a real
-	// browser_attach frame and asserts the refusal flips.
+	// browser_attach frame and asserts that a session naming a real workspace
+	// is no longer refused, and that a session the store cannot read is
+	// refused outright by the session-ownership gate (not tie-broken, not
+	// waved through to the ambiguity ladder).
 	//
 	// Chrome-free by construction: cdp_url points at a closed loopback port,
 	// so the successful branch reaches remote-CDP mode and fails on the dial
 	// instead of launching or downloading a browser. That failure is not the
-	// assertion — the assertion is that the message is no longer the FR-033
-	// ambiguity refusal.
+	// assertion — the assertion is which refusal (if any) came back first.
 	t.Run("attach stops refusing once the session names a workspace", func(t *testing.T) {
 		handler, al, _ := newBindingTestLoop(t, func(cfg *config.Config) {
 			cfg.Tools.Browser.CDPURL = "ws://127.0.0.1:1/devtools/browser/closed-on-purpose"
@@ -221,10 +222,16 @@ func TestGateway_SessionIDIsBinding(t *testing.T) {
 		const ambiguityMarker = "more than one workspace"
 
 		// (a) A session id the store knows nothing about — no workspace to
-		// read — must still produce FR-033's refusal.
+		// read, so the binding cannot be verified at all — is refused
+		// outright by the ownership gate, before the resolver's ambiguity
+		// ladder ever runs. This intentionally changed under the
+		// session-ownership fix: an unreadable session used to fall through
+		// to the plain ladder (and, for a two-workspace agent, land on
+		// FR-033's ambiguity refusal); now it never reaches the ladder.
 		unknown := attachAndReadMessage(t, srv, "01JZZZZZZZZZZZZZZZZZZZZZZZ")
-		assert.Contains(t, unknown, ambiguityMarker,
-			"with no workspace to read off the session, a two-workspace agent must be refused")
+		assert.Contains(t, unknown, "browser_attach: session not available",
+			"a session nothing owns cannot be verified against any workspace, so attach must refuse "+
+				"outright — not fall through to the ambiguity ladder")
 
 		// (b) The same agent, same handler, from a session that IS in a
 		// workspace: the ambiguity refusal must be gone.
