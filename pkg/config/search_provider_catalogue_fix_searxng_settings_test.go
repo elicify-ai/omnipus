@@ -7,11 +7,14 @@ package config
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 func TestFixF2_SearXNGAbsentFromCatalogueAndConfigType(t *testing.T) {
@@ -252,6 +255,46 @@ func TestFixF2_UnmigratedExplicitSearXNGDefaultUsesNormalMigration(t *testing.T)
 	}
 }
 
+// captureLoggerWarnings reads the production logger's JSON file sink. Tests
+// using it must stay serial because EnableFileLogging changes global state.
+func captureLoggerWarnings(t *testing.T) func() string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "gateway.log")
+	if err := logger.EnableFileLogging(path); err != nil {
+		t.Fatalf("enable file logging: %v", err)
+	}
+	t.Cleanup(logger.DisableFileLogging)
+	return func() string {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read logger output: %v", err)
+		}
+		return string(data)
+	}
+}
+
+func searxngWarningMessages(t *testing.T, output string) []string {
+	t.Helper()
+	var warnings []string
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		var event struct {
+			Level   string `json:"level"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("decode logger output %q: %v", line, err)
+		}
+		if event.Level == "warn" && strings.Contains(strings.ToLower(event.Message), "searxng") {
+			warnings = append(warnings, event.Message)
+		}
+	}
+	return warnings
+}
+
 // A file with roles_migrated_at will never re-run MigrateWebSearchRoles. The
 // normal load must instead retire stale role strings explicitly, persist that
 // repair immediately, and explain it once. A removed DEFAULT is deliberately
@@ -280,7 +323,7 @@ func TestFixF2_AlreadyMigratedSearXNGRolesAreClearedOnLoad(t *testing.T) {
 			if before := readWebSection(t, path); before["default_provider"] != tc.defaultID || before["fallback_provider"] != tc.fallbackID {
 				t.Fatalf("stale-role fixture does not carry the requested roles: %v", before)
 			}
-			logs := captureWarnings(t)
+			readLogs := captureLoggerWarnings(t)
 			cfg, err := LoadConfig(path)
 			if err != nil {
 				t.Fatalf("already-migrated config with removed roles must load: %v", err)
@@ -311,18 +354,14 @@ func TestFixF2_AlreadyMigratedSearXNGRolesAreClearedOnLoad(t *testing.T) {
 			if got := web["roles_migrated_at"]; got != "2026-09-01T12:00:00Z" {
 				t.Errorf("clearing stale roles changed the migration marker to %v", got)
 			}
-			var warnings []string
-			for _, line := range strings.Split(logs.String(), "\n") {
-				if strings.Contains(line, "level=WARN") && strings.Contains(strings.ToLower(line), "searxng") {
-					warnings = append(warnings, line)
-				}
-			}
+			firstLog := readLogs()
+			warnings := searxngWarningMessages(t, firstLog)
 			if len(warnings) != 1 {
-				t.Errorf("one clear warning must name removed SearXNG, got %d lines: %q", len(warnings), logs.String())
+				t.Errorf("one clear warning must name removed SearXNG, got %d lines: %q", len(warnings), firstLog)
 			}
 			if len(warnings) > 0 {
 				warning := strings.ToLower(warnings[0])
-				if !strings.Contains(warning, "warn") || !strings.Contains(warning, "removed") {
+				if !strings.Contains(warning, "removed") {
 					t.Errorf("warning must say the configured provider was removed: %q", warnings[0])
 				}
 				for _, role := range tc.clearedRoles {
@@ -365,14 +404,10 @@ func TestFixF2_AlreadyMigratedSearXNGRolesAreClearedOnLoad(t *testing.T) {
 			if got := readWebSection(t, path)["roles_migrated_at"]; got != "2026-09-01T12:00:00Z" {
 				t.Errorf("second boot changed the original migration marker to %v", got)
 			}
-			var searxngWarningsAfterSecond int
-			for _, line := range strings.Split(logs.String(), "\n") {
-				if strings.Contains(line, "level=WARN") && strings.Contains(strings.ToLower(line), "searxng") {
-					searxngWarningsAfterSecond++
-				}
-			}
-			if searxngWarningsAfterSecond != 1 {
-				t.Errorf("cleanup warning must occur once across both boots, got %d SearXNG lines: %q", searxngWarningsAfterSecond, logs.String())
+			secondLog := readLogs()
+			searxngWarningsAfterSecond := searxngWarningMessages(t, secondLog)
+			if len(searxngWarningsAfterSecond) != 1 {
+				t.Errorf("cleanup warning must occur once across both boots, got %d SearXNG lines: %q", len(searxngWarningsAfterSecond), secondLog)
 			}
 		})
 	}
