@@ -31,7 +31,7 @@
 //
 //	npx vitest run src/components/library/knowledge/KnowledgePanel.noSavedViewsBlock.test.tsx
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { KnowledgeBaseInfo } from '@/lib/api/generated/openapi-types'
@@ -62,6 +62,16 @@ describe('KnowledgePanel — no top "Saved views" block or dialog (FR-VA-030, TD
     // and show a view label (see KnowledgePanel.test.tsx's UAT D-13 suite) —
     // feeding it a real view here proves this test is not vacuously true
     // (there IS something a "Saved views" block would have shown).
+    //
+    // FR-VA-030 (amendment): a CORRECT implementation removes the whole
+    // "Saved views" surface, so a correct KnowledgePanel must NOT call
+    // loadViews at all — asserting `loadViews` WAS called (the original
+    // form of this test) would make the test permanently unsatisfiable by
+    // a correct fix, contradicting the very requirement it exists to
+    // enforce. This version never asserts loadViews was (or wasn't) called;
+    // it only proves the settled render — after giving today's still-wired
+    // KnowledgeViewsList a chance to mount and fetch — shows none of the
+    // surfaces FR-VA-030 forbids.
     const loadViews = vi.fn().mockResolvedValue({
       collection_id: COLLECTION_ID,
       views: [{ name: 'authored--active', label: 'Active invoices' }],
@@ -79,12 +89,17 @@ describe('KnowledgePanel — no top "Saved views" block or dialog (FR-VA-030, TD
       </QueryClientProvider>,
     )
 
-    // Wait for the COMPOSED surface to actually render (not merely for
-    // loadInfo to have been called) — surfaceEnabled's branch is what would
-    // mount KnowledgeViewsList, so the assertion below must run against a
-    // settled render, never a still-loading one that would pass vacuously.
+    // Wait for the COMPOSED surface to actually render, then flush any
+    // still-pending async work (today's loadViews fetch and its resulting
+    // re-render) inside `act` — without asserting loadViews's call count,
+    // per the FR-VA-030 note above — before checking absence, so the
+    // assertions below run against a fully settled render rather than a
+    // still-loading one that would pass vacuously.
     await screen.findByTestId('knowledge-panel-surface')
-    await waitFor(() => expect(loadViews).toHaveBeenCalled())
+    await act(async () => {
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(loadInfo).toHaveBeenCalled())
 
     expect(screen.queryByTestId('knowledge-views-list')).not.toBeInTheDocument()
     expect(screen.queryByText('Saved views')).not.toBeInTheDocument()
