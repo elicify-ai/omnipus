@@ -4818,21 +4818,22 @@ export interface components {
         };
         /**
          * LibraryMoveConflictError
-         * @description Typed 409 body for POST /library/move and POST /library/{workspace_id}/rename (FR-VA-031/FR-VA-032). Both operations can reach 409 for four distinct causes; `code` discriminates, following the multi-cause pattern of LLMError.yaml. Shares "error"/"code" with the standard ErrorResponse envelope so a generic handler still works unchanged. Which optional field is populated is a function of `code`:
-         *       - already_exists / is_mount_root: no extra field (today's 409s,
-         *         pkg/library/root.go ErrAlreadyExists/ErrIsMountRoot; `code` is new).
-         *       - view_tracked_transfer_refused (FR-VA-031): tracked_paths is present.
-         *       - move_incomplete (FR-VA-032): paths and pending_move_id are present;
+         * @description Typed 409 body shared by POST /library/move, POST /library/{workspace_id}/rename, and DELETE /library/{workspace_id}/entries (FR-VA-031/FR-VA-032/FR-VA-036). All five codes carry error and code; each code's additional fields are:
+         *       - already_exists / is_mount_root: none (move/rename).
+         *       - view_tracked_transfer_refused: tracked_paths (move/rename).
+         *       - move_incomplete: paths and pending_move_id (move/rename);
          *         retryable via POST /library/{workspace_id}/retry-move.
+         *       - trash_incomplete: paths (delete); retry by trashing again, with no
+         *         pending_move_id.
          */
         LibraryMoveConflictError: {
             /** @description Human-readable message, safe to display. */
             error: string;
             /** @enum {string} */
-            code: "already_exists" | "is_mount_root" | "view_tracked_transfer_refused" | "move_incomplete";
+            code: "already_exists" | "is_mount_root" | "view_tracked_transfer_refused" | "move_incomplete" | "trash_incomplete";
             /** @description Only for view_tracked_transfer_refused. */
             tracked_paths?: string[];
-            /** @description Only for move_incomplete. */
+            /** @description Only for move_incomplete or trash_incomplete. */
             paths?: string[];
             /** @description Only for move_incomplete; pass to retry-move. */
             pending_move_id?: string;
@@ -22328,6 +22329,15 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
+            /** @description Trash incomplete after membership revocation; paths name the affected entries (trash_incomplete). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryMoveConflictError"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
