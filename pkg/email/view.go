@@ -304,9 +304,22 @@ func (c *Client) fetchMailRows(ctx context.Context, client *imapclient.Client, s
 	}
 	rows := make([]MailRow, 0, len(bufs))
 	for _, buf := range bufs {
-		if buf == nil || hasDeletedFlag(buf.Flags) {
+		if buf != nil && hasDeletedFlag(buf.Flags) {
 			// A different client may flag a UID after our SEARCH. Never
 			// render it merely because it was visible at search time.
+			continue
+		}
+		if buf == nil || buf.Envelope == nil {
+			// Round-8 F5 (FR-018/FR-036), mirroring fetchMessages
+			// (transport.go): a buffer without its envelope cannot render a
+			// row, but the drop must never be invisible — one WARN per
+			// dropped row naming the condition.
+			uid := uint32(0)
+			if buf != nil {
+				uid = uint32(buf.UID)
+			}
+			slog.Warn("email transport: fetched row without envelope dropped from page",
+				"uid", uid)
 			continue
 		}
 		row := MailRow{
