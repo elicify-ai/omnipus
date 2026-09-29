@@ -28,7 +28,10 @@ func TestComposeMultipart_NoSignature(t *testing.T) {
 	// B-3 / MC-3: an empty signature still produces multipart/alternative, and
 	// the signature separator is absent.
 	const body = "# Title\n\nSee [docs](https://docs.example/a).\n"
-	got := buildEmailBody("ada@box.test", "a@x.test", "Hello", body, "")
+	got, err := buildEmailBody("ada@box.test", "a@x.test", "Hello", body, "")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 
 	plain, html := mustAlternativeParts(t, got)
 	if strings.Contains(plain, "\n--\n") || strings.Contains(plain, "\r\n--\r\n") {
@@ -49,7 +52,10 @@ func TestComposeHeaders_RFC2047(t *testing.T) {
 		subject = "Grüße"
 		from    = "Günter <ada@box.test>"
 	)
-	got := buildEmailBody(from, "a@x.test", subject, "body", "")
+	got, berr := buildEmailBody(from, "a@x.test", subject, "body", "")
+	if berr != nil {
+		t.Fatalf("buildEmailBody: %v", berr)
+	}
 	msg, err := mail.ReadMessage(strings.NewReader(got))
 	if err != nil {
 		t.Fatalf("MC-4: composed message is not RFC 5322: %v\n%s", err, got)
@@ -62,7 +68,10 @@ func TestComposeHeaders_RFC2047(t *testing.T) {
 func TestComposeMultipart_HeaderInjectionGuard(t *testing.T) {
 	// MC-4: a CRLF in a recipient must not become another header. Subject
 	// stripping already exists; the recipient path is the one this asserts.
-	got := buildEmailBody("ada@box.test", "a@x.test\r\nBcc: eve@x.test", "Hello", "body", "")
+	got, err := buildEmailBody("ada@box.test", "a@x.test\r\nBcc: eve@x.test", "Hello", "body", "")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	if strings.Contains(got, "\nBcc:") || strings.Contains(got, "\rBcc:") {
 		t.Fatalf("MC-4: recipient CRLF injected a Bcc header:\n%s", got)
 	}
@@ -137,7 +146,10 @@ func TestPlainTextPart_ASTDerivation_HardWraps(t *testing.T) {
 	// Links are "text (href)", list items are indented, code stays literal, and
 	// a single newline survives (hard wraps).
 	const body = "See [docs](https://docs.example/a).\n\n- one\n\n`keep-literal`\n\nalpha\nbeta\n"
-	got := buildEmailBody("ada@box.test", "a@x.test", "Hello", body, "")
+	got, err := buildEmailBody("ada@box.test", "a@x.test", "Hello", body, "")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	plain, html := mustAlternativeParts(t, got)
 
 	if !strings.Contains(plain, "docs (https://docs.example/a)") {
@@ -170,7 +182,10 @@ func TestOutboundBodyAllowlist(t *testing.T) {
 		"![pixel](http://img.example/a.png)\n\n" +
 		"![logo](https://logo.example/a.png)\n\n" +
 		"<span style=\"color:red\">styled</span>\n"
-	got := buildEmailBody("ada@box.test", "a@x.test", "Hello", body, "")
+	got, err := buildEmailBody("ada@box.test", "a@x.test", "Hello", body, "")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	_, html := mustAlternativeParts(t, got)
 
 	if strings.Contains(strings.ToLower(html), "<script") {
