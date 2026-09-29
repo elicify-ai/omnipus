@@ -139,6 +139,13 @@ var allStaticToolNames = []string{
 	"serve_web",
 	"set_todos",
 	"read_inbox", "search_email", "read_message", "send_email", "reply",
+	// create_email_draft (email-mail-view-spec §2.7 point 4): the
+	// Drafts-only compose tool. Catalog inclusion keeps the
+	// catalog↔ceiling parity test one-for-one with the shipped
+	// defaults.go entry and keeps validateOverrideKeys exhaustive —
+	// the D19 fill (pkg/gateway/rest_mailbox.go) and the ADR-090
+	// inventory grant reference this name.
+	"create_email_draft",
 	"ToolSearch",
 	// ADR-056 — the unified read-only background-job roster (plans owned,
 	// subagents delegated, standalone tasks assigned to or created by the

@@ -404,19 +404,22 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 		logger.WarnCF("gateway", "queued-task drain disabled — no task executor available", nil)
 	}
 
-	// Mailbox drain (M11): unhandled inbound mail → Board tasks. The provider is
-	// rebuilt from live config + the credential store on every tick, so adding,
-	// changing, or removing a mailbox via the Connectors API is picked up without
-	// a restart. Started unconditionally; the scanner is a no-op when no mailbox
-	// is configured.
+	// New-mail watcher (D20/#631): replaces the deleted mailbox drainer. The
+	// watcher never mutates flags, never creates tasks, never starts a turn —
+	// it only refreshes the per-mailbox state the Mail panel badge reads. The
+	// provider is rebuilt from live config + the credential store on every
+	// cycle, so mailbox changes via the Connectors API need no restart.
 	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
 			return buildMailboxes(stg.agentLoop.GetConfig(), stg.credStore)
 		})
-		drainer := email.NewDrainer(tStore, provider, 0)
-		stg.runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
-		stg.runningServices.MailboxDrain.Start()
-		fmt.Println("✓ Mailbox drain owned by: MailboxDrainService (unhandled mail → Board)")
+		// A8 mail-operation budget: the watcher set gates its cycles through
+		// the SAME shared per-account gate the REST panel and the agent tools
+		// use — one instance per state dir (SharedMailBudget), installed for
+		// the tools by gateway.go::initializeAgentLoop before NewAgentLoop.
+		stg.runningServices.MailWatch = heartbeat.NewMailWatchService(email.NewMailboxWatcherSet(provider, stg.homePath, email.SharedMailBudget(stg.homePath)), 0)
+		stg.runningServices.MailWatch.Start()
+		fmt.Println("✓ New-mail watcher owned by: MailWatchService (badge state only)")
 	}
 
 	// Task time-trigger executor: fires once/every/recurring task triggers via a
@@ -1029,7 +1032,7 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 
 // startPlanEngine configures and starts the plan engine when its task dependencies are available.
 func (stg *setupAndStartServicesState) startPlanEngine() (*services, bool, error) {
-	// Mirrors the TaskDrain/TaskTrigger/MailboxDrain degrade-not-abort
+	// Mirrors the TaskDrain/TaskTrigger/MailWatch degrade-not-abort
 	// convention immediately below/above for a missing task store/executor
 	// (e.g. a minimal test harness's AgentLoop) — the plan engine needs both.
 	if stg.tStore != nil && stg.tExecutor != nil {
@@ -1204,6 +1207,7 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		// M3: "unknown" is not "fresh install" — see the field's doc comment.
 		onboardingStateUnknown: stg.onboardingStateUnknown,
 		homePath:               stg.homePath,
+		mailBudget:             email.SharedMailBudget(stg.homePath), // A8: the shared per-account gate
 		taskStore:              stg.tStore,
 		taskExecutor:           stg.tExecutor,
 		liveTaskActivity:       stg.tExecutor, // founder decision 2026-09-14: Task.last_activity_at

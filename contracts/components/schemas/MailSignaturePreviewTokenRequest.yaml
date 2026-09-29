@@ -1,0 +1,27 @@
+title: MailSignaturePreviewTokenRequest
+description: >
+  Request to mint a short-lived token for the draft signature's live preview
+  (POST /mail/signature-preview-token — session-authenticated, stays in the
+  API namespace). Unlike the message HTML-preview mint, this endpoint NEVER
+  dials IMAP: there is no workspace/agent/folder/ref in the request — the
+  signature HTML is sanitized at mint (strip meta/base/forms/scripts/event
+  handlers, harden anchors; the signature policy keeps inline style, tables
+  and https+data images per FR-003) and held in the in-memory token store
+  for the TTL. Mint never persists: the sanitized HTML lives only in memory
+  and dies with the token (logout revocation or TTL expiry). Rate-limited
+  by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+type: object
+additionalProperties: false
+required:
+  - signature_html
+properties:
+  signature_html:
+    type: string
+    minLength: 1
+    maxLength: 16384
+    description: >
+      The signature editor's current HTML (MC-1 bound: 1..16384 characters).
+      Sanitized at mint before it is ever served into the sandboxed preview
+      frame; storage sanitization stays the draft PUT's job — this mint
+      never writes the signature anywhere.
+    example: "<p style=\"color:#333\">Elicify GmbH — Berlin</p>"

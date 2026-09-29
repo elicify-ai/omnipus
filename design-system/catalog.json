@@ -9,6 +9,34 @@
   ],
   "entries": [
     {
+      "source": "src/components/ui/AutoSaveIndicator.tsx",
+      "classification": "domain",
+      "exports": [
+        "AutoSaveIndicator"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/FormError.tsx",
+      "classification": "domain",
+      "exports": [
+        "FormErrorProps",
+        "FormError"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/RestartConfirmDialog.tsx",
+      "classification": "domain",
+      "exports": [
+        "RestartConfirmDialog"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
       "source": "src/components/ui/accordion.tsx",
       "classification": "primitive",
       "exports": [
@@ -40,15 +68,6 @@
         "AlertDialogDescription",
         "AlertDialogCancel",
         "AlertDialogAction"
-      ],
-      "publicExports": [],
-      "publicTypes": []
-    },
-    {
-      "source": "src/components/ui/AutoSaveIndicator.tsx",
-      "classification": "domain",
-      "exports": [
-        "AutoSaveIndicator"
       ],
       "publicExports": [],
       "publicTypes": []
@@ -312,54 +331,6 @@
       ]
     },
     {
-      "source": "src/components/ui/zoomable-view.tsx",
-      "classification": "composite",
-      "exports": [
-        "ZoomPill",
-        "ZoomableMediaSurface",
-        "clampZoomScale",
-        "effectiveMinScale",
-        "computeFittedScale",
-        "computeOpeningScale",
-        "resolveSvgIntrinsicSize",
-        "useZoomableViewKeyboard",
-        "useZoomableMedia",
-        "ZOOMABLE_VIEW_MIN_SCALE",
-        "ZOOMABLE_VIEW_MAX_SCALE",
-        "ZOOMABLE_VIEW_LABEL_FLOOR_PX",
-        "ZoomableSize",
-        "OpeningScaleParams",
-        "ZoomableViewKeyboardHandlers",
-        "ZoomPillProps",
-        "ZoomableMediaController",
-        "UseZoomableMediaOptions",
-        "ZoomableMediaSurfaceProps"
-      ],
-      "publicExports": [
-        "ZoomPill",
-        "ZoomableMediaSurface",
-        "clampZoomScale",
-        "effectiveMinScale",
-        "computeFittedScale",
-        "computeOpeningScale",
-        "resolveSvgIntrinsicSize",
-        "useZoomableViewKeyboard",
-        "useZoomableMedia",
-        "ZOOMABLE_VIEW_MIN_SCALE",
-        "ZOOMABLE_VIEW_MAX_SCALE",
-        "ZOOMABLE_VIEW_LABEL_FLOOR_PX"
-      ],
-      "publicTypes": [
-        "ZoomableSize",
-        "OpeningScaleParams",
-        "ZoomableViewKeyboardHandlers",
-        "ZoomPillProps",
-        "ZoomableMediaController",
-        "UseZoomableMediaOptions",
-        "ZoomableMediaSurfaceProps"
-      ]
-    },
-    {
       "source": "src/components/ui/dropdown-menu.tsx",
       "classification": "primitive",
       "exports": [
@@ -450,16 +421,6 @@
         "FieldProps",
         "FieldControlProps"
       ]
-    },
-    {
-      "source": "src/components/ui/FormError.tsx",
-      "classification": "domain",
-      "exports": [
-        "FormErrorProps",
-        "FormError"
-      ],
-      "publicExports": [],
-      "publicTypes": []
     },
     {
       "source": "src/components/ui/icon-button.tsx",
@@ -590,13 +551,20 @@
       ]
     },
     {
-      "source": "src/components/ui/RestartConfirmDialog.tsx",
-      "classification": "domain",
+      "source": "src/components/ui/resize-separator.tsx",
+      "classification": "primitive",
       "exports": [
-        "RestartConfirmDialog"
+        "ResizeSeparator",
+        "ResizeSeparatorProps",
+        "ResizeSeparatorSource"
       ],
-      "publicExports": [],
-      "publicTypes": []
+      "publicExports": [
+        "ResizeSeparator"
+      ],
+      "publicTypes": [
+        "ResizeSeparatorProps",
+        "ResizeSeparatorSource"
+      ]
     },
     {
       "source": "src/components/ui/segmented-control.tsx",
@@ -788,6 +756,15 @@
       "publicTypes": []
     },
     {
+      "source": "src/components/ui/toast-container.tsx",
+      "classification": "application",
+      "exports": [
+        "ToastContainer"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
       "source": "src/components/ui/tooltip.tsx",
       "classification": "primitive",
       "exports": [
@@ -802,13 +779,52 @@
       ]
     },
     {
-      "source": "src/components/ui/toast-container.tsx",
-      "classification": "application",
+      "source": "src/components/ui/zoomable-view.tsx",
+      "classification": "composite",
       "exports": [
-        "ToastContainer"
+        "ZoomPill",
+        "ZoomableMediaSurface",
+        "clampZoomScale",
+        "effectiveMinScale",
+        "computeFittedScale",
+        "computeOpeningScale",
+        "resolveSvgIntrinsicSize",
+        "useZoomableViewKeyboard",
+        "useZoomableMedia",
+        "ZOOMABLE_VIEW_MIN_SCALE",
+        "ZOOMABLE_VIEW_MAX_SCALE",
+        "ZOOMABLE_VIEW_LABEL_FLOOR_PX",
+        "ZoomableSize",
+        "OpeningScaleParams",
+        "ZoomableViewKeyboardHandlers",
+        "ZoomPillProps",
+        "ZoomableMediaController",
+        "UseZoomableMediaOptions",
+        "ZoomableMediaSurfaceProps"
       ],
-      "publicExports": [],
-      "publicTypes": []
+      "publicExports": [
+        "ZoomPill",
+        "ZoomableMediaSurface",
+        "clampZoomScale",
+        "effectiveMinScale",
+        "computeFittedScale",
+        "computeOpeningScale",
+        "resolveSvgIntrinsicSize",
+        "useZoomableViewKeyboard",
+        "useZoomableMedia",
+        "ZOOMABLE_VIEW_MIN_SCALE",
+        "ZOOMABLE_VIEW_MAX_SCALE",
+        "ZOOMABLE_VIEW_LABEL_FLOOR_PX"
+      ],
+      "publicTypes": [
+        "ZoomableSize",
+        "OpeningScaleParams",
+        "ZoomableViewKeyboardHandlers",
+        "ZoomPillProps",
+        "ZoomableMediaController",
+        "UseZoomableMediaOptions",
+        "ZoomableMediaSurfaceProps"
+      ]
     },
     {
       "source": "src/design-system/status.ts",

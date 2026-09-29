@@ -26,7 +26,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
+	"net/mail"
 	"net/smtp"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -68,11 +72,45 @@ const (
 	maxBodyBytes = 256 * 1024
 )
 
-// imapDial is the production IMAPS dialer. It is a package-level var only so
-// tests can point dialIMAP at an in-memory server over a plaintext connection;
-// production code never reassigns it.
-var imapDial = func(addr string, tlsCfg *tls.Config) (*imapclient.Client, error) {
-	return imapclient.DialTLS(addr, &imapclient.Options{TLSConfig: tlsCfg})
+// imapDial dials the IMAP server: implicit TLS everywhere except a loopback
+// configured host, which dials plaintext (LOGIN included). The D36 built-in fake server
+// (spec §7) and the D37 GreenMail UAT instance are loopback servers on
+// dynamic ports, so the local sink is identified by the configured hostname,
+// not a DNS result. It is a package-level var only so tests can point
+// dialIMAP at an in-memory server over a plaintext connection; production
+// code never reassigns it.
+var imapDial = func(ctx context.Context, addr string, tlsCfg *tls.Config) (*imapclient.Client, error) {
+	dialer := &net.Dialer{}
+	if isLoopbackAddr(addr) && isLoopbackAddr(tlsCfg.ServerName) {
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		return imapclient.New(conn, nil), nil
+	}
+	config := tlsCfg.Clone()
+	if config.NextProtos == nil {
+		config.NextProtos = []string{"imap"}
+	}
+	conn, err := (&tls.Dialer{NetDialer: dialer, Config: config}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	return imapclient.New(conn, &imapclient.Options{TLSConfig: config}), nil
+}
+
+// isLoopbackAddr reports whether addr's host part is a loopback IP or
+// "localhost".
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Account holds the connection parameters for a single mailbox. The password is
@@ -86,6 +124,12 @@ type Account struct {
 	SMTPPort int
 	Username string
 	Password string
+	// SentFolder is the IMAP folder sent copies are APPENDed to
+	// (email-mail-view-spec §2.1 sent_folder_name). Empty means "Sent".
+	SentFolder string
+	// DraftsFolder is the IMAP folder agent drafts are APPENDed to with \Draft
+	// (email-mail-view-spec §2.1 drafts_folder_name). Empty means "Drafts".
+	DraftsFolder string
 }
 
 // withDefaults returns a copy of a with default ports applied.
@@ -96,8 +140,20 @@ func (a Account) withDefaults() Account {
 	if a.SMTPPort == 0 {
 		a.SMTPPort = defaultSMTPPort
 	}
+	if a.SentFolder == "" {
+		a.SentFolder = "Sent"
+	}
+	if a.DraftsFolder == "" {
+		a.DraftsFolder = "Drafts"
+	}
 	return a
 }
+
+// sentFolder returns the effective Sent folder name.
+func (a Account) sentFolder() string { return a.withDefaults().SentFolder }
+
+// draftsFolder returns the effective Drafts folder name.
+func (a Account) draftsFolder() string { return a.withDefaults().DraftsFolder }
 
 // Message is a transport-level representation of a single email message,
 // independent of the underlying IMAP library types so tools and tests do not
@@ -116,6 +172,9 @@ type Message struct {
 	// senders) and callers such as the reply tool should prefer it over From.
 	ReplyTo string `json:"reply_to,omitempty"`
 	To      string `json:"to,omitempty"`
+	// Cc is the comma-joined Cc address list, when the message carries one
+	// (the reply tool's reply_all uses it — MAJ-014).
+	Cc      string `json:"cc,omitempty"`
 	Subject string `json:"subject"`
 	// Date is the message Date header in RFC 3339 (UTC), best-effort.
 	Date string `json:"date,omitempty"`
@@ -176,8 +235,14 @@ type SendRequest struct {
 	Subject string
 	Body    string
 	// InReplyTo, when non-empty, is set as the In-Reply-To and References
-	// headers so replies thread correctly in the recipient's client.
+	// headers on the composed message (legacy single-recipient path).
 	InReplyTo string
+	// Raw, when non-empty, is transmitted verbatim as the complete RFC 5322
+	// message (headers + body) — the composed multipart path the tools use
+	// after email.Compose. Envelope recipients are parsed from To (comma-
+	// joined). The 1 MiB body bound applies to Body only; Raw's size is
+	// governed by the attachment caps enforced by the tool layer.
+	Raw []byte
 }
 
 // Transport is the test seam the email tools depend on. The production
@@ -194,9 +259,10 @@ type Transport interface {
 	ReadMessage(ctx context.Context, uid uint32) (*Message, error)
 	// Send delivers an outbound message via SMTP.
 	Send(ctx context.Context, req SendRequest) error
-	// MarkSeen sets the \Seen flag on the message with the given UID. The heartbeat
-	// drainer calls this after a message has been turned into a Board task so the
-	// next unseen scan does not re-enqueue it.
+	// MarkSeen sets the \Seen flag on the message with the given UID. It has
+	// no production caller since the mailbox drainer was removed (#631): the
+	// panel's seen action goes through Client.MarkSeenIn, and the agent's
+	// read path sets \Seen together with the read-by-agent keyword.
 	MarkSeen(ctx context.Context, uid uint32) error
 }
 
@@ -229,6 +295,14 @@ func NewClient(acct Account) (*Client, error) {
 
 // Address returns the mailbox's own email address (the SMTP/IMAP username).
 func (c *Client) Address() string { return c.acct.Username }
+
+// AccountKey is the per-account budget key ("host|username"): the SAME
+// derivation on every path (REST handler, agent tool, watcher cycle), so all
+// three share one 2-per-account gate and one coalescing map. Implements the
+// AccountKeyer capability.
+func (c *Client) AccountKey() string {
+	return c.acct.IMAPHost + "|" + c.acct.Username
+}
 
 // clampLimit normalises a caller-supplied limit: <=0 becomes the default, and
 // anything above the max is clamped down. Enforced here (not just in the JSON
@@ -283,33 +357,40 @@ func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.Select
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 
-	// imapDial does not take a context; guard the dial with a timeout goroutine
-	// so an unreachable server cannot block past dialTimeout.
-	type dialResult struct {
-		cl  *imapclient.Client
-		err error
-	}
-	ch := make(chan dialResult, 1)
-	go func() {
-		cl, err := imapDial(addr, tlsCfg)
-		ch <- dialResult{cl, err}
-	}()
-	var client *imapclient.Client
-	select {
-	case <-dialCtx.Done():
-		return nil, nil, fmt.Errorf("email transport: dial %s: %w", addr, dialCtx.Err())
-	case res := <-ch:
-		if res.err != nil {
-			return nil, nil, fmt.Errorf("email transport: dial TLS %s: %w", addr, res.err)
+	// Bounded DNS retry inside the overall dial bound (round-8 F2,
+	// FR-037/MC-33/B-42): the hostname resolves through the dialResolver seam
+	// (3 lookups, 250/500 ms backoff on failure) and the dial targets the
+	// RESOLVED addresses in order; tlsCfg.ServerName above keeps the ORIGINAL
+	// hostname so the TLS handshake still validates the name the user
+	// configured. IP literals skip resolution entirely (the loopback test
+	// servers are unaffected). A resolution failure surfaces a dns-class error
+	// and spends no dial attempt.
+	targets := []string{addr}
+	if host, port, serr := net.SplitHostPort(addr); serr == nil && !isIPLiteral(host) {
+		resolved, rerr := resolveHostBounded(dialCtx, dialResolver, host)
+		if rerr != nil {
+			return nil, nil, rerr
 		}
-		client = res.cl
+		targets = make([]string, 0, len(resolved))
+		for _, resolvedAddr := range resolved {
+			targets = append(targets, net.JoinHostPort(resolvedAddr, port))
+		}
 	}
 
-	if _, err := runIMAP(ctx, "login", func() (struct{}, error) {
+	client, err := dialAddressCandidates(dialCtx, targets, "dial TLS", func(ctx context.Context, target string) (*imapclient.Client, error) {
+		return imapDial(ctx, target, tlsCfg)
+	}, func(client *imapclient.Client) {
+		_ = client.Close()
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if _, loginErr := runIMAP(ctx, "login", func() (struct{}, error) {
 		return struct{}{}, client.Login(c.acct.Username, c.acct.Password).Wait()
-	}); err != nil {
+	}); loginErr != nil {
 		client.Close()
-		return nil, nil, fmt.Errorf("email transport: login failed: %w", err)
+		return nil, nil, fmt.Errorf("email transport: login failed: %w", loginErr)
 	}
 	selData, err := runIMAP(ctx, "select INBOX", func() (*imap.SelectData, error) {
 		return client.Select("INBOX", nil).Wait()
@@ -487,6 +568,11 @@ func (c *Client) ReadMessage(ctx context.Context, uid uint32) (*Message, error) 
 	if len(msgs) == 0 {
 		return nil, fmt.Errorf("email transport: message uid %d not found", uid)
 	}
+	// MC-36: reading marks \Seen + the read-by-agent keyword in one STORE,
+	// with a \Seen-only fallback when the server rejects keywords.
+	if err := c.markAgentRead(ctx, client, imap.UIDSetNum(imap.UID(uid))); err != nil {
+		return nil, err
+	}
 	return &msgs[0], nil
 }
 
@@ -497,10 +583,12 @@ func (c *Client) ReadMessage(ctx context.Context, uid uint32) (*Message, error) 
 func (c *Client) fetchMessages(ctx context.Context, client *imapclient.Client, numSet imap.NumSet, withBody bool) ([]Message, error) {
 	opts := &imap.FetchOptions{Envelope: true, Flags: true, UID: true}
 	if withBody {
-		// BODY[] — the whole message including the headers that declare
+		// BODY.PEEK[] — the whole message including the headers that declare
 		// Content-Type / Content-Transfer-Encoding / boundary, which BODY[TEXT]
-		// omitted. Those headers are what makes MIME decoding possible.
-		opts.BodySection = []*imap.FetchItemBodySection{{}}
+		// omitted. Those headers are what makes MIME decoding possible. PEEK
+		// is required everywhere (MC-25): fetching must never set \Seen as a
+		// side effect.
+		opts.BodySection = []*imap.FetchItemBodySection{{Peek: true}}
 	}
 	fetched, err := runIMAP(ctx, "fetch", func() ([]*imapclient.FetchMessageBuffer, error) {
 		return client.Fetch(numSet, opts).Collect()
@@ -512,6 +600,17 @@ func (c *Client) fetchMessages(ctx context.Context, client *imapclient.Client, n
 	out := make([]Message, 0, len(fetched))
 	for _, m := range fetched {
 		if m == nil || m.Envelope == nil {
+			// Round-8 F5 (FR-018/FR-036): a buffer without its envelope
+			// cannot render a row, but the drop must never be invisible —
+			// ReadFolderPage's own comment promises "the page never silently
+			// drops rows". One WARN per dropped row naming the condition;
+			// the shrunk page and the TotalMatches desync become audible.
+			uid := uint32(0)
+			if m != nil {
+				uid = uint32(m.UID)
+			}
+			slog.Warn("email transport: fetched row without envelope dropped from page",
+				"uid", uid)
 			continue
 		}
 		out = append(out, bufferToMessage(m, withBody))
@@ -539,7 +638,10 @@ func bufferToMessage(m *imapclient.FetchMessageBuffer, withBody bool) Message {
 		msg.ReplyTo = addressString(env.ReplyTo[0])
 	}
 	if len(env.To) > 0 {
-		msg.To = addressString(env.To[0])
+		msg.To = addressListString(env.To)
+	}
+	if len(env.Cc) > 0 {
+		msg.Cc = addressListString(env.Cc)
 	}
 	if !env.Date.IsZero() {
 		msg.Date = env.Date.UTC().Format(time.RFC3339)
@@ -822,6 +924,19 @@ func addressString(a imap.Address) string {
 	return a.Mailbox
 }
 
+// addressListString renders an IMAP address list as comma-joined bare
+// addresses ("a@x.test, b@y.test") — the shape Message.To/Cc carry so the
+// reply tool's reply_all can re-address everyone the original went to.
+func addressListString(addrs []imap.Address) string {
+	parts := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		if s := addressString(a); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
 // MarkSeen sets the \Seen flag on the message with the given UID.
 func (c *Client) MarkSeen(ctx context.Context, uid uint32) error {
 	if uid == 0 {
@@ -849,106 +964,196 @@ func (c *Client) MarkSeen(ctx context.Context, uid uint32) error {
 
 // Send delivers an outbound message via SMTP (STARTTLS on 587/custom, implicit
 // TLS on 465).
-func (c *Client) Send(_ context.Context, req SendRequest) error {
+func (c *Client) Send(ctx context.Context, req SendRequest) error {
+	// MC-21 / #629: an expired or canceled context must abort before any I/O.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	to := strings.TrimSpace(req.To)
 	if to == "" {
 		return fmt.Errorf("email transport: recipient (to) is empty")
 	}
-	if strings.TrimSpace(req.Body) == "" {
+	rcpts, bad := parseRecipientList([]string{to})
+	if len(bad) > 0 {
+		return fmt.Errorf("email transport: recipient %q is not a valid address", bad[0])
+	}
+	// MC-27 / MAJ-015: 50 recipients after de-duplication — a transport-side
+	// bound mirroring the tool-layer cap (defense in depth).
+	if len(rcpts) > maxOutboundRecipients {
+		return fmt.Errorf("email transport: more than %d recipients after de-duplication (got %d)", maxOutboundRecipients, len(rcpts))
+	}
+	if req.Raw == nil && strings.TrimSpace(req.Body) == "" {
 		return fmt.Errorf("email transport: body is empty")
 	}
-	subject := req.Subject
-	if subject == "" {
-		subject = "(no subject)"
+	// MC-22 / FR-031: the body is bounded at 1 MiB, rejected before any SMTP
+	// connection is opened. Raw (pre-composed) messages are governed by the
+	// attachment caps at the tool layer instead.
+	if req.Raw == nil && len(req.Body) > maxOutboundBodyBytes {
+		return fmt.Errorf("email transport: outbound body is %d bytes; the bound is 1 MiB (1048576 bytes)", len(req.Body))
+	}
+
+	var body string
+	if req.Raw != nil {
+		// Composed multipart path: transmitted verbatim.
+		body = string(req.Raw)
+	} else {
+		subject := req.Subject
+		if subject == "" {
+			subject = "(no subject)"
+		}
+		body = buildEmailBody(c.acct.Username, to, subject, req.Body, req.InReplyTo)
 	}
 
 	smtpAddr := fmt.Sprintf("%s:%d", c.acct.SMTPHost, c.acct.SMTPPort)
-	body := buildEmailBody(c.acct.Username, to, subject, req.Body, req.InReplyTo)
-
+	tlsCfg := &tls.Config{ServerName: c.acct.SMTPHost, MinVersion: tls.VersionTLS12}
 	if c.acct.SMTPPort == 465 {
-		tlsCfg := &tls.Config{ServerName: c.acct.SMTPHost, MinVersion: tls.VersionTLS12}
-		if err := sendSMTPS(smtpAddr, c.acct.Username, to, body, c.acct.Username, c.acct.Password, tlsCfg); err != nil {
+		if err := sendSMTPS(ctx, smtpAddr, c.acct.Username, c.acct.Password, c.acct.Username, envelopeRecipients(rcpts), body, tlsCfg); err != nil {
 			return fmt.Errorf("email transport: SMTPS send: %w", err)
 		}
 		return nil
 	}
 	auth := smtp.PlainAuth("", c.acct.Username, c.acct.Password, c.acct.SMTPHost)
-	tlsCfg := &tls.Config{ServerName: c.acct.SMTPHost, MinVersion: tls.VersionTLS12}
-	if err := sendSMTPWithSTARTTLS(smtpAddr, auth, c.acct.Username, to, body, tlsCfg); err != nil {
+	if err := sendSMTPWithSTARTTLS(ctx, smtpAddr, auth, c.acct.Username, envelopeRecipients(rcpts), body, tlsCfg); err != nil {
 		return fmt.Errorf("email transport: STARTTLS send: %w", err)
 	}
 	return nil
 }
 
-// sendSMTPWithSTARTTLS sends an email via SMTP+STARTTLS using net/smtp.
-func sendSMTPWithSTARTTLS(addr string, auth smtp.Auth, from, to, body string, tlsCfg *tls.Config) error {
-	cl, err := smtp.Dial(addr)
-	if err != nil {
-		return fmt.Errorf("dial: %w", err)
-	}
-	defer cl.Close()
+// maxOutboundRecipients is MC-27 / round-2 MAJ-015: recipients across
+// To+Cc+Bcc after de-duplication, capped at 50.
+const maxOutboundRecipients = 50
 
-	if err = cl.StartTLS(tlsCfg); err != nil {
-		return fmt.Errorf("STARTTLS: %w", err)
+// smtpStep re-reports a failed SMTP step. A done context returns bare ctx.Err()
+// (MC-21: the deadline, not a socket timeout, is the truthful cause); a
+// deadline-flavored failure with a still-live ctx — the raw connection's
+// deadline clock and the caller's context timer are independent clocks, so a
+// blocked step can fail timeout-flavored a hair before ctx.Err() transitions —
+// is normalized to context.DeadlineExceeded under the step label; anything
+// else keeps the labeled raw wrap.
+func smtpStep(ctx context.Context, err error, label string) error {
+	if err == nil {
+		return nil
 	}
-	if err = cl.Auth(auth); err != nil {
-		return fmt.Errorf("auth: %w", err)
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
 	}
-	if err = cl.Mail(from); err != nil {
-		return fmt.Errorf("MAIL FROM: %w", err)
+	if isDeadlineFlavored(err) {
+		return fmt.Errorf("%s: %w", label, context.DeadlineExceeded)
 	}
-	if err = cl.Rcpt(to); err != nil {
-		return fmt.Errorf("RCPT TO: %w", err)
-	}
-	w, err := cl.Data()
-	if err != nil {
-		return fmt.Errorf("DATA: %w", err)
-	}
-	if _, err := io.WriteString(w, body); err != nil {
-		return fmt.Errorf("write body: %w", err)
-	}
-	return w.Close()
+	return fmt.Errorf("%s: %w", label, err)
 }
 
-// sendSMTPS sends an email via implicit TLS (port 465 / SMTPS).
-func sendSMTPS(addr, from, to, body, username, password string, tlsCfg *tls.Config) error {
-	conn, err := tls.Dial("tcp", addr, tlsCfg)
-	if err != nil {
-		return fmt.Errorf("TLS dial: %w", err)
+// ctxOrCommandDeadline bounds the raw connection when the caller gave no
+// deadline.
+func ctxOrCommandDeadline(ctx context.Context) time.Time {
+	if dl, ok := ctx.Deadline(); ok {
+		return dl
 	}
-	cl, err := smtp.NewClient(conn, tlsCfg.ServerName)
-	if err != nil {
-		return fmt.Errorf("SMTP client: %w", err)
-	}
-	defer cl.Close()
-
-	auth := smtp.PlainAuth("", username, password, tlsCfg.ServerName)
-	if err = cl.Auth(auth); err != nil {
-		return fmt.Errorf("auth: %w", err)
-	}
-	if err = cl.Mail(from); err != nil {
-		return fmt.Errorf("MAIL FROM: %w", err)
-	}
-	if err = cl.Rcpt(to); err != nil {
-		return fmt.Errorf("RCPT TO: %w", err)
-	}
-	w, err := cl.Data()
-	if err != nil {
-		return fmt.Errorf("DATA: %w", err)
-	}
-	if _, err := io.WriteString(w, body); err != nil {
-		return fmt.Errorf("write body: %w", err)
-	}
-	return w.Close()
+	return time.Now().Add(commandTimeout)
 }
 
-// buildEmailBody constructs a minimal RFC 5322-compliant message. When inReplyTo
-// is set, the In-Reply-To and References headers are added so the message threads.
+// dialSMTPRaw opens the TCP connection respecting ctx and dialTimeout, with
+// the bounded DNS retry (round-8 F2, FR-037/MC-33/B-42): the host part of
+// addr resolves through the dialResolver seam (3 lookups, 250/500 ms backoff
+// on failure) and the dial targets the RESOLVED address — the STARTTLS
+// upgrade keeps the original hostname as its TLS ServerName. A resolution
+// failure surfaces a dns-class error; a non-DNS dial failure (refused) is
+// never retried.
+func dialSMTPRaw(ctx context.Context, addr string) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	conn, err := dialTCPDNSRetry(ctx, dialResolver, addr)
+	if err != nil {
+		return nil, classifyDialErr(ctx, err)
+	}
+	if err := conn.SetDeadline(ctxOrCommandDeadline(ctx)); err != nil {
+		return nil, fmt.Errorf("set deadline: %w", err)
+	}
+	return conn, nil
+}
+
+// classifyDialErr maps a failed dial to the error the caller with a context
+// deadline expects. The dialer's fixed dialTimeout and the caller's context
+// deadline are independent clocks: the dial can fail deadline-flavored —
+// wrapping os.ErrDeadlineExceeded, or as a net.Error whose Timeout() is true
+// (e.g. the network stack's ETIMEDOUT) — at a moment when ctx.Err() has not
+// yet transitioned to non-nil. In that window the raw error used to escape
+// even though the caller had set a deadline, so callers matching on
+// context.DeadlineExceeded saw a raw timeout instead (MC-21: the flaky
+// blackhole dial test). A deadline-flavored dial failure IS the deadline
+// firing as far as the caller is concerned: normalize it to
+// context.DeadlineExceeded regardless of ctx.Err()'s state. Genuinely
+// unrelated failures (connection refused, no such host) keep the same
+// "dial: " wrapper as before — the classifier never hides a real connection
+// error.
+func classifyDialErr(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
+	if isDeadlineFlavored(err) {
+		return fmt.Errorf("dial: %w", context.DeadlineExceeded)
+	}
+	return fmt.Errorf("dial: %w", err)
+}
+
+// isDeadlineFlavored reports whether err is a timeout/deadline failure —
+// wrapping os.ErrDeadlineExceeded, or a net.Error whose Timeout() is true
+// (the poller's i/o timeout, or the network stack's ETIMEDOUT). The raw
+// connection's deadline clock and the caller's context timer are independent
+// clocks: a blocked dial or step can fail deadline-flavored a hair before
+// ctx.Err() transitions to non-nil, and a deadline-flavored failure IS the
+// deadline firing as far as the caller is concerned. Exactly one place knows
+// what "deadline-flavored" means; classifyDialErr and smtpStep both consult it.
+func isDeadlineFlavored(err error) bool {
+	if err == nil {
+		return false
+	}
+	var neterr net.Error
+	return errors.Is(err, os.ErrDeadlineExceeded) ||
+		(errors.As(err, &neterr) && neterr.Timeout())
+}
+
+// buildEmailBody constructs an RFC 5322-compliant message. A body that parses
+// to a single plain-text paragraph keeps the historical single-part text/plain
+// shape; anything with Markdown structure becomes multipart/alternative via
+// Compose (MC-3). When inReplyTo is set, the In-Reply-To and References headers
+// are added so the message threads. The helper never fails: unparseable
+// recipients are dropped (the CRLF-injection guard) and a Compose error falls
+// back to the plain shape.
 func buildEmailBody(from, to, subject, text, inReplyTo string) string {
+	fromHdr := formatFromHeader(from)
+	toList, _ := parseRecipientList([]string{to})
+	toStr := formatAddressList(toList)
+	if toStr == "" {
+		toStr = sanitizeHeader(to)
+	}
+	if !isPlainOnlyText(text) {
+		addresses := make([]string, 0, len(toList))
+		for i := range toList {
+			addresses = append(addresses, toList[i].Address)
+		}
+		out, err := Compose(ComposeInput{
+			From:      fromHeaderAddress(from),
+			To:        addresses,
+			Subject:   subject,
+			Markdown:  text,
+			InReplyTo: inReplyTo,
+		})
+		if err == nil {
+			return string(out.Transmitted)
+		}
+		// Round-8 F8 (FR-018/FR-036): the documented "helper never fails"
+		// fallback was UNLOGGED on HEAD — outgoing mail silently lost its
+		// multipart/HTML render. One WARN naming the compose fallback; the
+		// plain shape below is unchanged.
+		slog.Warn("email transport: compose fallback: building the multipart body failed, sending the plain shape",
+			"error", err)
+	}
 	var sb strings.Builder
-	sb.WriteString("From: " + from + "\r\n")
-	sb.WriteString("To: " + to + "\r\n")
-	sb.WriteString("Subject: " + sanitizeHeader(subject) + "\r\n")
+	sb.WriteString("From: " + fromHdr + "\r\n")
+	sb.WriteString("To: " + toStr + "\r\n")
+	sb.WriteString("Subject: " + encodeHeaderValue(sanitizeHeader(subject)) + "\r\n")
 	if inReplyTo != "" {
 		sb.WriteString("In-Reply-To: " + sanitizeHeader(inReplyTo) + "\r\n")
 		sb.WriteString("References: " + sanitizeHeader(inReplyTo) + "\r\n")
@@ -958,6 +1163,24 @@ func buildEmailBody(from, to, subject, text, inReplyTo string) string {
 	sb.WriteString("\r\n")
 	sb.WriteString(text)
 	return sb.String()
+}
+
+// formatFromHeader renders the From header, RFC 2047 encoding a non-ASCII
+// display name (MC-4). An unparsable value is sanitized raw.
+func formatFromHeader(from string) string {
+	a := strings.TrimSpace(from)
+	if parsed, err := mail.ParseAddress(a); err == nil {
+		return formatAddress(parsed)
+	}
+	return sanitizeHeader(a)
+}
+
+// fromHeaderAddress extracts the bare address of a From value for Compose.
+func fromHeaderAddress(from string) string {
+	if parsed, err := mail.ParseAddress(strings.TrimSpace(from)); err == nil {
+		return parsed.Address
+	}
+	return sanitizeHeader(from)
 }
 
 // sanitizeHeader strips CR/LF from a header value to prevent header injection.

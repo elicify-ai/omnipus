@@ -30,6 +30,7 @@ import { ChatImage } from './ChatImage'
 import { MermaidDiagram } from './mermaid-renderer'
 import { rewriteLegacyURL, resolveEffectivePreview } from '@/lib/preview-url'
 import { isSafeHref } from '@/lib/url-safe'
+import { mailDeepLinkTarget, openMailDeepLink } from '@/components/workspaces/mail/mailDeepLink'
 import { PHOSPHOR_EMOJI_ICONS } from '@/lib/phosphor-emoji-icons'
 
 type EffectivePreview = ReturnType<typeof resolveEffectivePreview>
@@ -85,6 +86,26 @@ export function createLinkRenderer(effectivePreview: EffectivePreview) {
         >
           {children}
         </span>
+      )
+    }
+    // Mail deep links (§17): a chat_link whose hash carries the SPA mail
+    // path navigates IN PLACE — it opens the Mail panel on that message
+    // instead of a new browser tab. Everything else keeps the new-tab
+    // behavior (isSafeHref already gated the scheme).
+    if (mailDeepLinkTarget(rewritten) !== null) {
+      return (
+        <a
+          tabIndex={0}
+          href={rewritten}
+          data-testid="markdown-link"
+          onClick={(e) => {
+            e.preventDefault()
+            openMailDeepLink(rewritten)
+          }}
+          className="text-[var(--color-accent)] underline underline-offset-2 hover:opacity-80 transition-opacity"
+        >
+          {children}
+        </a>
       )
     }
     return (

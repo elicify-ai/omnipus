@@ -725,15 +725,12 @@ func TestClient_Send_SMTPSDialFails(t *testing.T) {
 }
 
 // TestDialIMAP_ContextCancelledBeforeDial verifies that when the parent context
-// is already canceled, dialIMAP returns the context error without waiting for
-// the dial goroutine. This exercises the dialCtx.Done() select branch.
-// Traces to: transport.go dialIMAP (context cancellation path, line 165-166)
+// is already canceled, dialIMAP returns the context error without starting a
+// network connection.
 func TestDialIMAP_ContextCancelledBeforeDial(t *testing.T) {
-	// Use a host that takes time to refuse (non-routable address causes timeout,
-	// not immediate connection refused). We cancel the context immediately.
+	// Use a non-routable host, then cancel the context before the dial begins.
 	cl, _ := NewClient(Account{
-		// 192.0.2.x is TEST-NET-1 (RFC 5737) — packets are black-holed, so
-		// the dial goroutine will block, and the canceled context wins the select.
+		// 192.0.2.x is TEST-NET-1 (RFC 5737).
 		IMAPHost: "192.0.2.1",
 		IMAPPort: 993,
 		SMTPHost: "127.0.0.1",

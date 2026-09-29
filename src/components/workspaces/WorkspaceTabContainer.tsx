@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect } from 'react'
+import { createContext, useContext, useEffect, useRef } from 'react'
 import { Outlet, useNavigate, useLocation } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { List } from '@phosphor-icons/react'
@@ -7,8 +7,13 @@ import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSidebarStore } from '@/store/sidebar'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
 import { clearLibraryAttachments } from '@/lib/library-attachment'
+import { confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
+import { resolveWorkspaceSwitch } from '@/components/panel-shell/workspaceSwitch'
+import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
+import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 import { ChatControls } from '@/components/chat/ChatControls'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { Button } from '@/components/ui/button'
@@ -48,6 +53,7 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
   const { activeWorkspaceId, setActiveWorkspaceId, setActivePlanId } = useWorkspacesStore()
   const toggle = useSidebarStore((s) => s.toggle)
   const enterWorkspaceChat = useSessionStore((s) => s.enterWorkspaceChat)
+  const previousRouteWorkspaceRef = useRef(workspaceId)
 
   const {
     data: workspaces = [],
@@ -73,6 +79,60 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
       })
     }
   }, [workspaceId, workspaces, navigate])
+
+  // SP-29: preserve or re-target the open panel when the route changes
+  // workspaces. The router blocker owns pre-navigation cancellation; this
+  // call site applies the panel-specific state move after an allowed switch.
+  useEffect(() => {
+    const previousWorkspaceId = previousRouteWorkspaceRef.current
+    previousRouteWorkspaceRef.current = workspaceId
+    if (
+      !previousWorkspaceId ||
+      previousWorkspaceId === 'inbox' ||
+      !workspaceId ||
+      workspaceId === 'inbox' ||
+      previousWorkspaceId === workspaceId
+    ) {
+      return
+    }
+
+    const activePanel = useUiStore.getState().activePanel
+    if (!activePanel) return
+    const openedWorkspaceId =
+      activePanel.context.workspaceId === previousWorkspaceId
+        ? previousWorkspaceId
+        : undefined
+
+    void resolveWorkspaceSwitch({
+      panelId: activePanel.id,
+      openedWorkspaceId,
+      nextWorkspaceId: workspaceId,
+      beforeLeave:
+        activePanel.id === 'library' && openedWorkspaceId
+          ? confirmDiscardLibraryEdits
+          : undefined,
+    }).then((decision) => {
+      if (previousRouteWorkspaceRef.current !== workspaceId) return
+      if (decision.action === 'cancel') {
+        void navigate({
+          to: '/workspaces/$workspaceId/chat',
+          params: { workspaceId: previousWorkspaceId },
+          replace: true,
+        })
+        return
+      }
+      if (decision.action !== 'follow') return
+
+      const latest = useUiStore.getState().activePanel
+      if (latest !== activePanel) return
+      if (!isWorkspaceScopedPanel(activePanel.id)) return
+      const context = activePanel.context as WorkspacePanelContext
+      useUiStore.getState().openPanel(activePanel.id, {
+        ...context,
+        workspaceId: decision.workspaceId,
+      })
+    })
+  }, [workspaceId, navigate])
 
   // Bind the active workspace from the route.
   useEffect(() => {

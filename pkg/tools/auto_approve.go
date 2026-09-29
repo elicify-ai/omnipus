@@ -149,9 +149,14 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"send_file":    AutoRunsIfArgs,
 	"send_email":   AutoAsks,
 	"reply":        AutoAsks,
-	"read_inbox":   AutoRuns,
-	"search_email": AutoRuns,
-	"read_message": AutoRuns,
+	// create_email_draft only appends to the mailbox's own Drafts folder and
+	// never sends, so it runs under Auto like the other non-sending email
+	// tools (founder ruling 2026-09-26, decision D45); D33: attachments add
+	// NO separate touch point, this entry governs the whole call.
+	"create_email_draft": AutoRuns,
+	"read_inbox":         AutoRuns,
+	"search_email":       AutoRuns,
+	"read_message":       AutoRuns,
 
 	// Agents & tasks
 	"delegate":        AutoRuns,

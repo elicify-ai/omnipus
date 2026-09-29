@@ -1,0 +1,38 @@
+title: MailSendResponse
+description: >
+  Send outcome for the manual send (POST /workspaces/{id}/mail/{agentId}/messages)
+  and the panel send (POST .../folders/drafts/messages/{ref}/send). The
+  `sent` field was dropped (round-2 MIN-006 — it was always true on a 200).
+  Save failures are never silent (D7): a Sent-APPEND failure after a
+  successful SMTP send sets sent_saved=false plus save_warning. A draft that
+  could not be removed after a successful panel send sets
+  draft_cleanup_warning (MAJ-009/MC-28).
+type: object
+additionalProperties: false
+required:
+  - message_id
+  - sent_saved
+  - save_warning
+  - draft_cleanup_warning
+properties:
+  message_id:
+    type: string
+    description: The sent message's Message-ID (stable across panel edits).
+    example: "<b7d4@example.com>"
+  sent_saved:
+    type: boolean
+    description: Whether the Sent-folder APPEND (D7) succeeded; false plus a non-empty save_warning when the APPEND failed after a successful SMTP send (MC-9, never silent).
+  save_warning:
+    type: string
+    nullable: true
+    description: >
+      Set when the Sent APPEND failed after a successful SMTP send — never
+      silent (D7, MC-9); the tool result carries the same warning. Null when
+      the save succeeded.
+  draft_cleanup_warning:
+    type: string
+    nullable: true
+    description: >
+      Set when the draft could not be removed after a successful panel send
+      (MAJ-009/MC-28 — the panel warns of a possible duplicate). Null when
+      cleanup succeeded or there was no draft.

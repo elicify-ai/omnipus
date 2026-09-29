@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
@@ -81,10 +82,18 @@ type restAPI struct {
 	// cache TTL rather than one per HTTP call. Zero value is ready; see
 	// copilotProbeGuard (rest_signin_copilot.go).
 	copilotProbe copilotProbeGuard
-	homePath     string              // ~/.omnipus — root of the data directory
-	configMu     sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
-	taskStore    *task.Store         // unified task persistence
-	taskExecutor *agent.TaskExecutor // task execution engine
+	homePath     string // ~/.omnipus — root of the data directory
+	// mailBudget is the restAPI's handle on the shared A8 mail-operation
+	// budget (spec §2.3/A8): the four dialing Mail panel GETs gate their
+	// IMAP dials through it (rest_mail_budget.go). Nil is allowed —
+	// mailBudgetFor then resolves the process-wide instance lazily
+	// (email.SharedMailBudget, keyed by the state dir), so a directly
+	// constructed restAPI (the unit-test literal) shares the same gate.
+	mailBudget     *email.MailBudget
+	mailBudgetOnce sync.Once
+	configMu       sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
+	taskStore      *task.Store         // unified task persistence
+	taskExecutor   *agent.TaskExecutor // task execution engine
 	// liveTaskActivity (founder decision 2026-09-14) is the read seam
 	// Task.last_activity_at is stamped from: the live progress stamp of a
 	// running task's turn (advancing on streamed reasoning as well as
@@ -197,6 +206,12 @@ type restAPI struct {
 	// Nil until the preview routes are registered; every reader goes through
 	// previewTokenStore(), which is nil-safe.
 	previewTokens atomic.Pointer[PreviewTokenStore]
+
+	// mailPreviewTokens is the Mail HTML-preview token store (rest_mail_preview.go,
+	// MC-43), published by newMailPreviewRoutes at registration time and read by
+	// logout revocation. Nil until registered; readers go through
+	// mailPreviewTokenStoreOf(), which is nil-safe.
+	mailPreviewTokens atomic.Pointer[mailPreviewTokenStore]
 
 	// devServers is the gateway-wide Tier 3 dev-server registry. Shared with
 	// the web_serve tool (dev mode) and workspace.shell_bg tool via the agent
@@ -527,6 +542,17 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 	}
 }
 
+// jsonErrCode writes an ErrorResponse with a machine-readable code (MC-8's
+// closed error-class enum in `code`, MC-16's stale_draft). Same Content-Type
+// discipline as jsonErr.
+func jsonErrCode(w http.ResponseWriter, status int, msg, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: msg, Code: &code}); err != nil {
+		slog.Debug("rest: write error response failed", "error", err)
+	}
+}
+
 // boolPtr returns a pointer to b. Used wherever an API response field requires
 // *bool but the source value is a plain bool.
 func boolPtr(b bool) *bool { return &b }
@@ -634,6 +660,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// so the two halves share one token store. The mint path is an EXACT
 	// pattern, so it outranks the "/api/v1/library/" subtree above.
 	rae.a.registerLibraryPreviewRoutes(rae.cm)
+	// Mail HTML preview (email-mail-view-spec 2.3a, MC-10): the session-auth
+	// mint endpoint and the token-only /mail-preview/ serve prefix, sharing
+	// one token store published on the restAPI for logout revocation.
+	rae.a.registerMailPreviewRoutes(rae.cm)
 	// GET/PUT /api/v1/providers/default-model (ADR-068 FR-018/FR-042,
 	// T068-11): its OWN route with the high-blast-radius adminWrap chain
 	// (withAuth → RequireNotBypass — 401 unauthenticated, 503 under

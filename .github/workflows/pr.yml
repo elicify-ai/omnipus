@@ -725,7 +725,7 @@ jobs:
             patterns: "src/components/agents/ src/components/settings/ src/components/skills/ src/components/shared/ src/components/ui/"
           # Group D: layout components
           - group: components-layout
-            patterns: "src/components/layout/"
+            patterns: "src/components/layout/ src/components/panel-shell/"
           # Group E: workspaces — the largest single group (v0.3 flagship)
           - group: components-workspaces
             patterns: "src/components/workspaces/"

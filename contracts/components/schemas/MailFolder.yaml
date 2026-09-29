@@ -1,0 +1,45 @@
+title: MailFolder
+description: >
+  One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox,
+  as listed live from the mail server. Counts are live IMAP values at request
+  time; the unread count exists for the Inbox only and is null everywhere
+  else (round-1 MIN-005).
+type: object
+additionalProperties: false
+required:
+  - slug
+  - display_name
+  - total
+  - unread_count
+properties:
+  slug:
+    type: string
+    enum:
+      - inbox
+      - sent
+      - drafts
+    description: >
+      The folder slug. Exactly these three values exist (D5, MC-5); any
+      other value is rejected with HTTP 400 on the paths that take a folder
+      parameter.
+    example: "inbox"
+  display_name:
+    type: string
+    description: >
+      The mail server's real folder name for this slug (the per-mailbox
+      sent_folder_name / drafts_folder_name override applies, else the
+      auto-resolved standard name).
+    example: "INBOX"
+  total:
+    type: integer
+    description: Live message count of the folder.
+    example: 42
+  unread_count:
+    type: integer
+    nullable: true
+    description: >
+      Live IMAP UNSEEN count. Present for the Inbox only; null for Sent and
+      Drafts (round-1 MIN-005). The watcher's per-mailbox unseen_total is the
+      only other unread surface — the list endpoint never filters by it
+      (round-2 OBS-001 dropped the unseen_only query parameter).
+    example: 3

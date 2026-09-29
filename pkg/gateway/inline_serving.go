@@ -182,6 +182,34 @@ func applyLibraryPreviewByteHeaders(
 	return disposition
 }
 
+// mailContentDisposition is the mail attachment disposition (MC-42): always
+// "attachment", always the dual RFC 6266 form — filename (ASCII fallback via
+// asciiFallbackFilename) plus filename* (RFC 5987) on EVERY name, ASCII or
+// not. Deliberately not contentDispositionAttachment/contentDispositionWith:
+// their ASCII output is pinned single-form byte-identical for existing Library
+// downloads (rest_library_stage0_test.go), while the mail oracles (MC-42/C8)
+// pin the dual form on every name.
+func mailContentDisposition(name string) string {
+	return `attachment; filename="` + asciiFallbackFilename(name) + `"; filename*=UTF-8''` + percentEncodeRFC5987(name)
+}
+
+// applyMailByteHeaders sets every header a mail attachment response must carry
+// (MC-42): Content-Type from the part's recorded type with the extension as
+// fallback (caller-derived), the always-dual attachment disposition above, and
+// nosniff. A mail attachment carries NO CSP — an attachment is not rendered,
+// so there is nothing to isolate; MV-13's attachment half.
+//
+// It lives here, not in the mail route files, because FR-008c's source gate
+// allows a disposition write in exactly one file of this package, and a
+// handler that sets its own disposition sets its own (absent) policy and its
+// own (sniffed) type. Callers MUST call this BEFORE writing any bytes.
+func applyMailByteHeaders(w http.ResponseWriter, contentType, filename string) {
+	h := w.Header()
+	h.Set(headerContentType, contentType)
+	h.Set(headerContentDisposition, mailContentDisposition(filename))
+	h.Set(headerContentTypeOptions, nosniffValue)
+}
+
 // serveLibraryContent serves already-opened bytes with the headers above.
 //
 // The name argument to http.ServeContent is deliberately empty. That argument
