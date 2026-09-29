@@ -166,10 +166,20 @@ describe('Settings web search — #1055 card and Change selectors', () => {
 })
 
 describe('Settings web search — retained ADR-096 notices and #1056 removal', () => {
-  it('says list order does not determine which provider is tried first', async () => {
+  // #1055 problem 7 (team-lead ruling, 2026-09-29): the technical,
+  // negatively-framed sentence "The order of this list does not choose who
+  // is tried first." is retired — the founder-approved design replaces it
+  // with the plain-language intro. This test's assertion flips from
+  // requiring the retired sentence to requiring its replacement, so
+  // coverage of this line of the spec does not shrink; the retired
+  // sentence's absence is pinned separately, in the sibling RED file
+  // WebSearchGroup.fix1055.test.tsx (T2).
+  it('shows the approved plain-language intro that replaces the retired "list order" sentence (#1055 problem 7: retired sentence replaced by approved intro)', async () => {
     renderSection()
     await screen.findByTestId('search-row-tavily')
-    expect(screen.getByText(/The order of this list does not choose who is tried first\./)).toBeInTheDocument()
+    expect(
+      screen.getByText('Your agents search with the default service. If it fails, the fallback takes over.'),
+    ).toBeInTheDocument()
   })
 
   it('distinguishes undecided roles from an explicit None fallback', async () => {
