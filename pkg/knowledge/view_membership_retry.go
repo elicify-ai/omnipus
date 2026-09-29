@@ -30,13 +30,14 @@ func RetryViewMembershipMove(home string, renamer *Renamer, id string) (*RenameR
 		}
 		req := RenameRequest{From: pending.From, To: pending.To,
 			Folder: pending.Folder, AllowAmbiguity: pending.AllowAmbiguity}
+		affectedPaths := viewMemberMovedPaths(pending.affectedMembers())
 		return withRetryNestedViewMembershipRoots(home, renamer, req, id, func() error {
 			// The renamer journal is forward-only. Recovery can finish a rename
 			// that was interrupted before membership enrollment; an incomplete
 			// journal is a visible failure and never grants authority.
 			if _, recoverErr := renamer.RecoverPending(); recoverErr != nil {
 				return &ViewMembershipMoveIncompleteError{
-					From: pending.From, To: pending.To, RetryID: id, Cause: recoverErr}
+					From: pending.From, To: pending.To, Paths: affectedPaths, RetryID: id, Cause: recoverErr}
 			}
 			landed, stateErr := viewMoveAlreadyLanded(renamer.Root, req)
 			if stateErr != nil {
@@ -58,14 +59,14 @@ func RetryViewMembershipMove(home string, renamer *Renamer, id string) (*RenameR
 				result, renameErr = renamer.Rename(req)
 				if renameErr != nil {
 					return &ViewMembershipMoveIncompleteError{
-						From: pending.From, To: pending.To, RetryID: id, Cause: renameErr}
+						From: pending.From, To: pending.To, Paths: affectedPaths, RetryID: id, Cause: renameErr}
 				}
 			} else {
 				result = &RenameResult{From: pending.From, To: pending.To}
 			}
 			if enrollErr := m.enrollMovedMembers(pending.affectedMembers(), id, pending.From, pending.To); enrollErr != nil {
 				return &ViewMembershipMoveIncompleteError{
-					From: pending.From, To: pending.To, RetryID: id, Cause: enrollErr}
+					From: pending.From, To: pending.To, Paths: affectedPaths, RetryID: id, Cause: enrollErr}
 			}
 			return nil
 		})

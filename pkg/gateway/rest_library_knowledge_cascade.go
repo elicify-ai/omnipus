@@ -258,22 +258,14 @@ func sameCollectionDestination(root *library.Root, entry *libraryCollectionNote,
 // failure, mirroring mapLibraryErr's vocabulary so the SPA's existing
 // handling (404 / 409 / 400 / 503) keeps working for the knowledge-routed
 // case.
-func mapKnowledgeRestructureErr(w http.ResponseWriter, op, workspaceID string, err error) {
+func mapKnowledgeRestructureErr(w http.ResponseWriter, op, workspaceID, collectionRel string, err error) {
+	if mapLibraryTrashIncomplete(w, err, collectionRel) ||
+		(op != "delete entry" && mapLibraryMoveConflict(w, err, collectionRel)) {
+		return
+	}
 	var ambiguity *knowledge.AmbiguityError
 	var timeout *knowledge.LockTimeoutError
-	var incomplete *knowledge.ViewMembershipMoveIncompleteError
-	var trashIncomplete *knowledge.ViewMembershipTrashIncompleteError
-	var tracked *knowledge.TrackedViewTransferError
 	switch {
-	case errors.As(err, &tracked):
-		jsonErr(w, http.StatusConflict, err.Error())
-	case errors.As(err, &trashIncomplete):
-		jsonErr(w, http.StatusInternalServerError, err.Error())
-	case errors.As(err, &incomplete):
-		// The rename may already be on disk. Never tell the caller merely to
-		// retry it: the old membership was revoked for safety and the views
-		// need a visible repair path, not another blind move.
-		jsonErr(w, http.StatusInternalServerError, err.Error())
 	case errors.Is(err, knowledge.ErrRenameSourceMissing),
 		errors.Is(err, knowledge.ErrTrashSourceMissing),
 		errors.Is(err, knowledge.ErrNoteNotFound):
@@ -330,7 +322,7 @@ func (a *restAPI) renameNoteInCollection(
 		res, err = renamer.Rename(request)
 	}
 	if err != nil {
-		mapKnowledgeRestructureErr(w, op, workspaceID, err)
+		mapKnowledgeRestructureErr(w, op, workspaceID, note.collRel, err)
 		return false
 	}
 	if !res.NoOp {
@@ -395,7 +387,7 @@ func (a *restAPI) trashNoteInCollection(
 		res, err = trasher.Trash(request)
 	}
 	if err != nil {
-		mapKnowledgeRestructureErr(w, "delete entry", workspaceID, err)
+		mapKnowledgeRestructureErr(w, "delete entry", workspaceID, note.collRel, err)
 		return
 	}
 	ctx := context.WithoutCancel(r.Context())

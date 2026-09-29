@@ -1130,7 +1130,7 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 		return root.Rename(fromRel, toRel)
 	})
 	if err != nil {
-		if !mapTrackedLibraryTransferErr(w, err) {
+		if !mapLibraryMoveConflict(w, err, "") {
 			mapLibraryErr(w, "rename", workspaceID, err)
 		}
 		return
@@ -1245,7 +1245,7 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 		fi, opErr = library.CopyInto(fromRoot, toRoot, fromRel, toRel)
 	}
 	if opErr != nil {
-		if !mapTrackedLibraryTransferErr(w, opErr) {
+		if mode != transferModeMove || !mapLibraryMoveConflict(w, opErr, "") {
 			mapLibraryErr(w, string(mode), req.FromWorkspaceId, opErr)
 		}
 		return

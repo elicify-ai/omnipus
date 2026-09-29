@@ -4,10 +4,15 @@
 package knowledge
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/records"
 )
+
+// ErrViewMoveIdentityMismatch means the saved view no longer proves the
+// revoked identity; its editable provenance cannot restore write authority.
+var ErrViewMoveIdentityMismatch = errors.New("knowledge: revoked view identity mismatch")
 
 // readManagedView checks BOTH pipeline membership (supplied by the caller)
 // and the current file's provenance before any managed-view mutation.
@@ -25,10 +30,10 @@ func (m *ViewMembership) readManagedView(base, name, rel string) (*records.Saved
 	}
 	view, rejection := records.ParseView(file.Path, file.Bytes)
 	if rejection != nil {
-		return nil, nil, fmt.Errorf("knowledge: managed view %q: %s", rel, rejection.Reason)
+		return nil, nil, fmt.Errorf("%w: managed view %q: %s", ErrViewMoveIdentityMismatch, rel, rejection.Reason)
 	}
 	if view.Def.Name != name || view.Def.DerivedFrom == nil || *view.Def.DerivedFrom != base {
-		return nil, nil, fmt.Errorf("knowledge: view %q no longer matches its pipeline-owned membership", rel)
+		return nil, nil, fmt.Errorf("%w: view %q no longer matches its pipeline-owned membership", ErrViewMoveIdentityMismatch, rel)
 	}
 	return view, file.Bytes, nil
 }

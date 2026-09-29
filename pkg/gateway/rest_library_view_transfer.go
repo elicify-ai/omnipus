@@ -6,7 +6,6 @@ package gateway
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path"
 	"sort"
@@ -134,15 +133,4 @@ func prefixTrackedTransferError(err error, collRel string) error {
 		paths = append(paths, path.Join(collRel, rel))
 	}
 	return &knowledge.TrackedViewTransferError{Paths: paths, PendingMoveIDs: tracked.PendingMoveIDs}
-}
-
-// mapTrackedLibraryTransferErr uses the existing contracted error response
-// until the architect-approved structured refusal schema is regenerated.
-func mapTrackedLibraryTransferErr(w http.ResponseWriter, err error) bool {
-	var tracked *knowledge.TrackedViewTransferError
-	if !errors.As(err, &tracked) {
-		return false
-	}
-	jsonErr(w, http.StatusConflict, tracked.Error())
-	return true
 }

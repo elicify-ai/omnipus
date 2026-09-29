@@ -14,6 +14,7 @@ import (
 // treating their editable provenance as a way to recover ownership.
 type ViewMembershipMoveIncompleteError struct {
 	From, To string
+	Paths    []string // Revoked view paths, collection-relative (old and planned new).
 	RetryID  string
 	Cause    error
 }
@@ -23,6 +24,14 @@ func (e *ViewMembershipMoveIncompleteError) Error() string {
 }
 
 func (e *ViewMembershipMoveIncompleteError) Unwrap() error { return e.Cause }
+
+func viewMemberMovedPaths(changed []viewMemberRename) []string {
+	paths := make([]string, 0, len(changed)*2)
+	for _, member := range changed {
+		paths = append(paths, member.oldRel, member.newRel)
+	}
+	return sortedUnique(paths...)
+}
 
 // RenameWithViewMembership is the shared Library/agent move door. The
 // collection membership lock is held before Renamer takes individual file
@@ -66,6 +75,7 @@ func RenameWithViewMembership(home string, renamer *Renamer, req RenameRequest) 
 			return planErr
 		}
 		pendingID := m.stagePendingMove(req, changed)
+		affectedPaths := viewMemberMovedPaths(changed)
 		for _, member := range changed {
 			delete(m.Bases[member.oldBase], member.name)
 			if len(m.Bases[member.oldBase]) == 0 {
@@ -80,10 +90,10 @@ func RenameWithViewMembership(home string, renamer *Renamer, req RenameRequest) 
 		}
 		result, planErr = renamer.Rename(req)
 		if planErr != nil {
-			return &ViewMembershipMoveIncompleteError{From: from, To: to, RetryID: pendingID, Cause: planErr}
+			return &ViewMembershipMoveIncompleteError{From: from, To: to, Paths: affectedPaths, RetryID: pendingID, Cause: planErr}
 		}
 		if applyErr := m.enrollMovedMembers(changed, pendingID, from, to); applyErr != nil {
-			return &ViewMembershipMoveIncompleteError{From: from, To: to, RetryID: pendingID, Cause: applyErr}
+			return &ViewMembershipMoveIncompleteError{From: from, To: to, Paths: affectedPaths, RetryID: pendingID, Cause: applyErr}
 		}
 		return nil
 	})
@@ -113,15 +123,15 @@ func (m *ViewMembership) enrollMovedMembers(changed []viewMemberRename, pendingI
 	}
 	for _, member := range changed {
 		if rejected[member.name] {
-			return fmt.Errorf("knowledge: moved view %q has duplicate or rejected claimants", member.name)
+			return fmt.Errorf("%w: moved view %q has duplicate or rejected claimants", ErrViewMoveIdentityMismatch, member.name)
 		}
 		if existing, ok := m.Bases[member.newBase][member.name]; ok && existing != member.newRel {
-			return fmt.Errorf("knowledge: moved view %q conflicts with enrolled path %q", member.name, existing)
+			return fmt.Errorf("%w: moved view %q conflicts with enrolled path %q", ErrViewMoveIdentityMismatch, member.name, existing)
 		}
 		for base, names := range m.Bases {
 			for name, path := range names {
 				if path == member.newRel && (base != member.newBase || name != member.name) {
-					return fmt.Errorf("knowledge: moved view path %q belongs to %q/%q", member.newRel, base, name)
+					return fmt.Errorf("%w: moved view path %q belongs to %q/%q", ErrViewMoveIdentityMismatch, member.newRel, base, name)
 				}
 			}
 		}
@@ -133,9 +143,8 @@ func (m *ViewMembership) enrollMovedMembers(changed []viewMemberRename, pendingI
 			// verified result without rewriting it a second time.
 			if _, _, err := m.readManagedView(member.newBase, member.name, member.newRel); err == nil {
 				return nil
-			}
-			if member.oldBase == member.newBase {
-				return fmt.Errorf("knowledge: moved view %q no longer matches its identity", member.newRel)
+			} else if member.oldBase == member.newBase {
+				return fmt.Errorf("knowledge: moved view %q no longer matches its identity: %w", member.newRel, err)
 			}
 			_, body, err := m.readManagedView(member.oldBase, member.name, member.newRel)
 			if err != nil {

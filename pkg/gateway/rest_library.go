@@ -134,6 +134,12 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleLibraryRename(w, r, workspaceID)
+	case "retry-move":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryRetryMove(w, r, workspaceID)
 	case "download":
 		if r.Method != http.MethodGet {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
