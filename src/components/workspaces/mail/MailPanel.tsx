@@ -382,7 +382,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     if (detailQuery.isSuccess && detail !== null && detail.seen === false && folder !== 'drafts' && selectedRef !== null && !seenMutation.isPending) {
       seenMutation.mutate(selectedRef)
     }
-  })
+  }, [detailQuery.isSuccess, detail?.seen, folder, selectedRef])
 
   // Compose dialog state: null = closed. reply carries the open message's
   // identity for In-Reply-To (US-5 AS-3).
