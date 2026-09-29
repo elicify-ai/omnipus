@@ -81,3 +81,42 @@ properties:
       (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no
       new settings tab. Always present in responses.
     example: 20
+  max_tool_iterations:
+    type: integer
+    minimum: 1
+    maximum: 1000
+    description: >
+      The global tool-iteration limit IN FORCE ("Max tool calls per turn",
+      issue #904, tool-iteration-limit spec): the ceiling for every agent's
+      turns. An agent's own value may only lower it. When the value saved in
+      config.json is missing or out of range this is the value actually used,
+      not the saved one (see max_tool_iterations_saved_state). Always present
+      in responses.
+    example: 200
+  max_tool_iterations_saved_state:
+    $ref: './MaxToolIterationsSavedState.yaml'
+    x-go-type: MaxToolIterationsSavedState
+  max_tool_iterations_saved_raw:
+    type: integer
+    description: >
+      The global limit exactly as found in config.json. Present only when
+      max_tool_iterations_saved_state is below_min or above_max (spec D13
+      Settings warning); absent otherwise.
+    example: 5000
+  max_tool_iterations_lowered_agents:
+    type: array
+    items:
+      $ref: './MaxToolIterationAgentChange.yaml'
+      x-go-type: MaxToolIterationAgentChange
+    description: >
+      Agents whose own limit this request lowered to the new global (spec
+      D11). Present only on a PUT response that lowered at least one agent;
+      absent on GET and on every other PUT.
+  pending_apply:
+    $ref: './PerformancePendingApply.yaml'
+    x-go-type: PerformancePendingApply
+    description: >
+      Present only while saved Performance settings are not in force yet
+      (see PerformancePendingApply); absent when everything saved is applied.
+      Returned on GET and on every successful PUT (a successful PUT clears
+      it, so it is then absent).

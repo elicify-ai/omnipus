@@ -44,8 +44,11 @@
 // each RUNS-IF file tool re-checks its FINAL resolved path against the pin
 // (RecheckAutoPin) and refuses — without prompting again — if the path no
 // longer satisfies the workspace rule (for example a symlink swapped between
-// classification and use). A call dispatched without a pin (human-approved,
-// or policy allow) is never affected by the re-check.
+// classification and use). A pin of class "runs" made no location claim, so
+// it is never re-checked (ADR-092 correction note, founder decision D8); a
+// pin with no class at all is re-checked (fail-closed). A call dispatched
+// without a pin (human-approved, or policy allow) is never affected by the
+// re-check.
 //
 // # The workspace path rule (§2, founder ruling J2)
 //
@@ -54,11 +57,13 @@
 // it), then the tool's OWN ResolvePathAllowingPatterns (same op, same
 // patterns), then: not in the secret set (fspolicy.IsCarveOut) AND within
 // policy.WorkDir or one of policy.AllowedRoots (mounts), tested with
-// fspolicy.CoversForGrant. Reads and writes alike: a read outside the
-// workspace and its mounts asks, even though the tool itself would permit
-// it once a human approves. Because the classifier resolves through the
-// exact functions the tool uses, the two can never disagree about which
-// file a path names.
+// fspolicy.CoversForGrant. It governs the write and send tools
+// (write_file, edit_file, append_file, send_file, browser_screenshot's
+// destination): one of those outside the workspace and its mounts asks.
+// The reading tools (read_file, list_directory, grep) are class "runs" and
+// never consult it (#920, ADR-092 D9 amendment of 2026-09-26). Because the
+// classifier resolves through the exact functions the tool uses, the two can
+// never disagree about which file a path names.
 package tools
 
 import (
@@ -106,27 +111,37 @@ func (c AutoApproveClass) String() string {
 	}
 }
 
+// AutoVerdictClass is the typed spelling of an AutoVerdict/AutoPin's Class
+// field (T1, pkg/tools/auto_approve.go review): the four values below are
+// the only intended members. The named type stops a plain string
+// variable from being assigned without an explicit conversion; an untyped
+// string literal still compiles (Go constant assignability), so new values
+// belong in the const block below, not inline.
+type AutoVerdictClass string
+
 // Verdict class strings recorded on AutoVerdict.Class (and so in the
 // tool.auto_approved audit row).
 const (
-	AutoVerdictClassRuns              = "runs"
-	AutoVerdictClassRunsIfArgs        = "runs_if_args"
-	AutoVerdictClassMCPNotDestructive = "mcp_not_destructive"
-	AutoVerdictClassAsks              = "asks"
+	AutoVerdictClassRuns              AutoVerdictClass = "runs"
+	AutoVerdictClassRunsIfArgs        AutoVerdictClass = "runs_if_args"
+	AutoVerdictClassMCPNotDestructive AutoVerdictClass = "mcp_not_destructive"
+	AutoVerdictClassAsks              AutoVerdictClass = "asks"
 )
 
 // autoApproveClasses is the §3 table, transcribed one-for-one from the
 // founder file /Users/danielpiatkowski/Desktop/auto-approve-choices.json
 // (saved 2026-09-23T14:20:18Z): every catalog tool listed explicitly, plus
-// bash. "runs" entries become AutoRuns, except the seven whose file
+// bash. "runs" entries become AutoRuns, except the five whose file
 // argument carries the J2 path rule (AutoRunsIfArgs); "asks" entries
 // become AutoAsks. MCP tools are never listed here (§4) — they are
-// classified by their own annotations.
+// classified by their own annotations. read_file and list_directory moved
+// from AutoRunsIfArgs to AutoRuns for #920 (founder decisions D2/D3,
+// ADR-092 D9 amendment of 2026-09-26), joining grep.
 var autoApproveClasses = map[string]AutoApproveClass{
 
 	// Files
-	"read_file":      AutoRunsIfArgs,
-	"list_directory": AutoRunsIfArgs,
+	"read_file":      AutoRuns,
+	"list_directory": AutoRuns,
 	"write_file":     AutoRunsIfArgs,
 	"edit_file":      AutoRunsIfArgs,
 	"append_file":    AutoRunsIfArgs,
@@ -299,7 +314,7 @@ type PinnedPath struct {
 // Paths is set only by the RUNS-IF file tools, for the pin and the audit.
 type AutoVerdict struct {
 	Run    bool
-	Class  string
+	Class  AutoVerdictClass
 	Reason string
 	Paths  []PinnedPath
 }
@@ -447,8 +462,15 @@ func autoWorkspaceVerdict(
 }
 
 // AutoPin is the Auto decision pinned on one call's execution context.
+//
+// Class is the verdict's class (AutoVerdictClassRuns, …RunsIfArgs,
+// …MCPNotDestructive), copied by AutoPinForVerdict. RecheckAutoPin skips a
+// pin of class AutoVerdictClassRuns (D8); the zero value "" is re-checked,
+// so a pin literal built without a class keeps the fail-closed meaning it
+// had before the field existed.
 type AutoPin struct {
 	Tool  string
+	Class AutoVerdictClass
 	Paths []PinnedPath
 }
 
@@ -469,9 +491,11 @@ func AutoPinFrom(ctx context.Context) (AutoPin, bool) {
 	return pin, ok
 }
 
-// AutoPinForVerdict builds the pin for a running verdict.
+// AutoPinForVerdict builds the pin for a running verdict, carrying its
+// class so RecheckAutoPin can tell a "runs" decision (no location claim)
+// from a RUNS-IF one (D8).
 func AutoPinForVerdict(toolName string, verdict AutoVerdict) AutoPin {
-	return AutoPin{Tool: toolName, Paths: append([]PinnedPath(nil), verdict.Paths...)}
+	return AutoPin{Tool: toolName, Class: verdict.Class, Paths: append([]PinnedPath(nil), verdict.Paths...)}
 }
 
 // ErrAutoPinMoved is returned by RecheckAutoPin when an auto-approved call's
@@ -480,13 +504,21 @@ var ErrAutoPinMoved = errors.New("auto-approved path no longer inside the worksp
 
 // RecheckAutoPin re-applies the J2 rule to a tool's final resolved path. It
 // is a no-op (nil) when ctx carries no pin for toolName — a human-approved
-// or allow-policy call is never affected. With a pin, the path must still be
+// or allow-policy call is never affected. A pin of class
+// AutoVerdictClassRuns is also a no-op: a RUNS verdict made no location
+// claim for the re-check to re-verify (ADR-092 correction note, founder
+// decision D8), and the secret set is not part of the pin at all —
+// ResolvePath refuses fspolicy.IsCarveOut on every call. Any other pin,
+// including one with an empty Class, is re-checked: the path must still be
 // outside the secret set and inside the work folder or a mount, and access
 // must be covered by the access the classifier pinned; otherwise the call
 // is refused with an error wrapping ErrOutsideScope and ErrAutoPinMoved.
 func RecheckAutoPin(ctx context.Context, toolName string, policy fspolicy.FSPolicy, realPath string, access uint64) error {
 	pin, ok := AutoPinFrom(ctx)
 	if !ok || pin.Tool != toolName {
+		return nil
+	}
+	if pin.Class == AutoVerdictClassRuns {
 		return nil
 	}
 	var pinnedAccess uint64
@@ -539,8 +571,6 @@ func resolveAutoCheckedPath(
 
 // Every AutoRunsIfArgs file tool in this package implements the classifier.
 var (
-	_ AutoApproveClassifier = (*ReadFileTool)(nil)
-	_ AutoApproveClassifier = (*ListDirTool)(nil)
 	_ AutoApproveClassifier = (*WriteFileTool)(nil)
 	_ AutoApproveClassifier = (*EditFileTool)(nil)
 	_ AutoApproveClassifier = (*AppendFileTool)(nil)

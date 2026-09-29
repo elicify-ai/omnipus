@@ -96,6 +96,8 @@ const mockCoreAgent: Agent = {
   soul: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   rate_limits: { use_global_defaults: true },
   stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
@@ -116,6 +118,8 @@ const mockLockedCoreAgent: Agent = {
   soul: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
   editable_fields: BUILTIN_EDITABLE_FIELDS,
@@ -178,6 +182,8 @@ const mockJudgeAgent: Agent = {
   soul: 'You are the Judge — an impartial acceptance-criteria evaluator.',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   memory_enabled: false,
   editable_fields: COMMON_EDITABLE_FIELDS.map((field) => ({
     ...field,
@@ -2748,64 +2754,73 @@ describe('AgentProfile — max tool calls per turn (zero-clobber P0 fix)', () =>
   // persisted it (live install ended up with five zeroed agents + a zeroed
   // global default). The draft pattern must never autosave an empty/invalid
   // value, and blur restores the last committed number.
-  it('clearing the field to type never persists 0; a valid value persists', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, max_tool_iterations: 200 })
-    renderProfile(mockCoreAgent.id)
-    await screen.findByText(mockCoreAgent.name)
-    if (!screen.queryByTestId('agent-max-tool-calls-input')) {
+  // #904 re-derivation: the input now holds the agent's OWN value
+  // (max_tool_iterations_override), not the effective value — spec "UI
+  // Screens and States" (profile row) + FR-003. The zero-clobber guard stays:
+  // no save may carry 0 (FR-006, range 1–1000). Fixtures use an own value of
+  // 50 under global 200 (Resolver dataset row 2) instead of the old "200".
+  const ownFifty = {
+    ...mockCoreAgent,
+    max_tool_iterations: 50,
+    max_tool_iterations_source: 'agent' as const,
+    max_tool_iterations_override: 50,
+    max_tool_iterations_override_ignored: false,
+  }
+  async function openLimitInput(agent: Agent) {
+    vi.mocked(fetchAgent).mockResolvedValue(agent)
+    renderProfile(agent.id)
+    await screen.findByText(agent.name)
+    if (!screen.queryByLabelText(/^Max tool calls per turn/)) {
       switchTab('tab-advanced')
     }
-    const input = (await screen.findByTestId('agent-max-tool-calls-input')) as HTMLInputElement
-    expect(input.value).toBe('200')
+    return (await screen.findByLabelText(/^Max tool calls per turn/)) as HTMLInputElement
+  }
+
+  it('clearing the field to type never persists 0; a valid value persists', async () => {
+    const input = await openLimitInput(ownFifty)
+    expect(input.value).toBe('50') // the own value (was: effective 200 — pre-#904)
 
     vi.mocked(updateAgent).mockClear()
-
-    // Clear the field (the first thing a user does before typing a new value).
     fireEvent.change(input, { target: { value: '' } })
     expect(input.value).toBe('')
+    fireEvent.change(input, { target: { value: '40' } })
 
-    // Type the new value.
-    fireEvent.change(input, { target: { value: '350' } })
-
-    await waitFor(
-      () => {
-        expect(updateAgent).toHaveBeenCalled()
-      },
-      { timeout: 6000 },
-    )
-    // NO call may ever carry 0 — and the final persisted value is 350.
+    await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 6000 })
     for (const call of vi.mocked(updateAgent).mock.calls) {
       expect(call[1].max_tool_iterations).not.toBe(0)
     }
-    const last = vi.mocked(updateAgent).mock.calls.at(-1)!
-    expect(last[1].max_tool_iterations).toBe(350)
+    expect(vi.mocked(updateAgent).mock.calls.at(-1)![1].max_tool_iterations).toBe(40)
   })
 
-  it('blur with an empty draft restores the last committed value', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, max_tool_iterations: 200 })
-    renderProfile(mockCoreAgent.id)
-    await screen.findByText(mockCoreAgent.name)
-    if (!screen.queryByTestId('agent-max-tool-calls-input')) {
-      switchTab('tab-advanced')
-    }
-    const input = (await screen.findByTestId('agent-max-tool-calls-input')) as HTMLInputElement
-
+  it('blur with an empty draft restores the own value and saves nothing (clearing is only "Use global limit")', async () => {
+    // #904 FR-008/FR-017: an own value is cleared ONLY by "Use global limit"
+    // (explicit null); an abandoned empty draft is not a reset, so it must
+    // neither persist 0 nor silently send null.
+    const input = await openLimitInput(ownFifty)
+    vi.mocked(updateAgent).mockClear()
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.blur(input)
-    expect(input.value).toBe('200')
+    expect(input.value).toBe('50')
+    await new Promise((r) => setTimeout(r, 1500))
+    for (const call of vi.mocked(updateAgent).mock.calls) {
+      expect('max_tool_iterations' in call[1]).toBe(false)
+    }
   })
 
-  it('the help copy states the per-turn semantics and the 200 default', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, max_tool_iterations: 200 })
-    renderProfile(mockCoreAgent.id)
-    await screen.findByText(mockCoreAgent.name)
-    if (!screen.queryByTestId('agent-max-tool-calls-input')) {
-      switchTab('tab-advanced')
-    }
-    await screen.findByTestId('agent-max-tool-calls-input')
-    expect(screen.getByText(/Max tool calls per turn/i)).toBeInTheDocument()
+  it('the help copy names the SERVER global and carries no literal default (FR-004)', async () => {
+    // #904 FR-004 forbids the old "Default: 200" caption; the SPA renders
+    // the server's value. A 350 global (source "global", no own value)
+    // proves the number is not a literal.
+    await openLimitInput({
+      ...mockCoreAgent,
+      max_tool_iterations: 350,
+      max_tool_iterations_source: 'global',
+      max_tool_iterations_override_ignored: false,
+    })
+    expect(screen.getByText('Using the global limit (350)')).toBeInTheDocument()
+    // The per-turn semantics copy still ships (ToolIterationLimitField caption).
     expect(screen.getByText(/Per single turn/i)).toBeInTheDocument()
-    expect(screen.getByText(/Default: 200/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Default:?\s*200/i)).toBeNull()
   })
 })
 
@@ -2900,18 +2915,17 @@ describe('AgentProfile — Fallback models visibility by agent kind (field matri
   })
 })
 
-// W2c — Max tool calls per turn visibility by agent kind (field matrix,
-// agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03): excluded
-// — subagent_3p EXCLUDES max_tool_iterations).
+// Max tool calls per turn visibility by agent kind. #904 D14 supersedes the
+// field matrix's "subagent_3p EXCLUDES max_tool_iterations" (Decisions #1,
+// 2026-07-03): external-CLI workers get the same control and reset.
 describe('AgentProfile — Max tool calls per turn visibility by agent kind (field matrix, W2c)', () => {
-  it('hides the Max tool calls input for a subagent_3p agent', async () => {
+  it('shows the Max tool calls input for a subagent_3p agent (D14)', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
     renderProfile('external-researcher')
     await screen.findByText('External Researcher')
     switchTab('tab-advanced')
-    await waitFor(() => {
-      expect(screen.queryByTestId('agent-max-tool-calls-input')).toBeNull()
-    })
+    expect(await screen.findByLabelText(/^Max tool calls per turn/)).toBeInTheDocument()
+    // Unchanged by #904: subagent_3p still has no timeout input here.
     expect(screen.queryByTestId('agent-timeout-input')).toBeNull()
   })
 

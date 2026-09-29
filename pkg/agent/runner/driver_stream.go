@@ -101,6 +101,10 @@ func buildChildEnv(callerEnv []string) []string {
 	return out
 }
 
+// fatalDeliveryGrace bounds how long streamParser keeps offering a fatal event
+// to a consumer after the run context is already done (#904 F1).
+const fatalDeliveryGrace = 2 * time.Second
+
 // streamParser is a callback-based NDJSON parser.
 // It reads lines from r, calls parseLine for each non-empty line,
 // and sends the resulting RunEvents to out. It exits when ctx is
@@ -146,7 +150,16 @@ func streamParser(
 			ev.RunID = runID
 		}
 		if ev.Kind == EventKindError && ev.Err != nil && ev.Err.Fatal {
-			emittedFatal = true
+			// A fatal event is often produced right after the driver cancelled
+			// the run (every turn-cap branch calls Cancel() first), so ctx is
+			// already done here. It must not race ctx.Done() (#904 F1).
+			if deliverFatal(ctx, out, ev) {
+				emittedFatal = true
+			}
+			if ctx.Err() != nil {
+				return emittedFatal
+			}
+			continue
 		}
 		select {
 		case out <- ev:
@@ -168,6 +181,37 @@ func streamParser(
 		}
 	}
 	return emittedFatal
+}
+
+// deliverFatal hands a fatal event to out with priority over cancellation
+// (#904 F1). A plain `select { case out <- ev: case <-ctx.Done(): }` picks at
+// random when both are ready, so a fatal event emitted after the driver's own
+// Cancel() — the turn-cap path in all three drivers — was dropped about half
+// the time. deliverFatal sends immediately when out has room; otherwise it
+// waits for the consumer while the run is live, and for at most
+// fatalDeliveryGrace once ctx is done, so an abandoned consumer cannot leak
+// the parser goroutine. It reports whether the event was delivered.
+func deliverFatal(ctx context.Context, out chan<- RunEvent, ev RunEvent) bool {
+	select {
+	case out <- ev:
+		return true
+	default:
+	}
+	select {
+	case out <- ev:
+		return true
+	case <-ctx.Done():
+	}
+	timer := time.NewTimer(fatalDeliveryGrace)
+	defer timer.Stop()
+	select {
+	case out <- ev:
+		return true
+	case <-timer.C:
+		slog.Warn("runner: fatal event not delivered — consumer did not receive within the grace period",
+			"run_id", ev.RunID, "message", ev.Err.Message, "grace", fatalDeliveryGrace)
+		return false
+	}
 }
 
 // detectCLIVersion runs `<binary> --version` and returns the parsed version

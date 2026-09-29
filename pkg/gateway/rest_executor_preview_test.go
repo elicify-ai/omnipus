@@ -19,7 +19,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
@@ -54,13 +53,13 @@ func TestPostAgentsExecutorPreview_Claude_HappyPath(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, code)
 
-	// max_tool_iterations was omitted, so the preview must reflect the SAME
-	// default a real run would apply (agent.DefaultExternalMaxTurns) — see
-	// TestPostAgentsExecutorPreview_MaxToolIterations_DefaultsToExternalMaxTurns
-	// for dedicated coverage of that behavior; this test's own wantArgv must
-	// stay in sync with it rather than assuming MaxTurns:0.
+	// max_tool_iterations was omitted, so the preview must show the
+	// resolver's effective value = the global limit (#904 D4, FR-004). This
+	// harness saves no global, so the global in force is the shipped default
+	// 200 (spec Dataset "Saved global" row 2 / D13) — see
+	// TestPostAgentsExecutorPreview_MaxToolIterations_DefaultsToGlobalLimit.
 	wantArgv := runner.BuildClaudeArgs(
-		runner.RunOptions{Model: "sonnet", Input: "<prompt>", MaxTurns: agent.DefaultExternalMaxTurns},
+		runner.RunOptions{Model: "sonnet", Input: "<prompt>", MaxTurns: mtiShippedDefaultGlobal},
 	)
 	assert.Equal(t, wantArgv, resp.Argv)
 	assert.Equal(t, "claude", resp.Binary)
@@ -213,59 +212,80 @@ func TestPostAgentsExecutorPreview_ClaudeCode_ModelDroppedReasonNeverSet(t *test
 	assert.Contains(t, resp.Argv, "not-provider-shaped")
 }
 
-// TestPostAgentsExecutorPreview_MaxToolIterations_DefaultsToExternalMaxTurns
-// proves omitting max_tool_iterations previews with the SAME default a real
-// external-CLI dispatch applies (agent.DefaultExternalMaxTurns, referenced
-// directly — see runExternalCLISubTurn's "maxTurns <= 0 -> default"
-// fallback in external_dispatch.go), instead of silently showing no
-// --max-turns flag at all (the bug this test guards against).
-func TestPostAgentsExecutorPreview_MaxToolIterations_DefaultsToExternalMaxTurns(t *testing.T) {
+// mtiShippedDefaultGlobal is the shipped default global limit (#904 spec
+// FR-001: "range 1–1000, shipped default 200"; D13: a missing saved global
+// runs as 200). executorDefaultsTestAPI saves no global.
+const mtiShippedDefaultGlobal = 200
+
+// argvTurnCap returns the value following --max-turns in argv, or "".
+func mtiArgvTurnCap(argv []string) string {
+	for i, a := range argv {
+		if a == "--max-turns" && i+1 < len(argv) {
+			return argv[i+1]
+		}
+	}
+	return ""
+}
+
+// TestPostAgentsExecutorPreview_MaxToolIterations_DefaultsToGlobalLimit —
+// #904 Scenario "Worker preview equals runtime with no own value" (D4): an
+// omitted max_tool_iterations previews the global limit in force (200 here),
+// the value a real run passes — never the retired 50
+// (DefaultExternalMaxTurns is removed by FR-004).
+func TestPostAgentsExecutorPreview_MaxToolIterations_DefaultsToGlobalLimit(t *testing.T) {
+	mtiUnsetEnv(t)
 	api := executorDefaultsTestAPI(t)
 	code, resp := postExecutorPreview(t, api, map[string]any{
 		"cli": "claude-code",
 	})
 	require.Equal(t, http.StatusOK, code)
+	assert.Equal(t, fmt.Sprint(mtiShippedDefaultGlobal), mtiArgvTurnCap(resp.Argv),
+		"omitted max_tool_iterations must preview the global limit; argv=%v", resp.Argv)
+	assert.Contains(t, resp.CommandLine, fmt.Sprintf("--max-turns %d", mtiShippedDefaultGlobal))
+}
 
-	wantFlag := fmt.Sprintf("--max-turns %d", agent.DefaultExternalMaxTurns)
-	assert.Contains(t, resp.CommandLine, wantFlag,
-		"omitted max_tool_iterations must preview with the real dispatch default; command_line=%q", resp.CommandLine)
-
-	found := false
-	for i, a := range resp.Argv {
-		if a == "--max-turns" && i+1 < len(resp.Argv) &&
-			resp.Argv[i+1] == fmt.Sprintf("%d", agent.DefaultExternalMaxTurns) {
-			found = true
-		}
+// TestPostAgentsExecutorPreview_MaxToolIterations_ExplicitZero_Refused —
+// #904 FR-006: 0 is outside 1–1000 on every writable field including the
+// executor preview (ExecutorCommandPreviewRequest minimum: 1); it no longer
+// means "use the default".
+func TestPostAgentsExecutorPreview_MaxToolIterations_ExplicitZero_Refused(t *testing.T) {
+	api := executorDefaultsTestAPI(t)
+	for _, v := range []int{0, 1001} {
+		code, _ := postExecutorPreview(t, api, map[string]any{
+			"cli":                 "claude-code",
+			"max_tool_iterations": v,
+		})
+		assert.Equal(t, http.StatusBadRequest, code, "max_tool_iterations=%d must be refused (1–1000)", v)
 	}
-	assert.True(t, found, "argv must contain --max-turns %d; argv=%v", agent.DefaultExternalMaxTurns, resp.Argv)
 }
 
-// TestPostAgentsExecutorPreview_MaxToolIterations_ExplicitZero_AlsoDefaults
-// proves an explicit zero ALSO previews with the default — mirroring
-// runExternalCLISubTurn's "maxTurns <= 0" fallback (not just "field is nil").
-func TestPostAgentsExecutorPreview_MaxToolIterations_ExplicitZero_AlsoDefaults(t *testing.T) {
-	api := executorDefaultsTestAPI(t)
-	code, resp := postExecutorPreview(t, api, map[string]any{
-		"cli":                 "claude-code",
-		"max_tool_iterations": 0,
-	})
-	require.Equal(t, http.StatusOK, code)
-	wantFlag := fmt.Sprintf("--max-turns %d", agent.DefaultExternalMaxTurns)
-	assert.Contains(t, resp.CommandLine, wantFlag)
-}
-
-// TestPostAgentsExecutorPreview_MaxToolIterations_ExplicitValueRespected
-// proves a positive explicit value overrides the default rather than always
-// previewing with the fallback.
+// TestPostAgentsExecutorPreview_MaxToolIterations_ExplicitValueRespected —
+// #904 Scenario "Worker preview equals runtime with own value": an own
+// value below the global previews as itself.
 func TestPostAgentsExecutorPreview_MaxToolIterations_ExplicitValueRespected(t *testing.T) {
+	mtiUnsetEnv(t)
 	api := executorDefaultsTestAPI(t)
 	code, resp := postExecutorPreview(t, api, map[string]any{
 		"cli":                 "claude-code",
-		"max_tool_iterations": 7,
+		"max_tool_iterations": 30,
 	})
 	require.Equal(t, http.StatusOK, code)
-	assert.Contains(t, resp.CommandLine, "--max-turns 7")
-	assert.NotContains(t, resp.CommandLine, fmt.Sprintf("--max-turns %d", agent.DefaultExternalMaxTurns))
+	assert.Equal(t, "30", mtiArgvTurnCap(resp.Argv))
+}
+
+// TestPostAgentsExecutorPreview_MaxToolIterations_AboveGlobalCapped — #904
+// contract row ExecutorCommandPreviewRequest: "The server previews the
+// resolver's effective value (min(global, value))". 300 with global 200
+// previews 200, exactly what a run of that (capped-and-flagged) worker passes.
+func TestPostAgentsExecutorPreview_MaxToolIterations_AboveGlobalCapped(t *testing.T) {
+	mtiUnsetEnv(t)
+	api := executorDefaultsTestAPI(t)
+	code, resp := postExecutorPreview(t, api, map[string]any{
+		"cli":                 "claude-code",
+		"max_tool_iterations": 300,
+	})
+	require.Equal(t, http.StatusOK, code)
+	assert.Equal(t, fmt.Sprint(mtiShippedDefaultGlobal), mtiArgvTurnCap(resp.Argv))
 }
 
 // TestPostAgentsExecutorPreview_UnknownCLI_400 proves an unsupported cli

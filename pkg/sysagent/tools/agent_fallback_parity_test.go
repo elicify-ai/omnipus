@@ -14,7 +14,7 @@ import (
 // The expected object chain comes from AgentUpdateRequest/FallbackModel, not
 // the retired model_fallbacks string-array implementation.
 func TestAgentToolsFallbackModelsPersistAndClear(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	chain := []any{map[string]any{"model": "first", "provider": "provider-a"}, map[string]any{"model": "second", "provider": "provider-b"}}
 	args := map[string]any{"name": "Fallback Bot", "description": "Fallback parity", "soul": "Test instructions", "model": "primary", "color": "#22C55E", "icon": "Robot", "fallback_models": chain}
 	created := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
@@ -69,7 +69,7 @@ func TestAgentUpdateFallbackModelsRejectsInvalidWithoutWrites(t *testing.T) {
 		{"long provider", []any{map[string]any{"model": "a", "provider": strings.Repeat("b", 65)}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, _ := newTestDeps()
+			deps, _ := newTestDeps(t)
 			store := agentstore.New(deps.Home)
 			_, err := store.CreateState("fallback-test", &config.AgentConfig{Name: "Fallback", Model: &config.AgentModelConfig{Primary: "primary"}, FallbackModels: config.FallbackModelSlice{{Model: "original", Provider: "original-provider"}}}, "original soul")
 			if err != nil {
@@ -95,7 +95,7 @@ func TestAgentUpdateFallbackModelsRejectsInvalidWithoutWrites(t *testing.T) {
 }
 
 func TestAgentUpdateFallbackModelsBoundariesAndOmission(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	_, err := store.CreateState("fallback-bounds", &config.AgentConfig{Name: "Bounds", Model: &config.AgentModelConfig{Primary: "primary"}}, "instructions")
 	if err != nil {
@@ -135,7 +135,7 @@ func TestAgentUpdateFallbackModelsBoundariesAndOmission(t *testing.T) {
 }
 
 func TestAgentUpdateFallbackModelsExternalWorkerRefusesWithoutWrites(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	_, err := store.CreateState("fallback-external", &config.AgentConfig{Name: "CLI", Type: config.AgentTypeWorker, Subagents: &config.SubagentsConfig{Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "codex"}}}, "")
 	if err != nil {

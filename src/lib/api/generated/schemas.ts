@@ -1203,6 +1203,9 @@ type Agent = {
   warning?: string | undefined;
   timeout_seconds: number;
   max_tool_iterations: number;
+  max_tool_iterations_source: MaxToolIterationsSource;
+  max_tool_iterations_override?: number | undefined;
+  max_tool_iterations_override_ignored: boolean;
   tools_cfg?: AgentToolsCfg | undefined;
   auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
@@ -1227,6 +1230,7 @@ type AgentFieldDescriptor = {
   editable: boolean;
   reason?: string | undefined;
 };
+type MaxToolIterationsSource = "global" | "agent";
 type AgentToolsCfg = Partial<{
   builtin: {
     policies: {};
@@ -1363,6 +1367,7 @@ type AgentCreateRequestSubagent3p = {
   soul: string;
   executor: ExecutorConfig;
   timeout_seconds?: number | undefined;
+  max_tool_iterations?: number | undefined;
 };
 type AgentUpdateRequest = {
   revision: ConfigurationRevision;
@@ -1374,7 +1379,7 @@ type AgentUpdateRequest = {
   provider?: string | undefined;
   context_window_override?: (number | null) | undefined;
   soul?: string | undefined;
-  max_tool_iterations?: number | undefined;
+  max_tool_iterations?: (number | null) | undefined;
   color?: string | undefined;
   icon?: string | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
@@ -1457,6 +1462,69 @@ type AuditEntry = {
   resource?: string | undefined;
   old_value?: {} | undefined;
   new_value?: {} | undefined;
+};
+type PerformanceSettings = Partial<{
+  max_parallel_agents: number;
+  effective_max_parallel_agents: number;
+  max_parallel_agents_configured: boolean;
+  tools_on_demand: boolean;
+  goal_max_rounds: number;
+  max_tool_iterations: number;
+  max_tool_iterations_saved_state: MaxToolIterationsSavedState;
+  max_tool_iterations_saved_raw: number;
+  max_tool_iterations_lowered_agents: Array<MaxToolIterationAgentChange>;
+  pending_apply: PerformancePendingApply;
+}>;
+type MaxToolIterationsSavedState = "ok" | "missing" | "below_min" | "above_max";
+type MaxToolIterationAgentChange = {
+  agent_id: string;
+  agent_name: string;
+  old_value: number;
+  new_value: number;
+};
+type PerformancePendingApply = {
+  stage: "refresh" | "reload";
+  changed_fields: Array<
+    | "max_parallel_agents"
+    | "tools_on_demand"
+    | "goal_max_rounds"
+    | "max_tool_iterations"
+  >;
+};
+type PerformanceSettingsUpdate = Partial<{
+  max_parallel_agents: number;
+  tools_on_demand: boolean;
+  goal_max_rounds: number;
+  max_tool_iterations: number;
+  confirmed_lowering: Array<MaxToolIterationsConfirmedAgent>;
+}>;
+type MaxToolIterationsConfirmedAgent = {
+  agent_id: string;
+  old_value: number;
+};
+type MaxToolIterationsLoweringPreview = {
+  value: number;
+  agents: Array<MaxToolIterationAgentChange>;
+};
+type MaxToolIterationsLoweringConflict = {
+  error: string;
+  code: string;
+  preview: MaxToolIterationsLoweringPreview;
+};
+type PerformanceReloadFailedDetails = {
+  stage: "refresh" | "reload";
+  changed_fields: Array<
+    | "max_parallel_agents"
+    | "tools_on_demand"
+    | "goal_max_rounds"
+    | "max_tool_iterations"
+  >;
+  lowered_agents: Array<MaxToolIterationAgentChange>;
+};
+type PerformanceReloadFailedError = {
+  error: string;
+  code: string;
+  details: PerformanceReloadFailedDetails;
 };
 type Provider = {
   id: string;
@@ -3464,6 +3532,7 @@ export const AgentFieldDescriptor: z.ZodType<AgentFieldDescriptor> = z.object({
   editable: z.boolean(),
   reason: z.string().optional(),
 });
+export const MaxToolIterationsSource = z.enum(["global", "agent"]);
 export const AgentToolsMcpServerBinding: z.ZodType<AgentToolsMcpServerBinding> =
   z
     .object({ id: z.string(), tools: z.array(z.string()).optional() })
@@ -3549,7 +3618,10 @@ export const Agent: z.ZodType<Agent> = z
     soul: z.string(),
     warning: z.string().optional(),
     timeout_seconds: z.number().int().gte(0),
-    max_tool_iterations: z.number().int().gte(0),
+    max_tool_iterations: z.number().int().gte(1).lte(1000),
+    max_tool_iterations_source: MaxToolIterationsSource,
+    max_tool_iterations_override: z.number().int().gte(1).optional(),
+    max_tool_iterations_override_ignored: z.boolean(),
     tools_cfg: AgentToolsCfg.optional(),
     auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
@@ -3605,7 +3677,7 @@ export const AgentCreateRequestMain =
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
     voice: z.string().nullish(),
-    max_tool_iterations: z.number().int().gte(0).optional(),
+    max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestMain>;
 export const AgentCreateRequestSubagent =
   z.object({
@@ -3631,7 +3703,7 @@ export const AgentCreateRequestSubagent =
       .optional(),
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
-    max_tool_iterations: z.number().int().gte(0).optional(),
+    max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent>;
 export const AgentCreateRequestSubagent3p =
   z.object({
@@ -3658,6 +3730,7 @@ export const AgentCreateRequestSubagent3p =
     soul: z.string().min(1),
     executor: ExecutorConfig,
     timeout_seconds: z.number().int().gte(0).optional(),
+    max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent3p>;
 export const AgentCreateRequest =
   z.discriminatedUnion("type", [
@@ -3675,7 +3748,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   provider: z.string().max(64).optional(),
   context_window_override: z.number().int().gte(1).nullish(),
   soul: z.string().min(1).optional(),
-  max_tool_iterations: z.number().int().optional(),
+  max_tool_iterations: z.number().int().gte(1).lte(1000).nullish(),
   color: z
     .string()
     .regex(/^#[0-9A-Fa-f]{6}$/)
@@ -3770,7 +3843,7 @@ export const ExecutorCommandPreviewRequest: z.ZodType<ExecutorCommandPreviewRequ
     model: z.string().max(256).optional(),
     cli_path: z.string().max(4096).optional(),
     cli_args: z.string().max(4096).optional(),
-    max_tool_iterations: z.number().int().gte(0).optional(),
+    max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   });
 export const ExecutorCommandPreviewResponse = z.object({
   binary: z.string(),
@@ -4051,22 +4124,67 @@ export const RetentionSweepResult = z
     skipped_reason: z.string().optional(),
   })
   .passthrough();
-export const PerformanceSettings = z
+export const MaxToolIterationsSavedState = z.enum([
+  "ok",
+  "missing",
+  "below_min",
+  "above_max",
+]);
+export const MaxToolIterationAgentChange: z.ZodType<MaxToolIterationAgentChange> =
+  z.object({
+    agent_id: z.string(),
+    agent_name: z.string(),
+    old_value: z.number().int(),
+    new_value: z.number().int().gte(1).lte(1000),
+  });
+export const PerformancePendingApply: z.ZodType<PerformancePendingApply> =
+  z.object({
+    stage: z.enum(["refresh", "reload"]),
+    changed_fields: z.array(
+      z.enum([
+        "max_parallel_agents",
+        "tools_on_demand",
+        "goal_max_rounds",
+        "max_tool_iterations",
+      ])
+    ),
+  });
+export const PerformanceSettings: z.ZodType<PerformanceSettings> = z
   .object({
     max_parallel_agents: z.number().int().gte(1),
     effective_max_parallel_agents: z.number().int().gte(1),
     max_parallel_agents_configured: z.boolean(),
     tools_on_demand: z.boolean(),
     goal_max_rounds: z.number().int().gte(1),
+    max_tool_iterations: z.number().int().gte(1).lte(1000),
+    max_tool_iterations_saved_state: MaxToolIterationsSavedState,
+    max_tool_iterations_saved_raw: z.number().int(),
+    max_tool_iterations_lowered_agents: z.array(MaxToolIterationAgentChange),
+    pending_apply: PerformancePendingApply,
   })
   .partial();
-export const PerformanceSettingsUpdate = z
+export const MaxToolIterationsConfirmedAgent: z.ZodType<MaxToolIterationsConfirmedAgent> =
+  z.object({ agent_id: z.string(), old_value: z.number().int() });
+export const PerformanceSettingsUpdate: z.ZodType<PerformanceSettingsUpdate> = z
   .object({
     max_parallel_agents: z.number().int().gte(0),
     tools_on_demand: z.boolean(),
     goal_max_rounds: z.number().int().gte(1),
+    max_tool_iterations: z.number().int().gte(1).lte(1000),
+    confirmed_lowering: z.array(MaxToolIterationsConfirmedAgent),
   })
   .partial();
+export const MaxToolIterationsLoweringPreview: z.ZodType<MaxToolIterationsLoweringPreview> =
+  z.object({
+    value: z.number().int().gte(1).lte(1000),
+    agents: z.array(MaxToolIterationAgentChange),
+  });
+export const MaxToolIterationsLoweringConflict: z.ZodType<MaxToolIterationsLoweringConflict> =
+  z.object({
+    error: z.string(),
+    code: z.string(),
+    preview: MaxToolIterationsLoweringPreview,
+  });
 export const MemorySettings: z.ZodType<MemorySettings> = z
   .object({
     auto_recap_enabled: z.boolean(),
@@ -6541,6 +6659,25 @@ export const RateLimitConfig = z
   })
   .partial()
   .passthrough();
+export const PerformanceReloadFailedDetails: z.ZodType<PerformanceReloadFailedDetails> =
+  z.object({
+    stage: z.enum(["refresh", "reload"]),
+    changed_fields: z.array(
+      z.enum([
+        "max_parallel_agents",
+        "tools_on_demand",
+        "goal_max_rounds",
+        "max_tool_iterations",
+      ])
+    ),
+    lowered_agents: z.array(MaxToolIterationAgentChange),
+  });
+export const PerformanceReloadFailedError: z.ZodType<PerformanceReloadFailedError> =
+  z.object({
+    error: z.string(),
+    code: z.string(),
+    details: PerformanceReloadFailedDetails,
+  });
 export const BackupEntry = z.object({
   filename: z.string(),
   size_bytes: z.number().int().gte(0),
@@ -10900,7 +11037,7 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
     method: "get",
     path: "/performance",
     alias: "getPerformanceSettings",
-    description: `Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use.
+    description: `Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use. pending_apply is present while saved settings are not in force yet (see PerformancePendingApply).
 `,
     requestFormat: "json",
     response: PerformanceSettings,
@@ -10922,6 +11059,7 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
     path: "/performance",
     alias: "updatePerformanceSettings",
     description: `Updates max_parallel_agents. An explicit value is honored exactly as given — there is no ceiling, only a floor of 1; a value is never silently lowered. Set to 0 to restore the auto-detected default (available memory / ~3.5 MB per agent, floored at 2, physically bounded around 2000). Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
+Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1–1000; out of range → 400). Only a LOWERING — a new value below the global currently in force — can rewrite agents (D20): a raise, or the current value, rewrites no agent and needs no confirmation; agents whose stored value is above the global keep it (capped and flagged). A lowering below some agents&#x27; own values lowers those agents too, but only with consent (D11): confirmed_lowering must equal — as a set keyed by agent_id, order-independent — the agents whose own value is above the new global at write time. Any difference (extra, missing or changed agent, confirmed_lowering absent while agents would be lowered, or a NON-EMPTY list on a raise — an empty or absent one on a raise is fine) is drift (D16): nothing is written and the response is 409 MaxToolIterationsLoweringConflict carrying the fresh preview. The same 409 is returned when an agent record changes (revision conflict) between the deciding check and its lowering write — the agents already lowered are rolled back first. A failure part-way through the writes rolls back the agents already lowered and leaves the global unchanged (500 ErrorResponse, code max_tool_iterations_lowering_failed, or max_tool_iterations_rollback_incomplete if a rollback also failed, with the original failure in details.cause). A failure to read the agent store while computing or checking the affected set is 500 code max_tool_iterations_agents_read_failed, nothing written. Setting the global also ends the retired environment-variable import for good (D6). A successful change reloads the agent registry so every agent&#x27;s next turn uses the new limit; the response lists the lowered agents in max_tool_iterations_lowered_agents. If the save is committed but the in-memory refresh or that reload fails, the response is 500 code performance_reload_failed with a PerformanceReloadFailedError body: the settings ARE saved on disk and nothing is rolled back, but they are not in force yet. details.stage tells how far the apply got — refresh: the in-memory configuration was NOT swapped, so GET /performance still shows the OLD values until the next configuration reload or restart; reload: the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed, so agents&#x27; next turns keep the old limits until the next reload or restart. details.changed_fields lists the settings this request changed and details.lowered_agents the agents it lowered (GET /performance does not carry them). A registry reload whose rebuild itself fails (not only one that cannot start or times out) is the reload stage too. After any performance_reload_failed answer, GET /performance (and every later PUT response) carries pending_apply until a later refresh AND registry reload both succeed; while it is set, a later PUT always reloads the agent registry, whatever fields it changes.
 `,
     requestFormat: "json",
     parameters: [
@@ -10941,6 +11079,57 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Lowering drift (issue #904, D16) — the agents the new global limit would lower differ from confirmed_lowering, or an agent record changed mid-write (revision conflict; agents already lowered were rolled back). Nothing was written; the body carries the fresh preview.
+`,
+        schema: MaxToolIterationsLoweringConflict,
+      },
+      {
+        status: 500,
+        description: `Server-side failure. code tells them apart: max_tool_iterations_agents_read_failed (the agent store could not be read; nothing written), max_tool_iterations_lowering_failed (a write failed; everything rolled back, nothing changed), max_tool_iterations_rollback_incomplete (a write failed and some agents could not be restored — the error names them; details.cause carries the original failure; the global is unchanged), performance_reload_failed (the settings ARE saved — config.json and any lowered agents are written, nothing is rolled back — but not in force yet; the body is a PerformanceReloadFailedError whose details carry stage (refresh: in-memory config not swapped, GET still shows the old values; reload: in-memory config updated, registry reload failed), changed_fields and lowered_agents). Any other failure to write config.json carries no code.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/performance/max-tool-iterations/preview",
+    alias: "previewMaxToolIterationsLowering",
+    description: `Read-only (issue #904, tool-iteration-limit spec D11). Lists the agents whose own tool-iteration limit is strictly above &#x60;value&#x60; and would therefore be lowered to it if the global limit were set to &#x60;value&#x60;. A &#x60;value&#x60; at or above the global limit currently in force is a raise, which never rewrites an agent (D20): the list is empty. Nothing is written and no step-up token is needed (the PUT /performance that applies the change consumes it). Same access gate as GET /performance.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "value",
+        type: "Query",
+        schema: z.number().int().gte(1).lte(1000),
+      },
+    ],
+    response: MaxToolIterationsLoweringPreview,
+    errors: [
+      {
+        status: 400,
+        description: `Missing, non-integer or out-of-range value.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Missing or invalid bearer token.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The agent store could not be read (code max_tool_iterations_agents_read_failed).
+`,
         schema: ErrorResponse,
       },
       {

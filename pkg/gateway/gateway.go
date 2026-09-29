@@ -229,7 +229,41 @@ type services struct {
 	reloadInFlight   bool
 	reloadRequested  bool
 	reloadTrigger    func() error
-	credStore        *credentials.Store
+	// reloadOutcome records each reload's rebuild outcome (runReloadCycle);
+	// shared with restAPI so PUT /performance can tell a failed rebuild from
+	// an applied one. Nil in test constructions (a nil tracker is a no-op).
+	reloadOutcome *reloadOutcomeTracker
+	// lastAppliedConfigReadSeq is reloadOutcomeTracker.markConfigRead's
+	// return value for the config a swap-time re-read
+	// (gateway_reload.go::reloadConfigForSwap) most recently produced
+	// INSIDE THE CURRENT reload cycle's exec call — the config
+	// handleConfigReload actually applies (its caller assigns
+	// `newCfg = swapCfg` immediately after reloadConfigForSwap returns, and
+	// every step after that — createStartupProvider,
+	// al.ReloadProviderAndConfig, restartServices — acts on that swapped-in
+	// config, never on the pre-swap snapshot). Round-6 finding: without this
+	// field, runReloadCycle told reloadOutcomeTracker.finish the reload
+	// cycle's OUTER readSeq (the `first`/loadNext read taken before
+	// handleConfigReload ran), which can predate a write that landed on
+	// disk between that outer read and the swap-time re-read — so a config
+	// that WAS actually applied, and WAS read after a pending-apply mark,
+	// reported as though its provenance predated that mark, and
+	// performancePendingApply.clearAfterReload withheld a clear it should
+	// have granted.
+	//
+	// runReloadCycle resets this to 0 immediately before each exec call and
+	// reads it back immediately after (gateway_reload.go);
+	// reloadConfigForSwap sets it only once its swap-time re-read has fully
+	// passed prepareReloadConfig. Both happen on the same goroutine within
+	// one exec call — the single-flight reload slot (beginReload/
+	// finishReload) serializes every reload cycle process-wide — so no
+	// additional lock is required. Zero (no swap-time re-read ran this exec
+	// call: loadConfigForSwap is unset, which is every test that never
+	// wires it, and the manual-reload path before this cycle's own
+	// handleConfigReload runs) tells runReloadCycle to keep the cycle's own
+	// outer readSeq unchanged.
+	lastAppliedConfigReadSeq uint64
+	credStore                *credentials.Store
 	// toolStore owns the on-disk tool-result offload directory. Exposed here
 	// so RunContext can wire its retentionSweep into the nightly sweep loop.
 	toolStore *toolResultStore
@@ -457,7 +491,7 @@ type runContextWithOptions struct {
 	agentLoopCancel    context.CancelFunc
 	agentLoopDead      atomic.Bool
 	smConsumerCancel   context.CancelFunc
-	configReloadChan   <-chan *config.Config
+	configReloadChan   <-chan watchedConfigChange
 	stopWatch          func()
 }
 
@@ -1603,6 +1637,7 @@ func (rc *runContextWithOptions) configureHealthAndWatcher() {
 			rc.credStore,
 			rc.runningServices.selfWriteReg,
 			rc.runningServices.markReloadDegraded,
+			rc.runningServices.reloadOutcome,
 		)
 		logger.Info("Config hot reload enabled")
 	}
@@ -1631,7 +1666,7 @@ func (rc *runContextWithOptions) serveReloadLoop() error {
 			logger.Info("Shutting down...")
 			omnipusGracefulShutdown(rc.runningServices, rc.agentLoop, rc.provider, rc.cfg)
 			return nil
-		case newCfg := <-rc.configReloadChan:
+		case change := <-rc.configReloadChan:
 			if !rc.runningServices.beginReload(rc.agentLoop.MarkReloadPending) {
 				// NOT a drop: beginReload recorded the request, and the cycle
 				// that owns the in-flight reload will run a follow-up reload
@@ -1639,13 +1674,13 @@ func (rc *runContextWithOptions) serveReloadLoop() error {
 				logger.Info("Config reload coalesced into the in-flight reload")
 				continue
 			}
-			runReloadCycle(rc.agentLoop, rc.runningServices, newCfg, runOneReload, loadReloadConfig)
+			runReloadCycle(rc.agentLoop, rc.runningServices, change.cfg, change.readSeq, runOneReload, loadReloadConfig)
 		case <-rc.manualReloadChan:
 			// The slot was already claimed by reloadTrigger before it signalled
 			// this channel, so do NOT call beginReload here — runReloadCycle
 			// takes ownership of the release directly.
 			logger.Info("Manual reload triggered via /reload endpoint")
-			runReloadCycle(rc.agentLoop, rc.runningServices, nil, runOneReload, loadReloadConfig)
+			runReloadCycle(rc.agentLoop, rc.runningServices, nil, 0, runOneReload, loadReloadConfig)
 		}
 	}
 }

@@ -1199,6 +1199,12 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// consumer below treats nil as "no catalog", never a 500.
 	stg.providerCatalog = stg.agentLoop.GetCapabilityCatalog()
 
+	// #904: one reload outcome record, shared by the reload cycle (writer)
+	// and restAPI (PUT /performance reads it; its pending-apply state is
+	// cleared by the success hook installed right after restAPI is built,
+	// before any reload can run).
+	stg.runningServices.reloadOutcome = &reloadOutcomeTracker{}
+
 	stg.api = &restAPI{
 		agentLoop:       stg.agentLoop,
 		providerCatalog: stg.providerCatalog, // ADR-067: the booted catalog (nil in non-boot tests)
@@ -1216,6 +1222,7 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		mediaStore:             stg.runningServices.MediaStore,
 		ssrfChecker:            agent.GetSSRFChecker(stg.agentLoop), // SEC-24: nil when SSRF disabled
 		sandboxResult:          stg.sandboxResult,                   // immutable post-boot snapshot
+		reloadOutcome:          stg.runningServices.reloadOutcome,   // #904: shared reload outcome record
 		appliedConfig:          mustDeepCopyConfig(stg.cfg),         // boot-time snapshot for pending-restart diff
 		servedSubdirs:          stg.runningServices.servedSubdirs,   // web_serve static-mode token registry
 		devServers:             stg.runningServices.devServers,      // web_serve dev-mode process registry
@@ -1230,6 +1237,8 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		taskLock:               task.TaskFileLock,                   // shared striped lock for board task RMW
 	}
 	stg.api.cronService.Store(stg.runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	// #904: a successful reload clears the Performance pending-apply state.
+	stg.runningServices.reloadOutcome.onSuccess = stg.api.pendingApply.clearAfterReload
 	// D-107: the Library REST write handlers broadcast a library_changed WS
 	// frame after every landed mutation, so a second tab's folder listing
 	// reconciles without a reload. wsHandler was built earlier in boot; store

@@ -46,8 +46,14 @@ func mutationFieldNames(args map[string]any) []string {
 	return fields
 }
 
-func applyAgentToolArgs(a *config.AgentConfig, args map[string]any, known map[string]struct{}, inv AgentConfigInventory) error {
-	if err := applyIdentityAndModelArgs(a, args); err != nil {
+// applyAgentToolArgs applies create_agent/update_agent args onto a. defaults
+// is the global agent config in force (may be nil — the resolver then uses
+// the shipped default); the #904 per-agent tool-iteration limit is checked
+// against it (D15).
+func applyAgentToolArgs(a *config.AgentConfig, args map[string]any, known map[string]struct{}, inv AgentConfigInventory,
+	defaults *config.AgentDefaults,
+) error {
+	if err := applyIdentityAndModelArgs(a, args, defaults); err != nil {
 		return err
 	}
 	if err := applyCapabilityArgs(a, args, known, inv); err != nil {
@@ -56,7 +62,7 @@ func applyAgentToolArgs(a *config.AgentConfig, args map[string]any, known map[st
 	return applySharedConfigArgs(a, args)
 }
 
-func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any) error {
+func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any, defaults *config.AgentDefaults) error {
 	if err := applyOptionalString(args, "name", func(v string) error {
 		if strings.TrimSpace(v) == "" {
 			return fieldErr("name", "name must be nonblank")
@@ -114,16 +120,44 @@ func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any) error
 		}
 	}
 	if raw, present := args["max_tool_iterations"]; present {
-		n, err := jsonInt(raw, "max_tool_iterations")
-		if err != nil {
-			return err
-		}
-		if n < 0 {
-			return fieldErr("max_tool_iterations", "max_tool_iterations must be >= 0")
-		}
-		a.MaxToolIterations = n
+		return applyMaxToolIterationsArg(a, raw, defaults)
 	}
 	return nil
+}
+
+// applyMaxToolIterationsArg applies the #904 per-agent tool-iteration limit
+// (D15 — the same rules as REST): an explicit JSON null clears the own value
+// (0 is omitted from the record, so the agent rides the global — FR-008);
+// checked BEFORE jsonInt, whose float64 assertion would reject nil. A number
+// must be a whole number within 1..1000 and not above the global in force
+// (FR-006, FR-007, D10), with the resolver's exact messages.
+func applyMaxToolIterationsArg(a *config.AgentConfig, raw any, defaults *config.AgentDefaults) error {
+	if raw == nil {
+		a.MaxToolIterations = 0
+		return nil
+	}
+	n, err := jsonInt(raw, "max_tool_iterations")
+	if err != nil {
+		return err
+	}
+	if err := config.ValidateAgentMaxToolIterations(n, defaults); err != nil {
+		return fieldErr("max_tool_iterations", err.Error())
+	}
+	a.MaxToolIterations = n
+	return nil
+}
+
+// agentDefaults returns the global agent config in force, or nil when no
+// config is wired (tests); nil resolves to the shipped default.
+func (d *Deps) agentDefaults() *config.AgentDefaults {
+	if d == nil || d.GetCfg == nil {
+		return nil
+	}
+	cfg := d.GetCfg()
+	if cfg == nil {
+		return nil
+	}
+	return &cfg.Agents.Defaults
 }
 
 func applyCapabilityArgs(a *config.AgentConfig, args map[string]any, known map[string]struct{}, inv AgentConfigInventory) error {

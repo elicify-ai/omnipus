@@ -4626,6 +4626,40 @@
       }
     },
     {
+      "id": "src/components/settings/MaxToolIterationsLoweringDialog.tsx#MaxToolIterationsLoweringDialog",
+      "kind": "modal",
+      "source": "src/components/settings/MaxToolIterationsLoweringDialog.tsx",
+      "symbol": "MaxToolIterationsLoweringDialog",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-settings-maxtooliterationsloweringdialog-tsx-maxtooliterationsloweringdialog:unit",
+          "file": "tests/design-system/surfaces/src-components-settings-maxtooliterationsloweringdialog-tsx-maxtooliterationsloweringdialog.test.tsx",
+          "test": "src/components/settings/MaxToolIterationsLoweringDialog.tsx#MaxToolIterationsLoweringDialog surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-settings-maxtooliterationsloweringdialog-tsx-maxtooliterationsloweringdialog:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/MaxToolIterationsLoweringDialog.tsx#MaxToolIterationsLoweringDialog surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-settings-maxtooliterationsloweringdialog-tsx-maxtooliterationsloweringdialog:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/MaxToolIterationsLoweringDialog.tsx#MaxToolIterationsLoweringDialog surface interaction contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/settings/MaxToolIterationsLoweringDialog.tsx#MaxToolIterationsLoweringDialog"
+      }
+    },
+    {
       "id": "src/components/settings/ProvidersSection.tsx#overlay:1",
       "kind": "modal",
       "source": "src/components/settings/ProvidersSection.tsx",
@@ -6340,6 +6374,14 @@
       "lane": 5
     },
     {
+      "source": "src/components/agents/ToolIterationLimitField.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/agents/useToolIterationLimitRefusal.ts",
+      "lane": 5
+    },
+    {
       "source": "src/components/agents/CliPathValidationHint.tsx",
       "lane": 5
     },
@@ -7353,6 +7395,14 @@
     },
     {
       "source": "src/components/settings/PerformanceSection.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/MaxToolIterationsCard.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/MaxToolIterationsLoweringDialog.tsx",
       "lane": 6
     },
     {

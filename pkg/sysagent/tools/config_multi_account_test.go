@@ -57,7 +57,7 @@ func newNamespacedChannelInstance(t *testing.T, cfg *config.Config, chType, slug
 // settings reachability nowhere at all for the namespaced shape, because it
 // did not work).
 func TestConfigSet_NamespacedInstanceEndToEnd(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	instance := newNamespacedChannelInstance(t, cfg, "telegram", "one")
 	ctx := context.Background()
 
@@ -109,7 +109,7 @@ func TestConfigSet_NamespacedInstanceEndToEnd(t *testing.T) {
 // under-block (a fully permissive walk would also make the reachability half
 // pass).
 func TestConfigSet_NamespacedInstanceOrdinaryVsOwnershipFields(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	const instance = "telegram.one"
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
 		instance: {
@@ -176,7 +176,7 @@ func TestConfigSet_NamespacedInstanceOrdinaryVsOwnershipFields(t *testing.T) {
 // must not, as a side effect, change behaviour for the shape that already
 // worked.
 func TestConfigSet_LegacyBareInstanceUnaffectedByMultiAccountFix(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
 		"telegram": {
 			Type:        "telegram",

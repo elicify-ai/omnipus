@@ -102,6 +102,9 @@ function baseAgent(overrides: Record<string, unknown> = {}) {
     memory_enabled: true,
     // A-CONTRACT (ADR-068 FR-038): needs_model is required on every Agent.
     needs_model: false,
+    // Issue #904: the effective tool-iteration limit's provenance is required on every Agent.
+    max_tool_iterations_source: 'global',
+    max_tool_iterations_override_ignored: false,
     ...overrides,
   }
 }

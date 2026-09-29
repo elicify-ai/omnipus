@@ -265,9 +265,13 @@ func TestAutoApproveClassification_MutationSelfCheck_ClassifiersExistCatchesMiss
 	for k, v := range instances {
 		mutated[k] = v
 	}
-	mutated["read_file"] = stubNonClassifierTool{name: "read_file"}
+	// #920 (read-boundary-consistency-spec.md, Regression Test Requirements:
+	// "tally update; check 4 still passes after classifier deletion"):
+	// read_file is class runs now and carries no classifier, so the mutation
+	// targets write_file, which stays runs_if_args (MV-5).
+	mutated["write_file"] = stubNonClassifierTool{name: "write_file"}
 	if errs := checkClassifiersExist(mutated, table); len(errs) == 0 {
-		t.Fatal("mutation self-check failed: substituting a non-classifier stub for read_file did not make the classifiers-exist check fail")
+		t.Fatal("mutation self-check failed: substituting a non-classifier stub for write_file did not make the classifiers-exist check fail")
 	}
 }
 
@@ -536,5 +540,46 @@ func TestGetTools_MCPAutoApproveMapsFromAnnotations(t *testing.T) {
 	}
 	if got := unannotatedEntry["auto_approve"]; got != "asks" {
 		t.Errorf("unannotated MCP tool auto_approve = %v, want \"asks\"", got)
+	}
+}
+
+// TestGetTools_ReadToolsServeAutoRuns is the gateway half of #920's US-6
+// AS-3 / S-6.3 / FR-027 (read-boundary-consistency-spec.md): GET
+// /api/v1/tools — the payload the Tools & Permissions marker renders —
+// serves auto_approve "runs" for read_file, list_directory and grep, and
+// keeps "runs_if_args" for the write/send tools (MV-5). Same wiring as
+// TestGetTools_CarriesAutoApproveForEveryEntry.
+func TestGetTools_ReadToolsServeAutoRuns(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	reg, _ := buildCentralBuiltinRegistry(nil)
+	api.builtinRegistry = reg
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
+	r = withAdminRole(r)
+	w := httptest.NewRecorder()
+	api.HandleToolsRegistry(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/tools = %d, want 200: %s", w.Code, w.Body)
+	}
+	var entries []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("response did not unmarshal as a JSON array: %v", err)
+	}
+	got := map[string]any{}
+	for _, e := range entries {
+		if e["source"] != "builtin" {
+			continue
+		}
+		name, _ := e["name"].(string)
+		got[name] = e["auto_approve"]
+	}
+	want := map[string]string{
+		"read_file": "runs", "list_directory": "runs", "grep": "runs",
+		"write_file": "runs_if_args", "edit_file": "runs_if_args", "append_file": "runs_if_args", "send_file": "runs_if_args",
+	}
+	for name, wantClass := range want {
+		if got[name] != wantClass {
+			t.Errorf("GET /api/v1/tools %s auto_approve = %v, want %q (MV-5, FR-027)", name, got[name], wantClass)
+		}
 	}
 }

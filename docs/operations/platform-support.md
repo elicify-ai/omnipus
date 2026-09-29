@@ -28,7 +28,7 @@ The cross-compile path works (`GOOS=darwin GOARCH=amd64 go build ./cmd/omnipus`)
 
 ### Windows amd64
 
-Tracked as [#113](https://github.com/elicify-ai/omnipus/issues/113). Roughly 15 unit tests assume POSIX semantics (file mode bits, advisory `flock`, fork-time signals), so the full suite does not run on Windows yet. CI does cover Windows in two ways today: the `windows-compile` job cross-compiles the production code for `windows/amd64` on every PR, and the `windows-daemon-tests` job runs the daemon package's tests on a real Windows runner.
+Tracked as [#113](https://github.com/elicify-ai/omnipus/issues/113). Roughly 15 unit tests assume POSIX semantics (file mode bits, advisory `flock`, fork-time signals), so the full suite does not run on Windows yet. CI does cover Windows in three ways today: the `windows-compile` job cross-compiles the production code for `windows/amd64` on every PR, the `windows-daemon-tests` job runs the daemon package's tests on a real Windows runner, and the `windows-tools-tests` job runs the file-tool path tests for Windows path forms (drive letters such as `C:\`, forward-slash drive paths, network `\\server\share` paths, backslash-relative paths and a drive root) on a real Windows runner. That last job runs only those eight path tests, not the rest of the tools package.
 
 There is no kernel sandbox on Windows: `selectBackendPlatform` returns the application-level fallback everywhere Windows runs. Job Objects are used, but only to cap a child's memory and to kill children when the gateway dies — not for confinement. A real confinement design exists (a low-integrity token plus deny rules on secrets, no admin rights needed) and is deliberately deferred; #113 tracks Windows test coverage, not the sandbox backend.
 

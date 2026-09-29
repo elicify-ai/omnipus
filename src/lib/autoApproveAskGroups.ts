@@ -79,7 +79,9 @@ export const AUTO_APPROVE_ASK_GROUPS: AutoApproveAskGroup[] = [
     tools: ['browser_evaluate', 'browser_upload_file'],
   },
   {
-    label: 'Mounting a folder, or files outside your workspace',
+    // #920 D3: "writing" — reading, listing and searching outside the
+    // workspace run without a prompt under Auto; only writing asks.
+    label: 'Mounting a folder, or writing files outside your workspace',
     tools: ['request_mount'],
   },
 ]
