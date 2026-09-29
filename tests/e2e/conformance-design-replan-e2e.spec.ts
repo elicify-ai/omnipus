@@ -254,7 +254,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
       // prompt was 'reply with beta' and m2 (a real LLM) correctly replied
       // "beta". buildPlanClaimText (pkg/agent/plan_engine_supervise.go) hands
       // the Judge m2's own recorded Result text verbatim, so the real Judge
-      // (deepseek/deepseek-v4.1-flash) read that reply, correctly noticed it
+      // (the configured E2E model, tests/e2e/e2e-model.json) read that reply, correctly noticed it
       // matched the prompt exactly, concluded the DoD's premise was false,
       // and ABANDONED the plan rather than superseding work that was, on the
       // evidence actually in front of it, correct — the right call given a
