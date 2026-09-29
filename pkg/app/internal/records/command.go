@@ -87,6 +87,7 @@ than silently dropped or approximated.`,
 			report, err := vaultimport.RunWithOptions(vault, vaultimport.Options{
 				Write:   !dryRun,
 				LockDir: lockDir,
+				Home:    config.OmnipusHomeDir(),
 			})
 			if err != nil {
 				return fmt.Errorf("import failed: %w", err)

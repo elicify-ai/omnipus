@@ -4,6 +4,7 @@ package vaultimport
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -167,7 +168,8 @@ func translateOneView(
 	if limit > 0 {
 		pairs = append(pairs, ordPair{Key: "limit", Value: limit})
 	}
-	pairs = append(pairs, ordPair{Key: "source", Value: baseRelPath})
+	pairs = append(pairs, ordPair{Key: "source", Value: baseRelPath},
+		ordPair{Key: "derived_from", Value: baseRelPath})
 	if len(losses) > 0 {
 		pairs = append(pairs, ordPair{Key: "untranslated", Value: losses})
 	}
@@ -182,8 +184,8 @@ func translateOneView(
 		return vo, nil
 	}
 
-	relPath := records.ViewsDirName + "/" + slug + ".yaml"
-	vo.OutputRelPath = ".omnipus-vault/" + relPath
+	relPath := filepath.ToSlash(filepath.Join(filepath.Dir(filepath.FromSlash(baseRelPath)), slug+".view"))
+	vo.OutputRelPath = relPath
 	vo.Losses = losses
 	if len(losses) > 0 {
 		vo.Status = OutcomeConvertedWithLosses

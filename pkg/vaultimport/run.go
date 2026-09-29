@@ -230,9 +230,10 @@ func sortedInferredKeys(m map[string][]InferredProperty) []string {
 
 // Run performs the full import: scans the vault, infers record-type schemas
 // from observed frontmatter, translates every `.base` file into saved
-// views, writes both under <root>/.omnipus-vault/, then reloads everything
-// through records.LoadSchemas/records.LoadViews/records.Validate — the
-// SAME primitives the running product uses — to prove the written files are
+// views, writes schemas under <root>/.omnipus-vault/ and views beside their
+// .base files, then reloads via records.LoadSchemas,
+// knowledge.LoadViewsForCollection and records.Validate — the SAME primitives
+// the running product uses — to prove the written files are
 // not merely well-formed but actually load and validate real notes.
 //
 // When write is false, nothing is written to the vault; the report still
@@ -266,38 +267,49 @@ type Options struct {
 	// command is pointed at a vault an operator may well have open in a
 	// running Omnipus.
 	LockDir string
+	// Home locates the pipeline-owned view membership beside the collection
+	// index, outside the imported vault. The CLI supplies its real app home.
+	Home string
 }
 
 // runWithOptions carries the shared state of RunWithOptions across its stages.
 type runWithOptions struct {
-	vaultRoot         string
-	opts              Options
-	write             bool
-	inv               *Inventory
-	err               error
-	notes             []NoteRecord
-	loadProblems      []LoadProblem
-	disc              TypeDiscriminatorCheck
-	rejectedTypes     []RejectedType
-	inferred          map[string][]InferredProperty
-	typeSummaries     []TypeSchemaSummary
-	ambiguities       []AmbiguousInference
-	relationSplits    []RelationSplitReport
-	aritySplits       []AritySplitReport
-	nameEvidenced     []NameEvidencedInference
-	typeInference     TypeInferenceReport
-	baseRelPaths      []string
-	parsedBases       map[string]*ParsedBase
-	baseReadOutcomes  map[string]BaseOutcome
-	provisioned       []ProvisionedType
-	provisionedByType map[string]ProvisionedType
-	schemaSet         *records.SchemaSet
-	schemaReload      *records.SchemaLoadReport
-	identityStamps    IdentityStampReport
-	baseOutcomes      []BaseOutcome
-	allProduced       []ProducedView
-	viewRoot          string
-	viewReload        *records.ViewLoadReport
+	vaultRoot             string
+	opts                  Options
+	write                 bool
+	inv                   *Inventory
+	err                   error
+	notes                 []NoteRecord
+	loadProblems          []LoadProblem
+	disc                  TypeDiscriminatorCheck
+	rejectedTypes         []RejectedType
+	inferred              map[string][]InferredProperty
+	typeSummaries         []TypeSchemaSummary
+	ambiguities           []AmbiguousInference
+	relationSplits        []RelationSplitReport
+	aritySplits           []AritySplitReport
+	nameEvidenced         []NameEvidencedInference
+	typeInference         TypeInferenceReport
+	baseRelPaths          []string
+	parsedBases           map[string]*ParsedBase
+	baseReadOutcomes      map[string]BaseOutcome
+	provisioned           []ProvisionedType
+	provisionedByType     map[string]ProvisionedType
+	schemaSet             *records.SchemaSet
+	schemaReload          *records.SchemaLoadReport
+	identityStamps        IdentityStampReport
+	baseOutcomes          []BaseOutcome
+	allProduced           []ProducedView
+	viewRoot              string
+	viewReload            *records.ViewLoadReport
+	viewMembershipWarning string
+}
+
+func (rwo *runWithOptions) viewMembershipHome() string {
+	if rwo.opts.Home != "" {
+		return rwo.opts.Home
+	}
+	return defaultViewMembershipHome(rwo.inv.Root)
 }
 
 // RunWithOptions is Run with every knob exposed.
@@ -320,7 +332,7 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 		return result, err
 	}
 
-	rwo.translateBases()
+	rwo.viewRoot = rwo.inv.Root
 	if !rwo.write {
 		stage, stageErr := os.MkdirTemp("", "omnipus-import-dryrun-views-")
 		if stageErr != nil {
@@ -509,7 +521,7 @@ func (rwo *runWithOptions) reloadAndStamp() (*Report, bool, error) {
 	}
 
 	// Reload through the REAL loader — proves round-trip, and gives us the
-	// canonical SchemaSet records.Validate and records.LoadViews need. On a dry
+	// canonical SchemaSet records.Validate and the collection view loader need. On a dry
 	// run the same loader reads a staged copy, so the validation below is
 	// against the schemas this run produced either way (see
 	// schemaSetFromRendered).
@@ -537,9 +549,8 @@ func (rwo *runWithOptions) reloadAndStamp() (*Report, bool, error) {
 }
 
 // translateBases translates every parsed base into produced views.
-func (rwo *runWithOptions) translateBases() {
+func (rwo *runWithOptions) translateBases(slugs *SlugRegistry) {
 	schemaIdx := NewSchemaIndex(rwo.inferred)
-	slugs := NewSlugRegistry()
 
 	for _, rel := range rwo.baseRelPaths {
 		if bad, failed := rwo.baseReadOutcomes[rel]; failed {
@@ -551,23 +562,143 @@ func (rwo *runWithOptions) translateBases() {
 		rwo.allProduced = append(rwo.allProduced, produced...)
 	}
 
-	rwo.viewRoot = rwo.inv.Root
 }
 
-// writeAndReloadViews writes the produced views and reloads the resulting view set.
+// writeAndReloadViews reserves current view names, translates the bases, writes
+// the produced views and reloads through the same collection discovery as the
+// agent and Library. Live runs hold the membership lock across translation and
+// writing so another re-derivation cannot claim a name in between.
 func (rwo *runWithOptions) writeAndReloadViews() (*Report, bool, error) {
-	viewsDir := records.ViewsDir(rwo.viewRoot)
-	for _, pv := range rwo.allProduced {
-		path := filepath.Join(viewsDir, filepath.Base(pv.RelPath))
-		if writeErr := fileutil.WriteFileAtomic(path, pv.Bytes, generatedFilePerm); writeErr != nil {
-			return nil, true, fmt.Errorf("vaultimport: writing view %q: %w", path, writeErr)
+	root, err := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), rwo.inv.Root)
+	if err != nil {
+		return nil, true, err
+	}
+	if !rwo.write {
+		slugs, slugErr := rwo.currentViewSlugs(root, nil)
+		if slugErr != nil {
+			return nil, true, slugErr
+		}
+		rwo.translateBases(slugs)
+		for _, pv := range rwo.allProduced {
+			path := filepath.Join(rwo.viewRoot, filepath.FromSlash(pv.RelPath))
+			if err := fileutil.WriteFileAtomic(path, pv.Bytes, generatedFilePerm); err != nil {
+				return nil, true, fmt.Errorf("vaultimport: staging view %q: %w", path, err)
+			}
+		}
+	} else {
+		home := rwo.viewMembershipHome()
+		writeErr := knowledge.WithViewMembershipLock(home, root.Path(), func() error {
+			record, loadErr := knowledge.LoadViewMembership(home, root.Path())
+			if loadErr != nil {
+				rwo.viewMembershipWarning = loadErr.Error()
+			}
+			slugs, slugErr := rwo.currentViewSlugs(root, record)
+			if slugErr != nil {
+				return slugErr
+			}
+			rwo.translateBases(slugs)
+			for i, pv := range rwo.allProduced {
+				view, rejection := records.ParseView(pv.RelPath, pv.Bytes)
+				if rejection != nil || view.Def.DerivedFrom == nil {
+					return fmt.Errorf("vaultimport: generated view %q has invalid provenance", pv.RelPath)
+				}
+				base, name := *view.Def.DerivedFrom, view.Name()
+				if recorded, owned := record.Bases[base][name]; owned {
+					if _, err := record.RewriteManagedView(base, name, pv.Bytes); err != nil {
+						return fmt.Errorf("vaultimport: rewrite imported view %q: %w", name, err)
+					}
+					setTranslatedOutputPath(rwo.baseViews(base), pv.RelPath, recorded)
+					rwo.allProduced[i].RelPath = recorded
+					continue
+				}
+				outcome := &RederiveBaseResult{Views: rwo.baseViews(base)}
+				if err := createTranslatedView(record, base, &pv, slugs, outcome); err != nil {
+					return err
+				}
+				rwo.allProduced[i] = pv
+				rwo.setBaseViews(base, outcome.Views)
+			}
+			return nil
+		})
+		if writeErr != nil {
+			return nil, true, writeErr
 		}
 	}
-	_, rwo.viewReload, rwo.err = records.LoadViews(rwo.viewRoot, rwo.schemaSet)
+	viewRoot, rootErr := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), rwo.viewRoot)
+	if rootErr != nil {
+		return nil, true, rootErr
+	}
+	_, rwo.viewReload, rwo.err = knowledge.LoadViewsForCollection(knowledge.OSLinkFS(), viewRoot, rwo.schemaSet)
 	if rwo.err != nil {
 		return nil, true, fmt.Errorf("vaultimport: reloading views: %w", rwo.err)
 	}
 	return nil, false, nil
+}
+
+// currentViewSlugs uses the one discovery loader for global uniqueness and
+// pins only record-backed views that still verify against their current file.
+func (rwo *runWithOptions) currentViewSlugs(root knowledge.CollectionRoot, record *knowledge.ViewMembership) (*SlugRegistry, error) {
+	views, report, err := knowledge.LoadViewsForCollection(knowledge.OSLinkFS(), root, rwo.schemaSet)
+	if err != nil {
+		return nil, fmt.Errorf("vaultimport: discovering current views: %w", err)
+	}
+	slugs := NewSlugRegistry()
+	for _, view := range views.Views() {
+		slugs.Reserve(view.Name())
+	}
+	for _, name := range report.RejectedNames() {
+		slugs.Reserve(name)
+		if record != nil {
+			for base, names := range record.Bases {
+				if _, managed := names[name]; managed {
+					return nil, fmt.Errorf("vaultimport: managed view %q of %q has a rejected or duplicate definition", name, base)
+				}
+			}
+		}
+	}
+	if record == nil {
+		return slugs, nil
+	}
+	if err := record.ReconcileManagedViewPaths(views, report); err != nil {
+		return nil, fmt.Errorf("vaultimport: reconcile moved managed views: %w", err)
+	}
+	for base, names := range record.Bases {
+		for _, name := range sortedManagedViewNames(names) {
+			view, _, readErr := record.VerifiedManagedView(base, name)
+			if readErr != nil {
+				return nil, fmt.Errorf("vaultimport: verify managed view %q: %w", name, readErr)
+			}
+			slugs.Pin(base, view.DisplayLabel(), name)
+		}
+	}
+	return slugs, nil
+}
+
+func sortedManagedViewNames(names map[string]string) []string {
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (rwo *runWithOptions) baseViews(base string) []ViewOutcome {
+	for _, outcome := range rwo.baseOutcomes {
+		if outcome.BaseRelPath == base {
+			return outcome.Views
+		}
+	}
+	return nil
+}
+
+func (rwo *runWithOptions) setBaseViews(base string, views []ViewOutcome) {
+	for i := range rwo.baseOutcomes {
+		if rwo.baseOutcomes[i].BaseRelPath == base {
+			rwo.baseOutcomes[i].Views = views
+			return
+		}
+	}
 }
 
 // validateAndReport validates the imported records and assembles the final report.
@@ -625,19 +756,20 @@ func (rwo *runWithOptions) validateAndReport() (*Report, error) {
 		// it belongs to, so this reads the same source the written schema was
 		// built from — a widening that reached the schema and not this list
 		// is not expressible.
-		EnumWidenings:    CollectEnumWidenings(rwo.inferred),
-		FormulaEvidenced: CollectFormulaEvidencedTypes(rwo.inferred),
-		Provisioned:      rwo.provisioned,
-		Types:            rwo.typeSummaries,
-		Ambiguities:      rwo.ambiguities,
-		RelationSplits:   rwo.relationSplits,
-		AritySplits:      rwo.aritySplits,
-		Bases:            rwo.baseOutcomes,
-		TypeInference:    rwo.typeInference,
-		IdentityStamps:   rwo.identityStamps,
-		SchemaReload:     rwo.schemaReload,
-		ViewReload:       rwo.viewReload,
-		Validation:       vs,
+		EnumWidenings:         CollectEnumWidenings(rwo.inferred),
+		FormulaEvidenced:      CollectFormulaEvidencedTypes(rwo.inferred),
+		Provisioned:           rwo.provisioned,
+		Types:                 rwo.typeSummaries,
+		Ambiguities:           rwo.ambiguities,
+		RelationSplits:        rwo.relationSplits,
+		AritySplits:           rwo.aritySplits,
+		Bases:                 rwo.baseOutcomes,
+		TypeInference:         rwo.typeInference,
+		IdentityStamps:        rwo.identityStamps,
+		SchemaReload:          rwo.schemaReload,
+		ViewReload:            rwo.viewReload,
+		ViewMembershipWarning: rwo.viewMembershipWarning,
+		Validation:            vs,
 	}, nil
 }
 

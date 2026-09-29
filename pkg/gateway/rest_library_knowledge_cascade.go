@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
@@ -257,7 +258,11 @@ func sameCollectionDestination(root *library.Root, entry *libraryCollectionNote,
 // failure, mirroring mapLibraryErr's vocabulary so the SPA's existing
 // handling (404 / 409 / 400 / 503) keeps working for the knowledge-routed
 // case.
-func mapKnowledgeRestructureErr(w http.ResponseWriter, op, workspaceID string, err error) {
+func mapKnowledgeRestructureErr(w http.ResponseWriter, op, workspaceID, collectionRel string, err error) {
+	if mapLibraryTrashIncomplete(w, err, collectionRel) ||
+		(op != "delete entry" && mapLibraryMoveConflict(w, err, collectionRel)) {
+		return
+	}
 	var ambiguity *knowledge.AmbiguityError
 	var timeout *knowledge.LockTimeoutError
 	switch {
@@ -307,11 +312,17 @@ func (a *restAPI) renameNoteInCollection(
 			})
 		},
 	}
-	res, err := renamer.Rename(knowledge.RenameRequest{
-		From: note.relInCol, To: relWithinCollection(note.collRel, toRel), Folder: isFolder,
-	})
+	toInCol := relWithinCollection(note.collRel, toRel)
+	request := knowledge.RenameRequest{From: note.relInCol, To: toInCol, Folder: isFolder}
+	var res *knowledge.RenameResult
+	var err error
+	if isFolder || isLibraryBasePath(note.relInCol) || strings.EqualFold(filepath.Ext(note.relInCol), ".view") {
+		res, err = knowledge.RenameWithViewMembership(a.homePath, renamer, request)
+	} else {
+		res, err = renamer.Rename(request)
+	}
 	if err != nil {
-		mapKnowledgeRestructureErr(w, op, workspaceID, err)
+		mapKnowledgeRestructureErr(w, op, workspaceID, note.collRel, err)
 		return false
 	}
 	if !res.NoOp {
@@ -367,9 +378,16 @@ func (a *restAPI) trashNoteInCollection(
 			})
 		},
 	}
-	res, err := trasher.Trash(knowledge.TrashRequest{Path: note.relInCol, Folder: isFolder})
+	request := knowledge.TrashRequest{Path: note.relInCol, Folder: isFolder}
+	var res *knowledge.TrashResult
+	var err error
+	if isFolder || isLibraryBasePath(note.relInCol) || strings.EqualFold(filepath.Ext(note.relInCol), ".view") {
+		res, err = knowledge.TrashWithViewMembership(a.homePath, trasher, request)
+	} else {
+		res, err = trasher.Trash(request)
+	}
 	if err != nil {
-		mapKnowledgeRestructureErr(w, "delete entry", workspaceID, err)
+		mapKnowledgeRestructureErr(w, "delete entry", workspaceID, note.collRel, err)
 		return
 	}
 	ctx := context.WithoutCancel(r.Context())

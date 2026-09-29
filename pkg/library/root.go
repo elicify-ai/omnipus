@@ -600,6 +600,17 @@ func (r *Root) StatDir(rel string) (os.FileInfo, error) {
 	return fi, nil
 }
 
+// Lstat reports the entry at rel without following a symlink in its final
+// path segment. It remains confined by the Root, including mounted folders.
+func (r *Root) Lstat(rel string) (os.FileInfo, error) {
+	rt, sub := r.resolve(rel)
+	fi, err := rt.Lstat(sub)
+	if err != nil {
+		return nil, translateErr(err)
+	}
+	return fi, nil
+}
+
 // StatFile stats rel and requires it to be a regular file. Returns
 // ErrNotFound if nothing exists there, ErrIsDir if it exists but is a
 // directory.

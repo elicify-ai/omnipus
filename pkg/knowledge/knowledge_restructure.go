@@ -57,14 +57,15 @@ import (
 
 // Operation names knowledge_restructure's `op` argument accepts.
 const (
-	restructureOpRename  = "rename"
-	restructureOpMove    = "move"
-	restructureOpTrash   = "trash"
-	restructureOpRestore = "restore"
+	restructureOpRename    = "rename"
+	restructureOpMove      = "move"
+	restructureOpTrash     = "trash"
+	restructureOpRestore   = "restore"
+	restructureOpRetryMove = "retry_move"
 )
 
 // restructureOps lists the accepted ops, in the order they are documented.
-var restructureOps = []string{restructureOpRename, restructureOpMove, restructureOpTrash, restructureOpRestore}
+var restructureOps = []string{restructureOpRename, restructureOpMove, restructureOpTrash, restructureOpRestore, restructureOpRetryMove}
 
 // restructureEditRedirect names the ops that write exactly one named file —
 // knowledge_edit's whole territory (FR-070b) — refused here by name rather
@@ -95,16 +96,17 @@ var restructureConfigureOps = map[string]struct{}{
 // unknownArgs sweep, and told the SPEC's reason rather than a generic
 // "unknown argument".
 var restructureArgNames = []string{
-	"op", "collection", "path", "new_name", "new_folder", "allow_ambiguity", "trashed_at", "folder",
+	"op", "collection", "path", "new_name", "new_folder", "allow_ambiguity", "trashed_at", "folder", "pending_move_id",
 }
 
 // Audit operation names, local to this file (matching authoring_tools.go's
 // own knowledgeRenameOp precedent rather than adding to author.go's shared
 // AuthorOperation block).
 const (
-	restructureRenameOp  AuthorOperation = "knowledge.note.rename"
-	restructureTrashOp   AuthorOperation = "knowledge.note.trash"
-	restructureRestoreOp AuthorOperation = "knowledge.note.restore"
+	restructureRenameOp    AuthorOperation = "knowledge.note.rename"
+	restructureTrashOp     AuthorOperation = "knowledge.note.trash"
+	restructureRestoreOp   AuthorOperation = "knowledge.note.restore"
+	restructureRetryMoveOp AuthorOperation = "knowledge.note.retry_move"
 )
 
 // RestructureTool is knowledge_restructure.
@@ -197,14 +199,18 @@ func (t *RestructureTool) Parameters() map[string]any {
 					"accident. restore takes no 'folder': give the folder's original path, ending it " +
 					"with '/' (e.g. 'Projects/') when a trashed note has the same name.",
 			},
+			"pending_move_id": map[string]any{"type": "string"},
 		},
-		"required": []string{"op", "path"},
+		"required": []string{"op"},
 	}
 }
 
 // Execute dispatches by op.
 func (t *RestructureTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	op := strings.TrimSpace(stringArg(args["op"]))
+	if op == restructureOpRetryMove {
+		return t.execRetryMove(ctx, args)
+	}
 	authorOp := restructureAuditOpFor(op)
 	target, refusal := t.deps.begin(ctx, authorOp, args)
 	if refusal != nil {
@@ -289,7 +295,14 @@ func (t *RestructureTool) execRenameMove(
 	if err != nil {
 		return t.deps.refuse(op, target, nil, err.Error())
 	}
-	if !folder {
+	root, err := NewCollectionRoot(OSLinkFS(), target.col.Root)
+	if err != nil {
+		return t.deps.refuse(op, target, []string{from}, err.Error())
+	}
+	// Keep an existing non-markdown file's exact path. The destination
+	// inherits that choice, rather than appending .md to a moved .view.
+	preserveExtension := !folder && regularNonMarkdownRenameSource(root, from)
+	if !folder && !preserveExtension {
 		from = ensureMarkdown(from)
 	}
 
@@ -319,12 +332,19 @@ func (t *RestructureTool) execRenameMove(
 		return t.deps.refuse(op, target, []string{from}, err.Error())
 	}
 	if !folder {
-		to = ensureMarkdown(to)
-	}
-
-	root, err := NewCollectionRoot(OSLinkFS(), target.col.Root)
-	if err != nil {
-		return t.deps.refuse(op, target, []string{from}, err.Error())
+		if preserveExtension {
+			if strings.EqualFold(path.Ext(from), ".view") || strings.EqualFold(path.Ext(from), ".base") {
+				if path.Ext(newName) == "" {
+					to += path.Ext(from)
+				}
+				if strings.EqualFold(path.Ext(from), ".view") && !strings.EqualFold(path.Ext(to), ".view") {
+					return t.deps.refuse(op, target, []string{from},
+						fmt.Sprintf("renaming a .view file to a different extension is refused: %s would become %s", from, to))
+				}
+			}
+		} else {
+			to = ensureMarkdown(to)
+		}
 	}
 	// UAT 2026-09-13 D-53: a move into a folder that does not exist yet
 	// creates the folder — `to` has already passed cleanNoteArg, so the
@@ -343,9 +363,13 @@ func (t *RestructureTool) execRenameMove(
 		FS: OSLinkFS(), Root: root, AgentID: target.agentID,
 		Audit: restructureRenameAuditFunc(t.deps, target), Lock: target.lock,
 	}
-	res, err := renamer.Rename(RenameRequest{
-		From: from, To: to, AllowAmbiguity: boolArg(args["allow_ambiguity"]), Folder: folder,
-	})
+	request := RenameRequest{From: from, To: to, AllowAmbiguity: boolArg(args["allow_ambiguity"]), Folder: folder}
+	var res *RenameResult
+	if folder || (preserveExtension && (strings.EqualFold(path.Ext(from), ".view") || strings.EqualFold(path.Ext(from), ".base"))) {
+		res, err = RenameWithViewMembership(t.deps.Home, renamer, request)
+	} else {
+		res, err = renamer.Rename(request)
+	}
 	if err != nil {
 		// rename.go has already audited this outcome (including "incomplete",
 		// where the journal is retained and completable) — see renameEngine's
@@ -382,6 +406,20 @@ func (t *RestructureTool) execRenameMove(
 		IndexWarning: indexWarning, FolderCreated: folderCreated,
 		Folder: folder, FolderFiles: len(res.Moves),
 	}))
+}
+
+// regularNonMarkdownRenameSource applies the same exact-path-first rule as
+// trash: an existing regular file is addressed as given, not as <name>.md.
+func regularNonMarkdownRenameSource(root CollectionRoot, rel string) bool {
+	if IsMarkdownPath(rel) {
+		return false
+	}
+	abs, err := root.ResolveContainedNoSymlink(OSLinkFS(), rel)
+	if err != nil {
+		return false
+	}
+	info, err := os.Lstat(abs)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // ensureMoveDestinationFolder creates the parent folder of the move
@@ -524,10 +562,11 @@ func (t *RestructureTool) execTrash(ctx context.Context, target mutationTarget, 
 	if err != nil {
 		return t.deps.refuse(restructureTrashOp, target, nil, err.Error())
 	}
-	res, err := tr.Trash(TrashRequest{Path: stringArg(args["path"]), Folder: boolArg(args["folder"])})
+	res, err := TrashWithViewMembership(t.deps.Home, tr,
+		TrashRequest{Path: stringArg(args["path"]), Folder: boolArg(args["folder"])})
 	if err != nil {
-		// The Trasher has already audited this outcome — see execRenameMove's
-		// identical rule for Renamer.
+		// The membership wrapper audits preflight refusals; the Trasher
+		// audits any attempted filesystem operation.
 		return restructureFailure(restructureTrashOp, err)
 	}
 	// A note LEAVING the index (epoch.go's second bump site) — never on
