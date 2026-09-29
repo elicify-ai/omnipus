@@ -760,9 +760,22 @@ func (t *WebSearchTool) sanitizeProviderMessage(msg string) string {
 	return msg
 }
 
-// failureLine renders one "- id (role): class: msg" line with sanitization.
+// duckDuckGoRegionNote is an agent-facing hint for network failures only.
+// A transport error can mean regional blocking, but does not prove it.
+func duckDuckGoRegionNote(id, class string) string {
+	if id != config.SearchProviderDuckDuckGo || class != classNetwork {
+		return ""
+	}
+	return "\nNote: DuckDuckGo may be blocked in some countries: North Korea, Indonesia, and mainland China " +
+		"(Hong Kong and Macau remain accessible). If a different default or fallback is available, " +
+		"try omitting provider; otherwise configure or choose another provider."
+}
+
+// failureLine renders a sanitized provider failure and, for DuckDuckGo
+// network failures, an agent-facing regional-blocking note.
 func (t *WebSearchTool) failureLine(id, role, class, msg string) string {
-	return fmt.Sprintf("- %s (%s): %s: %s", id, role, class, t.sanitizeProviderMessage(msg))
+	return fmt.Sprintf("- %s (%s): %s: %s", id, role, class, t.sanitizeProviderMessage(msg)) +
+		duckDuckGoRegionNote(id, class)
 }
 
 // notCalledLine renders one "- id (role): not called: reason" line.
@@ -997,10 +1010,28 @@ func (t *WebSearchTool) executeChosen(
 				t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}, "\n"))
 		}
 	}
-	// Hard fail: capability use, no fallback, or final class.
-	tail := fmt.Sprintf("This call named %s, so the fallback was not tried. "+
-		"Omit provider to use the default and the fallback, or set provider to one of: %s.",
-		id, strings.Join(usableOthers(entries, id), ", "))
+	// Hard fail: name the actual reason instead of implying that naming a
+	// provider alone disabled a fallback (AC-5/D6 — the three honest reasons
+	// a named provider's hop does not happen).
+	var reason string
+	switch {
+	case usesCap:
+		reason = "This call used a provider-specific capability, so the fallback was not tried."
+	case entries.ignoredSameAsDefault:
+		reason = "The configured fallback is not eligible: same as default."
+	case entries.fallbackID == "" && strings.TrimSpace(cfg.FallbackProvider) != "" &&
+		strings.TrimSpace(cfg.FallbackProvider) != config.SearchProviderNone:
+		reason = "The configured fallback is not eligible: unknown provider id."
+	case entries.fallbackID == "":
+		reason = "No fallback is configured for this call."
+	case !entries.usable[entries.fallbackID]:
+		reason = fmt.Sprintf("The configured fallback (%s) is not eligible: %s.",
+			entries.fallbackID, entries.notCalledReason(cfg, entries.fallbackID))
+	default:
+		reason = fmt.Sprintf("This failure class (%s) does not allow a fallback.", spErr.class)
+	}
+	tail := reason + " Omit provider to use the default and the fallback, or set provider to one of: " +
+		strings.Join(usableOthers(entries, id), ", ") + "."
 	return ErrorResult(strings.Join([]string{
 		"search failed",
 		t.failureLine(id, "chosen", spErr.class, spErr.msg),
