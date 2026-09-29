@@ -1657,6 +1657,7 @@ type IntegrationProvider = {
   display_name: string;
   configured: boolean;
   requires_key: boolean;
+  search_depth_cap?: string | undefined;
   active?: boolean | undefined;
   usable?: boolean | undefined;
   fallback?: boolean | undefined;
@@ -2946,6 +2947,7 @@ export const IntegrationProvider: z.ZodType<IntegrationProvider> = z.object({
   display_name: z.string(),
   configured: z.boolean(),
   requires_key: z.boolean(),
+  search_depth_cap: z.string().optional(),
   active: z.boolean().optional(),
   usable: z.boolean().optional(),
   fallback: z.boolean().optional(),

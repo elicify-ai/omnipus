@@ -16711,6 +16711,9 @@ type IntegrationProvider struct {
 	// RequiresKey Whether this provider needs an API key to function.
 	RequiresKey bool `json:"requires_key"`
 
+	// SearchDepthCap Search rows only; omitted on providers without a depth setting and on voice rows. For Tavily, the effective operator-set search_depth ceiling (advanced when an existing install has no saved depth).
+	SearchDepthCap *string `json:"search_depth_cap,omitempty"`
+
 	// Usable Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on — or, for SearXNG, switched on with a non-empty base_url. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
 	Usable *bool `json:"usable,omitempty"`
 }

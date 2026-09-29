@@ -67,6 +67,14 @@ properties:
     type: boolean
     description: Whether this provider needs an API key to function.
     example: true
+  search_depth_cap:
+    type: string
+    readOnly: true
+    description: >
+      Search rows only; omitted on providers without a depth setting and on
+      voice rows. For Tavily, the effective operator-set search_depth ceiling
+      (advanced when an existing install has no saved depth).
+    example: "basic"
   active:
     type: boolean
     description: >

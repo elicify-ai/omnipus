@@ -10317,6 +10317,11 @@ export interface components {
              */
             requires_key: boolean;
             /**
+             * @description Search rows only; omitted on providers without a depth setting and on voice rows. For Tavily, the effective operator-set search_depth ceiling (advanced when an existing install has no saved depth).
+             * @example basic
+             */
+            readonly search_depth_cap?: string;
+            /**
              * @description True when this provider is the one currently selected for its kind. Voice rows: unchanged — the active transcriber. Search rows: true only when this row is the web-search default (ADR-096 D13 — no longer "whoever the old priority list picked"); kept so an older client still has the field. The Default/Fallback badges are built from default_search, fallback_search and the row's own usable flag instead.
              * @example true
              */
