@@ -682,20 +682,3 @@ func assertNoInputStateGranted(t *testing.T, conn *websocket.Conn) {
 		}
 	}
 }
-
-// assertNoWebRTCAnswer fails the row the moment a browser_webrtc_answer — a
-// granted media path — reaches the non-owner.
-func assertNoWebRTCAnswer(t *testing.T, conn *websocket.Conn) {
-	t.Helper()
-	conn.SetReadDeadline(time.Now().Add(soQuietTMO)) // errcheck rationale: test-only conn deadline
-	for {
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			return // quiet window elapsed — no answer ever came
-		}
-		var f browserFrameDecoder
-		if json.Unmarshal(raw, &f) == nil && f.Type == "browser_webrtc_answer" {
-			t.Fatalf("non-owner was granted a WebRTC answer (media path): %s", raw)
-		}
-	}
-}
