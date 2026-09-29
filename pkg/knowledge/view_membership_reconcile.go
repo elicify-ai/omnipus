@@ -80,7 +80,7 @@ func (m *ViewMembership) ReconcileManagedViewPaths(set *records.ViewSet, report 
 					// A moved claimant may be inside an unreadable subtree or
 					// an unparseable file. Discovery cannot prove retirement.
 					slog.Warn("knowledge: view discovery incomplete; retained managed membership",
-						"base", base, "view", name, "recorded_path", old,
+						"root", m.Root, "base", base, "view", name, "recorded_path", old,
 						"unreadable_paths", unknownClaims)
 					continue
 				}
