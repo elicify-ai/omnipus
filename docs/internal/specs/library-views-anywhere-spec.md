@@ -2312,7 +2312,14 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   Test 84.
 - **FR-VA-036 *(team-lead ruling, 2026-09-29)***: Library folder trash and the agent `knowledge_restructure`
   trash op are IN SCOPE: they MUST revoke tracked memberships first (revoke-before-act, as FR-VA-032),
-  then trash; a failure after revocation surfaces `move_incomplete` with Retry. Test 85.
+  then trash. **Ruling (team-lead, 2026-09-29): trash does NOT use the pending-move plan or Retry** —
+  revoke-first puts the views in their intended delete end state (released, no authority). If the trash
+  itself then fails, the operation returns a visible `trash_incomplete` error naming the paths; trashing
+  again completes it idempotently. `PendingViewMove` stays rename/move-only. REST: `DELETE
+  /library/{workspace_id}/entries` (`deleteLibraryEntry`, which has no 409 today) gains a 409 typed body
+  `LibraryTrashIncompleteError` (`code: trash_incomplete`, `paths`); the agent `knowledge_restructure`
+  trash op returns the same fields in prose. Test 85 (revoke persisted → trash fails → re-trash succeeds;
+  no authority remains at any point).
 - **FR-VA-037 *(team-lead ruling, 2026-09-29)***: Incomplete discovery (an unreadable subtree, SkipUnreadable)
   MUST NOT retire any member of the record — the member is kept and a visible warning is shown. Test 86.
 - **FR-VA-038 *(team-lead ruling, 2026-09-29)***: The membership record is guarded by a dedicated exact-key
