@@ -27,12 +27,12 @@ function WorkspaceMailPage() {
         folder: (search.folder as 'inbox' | 'sent' | 'drafts' | undefined) ?? null,
         messageRef: search.message ?? null,
       })
-    })
-    void navigate({
-      to: '/workspaces/$workspaceId/chat',
-      params: { workspaceId },
-      search: { panel: 'mail' },
-      replace: true,
+      void navigate({
+        to: '/workspaces/$workspaceId/chat',
+        params: { workspaceId },
+        search: { panel: 'mail' },
+        replace: true,
+      })
     })
   }, [workspaceId, search.mailbox, search.folder, search.message, navigate])
 
