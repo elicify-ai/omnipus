@@ -180,6 +180,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     // stored selection does not override the link's directive.
     if (mailboxId === null) return null
     if (typeof mailboxId === 'string') {
+      // A named mailbox can open Compose while the list is still loading;
+      // once it settles, only enabled/configured mailboxes survive the filter.
+      if (mailboxesQuery.isPending && mailboxId !== '') return mailboxId
       const named = workspaceMailboxes.find((mb) => mb.agent_id === mailboxId)
       if (named !== undefined) return mailboxId
     }
@@ -188,7 +191,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       if (stored !== undefined) return intent.agentId
     }
     return workspaceMailboxes[0]?.agent_id ?? null
-  }, [mailboxId, intent.agentId, workspaceMailboxes])
+  }, [mailboxId, intent.agentId, mailboxesQuery.isPending, workspaceMailboxes])
   const folder: string = intent.folder ?? 'inbox'
   // The open message ref — session state, not persisted (a fresh panel opens
   // with the list, not a message). Reset when folder/mailbox changes.
