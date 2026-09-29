@@ -17,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Select,
   SelectContent,
@@ -881,7 +882,7 @@ function ListSkeleton() {
   return (
     <div aria-hidden="true" className="flex flex-col gap-[var(--space-2)]">
       {[0, 1, 2].map((row) => (
-        <div key={row} className="h-12 rounded-md bg-[color-mix(in_srgb,var(--color-surface-3)_100%,transparent)] animate-pulse" />
+        <Skeleton key={row} className="h-12" />
       ))}
     </div>
   )
