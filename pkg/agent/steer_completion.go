@@ -136,8 +136,8 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	// onFinishing closure (after prepare, after the durable transition, after
 	// the deferred finish), and routed to one of three dispositions: revive
 	// the child into a new generation (post-finish STEER on a successful
-	// commit), drop (post-finish WAKE on a successful commit — the recipient
-	// has no live consumer and the inbox entry is durable), or drain as a
+	// commit), replay the durable inbox entry (post-finish WAKE on a
+	// successful commit), or drain as a
 	// same-generation continuation (commit refused OR prepare failed — the
 	// child stays non-terminal and the items get a consumer via the existing
 	// retry loop).
@@ -172,13 +172,10 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 // correction).
 //
 // Successful terminal commit: revive the child into a new generation
-// carrying every post-finish STEER. Every post-finish WAKE on a
-// durably-terminalised child is also accepted, but the in-memory entry
-// is dropped because the inbox entry is already durable; the existing
-// durable-wake fallback (pkg/agent/steer_audience.go's Deliver and the
-// boot_sweep.go nudge path) is what wakes the recipient in that case —
-// the round-4 correction REPLACES the pre-round-4 silent drop with a
-// visible INFO log so an operator can correlate it.
+// carrying every post-finish STEER. A post-finish WAKE is replayed from
+// its real durable inbox entry: revive the terminal recipient without
+// repeating its old instruction, then run the existing wake consumer,
+// which writes the consumed marker and acknowledges that entry.
 //
 // Commit refused (Stop landed, terminal-write conflict) OR prepare failed:
 // the child is non-terminal; drain waiting items as a same-generation
@@ -207,14 +204,10 @@ func (al *AgentLoop) processFinishingItems(
 	// of one hand-off go into ONE revival carrying all of them in order").
 	if terminalCommitted && transitionErr == nil {
 		steers := make([]string, 0, len(finishingItems))
+		wakes := make([]steeringQueueItem, 0, len(finishingItems))
 		for _, item := range finishingItems {
 			if item.wake != nil {
-				logger.InfoCF("agent", "steer: post-finish wake on a terminalised child — in-memory entry dropped, inbox entry durable, recipient will be woken by the existing durable-wake fallback",
-					map[string]any{
-						"session_id": rec.SessionID,
-						"message_id": item.wake.messageID,
-						"transcript": item.wake.transcriptSessionID,
-					})
+				wakes = append(wakes, item)
 				continue
 			}
 			text := strings.TrimSpace(item.message.Content)
@@ -235,7 +228,7 @@ func (al *AgentLoop) processFinishingItems(
 		// because the steering scope is keyed by sessionID, not
 		// generation.
 		if len(steers) == 0 {
-			return nil
+			return al.schedulePostFinishWakes(rec, wakes)
 		}
 		by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "system:post-finish-steer"}
 		// Round-4 correction: mark the post-finish revival at the
@@ -252,7 +245,8 @@ func (al *AgentLoop) processFinishingItems(
 		// (the latter is the only place the new generation is created).
 		if _, err := al.ReviveStoppedSession(ctx, rec.SessionID, by, steers[0]); err != nil {
 			al.clearPostFinishRevival(rec.SessionID)
-			return fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err)
+			return errors.Join(fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
+				al.schedulePostFinishWakes(rec, wakes))
 		}
 		// Every remaining post-finish steer rides on the revived
 		// generation. They go onto the same sessionID scope, which the
@@ -263,10 +257,11 @@ func (al *AgentLoop) processFinishingItems(
 				Role:    "user",
 				Content: text,
 			}, ""); err != nil {
-				return fmt.Errorf("steer: post-finish enqueue onto revived scope %q: %w", rec.SessionID, err)
+				return errors.Join(fmt.Errorf("steer: post-finish enqueue onto revived scope %q: %w", rec.SessionID, err),
+					al.schedulePostFinishWakes(rec, wakes))
 			}
 		}
-		return nil
+		return al.schedulePostFinishWakes(rec, wakes)
 	}
 	// Commit refused (Stop landed, terminal-write conflict, etc.) OR
 	// prepare failed: drain waiting items as a same-generation
