@@ -57,14 +57,15 @@ import (
 
 // Operation names knowledge_restructure's `op` argument accepts.
 const (
-	restructureOpRename  = "rename"
-	restructureOpMove    = "move"
-	restructureOpTrash   = "trash"
-	restructureOpRestore = "restore"
+	restructureOpRename    = "rename"
+	restructureOpMove      = "move"
+	restructureOpTrash     = "trash"
+	restructureOpRestore   = "restore"
+	restructureOpRetryMove = "retry_move"
 )
 
 // restructureOps lists the accepted ops, in the order they are documented.
-var restructureOps = []string{restructureOpRename, restructureOpMove, restructureOpTrash, restructureOpRestore}
+var restructureOps = []string{restructureOpRename, restructureOpMove, restructureOpTrash, restructureOpRestore, restructureOpRetryMove}
 
 // restructureEditRedirect names the ops that write exactly one named file —
 // knowledge_edit's whole territory (FR-070b) — refused here by name rather
@@ -95,16 +96,17 @@ var restructureConfigureOps = map[string]struct{}{
 // unknownArgs sweep, and told the SPEC's reason rather than a generic
 // "unknown argument".
 var restructureArgNames = []string{
-	"op", "collection", "path", "new_name", "new_folder", "allow_ambiguity", "trashed_at", "folder",
+	"op", "collection", "path", "new_name", "new_folder", "allow_ambiguity", "trashed_at", "folder", "pending_move_id",
 }
 
 // Audit operation names, local to this file (matching authoring_tools.go's
 // own knowledgeRenameOp precedent rather than adding to author.go's shared
 // AuthorOperation block).
 const (
-	restructureRenameOp  AuthorOperation = "knowledge.note.rename"
-	restructureTrashOp   AuthorOperation = "knowledge.note.trash"
-	restructureRestoreOp AuthorOperation = "knowledge.note.restore"
+	restructureRenameOp    AuthorOperation = "knowledge.note.rename"
+	restructureTrashOp     AuthorOperation = "knowledge.note.trash"
+	restructureRestoreOp   AuthorOperation = "knowledge.note.restore"
+	restructureRetryMoveOp AuthorOperation = "knowledge.note.retry_move"
 )
 
 // RestructureTool is knowledge_restructure.
@@ -197,14 +199,18 @@ func (t *RestructureTool) Parameters() map[string]any {
 					"accident. restore takes no 'folder': give the folder's original path, ending it " +
 					"with '/' (e.g. 'Projects/') when a trashed note has the same name.",
 			},
+			"pending_move_id": map[string]any{"type": "string"},
 		},
-		"required": []string{"op", "path"},
+		"required": []string{"op"},
 	}
 }
 
 // Execute dispatches by op.
 func (t *RestructureTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	op := strings.TrimSpace(stringArg(args["op"]))
+	if op == restructureOpRetryMove {
+		return t.execRetryMove(ctx, args)
+	}
 	authorOp := restructureAuditOpFor(op)
 	target, refusal := t.deps.begin(ctx, authorOp, args)
 	if refusal != nil {
