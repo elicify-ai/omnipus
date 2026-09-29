@@ -382,24 +382,20 @@ test(
       .filter({ hasText: label });
     await expect(delegateLine.first()).toBeVisible({ timeout: 60_000 });
 
-    // (2) THREAD — the guard: zero subagent-collapsed elements, ever.
-    await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
-
-    // (3) THREAD — the child's own bash call does NOT render in the
-    // PARENT's thread — a child's frames carry the child's own session_id
-    // now (I-4), so there is nothing to nest here regardless of how long
-    // this test waits.
-    await expect(page.locator('[data-testid="tool-call-badge"][data-tool="bash"]')).toHaveCount(0);
-
     // a11y baseline check on the delegated event line, BEFORE navigating away
     // to the child's session below (the parent's thread, delegated line
-    // included, leaves the DOM once the chat surface rebinds to the child).
-    // UPDATE 2026-09-27: the include used to name the delegate tool-call
-    // badge — verbose-only since fe1e2406a, so in this default non-verbose
-    // thread it matched nothing and axe passed silently over an empty
-    // selection (this file's own comment on the child-session scan below
-    // documents that exact false-green shape). The event line is the chip's
-    // replacement surface and keeps this scan real.
+    // included, leaves the DOM once the chat surface rebinds to the child),
+    // and BEFORE opening the Activity panel just below: ActivityPanel is a
+    // modal Sheet (Radix `modal` default true), which applies `hideOthers`
+    // to everything outside it — running this scan after the panel opens
+    // would hide the delegation-event-line from the accessibility tree and
+    // make the scan pass vacuously over nothing. UPDATE 2026-09-27: the
+    // include used to name the delegate tool-call badge — verbose-only since
+    // fe1e2406a, so in this default non-verbose thread it matched nothing and
+    // axe passed silently over an empty selection (this file's own comment on
+    // the child-session scan below documents that exact false-green shape).
+    // The event line is the chip's replacement surface and keeps this scan
+    // real.
     // Traces to: sprint-h-subagent-block-spec.md line 316 (Scenario 11) —
     // same accessibility guarantee SubagentBlock used to carry, re-pointed
     // at the surface that replaced it.
@@ -407,12 +403,32 @@ test(
       include: ['[data-testid="delegation-event-line"]'],
     });
 
-    // (4) PANEL — the row that replaced "click the collapsed header":
+    // (2) PANEL — the row that replaced "click the collapsed header":
     // opens the Activity panel, finds this delegation's row, and its open
-    // control into the child's own session.
+    // control into the child's own session. Opened here — right after the
+    // one check (the a11y scan above) that must run before it — rather than
+    // after the thread-guard checks below: the delegated child's task is
+    // trivial (one bash call) and the app hides the Activity bar entirely
+    // once a purely-successful child finishes with the panel still closed
+    // (src/components/chat/ActivityBar.tsx, the "Fix 1 (2026-07-16)" comment
+    // and ActivityBar.test.tsx's "an open panel survives running -> 0" case)
+    // — the panel must already be open, or there is no surface left to open
+    // it from. The two thread-guard checks below assert the ABSENCE of
+    // elements in the PARENT thread's DOM, which opening the panel does not
+    // affect, so their truth value and their position relative to the panel
+    // opening are unrelated.
     await openActivityPanel(page);
     const row = page.locator('[data-testid="activity-row"]', { hasText: label });
     await expect(row).toBeVisible({ timeout: 30_000 });
+
+    // (3) THREAD — the guard: zero subagent-collapsed elements, ever.
+    await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
+
+    // (4) THREAD — the child's own bash call does NOT render in the
+    // PARENT's thread — a child's frames carry the child's own session_id
+    // now (I-4), so there is nothing to nest here regardless of how long
+    // this test waits.
+    await expect(page.locator('[data-testid="tool-call-badge"][data-tool="bash"]')).toHaveCount(0);
     // child_session_id arrives WITH subagent_start (steer_frames.go's
     // deliverSubagentStart sets it unconditionally at launch, not once the
     // child finishes) — the open control should already be present the
