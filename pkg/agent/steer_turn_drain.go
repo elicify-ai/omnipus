@@ -163,9 +163,10 @@ func (al *AgentLoop) steeredDrainRecord(sessionID string, generation int) (*sess
 // abandonSteeredQueuedSteering is the steered-session counterpart of
 // sessionWorker.abandonQueuedSteering: dequeue-and-report after bounded
 // retries, while preserving wake-bearing queue items if this narrow failure
-// path panics. The error is written into the child's transcript because a
-// steered child has no direct user reply address; the operator log preserves
-// the underlying error and retry count.
+// path panics. Each abandoned item is reported in the child's transcript and
+// in a distinct parent-scoped subagent_message error frame; a steered child
+// has no direct user reply address. The operator log retains the underlying
+// error and retry count.
 func (al *AgentLoop) abandonSteeredQueuedSteering(
 	ts *turnState,
 	sessionID string,
@@ -196,12 +197,42 @@ func (al *AgentLoop) abandonSteeredQueuedSteering(
 			"attempts":    attempts,
 			"error":       lastErr.Error(),
 		})
-	for range abandonedItems {
+	const notice = "A queued follow-up message could not be processed and was not delivered. Please send it again."
+	var childRec *session.LifecycleRecord
+	if len(abandonedItems) > 0 {
+		if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
+			var err error
+			childRec, err = lifecycle.Load(sessionID)
+			if err != nil {
+				logger.ErrorCF("agent", "steer: cannot locate parent for abandoned steering",
+					map[string]any{"session_id": sessionID, "error": err.Error()})
+			}
+		} else {
+			logger.ErrorCF("agent", "steer: cannot locate parent for abandoned steering — lifecycle store not wired",
+				map[string]any{"session_id": sessionID})
+		}
+	}
+	parentID := steerParentSessionID(childRec)
+	for i, item := range abandonedItems {
 		if ts != nil {
 			ts.appendClassifiedError(EventKindError.String(), "steering_continue", LLMError{
 				Code:    CodeUnknown,
-				Message: "A queued follow-up message could not be processed and was not delivered. Please send it again.",
+				Message: notice,
 			})
 		}
+		if parentID == "" {
+			logger.ErrorCF("agent", "steer: abandoned steering has no parent to notify",
+				map[string]any{"session_id": sessionID, "item_number": i + 1})
+			continue
+		}
+		itemID := item.correlationID
+		if item.wake != nil {
+			itemID = item.wake.messageID
+		}
+		if itemID == "" {
+			itemID = fmt.Sprintf("item %d", i+1)
+		}
+		al.deliverSubagentMessage(parentID, childRec, "error",
+			fmt.Sprintf("Queued follow-up %q: %s", itemID, notice), nil)
 	}
 }

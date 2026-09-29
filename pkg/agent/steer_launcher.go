@@ -1140,6 +1140,12 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 			runErr = nil
 		}
 	}
-	logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — leaving waiting items for boot recovery",
+	if al.pendingSteeringCountForScope(sessionID) > 0 {
+		al.abandonSteeredQueuedSteering(ts, sessionID,
+			fmt.Errorf("steer: complete: bounded drain retry exhausted after %d attempts", continueDrainMaxRetries),
+			continueDrainMaxRetries)
+		return
+	}
+	logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — no queued items remain",
 		map[string]any{"session_id": sessionID, "generation": gen, "attempts": continueDrainMaxRetries})
 }
