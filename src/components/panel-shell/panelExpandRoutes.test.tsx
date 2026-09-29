@@ -1,7 +1,22 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import type { PanelContentProps, PanelContext, PanelId } from './types'
+
+// These routes render panel content that reads via React Query (e.g. the
+// library/browser panels' shellProps). The router alone provides no
+// QueryClient, so every render() call here must be wrapped — matching the
+// established pattern in src/test/screens.test.tsx: a fresh QueryClient per
+// render via RTL's `wrapper` option.
+function makeClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } })
+}
+
+function wrapper({ children }: { children: ReactNode }) {
+  return <QueryClientProvider client={makeClient()}>{children}</QueryClientProvider>
+}
 
 const { renderedPanels } = vi.hoisted(() => ({
   renderedPanels: vi.fn<(panelId: PanelId, props: PanelContentProps) => void>(),
@@ -94,7 +109,7 @@ describe('SP-38 shell-owned full-screen routes', () => {
 
       const history = createMemoryHistory({ initialEntries: [href.slice(1)] })
       const router = createRouter({ routeTree, history })
-      const mounted = render(<RouterProvider router={router} />)
+      const mounted = render(<RouterProvider router={router} />, { wrapper })
 
       await waitFor(() => expect(router.state.status).toBe('idle'), { timeout: 5_000 })
       expect(router.state.matches.map((match) => match.routeId)).toContain(
@@ -122,7 +137,7 @@ describe('SP-38 shell-owned full-screen routes', () => {
   it('shows a visible recovery link for an unknown panel instead of a blank page', async () => {
     const history = createMemoryHistory({ initialEntries: ['/panel/unknown?popout=unknown-1'] })
     const router = createRouter({ routeTree, history })
-    render(<RouterProvider router={router} />)
+    render(<RouterProvider router={router} />, { wrapper })
 
     expect(await screen.findByRole('heading', { name: /can't open this panel/i })).toBeVisible()
     expect(screen.getByRole('link', { name: 'Back to Omnipus' })).toBeVisible()

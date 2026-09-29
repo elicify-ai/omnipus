@@ -1547,7 +1547,7 @@ export function LibraryExplorer({
           if (!next) resolveDiscardConfirmDialog(false)
         }}
         title="Discard unsaved changes?"
-        description="You have unsaved changes in the Library editor. Leaving now will discard them. Continue?"
+        description={`You have unsaved changes in ${selectedEntry?.name ?? 'the Library editor'}. Leaving now will discard them. Continue?`}
         confirmLabel="Discard"
         destructive
         onConfirm={() => resolveDiscardConfirmDialog(true)}
