@@ -42,6 +42,11 @@ func TestExternalDispatch_ErrorEvent_CarriesChatID(t *testing.T) {
 
 	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("UnifiedStore.Close: %v", closeErr)
+		}
+	})
 	ts.transcriptStore = store
 	ts.transcriptSessionID = "session_ext_fix4"
 

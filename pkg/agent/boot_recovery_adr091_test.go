@@ -59,6 +59,11 @@ func newBootRecoveryHarness(t *testing.T) *bootRecoveryHarness {
 	if err != nil {
 		t.Fatalf("NewUnifiedStore: %v", err)
 	}
+	t.Cleanup(func() {
+		if closeErr := sessions.Close(); closeErr != nil {
+			t.Errorf("UnifiedStore.Close: %v", closeErr)
+		}
+	})
 	h := &bootRecoveryHarness{
 		lifecycle: session.NewLifecycleStore(filepath.Join(root, "lifecycle")),
 		sessions:  sessions,
