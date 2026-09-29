@@ -364,16 +364,36 @@ func TestSteeredTurnDrain1020_EnqueueAfterFinalEmptyCheckIsConsumedOrRefused(t *
 	var hookMu sync.Mutex
 	var enqueueErr error
 	var hookCalls int
+	var injected bool
+	// Round-4 fixture correction (qa-lead, squad-lead ruling on 098be2a05):
+	// completeStateWriteTestHook fires on EVERY terminal write, not just
+	// this child's original one — production used to clear it after firing
+	// (completeStateWriteTestHook = nil), a production write into a test
+	// hook that 098be2a05 removed as an integrity violation. Injecting
+	// unconditionally meant the REVIVED generation's own commit also saw a
+	// "new" late steer and revived again, forever. Inject exactly once —
+	// on the first call, which fires during the original generation's
+	// commit — and only COUNT every later call.
 	completeStateWriteTestHook = func(sessionID string) {
 		hookMu.Lock()
-		defer hookMu.Unlock()
 		hookCalls++
-		_, enqueueErr = al.EnqueueSteeringMessage(
+		first := !injected
+		if first {
+			injected = true
+		}
+		hookMu.Unlock()
+		if !first {
+			return
+		}
+		_, err := al.EnqueueSteeringMessage(
 			sessionID,
 			testDefaultAgentID,
 			providers.Message{Role: "user", Content: "ISSUE-1020-AFTER-FINAL-EMPTY-CHECK"},
 			"issue-1020-after-final-empty-check",
 		)
+		hookMu.Lock()
+		enqueueErr = err
+		hookMu.Unlock()
 	}
 	t.Cleanup(func() { completeStateWriteTestHook = nil })
 
@@ -383,8 +403,13 @@ func TestSteeredTurnDrain1020_EnqueueAfterFinalEmptyCheckIsConsumedOrRefused(t *
 	hookMu.Lock()
 	errAtEnqueue, calls := enqueueErr, hookCalls
 	hookMu.Unlock()
-	if calls != 1 {
-		t.Fatalf("post-drain enqueue hook count = %d, want exactly 1", calls)
+	// Derivation: 2 terminal writes total — the child's original
+	// generation (where the fixture's one late steer is injected) and the
+	// generation it revives to (whose own commit finds nothing new to
+	// inject, since this fixture injects only once, and so does not
+	// revive again).
+	if calls != 2 {
+		t.Fatalf("post-drain enqueue hook count = %d, want exactly 2 (one terminal write for the original generation, one for the generation it revives)", calls)
 	}
 	if errAtEnqueue == nil {
 		if got := al.pendingSteeringCountForScope(childID); got != 0 {
