@@ -1,55 +1,7 @@
-// browser_ws_session_ownership_test.go — RED pack for the browser-panel
-// session-ownership ruling (founder, 2026-09-28): a live-browser session is
-// reachable ONLY by the account that owns its chat session, on EVERY browser
-// WS frame that names a session.
-//
-// Spec source: the founder ruling (squad dispatch brief, CONFIDENTIAL security
-// defect — commit text stays neutral). Frame inventory read from
-// browser_ws.go's readLoop dispatch and the generated frame schemas
-// (pkg/api/generated/asyncapi_types.gen.go): browser_attach, browser_webrtc_offer
-// and browser_input_offer REQUIRE a session id; browser_viewport,
-// browser_tab_action and browser_detach carry an OPTIONAL one that the handlers
-// ignore (attachment-addressed); browser_input and browser_control name NO
-// session at all (pure attachment-addressed — their ownership boundary is the
-// attach that created the attachment). Every frame type gets a row: direct
-// rows assert the refusal of the named session; mediated rows assert the
-// refusal of the attach that would arm the attachment.
-//
-// Oracle source (refusal channel): browser_ws.go's own documented client-frame
-// failure channel — "this socket has no ErrorFrame-based rejection path for
-// client frames, browser_status is the one client-visible failure channel"
-// (browser_ws.go, readLoop's inbound-validation comment). Auth failures close
-// 1008; frame-level refusals on this socket are browser_status{state:"error"}
-// frames on a connection that stays open. So the refusal oracle is: the
-// non-owner receives a browser_status error frame, and never receives a
-// success frame (attached / controlling / detached / webrtc answer / applied
-// input state) for the owner's session. Success frame = access granted =
-// test failure, shown in the failure message.
-//
-// Side-effect oracle (owner's side): while the non-owner's frame is in flight,
-// the OWNER's connection — attached to the owner's own session — receives no
-// frame triggered by it (no tabs broadcast, no controlled_by_other broadcast,
-// no status change). The owner's session must not merely say no: nothing about
-// it may move.
-//
-// Harness: real gateway BrowserWSHandler over HTTP+WS (httptest), real
-// AgentLoop, real BrowserManager with real headless Chrome, TWO real accounts
-// (alice, bob) with bcrypt bearer tokens, two real workspaces on disk
-// (ws-alice, ws-bob, each with the agent on its core team), and two real chat
-// sessions stamped with Owner + WorkspaceID via the real session store — the
-// exact fields a fix must compare (SessionMeta.Owner, pkg/session/
-// daypartition.go) and resolve (sessionWorkspaceID). Only the LLM provider is
-// a stub (harness convention, restMockProvider).
-//
-// Known gaps (deliberate): CI devpods without a working Chrome skip these
-// rows (the probe below) — red-first evidence is the permitted one-narrow-
-// local-run per row, not CI; the dedicated-input row's downstream negotiation
-// machinery is deliberately not over-pinned (its refusal rides on the
-// dedicated-mode attach gate, which this pack pins); the chat-WS and REST
-// surfaces are out of this brief's frame list.
-//
-// Traces to: founder ruling 2026-09-28 (browser-panel non-shareability);
-// ADR-075 FR-017 (session meta read server-side); ADR-038 (panel socket).
+// browser_ws_session_ownership_test.go covers browser-panel session ownership.
+// The fixture uses real chat metadata, two user accounts, two workspaces, and
+// headless Chrome. Assertions follow the gateway's browser_status response
+// channel and the panel binding in ADR-075 FR-017 and ADR-038.
 
 package gateway
 
@@ -96,8 +48,7 @@ const (
 	soQuietTMO  = 1500 * time.Millisecond
 )
 
-// soSuccessStates are the browser_status states that mean ACCESS GRANTED on
-// this socket. Any of them reaching a non-owner is the defect, alive.
+// soSuccessStates are browser_status states that represent a successful request.
 var soSuccessStates = map[string]string{
 	"attached":    "live view attached",
 	"controlling": "control lock taken",
@@ -313,12 +264,6 @@ func soSendAttach(t *testing.T, conn *websocket.Conn, agentID, sessionID string,
 
 func soSendInput(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
-	// kind=reload: a discrete input kind that succeeds SILENTLY when honored
-	// (handleInput answers only on error) and touches no loopback-SSRF gate —
-	// so a granted attach is the only way input reaches the owner's browser.
-	// The frame carries NO session id (the contract's BrowserInputFrame has no
-	// session_id field): it acts on the connection's pinned attachment, so the
-	// attach gate IS this frame's ownership boundary.
 	soWrite(t, conn, generated.BrowserInputFrame{
 		Type: string(generated.WsFrameTypeBrowserInput),
 		Kind: "reload",
@@ -396,9 +341,7 @@ func soWrite(t *testing.T, conn *websocket.Conn, frame any) {
 
 // --- response readers (the oracle) ---
 
-// soExpectRefusal requires the next browser_status on conn to be an error —
-// the socket's client-frame refusal channel. A success state arriving instead
-// fails the test WITH that frame in the message (the defect, alive, on show).
+// soExpectRefusal checks the browser_status refusal and excludes success states.
 func soExpectRefusal(t *testing.T, conn *websocket.Conn, label string) {
 	t.Helper()
 	resp := readBrowserStatusFrame(t, conn, soRefusalTMO)
@@ -473,9 +416,7 @@ func TestBrowserWS_SessionOwnership_Attach_OwnerAllowed(t *testing.T) {
 	f.attachAndRequire(t, f.bobConn, soAgentID, f.bobSess)
 }
 
-// browser_attach: Bob's attach naming Alice's session is refused. RED today:
-// handleAttach authenticates Bob but never compares userID against
-// SessionMeta.Owner, so the attach succeeds onto Alice's live browser.
+// An attach naming a session outside the caller's account is refused.
 func TestBrowserWS_SessionOwnership_Attach_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, nil)
 	f.start(t)
@@ -491,13 +432,7 @@ func TestBrowserWS_SessionOwnership_Attach_NonOwnerRefused(t *testing.T) {
 	soExpectQuiet(t, f.aliceConn, "browser_attach")
 }
 
-// browser_input names NO session on the wire (the contract's
-// BrowserInputFrame has no session_id field) — it acts on the connection's
-// pinned attachment, so this frame's ownership boundary is the ATTACH that
-// created the attachment. RED today: Bob's attach onto Alice's session is
-// granted (the defect) and the reload below would then execute on HER tab;
-// nothing else in the socket stops it (input is deliberately not gated on a
-// control lock — browser_ws_input.go).
+// Browser input follows the connection's authorized attachment.
 func TestBrowserWS_SessionOwnership_Input_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, nil)
 	f.start(t)
@@ -508,19 +443,13 @@ func TestBrowserWS_SessionOwnership_Input_NonOwnerRefused(t *testing.T) {
 		"non-owner attach must be refused: browser_input acts on the pinned attachment, "+
 			"so a granted attach IS input access to the owner's browser (got %q)", resp.State)
 
-	// With the attach refused (post-fix), the input frame has no attachment to
-	// act on: it must be dropped benignly (no status frame — the socket's
-	// documented not-attached behavior) and move nothing on the owner's side.
+	// A refused attachment leaves input without a bound session.
 	soSendInput(t, f.bobConn)
 	soExpectQuiet(t, f.bobConn, "browser_input after refused attach")
 	soExpectQuiet(t, f.aliceConn, "browser_input")
 }
 
-// browser_control carries no session id and acts on the connection's pinned
-// attachment — so its ownership surface is the attach that created it. Bob
-// attempts attach onto Alice's session (granted before the fix), then takes
-// control. RED today: the take succeeds and Alice is broadcast
-// controlled_by_other=true — a non-owner holds the wheel on her browser.
+// Browser control is available only through an authorized attachment.
 func TestBrowserWS_SessionOwnership_Control_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, nil)
 	f.start(t)
@@ -536,9 +465,7 @@ func TestBrowserWS_SessionOwnership_Control_NonOwnerRefused(t *testing.T) {
 	soExpectQuiet(t, f.aliceConn, "browser_control")
 }
 
-// browser_tab_action: Bob, attached to his OWN session, names ALICE's session
-// on a tab action. RED today: the frame's session id is never consulted and
-// the open lands silently on Bob's own attachment.
+// A named tab action respects the current attachment's ownership.
 func TestBrowserWS_SessionOwnership_TabAction_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, nil)
 	f.start(t)
@@ -550,9 +477,7 @@ func TestBrowserWS_SessionOwnership_TabAction_NonOwnerRefused(t *testing.T) {
 	soExpectQuiet(t, f.aliceConn, "browser_tab_action")
 }
 
-// browser_viewport: same attachment-addressing shape as browser_input — Bob
-// home-attached names Alice's session; RED today the resize is honored
-// silently on Bob's own attachment.
+// A named viewport update respects the current attachment's ownership.
 func TestBrowserWS_SessionOwnership_Viewport_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, nil)
 	f.start(t)
@@ -572,9 +497,7 @@ func TestBrowserWS_SessionOwnership_Viewport_NonOwnerRefused(t *testing.T) {
 	soExpectQuiet(t, f.aliceConn, "browser_viewport")
 }
 
-// browser_detach: Bob home-attached names ALICE's session on a detach. RED
-// today: the frame's session id is ignored and Bob's OWN attachment is torn
-// down with a success status — the frame was honored, not refused.
+// Refusing a named detach leaves the connection's attachment intact.
 func TestBrowserWS_SessionOwnership_Detach_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, nil)
 	f.start(t)
@@ -586,13 +509,7 @@ func TestBrowserWS_SessionOwnership_Detach_NonOwnerRefused(t *testing.T) {
 	soExpectQuiet(t, f.aliceConn, "browser_detach")
 }
 
-// browser_input_offer (ADR-081 dedicated input): gated on a dedicated-mode
-// attach, which is itself an attach naming the session. RED today: Bob's
-// dedicated attach onto Alice's session is granted; the input offer then
-// resolves Alice's workspace manager directly
-// (dispatchDedicatedInputOffer's BrowserManagerForAgent call). This row pins
-// the attach gate plus "no input machinery granted to the non-owner"; the
-// negotiation state machine below it is deliberately not over-pinned.
+// A dedicated-input offer requires an authorized dedicated attachment.
 func TestBrowserWS_SessionOwnership_InputOffer_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, nil)
 	f.start(t)
@@ -608,14 +525,7 @@ func TestBrowserWS_SessionOwnership_InputOffer_NonOwnerRefused(t *testing.T) {
 	soExpectQuiet(t, f.aliceConn, "browser_input_offer")
 }
 
-// browser_webrtc_offer: RED today, Bob's offer naming ALICE's session is
-// accepted through every gate — claims, the (defective) attach, the route
-// guard, availability — because no gate consults SessionMeta.Owner, and the
-// frame proceeds into media machinery on her browser with no refusal ever
-// sent. This row requires the refusal; it deliberately does NOT require an
-// answer frame (in-harness negotiation may legitimately stall), so the row is
-// red for exactly one reason: the non-owner's offer on the owner's session
-// was not refused.
+// A WebRTC offer naming another account's session receives an explicit refusal.
 func TestBrowserWS_SessionOwnership_WebrtcOffer_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true // the row exercises the real webrtc offer path
@@ -634,10 +544,7 @@ func TestBrowserWS_SessionOwnership_WebrtcOffer_NonOwnerRefused(t *testing.T) {
 	soExpectQuiet(t, f.aliceConn, "browser_webrtc_offer")
 }
 
-// soExpectRefusalNoAnswer is the webrtc_offer row's oracle: the non-owner must
-// receive a browser_status error (the refusal), and must NEVER receive a
-// browser_webrtc_answer (a granted media path). Fails the moment either the
-// answer appears (granted — the defect, alive) or a success status appears.
+// soExpectRefusalNoAnswer requires a status refusal and excludes a media answer.
 func soExpectRefusalNoAnswer(t *testing.T, conn *websocket.Conn, label string) {
 	t.Helper()
 	conn.SetReadDeadline(time.Now().Add(soWebrtcTMO)) // errcheck rationale: test-only conn deadline
