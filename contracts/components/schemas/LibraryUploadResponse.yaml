@@ -14,3 +14,13 @@ properties:
     description: Entries created by this upload, in the order the multipart parts were received.
     items:
       $ref: './LibraryEntry.yaml'
+      # x-go-type pins the Go shape to the named `gen.LibraryEntry` so the
+      # generated entries element is the SAME struct the rest of the package
+      # (library.EntryFromInfo, the GET .../entries handler) already returns —
+      # without it oapi-codegen v2.7.0 inlines this $ref as an anonymous
+      # struct whose nested enum types get prefix-named from the parent's
+      # path (LibraryUploadResponseEntriesViewKind, ...) and no longer match
+      # the named types on the library side (LibraryEntryViewKind, ...).
+      # The comment at openapi.yaml:374 (and RecordQueryResponse's own use of
+      # x-go-type on its `problems` array) record the same fix.
+      x-go-type: LibraryEntry

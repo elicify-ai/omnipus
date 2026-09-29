@@ -1,0 +1,15 @@
+title: RetryMoveError
+type: object
+required: [error, code, pending_move_id]
+properties:
+  error:
+    type: string
+  code:
+    type: string
+    enum: [retry_not_found, retry_expired, retry_identity_mismatch, retry_preflight_failed, retry_locked]
+  pending_move_id:
+    type: string
+  paths:
+    type: array
+    items:
+      type: string

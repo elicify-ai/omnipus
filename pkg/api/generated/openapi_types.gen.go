@@ -4724,6 +4724,108 @@ func (e LibraryConflictErrorCode) Valid() bool {
 	}
 }
 
+// Defines values for LibraryEntryViewKind.
+const (
+	LibraryEntryViewKindBoard     LibraryEntryViewKind = "board"
+	LibraryEntryViewKindBreakdown LibraryEntryViewKind = "breakdown"
+	LibraryEntryViewKindCalendar  LibraryEntryViewKind = "calendar"
+	LibraryEntryViewKindList      LibraryEntryViewKind = "list"
+	LibraryEntryViewKindSummary   LibraryEntryViewKind = "summary"
+	LibraryEntryViewKindTable     LibraryEntryViewKind = "table"
+	LibraryEntryViewKindTiles     LibraryEntryViewKind = "tiles"
+	LibraryEntryViewKindTrend     LibraryEntryViewKind = "trend"
+)
+
+// Valid indicates whether the value is a known member of the LibraryEntryViewKind enum.
+func (e LibraryEntryViewKind) Valid() bool {
+	switch e {
+	case LibraryEntryViewKindBoard:
+		return true
+	case LibraryEntryViewKindBreakdown:
+		return true
+	case LibraryEntryViewKindCalendar:
+		return true
+	case LibraryEntryViewKindList:
+		return true
+	case LibraryEntryViewKindSummary:
+		return true
+	case LibraryEntryViewKindTable:
+		return true
+	case LibraryEntryViewKindTiles:
+		return true
+	case LibraryEntryViewKindTrend:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryEntryViewRejection.
+const (
+	LibraryEntryViewRejectionViewDuplicateName     LibraryEntryViewRejection = "view_duplicate_name"
+	LibraryEntryViewRejectionViewEmpty             LibraryEntryViewRejection = "view_empty"
+	LibraryEntryViewRejectionViewFilterTooLarge    LibraryEntryViewRejection = "view_filter_too_large"
+	LibraryEntryViewRejectionViewInvalidFilterNode LibraryEntryViewRejection = "view_invalid_filter_node"
+	LibraryEntryViewRejectionViewInvalidFormula    LibraryEntryViewRejection = "view_invalid_formula"
+	LibraryEntryViewRejectionViewInvalidKind       LibraryEntryViewRejection = "view_invalid_kind"
+	LibraryEntryViewRejectionViewInvalidLayout     LibraryEntryViewRejection = "view_invalid_layout"
+	LibraryEntryViewRejectionViewInvalidPart       LibraryEntryViewRejection = "view_invalid_part"
+	LibraryEntryViewRejectionViewInvalidYaml       LibraryEntryViewRejection = "view_invalid_yaml"
+	LibraryEntryViewRejectionViewMissingName       LibraryEntryViewRejection = "view_missing_name"
+	LibraryEntryViewRejectionViewMissingType       LibraryEntryViewRejection = "view_missing_type"
+	LibraryEntryViewRejectionViewTooLarge          LibraryEntryViewRejection = "view_too_large"
+	LibraryEntryViewRejectionViewUnknownEnumValue  LibraryEntryViewRejection = "view_unknown_enum_value"
+	LibraryEntryViewRejectionViewUnknownFormula    LibraryEntryViewRejection = "view_unknown_formula"
+	LibraryEntryViewRejectionViewUnknownKey        LibraryEntryViewRejection = "view_unknown_key"
+	LibraryEntryViewRejectionViewUnknownProperty   LibraryEntryViewRejection = "view_unknown_property"
+	LibraryEntryViewRejectionViewUnknownType       LibraryEntryViewRejection = "view_unknown_type"
+	LibraryEntryViewRejectionViewUnreadable        LibraryEntryViewRejection = "view_unreadable"
+)
+
+// Valid indicates whether the value is a known member of the LibraryEntryViewRejection enum.
+func (e LibraryEntryViewRejection) Valid() bool {
+	switch e {
+	case LibraryEntryViewRejectionViewDuplicateName:
+		return true
+	case LibraryEntryViewRejectionViewEmpty:
+		return true
+	case LibraryEntryViewRejectionViewFilterTooLarge:
+		return true
+	case LibraryEntryViewRejectionViewInvalidFilterNode:
+		return true
+	case LibraryEntryViewRejectionViewInvalidFormula:
+		return true
+	case LibraryEntryViewRejectionViewInvalidKind:
+		return true
+	case LibraryEntryViewRejectionViewInvalidLayout:
+		return true
+	case LibraryEntryViewRejectionViewInvalidPart:
+		return true
+	case LibraryEntryViewRejectionViewInvalidYaml:
+		return true
+	case LibraryEntryViewRejectionViewMissingName:
+		return true
+	case LibraryEntryViewRejectionViewMissingType:
+		return true
+	case LibraryEntryViewRejectionViewTooLarge:
+		return true
+	case LibraryEntryViewRejectionViewUnknownEnumValue:
+		return true
+	case LibraryEntryViewRejectionViewUnknownFormula:
+		return true
+	case LibraryEntryViewRejectionViewUnknownKey:
+		return true
+	case LibraryEntryViewRejectionViewUnknownProperty:
+		return true
+	case LibraryEntryViewRejectionViewUnknownType:
+		return true
+	case LibraryEntryViewRejectionViewUnreadable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LibraryInlineDispositionDisposition.
 const (
 	LibraryInlineDispositionDispositionAttachment LibraryInlineDispositionDisposition = "attachment"
@@ -4775,6 +4877,30 @@ func (e LibraryInlineDispositionRenderer) Valid() bool {
 	case LibraryInlineDispositionRendererText:
 		return true
 	case LibraryInlineDispositionRendererVideo:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryMoveConflictErrorCode.
+const (
+	LibraryMoveConflictErrorCodeAlreadyExists              LibraryMoveConflictErrorCode = "already_exists"
+	LibraryMoveConflictErrorCodeIsMountRoot                LibraryMoveConflictErrorCode = "is_mount_root"
+	LibraryMoveConflictErrorCodeMoveIncomplete             LibraryMoveConflictErrorCode = "move_incomplete"
+	LibraryMoveConflictErrorCodeViewTrackedTransferRefused LibraryMoveConflictErrorCode = "view_tracked_transfer_refused"
+)
+
+// Valid indicates whether the value is a known member of the LibraryMoveConflictErrorCode enum.
+func (e LibraryMoveConflictErrorCode) Valid() bool {
+	switch e {
+	case LibraryMoveConflictErrorCodeAlreadyExists:
+		return true
+	case LibraryMoveConflictErrorCodeIsMountRoot:
+		return true
+	case LibraryMoveConflictErrorCodeMoveIncomplete:
+		return true
+	case LibraryMoveConflictErrorCodeViewTrackedTransferRefused:
 		return true
 	default:
 		return false
@@ -7868,6 +7994,51 @@ func (e RelationWriteRequestOp) Valid() bool {
 	case RelationWriteRequestOpRemove:
 		return true
 	case RelationWriteRequestOpReplace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RetryMoveErrorCode.
+const (
+	RetryMoveErrorCodeRetryExpired          RetryMoveErrorCode = "retry_expired"
+	RetryMoveErrorCodeRetryIdentityMismatch RetryMoveErrorCode = "retry_identity_mismatch"
+	RetryMoveErrorCodeRetryLocked           RetryMoveErrorCode = "retry_locked"
+	RetryMoveErrorCodeRetryNotFound         RetryMoveErrorCode = "retry_not_found"
+	RetryMoveErrorCodeRetryPreflightFailed  RetryMoveErrorCode = "retry_preflight_failed"
+)
+
+// Valid indicates whether the value is a known member of the RetryMoveErrorCode enum.
+func (e RetryMoveErrorCode) Valid() bool {
+	switch e {
+	case RetryMoveErrorCodeRetryExpired:
+		return true
+	case RetryMoveErrorCodeRetryIdentityMismatch:
+		return true
+	case RetryMoveErrorCodeRetryLocked:
+		return true
+	case RetryMoveErrorCodeRetryNotFound:
+		return true
+	case RetryMoveErrorCodeRetryPreflightFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RetryMoveResultOutcome.
+const (
+	RetryMoveResultOutcomeAlreadyComplete RetryMoveResultOutcome = "already_complete"
+	RetryMoveResultOutcomeReEnrolled      RetryMoveResultOutcome = "re_enrolled"
+)
+
+// Valid indicates whether the value is a known member of the RetryMoveResultOutcome enum.
+func (e RetryMoveResultOutcome) Valid() bool {
+	switch e {
+	case RetryMoveResultOutcomeAlreadyComplete:
+		return true
+	case RetryMoveResultOutcomeReEnrolled:
 		return true
 	default:
 		return false
@@ -17259,6 +17430,9 @@ type LibraryEntry struct {
 	// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 	IsTextEditable bool `json:"is_text_editable"`
 
+	// IsView True when this entry's extension is the one chosen for view files (`.view`, library-views-anywhere-spec Q1/A) AND its path is inside an enclosing knowledge base (D-SCOPE, FD-1) — a `.view` file in a plain workspace folder that is not, and is not inside, any knowledge base reports `is_view` absent and lists as a plain, unrunnable file. Independent of whether the file parses as a valid `ViewDef` (US-4 AS-3 — a malformed view is still `is_view: true`, with its parse failure surfaced on the sibling `view.rejection` / `view.rejection_reason`).
+	IsView *bool `json:"is_view,omitempty"`
+
 	// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
 	Mime *string `json:"mime,omitempty"`
 
@@ -17286,7 +17460,48 @@ type LibraryEntry struct {
 
 	// Size File size in bytes. Always 0 for directories.
 	Size int64 `json:"size"`
+
+	// View Per-entry facts about a `.view` file, surfaced directly on the `LibraryEntry` so the tree can show its kind icon and the preview can open it without a second round trip (library-views-anywhere-spec D-CONTRACT, US-4). PRESENT IFF `is_view` is true on the parent entry — a single presence check replaces what would otherwise be six-to-nine independent "present iff inside a knowledge base" markers (R2-OBS-001), and mirrors `mount`'s own pattern of nesting related optional facts on `LibraryEntry` (the `LibraryEntryMount.yaml` precedent).
+	// A `.view` file outside every knowledge base never carries `is_view` (D-SCOPE, FD-1) and so never carries this object — it renders as a plain, unrunnable file (founder: "a view runs only inside a knowledge base").
+	View *struct {
+		// CollectionId The opaque `kb_`-prefixed identifier of the ENCLOSING knowledge base (D-ADDRESS, R2-CRIT-003) — the same value `KnowledgeBaseViews.collection_id` carries for a `.base` file in the same collection, computed by the same `knowledgeCollectionID` function. The Library preview uses it together with `name` to call the existing `GET .../knowledge/view` endpoint directly, with no SPA-side enclosing-collection resolution step (BasePreview's own resolution path does not exist for non-`.base` entries, hence the round-2 contract addition).
+		// Present exactly when this object is present — D-SCOPE already guarantees an enclosing knowledge base at that point.
+		CollectionId *string `json:"collection_id,omitempty"`
+
+		// ConflictPaths Every file involved in a duplicate-name collision, collection- relative — the same two (or more) paths `ViewRejection.Paths` already carries on the server, now reaching the wire so a person can tell BOTH views apart. Present exactly when `rejection` is `view_duplicate_name`; absent otherwise (a parse failure names the single file involved through `path` on the entry itself).
+		ConflictPaths *[]string `json:"conflict_paths,omitempty"`
+
+		// DerivedFrom The collection-relative path of the `.base` file currently managing this view (the file's own `ViewDef.derived_from` field, D-PROVENANCE / FR-VA-009a). Present iff that field is set on the underlying `ViewDef` — the read-only / "derived" / "managed by" markers a UI surfaces from it are display-only and never influence what re-derivation may rewrite or delete (the pipeline-owned membership record is the authority for that, not this field, per R2-CRIT-001).
+		DerivedFrom *string `json:"derived_from,omitempty"`
+
+		// Kind WHICH OF THE EIGHT NAMED VIEW KINDS A VIEW IS (view-kinds-design-2026-09-03 §2.3, §4). Shared between `ViewDef.kind` (what an agent or composer authored) and `LibraryEntryView.kind` (what the Library tree's icon must key off) — extracted to its own schema (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 / round-1 MIN-004) so the two references stay in lockstep by construction, not by two enums that happen to read the same eight strings today.
+		// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what was asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+		// A view that does not declare a kind (legal under the schema — only `name` is required) reports `kind` absent on `LibraryEntryView`; the tree falls back to a generic view icon (library-views-anywhere-spec EC-3).
+		Kind *LibraryEntryViewKind `json:"kind,omitempty"`
+
+		// Label The view's `DisplayLabel()` — the human-readable label the Library tree shows without a second round trip. Absent when the file fails to parse.
+		Label *string `json:"label,omitempty"`
+
+		// Name The view's authoritative `Def.Name`. Present iff the file parsed successfully AND `is_view` is true on the parent; absent whenever `rejection` is present (the only handle the preview has on a broken or duplicate-rejected view is `rejection_reason` and, for a duplicate, `conflict_paths`).
+		Name *string `json:"name,omitempty"`
+
+		// Rejection Every reason a `.view` file can fail to load — extracted to its own enum (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 2) so the SPA's duplicate / parse / oversize badges compare against one canonical list of reason codes, not against a hand-written wire literal that can drift from the server's actual `RejectView*` set.
+		// Present on `LibraryEntryView.rejection` exactly when the file is `is_view: true` but broken, oversize, or duplicate-rejected; absent on a healthy view. The operator-facing text lives on the sibling `rejection_reason` field (`ViewRejection.Reason` on the server), and — for a duplicate-name collision only — the colliding paths live on the sibling `conflict_paths` field (`ViewRejection.Paths` on the server).
+		Rejection *LibraryEntryViewRejection `json:"rejection,omitempty"`
+
+		// RejectionReason The operator-facing text the loader emitted with the rejection, verbatim from `ViewRejection.Reason` on the server. Present exactly when `rejection` is present. This is what the preview surfaces to a person opening a broken or duplicate-rejected view, so it never shows a blank or generic error.
+		RejectionReason *string `json:"rejection_reason,omitempty"`
+	} `json:"view,omitempty"`
 }
+
+// LibraryEntryViewKind WHICH OF THE EIGHT NAMED VIEW KINDS A VIEW IS (view-kinds-design-2026-09-03 §2.3, §4). Shared between `ViewDef.kind` (what an agent or composer authored) and `LibraryEntryView.kind` (what the Library tree's icon must key off) — extracted to its own schema (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 / round-1 MIN-004) so the two references stay in lockstep by construction, not by two enums that happen to read the same eight strings today.
+// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what was asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+// A view that does not declare a kind (legal under the schema — only `name` is required) reports `kind` absent on `LibraryEntryView`; the tree falls back to a generic view icon (library-views-anywhere-spec EC-3).
+type LibraryEntryViewKind string
+
+// LibraryEntryViewRejection Every reason a `.view` file can fail to load — extracted to its own enum (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 2) so the SPA's duplicate / parse / oversize badges compare against one canonical list of reason codes, not against a hand-written wire literal that can drift from the server's actual `RejectView*` set.
+// Present on `LibraryEntryView.rejection` exactly when the file is `is_view: true` but broken, oversize, or duplicate-rejected; absent on a healthy view. The operator-facing text lives on the sibling `rejection_reason` field (`ViewRejection.Reason` on the server), and — for a duplicate-name collision only — the colliding paths live on the sibling `conflict_paths` field (`ViewRejection.Paths` on the server).
+type LibraryEntryViewRejection string
 
 // LibraryEntryMount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
 // It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
@@ -17338,6 +17553,31 @@ type LibraryMkdirRequest struct {
 	// Path Workspace-relative directory path to create, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). May name a nested path whose intermediate directories do not exist yet — all of them are created, matching `mkdir -p`.
 	Path string `json:"path"`
 }
+
+// LibraryMoveConflictError Typed 409 body for POST /library/move and POST /library/{workspace_id}/rename (FR-VA-031/FR-VA-032). Both operations can reach 409 for four distinct causes; `code` discriminates, following the multi-cause pattern of LLMError.yaml. Shares "error"/"code" with the standard ErrorResponse envelope so a generic handler still works unchanged. Which optional field is populated is a function of `code`:
+//   - already_exists / is_mount_root: no extra field (today's 409s,
+//     pkg/library/root.go ErrAlreadyExists/ErrIsMountRoot; `code` is new).
+//   - view_tracked_transfer_refused (FR-VA-031): tracked_paths is present.
+//   - move_incomplete (FR-VA-032): paths and pending_move_id are present;
+//     retryable via POST /library/{workspace_id}/retry-move.
+type LibraryMoveConflictError struct {
+	Code LibraryMoveConflictErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+
+	// Paths Only for move_incomplete.
+	Paths *[]string `json:"paths,omitempty"`
+
+	// PendingMoveId Only for move_incomplete; pass to retry-move.
+	PendingMoveId *string `json:"pending_move_id,omitempty"`
+
+	// TrackedPaths Only for view_tracked_transfer_refused.
+	TrackedPaths *[]string `json:"tracked_paths,omitempty"`
+}
+
+// LibraryMoveConflictErrorCode defines model for LibraryMoveConflictError.Code.
+type LibraryMoveConflictErrorCode string
 
 // LibraryPreviewTokenRequest Request body for POST /api/v1/library/preview-token (FR-003f). Mints a short-lived, path-bearing credential that lets a SANDBOXED document — which has an opaque origin and can therefore send neither the SameSite=Strict session cookie nor an Authorization header — load itself and its relative subresources (FR-003a, FR-003).
 // Minting is authenticated and NEVER WIDENS ACCESS (FR-003b): the caller must already be able to read the path, and the token is scoped to one workspace and one path. There is no whole-workspace scope, by design.
@@ -17417,47 +17657,7 @@ type LibraryTransferRequest struct {
 // LibraryUploadResponse Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile.
 type LibraryUploadResponse struct {
 	// Entries Entries created by this upload, in the order the multipart parts were received.
-	Entries []struct {
-		// IsDir True when this entry is a directory.
-		IsDir bool `json:"is_dir"`
-
-		// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
-		IsHidden bool `json:"is_hidden"`
-
-		// IsKnowledgeBase True when this DIRECTORY is itself a knowledge base, using the exact same marker-based detection GET /library/{workspace_id}/knowledge answers per folder (KnowledgeBaseInfo.is_knowledge_base) — computed once per directory entry during listing so the Library explorer's Vault icon is a fact the server states, not something the client infers from whichever folders it happens to have queried this session (a directory never opened yet, or a session whose cache was evicted, used to render as a plain folder even though it was a real knowledge base). Present (true or false) for a directory whenever detection could complete; absent when the entry is a file, or when detection could not complete for this one row (a listing failure on a single entry never fails the whole directory listing). Optional on the wire so SPA builds and fixtures that predate this field keep working.
-		IsKnowledgeBase *bool `json:"is_knowledge_base,omitempty"`
-
-		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
-		IsTextEditable bool `json:"is_text_editable"`
-
-		// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
-		Mime *string `json:"mime,omitempty"`
-
-		// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
-		ModifiedAt time.Time `json:"modified_at"`
-
-		// Mount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
-		// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
-		Mount *struct {
-			// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
-			Broad bool `json:"broad"`
-
-			// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
-			HostPath string `json:"host_path"`
-
-			// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
-			Name string `json:"name"`
-		} `json:"mount,omitempty"`
-
-		// Name Base filename or directory name (final path segment).
-		Name string `json:"name"`
-
-		// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
-		Path string `json:"path"`
-
-		// Size File size in bytes. Always 0 for directories.
-		Size int64 `json:"size"`
-	} `json:"entries"`
+	Entries []LibraryEntry `json:"entries"`
 }
 
 // LibraryWorkspaceNode One workspace as a node in the Library's virtual root listing (GET /api/v1/library/workspaces) — the sidebar entry point (library-spec.md D-3: "two entry points, one component"). Drilling into a node scopes all subsequent Library operations to that workspace's work tree via {workspace_id}.
@@ -20531,6 +20731,31 @@ type RetentionUpdateResponse struct {
 	// SessionDays Number of days to retain session logs. 0 = system default (90 days).
 	SessionDays int `json:"session_days"`
 }
+
+// RetryMoveError defines model for RetryMoveError.
+type RetryMoveError struct {
+	Code          RetryMoveErrorCode `json:"code"`
+	Error         string             `json:"error"`
+	Paths         *[]string          `json:"paths,omitempty"`
+	PendingMoveId string             `json:"pending_move_id"`
+}
+
+// RetryMoveErrorCode defines model for RetryMoveError.Code.
+type RetryMoveErrorCode string
+
+// RetryMoveRequest defines model for RetryMoveRequest.
+type RetryMoveRequest struct {
+	PendingMoveId string `json:"pending_move_id"`
+}
+
+// RetryMoveResult defines model for RetryMoveResult.
+type RetryMoveResult struct {
+	Outcome         RetryMoveResultOutcome `json:"outcome"`
+	ReEnrolledPaths []string               `json:"re_enrolled_paths"`
+}
+
+// RetryMoveResultOutcome defines model for RetryMoveResult.Outcome.
+type RetryMoveResultOutcome string
 
 // RevisionEntry A single owner-loop plan correction record (ADR-053 §Contract Surface — "Revision entry"). Committed transactionally with the tail members + edges it introduces via the write-ahead intent-log (INV-6/N-8) — the intent record, the tail members, their edges, and the plan-record patch land all-or-nothing. This is the single canonical shape for a revision record; `SessionMessageRevisionEntry` (the SessionMessage transport variant, `kind: revision_entry`) nests this same schema under a `revision` key rather than duplicating its fields — see that file's description for why the two `generation` concepts cannot be flattened into one object.
 type RevisionEntry struct {
@@ -24773,7 +24998,7 @@ type VersionResponse struct {
 	Version string `json:"version"`
 }
 
-// ViewDef A saved query, stored as data (ADR-068 D10). A view names filters, grouping, sort and the properties to show; it lives in `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a human can diff it.
+// ViewDef A saved query, stored as data (ADR-068 D10). A view names filters, grouping, sort and the properties to show. A view is stored as an ORDINARY Library entry with the `.view` extension — anywhere inside a knowledge base, at any depth (library-views-anywhere-spec D-SCOPE/D-WALK, FD-1/FD-4); its `name:` is its authoritative identifier regardless of filename (Q3/B), so an agent can author one and a human can move and rename it like any other note. The filename's `.view` extension is the discovery filter; a view's identity on disk is decoupled from its identity on the wire.
 // A view naming a property or enum value that does not exist is REJECTED at write time (D15), not stored and discovered broken later.
 // THERE IS EXACTLY ONE VIEW FORMAT, AND IT CARRIES NO VERSION NUMBER. A view is: ONE `filter` tree of `all`/`any`/`not` over the ten SQL operators — the same grammar knowledge_find evaluates, so a view's filter needs no translation to be served — `grouping` keys that each carry a direction, an OPTIONAL `type`, plus `layout`, `formulas` and `property_config`.
 // THE FLAT, AND-ONLY PREDECESSOR IS GONE. An earlier shape stored `filters` (a flat AND-list in a separate seven-operator vocabulary) and `group_by` (a bare name list with no direction). It was carried alongside this one only so files written under it stayed readable. Nothing was ever written under it outside this project's own tooling and no such file exists on disk, so it is deleted rather than versioned around: two formats in one schema is a permanent tax on every reader, and the second one had no remaining constituency.
@@ -24784,6 +25009,11 @@ type ViewDef struct {
 	//
 	// ONE NAME, FIFTEEN FUNCTIONS (founder ruling, FR-150). Obsidian's top-level `summaries` key and its per-view summary map TRANSLATE at import into entries of this list. There is deliberately NO `summaries` key on a view: parity is capability, not key names, and a second spelling for one concept is how two surfaces start disagreeing about which is authoritative.
 	Aggregates *[]RecordAggregate `json:"aggregates,omitempty"`
+
+	// DerivedFrom Collection-relative path of the `.base` file currently MANAGING this view through the import/re-derivation pipeline (library-views-anywhere-spec D-PROVENANCE, FR-VA-009a). Set ONLY by the pipeline (`pkg/vaultimport/run.go` / `rederive.go`); never accepted from a `create_view`/`write_view` caller. When present, `write_view` refuses the write naming this `.base` and the Library editor opens the view read-only (FD-6 / R2-MAJ-003).
+	// The pipeline-owned membership record, not this field, is the sole authority for what re-derivation may rewrite or delete; a file merely carrying this field but absent from the record is ignored by re-derivation regardless of what its own `derived_from` says (R2-CRIT-001).
+	// Hand-cleared (never trashed) when the `.base` is deleted (D-PROVENANCE `.base` lifecycle, FD-7); rewritten in place when the `.base` is renamed or moved (`pkg/gateway/rest_library_knowledge_cascade.go`'s Renamer, R2-MAJ-002).
+	DerivedFrom *string `json:"derived_from,omitempty"`
 
 	// Disabled The view is stored but MUST NOT be applied; applying it is REFUSED naming the expression in `untranslated` that disabled it (FR-105).
 	//
@@ -24813,13 +25043,9 @@ type ViewDef struct {
 	// THE DIRECTION IS PART OF THE KEY, not an afterthought: a bare name list is why every `groupBy` direction in an imported base was unrepresentable rather than merely untranslated.
 	Grouping *[]ViewGroupBy `json:"grouping,omitempty"`
 
-	// Kind WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on every view written before the kinds existed.
-	//
-	// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what the agent asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
-	//
-	// The eight and what each stacks: `table` → table. `list` → list. `tiles` → tiles (needs an image property). `board` → columns (needs an enum property with at most 8 values). `calendar` → calendar (needs a date property). `summary` → figures then a grouped table with subtotals (needs a number). `trend` → figures then chart then table (needs a date and a number). `breakdown` → figures then crosstab (needs two groupable properties and a number).
-	//
-	// A kind is OFFERED only when the collection holds what it requires, and a refusal names the missing property (design §3 G1). That gate lives in the composer, which is the only thing that writes this field on the normal path.
+	// Kind WHICH OF THE EIGHT NAMED VIEW KINDS A VIEW IS (view-kinds-design-2026-09-03 §2.3, §4). Shared between `ViewDef.kind` (what an agent or composer authored) and `LibraryEntryView.kind` (what the Library tree's icon must key off) — extracted to its own schema (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 / round-1 MIN-004) so the two references stay in lockstep by construction, not by two enums that happen to read the same eight strings today.
+	// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what was asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+	// A view that does not declare a kind (legal under the schema — only `name` is required) reports `kind` absent on `LibraryEntryView`; the tree falls back to a generic view icon (library-views-anywhere-spec EC-3).
 	Kind *ViewDefKind `json:"kind,omitempty"`
 
 	// Label Human-readable title. Absent means render `name`.
@@ -24854,7 +25080,8 @@ type ViewDef struct {
 	// Sort Sort keys, applied in order.
 	Sort *[]RecordSort `json:"sort,omitempty"`
 
-	// Source Vault-relative path of the file this view was IMPORTED from, when it was imported rather than authored. Recorded so the provenance of a partially translated view is visible; the source is never re-read afterwards (FR-102).
+	// Source Collection-relative path of the file this view was IMPORTED from, when it was imported rather than authored. Recorded so the provenance of a partially translated view is visible and so the `.base` preview can group tabs by source (`pkg/gateway/rest_knowledge_base_views.go`'s grouping, F1) and an `![[X.base#View]]` embed can resolve back to the importing file.
+	// It is NOT a re-derivation trigger. Re-derivation locates its managed views through `derived_from` AND its own pipeline-owned membership record — never through `source` alone (library-views-anywhere-spec D-PROVENANCE, FD-5 / R2-MAJ-001). The narrower invariant that survives is FR-105 / FR-018b: a view's `filter`/`type` data is never broadened on the operator's behalf by re-reading this field.
 	Source *string `json:"source,omitempty"`
 
 	// Type The record type this view queries.
@@ -24872,13 +25099,9 @@ type ViewDef struct {
 	Untranslated *[]string `json:"untranslated,omitempty"`
 }
 
-// ViewDefKind WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on every view written before the kinds existed.
-//
-// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what the agent asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
-//
-// The eight and what each stacks: `table` → table. `list` → list. `tiles` → tiles (needs an image property). `board` → columns (needs an enum property with at most 8 values). `calendar` → calendar (needs a date property). `summary` → figures then a grouped table with subtotals (needs a number). `trend` → figures then chart then table (needs a date and a number). `breakdown` → figures then crosstab (needs two groupable properties and a number).
-//
-// A kind is OFFERED only when the collection holds what it requires, and a refusal names the missing property (design §3 G1). That gate lives in the composer, which is the only thing that writes this field on the normal path.
+// ViewDefKind WHICH OF THE EIGHT NAMED VIEW KINDS A VIEW IS (view-kinds-design-2026-09-03 §2.3, §4). Shared between `ViewDef.kind` (what an agent or composer authored) and `LibraryEntryView.kind` (what the Library tree's icon must key off) — extracted to its own schema (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 / round-1 MIN-004) so the two references stay in lockstep by construction, not by two enums that happen to read the same eight strings today.
+// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what was asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+// A view that does not declare a kind (legal under the schema — only `name` is required) reports `kind` absent on `LibraryEntryView`; the tree falls back to a generic view icon (library-views-anywhere-spec EC-3).
 type ViewDefKind string
 
 // ViewDefLayout Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`. Every layout renders except `map`, which has no renderer yet; `records.ViewLayoutIsRendered` is the source of truth. All five non-table layouts stay declared here so the importer can record what an Obsidian view actually asked for: a layout the SPA cannot draw yet imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table nobody knows was ever anything else.
@@ -25923,6 +26146,9 @@ type CreateLibraryDirectoryJSONRequestBody = LibraryMkdirRequest
 
 // RenameLibraryEntryJSONRequestBody defines body for RenameLibraryEntry for application/json ContentType.
 type RenameLibraryEntryJSONRequestBody = LibraryRenameRequest
+
+// RetryLibraryMoveJSONRequestBody defines body for RetryLibraryMove for application/json ContentType.
+type RetryLibraryMoveJSONRequestBody = RetryMoveRequest
 
 // UploadLibraryFilesMultipartRequestBody defines body for UploadLibraryFiles for multipart/form-data ContentType.
 type UploadLibraryFilesMultipartRequestBody UploadLibraryFilesMultipartBody

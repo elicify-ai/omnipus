@@ -1762,6 +1762,25 @@ shape from round 1.
 
 ---
 
+### Accepted residual risk (team-lead decision, 2026-09-29; security-lead confirms in the gate)
+
+- **Unique-claimant identity match after an external move.** If an external (non-Omnipus) move
+  removed a managed view's original file and a single file with the same `name` and the same
+  `derived_from` then appears anywhere in the collection, the pipeline treats it as that managed
+  view (identity-in-record + `derived_from`, the architect ruling on external moves) and may
+  re-derive or delete it on the next `.base` change. **Accepted because:** planting that file
+  requires write access to the collection, which already allows deleting or overwriting those
+  bytes directly — the match grants no new privilege; Omnipus is single-owner (no cross-account
+  writer in the same collection); two or more claimants are refused outright (Dataset F-10 / test
+  46: neither touched). **Explicitly rejected:** content-hash authority (it would reopen the
+  copied-marker hole, R2-CRIT-001). The gate's security-lead review must confirm this risk
+  acceptance.
+
+- **Leaf-replacement race (accepted residual, team-lead 2026-09-29).** Between discovery and a
+  pipeline write/delete, a local writer could replace a leaf file at a tracked path. Accepted: it
+  requires local write access to the collection, which already permits deleting or overwriting that
+  file directly; Omnipus is single-owner. The gate's security-lead confirms.
+
 ## 10. TDD Plan
 
 | Order | Test Name | Level | Traces to | Description |
@@ -2234,6 +2253,97 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   collection with saved views renders no "Saved views" block and no view dialog; the views are
   tree entries).
 
+- **FR-VA-031 *(founder-direction amendment, 2026-09-29, architect ruling Q-A = C)***: A Library
+  transfer to ANOTHER knowledge base (`pkg/gateway/rest_library_write.go::handleLibraryTransfer`, any
+  mode other than a same-collection move) MUST be REFUSED when it involves a tracked derived `.view`
+  (a view in its `.base`'s membership record) or a `.base` that has tracked views — including a folder
+  transfer containing either. The refusal is a visible REST error naming the tracked paths and the
+  reason; the Library UI shows it as a message; agent move/rename paths (`knowledge_restructure`
+  rename/move — corrected 2026-09-29: `knowledge_configure` refuses rename/move and redirects to
+  `knowledge_restructure`, see `knowledge_configure.go::vaultConfigureCascadeOps`) return the same refusal. Nothing is moved, copied, released or re-keyed. Tests 74, 75, 76.
+  **Clarification (team-lead, 2026-09-29, of the founder's "refuse"):** the refusal applies to any
+  MOVE of a tracked derived `.view`, or of a `.base` with tracked views, OUT of its source collection —
+  to another knowledge base OR to ordinary (non-knowledge-base) workspace storage. COPIES out stay
+  allowed: the copy has `derived_from` stripped (the D-DUPLICATE shared strip) and carries no
+  authority. Tests 74-76 plus 79 (move to plain workspace storage refused) and 80 (copy out allowed,
+  marker stripped, source untouched).
+- **FR-VA-032 *(founder-direction amendment, 2026-09-29, architect ruling Q-B = B)***: When an
+  Omnipus-mediated move fails after the membership revocation (revoke-before-rename: preflight → persist
+  revocation → rename → markers → enroll; see #1042 for full crash atomicity), the visible "incomplete"
+  error MUST carry a Retry / re-enroll action that replays steps 3–5 (rename-completion check, markers,
+  enroll new paths) for the named paths only. Retry is idempotent (running it twice changes nothing the
+  second time), never grants authority to a path whose identity is not the revoked view's, and restores
+  management on success. Available to the user (UI action on the error) and to agents (same backend
+  operation). Tests 77, 78.
+  **Amendment (team-lead, 2026-09-29) — Retry mechanics and contract:** revocation atomically writes a
+  trusted PENDING-MOVE entry outside the vault — **in the SAME `view_membership.json` membership
+  record, written in the SAME atomic write as the revocation** (correction 2026-09-29: two files cannot
+  be crash-atomic, so there is no separate `pending-moves.json`; the completed receipts live in that
+  same record too), keyed by `pending_move_id`: collection, old/new `.base`-or-folder path, view
+  names, old/new view paths, timestamp). Retry replays ONLY from that record, never from file content.
+  The record EXPIRES 7 days after its timestamp (a named constant); Retry on an expired record returns a
+  visible `retry_expired` error. If the rename already landed, Retry verifies and enrolls; otherwise it
+  re-runs the same saved, preflighted request under the collection lock; a preflight that now fails
+  (destination occupied, source changed or disappeared) returns a visible `retry_preflight_failed`
+  error. Neither error grants authority. On success the pending record is replaced by an inert
+  "completed" receipt for that `pending_move_id`, kept 7 days: a repeat Retry on it returns success with
+  `outcome: already_complete` (no-op); an unknown id returns a visible `retry_not_found`; an expired
+  pending or completed id returns `retry_expired`. Contract: `POST
+  /library/{workspace_id}/retry-move` (`RetryMoveRequest` → `RetryMoveResult`; `RetryMoveError` codes
+  `retry_not_found` 404, `retry_expired` 410, `retry_identity_mismatch` 409, `retry_preflight_failed`
+  409, `retry_locked` 503); moves that fail after revocation and FR-VA-031 refusals both return the ONE typed 409 body
+  `LibraryMoveConflictError` on `POST /library/move` and `POST /library/{workspace_id}/rename`
+  (architect ruling VA-ARCH-409, 2026-09-29: no `oneOf`, ADR-034), `code` enum `already_exists` |
+  `is_mount_root` | `view_tracked_transfer_refused` (+ `tracked_paths`) | `move_incomplete` (+ `paths`,
+  `pending_move_id`; 409 because it is retryable, not a server fault). Agent surface:
+  `knowledge_restructure` op `retry_move` (arg `pending_move_id`), prose results carrying the same
+  fields. Tests 77/78 cover expired, preflight_failed, already-landed, the normal retry, repeat-after-success
+  (no-op via the completed receipt) and unknown id (not_found).
+
+- **FR-VA-033 *(team-lead ruling, 2026-09-29)***: Releasing a `.base`'s views (FD-7 delete-release, and any
+  trash of a `.base`) MUST revoke ALL of that `.base`'s memberships in ONE membership-record save BEFORE
+  stripping markers or trashing files. The "derived" badge and read-only enforcement (FD-6) are driven by
+  the membership RECORD, never by the file's `derived_from` marker. Tests 81, 82.
+- **FR-VA-034 *(team-lead ruling, 2026-09-29)***: A same-collection FOLDER rename/move whose subtree contains
+  a nested knowledge base with tracked views MUST be REFUSED (same `LibraryMoveConflictError`
+  `view_tracked_transfer_refused`, naming the tracked paths). Test 83.
+- **FR-VA-035 *(team-lead ruling, 2026-09-29)***: While an unexpired pending move (FR-VA-032) names a path,
+  any transfer or root move touching that path MUST be refused (visible error naming the pending move).
+  Test 84.
+- **FR-VA-036 *(team-lead ruling, 2026-09-29)***: Library folder trash and the agent `knowledge_restructure`
+  trash op are IN SCOPE: they MUST revoke tracked memberships first (revoke-before-act, as FR-VA-032),
+  then trash. **Ruling (team-lead, 2026-09-29): trash does NOT use the pending-move plan or Retry** —
+  revoke-first puts the views in their intended delete end state (released, no authority). If the trash
+  itself then fails, the operation returns a visible `trash_incomplete` error naming the paths; trashing
+  again completes it idempotently. `PendingViewMove` stays rename/move-only. REST (team-lead correction,
+  2026-09-29): `trash_incomplete` is added to the `LibraryMoveConflictError` code enum (with `paths`) and
+  `DELETE /library/{workspace_id}/entries` (`deleteLibraryEntry`, no 409 today) gains a 409 using that
+  same schema — no separate trash error schema; the agent `knowledge_restructure` trash op returns the
+  same fields in prose. **Nested roots:** a folder trash whose subtree contains nested knowledge-base
+  roots takes sorted locks (enclosing + every nested root) and revokes the memberships in ALL affected
+  roots BEFORE the trash; recorded views inside the trashed folder are released even when their `.base`
+  lives outside it. Test 85 (revoke persisted → trash fails → re-trash succeeds;
+  no authority remains at any point).
+- **FR-VA-037 *(team-lead ruling, 2026-09-29)***: Incomplete discovery (an unreadable subtree, SkipUnreadable)
+  MUST NOT retire any member of the record — the member is kept. **Correction (team-lead, 2026-09-29):**
+  the kept-member notice is a server `Warn` log only (naming the collection and the skipped subtree), NOT a
+  user-visible warning; the unreadable subfolder itself is still reported on every surface under
+  FR-VA-025 — that visible report is unchanged. Test 86 (member kept after an incomplete walk; the `Warn`
+  log line is emitted).
+- **FR-VA-038 *(team-lead ruling, 2026-09-29)***: The membership record is guarded by a dedicated exact-key
+  membership lock (not the striped note-write locks, which were proven to self-deadlock on a collision).
+  Test 87 (regression: two keys that collide in the striped table do not deadlock).
+- **FR-VA-039 *(team-lead ruling, 2026-09-29)***: Permanently deleting a knowledge base's ROOT folder (the
+  plain `root.Delete` path) and permanently deleting its marker folder (`.obsidian` / `.omnipus-vault` —
+  KB demotion: the folder stops being a knowledge base) MUST both remove that collection's outside-vault
+  membership record (`view_membership.json` entry), including its pending moves and completed receipts,
+  under the dedicated membership lock (FR-VA-038). If that removal fails, the delete/demotion itself
+  fails with a visible error; it never succeeds while leaving the record behind. Tests 88 (delete the KB
+  root, recreate a knowledge base at the SAME path, plant a view with the same `name` and `derived_from`:
+  it gets NO authority — not derived, not read-only, no managed rewrite) and 89 (same, via marker-folder
+  deletion and re-creation of the marker; plus: an injected record-removal failure makes the delete fail
+  visibly and leaves the root/marker in place).
+
 ## 13. Success Criteria
 
 - **SC-VA-001**: A view file placed anywhere inside a knowledge base (any depth, not the former
@@ -2377,6 +2487,15 @@ registration/wiring, not the test suite).
 | FR-VA-026 | — (cross-cutting, OBS-003; **corrected in round 2, R2-MIN-007 — round 1 wrongly mapped this to test 10, a Library-listing test with no path-in-output assertion**) | — | 68 |
 | FR-VA-027 | — (cross-cutting, R2-MAJ-006) | — | 59, 60 |
 | FR-VA-030 | US-5, US-6 | founder-direction amendment 2026-09-29 (#1013) | 73 |
+| FR-VA-031 | US-2, US-3 | founder-direction amendment 2026-09-29 (architect Q-A) | 74, 75, 76, 79, 80 |
+| FR-VA-032 | US-2 | founder-direction amendment 2026-09-29 (architect Q-B) | 77, 78 |
+| FR-VA-033 | US-2 | team-lead ruling 2026-09-29 | 81, 82 |
+| FR-VA-034 | US-2, US-3 | team-lead ruling 2026-09-29 | 83 |
+| FR-VA-035 | US-2 | team-lead ruling 2026-09-29 | 84 |
+| FR-VA-036 | US-2, US-3 | team-lead ruling 2026-09-29 | 85 |
+| FR-VA-037 | US-1 | team-lead ruling 2026-09-29 | 86 |
+| FR-VA-038 | US-2 | team-lead ruling 2026-09-29 | 87 |
+| FR-VA-039 | US-2, US-3 | team-lead ruling 2026-09-29 | 88, 89 |
 
 Every FR appears above. Remaining gaps between the TDD plan's numbered tests and a scenario are
 flagged rather than silently left implicit, per "no false success": the implementing lead adds the

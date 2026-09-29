@@ -1,0 +1,24 @@
+title: LibraryMoveConflictError
+description: >
+  Typed 409 body for POST /library/move and POST
+  /library/{workspace_id}/rename (FR-VA-031/FR-VA-032). Both operations can
+  reach 409 for four distinct causes; `code` discriminates, following the
+  multi-cause pattern of LLMError.yaml. Shares "error"/"code" with the
+  standard ErrorResponse envelope so a generic handler still works unchanged.
+  Which optional field is populated is a function of `code`:
+    - already_exists / is_mount_root: no extra field (today's 409s,
+      pkg/library/root.go ErrAlreadyExists/ErrIsMountRoot; `code` is new).
+    - view_tracked_transfer_refused (FR-VA-031): tracked_paths is present.
+    - move_incomplete (FR-VA-032): paths and pending_move_id are present;
+      retryable via POST /library/{workspace_id}/retry-move.
+type: object
+additionalProperties: false
+required: [error, code]
+properties:
+  error: {type: string, minLength: 1, description: "Human-readable message, safe to display."}
+  code:
+    type: string
+    enum: [already_exists, is_mount_root, view_tracked_transfer_refused, move_incomplete]
+  tracked_paths: {type: array, items: {type: string}, description: "Only for view_tracked_transfer_refused."}
+  paths: {type: array, items: {type: string}, description: "Only for move_incomplete."}
+  pending_move_id: {type: string, description: "Only for move_incomplete; pass to retry-move."}

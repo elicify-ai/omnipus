@@ -1,0 +1,35 @@
+title: ViewRejectionCode
+description: >
+  Every reason a `.view` file can fail to load — extracted to its own enum
+  (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 2) so the SPA's
+  duplicate / parse / oversize badges compare against one canonical list of
+  reason codes, not against a hand-written wire literal that can drift from the
+  server's actual `RejectView*` set.
+
+  Present on `LibraryEntryView.rejection` exactly when the file is `is_view: true`
+  but broken, oversize, or duplicate-rejected; absent on a healthy view. The
+  operator-facing text lives on the sibling `rejection_reason` field
+  (`ViewRejection.Reason` on the server), and — for a duplicate-name collision
+  only — the colliding paths live on the sibling `conflict_paths` field
+  (`ViewRejection.Paths` on the server).
+type: string
+enum:
+  - view_unreadable
+  - view_invalid_yaml
+  - view_empty
+  - view_missing_name
+  - view_missing_type
+  - view_duplicate_name
+  - view_unknown_key
+  - view_unknown_type
+  - view_unknown_property
+  - view_invalid_layout
+  - view_filter_too_large
+  - view_invalid_filter_node
+  - view_invalid_formula
+  - view_unknown_formula
+  - view_invalid_kind
+  - view_invalid_part
+  - view_unknown_enum_value
+  - view_too_large
+example: "view_duplicate_name"
