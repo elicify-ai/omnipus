@@ -166,8 +166,8 @@ func TestGoalQ2B_RejectRunningChildren_RunningGrandchildWithTerminalDirectChildP
 		t.Fatalf("Load(grandchild): %v", err)
 	}
 	grandchild.State = session.LifecycleRunning
-	if err := h.lifecycle.Persist(grandchild); err != nil {
-		t.Fatalf("Persist(grandchild running): %v", err)
+	if persistErr := h.lifecycle.Persist(grandchild); persistErr != nil {
+		t.Fatalf("Persist(grandchild running): %v", persistErr)
 	}
 	q2bKeepTurnAlive(t, h.al, grandchild.SessionID)
 	q2bMakeDirectChildTerminal(t, h, direct, session.LifecycleCompleted)
