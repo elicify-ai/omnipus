@@ -55,6 +55,21 @@
 // os.OpenRoot(hostPath) calls named above, passing the exact string about
 // to be opened.
 //
+// # Tag guidance (fix-round-3 RED-pack correction, item 4)
+//
+// This file's tag is plain `fix3seam` (no `unix`) because its swap
+// machinery (installFix3PreOpenSwapHook, os.Symlink) and its two test
+// functions are not unix-specific — os.Symlink and the fixtures both of
+// them use (newRBFixture, rbWrite, rbTruncation) run on every platform this
+// repo supports (Hard Constraint: Linux, macOS, Windows). The developer
+// removes the `fix3seam` term entirely (this file becomes an ordinary,
+// always-built *_test.go with no build-tag line at all) once
+// setGrepPreOpenRootHook/runGrepPreOpenRootHook are added to grep_scope.go
+// — there is no narrower platform tag to fall back to the way T2a's
+// FIFO-swap file falls back to `unix`, because nothing else in this file
+// is platform-restricted. Folding it into an existing file rather than
+// keeping it standalone is also acceptable once the seam exists.
+//
 //go:build fix3seam
 
 package tools

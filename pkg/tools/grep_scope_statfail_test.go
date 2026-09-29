@@ -15,6 +15,49 @@
 // absence truthfully); every OTHER Stat error must refuse — fail closed —
 // with an *fs.PathError wrapping fs.ErrPermission, and the entry must never
 // reach Open/content-read.
+//
+// # fix-round-3 RED-pack correction (team-lead decision, option A)
+//
+// Two things were wrong with this file's oracle as originally written, both
+// corrected here rather than left for CHECK to find:
+//
+//  1. TestRefuseNonRegular_FailClosedOnOpaqueStatError used to call
+//     refuseNonRegular directly. refuseNonRegular has ZERO production
+//     callers as of 3d33a7950 (`grep -rn "refuseNonRegular(" pkg/tools/*.go`
+//     outside _test.go files returns only its own definition) — it is dead
+//     code, kept only for its own doc comment's account of the OLD
+//     Stat-then-Open race window the A3 fix (refuseNonRegularViaOpen)
+//     replaced. A green test that calls dead code directly proves nothing
+//     about the shipped path; it was DELETED rather than retargeted,
+//     because TestGrepGateFS_Open_StatErrorRefusesWithoutOpening below
+//     (F1/S3's "T4") already asserts the identical property — refuse with
+//     an *fs.PathError wrapping fs.ErrPermission, entry never opened —
+//     through the LIVE call path (grepGateFS.Open ->
+//     refuseNonRegularViaOpen) and with a REAL, deterministic OS-level
+//     opaque error (a symlink loop, syscall.ELOOP) rather than a synthetic
+//     fs.FS stub error against unreachable code. Retargeting would only
+//     have reproduced T4's own assertions under a new name. Its sibling,
+//     TestRefuseNonRegular_NotExistLeftToOpen (below), calls the same dead
+//     helper and has the identical redundancy problem (the two
+//     Open-level "StillOpens" tests already cover fs.ErrNotExist through
+//     the live path) — it was OUT OF SCOPE for this pass and is left as a
+//     reported finding, not fixed here.
+//  2. TestGrepGateFS_Open_ELOOPDiscriminatingControl and
+//     TestGrepGateFS_Open_StatNotExistStillOpens used to assert
+//     `fsys.opened` / an `opened` spy flag directly — i.e. that the
+//     guarded fsys's OWN Open call was reached, which encodes ONE
+//     particular internal implementation (a Stat/verify step followed by a
+//     SEPARATE reopen) rather than the property #920 actually specifies:
+//     a genuinely-missing entry's absence surfaces to the CALLER
+//     truthfully. The required fix for the related N2 finding
+//     (grep_fix3_t2a_needs_seam_test.go) may remove that separate reopen
+//     entirely for the regular-file case; asserting on whether some
+//     particular internal Open fired would make these two tests describe
+//     an implementation detail the fix is free to change, not the
+//     contract it must keep. Rewritten below to assert only the
+//     OBSERVABLE contract: the error grepGateFS.Open returns for
+//     "gone.txt" satisfies errors.Is(err, fs.ErrNotExist) — true
+//     regardless of whether one open or two internal opens produced it.
 package tools
 
 import (
@@ -22,17 +65,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
-
-// errStatIOFailure is an opaque fs.FS-specific Stat failure — deliberately
-// neither fs.ErrNotExist nor fs.ErrPermission — exercising the "ANY other
-// Stat error" branch the fix requires, not merely the one error type the
-// pre-fix code already happened to special-case in its callers.
-var errStatIOFailure = errors.New("stub: transient stat I/O failure")
 
 // statFailFS is a minimal fs.FS stub — the one process-edge (the
 // filesystem) refuseNonRegular actually depends on, per test-plan-and-write's
@@ -74,30 +110,13 @@ func newStatFailFixture(t *testing.T) (dir string, base fs.FS) {
 	return dir, os.DirFS(dir)
 }
 
-// TestRefuseNonRegular_FailClosedOnOpaqueStatError is F1/S3's direct-call
-// case: a Stat error that is not fs.ErrNotExist must refuse, not allow.
-func TestRefuseNonRegular_FailClosedOnOpaqueStatError(t *testing.T) {
-	_, base := newStatFailFixture(t)
-	stub := &statFailFS{FS: base, failName: "entry.txt", statErr: errStatIOFailure}
-
-	err := refuseNonRegular(stub, "entry.txt")
-	if err == nil {
-		t.Fatal("F1/S3: a non-NotExist Stat error must refuse (fail closed), got nil (ALLOW)")
-	}
-	if !errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("refusal must wrap fs.ErrPermission, got %v", err)
-	}
-	var pathErr *fs.PathError
-	if !errors.As(err, &pathErr) {
-		t.Fatalf("refusal must be an *fs.PathError, got %T: %v", err, err)
-	}
-	if pathErr.Op != "open" || pathErr.Path != "entry.txt" {
-		t.Fatalf("PathError = {Op:%q Path:%q}, want {Op:\"open\" Path:\"entry.txt\"}", pathErr.Op, pathErr.Path)
-	}
-	if !strings.Contains(err.Error(), errStatIOFailure.Error()) {
-		t.Fatalf("refusal reason must surface WHY the Stat failed (the original error), got: %v", err)
-	}
-}
+// TestRefuseNonRegular_FailClosedOnOpaqueStatError was DELETED in the
+// fix-round-3 RED-pack correction — see the file header's "fix-round-3
+// RED-pack correction" note, item 1. It called refuseNonRegular, which has
+// zero production callers on 3d33a7950; TestGrepGateFS_Open_StatErrorRefusesWithoutOpening
+// below already proves the identical fail-closed-on-opaque-error property
+// through the live call path with a real OS error, so this was redundant
+// dead-code coverage, not a gap.
 
 // TestRefuseNonRegular_NotExistLeftToOpen is the discriminating control:
 // fs.ErrNotExist must keep the pre-fix behaviour exactly (nil — Open
@@ -175,30 +194,41 @@ func TestGrepGateFS_Open_StatErrorRefusesWithoutOpening(t *testing.T) {
 }
 
 // TestGrepGateFS_Open_ELOOPDiscriminatingControl is the discriminating
-// control for the test above: a genuinely-missing entry (fs.ErrNotExist)
-// must still reach the guarded fsys's Open, exactly as
-// TestGrepGateFS_Open_StatNotExistStillOpens already asserts through the
-// fs.FS-stub shape — this restates it through the real os.OpenFile path so
-// the ELOOP assertion above cannot be satisfied by a fail-closed-on-anything
-// gate that also (wrongly) refuses a plain absence.
+// control for the test above: a genuinely-missing entry must be reported to
+// the CALLER as fs.ErrNotExist — the truthful absence — not turned into a
+// refusal, exactly as TestGrepGateFS_Open_StatNotExistStillOpens already
+// asserts through the fs.FS-stub shape. This restates it through the real
+// os.OpenFile path so the ELOOP assertion above cannot be satisfied by a
+// fail-closed-on-anything gate that also (wrongly) refuses a plain absence.
+//
+// Rewritten (fix-round-3 RED-pack correction, item 2): the pre-correction
+// version asserted `opened` — that the guarded fsys's OWN Open call was
+// reached — which encodes ONE particular internal shape (a verify step
+// followed by a separate reopen) rather than the OBSERVABLE contract this
+// test actually owns. Asserting on the returned error's identity instead
+// is agnostic to whether the fix keeps, removes or reshapes any internal
+// reopen.
 func TestGrepGateFS_Open_ELOOPDiscriminatingControl(t *testing.T) {
 	dir := t.TempDir()
-	var opened bool
-	fsys := fix3RedOpenSpy{FS: os.DirFS(dir), opened: &opened}
-	g := grepGateFS{fsys: fsys, raw: os.DirFS(dir), root: dir, policy: fspolicy.FSPolicy{}}
+	g := grepGateFS{fsys: os.DirFS(dir), raw: os.DirFS(dir), root: dir, policy: fspolicy.FSPolicy{}}
 
 	_, err := g.Open("gone.txt")
 	if err == nil {
 		t.Fatal("control: gone.txt does not exist on disk; Open must report that, not succeed")
 	}
-	if !opened {
-		t.Fatal("control: a genuinely-missing entry must still reach the guarded fsys's Open (unchanged behaviour) — the kind check must not swallow ENOENT")
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("control: a genuinely-missing entry must surface fs.ErrNotExist to the caller (the kind check must not swallow ENOENT behind a refusal), got %v", err)
 	}
 }
 
 // TestGrepGateFS_Open_StatNotExistStillOpens is the same integration
-// control: a genuinely-missing entry still reaches the guarded fsys's Open,
-// which reports the absence itself — unchanged behaviour.
+// control via the fs.FS-stub shape: a genuinely-missing entry's absence
+// reaches the caller truthfully as fs.ErrNotExist — unchanged behaviour.
+//
+// Rewritten (fix-round-3 RED-pack correction, item 2): the pre-correction
+// version asserted `fsys.opened` directly — see this file's header note
+// and the sibling rewrite above for why that is an internal-implementation
+// assertion, not the contract this test owns.
 func TestGrepGateFS_Open_StatNotExistStillOpens(t *testing.T) {
 	dir, base := newStatFailFixture(t)
 	raw := &statFailFS{FS: base, failName: "gone.txt", statErr: &fs.PathError{Op: "stat", Path: "gone.txt", Err: fs.ErrNotExist}}
@@ -209,7 +239,7 @@ func TestGrepGateFS_Open_StatNotExistStillOpens(t *testing.T) {
 	if err == nil {
 		t.Fatal("gone.txt does not exist on disk either; Open must report that, not succeed")
 	}
-	if !fsys.opened {
-		t.Fatal("an fs.ErrNotExist Stat result must still reach the guarded fsys's Open (unchanged behaviour)")
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("an fs.ErrNotExist Stat result must surface fs.ErrNotExist to the caller (the truthful absence, not a refusal-shaped error), got %v", err)
 	}
 }
