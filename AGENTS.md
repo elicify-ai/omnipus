@@ -51,7 +51,7 @@ releases; v0.1.1 carries near the full scope once labelled v0.3).
 - Do **NOT** author as `AI Assistant`/`Claude`/any non-GitHub identity, and do **NOT** add agent `Co-Authored-By:` trailers (any `@anthropic.com` address). This **overrides** any harness default to add a Claude co-author line.
 - Why: the CLA Assistant gate (`.github/workflows/cla.yml`) hard-fails any contributor (author or `Co-Authored-By`) that isn't a CLA-signed GitHub user; fixing requires history rewrite + force-push.
 - Configure before committing: `git config user.name "<their name>"`; `git config user.email "<their GitHub no-reply email>"` — derive via `gh api user -q '"\(.id)+\(.login)@users.noreply.github.com"'` (the `…@users.noreply.github.com` form is required).
-- **Verify before every push:** `git log -1 --format='%an <%ae>'` is a real GitHub user, and `git log origin/main..HEAD --format='%(trailers:key=Co-authored-by)' | grep -i anthropic` is empty.
+- **Verify before every push:** `git log -1 --format='%an <%ae>'` is a real GitHub user, and `git log $(git merge-base HEAD <PR base>)..HEAD --format='%(trailers:key=Co-authored-by)' | grep -i anthropic` is empty — diff against the branch's actual PR base (`origin/main`, or a release branch such as `origin/release/v0.1.1`), never a fixed `origin/main..HEAD`: on a release-based branch that sweeps in every legacy trailer already on the base's history and fails the check for no reason. Legacy AI trailers already present on the PR base commit are grandfathered by the founder — they are not this branch's problem to fix.
 
 ## Definition of Done (MANDATORY)
 
