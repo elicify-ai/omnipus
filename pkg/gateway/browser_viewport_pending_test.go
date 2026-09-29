@@ -36,7 +36,7 @@ func TestViewportPendingAttachmentKeepsOriginalQueueOrder(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("attachment work did not enter")
 			}
-			h.dispatchViewport(wc, state, "other-viewer", marshalViewportFrame(t, 900, 700))
+			h.dispatchViewport(wc, state, "other-viewer", "", marshalViewportFrame(t, 900, 700))
 			if replace {
 				replacement := state.beginAttach()
 				require.True(t, state.bindAttachment(replacement, mgr, session, panel))

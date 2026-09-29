@@ -25,9 +25,9 @@ func TestDedicatedControlAcknowledgesOnlyActualSuccess(t *testing.T) {
 					f.cfg.Tools.Browser.TakeControlEnabled = false
 					f.handler.handleControlContext(ctx, f.conn, f.state, a, "fixture-viewer", "user", []byte(tc.raw), f.cfg)
 				case "tab":
-					f.handler.handleTabActionContext(ctx, f.conn, f.state, a, "fixture-viewer", []byte(tc.raw))
+					f.handler.handleTabActionContext(ctx, f.conn, f.state, a, "fixture-viewer", "user", []byte(tc.raw))
 				case "viewport":
-					f.handler.handleViewportContext(ctx, f.conn, f.state, a, "fixture-viewer", []byte(tc.raw))
+					f.handler.handleViewportContext(ctx, f.conn, f.state, a, "fixture-viewer", "user", []byte(tc.raw))
 				case "input":
 					f.handler.handleInputContext(ctx, f.conn, f.state, a, "fixture-viewer", []byte(tc.raw))
 				}

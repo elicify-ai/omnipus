@@ -187,7 +187,7 @@ func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *brow
 			case string(generated.WsFrameTypeBrowserControl):
 				h.handleControlContext(commandCtx, wc, state, attachment, viewerID, userID, data, cfg)
 			case string(generated.WsFrameTypeBrowserTabAction):
-				h.handleTabActionContext(commandCtx, wc, state, attachment, viewerID, data)
+				h.handleTabActionContext(commandCtx, wc, state, attachment, viewerID, userID, data)
 			}
 		},
 	}

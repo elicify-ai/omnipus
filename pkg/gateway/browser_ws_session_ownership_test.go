@@ -1,0 +1,701 @@
+// browser_ws_session_ownership_test.go — RED pack for the browser-panel
+// session-ownership ruling (founder, 2026-09-28): a live-browser session is
+// reachable ONLY by the account that owns its chat session, on EVERY browser
+// WS frame that names a session.
+//
+// Spec source: the founder ruling (squad dispatch brief, CONFIDENTIAL security
+// defect — commit text stays neutral). Frame inventory read from
+// browser_ws.go's readLoop dispatch and the generated frame schemas
+// (pkg/api/generated/asyncapi_types.gen.go): browser_attach, browser_webrtc_offer
+// and browser_input_offer REQUIRE a session id; browser_viewport,
+// browser_tab_action and browser_detach carry an OPTIONAL one that the handlers
+// ignore (attachment-addressed); browser_input and browser_control name NO
+// session at all (pure attachment-addressed — their ownership boundary is the
+// attach that created the attachment). Every frame type gets a row: direct
+// rows assert the refusal of the named session; mediated rows assert the
+// refusal of the attach that would arm the attachment.
+//
+// Oracle source (refusal channel): browser_ws.go's own documented client-frame
+// failure channel — "this socket has no ErrorFrame-based rejection path for
+// client frames, browser_status is the one client-visible failure channel"
+// (browser_ws.go, readLoop's inbound-validation comment). Auth failures close
+// 1008; frame-level refusals on this socket are browser_status{state:"error"}
+// frames on a connection that stays open. So the refusal oracle is: the
+// non-owner receives a browser_status error frame, and never receives a
+// success frame (attached / controlling / detached / webrtc answer / applied
+// input state) for the owner's session. Success frame = access granted =
+// test failure, shown in the failure message.
+//
+// Side-effect oracle (owner's side): while the non-owner's frame is in flight,
+// the OWNER's connection — attached to the owner's own session — receives no
+// frame triggered by it (no tabs broadcast, no controlled_by_other broadcast,
+// no status change). The owner's session must not merely say no: nothing about
+// it may move.
+//
+// Harness: real gateway BrowserWSHandler over HTTP+WS (httptest), real
+// AgentLoop, real BrowserManager with real headless Chrome, TWO real accounts
+// (alice, bob) with bcrypt bearer tokens, two real workspaces on disk
+// (ws-alice, ws-bob, each with the agent on its core team), and two real chat
+// sessions stamped with Owner + WorkspaceID via the real session store — the
+// exact fields a fix must compare (SessionMeta.Owner, pkg/session/
+// daypartition.go) and resolve (sessionWorkspaceID). Only the LLM provider is
+// a stub (harness convention, restMockProvider).
+//
+// Known gaps (deliberate): CI devpods without a working Chrome skip these
+// rows (the probe below) — red-first evidence is the permitted one-narrow-
+// local-run per row, not CI; the dedicated-input row's downstream negotiation
+// machinery is deliberately not over-pinned (its refusal rides on the
+// dedicated-mode attach gate, which this pack pins); the chat-WS and REST
+// surfaces are out of this brief's frame list.
+//
+// Traces to: founder ruling 2026-09-28 (browser-panel non-shareability);
+// ADR-075 FR-017 (session meta read server-side); ADR-038 (panel socket).
+
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+	pion "github.com/pion/webrtc/v4"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+)
+
+// Session-ownership fixture identities. Two accounts, two workspaces, one
+// registered agent that sits on both workspace teams.
+const (
+	soAgentID    = "mia"
+	soAliceUser  = "alice"
+	soBobUser    = "bob"
+	soAliceWS    = "ws-alice"
+	soBobWS      = "ws-bob"
+	soRefusalTMO = 8 * time.Second
+	// soWebrtcTMO covers a real WebRTC negotiation attempt on the owner's
+	// browser — the repo's own e2e budget for an answer is 20s (e2eWait,
+	// browser_webrtc_e2e_test.go), so the refusal window here must be longer,
+	// or a granted answer lands after the oracle gave up.
+	soWebrtcTMO = 25 * time.Second
+	soQuietTMO  = 1500 * time.Millisecond
+)
+
+// soSuccessStates are the browser_status states that mean ACCESS GRANTED on
+// this socket. Any of them reaching a non-owner is the defect, alive.
+var soSuccessStates = map[string]string{
+	"attached":    "live view attached",
+	"controlling": "control lock taken",
+	"detached":    "detach honored",
+}
+
+// soSkipIfNoChrome probes for a working Chrome/Chromium binary (PATH names,
+// then the macOS application bundles the PATH probe misses) and skips the
+// calling test where none executes — mirroring browserWSSkipIfNoBrowser's
+// convention but extended for darwin, where Chrome is never on PATH. Returns
+// the working binary path; the caller pins cfg.Tools.Browser.ExecPath to it so
+// the resolver trusts a verified binary without flipping trust_path_chrome.
+func soSkipIfNoChrome(t *testing.T) string {
+	t.Helper()
+	if os.Getenv("CI") != "" && os.Getenv("OMNIPUS_BROWSER_E2E") == "" {
+		t.Skip("skipping browser-backed ownership tests in CI — set OMNIPUS_BROWSER_E2E=1 to enable")
+	}
+	candidates := []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"}
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = append(candidates,
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		)
+	case "linux":
+		candidates = append(candidates,
+			"/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser",
+		)
+	}
+	for _, name := range candidates {
+		probe := exec.Command(name, "--version")
+		if probe.Run() != nil {
+			continue
+		}
+		if filepath.IsAbs(name) {
+			return name
+		}
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
+	}
+	t.Skip("skipping: no working Chrome/Chromium binary found (PATH + platform bundles probed)")
+	return ""
+}
+
+// soFixture is the two-account real-gateway fixture for one ownership row.
+type soFixture struct {
+	handler    *BrowserWSHandler
+	al         *agent.AgentLoop
+	mgr        *browser.BrowserManager // the owner's (ws-alice) manager
+	alicePanel string                  // PanelTabSetID for the owner's session
+	aliceSess  string
+	bobSess    string
+	aliceToken string
+	bobToken   string
+	aliceConn  *websocket.Conn
+	bobConn    *websocket.Conn
+	srv        *httptest.Server
+}
+
+// soUserToken derives a deterministic two-account bearer token in the
+// harness's established shape ("omnipus_" + 64×<digit>, cf.
+// TestBrowserWS_Auth_ValidUserToken_ConnectionProceeds) plus its bcrypt hash.
+func soUserToken(t *testing.T, digit string) (string, string) {
+	t.Helper()
+	token := "omnipus_" + strings.Repeat(digit, 64)
+	hash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.MinCost)
+	require.NoError(t, err)
+	return token, string(hash)
+}
+
+// newSessionOwnershipFixture builds the fixture WITHOUT connecting anyone.
+func newSessionOwnershipFixture(t *testing.T, mutate func(cfg *config.Config)) *soFixture {
+	t.Helper()
+	chrome := soSkipIfNoChrome(t)
+
+	tmpDir := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpDir)
+
+	aliceToken, aliceHash := soUserToken(t, "7")
+	bobToken, bobHash := soUserToken(t, "8")
+
+	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+		cfg.Gateway.Users = []config.UserConfig{
+			{Username: soAliceUser, Tokens: []config.TokenEntry{{Hash: config.BcryptHash(aliceHash)}}},
+			{Username: soBobUser, Tokens: []config.TokenEntry{{Hash: config.BcryptHash(bobHash)}}},
+		}
+		cfg.Tools.Browser.Headless = true
+		cfg.Tools.Browser.ExecPath = chrome
+		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
+		cfg.Tools.Browser.PageTimeoutSec = 30
+		if mutate != nil {
+			mutate(cfg)
+		}
+	})
+
+	// Two workspaces, one per account, agent "mia" on both core teams. The
+	// harness seed (mustAgentLoop) already put "mia" in its own default
+	// workspace, so every attach below MUST name a session whose meta carries
+	// workspace_id — the FR-033 ambiguity guard otherwise refuses, exactly as
+	// in production.
+	home := config.OmnipusHomeDir()
+	for id := range map[string]bool{soAliceWS: true, soBobWS: true} {
+		require.NoError(t, writeWorkspaceFile(home, storedWorkspace{
+			ID:       id,
+			Name:     id,
+			Status:   "active",
+			CoreTeam: []string{soAgentID},
+		}))
+	}
+
+	// Two real chat sessions with Owner + WorkspaceID — the fields the ruling
+	// turns into the ownership boundary.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "AgentLoop must expose the shared session store")
+	aliceMeta, err := store.NewSession(session.SessionTypeChat, "webchat", soAgentID)
+	require.NoError(t, err)
+	require.NoError(t, store.SetMeta(aliceMeta.ID, session.MetaPatch{
+		Owner:       strPtrSO(soAliceUser),
+		WorkspaceID: strPtrSO(soAliceWS),
+	}))
+	bobMeta, err := store.NewSession(session.SessionTypeChat, "webchat", soAgentID)
+	require.NoError(t, err)
+	require.NoError(t, store.SetMeta(bobMeta.ID, session.MetaPatch{
+		Owner:       strPtrSO(soBobUser),
+		WorkspaceID: strPtrSO(soBobWS),
+	}))
+
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), soAgentID, soAliceWS)
+	require.Equal(t, agent.BrowserResolveOK, outcome, "owner's workspace must resolve a browser manager")
+	t.Cleanup(mgr.Shutdown)
+
+	f := &soFixture{
+		handler:    handler,
+		al:         al,
+		mgr:        mgr,
+		alicePanel: mgr.PanelTabSetID(aliceMeta.ID),
+		aliceSess:  aliceMeta.ID,
+		bobSess:    bobMeta.ID,
+		aliceToken: aliceToken,
+		bobToken:   bobToken,
+	}
+	t.Cleanup(f.closeConns)
+	return f
+}
+
+// start serves the handler and dials+authenticates one connection per
+// account. Attach calls stay with the individual rows.
+func (f *soFixture) start(t *testing.T) {
+	t.Helper()
+	t.Cleanup(f.handler.Wait)
+	f.srv = httptest.NewServer(f.handler)
+	t.Cleanup(f.srv.Close)
+	f.aliceConn = f.dialAuth(t, soAliceUser)
+	f.bobConn = f.dialAuth(t, soBobUser)
+}
+
+func (f *soFixture) dialAuth(t *testing.T, user string) *websocket.Conn {
+	t.Helper()
+	conn := dialBrowserTestWS(t, f.srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	token := f.aliceToken
+	if user == soBobUser {
+		token = f.bobToken
+	}
+	writeBrowserAuthFrame(t, conn, token)
+	return conn
+}
+
+func (f *soFixture) closeConns() {
+	for _, c := range []*websocket.Conn{f.aliceConn, f.bobConn} {
+		if c != nil {
+			_ = c.Close()
+		}
+	}
+}
+
+// attachAndRequire sends browser_attach for (agentID, sessionID) and requires
+// the "attached" success status — the owner-allowed path every row leans on.
+func (f *soFixture) attachAndRequire(t *testing.T, conn *websocket.Conn, agentID, sessionID string) {
+	t.Helper()
+	soSendAttach(t, conn, agentID, sessionID, false)
+	resp := readBrowserStatusFrame(t, conn, 20*time.Second)
+	require.Equal(t, "attached", resp.State,
+		"owner attach must succeed against real headless Chrome: %+v", resp)
+}
+
+// attemptAttach sends browser_attach and returns the response status WITHOUT
+// asserting its state — non-owner attach attempts are expected to be refused
+// after the fix and granted before it, so rows drain the outcome either way
+// and pin only what the ruling demands further down.
+func (f *soFixture) attemptAttach(t *testing.T, conn *websocket.Conn, agentID, sessionID string, dedicated bool) browserFrameDecoder {
+	t.Helper()
+	soSendAttach(t, conn, agentID, sessionID, dedicated)
+	return readBrowserStatusFrame(t, conn, 20*time.Second)
+}
+
+// --- frame senders (one per frame type in the ruling's scope) ---
+
+func soSendAttach(t *testing.T, conn *websocket.Conn, agentID, sessionID string, dedicated bool) {
+	t.Helper()
+	frame := generated.BrowserAttachFrame{
+		Type:      string(generated.WsFrameTypeBrowserAttach),
+		AgentId:   agentID,
+		SessionId: sessionID,
+	}
+	if dedicated {
+		mode := "dedicated"
+		frame.InputMode = &mode
+	}
+	soWrite(t, conn, frame)
+}
+
+func soSendInput(t *testing.T, conn *websocket.Conn) {
+	t.Helper()
+	// kind=reload: a discrete input kind that succeeds SILENTLY when honored
+	// (handleInput answers only on error) and touches no loopback-SSRF gate —
+	// so a granted attach is the only way input reaches the owner's browser.
+	// The frame carries NO session id (the contract's BrowserInputFrame has no
+	// session_id field): it acts on the connection's pinned attachment, so the
+	// attach gate IS this frame's ownership boundary.
+	soWrite(t, conn, generated.BrowserInputFrame{
+		Type: string(generated.WsFrameTypeBrowserInput),
+		Kind: "reload",
+	})
+}
+
+func soSendControlTake(t *testing.T, conn *websocket.Conn) {
+	t.Helper()
+	soWrite(t, conn, generated.BrowserControlFrame{
+		Type:   string(generated.WsFrameTypeBrowserControl),
+		Action: "take",
+	})
+}
+
+func soSendTabAction(t *testing.T, conn *websocket.Conn, agentID, sessionID string) {
+	t.Helper()
+	// action=open needs no index and succeeds silently when honored.
+	soWrite(t, conn, generated.BrowserTabActionFrame{
+		Type:      string(generated.WsFrameTypeBrowserTabAction),
+		Action:    "open",
+		AgentId:   &agentID,
+		SessionId: &sessionID,
+	})
+}
+
+func soSendViewport(t *testing.T, conn *websocket.Conn, agentID, sessionID string) {
+	t.Helper()
+	soWrite(t, conn, generated.BrowserViewportFrame{
+		Type:      string(generated.WsFrameTypeBrowserViewport),
+		AgentId:   &agentID,
+		SessionId: &sessionID,
+		Width:     801,
+		Height:    601,
+	})
+}
+
+func soSendDetach(t *testing.T, conn *websocket.Conn, sessionID string) {
+	t.Helper()
+	soWrite(t, conn, generated.BrowserDetachFrame{
+		Type:      string(generated.WsFrameTypeBrowserDetach),
+		SessionId: &sessionID,
+	})
+}
+
+func soSendInputOffer(t *testing.T, conn *websocket.Conn, agentID, sessionID, sdp string) {
+	t.Helper()
+	soWrite(t, conn, generated.BrowserInputOfferFrame{
+		Type:         string(generated.WsFrameTypeBrowserInputOffer),
+		AgentId:      agentID,
+		SessionId:    sessionID,
+		Sdp:          sdp,
+		OfferId:      1,
+		InputEpoch:   1,
+		ControlEpoch: 0,
+	})
+}
+
+func soSendWebrtcOffer(t *testing.T, conn *websocket.Conn, agentID, sessionID, sdp string) {
+	t.Helper()
+	soWrite(t, conn, generated.BrowserWebRTCOfferFrame{
+		Type:      string(generated.WsFrameTypeBrowserWebrtcOffer),
+		AgentId:   agentID,
+		SessionId: sessionID,
+		Sdp:       sdp,
+		OfferId:   intPtrSO(1),
+	})
+}
+
+func soWrite(t *testing.T, conn *websocket.Conn, frame any) {
+	t.Helper()
+	data, err := json.Marshal(frame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+}
+
+// --- response readers (the oracle) ---
+
+// soExpectRefusal requires the next browser_status on conn to be an error —
+// the socket's client-frame refusal channel. A success state arriving instead
+// fails the test WITH that frame in the message (the defect, alive, on show).
+func soExpectRefusal(t *testing.T, conn *websocket.Conn, label string) {
+	t.Helper()
+	resp := readBrowserStatusFrame(t, conn, soRefusalTMO)
+	if state, ok := soSuccessStates[resp.State]; ok {
+		t.Fatalf("%s: non-owner was GRANTED %s — browser_status{state:%q session_id:%q message:%q}; "+
+			"the ownership ruling requires a refusal (browser_status error) here",
+			label, state, resp.State, resp.SessionID, resp.Message)
+	}
+	require.Equal(t, "error", resp.State,
+		"%s: non-owner frame must be refused with a browser_status error frame: %+v", label, resp)
+}
+
+// soExpectQuiet requires NO frame of any kind within the window. The owner's
+// channel must carry nothing triggered by the non-owner's frame; a close is
+// also a failure (the owner must stay connected).
+func soExpectQuiet(t *testing.T, conn *websocket.Conn, label string) {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(soQuietTMO)) // errcheck rationale: test-only conn deadline
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return // quiet — the required outcome
+		}
+		t.Fatalf("%s: owner's connection closed or errored while expected quiet: %v", label, err)
+	}
+	t.Fatalf("%s: owner's connection received a frame triggered by the non-owner's request: %s", label, raw)
+}
+
+// soMintOfferSDP builds a real, gather-complete SDP offer with pion — the
+// browser_webrtc_offer / browser_input_offer claims validation demands a
+// parseable offer before any refusal path that sits behind it.
+func soMintOfferSDP(t *testing.T) string {
+	t.Helper()
+	pc, err := pion.NewPeerConnection(pion.Configuration{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pc.Close() })
+	recvonly := pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}
+	_, err = pc.AddTransceiverFromKind(pion.RTPCodecTypeVideo, recvonly)
+	require.NoError(t, err)
+	_, err = pc.AddTransceiverFromKind(pion.RTPCodecTypeAudio, recvonly)
+	require.NoError(t, err)
+	offer, err := pc.CreateOffer(nil)
+	require.NoError(t, err)
+	gatherComplete := pion.GatheringCompletePromise(pc)
+	require.NoError(t, pc.SetLocalDescription(offer))
+	select {
+	case <-gatherComplete:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ICE gathering did not complete within 10s")
+	}
+	local := pc.LocalDescription()
+	require.NotNil(t, local, "LocalDescription must be present after gathering")
+	return local.SDP
+}
+
+func strPtrSO(s string) *string { return &s }
+
+func intPtrSO(i int) *int { return &i }
+
+// ---------------------------------------------------------------------------
+// Rows — one per frame type that names or addresses a session.
+// ---------------------------------------------------------------------------
+
+// Positive control: BOTH owners attach to their OWN sessions. Pins the
+// fixture (two accounts, two workspaces, real Chrome) and the property any
+// fix must preserve: ownership checks refuse exactly the foreign frames.
+func TestBrowserWS_SessionOwnership_Attach_OwnerAllowed(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
+	f.attachAndRequire(t, f.bobConn, soAgentID, f.bobSess)
+}
+
+// browser_attach: Bob's attach naming Alice's session is refused. RED today:
+// handleAttach authenticates Bob but never compares userID against
+// SessionMeta.Owner, so the attach succeeds onto Alice's live browser.
+func TestBrowserWS_SessionOwnership_Attach_NonOwnerRefused(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess) // owner pinned
+
+	soSendAttach(t, f.bobConn, soAgentID, f.aliceSess, false)
+	soExpectRefusal(t, f.bobConn, "browser_attach")
+
+	// Side effect: no control lock appeared on the owner's tab set, and the
+	// owner's channel carries nothing from the attempt.
+	require.Equal(t, "", f.mgr.Live().Controller(f.alicePanel),
+		"non-owner attach attempt must leave the owner's control state untouched")
+	soExpectQuiet(t, f.aliceConn, "browser_attach")
+}
+
+// browser_input names NO session on the wire (the contract's
+// BrowserInputFrame has no session_id field) — it acts on the connection's
+// pinned attachment, so this frame's ownership boundary is the ATTACH that
+// created the attachment. RED today: Bob's attach onto Alice's session is
+// granted (the defect) and the reload below would then execute on HER tab;
+// nothing else in the socket stops it (input is deliberately not gated on a
+// control lock — browser_ws_input.go).
+func TestBrowserWS_SessionOwnership_Input_NonOwnerRefused(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
+
+	resp := f.attemptAttach(t, f.bobConn, soAgentID, f.aliceSess, false)
+	require.Equal(t, "error", resp.State,
+		"non-owner attach must be refused: browser_input acts on the pinned attachment, "+
+			"so a granted attach IS input access to the owner's browser (got %q)", resp.State)
+
+	// With the attach refused (post-fix), the input frame has no attachment to
+	// act on: it must be dropped benignly (no status frame — the socket's
+	// documented not-attached behavior) and move nothing on the owner's side.
+	soSendInput(t, f.bobConn)
+	soExpectQuiet(t, f.bobConn, "browser_input after refused attach")
+	soExpectQuiet(t, f.aliceConn, "browser_input")
+}
+
+// browser_control carries no session id and acts on the connection's pinned
+// attachment — so its ownership surface is the attach that created it. Bob
+// attempts attach onto Alice's session (granted before the fix), then takes
+// control. RED today: the take succeeds and Alice is broadcast
+// controlled_by_other=true — a non-owner holds the wheel on her browser.
+func TestBrowserWS_SessionOwnership_Control_NonOwnerRefused(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
+
+	_ = f.attemptAttach(t, f.bobConn, soAgentID, f.aliceSess, false) // outcome unpinned by design
+
+	soSendControlTake(t, f.bobConn)
+	soExpectRefusal(t, f.bobConn, "browser_control")
+
+	require.Equal(t, "", f.mgr.Live().Controller(f.alicePanel),
+		"non-owner control take must leave the owner's control lock unset")
+	soExpectQuiet(t, f.aliceConn, "browser_control")
+}
+
+// browser_tab_action: Bob, attached to his OWN session, names ALICE's session
+// on a tab action. RED today: the frame's session id is never consulted and
+// the open lands silently on Bob's own attachment.
+func TestBrowserWS_SessionOwnership_TabAction_NonOwnerRefused(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
+	f.attachAndRequire(t, f.bobConn, soAgentID, f.bobSess)
+
+	soSendTabAction(t, f.bobConn, soAgentID, f.aliceSess)
+	soExpectRefusal(t, f.bobConn, "browser_tab_action")
+	soExpectQuiet(t, f.aliceConn, "browser_tab_action")
+}
+
+// browser_viewport: same attachment-addressing shape as browser_input — Bob
+// home-attached names Alice's session; RED today the resize is honored
+// silently on Bob's own attachment.
+func TestBrowserWS_SessionOwnership_Viewport_NonOwnerRefused(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
+	f.attachAndRequire(t, f.bobConn, soAgentID, f.bobSess)
+
+	beforeW, beforeH, beforeOK := f.mgr.Live().CSSViewport(f.alicePanel)
+	soSendViewport(t, f.bobConn, soAgentID, f.aliceSess)
+	soExpectRefusal(t, f.bobConn, "browser_viewport")
+
+	afterW, afterH, afterOK := f.mgr.Live().CSSViewport(f.alicePanel)
+	require.Equal(t, beforeOK, afterOK, "owner's viewport state must be untouched")
+	if beforeOK {
+		require.Equal(t, beforeW, afterW, "owner's viewport width must be untouched")
+		require.Equal(t, beforeH, afterH, "owner's viewport height must be untouched")
+	}
+	soExpectQuiet(t, f.aliceConn, "browser_viewport")
+}
+
+// browser_detach: Bob home-attached names ALICE's session on a detach. RED
+// today: the frame's session id is ignored and Bob's OWN attachment is torn
+// down with a success status — the frame was honored, not refused.
+func TestBrowserWS_SessionOwnership_Detach_NonOwnerRefused(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
+	f.attachAndRequire(t, f.bobConn, soAgentID, f.bobSess)
+
+	soSendDetach(t, f.bobConn, f.aliceSess)
+	soExpectRefusal(t, f.bobConn, "browser_detach")
+	soExpectQuiet(t, f.aliceConn, "browser_detach")
+}
+
+// browser_input_offer (ADR-081 dedicated input): gated on a dedicated-mode
+// attach, which is itself an attach naming the session. RED today: Bob's
+// dedicated attach onto Alice's session is granted; the input offer then
+// resolves Alice's workspace manager directly
+// (dispatchDedicatedInputOffer's BrowserManagerForAgent call). This row pins
+// the attach gate plus "no input machinery granted to the non-owner"; the
+// negotiation state machine below it is deliberately not over-pinned.
+func TestBrowserWS_SessionOwnership_InputOffer_NonOwnerRefused(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
+
+	resp := f.attemptAttach(t, f.bobConn, soAgentID, f.aliceSess, true)
+	require.Equal(t, "error", resp.State,
+		"non-owner dedicated attach must be refused: %+v", resp)
+
+	sdp := soMintOfferSDP(t)
+	soSendInputOffer(t, f.bobConn, soAgentID, f.aliceSess, sdp)
+	assertNoInputStateGranted(t, f.bobConn)
+	soExpectQuiet(t, f.aliceConn, "browser_input_offer")
+}
+
+// browser_webrtc_offer: RED today, Bob's offer naming ALICE's session is
+// accepted through every gate — claims, the (defective) attach, the route
+// guard, availability — because no gate consults SessionMeta.Owner, and the
+// frame proceeds into media machinery on her browser with no refusal ever
+// sent. This row requires the refusal; it deliberately does NOT require an
+// answer frame (in-harness negotiation may legitimately stall), so the row is
+// red for exactly one reason: the non-owner's offer on the owner's session
+// was not refused.
+func TestBrowserWS_SessionOwnership_WebrtcOffer_NonOwnerRefused(t *testing.T) {
+	f := newSessionOwnershipFixture(t, func(cfg *config.Config) {
+		cfg.Tools.Browser.WebRTCEnabled = true // the row exercises the real webrtc offer path
+	})
+	f.start(t)
+	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
+
+	_ = f.attemptAttach(t, f.bobConn, soAgentID, f.aliceSess, false) // outcome unpinned by design
+
+	cfg := f.al.GetConfig()
+	require.True(t, cfg.Tools.Browser.WebRTCEnabled, "fixture must enable the webrtc path this row exercises")
+
+	sdp := soMintOfferSDP(t)
+	soSendWebrtcOffer(t, f.bobConn, soAgentID, f.aliceSess, sdp)
+	soExpectRefusalNoAnswer(t, f.bobConn, "browser_webrtc_offer")
+	soExpectQuiet(t, f.aliceConn, "browser_webrtc_offer")
+}
+
+// soExpectRefusalNoAnswer is the webrtc_offer row's oracle: the non-owner must
+// receive a browser_status error (the refusal), and must NEVER receive a
+// browser_webrtc_answer (a granted media path). Fails the moment either the
+// answer appears (granted — the defect, alive) or a success status appears.
+func soExpectRefusalNoAnswer(t *testing.T, conn *websocket.Conn, label string) {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(soWebrtcTMO)) // errcheck rationale: test-only conn deadline
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("%s: no refusal arrived on the non-owner's channel: %v", label, err)
+		}
+		var f browserFrameDecoder
+		if err := json.Unmarshal(raw, &f); err != nil {
+			continue
+		}
+		if f.Type == string(generated.WsFrameTypeBrowserWebrtcAnswer) {
+			t.Fatalf("%s: non-owner was granted a WebRTC answer (media path): %s", label, raw)
+		}
+		if f.Type != "browser_status" {
+			continue
+		}
+		if state, ok := soSuccessStates[f.State]; ok {
+			t.Fatalf("%s: non-owner was GRANTED %s — browser_status{state:%q message:%q}; "+
+				"the ownership ruling requires a refusal", label, state, f.State, f.Message)
+		}
+		require.Equal(t, "error", f.State,
+			"%s: non-owner webrtc offer must be refused with a browser_status error: %s", label, raw)
+		return
+	}
+}
+
+// assertNoInputStateGranted reads frames after a refused-mode input offer and
+// fails if dedicated-input machinery answers the non-owner at all.
+func assertNoInputStateGranted(t *testing.T, conn *websocket.Conn) {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(soQuietTMO)) // errcheck rationale: test-only conn deadline
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return // quiet window elapsed — nothing granted
+		}
+		var f browserFrameDecoder
+		if json.Unmarshal(raw, &f) == nil && f.Type == "browser_input_state" {
+			t.Fatalf("non-owner received dedicated-input machinery frames: %s", raw)
+		}
+	}
+}
+
+// assertNoWebRTCAnswer fails the row the moment a browser_webrtc_answer — a
+// granted media path — reaches the non-owner.
+func assertNoWebRTCAnswer(t *testing.T, conn *websocket.Conn) {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(soQuietTMO)) // errcheck rationale: test-only conn deadline
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return // quiet window elapsed — no answer ever came
+		}
+		var f browserFrameDecoder
+		if json.Unmarshal(raw, &f) == nil && f.Type == "browser_webrtc_answer" {
+			t.Fatalf("non-owner was granted a WebRTC answer (media path): %s", raw)
+		}
+	}
+}

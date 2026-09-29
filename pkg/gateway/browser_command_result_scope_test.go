@@ -23,7 +23,7 @@ func TestBrowserCommandResultUsesAttachmentLifetime(t *testing.T) {
 			case "control_invalid":
 				h.handleControlContext(operation, wc, state, attachment, "viewer", "user", []byte(`{`), nil)
 			case "tab_invalid":
-				h.handleTabActionContext(operation, wc, state, attachment, "viewer", []byte(`{`))
+				h.handleTabActionContext(operation, wc, state, attachment, "viewer", "user", []byte(`{`))
 			case "dispatch_invalid":
 				h.dispatchBrowserCommand(wc, state, "viewer", "user", []byte(`{`), string(generated.WsFrameTypeBrowserInput), nil)
 			}

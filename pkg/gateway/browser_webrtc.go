@@ -273,6 +273,16 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		send(operationErrorStatus(sessID, "browser_webrtc_offer: valid offer_id and paired capture claims are required"), sessID, "webrtc-offer-invalid-claims")
 		return
 	}
+
+	// Session-ownership gate (founder ruling, 2026-09-28): the offer names a
+	// session, so the named session must be the caller's own. Refused before
+	// any attachment await or media machinery — a non-owner gets an explicit
+	// refusal frame, never silence and never a state frame.
+	if h.browserFrameSessionRefused(sessID, state.commandAttachment().sessionID, userID) {
+		h.auditControl(userID, sessID, viewerID, audit.SeverityWarn, "session_ownership_refused")
+		send(sessionErrorStatus(sessID, "browser_webrtc_offer: session not available"), sessID, "webrtc-offer-owner-refused")
+		return
+	}
 	sendState := func(available, active, audio bool, reason string, cause error) {
 		status := generated.BrowserWebRTCStateFrame{Type: string(generated.WsFrameTypeBrowserWebrtcState), SessionId: &sessID, Available: available}
 		if active {
