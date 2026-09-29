@@ -25,6 +25,11 @@ import (
 // `version` field is then reported as reason=invalid, DS-7 row 6).
 var ErrInvalidVersion = errors.New("catalog: invalid version")
 
+// ErrRegressed is wrapped when a refresh fetches a catalog older than the
+// document already being served. Repeating the same published document cannot
+// recover, so callers may use errors.Is to avoid retrying this rejection.
+var ErrRegressed = errors.New("catalog: regressed version")
+
 // versionRe is FR-002's version rule, anchored: exactly four year digits,
 // one or two month and day digits, an optional numeric fourth component.
 var versionRe = regexp.MustCompile(`^v\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$`)

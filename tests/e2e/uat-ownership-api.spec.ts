@@ -477,7 +477,15 @@ test('UAT-CTRL a chat reaches its own workspace browser and can drive it', async
   if (isMemoryRefusal(opened.error)) {
     throw new Error(`BLOCKED by the memory ceiling (the feature working, not a defect): ${opened.error}`);
   }
-  expect(opened.error, 'attach must not error').toBeNull();
+  // Row 55: a LIVE_NAVIGATE_DEADLINE dispatch error is stale once the tab
+  // strip already shows PAGE_A — the same "Chrome commits the load anyway"
+  // race errorUnlessPageShows already tolerates for UAT-09b above. Deferring
+  // to the tabs assertion right below (which already exists and is
+  // unconditional) as the real oracle; any OTHER error still fails here
+  // immediately, same as before.
+  if (opened.error === null || !LIVE_NAVIGATE_DEADLINE.test(opened.error)) {
+    expect(opened.error, 'attach must not error').toBeNull();
+  }
   expect(opened.statuses.some((s) => s.state === 'attached'), 'panel must report attached').toBe(true);
   expect(opened.tabs.map((t) => t.url).join(','), 'the workspace tab must be on the page we drove it to').toContain(PAGE_A);
 });
@@ -600,11 +608,19 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
   // workspaces must be showing DIFFERENT pages at the moment of the crossing,
   // or "it showed httpbin" cannot tell A's browser from B's and the case proves
   // nothing while still going green.
+  // Row 55 UAT-SEC: this collect window was 20_000ms, shorter than UAT-CTRL's
+  // structurally-identical navigate-to-PAGE_A operation above (28_000ms) for
+  // no evident reason. markA/markB.tabs is a snapshot captured when the
+  // collect window closes — a navigation still in flight because a slow
+  // external site (the-internet.herokuapp.com) hadn't committed yet reads as
+  // the tab never having moved (the exact failure this row is about: the
+  // tab caught showing a leftover page from an earlier test). Matching
+  // UAT-CTRL's window gives the same slow-navigation class the same runway.
   const markA = await attachRetryingMemory(fx.chatA1, fx.agentA, [
     { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
     { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: PAGE_A } },
     { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
-  ], 20_000);
+  ], 28_000);
   if (isMemoryRefusal(markA.error)) throw new Error(`BLOCKED by the memory ceiling: ${markA.error}`);
   expect(markA.tabs.map((t) => t.url).join(','), 'workspace A must be marked before the crossing').toContain('the-internet');
 
@@ -612,7 +628,7 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
     { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
     { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: PAGE_B } },
     { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
-  ], 20_000);
+  ], 28_000);
   if (isMemoryRefusal(markB.error)) throw new Error(`BLOCKED by the memory ceiling: ${markB.error}`);
   expect(markB.tabs.map((t) => t.url).join(','), 'workspace B must be marked before the crossing').toContain('example.com');
 
