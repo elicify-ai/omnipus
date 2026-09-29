@@ -2286,9 +2286,11 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   pending or completed id returns `retry_expired`. Contract: `POST
   /library/{workspace_id}/retry-move` (`RetryMoveRequest` → `RetryMoveResult`; `RetryMoveError` codes
   `retry_not_found` 404, `retry_expired` 410, `retry_identity_mismatch` 409, `retry_preflight_failed`
-  409, `retry_locked` 503); moves that fail after revocation return `LibraryMoveIncompleteError`
-  (`move_incomplete`, paths, `pending_move_id`); FR-VA-031 refusals return 409
-  `ViewTransferRefusedError` (`view_tracked_transfer_refused`, `tracked_paths`). Agent surface:
+  409, `retry_locked` 503); moves that fail after revocation and FR-VA-031 refusals both return the ONE typed 409 body
+  `LibraryMoveConflictError` on `POST /library/move` and `POST /library/{workspace_id}/rename`
+  (architect ruling VA-ARCH-409, 2026-09-29: no `oneOf`, ADR-034), `code` enum `already_exists` |
+  `is_mount_root` | `view_tracked_transfer_refused` (+ `tracked_paths`) | `move_incomplete` (+ `paths`,
+  `pending_move_id`; 409 because it is retryable, not a server fault). Agent surface:
   `knowledge_restructure` op `retry_move` (arg `pending_move_id`), prose results carrying the same
   fields. Tests 77/78 cover expired, preflight_failed, already-landed, the normal retry, repeat-after-success
   (no-op via the completed receipt) and unknown id (not_found).
