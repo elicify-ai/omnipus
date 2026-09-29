@@ -145,6 +145,8 @@ async function expandActivePanel(options: {
     return 'opened'
   }
   if (outcome.kind === 'focused') {
+    const { showPanelTabFocused } = await import('./panelTabSwitch')
+    showPanelTabFocused(`The ${definition.title}`)
     finishClose(activePanel.id, 'chat')
     return 'opened'
   }
