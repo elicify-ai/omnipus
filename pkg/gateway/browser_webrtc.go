@@ -266,10 +266,7 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		send(sessionErrorStatus(sessID, "browser_webrtc_offer: agent_id and sdp are required"), sessID, "webrtc-offer-missing-fields")
 		return
 	}
-	const maxSafeInteger = uint64(1<<53 - 1)
-	validID := func(value *int) bool { return value != nil && *value > 0 && uint64(*value) <= maxSafeInteger }
-	if !validID(frame.OfferId) || (frame.CaptureId == nil) != (frame.CaptureGeneration == nil) ||
-		(frame.CaptureId != nil && (*frame.CaptureId == "" || !validID(frame.CaptureGeneration))) {
+	if !validWebRTCOfferClaims(frame) {
 		send(operationErrorStatus(sessID, "browser_webrtc_offer: valid offer_id and paired capture claims are required"), sessID, "webrtc-offer-invalid-claims")
 		return
 	}
@@ -456,6 +453,15 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	if notice := h.mediaTransportNotice(); notice != "" {
 		wc.sendCriticalScopedGen(sessionErrorStatus(sessID, notice), dropContext(sessID, viewerID, "media-port-fallback"), snapshot.ctx, answerCurrent)
 	}
+}
+
+// validWebRTCOfferClaims keeps the paired capture claim and JavaScript-safe
+// integer checks together before negotiation or media state is touched.
+func validWebRTCOfferClaims(frame generated.BrowserWebRTCOfferFrame) bool {
+	const maxSafeInteger = uint64(1<<53 - 1)
+	validID := func(value *int) bool { return value != nil && *value > 0 && uint64(*value) <= maxSafeInteger }
+	return validID(frame.OfferId) && (frame.CaptureId == nil) == (frame.CaptureGeneration == nil) &&
+		(frame.CaptureId == nil || (*frame.CaptureId != "" && validID(frame.CaptureGeneration)))
 }
 
 // applyColdStartRecapture verifies the original panel's current measured
