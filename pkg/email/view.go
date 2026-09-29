@@ -412,6 +412,17 @@ type MailView struct {
 	RenderHash      string
 	Attachments     []MailPart
 	Inline          []MailPart
+	// DraftBodyPart is the message's own body bookkeeping part (the
+	// X-Omnipus-Part: draft-body marker header, renderMarkdownPart) — nil
+	// for a message with no such part. It is deliberately NOT a member of
+	// Attachments or Inline (never a listed/carried/sent user attachment;
+	// TestReadView_FullMIMEWalk pins Attachments to the message's real
+	// attachments only), but it still occupies its own stable PartIndex on
+	// the download-route addressing space (mailAddressableParts,
+	// pkg/gateway/rest_mail_read.go), so a keep list naming that index is
+	// accepted and silently skipped — never rejected as "no such part"
+	// (round-7 ruling, mail_draft_no_body_leak_red_test.go).
+	DraftBodyPart *MailPart
 }
 
 // MailPart is one leaf MIME part of a message view. PartIndex is the stable
@@ -653,8 +664,25 @@ func viewFromRaw(raw []byte, slug string, uid uint32) *MailView {
 			// attachment branch below instead, which fed the walk's
 			// text/plain lossy fallback (already-signed) back into
 			// BodyMarkdown as if it were the original unsigned source.
-			view.BodyMarkdown = readViewText(part.Body)
+			bodyText := readViewText(part.Body)
+			view.BodyMarkdown = bodyText
 			view.MarkdownLossy = false
+			// Round-7 fix: the bookkeeping part still occupies its own
+			// stable PartIndex (never in Attachments — see
+			// MailView.DraftBodyPart's doc comment) so the download route
+			// and the draft carry paths can find it by index and skip it
+			// silently instead of 400ing "no such part" when a keep list
+			// names it.
+			bodyData := []byte(bodyText)
+			view.DraftBodyPart = &MailPart{
+				PartIndex:        idx,
+				Filename:         sanitizeMailPartName(name),
+				ContentType:      ct,
+				Disposition:      disp,
+				Data:             bodyData,
+				SizeBytes:        len(bodyData),
+				OmnipusDraftBody: true,
+			}
 		default:
 			p := MailPart{
 				PartIndex:        idx,

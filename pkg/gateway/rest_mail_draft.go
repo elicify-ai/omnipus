@@ -146,7 +146,11 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		// FR-035/D28: keep values are each attachment's own stable PartIndex
 		// (the download route's {partIndex}) — matched by search, never by
 		// listing position (rest_mail_read.go::mailPartByStableIndex).
-		p := mailPartByStableIndex(cur.Attachments, idx)
+		// mailAddressableParts also makes the draft's own body bookkeeping
+		// part resolvable here (round-7 ruling): naming its stable index is
+		// accepted and silently skipped by mailCarryAttachment below, never
+		// a 400 "no such part".
+		p := mailPartByStableIndex(mailAddressableParts(cur), idx)
 		if p == nil {
 			jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names no such part")
 			return
@@ -478,8 +482,12 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		for _, idx := range keepParts {
 			// FR-035/D28: keep values are each attachment's own stable
 			// PartIndex (the download route's {partIndex}) — matched by
-			// search, never by listing position.
-			p := mailPartByStableIndex(cur.Attachments, idx)
+			// search, never by listing position. mailAddressableParts also
+			// makes the draft's own body bookkeeping part resolvable here
+			// (round-7 ruling): naming its stable index is accepted and
+			// silently skipped by mailCarryAttachment below, never a 400
+			// "no such part".
+			p := mailPartByStableIndex(mailAddressableParts(cur), idx)
 			if p == nil {
 				jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names no such part")
 				return

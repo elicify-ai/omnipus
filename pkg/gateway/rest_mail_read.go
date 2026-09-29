@@ -300,6 +300,27 @@ func mailPartByStableIndex(atts []email.MailPart, idx int) *email.MailPart {
 	return nil
 }
 
+// mailAddressableParts returns every part addressable on the download
+// route's {partIndex} space for one view: the view's listed Attachments
+// plus, when present, its own body bookkeeping part (v.DraftBodyPart —
+// never a member of Attachments, so never listed, carried or sent). Naming
+// the bookkeeping part's stable index in a keep list must be ACCEPTED and
+// silently skipped (mailCarryAttachment already filters it via
+// mailViewDraftBodyPart), never rejected as "no such part" — round-7 ruling,
+// mail_draft_no_body_leak_red_test.go. Callers that must resolve a keep
+// index or a download probe against the bookkeeping part use this instead
+// of v.Attachments directly; callers building a listing or a default
+// carry-all still iterate v.Attachments alone, which already excludes it.
+func mailAddressableParts(v *email.MailView) []email.MailPart {
+	if v.DraftBodyPart == nil {
+		return v.Attachments
+	}
+	out := make([]email.MailPart, len(v.Attachments)+1)
+	copy(out, v.Attachments)
+	out[len(v.Attachments)] = *v.DraftBodyPart
+	return out
+}
+
 func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, workspaceID, agentID, folder, ref string, idx int) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -321,7 +342,7 @@ func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, w
 		return
 	}
 	v := mv
-	part := mailPartByStableIndex(v.Attachments, idx)
+	part := mailPartByStableIndex(mailAddressableParts(v), idx)
 	if part == nil {
 		jsonErr(w, http.StatusNotFound, "no such attachment part")
 		return
