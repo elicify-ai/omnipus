@@ -1776,6 +1776,11 @@ shape from round 1.
   copied-marker hole, R2-CRIT-001). The gate's security-lead review must confirm this risk
   acceptance.
 
+- **Leaf-replacement race (accepted residual, team-lead 2026-09-29).** Between discovery and a
+  pipeline write/delete, a local writer could replace a leaf file at a tracked path. Accepted: it
+  requires local write access to the collection, which already permits deleting or overwriting that
+  file directly; Omnipus is single-owner. The gate's security-lead confirms.
+
 ## 10. TDD Plan
 
 | Order | Test Name | Level | Traces to | Description |
@@ -2286,12 +2291,33 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   pending or completed id returns `retry_expired`. Contract: `POST
   /library/{workspace_id}/retry-move` (`RetryMoveRequest` → `RetryMoveResult`; `RetryMoveError` codes
   `retry_not_found` 404, `retry_expired` 410, `retry_identity_mismatch` 409, `retry_preflight_failed`
-  409, `retry_locked` 503); moves that fail after revocation return `LibraryMoveIncompleteError`
-  (`move_incomplete`, paths, `pending_move_id`); FR-VA-031 refusals return 409
-  `ViewTransferRefusedError` (`view_tracked_transfer_refused`, `tracked_paths`). Agent surface:
+  409, `retry_locked` 503); moves that fail after revocation and FR-VA-031 refusals both return the ONE typed 409 body
+  `LibraryMoveConflictError` on `POST /library/move` and `POST /library/{workspace_id}/rename`
+  (architect ruling VA-ARCH-409, 2026-09-29: no `oneOf`, ADR-034), `code` enum `already_exists` |
+  `is_mount_root` | `view_tracked_transfer_refused` (+ `tracked_paths`) | `move_incomplete` (+ `paths`,
+  `pending_move_id`; 409 because it is retryable, not a server fault). Agent surface:
   `knowledge_restructure` op `retry_move` (arg `pending_move_id`), prose results carrying the same
   fields. Tests 77/78 cover expired, preflight_failed, already-landed, the normal retry, repeat-after-success
   (no-op via the completed receipt) and unknown id (not_found).
+
+- **FR-VA-033 *(team-lead ruling, 2026-09-29)***: Releasing a `.base`'s views (FD-7 delete-release, and any
+  trash of a `.base`) MUST revoke ALL of that `.base`'s memberships in ONE membership-record save BEFORE
+  stripping markers or trashing files. The "derived" badge and read-only enforcement (FD-6) are driven by
+  the membership RECORD, never by the file's `derived_from` marker. Tests 81, 82.
+- **FR-VA-034 *(team-lead ruling, 2026-09-29)***: A same-collection FOLDER rename/move whose subtree contains
+  a nested knowledge base with tracked views MUST be REFUSED (same `LibraryMoveConflictError`
+  `view_tracked_transfer_refused`, naming the tracked paths). Test 83.
+- **FR-VA-035 *(team-lead ruling, 2026-09-29)***: While an unexpired pending move (FR-VA-032) names a path,
+  any transfer or root move touching that path MUST be refused (visible error naming the pending move).
+  Test 84.
+- **FR-VA-036 *(team-lead ruling, 2026-09-29)***: Library folder trash and the agent `knowledge_restructure`
+  trash op are IN SCOPE: they MUST revoke tracked memberships first (revoke-before-act, as FR-VA-032),
+  then trash; a failure after revocation surfaces `move_incomplete` with Retry. Test 85.
+- **FR-VA-037 *(team-lead ruling, 2026-09-29)***: Incomplete discovery (an unreadable subtree, SkipUnreadable)
+  MUST NOT retire any member of the record — the member is kept and a visible warning is shown. Test 86.
+- **FR-VA-038 *(team-lead ruling, 2026-09-29)***: The membership record is guarded by a dedicated exact-key
+  membership lock (not the striped note-write locks, which were proven to self-deadlock on a collision).
+  Test 87 (regression: two keys that collide in the striped table do not deadlock).
 
 ## 13. Success Criteria
 
@@ -2438,6 +2464,12 @@ registration/wiring, not the test suite).
 | FR-VA-030 | US-5, US-6 | founder-direction amendment 2026-09-29 (#1013) | 73 |
 | FR-VA-031 | US-2, US-3 | founder-direction amendment 2026-09-29 (architect Q-A) | 74, 75, 76, 79, 80 |
 | FR-VA-032 | US-2 | founder-direction amendment 2026-09-29 (architect Q-B) | 77, 78 |
+| FR-VA-033 | US-2 | team-lead ruling 2026-09-29 | 81, 82 |
+| FR-VA-034 | US-2, US-3 | team-lead ruling 2026-09-29 | 83 |
+| FR-VA-035 | US-2 | team-lead ruling 2026-09-29 | 84 |
+| FR-VA-036 | US-2, US-3 | team-lead ruling 2026-09-29 | 85 |
+| FR-VA-037 | US-1 | team-lead ruling 2026-09-29 | 86 |
+| FR-VA-038 | US-2 | team-lead ruling 2026-09-29 | 87 |
 
 Every FR appears above. Remaining gaps between the TDD plan's numbered tests and a scenario are
 flagged rather than silently left implicit, per "no false success": the implementing lead adds the
