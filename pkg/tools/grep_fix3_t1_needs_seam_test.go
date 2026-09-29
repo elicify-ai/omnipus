@@ -69,7 +69,6 @@
 // FIFO-swap file falls back to `unix`, because nothing else in this file
 // is platform-restricted. Folding it into an existing file rather than
 // keeping it standalone is also acceptable once the seam exists.
-//
 package tools
 
 import (
