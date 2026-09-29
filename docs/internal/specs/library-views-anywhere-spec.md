@@ -2271,8 +2271,10 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   management on success. Available to the user (UI action on the error) and to agents (same backend
   operation). Tests 77, 78.
   **Amendment (team-lead, 2026-09-29) — Retry mechanics and contract:** revocation atomically writes a
-  trusted PENDING-MOVE record outside the vault (beside the collection's `manifest.json`,
-  `pending-moves.json`, keyed by `pending_move_id`: collection, old/new `.base`-or-folder path, view
+  trusted PENDING-MOVE entry outside the vault — **in the SAME `view_membership.json` membership
+  record, written in the SAME atomic write as the revocation** (correction 2026-09-29: two files cannot
+  be crash-atomic, so there is no separate `pending-moves.json`; the completed receipts live in that
+  same record too), keyed by `pending_move_id`: collection, old/new `.base`-or-folder path, view
   names, old/new view paths, timestamp). Retry replays ONLY from that record, never from file content.
   The record EXPIRES 7 days after its timestamp (a named constant); Retry on an expired record returns a
   visible `retry_expired` error. If the rename already landed, Retry verifies and enrolls; otherwise it
