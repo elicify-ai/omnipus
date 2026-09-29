@@ -67,7 +67,8 @@
         "tests/e2e/agents.spec.ts",
         "tests/e2e/auth.spec.ts",
         "tests/e2e/burst-resilience.spec.ts",
-        "tests/e2e/side-panel-deeplink.spec.ts"
+        "tests/e2e/side-panel-deeplink.spec.ts",
+        "tests/e2e/side-panel-escape-discard.spec.ts"
       ]
     },
     {
@@ -79,7 +80,8 @@
         "tests/e2e/calendar.spec.ts",
         "tests/e2e/contract-counters.spec.ts",
         "tests/e2e/create-agent.spec.ts",
-        "tests/e2e/side-panel-signin-return.spec.ts"
+        "tests/e2e/side-panel-signin-return.spec.ts",
+        "tests/e2e/side-panel-sidebar-focus.spec.ts"
       ]
     },
     {
