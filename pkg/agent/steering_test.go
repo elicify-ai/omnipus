@@ -160,8 +160,9 @@ func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
 func TestSteeringQueue_Overflow(t *testing.T) {
 	sq := newSteeringQueue(SteeringOneAtATime)
 
-	// Fill the queue up to its maximum capacity
-	for i := 0; i < MaxQueueSize; i++ {
+	// Ordinary steer messages share the inbox retention-tail bound. Fill the
+	// queue to that exact capacity before checking both admission classes.
+	for i := 0; i < 200; i++ {
 		err := sq.push(providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)})
 		if err != nil {
 			t.Fatalf("unexpected error pushing message %d: %v", i, err)
@@ -169,8 +170,8 @@ func TestSteeringQueue_Overflow(t *testing.T) {
 	}
 
 	// Sanity check: ensure the queue is actually full
-	if sq.len() != MaxQueueSize {
-		t.Fatalf("expected queue length %d, got %d", MaxQueueSize, sq.len())
+	if sq.len() != 200 {
+		t.Fatalf("expected queue length 200, got %d", sq.len())
 	}
 
 	// Attempt to push one more message, which MUST fail
@@ -184,6 +185,19 @@ func TestSteeringQueue_Overflow(t *testing.T) {
 	expectedErr := "steering queue is full"
 	if err.Error() != expectedErr {
 		t.Errorf("expected error message %q, got %q", expectedErr, err.Error())
+	}
+
+	// A completion wake is control flow, not producer traffic: it must remain
+	// admissible after the ordinary-message memory bound is reached.
+	wakeErr := sq.pushItemScope(manualSteeringScope, steeringQueueItem{
+		message: providers.Message{Role: "user", Content: "child completed"},
+		wake:    &steeringWake{messageID: "wake-after-full"},
+	})
+	if wakeErr != nil {
+		t.Fatalf("upward wake refused by ordinary steering cap: %v", wakeErr)
+	}
+	if sq.len() != 201 {
+		t.Fatalf("queue length after wake = %d, want 201", sq.len())
 	}
 }
 

@@ -28,8 +28,11 @@ const (
 	SteeringOneAtATime SteeringMode = "one-at-a-time"
 	// SteeringAll drains the entire queue in a single poll.
 	SteeringAll SteeringMode = "all"
-	// MaxQueueSize number of possible messages in the Steering Queue
-	MaxQueueSize = 10
+	// MaxQueueSize bounds ordinary steer messages against a runaway producer.
+	// It matches the durable inbox's 200-entry retention tail so anything
+	// admitted here remains recoverable there. Upward completion wakes are
+	// control flow and deliberately bypass this cap.
+	MaxQueueSize = 200
 	// manualSteeringScope is the legacy fallback queue used when no active
 	// turn/session scope is available.
 	manualSteeringScope = "__manual__"
@@ -102,7 +105,16 @@ func (sq *steeringQueue) pushItemScope(scope string, item steeringQueueItem) err
 
 	scope = normalizeSteeringScope(scope)
 	queue := sq.queues[scope]
-	if len(queue) >= MaxQueueSize {
+	if item.wake != nil {
+		// A terminal delivery may retry before the parent consumes its first
+		// wake. Keep one pending item per deterministic message id; dequeueing
+		// removes it, so the same id can be admitted again later.
+		for _, queued := range queue {
+			if queued.wake != nil && queued.wake.messageID == item.wake.messageID {
+				return nil
+			}
+		}
+	} else if len(queue) >= MaxQueueSize {
 		return fmt.Errorf("steering queue is full")
 	}
 	sq.queues[scope] = append(queue, item)
@@ -180,8 +192,27 @@ func (sq *steeringQueue) prependItemsScope(scope string, items []steeringQueueIt
 	defer sq.mu.Unlock()
 	scope = normalizeSteeringScope(scope)
 	queue := sq.queues[scope]
+	pendingWakeIDs := make(map[string]struct{}, len(queue)+len(items))
+	for _, queued := range queue {
+		if queued.wake != nil {
+			pendingWakeIDs[queued.wake.messageID] = struct{}{}
+		}
+	}
 	restored := make([]steeringQueueItem, 0, len(items)+len(queue))
-	restored = append(restored, items...)
+	for _, item := range items {
+		if item.wake != nil {
+			if _, queued := pendingWakeIDs[item.wake.messageID]; queued {
+				// A concurrent retry claimed this message id while the original
+				// was dequeued. Keep that queue-resident copy: it owns the
+				// canonical position among arrivals under pushItemScope. Moving
+				// the restored copy ahead of those arrivals would break their
+				// FIFO order. Distinct restored wakes retain their original order.
+				continue
+			}
+			pendingWakeIDs[item.wake.messageID] = struct{}{}
+		}
+		restored = append(restored, item)
+	}
 	restored = append(restored, queue...)
 	sq.queues[scope] = restored
 }
