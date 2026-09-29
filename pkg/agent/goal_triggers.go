@@ -1267,7 +1267,19 @@ func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudica
 	// completion tail the child's own claim as its final answer, so the parent
 	// receives the completion handback IN ADDITION to the goal_status verdict
 	// and the child's record leaves `running` (the #947 hang).
-	ag.al.completeSteeredTurnAfterGoal(context.Background(), ag.sessionID, ag.claimText, nil)
+	finalWoke := ag.al.completeSteeredTurnAfterGoal(context.Background(), ag.sessionID, ag.claimText, nil)
+	// Q1=A (founder, #984 follow-up): the met verdict's inbox entry was
+	// delivered without a wake (deliverGoalVerdictUpward's SuppressWake);
+	// acknowledge it only after the deterministic final hand-back is known
+	// durable AND its delivery woke (or queued into) the parent. If the tail
+	// was gated, failed, or only stored the hand-back, re-deliver the still-
+	// unacknowledged verdict without suppression so the parent is never silent.
+	if finalWoke {
+		ag.al.ackMetVerdictEntry(ag.sessionID, ag.rec.GoalID, ag.verdict.Round)
+	} else if err := ag.al.wakeMetVerdictEntry(ag.sessionID, ag.rec.GoalID, ag.verdict.Round); err != nil {
+		logger.WarnCF("agent", "goal: met verdict fallback wake failed — the verdict remains unacknowledged for boot recovery",
+			map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID, "error": err.Error()})
+	}
 	ag.ret0 = true
 	return agentLoopRunGoalAdjudicationReturn
 }
