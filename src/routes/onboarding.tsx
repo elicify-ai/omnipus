@@ -22,7 +22,8 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { ModelSelector } from '@/components/ui/model-selector'
 import type { ModelCatalogGroup } from '@/lib/providerModelGroups'
-import { probeProvider, completeOnboardingTransaction, fetchAppState, isApiError } from '@/lib/api'
+import { probeProvider, completeOnboardingTransaction } from '@/lib/api'
+import { isApiError } from '@/lib/api-error'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { useUiStore } from '@/store/ui'
@@ -1851,6 +1852,7 @@ export const Route = createFileRoute('/onboarding')({
     // WP1's fail-closed edition stamp), so an unauthenticated platform
     // caller still takes this gate below.
     try {
+      const { fetchAppState } = await import('@/lib/api')
       const state = await fetchAppState()
       const onboardingAuthMode = readOnboardingAuthMode(state)
       if (state?.onboarding_complete) {

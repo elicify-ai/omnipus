@@ -2,7 +2,8 @@ import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChatScreen } from '@/components/chat/ChatScreen'
-import { fetchSessionDetail, fetchWorkspaces, workspacesQueryKeys, isApiError } from '@/lib/api'
+import { fetchSessionDetail, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
+import { isApiError } from '@/lib/api-error'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -279,6 +280,7 @@ export const Route = createFileRoute('/_app/sessions/$sessionId')({
     // real, confirmed bug for every session deep link (/#/sessions/{id}) —
     // do not reintroduce the store write here.
     try {
+      const { fetchSessionDetail } = await import('@/lib/api')
       const detail = await fetchSessionDetail(params.sessionId)
       return detail ?? null
     } catch (err) {
