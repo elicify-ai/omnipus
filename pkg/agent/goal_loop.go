@@ -949,14 +949,14 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 			// There is no publication lock to take: the subtree is quiet.
 			logger.DebugCF("agent", "goal: no lifecycle store wired; completion subtree is quiet",
 				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID})
-			installed = gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
+			installed = gl.al.goalInstallWaitingCompletion(gl.rec.GoalID, gl.sessionID)
 		} else {
 			if goalClaimBeforePublicationLockTestHook != nil {
 				goalClaimBeforePublicationLockTestHook(gl.sessionID)
 			}
 			publicationMu := lifecycle.Lock(gl.sessionID)
 			publicationMu.Lock()
-			installed = gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
+			installed = gl.al.goalInstallWaitingCompletion(gl.rec.GoalID, gl.sessionID)
 			publicationMu.Unlock()
 		}
 		if !installed {

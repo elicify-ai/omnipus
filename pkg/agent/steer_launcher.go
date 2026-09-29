@@ -449,14 +449,10 @@ func (l *SteerLauncher) launchSteered(
 			// existing descendants or being adjudicated. This check is inside
 			// the parent's publication lock and precedes every child record.
 			//
-			// Q2=B gate round 1 finding 2 (security-lead + silent-failure-hunter):
-			// an unreadable goal store used to silently map to "no fence" and
-			// let the launch through — the very Judge race the fence exists
-			// to prevent. The fence now returns an error and the launch
-			// refuses the call explicitly when goal authority is unreadable.
-			if fenceActive, fenceErr := l.al.goalCompletionFenceActive(req.SteeringSessionID); fenceErr != nil {
-				return nil, fmt.Errorf("steer: launch: completion fence could not be read: %w", fenceErr)
-			} else if fenceActive {
+			// The fence reads the session-keyed completion phase under its own
+			// mutex; no goal-directory scan runs under this publication lock.
+			// An unreadable goal store cannot drop an already installed fence.
+			if l.al.goalCompletionFenceActive(req.SteeringSessionID) {
 				return nil, fmt.Errorf("steer: launch: completion claim is pending for steering session %q", req.SteeringSessionID)
 			}
 			if launchAfterCompletionFenceTestHook != nil {

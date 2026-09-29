@@ -42,6 +42,11 @@ const goalCompletionReevaluationPrompt = "All delegated work has finished; revie
 
 type goalCompletionPhase uint8
 
+type goalSessionCompletionPhase struct {
+	goalID string
+	phase  goalCompletionPhase
+}
+
 const (
 	goalCompletionNone goalCompletionPhase = iota
 	goalCompletionWaitingDescendants
@@ -67,16 +72,12 @@ func (phase goalCompletionPhase) String() string {
 // goalTransitionCompletionPhase is the ONE primitive every completion-phase
 // write goes through (type-design-analyzer finding 1: install-and-promote must
 // be one critical section; finding 2: no scattered lock/check/write sites).
-// It performs a compare-and-set under s.mu: the phase is set to `to` only when
-// the current phase equals one of `from`. Returns true when the transition
-// landed. The case `to == goalCompletionNone` deletes the entry on success.
-//
-// Why one primitive: a separate "set" + "promote" left two races open — a
-// second claim could downgrade an Adjudicating phase to Waiting (type 1), and
-// the bookkeeping for "current value seen under the lock" was open-coded at
-// five sites. Routing every writer through transition() collapses both into
-// one critical section.
-func (al *AgentLoop) goalTransitionCompletionPhase(goalID string, from []goalCompletionPhase, to goalCompletionPhase) bool {
+// It compares and writes the goal phase, the session fence, and the reverse
+// goal-to-session mapping under the same s.mu. sessionID is supplied on the
+// first install or durable restore; subsequent transitions can recover it from
+// the reverse mapping without touching the goal store. A clear removes both
+// views, including the reverse mapping for a dispatched re-evaluation.
+func (al *AgentLoop) goalTransitionCompletionPhase(goalID string, from []goalCompletionPhase, to goalCompletionPhase, sessionID ...string) bool {
 	if goalID == "" {
 		return false
 	}
@@ -86,11 +87,37 @@ func (al *AgentLoop) goalTransitionCompletionPhase(goalID string, from []goalCom
 	if !completionPhaseMatchesAny(s.completionPhase[goalID], from) {
 		return false
 	}
+	previousSessionID := s.completionSessionByGoal[goalID]
 	if to == goalCompletionNone {
 		delete(s.completionPhase, goalID)
+		delete(s.completionSessionByGoal, goalID)
+		if s.completionBySession[previousSessionID].goalID == goalID {
+			delete(s.completionBySession, previousSessionID)
+		}
 		return true
 	}
+	ownerSessionID := previousSessionID
+	if len(sessionID) != 0 && sessionID[0] != "" {
+		ownerSessionID = sessionID[0]
+	}
+	if ownerSessionID == "" {
+		return false
+	}
+	if current := s.completionBySession[ownerSessionID]; current.goalID != "" && current.goalID != goalID {
+		// Two goals bound to one session violate the active-goal invariant.
+		// Keep the existing fence rather than silently overwrite it.
+		return false
+	}
+	if previousSessionID != "" && previousSessionID != ownerSessionID && s.completionBySession[previousSessionID].goalID == goalID {
+		delete(s.completionBySession, previousSessionID)
+	}
 	s.completionPhase[goalID] = to
+	s.completionSessionByGoal[goalID] = ownerSessionID
+	if to == goalCompletionWaitingDescendants || to == goalCompletionAdjudicating {
+		s.completionBySession[ownerSessionID] = goalSessionCompletionPhase{goalID: goalID, phase: to}
+	} else if s.completionBySession[ownerSessionID].goalID == goalID {
+		delete(s.completionBySession, ownerSessionID)
+	}
 	return true
 }
 
@@ -118,15 +145,33 @@ func completionPhaseMatchesAny(current goalCompletionPhase, allowed []goalComple
 // overwrite the dispatched marker so the new claim reaches the Judge under
 // the install-and-promote contract. Idempotent on Waiting. The transition
 // goes through the same primitive every other write does
-// (goalTransitionCompletionPhase).
-func (al *AgentLoop) goalInstallWaitingCompletion(goalID string) bool {
+// (goalTransitionCompletionPhase). A caller with the goal record supplies its
+// ActiveSessionID; a goal-ID-only caller resolves that single record directly
+// instead of scanning all retained goals. Launches never use this lookup.
+func (al *AgentLoop) goalInstallWaitingCompletion(goalID string, sessionID ...string) bool {
+	if goalID == "" {
+		return false
+	}
+	ownerSessionID := ""
+	if len(sessionID) != 0 {
+		ownerSessionID = sessionID[0]
+	}
+	if ownerSessionID == "" {
+		rec, err := resolveGoalRecordStore().Get(goalID)
+		if err != nil {
+			logger.ErrorCF("agent", "goal: could not resolve completion-phase session from goal record",
+				map[string]any{"goal_id": goalID, "error": err.Error()})
+			return false
+		}
+		ownerSessionID = rec.ActiveSessionID
+	}
 	return al.goalTransitionCompletionPhase(goalID,
 		[]goalCompletionPhase{
 			goalCompletionNone,
 			goalCompletionWaitingDescendants,
 			goalCompletionReevaluationDispatched,
 		},
-		goalCompletionWaitingDescendants)
+		goalCompletionWaitingDescendants, ownerSessionID)
 }
 
 // goalPromoteCompletionToAdjudicating installs the adjudicating phase from
@@ -157,32 +202,16 @@ func (al *AgentLoop) goalCompletionWaiting(goalID string) bool {
 	return s.completionPhase[goalID] == goalCompletionWaitingDescendants
 }
 
-// goalCompletionFenceActive reports whether sessionID's completion fence
-// refuses new launches (security-lead finding 2 / silent-failure-hunter
-// finding 2). Returns the fence state and an error: an unreadable goal store
-// is fail-closed — the caller MUST refuse the launch, not let it through.
-// nil goal record on a readable store (the
-// activeGoalForSessionWithError "no active goal" sentinel) means the session
-// has no active goal and the fence is inactive.
-func (al *AgentLoop) goalCompletionFenceActive(sessionID string) (bool, error) {
-	if sessionID == "" {
-		return false, nil
-	}
-	rec, err := activeGoalForSessionWithError(sessionID)
-	if err != nil {
-		if errors.Is(err, errNoActiveGoalForSession) {
-			return false, nil
-		}
-		return false, fmt.Errorf("goal completion fence: read active goal: %w", err)
-	}
-	if rec == nil {
-		return false, nil
-	}
+// goalCompletionFenceActive reports whether this session has a waiting or
+// adjudicating completion claim. The same locked transition that writes the
+// goal phase updates this session-keyed view. Launch therefore never reads or
+// scans the goal store while holding the parent publication lock.
+func (al *AgentLoop) goalCompletionFenceActive(sessionID string) bool {
 	s := goalTriggers()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	phase := s.completionPhase[rec.GoalID]
-	return phase == goalCompletionWaitingDescendants || phase == goalCompletionAdjudicating, nil
+	phase := s.completionBySession[sessionID].phase
+	return phase == goalCompletionWaitingDescendants || phase == goalCompletionAdjudicating
 }
 
 func (al *AgentLoop) goalSetSteeredCompletionWrite(sessionID string, active bool) {
@@ -316,7 +345,7 @@ func (al *AgentLoop) goalRestoreWaitingCompletion(rec *goal.Goal) {
 		}
 	}
 	al.goalTransitionCompletionPhase(rec.GoalID,
-		[]goalCompletionPhase{goalCompletionNone}, goalCompletionWaitingDescendants)
+		[]goalCompletionPhase{goalCompletionNone}, goalCompletionWaitingDescendants, rec.ActiveSessionID)
 }
 
 // deferMetWhileDescendantsActive is the final Q2 B quietness fence. It runs

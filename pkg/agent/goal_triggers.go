@@ -304,9 +304,17 @@ type goalTriggerState struct {
 	//     not double-dispatch.
 	//   - missing entry / goalCompletionNone: no fence; ordinary launches
 	//     are allowed.
-	// All four phase writes go through goalTransitionCompletionPhase (one
+	// All phase writes go through goalTransitionCompletionPhase (one
 	// critical section; type-design finding 1).
 	completionPhase map[string]goalCompletionPhase
+
+	// completionBySession is the launch fence's session-keyed view of the
+	// waiting/adjudicating phases. completionSessionByGoal is its reverse
+	// mapping, retained through reevaluation_dispatched so transitions that
+	// only carry a goal ID can update both views without reading the store.
+	// Both share mu and have exactly the lifetime of completionPhase.
+	completionBySession     map[string]goalSessionCompletionPhase
+	completionSessionByGoal map[string]string
 
 	// steeredCompletionWrites marks a steered child whose terminal lifecycle
 	// write is in progress — between the Deliver (upward delivery) and the
@@ -396,6 +404,8 @@ var goalTriggersSingleton = &goalTriggerState{
 	outputWatermarks:        make(map[string]time.Time),
 	blocked:                 make(map[string]bool),
 	completionPhase:         make(map[string]goalCompletionPhase),
+	completionBySession:     make(map[string]goalSessionCompletionPhase),
+	completionSessionByGoal: make(map[string]string),
 	steeredCompletionWrites: make(map[string]bool),
 	claimScanWatermarks:     make(map[string]time.Time),
 	liveTurnWork:            make(map[string]goalLiveTurnWork),
@@ -437,6 +447,8 @@ func resetGoalTriggerStateForTest() {
 	s.outputWatermarks = make(map[string]time.Time)
 	s.blocked = make(map[string]bool)
 	s.completionPhase = make(map[string]goalCompletionPhase)
+	s.completionBySession = make(map[string]goalSessionCompletionPhase)
+	s.completionSessionByGoal = make(map[string]string)
 	s.steeredCompletionWrites = make(map[string]bool)
 	s.claimScanWatermarks = make(map[string]time.Time)
 	s.liveTurnWork = make(map[string]goalLiveTurnWork)
@@ -524,6 +536,9 @@ func (al *AgentLoop) clearGoalTriggerState(sessionID, goalID string) {
 	if sessionID == "" && goalID == "" {
 		return
 	}
+	// Completion-phase cleanup uses the same transition as install, promote,
+	// and restore. Do it before taking mu here; the primitive takes mu itself.
+	al.goalClearCompletionPhase(goalID)
 	s := goalTriggers()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -533,7 +548,6 @@ func (al *AgentLoop) clearGoalTriggerState(sessionID, goalID string) {
 		delete(s.idleSettling, goalID)
 		delete(s.outputWatermarks, goalID)
 		delete(s.blocked, goalID)
-		delete(s.completionPhase, goalID)
 		delete(s.claimScanWatermarks, goalID)
 		delete(s.liveTurnWork, goalID)
 	}

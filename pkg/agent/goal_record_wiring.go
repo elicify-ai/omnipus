@@ -154,19 +154,13 @@ func activeGoalForSession(sessionID string) *goal.Goal {
 	return rec
 }
 
-// activeGoalForSessionWithError is the same lookup but propagates a real
-// error so callers that must fail closed (the Q2=B completion fence,
-// redriveGoalAdjudication's degraded-store path) can refuse the action rather
-// than silently returning nil. The Warn-and-treat-as-nil semantics
-// activeGoalForSession keeps are right for the OLD call sites (a missing
-// record is a common path; a missing store is not) and remain unchanged.
-// errNoActiveGoalForSession is the sentinel returned by
-// activeGoalForSessionWithError when the session is empty / has no active
-// goal — distinct from a real store read error so callers that must fail
-// closed (the Q2=B completion fence) can refuse without conflating "no goal
-// on this session" with "store is unreadable". activeGoalForSession keeps its
-// nil-on-empty contract by collapsing this sentinel back to nil; the
-// explicit-name form is for callers that need to distinguish the two.
+// activeGoalForSessionWithError is the same lookup but preserves real store
+// read errors for callers that must distinguish them from an absent goal.
+// activeGoalForSession keeps its existing nil-on-error contract; the launch
+// completion fence no longer calls either lookup, because it reads the
+// process-local session phase instead of scanning the goal directory.
+// errNoActiveGoalForSession is the sentinel for an empty session or a session
+// with no active goal, distinct from a goal-store read error.
 var errNoActiveGoalForSession = errors.New("no active goal on this session")
 
 func activeGoalForSessionWithError(sessionID string) (*goal.Goal, error) {
