@@ -163,6 +163,10 @@ func (p *mailPreviewRoutes) handleMint(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if mailViewHidden(v) {
+		jsonErr(w, http.StatusNotFound, "message not found")
+		return
+	}
 	html := v.HTMLBody
 	if len(html) > mailPreviewMaxHTMLBytes {
 		jsonErr(w, http.StatusBadRequest, "html body too large")

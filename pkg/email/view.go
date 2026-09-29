@@ -167,9 +167,10 @@ func (c *Client) selectFolder(ctx context.Context, client *imapclient.Client, na
 
 // ReadFolderPage returns one envelope page for any D5 folder, newest first
 // (§2.3): beforeUID==0 fetches the newest limit messages; beforeUID>0 fetches
-// messages with UID strictly below it. Truncation is explicit — the caller
-// learns whether more rows exist and gets the next page cursor. Envelopes
-// only: no body fetch, so no \Seen side effect is even possible.
+// messages with UID strictly below it. Drafts choose the highest non-deleted
+// UID per Message-ID before applying the cursor, so a failed old-copy delete
+// cannot expose an obsolete draft on a later page. Truncation is explicit;
+// envelopes only are fetched, without a \Seen side effect.
 func (c *Client) ReadFolderPage(ctx context.Context, slug string, limit int, beforeUID uint32) ([]MailRow, uint32, bool, error) {
 	name, err := c.folderNameFor(slug)
 	if err != nil {
@@ -191,38 +192,32 @@ func (c *Client) ReadFolderPage(ctx context.Context, slug string, limit int, bef
 		return nil, 0, false, err
 	}
 
-	var all []uint32
-	switch {
-	case beforeUID > 0:
-		if beforeUID == 1 {
-			return []MailRow{}, uidvalidity, false, nil
-		}
-		crit := &imap.SearchCriteria{}
+	if beforeUID == 1 {
+		return []MailRow{}, uidvalidity, false, nil
+	}
+	// Drafts must search past the cursor as well: a higher UID can supersede
+	// an unflagged predecessor that sits inside a later page's UID range.
+	crit := &imap.SearchCriteria{NotFlag: []imap.Flag{imap.FlagDeleted}}
+	if beforeUID > 0 && slug != FolderDrafts {
 		var s imap.UIDSet
 		s.AddRange(imap.UID(1), imap.UID(beforeUID-1))
 		crit.UID = []imap.UIDSet{s}
-		sd, serr := runIMAP(ctx, "search page", func() (*imap.SearchData, error) {
-			return client.UIDSearch(crit, nil).Wait()
-		})
-		if serr != nil {
-			return nil, 0, false, fmt.Errorf("email transport: search page %s: %w", slug, serr)
-		}
-		all = searchDataUIDs(sd)
-	default:
-		// SEARCH ALL — the price of an explicitly-truncating page cursor
-		// (the schema promises the page never silently drops rows).
-		sd, serr := runIMAP(ctx, "search all", func() (*imap.SearchData, error) {
-			return client.UIDSearch(&imap.SearchCriteria{}, nil).Wait()
-		})
-		if serr != nil {
-			return nil, 0, false, fmt.Errorf("email transport: search page %s: %w", slug, serr)
-		}
-		all = searchDataUIDs(sd)
 	}
+	sd, serr := runIMAP(ctx, "search page", func() (*imap.SearchData, error) {
+		return client.UIDSearch(crit, nil).Wait()
+	})
+	if serr != nil {
+		return nil, 0, false, fmt.Errorf("email transport: search page %s: %w", slug, serr)
+	}
+	all := searchDataUIDs(sd)
 	if len(all) == 0 {
 		return []MailRow{}, uidvalidity, false, nil
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i] > all[j] }) // newest first
+	if slug == FolderDrafts {
+		rows, truncated, ferr := c.readCurrentDraftRows(ctx, client, all, limit, beforeUID)
+		return rows, uidvalidity, truncated, ferr
+	}
 	truncated := len(all) > limit
 	if truncated {
 		all = all[:limit]
@@ -232,6 +227,38 @@ func (c *Client) ReadFolderPage(ctx context.Context, slug string, limit int, bef
 		return nil, 0, false, ferr
 	}
 	return rows, uidvalidity, truncated, nil
+}
+
+// readCurrentDraftRows scans only as far as a full page plus a truncation
+// witness. Chunked FETCH keeps the peak envelope set at the existing page
+// limit while the newest Message-ID wins across cursor boundaries.
+func (c *Client) readCurrentDraftRows(ctx context.Context, client *imapclient.Client, all []uint32, limit int, beforeUID uint32) ([]MailRow, bool, error) {
+	seen := make(map[string]struct{})
+	rows := make([]MailRow, 0, limit)
+	for len(all) > 0 {
+		n := min(len(all), maxListLimit)
+		batch, err := c.fetchMailRows(ctx, client, imap.UIDSetNum(toUIDs(all[:n])...))
+		if err != nil {
+			return nil, false, err
+		}
+		for _, row := range batch {
+			if row.MessageID != "" {
+				if _, found := seen[row.MessageID]; found {
+					continue
+				}
+				seen[row.MessageID] = struct{}{}
+			}
+			if beforeUID > 0 && row.UID >= beforeUID {
+				continue
+			}
+			if len(rows) == limit {
+				return rows, true, nil
+			}
+			rows = append(rows, row)
+		}
+		all = all[n:]
+	}
+	return rows, false, nil
 }
 
 // MailRow is one envelope page row for the Mail panel lists — the transport
@@ -277,7 +304,9 @@ func (c *Client) fetchMailRows(ctx context.Context, client *imapclient.Client, s
 	}
 	rows := make([]MailRow, 0, len(bufs))
 	for _, buf := range bufs {
-		if buf == nil {
+		if buf == nil || hasDeletedFlag(buf.Flags) {
+			// A different client may flag a UID after our SEARCH. Never
+			// render it merely because it was visible at search time.
 			continue
 		}
 		row := MailRow{
@@ -363,9 +392,13 @@ type MailView struct {
 	BodyMarkdown   string
 	MarkdownLossy  bool
 	IsOmnipusDraft bool
-	RenderHash     string
-	Attachments    []MailPart
-	Inline         []MailPart
+	// SupersededDraft is true when a higher non-deleted UID with this
+	// Message-ID exists in Drafts. It catches an older copy even if its
+	// deletion failed after a successful replacement APPEND.
+	SupersededDraft bool
+	RenderHash      string
+	Attachments     []MailPart
+	Inline          []MailPart
 }
 
 // MailPart is one leaf MIME part of a message view. PartIndex is the stable
@@ -483,6 +516,16 @@ func (c *Client) ReadView(ctx context.Context, slug, ref string) (*MailView, err
 		if !buf.Envelope.Date.IsZero() {
 			view.Date = buf.Envelope.Date.UTC()
 		}
+	}
+	if slug == FolderDrafts && view.MessageID != "" {
+		// A replacement APPEND may succeed while deleting its predecessor
+		// fails. Resolve the current non-deleted copy on this same session
+		// rather than trusting that the old UID still exists.
+		currentUID, serr := c.searchMessageID(ctx, client, view.MessageID)
+		if serr != nil {
+			return nil, serr
+		}
+		view.SupersededDraft = currentUID > uid
 	}
 	return view, nil
 }

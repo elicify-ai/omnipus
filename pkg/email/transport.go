@@ -404,9 +404,9 @@ func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.Select
 
 // ReadInbox returns up to opts.Limit of the most recent INBOX messages, newest
 // first. The default (seen+unseen, no cursor) path avoids a full-mailbox
-// SEARCH ALL: it takes the SELECT EXISTS count and fetches the trailing
-// sequence range. Unseen-only mode and cursor paging go through a bounded
-// UIDSearch instead.
+// SEARCH ALL: it fetches trailing sequence ranges until it has enough
+// non-deleted messages or reaches the start of the mailbox. Unseen-only mode
+// and cursor paging go through a bounded UIDSearch instead.
 func (c *Client) ReadInbox(ctx context.Context, opts InboxOptions) ([]Message, error) {
 	limit := clampLimit(opts.Limit)
 	client, selData, err := c.dialIMAP(ctx)
@@ -416,9 +416,9 @@ func (c *Client) ReadInbox(ctx context.Context, opts InboxOptions) ([]Message, e
 	defer client.Close()
 
 	if opts.UnseenOnly || opts.BeforeUID > 0 {
-		crit := &imap.SearchCriteria{}
+		crit := &imap.SearchCriteria{NotFlag: []imap.Flag{imap.FlagDeleted}}
 		if opts.UnseenOnly {
-			crit.NotFlag = []imap.Flag{imap.FlagSeen}
+			crit.NotFlag = append(crit.NotFlag, imap.FlagSeen)
 		}
 		switch {
 		case opts.BeforeUID == 1:
@@ -446,19 +446,27 @@ func (c *Client) ReadInbox(ctx context.Context, opts InboxOptions) ([]Message, e
 		return c.fetchMessages(ctx, client, imap.UIDSetNum(uids...), false)
 	}
 
-	// Default path: the newest `limit` messages by sequence number, derived from
-	// the EXISTS count — no SEARCH ALL.
+	// Default path: inspect trailing sequence ranges without a full-mailbox
+	// SEARCH. A deleted UID can occupy one of the newest slots, so fetch
+	// preceding ranges until the page has `limit` visible messages.
 	n := selData.NumMessages
-	if n == 0 {
-		return []Message{}, nil
+	out := make([]Message, 0, limit)
+	for n > 0 && len(out) < limit {
+		start := uint32(1)
+		if need := uint32(limit - len(out)); n > need {
+			start = n - need + 1
+		}
+		var seq imap.SeqSet
+		seq.AddRange(start, n)
+		rows, err := c.fetchMessages(ctx, client, seq, false)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		n = start - 1
 	}
-	start := uint32(1)
-	if n > uint32(limit) {
-		start = n - uint32(limit) + 1
-	}
-	var seq imap.SeqSet
-	seq.AddRange(start, n)
-	return c.fetchMessages(ctx, client, seq, false)
+	sort.Slice(out, func(i, j int) bool { return out[i].UID > out[j].UID })
+	return out, nil
 }
 
 // Search returns matches for query, newest first, up to opts.Limit, with
@@ -526,7 +534,7 @@ func (c *Client) Search(ctx context.Context, query string, opts SearchOptions) (
 // BODY substring scan is added only when body is true. A non-zero beforeUID is
 // ANDed on as a "UID < beforeUID" range for pagination.
 func buildSearchCriteria(q string, body bool, beforeUID uint32) *imap.SearchCriteria {
-	crit := &imap.SearchCriteria{}
+	crit := &imap.SearchCriteria{NotFlag: []imap.Flag{imap.FlagDeleted}}
 	if body {
 		// (Subject OR (From OR BODY)) — go-imap models OR as a pair, so chain it.
 		crit.Or = [][2]imap.SearchCriteria{{
@@ -599,6 +607,11 @@ func (c *Client) fetchMessages(ctx context.Context, client *imapclient.Client, n
 
 	out := make([]Message, 0, len(fetched))
 	for _, m := range fetched {
+		if m != nil && hasDeletedFlag(m.Flags) {
+			// Another client may mark a result deleted after SEARCH or SELECT;
+			// the fetched flags, not the earlier match, govern visibility.
+			continue
+		}
 		if m == nil || m.Envelope == nil {
 			// Round-8 F5 (FR-018/FR-036): a buffer without its envelope
 			// cannot render a row, but the drop must never be invisible —
@@ -906,6 +919,17 @@ func capBody(s string) string {
 	}
 	removed := len(s) - len(truncated)
 	return truncated + fmt.Sprintf("\n…[truncated %d bytes]", removed)
+}
+
+// hasDeletedFlag checks the latest FETCH flags; IMAP system-flag case is
+// insensitive, even when servers return a different spelling.
+func hasDeletedFlag(flags []imap.Flag) bool {
+	for _, f := range flags {
+		if strings.EqualFold(string(f), string(imap.FlagDeleted)) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasSeenFlag(flags []imap.Flag) bool {
