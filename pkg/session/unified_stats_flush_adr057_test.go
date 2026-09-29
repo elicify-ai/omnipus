@@ -454,9 +454,20 @@ func TestFlushInterval_ConfigKeyDefaultAndOverride(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.AppendTranscript(meta.ID, TranscriptEntry{Role: "user", Content: "x", Tokens: 1}))
 
-	time.Sleep(200 * time.Millisecond) // several multiples of 50ms; far less than the 5s default
-	_, statErr := os.Stat(filepath.Join(store.BaseDir(), meta.ID, "stats.json"))
-	require.NoError(t, statErr, "a non-default flush interval must be honoured end to end, not just stored")
+	// Poll rather than sleep-then-check-once: a fixed sleep assumes the
+	// background flusher goroutine gets scheduled AND completes a
+	// synchronous disk write (marshal + flock + fsync + rename + dir-fsync,
+	// see u5WriteStatsLocked) within that exact window — false under CI CPU
+	// contention. The 5s timeout is generous headroom over the 50ms interval
+	// (a hundred multiples) while staying far below the 5s OLD/default
+	// interval this test is proving was overridden; the 20ms poll tick is a
+	// fraction of the interval under test.
+	statsPath := filepath.Join(store.BaseDir(), meta.ID, "stats.json")
+	require.Eventually(t, func() bool {
+		_, statErr := os.Stat(statsPath)
+		return statErr == nil
+	}, 5*time.Second, 20*time.Millisecond,
+		"a non-default flush interval must be honoured end to end, not just stored")
 }
 
 // ---------------------------------------------------------------------
