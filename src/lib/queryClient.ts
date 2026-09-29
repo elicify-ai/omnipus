@@ -1,5 +1,6 @@
 import { QueryClient } from '@tanstack/react-query'
-import { ApiSchemaError, ApiError, validateToken } from './api'
+import { ApiError } from './api-error'
+import { ApiSchemaError } from './api/http'
 import { forceLogout } from './authLogout'
 import { checkTokenValidity, resetTokenValidationCache, type TokenVerdict } from '@/routes/authValidation'
 
@@ -33,7 +34,7 @@ let _pendingValidityRecheck: Promise<TokenVerdict> | null = null
 function _recheckSessionValidity(): Promise<TokenVerdict> {
   if (!_pendingValidityRecheck) {
     resetTokenValidationCache()
-    _pendingValidityRecheck = checkTokenValidity(validateToken).finally(() => {
+    _pendingValidityRecheck = checkTokenValidity(() => import('./api').then(({ validateToken }) => validateToken())).finally(() => {
       _pendingValidityRecheck = null
     })
   }
