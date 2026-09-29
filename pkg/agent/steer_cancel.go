@@ -221,7 +221,6 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 		// "interrupted: the session was cancelled" shape) naming the cause.
 		// Idempotent; never speaks for a task-owned goal.
 		al.endSessionOwnedGoalOnTerminal(sessionID, goalEndingForTerminalState(nextState), failureReason)
-		al.resumeDeferredGoalAfterDescendantTerminal(sessionID)
 	case errors.Is(mutateErr, errTerminalReportStaleGeneration),
 		errors.Is(mutateErr, errTerminalReportAlreadyTerminal),
 		errors.Is(mutateErr, errTerminalReportStoppedDuringDelivery),

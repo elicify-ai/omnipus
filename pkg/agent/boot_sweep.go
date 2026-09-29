@@ -92,11 +92,6 @@ type SteerBootRecovery struct {
 	// from the live AgentLoop; nil (tests, embedders) skips the pair-end —
 	// same optional-dep posture as every other field here.
 	EndSessionGoal func(sessionID string, reason string)
-	// DescendantTerminal re-runs the Q2 B quiet-subtree check after a boot
-	// repair actually lands a descendant's terminal lifecycle state.
-	DescendantTerminal func(sessionID string)
-	// orderSessionIDs lets tests force an adversarial visit order.
-	orderSessionIDs func([]string) []string
 }
 
 type bootSessionMessageEnvelope struct {
@@ -141,37 +136,8 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if r.orderSessionIDs != nil {
-		ids = r.orderSessionIDs(ids)
-	}
-	// Do not notify a pending owner while another session in this same sweep
-	// can still be interrupted. Keep the original receiver unchanged so direct
-	// callers of the repair helpers continue to notify inline.
-	var pendingTerminal []string
-	sweep := *r
-	if r.DescendantTerminal != nil {
-		sweep.DescendantTerminal = func(id string) {
-			pendingTerminal = append(pendingTerminal, id)
-		}
-	}
-	abortIfCancelled := func() error {
-		if err := ctx.Err(); err != nil {
-			// Firing any collected callback before every session is visited can
-			// revive an unvisited owner. Leave the durable terminal records for
-			// the next boot sweep and report every pending ID to the operator.
-			for _, pendingID := range pendingTerminal {
-				message := fmt.Sprintf("session %s descendant-terminal follow-up was deferred: boot recovery cancelled; retry at next boot", pendingID)
-				notice("deferred-terminal:"+pendingID, message)
-				if r.OperatorNotice == nil {
-					logger.WarnCF("agent", message, map[string]any{"session_id": pendingID, "error": err.Error()})
-				}
-			}
-			return err
-		}
-		return nil
-	}
 	for _, id := range ids {
-		if err := abortIfCancelled(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		// I-9 currently distinguishes a load error from a missing record, but
@@ -193,7 +159,7 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 		case steer.ClassOrdinaryRoot:
 			// Existing root boot recovery remains authoritative.
 		case steer.ClassSteered:
-			sweep.recoverSteered(ctx, id, notice)
+			r.recoverSteered(ctx, id, notice)
 		case steer.ClassLegacyDelegate:
 			r.failLegacy(id, notice)
 		case steer.ClassDamagedChild, steer.ClassInvalidEdge, steer.ClassUnreadable:
@@ -202,15 +168,7 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 			notice("refused:"+id, fmt.Sprintf("session %s refused at boot: unknown classification %q", id, class))
 		}
 	}
-	for len(pendingTerminal) > 0 {
-		if err := abortIfCancelled(); err != nil {
-			return err
-		}
-		id := pendingTerminal[0]
-		pendingTerminal = pendingTerminal[1:]
-		r.DescendantTerminal(id)
-	}
-	return abortIfCancelled()
+	return nil
 }
 
 func (r *SteerBootRecovery) sessionIDs() ([]string, error) {
@@ -266,7 +224,6 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
 		return
 	}
-	terminalAtBoot := rec.Terminal()
 	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
 		// A current-generation Stop is durable. Do not deliver or re-wake any
 		// pending entry; it waits for Revive to mint a newer generation.
@@ -318,13 +275,6 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 			continue
 		}
 		r.deliverIfUnconsumed(ctx, rec, message, notice)
-	}
-	// A terminal record can predate this process because the prior process
-	// crashed after its lifecycle write but before the live Q2 B terminal
-	// hook. Re-run the idempotent quiet-subtree check after boot has repaired
-	// or replayed the descendant's final delivery.
-	if terminalAtBoot && rec.Terminal() && r.DescendantTerminal != nil {
-		r.DescendantTerminal(rec.SessionID)
 	}
 }
 
@@ -474,14 +424,10 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 	if err == nil && pairEnded && r.EndSessionGoal != nil {
 		r.EndSessionGoal(rec.SessionID, failedReasonInterrupted+": the gateway restarted after the session's final report was delivered")
 	}
-	if err == nil && pairEnded && r.DescendantTerminal != nil {
-		r.DescendantTerminal(rec.SessionID)
-	}
 	return err
 }
 
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
-	landed := false
 	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
 			return nil
@@ -489,14 +435,10 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		current.State = session.LifecycleFailed
 		current.FailedReason = failedReasonInterrupted
 		current.NeedsInput = nil
-		landed = true
 		return nil
 	})
 	if err == nil && r.EndSessionGoal != nil {
 		r.EndSessionGoal(rec.SessionID, failedReasonInterrupted+": the gateway restarted while the session was mid-flight")
-	}
-	if err == nil && landed && r.DescendantTerminal != nil {
-		r.DescendantTerminal(rec.SessionID)
 	}
 	return err
 }

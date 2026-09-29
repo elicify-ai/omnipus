@@ -44,11 +44,9 @@ import (
 // registry closure.
 //
 // goal_claim MUST be registered here and nowhere else. It shares set_goal's
-// GoalRecordAccess seam verbatim (goal_claim.go's own doc comment: "reusing
-// set_goal.go's own GoalRecordAccess (its read half) ... so a single
-// implementation wires both tools with no adapter needed") — it reads
-// ReadGoalState only, to answer its FR-090 "does this session have an active
-// goal at all" precondition, and never writes. Without this registration the
+// GoalRecordAccess seam and a claim-specific direct-child lookup. It reads
+// the session-bound active goal and its direct child lifecycles without
+// changing set_goal's write contract. Without this registration the
 // tool is seeded in every agent's policy map and present in the metadata
 // catalog yet NEVER OFFERED TO A MODEL, which silently disables ADR-084's
 // claim-triggered adjudication entirely (goal_loop.go's claim detection can
@@ -150,26 +148,14 @@ func resolveGoalRecordStore() *goal.Store {
 // entirely would be a worse failure than continuing against the older of two
 // records.
 func activeGoalForSession(sessionID string) *goal.Goal {
-	rec, _ := activeGoalForSessionWithError(sessionID)
-	return rec
-}
-
-// activeGoalForSessionWithError is the same lookup but preserves real store
-// read errors for callers that must distinguish them from an absent goal.
-// activeGoalForSession keeps its existing nil-on-error contract; the launch
-// completion fence no longer calls either lookup, because it reads the
-// process-local session phase instead of scanning the goal directory.
-// errNoActiveGoalForSession is the sentinel for an empty session or a session
-// with no active goal, distinct from a goal-store read error.
-var errNoActiveGoalForSession = errors.New("no active goal on this session")
-
-func activeGoalForSessionWithError(sessionID string) (*goal.Goal, error) {
 	if sessionID == "" {
-		return nil, errNoActiveGoalForSession
+		return nil
 	}
 	active, err := resolveGoalRecordStore().ListActive()
 	if err != nil {
-		return nil, err
+		logger.WarnCF("agent", "goal: could not list active goal records; treating this session as goal-less",
+			map[string]any{"component": "goal", "session_id": sessionID, "error": err.Error()})
+		return nil
 	}
 	var found *goal.Goal
 	for i := range active {
@@ -184,10 +170,7 @@ func activeGoalForSessionWithError(sessionID string) (*goal.Goal, error) {
 		g := active[i]
 		found = &g
 	}
-	if found == nil {
-		return nil, errNoActiveGoalForSession
-	}
-	return found, nil
+	return found
 }
 
 // bumpGoalRecordActivity moves goalID's own LastActivityAt clock forward —
@@ -368,7 +351,39 @@ func (a agentLoopGoalRecordAccess) ReadClaimableGoal(sessionID string) (goalID, 
 	return rec.GoalID, rec.Prompt, nil
 }
 
+// DirectNonTerminalChildren implements tools.GoalClaimDirectChildrenAccess.
+// Only this session's own children are checked; List's order is retained in
+// the IDs returned to the caller. A running record without an active turn or
+// completion write is idle, not an unfinished call to its parent.
+func (a agentLoopGoalRecordAccess) DirectNonTerminalChildren(sessionID string) ([]string, error) {
+	lifecycle := a.al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		// Without this store, SteerLauncher.Launch cannot create a child.
+		return nil, nil
+	}
+	children, err := lifecycle.List(session.LifecycleFilter{SteeringSessionID: sessionID})
+	if err != nil {
+		return nil, fmt.Errorf("goal_claim: list direct children of %q: %w", sessionID, err)
+	}
+	var active []string
+	for i := range children {
+		child := &children[i]
+		switch child.State {
+		case session.LifecycleQueued:
+			active = append(active, child.SessionID)
+		case session.LifecycleRunning:
+			if a.al.steeredCompletionWriteActive(child.SessionID) {
+				active = append(active, child.SessionID)
+			} else if ts := a.al.getActiveTurnState(child.SessionID); ts != nil && ts.IsAlive() {
+				active = append(active, child.SessionID)
+			}
+		}
+	}
+	return active, nil
+}
+
 var _ tools.GoalClaimAccess = agentLoopGoalRecordAccess{}
+var _ tools.GoalClaimDirectChildrenAccess = agentLoopGoalRecordAccess{}
 
 // goalRecordAnchor describes one ENGINE-authored goal-record write that must
 // be anchored in the session transcript as a `set_goal` tool call (ADR-082

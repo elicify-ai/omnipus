@@ -22,7 +22,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
-	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -750,28 +749,20 @@ func TestGoalAdjudication_RoundAdvancePersistFailure_Aborts_M3(t *testing.T) {
 
 // =============== corr-MAJOR-3: concurrent deferred claims → one Judge ======
 
-// TestConcurrentDeferredClaims_OneJudge_corrMAJOR3 is corr-MAJOR-3's Q2=B
-// successor (G-1 "exactly once"). Type-design finding (Q2=B pinned contract,
-// squad-lead ruling on fix-890): a second met claim arriving before the
-// first's deferred work is dispatched must NEVER downgrade the Adjudicating
-// phase and must NEVER record a second Judge dispatch of its own — the
-// install-and-promote sequence in goal_loop.go::checkGoalLoopAfterTurn
-// (gl.al.goalInstallWaitingCompletion then goalPromoteCompletionToAdjudicating)
-// is the record-time gate: the second call's install attempt sees the phase
-// already at Adjudicating (not in {None, Waiting, ReevaluationDispatched}),
-// refuses, and returns with no goalDeferredAdjudication — logging "goal: met
-// claim coalesced into the in-flight adjudication" (goal_loop.go, the
-// !installed branch). The second claim's evidence is still recorded onto the
-// goal record first (recordGoalClaim runs unconditionally, before the install
-// attempt), so LatestClaim reflects the LATEST claim even though only the
-// FIRST claim's work reaches the Judge.
-//
-// The verifier-registry's CAS Register (corr-MAJOR-3b, pkg/agent/
-// verifier_adjudication.go) is the second, independent defense layer that
-// catches whatever races past the install-time gate above — proven here by
-// dispatching the SAME (first claim's) deferred work twice concurrently and
-// asserting the Judge is still called exactly once. Run with -race so any
-// unsynchronized map access on the registry is caught.
+// TestConcurrentDeferredClaims_OneJudge_corrMAJOR3 is corr-MAJOR-3's D13
+// successor (G-1 "exactly once"): under D13 the idle tick can no longer
+// race a Judge call at all (FR-095/FR-097 — it only ever re-posts), so the
+// race this test now proves is the one D13 actually introduces: TWO turns
+// that both produce a `met` claim on the SAME session, each independently
+// recording its OWN deferred adjudication work (checkGoalLoopAfterTurn's
+// synchronous goalAdjudicationInFlight check cannot see either turn's
+// adjudication yet — neither has been DISPATCHED, only recorded, so both
+// legitimately pass it), then BOTH dispatched concurrently
+// (dispatchDeferredGoalAdjudication, simulating runAgentLoop's own
+// goroutines). The verifier-registry's CAS Register (corr-MAJOR-3b,
+// unaffected by D13 — pkg/agent/verifier_adjudication.go, outside this
+// wave's write-set) is what still enforces "exactly once" here. Run with
+// -race so any unsynchronized map access on the registry is caught.
 func TestConcurrentDeferredClaims_OneJudge_corrMAJOR3(t *testing.T) {
 	resetGoalTriggerStateForTest()
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
@@ -783,7 +774,7 @@ func TestConcurrentDeferredClaims_OneJudge_corrMAJOR3(t *testing.T) {
 	al.SetPlanEngine(pe)
 	t.Cleanup(pe.Stop)
 	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
-	goalID := setGoalRoundsArmed(t, store, sid, "goal race", 0, time.Now().Add(-1*time.Hour))
+	setGoalRoundsArmed(t, store, sid, "goal race", 0, time.Now().Add(-1*time.Hour))
 
 	var judgeCalls int32
 	// chatFn counts invocations and sleeps briefly to WIDEN the race window —
@@ -803,38 +794,18 @@ func TestConcurrentDeferredClaims_OneJudge_corrMAJOR3(t *testing.T) {
 		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
 	}
 
-	// First turn's claim wins the install-and-promote race: it is the ONLY
-	// claim that may ever record deferred work for this goal.
+	// Two turns, each producing its OWN claim — checkGoalLoopAfterTurn's
+	// synchronous in-flight check cannot see either turn's own adjudication
+	// yet (nothing has dispatched), so BOTH legitimately record deferred
+	// work here — this is the shape D13 introduces.
 	r1 := &turnResult{finalContent: "[goal:evidence] first done\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, r1)
-	if r1.goalDeferredAdjudication == nil {
-		t.Fatal("arrange: first claim did not record deferred adjudication work")
-	}
-
-	readLog := captureLogFile(t, logger.INFO) // production default level
-	// Second turn's claim arrives while the first is still undispatched
-	// (Adjudicating, per the install-and-promote sequence above) — it must
-	// coalesce, not schedule a second Judge dispatch of its own.
 	r2 := &turnResult{finalContent: "[goal:evidence] second done\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, r2)
-	if r2.goalDeferredAdjudication != nil {
-		t.Fatal("BUG: second claim recorded its own deferred adjudication work while the first was still undispatched — a second claim must coalesce into the in-flight adjudication, never schedule a second Judge call")
-	}
-	if !strings.Contains(readLog(), "goal: met claim coalesced into the in-flight adjudication") {
-		t.Fatal("second claim did not emit the coalescing INFO line (\"goal: met claim coalesced into the in-flight adjudication\")")
+	if r1.goalDeferredAdjudication == nil || r2.goalDeferredAdjudication == nil {
+		t.Fatal("both turns must have recorded deferred adjudication work")
 	}
 
-	g, err := resolveGoalRecordStore().Get(goalID)
-	if err != nil {
-		t.Fatalf("Get(goal %q): %v", goalID, err)
-	}
-	if g.LatestClaim == nil || g.LatestClaim.Status != generated.GoalLatestClaimStatusMet || g.LatestClaim.Evidence != "second done" {
-		t.Fatalf("goal record's latest claim after the coalesced second claim = %+v, want status=met evidence=%q (the second claim's own evidence, still durable on the record)", g.LatestClaim, "second done")
-	}
-
-	// The verifier-registry CAS Register is the SECOND defense layer: prove
-	// it independently by dispatching the ONE existing deferred work item
-	// (the first claim's — the second never produced one) twice concurrently.
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -843,12 +814,12 @@ func TestConcurrentDeferredClaims_OneJudge_corrMAJOR3(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		al.dispatchDeferredGoalAdjudication(r1.goalDeferredAdjudication)
+		al.dispatchDeferredGoalAdjudication(r2.goalDeferredAdjudication)
 	}()
 	wg.Wait()
 
 	if got := atomic.LoadInt32(&judgeCalls); got != 1 {
-		t.Fatalf("corr-MAJOR-3: the same deferred claim dispatched twice concurrently invoked the Judge %d times, want exactly 1 (G-1 exactly-once, verifier-registry CAS)", got)
+		t.Fatalf("corr-MAJOR-3: two concurrently dispatched deferred claims invoked the Judge %d times, want exactly 1 (G-1 exactly-once)", got)
 	}
 }
 

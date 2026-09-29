@@ -47,8 +47,8 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 	if rec.Terminal() {
 		return false, nil
 	}
-	al.goalSetSteeredCompletionWrite(rec.SessionID, true)
-	defer al.goalSetSteeredCompletionWrite(rec.SessionID, false)
+	al.setSteeredCompletionWrite(rec.SessionID, true)
+	defer al.setSteeredCompletionWrite(rec.SessionID, false)
 
 	answer := strings.TrimSpace(result.finalContent)
 	outcome, nextState, failureReason := completionDisposition(result, runErr, answer)
@@ -219,7 +219,6 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		// goal, no action), and it never speaks for a task-owned goal.
 		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
 			goalEndingForTerminalState(nextState), goalSessionEndedReasonForState(nextState))
-		al.resumeDeferredGoalAfterDescendantTerminal(rec.SessionID)
 		return finalWoke, nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
@@ -633,6 +632,29 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 	return message, err
 }
 
+// setSteeredCompletionWrite tracks the delivery-before-terminal interval of
+// a steered session's completion, even after its turn has deregistered.
+func (al *AgentLoop) setSteeredCompletionWrite(sessionID string, active bool) {
+	if sessionID == "" {
+		return
+	}
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if active {
+		s.steeredCompletionWrites[sessionID] = true
+		return
+	}
+	delete(s.steeredCompletionWrites, sessionID)
+}
+
+func (al *AgentLoop) steeredCompletionWriteActive(sessionID string) bool {
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.steeredCompletionWrites[sessionID]
+}
+
 // hasRunningOrQueuedDescendant reports whether parentID has any descendant
 // that is genuinely still working — a `queued` child (admitted or not, it
 // WILL run), or a `running` child that is actually executing: a live turn
@@ -700,7 +722,7 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 	if lifecycle == nil {
 		// SteerLauncher.Launch refuses a child without a lifecycle store, so
 		// there is no descendant to wait for. A failed List on a wired store
-		// still returns an error and fails the completion fence closed.
+		// still returns an error instead of appearing quiet.
 		return false, nil
 	}
 	seen := map[string]bool{parentID: true}
@@ -722,7 +744,7 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 			case session.LifecycleQueued:
 				return true, nil
 			case session.LifecycleRunning:
-				if al.goalSteeredCompletionWriteActive(child.SessionID) {
+				if al.steeredCompletionWriteActive(child.SessionID) {
 					return true, nil
 				}
 				if ts := al.getActiveTurnState(child.SessionID); ts != nil && ts.IsAlive() {

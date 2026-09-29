@@ -2,75 +2,158 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// TestGoalDelegation984_MetWithRunningDescendantWaitsForFinalHandback updates
-// the pre-Q2 F1 oracle: a met claim cannot wake a verdict while descendant
-// work remains. The descendant's terminal transition schedules one fresh
-// evaluation; only that fresh met claim may produce the final handback wake.
-func TestGoalDelegation984_MetWithRunningDescendantWaitsForFinalHandback(t *testing.T) {
-	h := newQ2BHarness(t, "q2b-followup-running-descendant")
-	descendant := q2bLaunchDescendant(t, h, "q2b-followup-grandchild", session.LifecycleRunning)
-	q2bKeepTurnAlive(t, h.al, descendant.SessionID)
+// TestGoalDelegation984_MetWithRunningDescendantWakesVerdict pins architect
+// re-review F1: when the met completion tail cannot store its deterministic
+// final hand-back because a descendant is still running, the suppressed goal
+// verdict must stay unacknowledged and must wake the parent itself.
+func TestGoalDelegation984_MetWithRunningDescendantWakesVerdict(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	wireSteerCompletionDeps(t, al)
 
-	initial := h.claimMet("descendant still owns required work")
-	if initial.goalDeferredAdjudication != nil {
-		t.Fatal("met claim scheduled adjudication while descendant was running")
-	}
-	if calls := h.judge.callCount(); calls != 0 {
-		t.Fatalf("Judge calls before descendant completion = %d, want 0", calls)
-	}
-	if messages := h.parentMessages(); len(messages) != 0 {
-		t.Fatalf("parent messages before descendant completion = %d, want 0", len(messages))
-	}
-	if wakes := h.parentWakeEvents(); len(wakes) != 0 {
-		t.Fatalf("parent wakes before descendant completion = %d, want 0", len(wakes))
-	}
-
-	if err := h.al.completeSteeredTurn(context.Background(), descendant,
-		turnResult{finalContent: "descendant evidence"}, nil); err != nil {
-		t.Fatalf("completeSteeredTurn(descendant): %v", err)
-	}
-	if got := q2bCountReevaluations(h.dispatches.all(), h.child.SessionID); got != 1 {
-		t.Fatalf("post-terminal re-evaluations = %d, want exactly 1", got)
-	}
-
-	fresh := h.claimMet("fresh claim after reviewing descendant evidence")
-	if fresh.goalDeferredAdjudication == nil {
-		t.Fatal("fresh post-handback claim did not schedule adjudication")
-	}
-	h.al.dispatchDeferredGoalAdjudication(fresh.goalDeferredAdjudication)
-	if calls := h.judge.callCount(); calls != 1 {
-		t.Fatalf("Judge calls after fresh claim = %d, want exactly 1", calls)
-	}
-	if wakes := h.parentWakeEvents(); len(wakes) != 1 || wakes[0].SourceKind != "message_parent:handback" {
-		t.Fatalf("parent wakes after fresh met claim = %+v, want exactly one final handback", wakes)
-	}
-	wantFinalID := fmt.Sprintf("%s:%d:final", h.child.SessionID, h.child.Generation)
-	wakes := h.parentWakeEvents()
-	if got := fmt.Sprint(wakes[0].Metadata["steer_message_id"]); got != wantFinalID {
-		t.Fatalf("final parent wake id = %q, want deterministic id %q", got, wantFinalID)
-	}
-	messages := h.parentMessages()
-	if len(messages) != 1 {
-		t.Fatalf("parent messages after fresh met claim = %d, want exactly 1", len(messages))
-	}
-	if got := messageIDOf(messages[0]); got != wantFinalID {
-		t.Fatalf("final parent message id = %q, want deterministic id %q", got, wantFinalID)
-	}
-	class, err := session.ClassifySessionMessage(messages[0])
+	parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
 	if err != nil {
-		t.Fatalf("ClassifySessionMessage: %v", err)
+		t.Fatalf("NewSession(parent): %v", err)
 	}
-	if class.Kind != "handback" {
-		t.Fatalf("only parent message kind = %q, want handback", class.Kind)
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: parentMeta.ID,
+		TargetAgentID:     "native-agent",
+		Task:              "prove the goal while a descendant is still working",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-f1-running-descendant"},
+		Goal: &steer.GoalSpec{
+			Criteria: []steer.Criterion{{Text: "the work is complete"}},
+			DoD:      []steer.Criterion{{Text: "the evidence is sufficient"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Launch(goal child): %v", err)
 	}
+	child, err := lifecycle.Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("Load(goal child): %v", err)
+	}
+	child.State = session.LifecycleRunning
+	if persistErr := lifecycle.Persist(child); persistErr != nil {
+		t.Fatalf("Persist(goal child running): %v", persistErr)
+	}
+
+	grandchild := &session.LifecycleRecord{
+		SessionID:      "session_f1_running_grandchild",
+		Generation:     1,
+		State:          session.LifecycleRunning,
+		Origin:         &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-f1-running-grandchild"},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: child.SessionID, RootSessionID: child.SteeredBy.RootSessionID},
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   child.SessionID,
+		WorkspaceID:    child.WorkspaceID,
+		AgentID:        child.AgentID,
+		ParentAgentID:  child.AgentID,
+		OriginChannel:  child.OriginChannel,
+		OriginChatID:   child.OriginChatID,
+	}
+	if persistErr := lifecycle.Persist(grandchild); persistErr != nil {
+		t.Fatalf("Persist(grandchild running): %v", persistErr)
+	}
+	al.activeTurnStates.Store(grandchild.SessionID, &turnState{})
+	t.Cleanup(func() { al.activeTurnStates.Delete(grandchild.SessionID) })
+	if grandchild.SteeringSessionID() != child.SessionID {
+		t.Fatalf("grandchild parent = %q, want %q", grandchild.SteeringSessionID(), child.SessionID)
+	}
+
+	g, err := resolveGoalRecordStore().Get(child.GoalRef)
+	if err != nil {
+		t.Fatalf("Get(goal): %v", err)
+	}
+	type criterionVerdict struct {
+		ID     string `json:"id"`
+		Met    bool   `json:"met"`
+		Reason string `json:"reason"`
+	}
+	verdicts := make([]criterionVerdict, 0, len(g.Criteria)+len(g.DoD))
+	for _, criterion := range append(append([]task.AcceptanceCriterion{}, g.Criteria...), g.DoD...) {
+		verdicts = append(verdicts, criterionVerdict{ID: criterion.ID, Met: true, Reason: "verified"})
+	}
+	body, err := json.Marshal(map[string]any{"met": true, "criteria": verdicts})
+	if err != nil {
+		t.Fatalf("Marshal(verdict): %v", err)
+	}
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{Content: string(body)}, nil
+	}}
+
+	var mu sync.Mutex
+	var wakeIDs []string
+	al.asyncNotifier.registerObserver(func(event AsyncNotifyEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		wakeIDs = append(wakeIDs, fmt.Sprint(event.Metadata["steer_message_id"]))
+	})
+
+	ts, err := al.reconstructSteeredTurn(child, nil)
+	if err != nil {
+		t.Fatalf("reconstructSteeredTurn: %v", err)
+	}
+	done := make(chan string, 1)
+	oldDone := goalDeferredAdjudicationDoneFn
+	goalDeferredAdjudicationDoneFn = func(sessionID string) { done <- sessionID }
+	t.Cleanup(func() { goalDeferredAdjudicationDoneFn = oldDone })
+	al.finishSteeredGoalTurn(ts, child, &turnResult{finalContent: "[goal:evidence] verified\nGOAL_STATUS: met"}, nil)
+	select {
+	case got := <-done:
+		if got != child.SessionID {
+			t.Fatalf("adjudicated session = %q, want %q", got, child.SessionID)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for delegated goal adjudication")
+	}
+
+	verdictID := goalVerdictUpwardMessageID(g.GoalID, 1)
+	mu.Lock()
+	gotWakeIDs := append([]string(nil), wakeIDs...)
+	mu.Unlock()
+	if len(gotWakeIDs) != 1 || gotWakeIDs[0] != verdictID {
+		t.Fatalf("parent wakes = %v, want exactly the unacknowledged verdict %q when no final hand-back was stored", gotWakeIDs, verdictID)
+	}
+	assertUnackedMessageIDs(t, inbox, parentMeta.ID, child.SessionID, verdictID)
+	loaded, err := lifecycle.Load(child.SessionID)
+	if err != nil {
+		t.Fatalf("Load(goal child after met): %v", err)
+	}
+	if loaded.Terminal() {
+		t.Fatalf("goal child state = %q, want non-terminal while descendant %q is still running", loaded.State, grandchild.SessionID)
+	}
+
+	grandchild.State = session.LifecycleCompleted
+	if persistErr := lifecycle.Persist(grandchild); persistErr != nil {
+		t.Fatalf("Persist(grandchild completed): %v", persistErr)
+	}
+	al.activeTurnStates.Delete(grandchild.SessionID)
+	if woke := al.completeSteeredTurnAfterGoal(context.Background(), child.SessionID, "verified", nil); !woke {
+		t.Fatal("deferred goal-child hand-back did not wake the parent")
+	}
+
+	mu.Lock()
+	gotWakeIDs = append([]string(nil), wakeIDs...)
+	mu.Unlock()
+	wantFinalID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
+	if len(gotWakeIDs) != 2 || gotWakeIDs[0] != verdictID || gotWakeIDs[1] != wantFinalID {
+		t.Fatalf("parent wakes after descendant completion = %v, want verdict %q then hand-back %q", gotWakeIDs, verdictID, wantFinalID)
+	}
+	assertUnackedMessageIDs(t, inbox, parentMeta.ID, child.SessionID, verdictID, wantFinalID)
 }
 
 // TestGoal984_CompletionTailSingleShotDuringFinishedTurnRace pins architect
