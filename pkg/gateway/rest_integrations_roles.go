@@ -215,6 +215,15 @@ func (a *restAPI) buildIntegrationResponse(cfg *config.Config) (gen.IntegrationP
 			entry.Active = &active
 			entry.Fallback = &isFallback
 			entry.FallbackAutomatic = &fallbackAuto
+			// Only Tavily's depth cap is surfaced in this response. Providers
+			// without a depth axis, and voice rows, omit the optional field.
+			if def, ok := config.SearchProviderDefByID(d.id); ok && def.HonoursDepth && d.id == config.SearchProviderTavily {
+				depth := cfg.Tools.Web.Tavily.SearchDepth
+				if depth == "" {
+					depth = "advanced" // The same legacy-empty cap as TavilySearchProvider.effectiveDepth.
+				}
+				entry.SearchDepthCap = &depth
+			}
 			resp.Search = append(resp.Search, entry)
 		} else {
 			active := d.id == activeVoice
