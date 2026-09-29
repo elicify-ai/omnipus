@@ -1851,8 +1851,8 @@ export const Route = createFileRoute('/onboarding')({
     // platform server always answers identity.mode: 'platform' (ADR-0010
     // WP1's fail-closed edition stamp), so an unauthenticated platform
     // caller still takes this gate below.
+    const { fetchAppState } = await import('@/lib/api')
     try {
-      const { fetchAppState } = await import('@/lib/api')
       const state = await fetchAppState()
       const onboardingAuthMode = readOnboardingAuthMode(state)
       if (state?.onboarding_complete) {
