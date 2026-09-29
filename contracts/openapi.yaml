@@ -8536,6 +8536,12 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Trash incomplete after membership revocation; paths name the affected entries (trash_incomplete).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryMoveConflictError'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 

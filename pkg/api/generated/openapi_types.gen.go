@@ -4888,6 +4888,7 @@ const (
 	LibraryMoveConflictErrorCodeAlreadyExists              LibraryMoveConflictErrorCode = "already_exists"
 	LibraryMoveConflictErrorCodeIsMountRoot                LibraryMoveConflictErrorCode = "is_mount_root"
 	LibraryMoveConflictErrorCodeMoveIncomplete             LibraryMoveConflictErrorCode = "move_incomplete"
+	LibraryMoveConflictErrorCodeTrashIncomplete            LibraryMoveConflictErrorCode = "trash_incomplete"
 	LibraryMoveConflictErrorCodeViewTrackedTransferRefused LibraryMoveConflictErrorCode = "view_tracked_transfer_refused"
 )
 
@@ -4899,6 +4900,8 @@ func (e LibraryMoveConflictErrorCode) Valid() bool {
 	case LibraryMoveConflictErrorCodeIsMountRoot:
 		return true
 	case LibraryMoveConflictErrorCodeMoveIncomplete:
+		return true
+	case LibraryMoveConflictErrorCodeTrashIncomplete:
 		return true
 	case LibraryMoveConflictErrorCodeViewTrackedTransferRefused:
 		return true
@@ -17554,19 +17557,20 @@ type LibraryMkdirRequest struct {
 	Path string `json:"path"`
 }
 
-// LibraryMoveConflictError Typed 409 body for POST /library/move and POST /library/{workspace_id}/rename (FR-VA-031/FR-VA-032). Both operations can reach 409 for four distinct causes; `code` discriminates, following the multi-cause pattern of LLMError.yaml. Shares "error"/"code" with the standard ErrorResponse envelope so a generic handler still works unchanged. Which optional field is populated is a function of `code`:
-//   - already_exists / is_mount_root: no extra field (today's 409s,
-//     pkg/library/root.go ErrAlreadyExists/ErrIsMountRoot; `code` is new).
-//   - view_tracked_transfer_refused (FR-VA-031): tracked_paths is present.
-//   - move_incomplete (FR-VA-032): paths and pending_move_id are present;
+// LibraryMoveConflictError Typed 409 body shared by POST /library/move, POST /library/{workspace_id}/rename, and DELETE /library/{workspace_id}/entries (FR-VA-031/FR-VA-032/FR-VA-036). All five codes carry error and code; each code's additional fields are:
+//   - already_exists / is_mount_root: none (move/rename).
+//   - view_tracked_transfer_refused: tracked_paths (move/rename).
+//   - move_incomplete: paths and pending_move_id (move/rename);
 //     retryable via POST /library/{workspace_id}/retry-move.
+//   - trash_incomplete: paths (delete); retry by trashing again, with no
+//     pending_move_id.
 type LibraryMoveConflictError struct {
 	Code LibraryMoveConflictErrorCode `json:"code"`
 
 	// Error Human-readable message, safe to display.
 	Error string `json:"error"`
 
-	// Paths Only for move_incomplete.
+	// Paths Only for move_incomplete or trash_incomplete.
 	Paths *[]string `json:"paths,omitempty"`
 
 	// PendingMoveId Only for move_incomplete; pass to retry-move.
