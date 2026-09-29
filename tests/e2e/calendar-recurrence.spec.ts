@@ -650,6 +650,7 @@ test(
     const onceTitle = `E2E Board Once ${Date.now()}`;
     const recurringTitle = `E2E Board Recurring ${Date.now()}`;
     const dtstart = priorMonday(new Date(), 60);
+    const onceAt = todayAt(11, 0);
 
     const manualTask = await createTaskApi({
       title: manualTitle,
@@ -665,7 +666,7 @@ test(
       surface: 'user',
       // once is a scheduled trigger → agent_id required (backend validation).
       agent_id: 'mia',
-      trigger: { type: 'once', config: { at_ms: todayAt(11, 0).getTime() } },
+      trigger: { type: 'once', config: { at_ms: onceAt.getTime() } },
     });
     const recurringTask = await createTaskApi({
       title: recurringTitle,
@@ -710,9 +711,25 @@ test(
       // current month grid contains a real occurrence, mirroring the (b)
       // "Weekly task renders" assertion above.
       await navigateToCalendar(page);
-      await expect(page.locator('.fc-event', { hasText: onceTitle }).first()).toBeVisible({
-        timeout: 15_000,
-      });
+      const onceChip = page.locator('.fc-event', { hasText: onceTitle }).first();
+      await expect(onceChip).toBeAttached({ timeout: 15_000 });
+
+      // Month view hides overflowed events behind this day's "+more" link.
+      // Its popover renders all of the day's chips, including hidden ones.
+      const moreLink = page.locator(
+        `.fc-daygrid-day[data-date="${formatYMD(onceAt)}"] .fc-daygrid-more-link`,
+      );
+      if (await moreLink.isVisible()) {
+        await moreLink.click();
+        const popover = page.locator('.fc-more-popover');
+        await expect(popover.locator('.fc-event', { hasText: onceTitle })).toBeVisible({
+          timeout: 15_000,
+        });
+        await popover.locator('.fc-popover-close').click();
+        await expect(popover).toHaveCount(0);
+      } else {
+        await expect(onceChip).toBeVisible({ timeout: 15_000 });
+      }
       await expect(page.locator('.fc-event', { hasText: recurringTitle }).first()).toBeVisible({
         timeout: 10_000,
       });
