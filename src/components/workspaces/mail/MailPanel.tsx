@@ -396,6 +396,10 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
         message: res.save_warning ?? 'Message sent',
         variant: res.save_warning ? 'warning' : 'success',
       })
+      // F11: only a confirmed send closes Compose. A failed send (onError,
+      // below) must leave the dialog — and everything the user typed — in
+      // place instead of discarding it on an optimistic close.
+      setCompose(null)
     },
     onError: (err) => addToast({ message: mailErrorCode(err), variant: 'error' })
   })
@@ -776,7 +780,6 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
         signatureHtml={selectedMailbox?.signature_html}
         onSend={(body) => {
           composeSend.mutate(body)
-          setCompose(null)
         }}
         onClose={() => setCompose(null)}
       />
