@@ -5147,9 +5147,10 @@ export const LibraryMoveConflictError = z.object({
     "is_mount_root",
     "view_tracked_transfer_refused",
     "move_incomplete",
+    "trash_incomplete",
   ]),
   tracked_paths: z.array(z.string()).optional(),
-  paths: z.array(z.string()).optional(),
+  paths: z.array(z.string().min(1)).optional(),
   pending_move_id: z.string().optional(),
 });
 export const LibraryContentResponse = z.object({
@@ -9049,6 +9050,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         status: 404,
         description: `Resource not found.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Trash incomplete after membership revocation; paths name the affected entries (trash_incomplete).`,
+        schema: LibraryMoveConflictError,
       },
       {
         status: 500,
