@@ -353,9 +353,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       })
     },
     onSuccess: (res) => {
+      setSelectedRef(null)
       void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
       void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
-      void queryClient.invalidateQueries({ queryKey: DETAIL_KEY })
       addToast({
         message: res.draft_cleanup_warning ?? 'Draft sent',
         variant: res.draft_cleanup_warning ? 'warning' : 'success',
