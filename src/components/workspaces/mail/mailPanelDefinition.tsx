@@ -106,7 +106,7 @@ function mailFromSearch(search: Record<string, unknown>): PanelContext | null {
   return context
 }
 
-function MailPanelContent({ context, presentation, close, registerExpandContext }: PanelContentProps) {
+function MailPanelContent({ context, presentation, registerExpandContext }: PanelContentProps) {
   const workspaceContext = context as WorkspacePanelContext
   const locationRef = useRef<MailPanelLocation>({
     mailboxId: workspaceContext.mailboxId ?? null,
@@ -134,7 +134,6 @@ function MailPanelContent({ context, presentation, close, registerExpandContext 
       workspaceId={workspaceContext.workspaceId ?? ''}
       mailboxId={workspaceContext.mailboxId}
       layout={presentation === 'fullscreen' ? 'split' : 'stacked'}
-      onReturnToChat={presentation === 'fullscreen' ? close : undefined}
       initialFolder={workspaceContext.folder ?? undefined}
       initialMessageRef={workspaceContext.messageRef ?? undefined}
       onLocationChange={(location) => { locationRef.current = location }}
