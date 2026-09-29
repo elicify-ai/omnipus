@@ -650,6 +650,7 @@ test(
     const onceTitle = `E2E Board Once ${Date.now()}`;
     const recurringTitle = `E2E Board Recurring ${Date.now()}`;
     const dtstart = priorMonday(new Date(), 60);
+    const onceAt = todayAt(11, 0);
 
     const manualTask = await createTaskApi({
       title: manualTitle,
@@ -665,7 +666,7 @@ test(
       surface: 'user',
       // once is a scheduled trigger → agent_id required (backend validation).
       agent_id: 'mia',
-      trigger: { type: 'once', config: { at_ms: todayAt(11, 0).getTime() } },
+      trigger: { type: 'once', config: { at_ms: onceAt.getTime() } },
     });
     const recurringTask = await createTaskApi({
       title: recurringTitle,
@@ -701,18 +702,18 @@ test(
       expect(recurringCount, 'recurring task title must not be present anywhere on the Board DOM').toBe(0);
 
       // Prove "moved to Calendar", not merely "hidden": both scheduled tasks
-      // must render as event chips on the workspace Calendar tab. Month view
-      // (the calendar's default on a fresh mount — CalendarScreen.tsx's
-      // `currentView` initial state is 'dayGridMonth', not persisted across
-      // navigations) covers both — the once task fires today at 11:00 (in
-      // the currently-displayed month) and the recurring rule's Tuesday
-      // dtstart is far enough in the past (priorMonday(…, 60)) that the
-      // current month grid contains a real occurrence, mirroring the (b)
-      // "Weekly task renders" assertion above.
+      // must render as event chips on the workspace Calendar tab. Day view
+      // shows today's timed once task without Month view's dayMaxEvents
+      // collapsing; return to Month view to find the recurring Tuesday
+      // occurrence seeded from priorMonday(…, 60).
       await navigateToCalendar(page);
-      await expect(page.locator('.fc-event', { hasText: onceTitle }).first()).toBeVisible({
-        timeout: 15_000,
-      });
+      await page.getByTestId('calendar-view-timeGridDay').click();
+      await expect(page.locator('.fc-timeGridDay-view')).toBeVisible({ timeout: 10_000 });
+      const onceChip = page.locator('.fc-event', { hasText: onceTitle }).first();
+      await expect(onceChip).toBeVisible({ timeout: 15_000 });
+
+      await page.getByTestId('calendar-view-dayGridMonth').click();
+      await expect(page.locator('.fc-dayGridMonth-view')).toBeVisible({ timeout: 10_000 });
       await expect(page.locator('.fc-event', { hasText: recurringTitle }).first()).toBeVisible({
         timeout: 10_000,
       });
