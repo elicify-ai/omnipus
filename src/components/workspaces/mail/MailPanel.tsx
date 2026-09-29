@@ -159,6 +159,22 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     queryFn: fetchAgents,
     staleTime: 60_000,
   })
+  // F3: Mail can be re-adopted for a DIFFERENT workspace while it stays
+  // mounted (a same-page hash navigation — usePanelDeepLink re-opens the
+  // panel with a new `context.workspaceId`, it does not remount this
+  // component). `mailboxesQuery` is a single app-wide list with a 60s
+  // `staleTime` and no per-workspace key, so without this it would keep
+  // answering with whichever workspace's roster it last fetched — a
+  // mailbox configured for the newly routed workspace while this panel
+  // was open elsewhere would be silently missed. Treat a workspace change
+  // as a fresh look and invalidate, the same way a mutation here already
+  // invalidates FOLDERS_KEY/MESSAGES_KEY.
+  const workspaceIdRef = useRef(workspaceId)
+  useEffect(() => {
+    if (workspaceIdRef.current === workspaceId) return
+    workspaceIdRef.current = workspaceId
+    void queryClient.invalidateQueries({ queryKey: ['mailboxes'] })
+  }, [workspaceId, queryClient])
   const workspaceMailboxes = useMemo(() => {
     const list = mailboxesQuery.data
     if (!list) return []

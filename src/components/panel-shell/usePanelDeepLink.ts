@@ -72,6 +72,29 @@ function projectedPanel(activePanel: ActivePanel | null): WorkspacePanelId | und
   return isWorkspaceScopedPanel(activePanel.id) ? activePanel.id : undefined
 }
 
+/** The workspace a currently-open panel is scoped to, or `undefined` for the
+ * Browser (session-scoped, never workspace-scoped — its context type has no
+ * `workspaceId` at all). */
+function activePanelWorkspaceId(activePanel: ActivePanel): string | undefined {
+  return activePanel.id === 'browser' ? undefined : activePanel.context.workspaceId
+}
+
+/** F3: the panel-TYPE check alone (`current.id === named`) is not enough —
+ * it is blind to a same-page hash navigation that keeps `panel=mail` (or any
+ * other workspace-scoped panel) but changes `$workspaceId`. Without also
+ * comparing the workspace, re-requesting the SAME panel id for a DIFFERENT
+ * workspace is wrongly treated as "already adopted" and the panel keeps
+ * rendering the OLD workspace's data. */
+function isAlreadyAdopted(
+  activePanel: ActivePanel | null,
+  named: WorkspacePanelId,
+  workspaceId: string,
+): boolean {
+  return activePanel !== null
+    && activePanel.id === named
+    && activePanelWorkspaceId(activePanel) === workspaceId
+}
+
 /**
  * Adoption context per panel (§8.1: context carries what the panel needs).
  * Mail (SP-23): the URL's `agent` param is the mailbox directive — present,
@@ -143,12 +166,12 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     if (named !== undefined) {
       if (hasForeignKey(rawSearch)) replaceSearch(named)
       const { activePanel: current, openPanel } = useUiStore.getState()
-      if (current?.id === named) return
+      if (isAlreadyAdopted(current, named, workspaceId)) return
       const context = adoptionContext(named, workspaceId, rawSearch)
       if (current !== null) {
         leaveGateThen(current.id, () => {
           const { activePanel: still, openPanel: open } = useUiStore.getState()
-          if (still?.id !== named) open(named, context)
+          if (!isAlreadyAdopted(still, named, workspaceId)) open(named, context)
         })
       } else {
         openPanel(named, context)
