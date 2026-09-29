@@ -274,7 +274,7 @@ func TestSteeredTurnDrain1020Round4_PersistentDeliveryFailureIsBoundedAndLoud(t 
 	}
 	reports := 0
 	for _, e := range entries {
-		if e.Status == "error" {
+		if e.Status == "error" && e.Content == "A queued follow-up message could not be processed and was not delivered. Please send it again." {
 			reports++
 		}
 	}
