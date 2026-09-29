@@ -80,7 +80,7 @@ team-lead interviews the founder on "Questions for the founder"
 fix round 2  ->  any remaining BLOCKing finding is escalated to the founder
       |
       v
-team-lead plans  ->  RED / GREEN / CHECK  ->  8-reviewer gate  ->  founder's
+team-lead plans  ->  RED / GREEN / CHECK  ->  5-reviewer gate  ->  founder's
 yes  ->  landing
 ```
 
@@ -450,7 +450,7 @@ triggers another grill round — the founder decides the disposition.
    round-2 findings. Any CRITICAL finding still open after that fix is
    listed under "Escalation to the founder" above for the founder to
    decide — do not run a third grill round. Once resolved, team-lead plans
-   the implementation (RED / GREEN / CHECK, the 8-reviewer gate).
+   the implementation (RED / GREEN / CHECK, the 5-reviewer gate).
    ```
 
    **ADR mode (the one grill round):**
