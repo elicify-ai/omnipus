@@ -350,7 +350,9 @@ func (al *AgentLoop) dispatchGoalCompletionReevaluation(sessionID, goalID string
 	}
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
-		return false
+		// Without a lifecycle store the launcher cannot create a steered
+		// session, so this is an ordinary goal's fresh-claim turn.
+		return al.dispatchGoalAsyncFollowUp(sessionID, goalID, goalCompletionSourceKind, goalCompletionReevaluationPrompt)
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil || rec == nil || rec.Terminal() || rec.Stopped() {
@@ -742,8 +744,13 @@ func (al *AgentLoop) ackMetVerdictEntry(sessionID, goalID string, round int) {
 func (al *AgentLoop) wakeMetVerdictEntry(sessionID, goalID string, round int) error {
 	inbox := al.GetMessageInboxStore()
 	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		// No steered child can exist without this store, so an ordinary
+		// goal has no parent's verdict entry to wake or acknowledge.
+		return nil
+	}
 	deliverer := al.getUpwardDeliverer()
-	if inbox == nil || lifecycle == nil || deliverer == nil {
+	if inbox == nil || deliverer == nil {
 		return errors.New("goal: met verdict fallback wake dependencies are not wired")
 	}
 	rec, err := lifecycle.Load(sessionID)

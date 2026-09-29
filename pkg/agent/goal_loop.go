@@ -874,10 +874,10 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// Q2 B (the deferred-work arm): a met claim may not schedule
 		// adjudication immediately if the delegated subtree is not quiet
 		// (waiting_descendants install below). On every early return inside
-		// this branch — no lifecycle store, the install-and-promote critical
-		// section refused (second-claim race), subtree quietness check
-		// failed or unreadable, the promote-to-Adjudicating CAS refused
-		// (concurrent terminal writer) — no goalDeferredAdjudication is
+		// this branch — the install-and-promote critical section refused
+		// (second-claim race), subtree quietness check failed or unreadable,
+		// the promote-to-Adjudicating CAS refused (concurrent terminal writer)
+		// — no goalDeferredAdjudication is
 		// recorded. Only the happy path that wins the install AND the
 		// quietness check AND the promote CAS sets the work struct, and it
 		// is the ONLY path that records deferred work.
@@ -938,30 +938,27 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// read runs after release because child IDs can share the store's
 		// striped mutex with their parent, making a recursive List deadlock.
 		lifecycle := gl.al.GetSessionLifecycleStore()
+		// Q2=B gate round 1 type-design finding 1: a second claim must not
+		// downgrade Adjudicating to Waiting. The transition primitive refuses
+		// that install, coalescing the new claim with the Judge already running.
+		// When the store exists, install under the parent-publication lock so
+		// launches cannot slip between the fence check and the phase write.
+		var installed bool
 		if lifecycle == nil {
-			gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
-			logger.WarnCF("agent", "goal: completion claim held because no lifecycle store is wired",
+			// SteerLauncher.Launch cannot create descendants without this store.
+			// There is no publication lock to take: the subtree is quiet.
+			logger.DebugCF("agent", "goal: no lifecycle store wired; completion subtree is quiet",
 				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID})
-			return
+			installed = gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
+		} else {
+			if goalClaimBeforePublicationLockTestHook != nil {
+				goalClaimBeforePublicationLockTestHook(gl.sessionID)
+			}
+			publicationMu := lifecycle.Lock(gl.sessionID)
+			publicationMu.Lock()
+			installed = gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
+			publicationMu.Unlock()
 		}
-		if goalClaimBeforePublicationLockTestHook != nil {
-			goalClaimBeforePublicationLockTestHook(gl.sessionID)
-		}
-		publicationMu := lifecycle.Lock(gl.sessionID)
-		publicationMu.Lock()
-		// Q2=B gate round 1 type-design finding 1: install-and-promote must
-		// be one critical section. The previous shape called
-		// an unconditional Waiting install then goalPromoteCompletionToAdjudicating
-		// across two lock acquisitions, which let a racing second claim
-		// downgrade an Adjudicating phase back to Waiting — its CAS then
-		// succeeded, the second claim scheduled its own adjudication, and
-		// two Judge calls landed for one goal. The install below uses the
-		// ONE transition primitive (goalInstallWaitingCompletion) and
-		// refuses to downgrade Adjudicating; on refusal, the second claim
-		// coalesces with the first and is traced at INFO, leaving only the
-		// first Judge call.
-		installed := gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
-		publicationMu.Unlock()
 		if !installed {
 			// The latest claim is durable, but adjudication already owns this
 			// round. A second claim must not schedule a second Judge call.
