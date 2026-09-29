@@ -47,8 +47,10 @@ An earlier draft of the spec treated this as "add providers" and left Exa off th
 | Provider | Usable when |
 |---|---|
 | Brave, Tavily, Perplexity, GLM, Baidu, Exa | Switched on, **and** `APIKey()` returns a non-empty string |
-| SearXNG | Switched on, **and** the base URL is non-empty after trimming |
+| ~~SearXNG~~ | Removed 2026-09-29 — see the D10 amendment. No longer a provider. |
 | DuckDuckGo | Switched on. Nothing else |
+
+> **Amendment, 2026-09-29 (founder, #1055 fix round): saving a key switches that provider on.** A key-only save for a keyed search provider also sets that provider's own `enabled: true` (no role assigned, `roles_migrated_at` not stamped, no other provider touched). Without it, a keyed provider could never become usable from the Settings screen, which only offers usable providers as default or fallback.
 
 `APIKey()` reads `os.Getenv(<ref>)` (`pkg/config/config_defaults_apply.go::TavilyConfig.APIKey` and the Brave, Perplexity, GLM and Baidu twins). So "usable" is a statement about the **process environment**, which is populated by `credentials.InjectFromConfig`. Two separate consequences follow, and both had to be fixed in round 2: where the migration can run (D11) and what the tool must hold in order to re-check this at call time (D4a).
 
@@ -125,6 +127,8 @@ A save that names a provider whose key does not resolve is **not** simply reject
 A new install ships `duckduckgo.enabled: true`, `default_provider: duckduckgo`, `fallback_provider: none`, every other search provider off. One role, no fallback, so no hop (R1/R2).
 
 **Hand-typed `searxng`** on a file that never resolved to it: treated as a known id, usable only under the SearXNG row of the Definitions table (switched on with a base URL). Otherwise R6 or R7. It is never rejected at load; a file that cannot boot is worse than a file that reports honestly.
+
+> **Superseded 2026-09-29 (D10 amendment):** SearXNG is removed. A stored `searxng` role is cleared on load by the one-time cleanup, not treated as a known id.
 
 ### D4a — What the tool checks usability *against*
 
@@ -600,7 +604,7 @@ A rate-limited default means every concurrent call pays a 429 and then a fallbac
 - **AC-6.** The definition registered for the agent lists the usable providers in `provider`'s enum, and omits `depth` and the domain arguments when the resolved default does not honour them. A DuckDuckGo-only install's definition has `query`, `count` and `range` only. The **rendered definition** — description plus serialised parameters — is at most 2,400 bytes **at the maximal configuration** (all eight usable, all capabilities present), and `Description` is byte-identical between the live instance and `GeneralBuiltinMetadata`'s.
 - **AC-7.** Tavily still sends `include_answer: false`. GLM still sends `search_intent: false`. Brave does not send `summary`. A Perplexity result includes the citations array (or an explicit "none returned"). The **decoded** Perplexity request body has `temperature` present and equal to `0`.
 - **AC-8.** `include_domains` against a provider that cannot honour it refuses before any request, names a provider that can, and does not hop. `exclude_domains` against such a provider proceeds and the result states that the exclusion was not applied. Tavily sends snake_case `include_domains` / `exclude_domains`; Exa sends camelCase `includeDomains` / `excludeDomains`.
-- **AC-9.** No new SearXNG field and no SearXNG address control are added. An install that already resolves to SearXNG keeps that default across migration. SearXNG's response goes through the ingest bound and its client comes from `makeSearchClient`.
+- **AC-9.** ~~No new SearXNG field and no SearXNG address control are added. An install that already resolves to SearXNG keeps that default across migration. SearXNG's response goes through the ingest bound and its client comes from `makeSearchClient`.~~ **Superseded 2026-09-29 (D10 amendment):** SearXNG is removed from code, catalogue, config, settings and docs; a stored SearXNG role is cleared on load (default unset, fallback `none`).
 - **AC-10.** The five rows in D11's table hold. Row (c) does not gain a hop; row (d) does not gain a hop and does not drop depth to `basic`; row (e) switches the provider on and logs it.
 - **AC-11.** A new Tavily install sends `basic` unless the agent sets `depth`. A migrated Tavily object sends `advanced` until the operator changes it. `depth: high` sends `advanced` for that call only. `depth` above the operator's configured ceiling is clamped, with a note.
 - **AC-12.** The search badge follows the Definitions test. A key reference with an empty `APIKey()` is not shown as the provider that runs — **and a key stored in the same request reads ready, not "key not reaching search"** (D18).
