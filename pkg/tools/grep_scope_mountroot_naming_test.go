@@ -78,11 +78,19 @@ func rbIgnoreUnreadableCount(t *testing.T, out string) int {
 // oracle: an absolute `path` equal to the mount's own host root must report
 // its hit under the plain mount host path, never with a trailing "/.".
 func TestReadBoundary_GrepAbsoluteMountRootReportsPlainName(t *testing.T) {
+	// A UNIQUE sentinel, not the fixture's own "needle": newRBFixture already
+	// seeds <MNT>/src/b.md with "needle\n" (readboundary_fixture_test.go's
+	// Background), so searching the mount root for "needle" correctly
+	// returns TWO hits (this test's own file plus the fixture's) — that was
+	// a wrong oracle in an earlier version of this test, not a defect in
+	// absoluteGrepRoot. A sentinel absent from the shared fixture keeps this
+	// test's one-hit assertion sound without touching that shared fixture.
+	const sentinel = "n5-mountroot-plainname-sentinel"
 	f := newRBFixture(t)
-	rbWrite(t, filepath.Join(f.mnt, "b.md"), "needle\n")
+	rbWrite(t, filepath.Join(f.mnt, "b.md"), sentinel+"\n")
 
 	res := f.grep.Execute(f.ctx, map[string]any{
-		"pattern": "needle",
+		"pattern": sentinel,
 		"path":    f.mnt,
 	})
 	if res.IsError {
@@ -92,7 +100,7 @@ func TestReadBoundary_GrepAbsoluteMountRootReportsPlainName(t *testing.T) {
 	wantPath := rbSlash(filepath.Join(f.mnt, "b.md"))
 	hits := rbHitPaths(res.ForLLM)
 	if len(hits) == 0 {
-		t.Fatalf("no hits at all — precondition (the needle file under the mount root) was not found:\n%s", res.ForLLM)
+		t.Fatalf("no hits at all — precondition (the %s sentinel file under the mount root) was not found:\n%s", sentinel, res.ForLLM)
 	}
 	for _, p := range hits {
 		if strings.Contains(p, "/./") || strings.HasSuffix(p, "/.") {

@@ -119,6 +119,20 @@ func TestFix3RedT1_GrepAbsoluteUnanchoredPreOpenSwap_OrdinaryTurn(t *testing.T) 
 	rbWrite(t, filepath.Join(f.ext, "anc", "hit.md"), "needle\n")
 	swapTo := f.ws // a real, acyclic sibling directory
 	rbWrite(t, filepath.Join(swapTo, "swapped.md"), "OUTSIDE-PREOPEN-SWAPPED\n")
+	// Fix3-red3 correction (mutation receipt
+	// fix3-dev-mutation-T1b-unanchored-identity.log/.diff): the swap target
+	// must ALSO carry a file named exactly "hit.md" — the same relative
+	// path the `path` argument below requests. Without this, disabling the
+	// identity guard entirely (mutant: `if false && !grepOpenedRootMatches(...)`)
+	// still made this test PASS, because the swapped-in root never had a
+	// "hit.md" of its own: the open failed with an unrelated ENOENT before
+	// the guard (real or mutated) was ever reached, so `res.IsError` was
+	// true for a reason that has nothing to do with F2. Seeding hit.md
+	// inside the swap target means the open now SUCCEEDS whenever the
+	// guard fails to refuse the swap, so a disabled guard is forced to
+	// either leak this content (caught below) or the test cannot pass by
+	// accident.
+	rbWrite(t, filepath.Join(swapTo, "hit.md"), "OUTSIDE-PREOPEN-SWAPPED\n")
 
 	installFix3PreOpenSwapHook(t, filepath.Join(f.ext, "anc"), swapTo)
 
