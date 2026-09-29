@@ -10,6 +10,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -330,6 +331,62 @@ func TestDeliver_LiveParentUsesRawSessionKeyAndRetainsMessageIdentity(t *testing
 	}
 	if items[0].wake.messageID != "child-1:1:final" || items[0].wake.transcriptSessionID != parentID {
 		t.Fatalf("wake identity = %+v, want message child-1:1:final in transcript %s", items[0].wake, parentID)
+	}
+}
+
+func TestDeliver_LiveParentQueuesAllUpwardWakesBeyondOldCap(t *testing.T) {
+	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	const parentID = "parent-many-wakes"
+	seedUnifiedSession(t, al, parentID)
+	seedParentAndChild(t, lifecycle, parentID, "child-wake-00")
+	al.activeTurnStates.Store(parentID, &turnState{sessionKey: parentID})
+	t.Cleanup(func() { al.activeTurnStates.Delete(parentID) })
+
+	const wakeCount = 11
+	for i := 0; i < wakeCount; i++ {
+		childID := fmt.Sprintf("child-wake-%02d", i)
+		if i > 0 {
+			if err := lifecycle.Persist(&session.LifecycleRecord{
+				SessionID: childID, State: session.LifecycleRunning,
+				OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: parentID,
+				WorkspaceID: "ws-1", AgentID: "worker",
+				Origin:     &session.Origin{Kind: session.OriginKindDelegate, CallID: fmt.Sprintf("call-%02d", i)},
+				Generation: 1,
+				SteeredBy: &session.SteeredBy{
+					SteeringSessionID: parentID,
+					RootSessionID:     parentID,
+					ReportingTarget: session.ReportingTarget{
+						Channel: "webchat", ChatID: parentID,
+					},
+				},
+			}); err != nil {
+				t.Fatalf("seed child %d: %v", i, err)
+			}
+		}
+
+		delivery, err := deliverer.Deliver(context.Background(), handbackEvent(childID, "ignored"))
+		if err != nil {
+			t.Fatalf("Deliver wake %d: %v", i, err)
+		}
+		if delivery.Outcome != steer.DeliveryQueuedIntoLiveTurn {
+			t.Fatalf("Deliver wake %d outcome = %q, want %q", i, delivery.Outcome, steer.DeliveryQueuedIntoLiveTurn)
+		}
+	}
+
+	al.steering.mu.Lock()
+	items := append([]steeringQueueItem(nil), al.steering.queues[parentID]...)
+	al.steering.mu.Unlock()
+	if len(items) != wakeCount {
+		t.Fatalf("queued upward wakes = %d, want %d", len(items), wakeCount)
+	}
+	for i, item := range items {
+		if item.wake == nil {
+			t.Fatalf("queued item %d lost its wake identity", i)
+		}
+		wantID := fmt.Sprintf("child-wake-%02d:1:final", i)
+		if item.wake.messageID != wantID {
+			t.Fatalf("queued wake %d message id = %q, want %q", i, item.wake.messageID, wantID)
+		}
 	}
 }
 

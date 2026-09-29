@@ -17,7 +17,7 @@ import type { OpenPanel, PanelDefinition, PanelContext, PanelId } from './types'
 import { usePanelShellStore } from './panelShellStore'
 import { readPanelWidth, writePanelWidth, deletePanelWidth, panelWidthScope } from './panelWidthMemory'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
-import { focusPanelTriggerOrigin } from './panelFocus'
+import { focusChatInput, focusPanelTriggerOrigin } from './panelFocus'
 import { generateId } from '@/lib/constants'
 import {
   panelIdentityFromContext,
@@ -27,6 +27,7 @@ import {
   discardPanelPopout,
   registerPanelPopout,
 } from '@/lib/panelPopoutLifecycle'
+import { leaveGateThen } from './leaveGate'
 
 export { PANEL_TRIGGER_ATTR } from './panelFocus'
 
@@ -34,23 +35,21 @@ export type PanelFocusReturnReason = 'trigger' | 'chat'
 
 let panelWidthPersistenceWarned = false
 
-function restoreFocusToChat(): void {
-  const focus = (): boolean => {
-    const input = document.querySelector<HTMLElement>('[data-testid="chat-input"]')
-    input?.focus()
-    return input !== null && document.activeElement === input
-  }
+function restoreFocusToChat(isCurrent: () => boolean): void {
+  const focus = () => isCurrent() && focusChatInput()
   if (focus()) return
   requestAnimationFrame(focus)
 }
 
-function restoreFocusToTrigger(id: PanelId): void {
+function restoreFocusToTrigger(id: PanelId, isCurrent: () => boolean): void {
+  if (!isCurrent()) return
   if (focusPanelTriggerOrigin(id)) return
   let frames = 0
   const tick = (): void => {
+    if (!isCurrent()) return
     if (focusPanelTriggerOrigin(id)) return
     if (++frames < 10) requestAnimationFrame(tick)
-    else restoreFocusToChat()
+    else restoreFocusToChat(isCurrent)
   }
   requestAnimationFrame(tick)
 }
@@ -146,6 +145,8 @@ async function expandActivePanel(options: {
     return 'opened'
   }
   if (outcome.kind === 'focused') {
+    const { showPanelTabFocused } = await import('./panelTabSwitch')
+    showPanelTabFocused(`The ${definition.title}`)
     finishClose(activePanel.id, 'chat')
     return 'opened'
   }
@@ -161,8 +162,17 @@ async function expandActivePanel(options: {
       handle: openedPopup,
       onClosed: (_finalIdentity, finalContext) => {
         const store = usePanelShellStore.getState()
-        if (store.activePanel !== null) return
-        ;(store.openPanel as (id: PanelId, context?: PanelContext) => void)(definition.id, finalContext)
+        const outgoingPanelId = store.activePanel?.id ?? null
+        if (outgoingPanelId !== null && outgoingPanelId !== definition.id) return
+        leaveGateThen(outgoingPanelId, () => {
+          const latest = usePanelShellStore.getState()
+          if (latest.activePanel !== null && latest.activePanel.id !== definition.id) return
+          ;(latest.openPanel as (id: PanelId, context?: PanelContext) => void)(definition.id, finalContext)
+          restoreFocusToChat(() => {
+            const current = usePanelShellStore.getState().activePanel
+            return current?.id === definition.id && current.context === finalContext
+          })
+        })
       },
     })
     flushSync(() => finishClose(activePanel.id, 'chat'))
@@ -203,6 +213,7 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
 
   const panelsRef = useRef(panels)
   const historyFocusReturnRef = useRef<PanelFocusReturnReason>('trigger')
+  const focusReturnGenerationRef = useRef(0)
   panelsRef.current = panels
 
   // Production entry points open through the global store, not requestOpen.
@@ -225,8 +236,13 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
   const finishClose = useCallback(
     (id: PanelId, focusReturn: PanelFocusReturnReason) => {
       usePanelShellStore.getState().closePanel() // also clears historyPushed
-      if (focusReturn === 'chat') restoreFocusToChat()
-      else restoreFocusToTrigger(id)
+      const generation = ++focusReturnGenerationRef.current
+      // A prior close may still be retrying on animation frames. It must not
+      // steal focus after this close, or after another panel has opened.
+      const isCurrent = () => focusReturnGenerationRef.current === generation
+        && usePanelShellStore.getState().activePanel === null
+      if (focusReturn === 'chat') restoreFocusToChat(isCurrent)
+      else restoreFocusToTrigger(id, isCurrent)
     },
     [],
   )

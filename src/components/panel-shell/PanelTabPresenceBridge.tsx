@@ -7,7 +7,7 @@ import {
 import { startPanelPopoutLifecycleOwner } from '@/lib/panelPopoutLifecycle'
 import { useUiStore } from '@/store/ui'
 import type { ActivePanel } from './types'
-import { showPanelTabFocusDegraded, showPanelTabSwitch } from './panelTabSwitch'
+import { showPanelTabFocusDegraded, showPanelTabFocused, showPanelTabSwitch } from './panelTabSwitch'
 
 function panelIdentity(activePanel: ActivePanel): PanelIdentity | null {
   if (activePanel.id === 'browser') {
@@ -39,7 +39,11 @@ export function PanelTabPresenceBridge() {
       if (!existing) return
 
       state.closePanel()
-      if (existing === 'focused') return
+      const label = panelLabel(activePanel.id)
+      if (existing === 'focused') {
+        showPanelTabFocused(label)
+        return
+      }
       const openWhenUnavailable = () => {
         if (activePanel.id === 'browser') {
           useUiStore.getState().openPanel('browser', activePanel.context)
@@ -47,7 +51,6 @@ export function PanelTabPresenceBridge() {
           useUiStore.getState().openPanel(activePanel.id, activePanel.context)
         }
       }
-      const label = panelLabel(activePanel.id)
       if (existing === 'focus-failed') {
         showPanelTabFocusDegraded(label)
       } else {

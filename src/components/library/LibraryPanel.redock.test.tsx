@@ -217,7 +217,8 @@ describe('pop-out re-dock no-clobber and opener-only (§12 #8c, #19)', () => {
     const popoutId = await expandLibrary(popup())
 
     // The operator re-docks the Library while the pop-out lives (the two
-    // surfaces may legitimately coexist — libraryHandoff.ts), then edits.
+    // surfaces may legitimately coexist — see LibraryPanel.tsx's
+    // `handlePopOut` and its absence of a force-close), then edits.
     act(() => {
       s81().openPanel('library', { workspaceId: 'ws-current' })
     })

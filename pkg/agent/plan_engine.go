@@ -268,6 +268,16 @@ type PlanEngine struct {
 	// session.failed event / drive recovery (FR-118 deliverable 3). Best-effort:
 	// a hook failure is logged, never blocks the sweep.
 	sessionFailedHook func(sessionID, reason string)
+	// steeredGoalEndHook is the FD1=A pair-end for steered records the boot
+	// sweep lands on failed(interrupted) (F3, #984 founder-rule follow-up):
+	// a steered session's own goal ends with its session — "the pair ends
+	// together" — through the same seam SteerBootRecovery.EndSessionGoal
+	// wires at boot (gateway_boot.go::wireSteerDeps). Fired ONLY for steered
+	// records: ordinary roots are exempt from the sweep upstream
+	// (standingRootExemptFromSweep) and task-origin records carry no steered
+	// edge, so the founder rule "a cancel never ends an ancestor goal" holds
+	// structurally. Nil-safe everywhere: unwired (tests) → sweep unchanged.
+	steeredGoalEndHook func(sessionID, reason string)
 	// goalSemanticsVersioner reports the recorded trigger-semantics version
 	// of a goal-bearing session (N-15 live-upgrade re-baseline). Wired by
 	// Phase-2-C; nil until then, which means "unversioned" -> no re-baseline.
@@ -570,6 +580,17 @@ func (pe *PlanEngine) SetAgentResolver(fn func(agentID string) bool) {
 func (pe *PlanEngine) SetSessionFailedHook(fn func(sessionID, reason string)) {
 	pe.mu.Lock()
 	pe.sessionFailedHook = fn
+	pe.mu.Unlock()
+}
+
+// SetSteeredGoalEndHook installs the FD1=A pair-end fired for every STEERED
+// record the boot sweep lands on failed(interrupted)
+// (boot_sweep.go::sweepToFailedInterrupted, F3 #984 follow-up). Wired at
+// gateway boot to AgentLoop.EndSessionOwnedGoalOnTerminal — the same seam
+// SteerBootRecovery.EndSessionGoal uses. Best-effort, nil-safe.
+func (pe *PlanEngine) SetSteeredGoalEndHook(fn func(sessionID, reason string)) {
+	pe.mu.Lock()
+	pe.steeredGoalEndHook = fn
 	pe.mu.Unlock()
 }
 

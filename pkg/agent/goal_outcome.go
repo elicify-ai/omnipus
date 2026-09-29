@@ -101,7 +101,16 @@ func (al *AgentLoop) clearGoalByUser(sessionID string, store *session.UnifiedSto
 		in.content = fmt.Sprintf("Goal %q was stopped by the user after %d of %d round(s).",
 			rec.Prompt, rec.Round, rec.MaxRounds)
 	}
-	reply, _ := al.clearGoalWithOutcome(sessionID, store, goalClearNoteUser, in)
+	reply, ok := al.clearGoalWithOutcome(sessionID, store, goalClearNoteUser, in)
+	if ok {
+		// F4 (#984 follow-up): /goal clear on a goal bound to a non-terminal
+		// steered session deferred at the (a) gate — the gate only re-runs on
+		// a turn exit or cancel, so route the child through the completion
+		// tail now, or it stays `running` until the next boot sweep repairs
+		// it. Never for ordinary roots (completeSteeredTurn refuses without a
+		// steered edge) — the founder rule holds.
+		al.completeSteeredTurnIfDeferredAtGate(sessionID)
+	}
 	return reply
 }
 

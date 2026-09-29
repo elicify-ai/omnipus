@@ -2,6 +2,22 @@ import type { PanelId } from './types'
 
 export const PANEL_TRIGGER_ATTR = 'data-panel-trigger'
 
+/** Shared US-9 focus target for docked close, re-dock and same-tab return. */
+export function focusChatInput(): boolean {
+  const input = document.querySelector<HTMLElement>('[data-testid="chat-input"]')
+  input?.focus()
+  return input !== null && document.activeElement === input
+}
+
+/** The chat composer can mount after async session restoration completes. */
+export function focusChatInputWhenReady(isCurrentChat: () => boolean): void {
+  if (!isCurrentChat() || focusChatInput()) return
+  const observer = new MutationObserver(() => {
+    if (!isCurrentChat() || focusChatInput()) observer.disconnect()
+  })
+  observer.observe(document.body, { childList: true, subtree: true })
+}
+
 let origin: { panelId: PanelId; element: HTMLElement } | null = null
 let pendingClickOrigin: { panelId: string; element: HTMLElement } | null = null
 let focusPanelOnOpen: PanelId | null = null

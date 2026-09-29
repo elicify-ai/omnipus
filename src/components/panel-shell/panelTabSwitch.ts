@@ -15,6 +15,14 @@ export function showPanelTabFocusDegraded(panelLabel: string): void {
   })
 }
 
+export function showPanelTabFocused(panelLabel: string): void {
+  useUiStore.getState().addToast({
+    message: `${panelLabel} is already open in another tab and has been focused.`,
+    variant: 'default',
+    duration: 10_000,
+  })
+}
+
 /** SP-18: switching is exclusive; local fallback is permitted only after the target disappears. */
 export function showPanelTabSwitch(
   identity: PanelIdentity,

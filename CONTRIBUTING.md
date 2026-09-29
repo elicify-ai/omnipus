@@ -317,13 +317,13 @@ Review for:
 
 Be constructive and specific. "This could have a race condition if two goroutines call this concurrently — consider using a mutex here" is better than "this looks wrong".
 
-### Agent-assisted review gate (8 reviewers)
+### Agent-assisted review gate (5 reviewers)
 
-When work is done with Claude Code, an **8-reviewer quality gate** runs over the change **after each completed feature and again on the whole epic** before the final merge — all eight must be clean or every finding deferred with a tracked issue:
+When work is done with Claude Code, a **5-reviewer quality gate** runs over the change **after each completed feature and again on the whole epic** before the final merge — all five must be clean or every finding deferred with a tracked issue:
 
-1–6. The `pr-review-toolkit` agents — code-reviewer, code-simplifier, comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer.
-7. An **architect pass** — correctness, security, error handling, testing quality, observability, overcomplexity, and spec/task compliance where a spec exists.
-8. A **security-lead pass** — standing member of the feature-size gate.
+1–3. The mandatory `pr-review-toolkit` agents — code-reviewer, silent-failure-hunter, pr-test-analyzer. (`comment-analyzer`, `code-simplifier` and `type-design-analyzer` are the same plugin's remaining reviewers; dispatched only on explicit request, not part of the standing gate.)
+4. An **architect pass** — correctness, security, error handling, testing quality, observability, overcomplexity, and spec/task compliance where a spec exists.
+5. A **security-lead pass** — standing member of the feature-size gate.
 
 See `CLAUDE.md` → "Change sizes and the review gate" for the canonical definition.
 
