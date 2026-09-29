@@ -14,6 +14,12 @@ name: Cross-Platform
 #     windows/amd64 on Linux. It does not compile or run Windows test files.
 #   * This workflow's `windows-daemon-tests` job runs pkg/daemon tests on a
 #     windows-latest runner, including daemon_windows_test.go.
+#   * This workflow's `windows-tools-tests` job runs ONLY the #920 read-boundary
+#     Windows path tests in pkg/tools (TestReadBoundary_Windows, subtests
+#     W1-W8, readboundary_windows_test.go) on a windows-latest runner, and
+#     fails unless all eight subtests report PASS
+#     (read-boundary-consistency-spec.md FR-031, founder decision D12). The
+#     rest of pkg/tools does not run on Windows.
 #   * Makefile → `make vet-windows` can type-check the full module and its test
 #     files for windows/amd64, but no workflow calls it today.
 #
@@ -214,3 +220,59 @@ jobs:
 
       - name: Run pkg/daemon tests
         run: go test -tags goolm,stdjson -count=1 -p 1 ./pkg/daemon/
+
+  # #920 (docs/internal/specs/read-boundary-consistency-spec.md FR-031, founder
+  # decision D12): the DS-4 Windows path cases (drive, forward-slash drive, UNC,
+  # backslash-relative, mount shorthand with `\`, `..\`, drive-relative,
+  # volume root) must execute on a REAL Windows runner. They cannot run in
+  # `windows-compile`: that job runs on ubuntu-latest, where the
+  # `_windows_test.go` filename constraint excludes the file, so `-run` would
+  # match nothing and exit 0 — a false green. The step below therefore proves
+  # the tests ran: exit code captured without a pipe, "no tests to run" is a
+  # failure, and each of the eight `--- PASS: TestReadBoundary_Windows/W<n>`
+  # lines must be present (a SKIP counts as missing). pkg/tools does not import
+  # pkg/gateway, so no SPA embed placeholder is needed. The rest of the Windows
+  # suite stays on #113.
+  windows-tools-tests:
+    name: Windows read-boundary tests (#920)
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run the #920 Windows path tests (DS-4 W1-W8)
+        shell: bash
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/readboundary-windows.log"
+          if go test -tags goolm,stdjson -count=1 -p 1 -v -run '^TestReadBoundary_Windows$' ./pkg/tools/ > "$log" 2>&1; then
+            status=0
+          else
+            status=$?
+          fi
+          cat "$log"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::go test exited $status" >&2
+            exit 1
+          fi
+          if grep -q "no tests to run" "$log"; then
+            echo "::error::TestReadBoundary_Windows did not run (no tests to run) — refusing a false green" >&2
+            exit 1
+          fi
+          missing=0
+          for n in 1 2 3 4 5 6 7 8; do
+            if ! grep -q -- "--- PASS: TestReadBoundary_Windows/W$n " "$log"; then
+              echo "::error::missing '--- PASS: TestReadBoundary_Windows/W$n' (a SKIP or FAIL counts as missing)" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "all eight DS-4 subtests passed on Windows"

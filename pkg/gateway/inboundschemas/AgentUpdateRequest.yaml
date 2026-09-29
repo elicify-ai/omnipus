@@ -68,7 +68,15 @@ properties:
     example: "You are a helpful assistant..."
   max_tool_iterations:
     type: integer
-    description: New maximum tool calls per turn. Allowed on all agents.
+    minimum: 1
+    maximum: 1000
+    nullable: true
+    description: >
+      The agent's own tool-iteration limit (issue #904, tool-iteration-limit
+      spec D9/D10/D14). Omitted = unchanged; null = clear the own value (the
+      agent rides the global limit — "Use global limit"); a number = set the
+      own value, refused (400) if above the current global limit. Allowed on
+      every agent type, including subagent_3p.
     example: 100
   color:
     type: string

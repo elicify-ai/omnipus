@@ -38,7 +38,7 @@ import (
 // success. TestConfigSet_NoRestartForNonRestartKey used that very key as its
 // fixture and passed, because it only ever asserted on requires_restart.
 func TestConfigSet_PhantomSectionRejected(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 		"key":   "heartbeat.enabled",
@@ -75,7 +75,7 @@ func TestConfigSet_UnknownFieldInKnownSectionRejected(t *testing.T) {
 		"agents.defaults.restrict_to_workspace",
 	} {
 		t.Run(key, func(t *testing.T) {
-			deps, _ := newTestDeps()
+			deps, _ := newTestDeps(t)
 			result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 				"key":   key,
 				"value": "anything",
@@ -121,7 +121,7 @@ func TestConfigSet_UnknownFieldInKnownSectionRejected(t *testing.T) {
 func TestConfigSet_NamespacedInstanceFieldsAreTruthfullyReported(t *testing.T) {
 	const namespaced = "slack.eu"
 	newSeededDeps := func() (*systools.Deps, *config.Config) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		cfg.Channels = map[string]config.ChannelInstanceConfig{
 			namespaced: {
 				Type:        "slack",
@@ -197,7 +197,7 @@ func TestConfigSet_PhantomMapEntryRejected(t *testing.T) {
 		{"channels.foo.enabled"},
 	} {
 		t.Run(tc.key, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			seedOwnedChannel(cfg) // a real, unrelated instance exists
 
 			result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
@@ -266,7 +266,7 @@ func TestConfigSet_LegitimateWritesStillLand(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			seedOwnedChannel(cfg)
 
 			result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
@@ -291,7 +291,7 @@ func TestConfigSet_LegitimateWritesStillLand(t *testing.T) {
 // setting standing — the value read back is much larger than the value written.
 // The verification must judge that a success, member by member, not a mismatch.
 func TestConfigSet_ObjectWriteMergesWithoutFalseAlarm(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Agents.Defaults.MaxTokens = 4242
 	cfg.Agents.Defaults.DefaultModel.Provider = "openrouter"
 
@@ -318,7 +318,7 @@ func TestConfigSet_ObjectWriteMergesWithoutFalseAlarm(t *testing.T) {
 // which looks exactly like a dropped write. It is not one, and clearing a
 // setting must keep working.
 func TestConfigSet_ZeroValueOnOmitemptyFieldStillSucceeds(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	seedOwnedChannel(cfg)
 	instance := cfg.Channels["telegram"]
 	instance.BaseURL = "https://api.example.invalid"
@@ -345,7 +345,7 @@ func TestConfigSet_ZeroValueOnOmitemptyFieldStillSucceeds(t *testing.T) {
 // only {"value":"alice"} leaves the agent believing the stored value is a
 // string. The tool must hand back what the config actually holds.
 func TestConfigSet_NormalisedValueIsReportedAsStored(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	seedOwnedChannel(cfg)
 
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
@@ -377,7 +377,7 @@ func TestConfigSet_NormalisedValueIsReportedAsStored(t *testing.T) {
 // lands exactly as sent, the response must NOT be cluttered with stored_value
 // and a normalisation note. Otherwise "normalised" would mean nothing.
 func TestConfigSet_ExactWriteReportsNoDrift(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 		"key": "gateway.port", "value": float64(7777),
 	})
@@ -417,7 +417,7 @@ func TestConfigSet_EveryReportedSuccessIsReadableBack(t *testing.T) {
 	}
 	for _, w := range writes {
 		t.Run(w.key, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			seedOwnedChannel(cfg)
 			ctx := context.Background()
 

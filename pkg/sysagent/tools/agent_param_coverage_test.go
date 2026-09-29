@@ -42,7 +42,7 @@ func declaredObjectProperties(t *testing.T, params map[string]any) map[string]bo
 // known-consumed set, so a newly added but unwired property fails this test
 // by omission rather than by a false negative.
 func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
 	declared := declaredObjectProperties(t, tool.Parameters())
@@ -93,7 +93,7 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 // TestAgentUpdateTool_NoOrphanedParameters mirrors
 // TestAgentCreateTool_NoOrphanedParameters for update_agent.
 func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentUpdateTool(deps)
 
 	declared := declaredObjectProperties(t, tool.Parameters())
@@ -134,7 +134,7 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 // provider and max_tool_iterations parameters are not just schema-declared
 // but actually persisted onto the entity record.
 func TestAgentCreate_AppliesProviderAndMaxToolIterations(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -167,7 +167,7 @@ func TestAgentCreate_AppliesProviderAndMaxToolIterations(t *testing.T) {
 // path: a negative max_tool_iterations is rejected with INVALID_INPUT, not
 // silently clamped or silently ignored.
 func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -197,7 +197,7 @@ func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
 // string (matching REST's updateAgent semantics for the identical wire
 // field — see pkg/gateway/rest.go's req.Provider handling).
 func TestAgentUpdate_AppliesProviderAndMaxToolIterations(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("my-agent", &config.AgentConfig{
 		ID:                "my-agent",
@@ -271,7 +271,7 @@ func objectAt(t *testing.T, root map[string]any, keys ...string) map[string]any 
 }
 
 func TestAgentToolNestedParameterSchemasAreTyped(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	for _, tool := range []interface{ Parameters() map[string]any }{
 		systools.NewAgentCreateTool(deps),
 		systools.NewAgentUpdateTool(deps),

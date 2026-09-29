@@ -24,7 +24,7 @@ func newDepsWithSkillsLoader(t *testing.T, globalSkillsDir string) (*systools.De
 	t.Helper()
 	home := t.TempDir()
 	loader := skills.NewSkillsLoader("", globalSkillsDir, "")
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.Home = home
 	deps.SkillsLoader = loader
 	return deps, home
@@ -37,7 +37,7 @@ func newDepsWithSkillsLoader(t *testing.T, globalSkillsDir string) (*systools.De
 //	When the tool is executed,
 //	Then it returns NOT_AVAILABLE error.
 func TestSkillListTool_NilLoader_ReturnsNotAvailable(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	// Do NOT set deps.SkillsLoader — it is nil.
 	tool := systools.NewSkillListTool(deps)
 	result := tool.Execute(context.Background(), nil)
@@ -127,7 +127,7 @@ func TestSkillListTool_FiltersByGrantAndOmitsPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", globalDir, "")
 	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
 		ID:     "jim",
@@ -160,7 +160,7 @@ func TestSkillListTool_FiltersByGrantAndOmitsPath(t *testing.T) {
 // the live config roster is granted nothing, rather than falling open.
 func TestSkillListTool_UnresolvableAgentDeniesEverything(t *testing.T) {
 	globalDir := t.TempDir()
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", globalDir, "")
 	if err := os.MkdirAll(filepath.Join(globalDir, "some-skill"), 0o755); err != nil {
 		t.Fatal(err)
@@ -189,7 +189,7 @@ func TestSkillListTool_UnresolvableAgentDeniesEverything(t *testing.T) {
 //	When the tool is executed with name+confirm,
 //	Then it returns NOT_AVAILABLE.
 func TestSkillRemoveTool_NilInstaller_ReturnsNotAvailable(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewSkillRemoveTool(deps)
 	result := tool.Execute(context.Background(), map[string]any{
 		"name":    "my-skill",
@@ -207,7 +207,7 @@ func TestSkillRemoveTool_NilInstaller_ReturnsNotAvailable(t *testing.T) {
 //	When the tool is executed,
 //	Then it returns CONFIRMATION_REQUIRED.
 func TestSkillRemoveTool_NotConfirmed_ReturnsConfirmationRequired(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewSkillRemoveTool(deps)
 	result := tool.Execute(context.Background(), map[string]any{
 		"name":    "my-skill",
@@ -240,7 +240,7 @@ func TestSkillRemoveTool_InstalledSkill_RemovesAndReturnsSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSkillInstaller: %v", err)
 	}
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.SkillInstaller = installer
 
 	tool := systools.NewSkillRemoveTool(deps)
@@ -276,7 +276,7 @@ func TestSkillRemoveTool_NotInstalled_ReturnsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSkillInstaller: %v", err)
 	}
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.SkillInstaller = installer
 
 	tool := systools.NewSkillRemoveTool(deps)
@@ -307,7 +307,7 @@ func TestSkillTools_NoStubStrings(t *testing.T) {
 	installer, _ := skills.NewSkillInstaller(workspace, "", "")
 	loader := skills.NewSkillsLoader(workspace, t.TempDir(), "")
 
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.SkillInstaller = installer
 	deps.SkillsLoader = loader
 

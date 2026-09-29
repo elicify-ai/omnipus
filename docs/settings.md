@@ -46,7 +46,7 @@ Each tab and neighbor screen has one job.
 | Settings, Data | Session retention, storage numbers, backups, clearing sessions |
 | Settings, Memory | What the team remembers: recap and retrospective settings |
 | Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
-| Settings, Performance | How many agents may run at once, how deep delegation may go, and how long a delegation may run |
+| Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, how deep delegation may go, and how long a delegation may run |
 | Settings, Chat | Chat display, including the verbose view of tool calls |
 | Settings, About | Version and build information |
 | Profile | Your name, timezone, font size, password, and workspace context |
@@ -61,6 +61,68 @@ If the host cannot measure available memory, Omnipus holds agent concurrency at 
 The rate limits live in Settings, Security, under its advanced section. Two numbers, both per agent: model calls per hour, and tool calls per minute. Leave either blank for no limit.
 
 Profile holds one setting your agents read every turn: **Workspace Context**. It is a free-text page about you — your role, your preferences, how you like answers — saved automatically and shared with all agents. Your display name, timezone, and font size are personal display choices stored in this browser, so they do not follow you to another machine.
+
+## Tool calls per turn
+
+**Max tool calls per turn**, on the Performance tab, caps how many tool steps any agent may take in one turn. A turn is one message, one task run, or one heartbeat run. When an agent reaches the limit without a final answer, the turn stops and the agent replies that it hit its limit of tool steps for one turn. You can then ask it to continue.
+
+- The limit applies to every agent, including the four built-in agents and [external workers](agents.md#workers-and-delegation).
+- It accepts a whole number from **1 to 1000**. The shipped value is **200**.
+- In `config.json` it is `agents.defaults.max_tool_iterations`.
+- An agent can have its own lower limit on its profile. It can never have a higher one. See [agents](agents.md#how-to-lower-one-agents-tool-call-limit).
+- A turn that is already running keeps the limit it started with. The new value applies from the next turn. No restart is needed.
+
+### How to change it
+
+1. Open Settings, then the **Performance** tab.
+2. Find the **Tool calls per turn** card and type a new number into **Max tool calls per turn**. It saves by itself a moment after you stop typing.
+3. If the new value is lower than the current one and some agents have their own higher limit, a dialog lists each of those agents as *old value → new value*. Click **Lower limits** to go ahead, or cancel to change nothing.
+4. Re-type your password when asked. (Where there is no local password to re-type, you confirm the change instead.)
+
+Every change is recorded in the audit log as a `security_setting_change` event. The global limit is recorded as `agents.defaults.max_tool_iterations`, and each lowered agent as `agents.<agent id>.max_tool_iterations`, with the old and new values.
+
+### Lowering and raising behave differently
+
+| You change the limit | What happens to agents with their own limit |
+|---|---|
+| **Lower**, for example from 200 to 50 | Every agent whose own limit is above 50 is lowered to 50, after you confirm the list in the dialog. Agents at or below 50 are not touched. After the save, a message names each agent that was lowered. |
+| **Raise**, for example from 50 to 200 | No dialog opens, and no agent's own limit changes. An agent you lowered to 50 stays at 50. Raising the limit again does not restore values an earlier lowering replaced. |
+
+If an agent's own limit changes between the dialog opening and your confirmation, nothing is saved. The dialog shows **"The list of affected agents changed — review and confirm again."** with the new list, and you confirm again.
+
+### When a save is not applied yet
+
+Rarely, a save is written but not yet in force. A warning then starts with **"Saved, but not applied yet"**. It names only the settings that save changed (for this card, "the tool-iteration limit"). The agents that save lowered are named at the moment of the save — in a status toast and inline under the field — but that naming does not survive a page reload: reload, and the list under the field is gone, even though the "Saved, but not applied yet" warning itself keeps showing. The audit log is the lasting record of which agents were lowered and when. It comes in two forms:
+
+| The warning reads | What happened |
+|---|---|
+| "Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload: …" | `config.json` holds the new value, but the running configuration could not be refreshed. The Performance tab keeps showing the value you saved, with this notice, until the gateway reloads or restarts. |
+| "Saved, but not applied yet: … the agent reload failed …" | The running configuration has the new value, but the agents could not be reloaded with it. Their next turns keep the old limit. |
+
+Either way nothing is rolled back: the value is in `config.json`, agents it lowered are already lowered, and the change is in the audit log. The new limit applies after the next reload or a gateway restart.
+
+### A saved value outside 1 to 1000
+
+If `config.json` holds a value the setting does not accept, for example after a hand edit, Omnipus still starts. It runs with a corrected value in memory and does not change the file:
+
+| Saved value | Limit in force |
+|---|---|
+| Missing, or below 1 (such as 0) | 200, the shipped value |
+| Above 1000 (such as 5000) | 1000 |
+
+The gateway log carries a warning at start-up, and the Performance tab shows a warning naming the saved value and the one in use. Save a value from 1 to 1000 in the field to replace the saved one.
+
+### Changing it outside Settings
+
+Only Settings, Performance changes this limit, because it asks for your password and shows you which agents a lowering affects. Other ways in are refused:
+
+- The general configuration endpoint, `PUT /api/v1/config`, refuses a body that includes `agents.defaults.max_tool_iterations` with status 403 and "agents.defaults.max_tool_iterations is a blocked path — use the dedicated endpoint". Nothing in that body is saved. Other changes to `agents.defaults` through this endpoint keep the saved limit as it is.
+- The `set_config` tool that agents use to change configuration from a chat refuses the key and points to Settings, Performance. To limit one agent from a chat, ask for that agent's own value instead; see [agents](agents.md#how-to-lower-one-agents-tool-call-limit).
+
+### If you are upgrading
+
+- **The environment variable is retired.** `OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS` used to override the saved value on every start. Now, on the first start after upgrading, its value is copied into `config.json` once. From then on it is ignored, and the log says so at each start while it is still set. Change the limit in Settings and remove the variable. A value outside 1 to 1000 is copied as the nearest bound, 1 or 1000, with a warning. A value that is not a whole number is not copied; the log says so.
+- **Agents with an old higher limit.** Earlier releases let an agent's own limit be higher than the global one. Upgrading does not change those stored values. Such an agent now runs at the global limit, its profile says its own value has no effect, and one warning at start-up lists every such agent. See [agents](agents.md#how-to-lower-one-agents-tool-call-limit).
 
 ## Delegation limits
 

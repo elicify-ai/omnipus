@@ -36,6 +36,8 @@ export function makeAgent(overrides: Partial<Agent> = {}): Agent {
     soul: '',
     timeout_seconds: 300,
     max_tool_iterations: 50,
+    max_tool_iterations_source: 'global',
+    max_tool_iterations_override_ignored: false,
     // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
     memory_enabled: true,
     ...overrides,

@@ -1,5 +1,7 @@
 # Unified Library Search & Grep Engine — Implementation Spec
 
+Status: Implemented
+
 - **Source ADR:** `docs/internal/architecture/ADR-081-unified-library-search-and-grep-engine.md`.
 - **Codebase:** branch `integrate/library-improvements-v0.1.1`. Pin lineage (one
   first-parent line): ADR validated @ `f37346338`; draft @ `f23f18ffb`; round-1 review
@@ -7,6 +9,9 @@
 - **Status:** **FINAL** — grill round 1 (27 findings) and round 2 (22 findings) both
   addressed; this document is self-contained (R2-MAJ-001): no content lives only in
   git history. Reviews: `unified-search-and-grep-spec-review-round1.md`, `-round2.md`.
+- **Superseded in part 2026-09-26 (#920):** the agent `grep` tool's reach is now governed by
+  [`read-boundary-consistency-spec.md`](read-boundary-consistency-spec.md) (founder decisions D1-D10). Each superseded clause below carries
+  a dated pointer; everything else in this spec stands.
 - **Founder rulings:** (a) best-in-class agent grep — performance levers and agent
   ergonomics are MUSTs; (b) grep is allowed for **ALL agents — explicitly including
   the Worker and the specialist tier** — every seed carries an explicit `allow`.
@@ -117,6 +122,9 @@ at its bounds with an honest notice.
    content-scanned.
 5. **Given** the confinement boundary, **Then** nothing outside the work-tree or its
    mounts is read or listed.
+   *[Narrowed 2026-09-26 (#920): still holds for the human Library search bar and for
+   symlinks met during a walk; an agent `grep` `path` argument follows
+   `read-boundary-consistency-spec.md` FR-001 and FR-008.]*
 6. **Given** the walk/mount root becomes unreadable mid-search, **Then** a
    request-level error or `root_lost` truncation — never a bare "0 matches".
 7. **Given** regex metacharacters typed in the bar, **Then** they match literally;
@@ -128,6 +136,9 @@ at its bounds with an honest notice.
 Ripgrep-class for agents: literal or full RE2, case-mode control with smart-case
 default, globs, context lines, per-file and total caps, line numbers, structured
 output — over the calling agent's OWN workspace root and mounts only.
+*[Superseded 2026-09-26 (#920): the "own workspace root and mounts only" limit now holds only
+when no `path` is given; with a `path` the agent `grep` reaches what `read_file` can read —
+see `read-boundary-consistency-spec.md` FR-001, FR-003.]*
 **Why P0:** the founder's ruling — the missing capability, built best-in-class.
 **Independent test:** real agent session greps a seeded workspace with context
 lines; engineered cap produces `truncated:true`.
@@ -143,6 +154,8 @@ lines; engineered cap produces `truncated:true`.
    reason.
 7. **Given** any scope argument, **Then** only the calling agent's workspace root and
    mounts are reachable — no cross-workspace parameter exists.
+   *[Superseded 2026-09-26 (#920): see `read-boundary-consistency-spec.md` US-1 and FR-001; other
+   workspaces stay unreachable (FR-005), and no cross-workspace parameter exists still.]*
 8. **Given** output beyond the tool cap, **Then** truncation at the cap with an
    explicit marker and a narrowing hint.
 9. **Given** `case: "sensitive"` with pattern `todo`, **Then** only lowercase `todo`
@@ -389,6 +402,8 @@ Scenario: binary files are name-matched only                    # Edge Case
   Given "invoice.pdf" whose bytes contain "meeting"
   Then "invoice" finds it by name and "meeting" does not find it by content
 
+# [Narrowed 2026-09-26 (#920): holds for the human bar and for symlinks met during a walk;
+#  an agent grep `path` follows read-boundary-consistency-spec.md S-2.6, S-2.7.]
 Scenario: confinement holds under adversarial layout            # Error Path
   Traces to: US-2 AS-5
   Given a symlink pointing outside the work tree
@@ -450,6 +465,7 @@ Scenario: grep output cap truncates with a marker               # Edge Case
   Then serialized output is at most the tool cap
     And ends with an explicit truncation marker and a narrowing hint
 
+# [Superseded 2026-09-26 (#920): replaced by read-boundary-consistency-spec.md S-1.1 to S-1.4.]
 Scenario: grep cannot leave its own workspace                   # Error Path
   Traces to: US-3 AS-7
   Given two workspaces
@@ -511,7 +527,7 @@ Engine **`pkg/filegrep`**; REST **`POST /api/v1/library/{workspace_id}/files/sea
 | 8 | `TestFileGrep_GitignoreSemantics` | Unit | FR-007 | nested, negation, non-git tree, pruned counts; gitignore read even with hidden excluded |
 | 9 | `TestFileGrep_HiddenAndAlwaysPruned` | Unit | R2-MIN-006 | include_hidden on/off; `.git/.library/.omnipus-vault` never scanned either way |
 | 10 | `TestFileGrep_GlobIncludeExclude` | Unit | US-3 | doublestar `**` |
-| 11 | `TestFileGrep_SymlinkConfinement` | Integration | US-2 AS-5 | real temp dirs; mirrors path_traversal idioms |
+| 11 | `TestFileGrep_SymlinkConfinement` | Integration | US-2 AS-5 | real temp dirs; mirrors path_traversal idioms. *[2026-09-26 (#920): engine test stays; the agent-side `path` cases move to `read-boundary-consistency-spec.md` tests 10 and 1.]* |
 | 12 | `TestFileGrep_UnreadableSkippedCounted` | Integration | FR-021 | injected FS-error seam + dangling-symlink variant (never chmod-000 — void under root CI) |
 | 13 | `TestFileGrep_RootLostMidWalk` | Integration | US-2 AS-6 | root removed after walk start ⇒ error/`root_lost` |
 | 14 | `TestFileGrep_ParallelScanDeterministicSet` | Unit | engine | result set stable; ordering rule asserted |
@@ -523,7 +539,7 @@ Engine **`pkg/filegrep`**; REST **`POST /api/v1/library/{workspace_id}/files/sea
 | 20 | `TestLibraryFilesSearch_ConcurrencyCapAndCancel` | Integration | MV-11 | 3rd walk ⇒ 429; disconnect cancels; TOOL walk shares the semaphore (busy path) |
 | 21 | `TestLibraryFilesSearch_MountScope` | Integration | US-2 AS-3 | injected bounds over a mount |
 | 22 | `TestGrepTool_ExecuteAndPolicy` | Integration | US-3 AS-1/5 | registered, executes, deny refusal audited |
-| 23 | `TestGrepTool_OwnWorkspaceOnly` | Integration | US-3 AS-7 | two workspaces; no crossover |
+| 23 | `TestGrepTool_OwnWorkspaceOnly` | Integration | US-3 AS-7 | two workspaces; no crossover. *[Superseded 2026-09-26 (#920): rewritten per `read-boundary-consistency-spec.md` Regression table; the cross-workspace refusal half stays.]* |
 | 24 | `TestGrepTool_OutputCapTruncates` | Integration | US-3 AS-8; MV-3a | layered-reason rule asserted |
 | 25 | `TestVisibility_GrepIsSearchOnly` | Unit | MV-7 | own sibling pin test (cites ADR-081 D11) |
 | 26 | `TestCatalog_SizeIsPinned` 101→102 | Unit | MV-7 | the test's documented procedure |
@@ -608,6 +624,8 @@ order, OBS-003); e2e shard checker green at 66/66.
 - **FR-013** All new wire shapes contract-first (Constraint #8).
 - **FR-014** Search MUST NOT read or reveal anything outside the confined root;
   symlinks never followed across it; `.git/.library/.omnipus-vault` never scanned.
+  *[Superseded 2026-09-26 (#920) for the agent `grep` tool only: its `path` follows
+  `read-boundary-consistency-spec.md` FR-001, FR-005 to FR-008. Unchanged for the human bar.]*
 - **FR-015** New deps limited to O1's four; pinned and justified in the PR.
 - **FR-016** The human bar is literal-with-smart-case; regex only via the explicit
   flag (REST/tool).
@@ -620,6 +638,8 @@ order, OBS-003); e2e shard checker green at 66/66.
 - **FR-019** The grep tool MUST support context lines (0–5), per-file (50) and total
   (1,000) match caps, glob filters, line numbers, case modes, structured output.
 - **FR-020** grep is scoped to the calling agent's own workspace root and mounts.
+  *[Superseded 2026-09-26 (#920): with no `path` this still holds (D5); with a `path`
+  see `read-boundary-consistency-spec.md` FR-001 to FR-004.]*
 - **FR-021** Mid-walk root/mount loss MUST surface as an error or `root_lost` —
   never an unqualified empty result; per-file failures are skipped and counted.
 - **FR-022** Performance levers are MUSTs with teeth: sensitive-literal fast path

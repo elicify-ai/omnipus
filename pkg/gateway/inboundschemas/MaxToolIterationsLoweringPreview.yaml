@@ -1,0 +1,28 @@
+title: MaxToolIterationsLoweringPreview
+description: >
+  Read-only preview of which agents' own tool-iteration limits would be
+  lowered if the global limit were set to `value` (issue #904,
+  tool-iteration-limit spec D11). Only agents whose own value is strictly
+  above `value` are listed; agents equal to or below it, and agents with no
+  own value, are excluded. Returned by
+  GET /performance/max-tool-iterations/preview and embedded in the 409
+  MaxToolIterationsLoweringConflict body.
+type: object
+additionalProperties: false
+required:
+  - value
+  - agents
+properties:
+  value:
+    type: integer
+    minimum: 1
+    maximum: 1000
+    description: The candidate global limit the preview was computed for.
+    example: 200
+  agents:
+    type: array
+    items:
+      $ref: './MaxToolIterationAgentChange.yaml'
+      x-go-type: MaxToolIterationAgentChange
+    description: >
+      Agents that would be lowered; empty when nothing would change.

@@ -64,7 +64,7 @@ func parseToolJSON(t *testing.T, s string) map[string]any {
 }
 
 func TestChannelEnable_MutatesConfigToEnabled(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	if cfg.Channels == nil {
 		cfg.Channels = map[string]config.ChannelInstanceConfig{}
 	}
@@ -92,7 +92,7 @@ func TestChannelEnable_MutatesConfigToEnabled(t *testing.T) {
 }
 
 func TestChannelDisable_MutatesConfigToDisabled(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
 		"telegram": {Type: "telegram", Enabled: true},
 	}
@@ -113,7 +113,7 @@ func TestChannelDisable_MutatesConfigToDisabled(t *testing.T) {
 }
 
 func TestChannelDisable_RejectsUnconfigured(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Channels = map[string]config.ChannelInstanceConfig{}
 	tool := systools.NewChannelDisableTool(deps)
 
@@ -125,7 +125,7 @@ func TestChannelDisable_RejectsUnconfigured(t *testing.T) {
 }
 
 func TestChannelEnable_RejectsUnknownChannel(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewChannelEnableTool(deps)
 	res := tool.Execute(context.Background(), map[string]any{"id": "nonexistent-channel"})
 	if !res.IsError {
@@ -137,7 +137,7 @@ func TestChannelEnable_RejectsUnknownChannel(t *testing.T) {
 }
 
 func TestChannelEnable_RejectsMissingID(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewChannelEnableTool(deps)
 	res := tool.Execute(context.Background(), map[string]any{})
 	if !res.IsError {
@@ -146,7 +146,7 @@ func TestChannelEnable_RejectsMissingID(t *testing.T) {
 }
 
 func TestChannelTest_ReportsNotConfigured(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Channels = map[string]config.ChannelInstanceConfig{}
 	tool := systools.NewChannelTestTool(deps)
 
@@ -169,7 +169,7 @@ func TestChannelTest_ReportsNotConfigured(t *testing.T) {
 }
 
 func TestChannelTest_ReportsNoCredentials(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
 		"telegram": {Type: "telegram", Enabled: true}, // no TokenRef, no Identity
 	}
@@ -191,7 +191,7 @@ func TestChannelTest_ReportsNoCredentials(t *testing.T) {
 }
 
 func TestChannelTest_ReportsConfigured(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
 		"telegram": {Type: "telegram", Enabled: true, TokenRef: "channel.telegram.token"},
 	}
@@ -332,7 +332,7 @@ func TestConfigure_PlainFields(t *testing.T) {
 // app_secret. This test configures a channel with only AppSecretRef set (no
 // TokenRef, no Identity) and asserts test_channel now reports success=true.
 func TestChannelTest_AppSecretRefCountsAsCredentials(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
 		"feishu": {Type: "feishu", Enabled: true, AppSecretRef: "channel_feishu_app_secret"},
 	}
@@ -358,7 +358,7 @@ func TestChannelTest_AppSecretRefCountsAsCredentials(t *testing.T) {
 // leaves a third entirely untouched, then asserts list_channels reports the
 // live state for each.
 func TestChannelList_ReportsLiveState(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
 		"telegram": {Type: "telegram", Enabled: true, TokenRef: "channel_telegram_token"},
 		"discord":  {Type: "discord", Enabled: false},
@@ -421,7 +421,7 @@ func TestChannelList_ReportsLiveState(t *testing.T) {
 
 // TestChannelEnableDisableRoundTrip verifies enable→disable→enable cycles persist correctly.
 func TestChannelEnableDisableRoundTrip(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Channels = map[string]config.ChannelInstanceConfig{}
 	enable := systools.NewChannelEnableTool(deps)
 	disable := systools.NewChannelDisableTool(deps)

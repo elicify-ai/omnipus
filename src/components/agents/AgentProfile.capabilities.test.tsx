@@ -58,6 +58,8 @@ const lockedAgent: Agent = {
   soul: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   memory_enabled: true,
   editable_fields: [],
 }

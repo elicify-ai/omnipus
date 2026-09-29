@@ -36,6 +36,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -424,13 +425,16 @@ var (
 )
 
 // WithReadConfined marks a turn context as running under ADR-084
-// JUDGE-FR-060's read-confinement posture: FSOpRead, FSOpList and FSOpSend
-// are confined to the turn's effective working directory instead of being
-// open outside the secret set.
+// JUDGE-FR-060's read-confinement posture: FSOpRead and FSOpList are
+// confined to the turn's effective working directory plus the workspace's
+// mounts, and FSOpSend to the working directory alone, instead of being open
+// outside the secret set (#920, ADR-081 D6 corrections 1-3).
 //
-// The engine sets this when it dispatches a System-Agent turn (the Judge and
-// PlanSupervisor), at the same place it already sets
-// WithSystemAgentWorkspaceOverride. No tool calls it.
+// The engine sets this only when it dispatches the Judge's review turn
+// (pkg/agent/verifier_adjudication.go dispatchTurn), at the same place it
+// already sets WithSystemAgentWorkspaceOverride. No tool calls it. The Plan
+// Supervisor is NOT read-confined (#920 founder decision D10): its grep
+// follows the ordinary read rule.
 //
 // POLARITY: unset means NOT confined. Passing false is therefore identical
 // to never calling this at all, and every turn that does not opt in keeps
@@ -625,6 +629,15 @@ type PathHandle struct {
 	// classifySkillsGatePath. WriteFile below emits the D6.1.1/FR-071 audit
 	// record from it AFTER the write actually succeeds, never before.
 	skillsWriteAudit *skillsWriteAuditFields
+
+	// readOnly makes the "this handle only ever reads" invariant a type-level
+	// property instead of caller discipline (T2, type-design-analyzer finding
+	// on the 8-reviewer #920 gate). Set only by readConfinedMountHandle,
+	// below — the Judge's read-confined FSOpRead/FSOpList reach into a
+	// workspace mount. Every write-capable method (WriteFile, MkdirAll —
+	// PathHandle's only two) checks it first and returns ErrHandleReadOnly
+	// immediately, before doing any I/O.
+	readOnly bool
 }
 
 // recheckUnrestrictedCarveOut re-resolves h.abs (following any symlink that
@@ -680,6 +693,9 @@ func (h *PathHandle) ReadFile() ([]byte, error) {
 // sandboxFs.WriteFile used for the confined (root-backed) case, and
 // fileutil.WriteFileAtomic's contract for the unrestricted (host) case.
 func (h *PathHandle) WriteFile(data []byte) error {
+	if h.readOnly {
+		return ErrHandleReadOnly
+	}
 	if h.root == nil {
 		if err := h.recheckUnrestrictedCarveOut(); err != nil {
 			return err
@@ -721,7 +737,8 @@ func (h *PathHandle) ReadDir() ([]os.DirEntry, error) {
 		}
 		return entries, nil
 	}
-	entries, err := fs.ReadDir(h.root.FS(), h.rel)
+	// Root.FS uses io/fs names; h.rel stays OS-native for the os.Root methods.
+	entries, err := fs.ReadDir(h.root.FS(), filepath.ToSlash(h.rel))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
@@ -746,6 +763,38 @@ func (h *PathHandle) Open() (fs.File, error) {
 	f, err := h.root.Open(h.rel)
 	if err != nil {
 		return nil, wrapOpenErr(err)
+	}
+	return f, nil
+}
+
+var errReadSourceNotRegular = errors.New("not a regular file")
+
+// OpenNonBlockingRead opens an ordinary read_file target once through the
+// already-authorized handle, then checks the kind on that same descriptor.
+// Directories remain openable so the existing directory-read error is kept;
+// a FIFO or device is refused without ever blocking the turn.
+func (h *PathHandle) OpenNonBlockingRead() (fs.File, error) {
+	var f *os.File
+	var err error
+	if h.root == nil {
+		if carveErr := h.recheckUnrestrictedCarveOut(); carveErr != nil {
+			return nil, carveErr
+		}
+		f, err = os.OpenFile(h.abs, regularReadOpenFlags(), 0)
+	} else {
+		f, err = h.root.OpenFile(h.rel, regularReadOpenFlags(), 0)
+	}
+	if err != nil {
+		return nil, wrapOpenErr(err)
+	}
+	info, statErr := f.Stat()
+	if statErr != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("failed to stat opened file: %w", statErr)
+	}
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errReadSourceNotRegular
 	}
 	return f, nil
 }
@@ -783,6 +832,9 @@ func (h *PathHandle) OpenRegularNonBlocking() (fs.File, error) {
 
 // MkdirAll creates the handle's target directory (and any missing parents).
 func (h *PathHandle) MkdirAll(perm os.FileMode) error {
+	if h.readOnly {
+		return ErrHandleReadOnly
+	}
 	if h.root == nil {
 		if err := h.recheckUnrestrictedCarveOut(); err != nil {
 			return err
@@ -919,9 +971,11 @@ type resolvePath struct {
 //     (root==nil) is returned, independent of policy.Scope. The ONE
 //     exception is policy.ReadConfined (ADR-084 JUDGE-FR-060): a
 //     read-confined turn is refused with ErrOutsideScope here instead,
-//     for all three of these operations. ReadConfined is false on every
-//     policy that did not explicitly ask for it, so this exception
-//     changes nothing for any non-System agent.
+//     except that FSOpRead/FSOpList inside a workspace mount
+//     (policy.AllowedRoots) are admitted through a mount-anchored os.Root
+//     handle (#920, ADR-081 D6 corrections 1-3); FSOpSend stays refused.
+//     ReadConfined is false on every policy that did not explicitly ask
+//     for it, so this exception changes nothing for any other turn.
 //     - FSOpWrite, FSOpServe: allowed only when the realpath also falls
 //     within one of policy.AllowedRoots (a workspace mount) — refused
 //     with ErrOutsideScope otherwise, independent of policy.Scope. This
@@ -1079,10 +1133,12 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 		// set unconditionally above (step 2), before op is ever consulted.
 		switch rp.op {
 		case FSOpRead, FSOpList, FSOpSend:
-			// ADR-084 JUDGE-FR-060: a read-confined turn (the Judge and
-			// PlanSupervisor — see fspolicy.FSPolicy.ReadConfined) loses the
+			// ADR-084 JUDGE-FR-060: a read-confined turn (only the Judge's
+			// review turn — see fspolicy.FSPolicy.ReadConfined; the Plan
+			// Supervisor is not read-confined, #920 decision D10) loses the
 			// open-read rule for ALL THREE of these operations and is held
-			// to policy.WorkDir instead.
+			// to policy.WorkDir — plus, for FSOpRead/FSOpList only, the
+			// workspace's mounts (readConfinedMountHandle, #920 D6).
 			//
 			// This is the ONLY behavioural change ADR-084 makes to this
 			// function. Every turn that did not opt in (ReadConfined is the
@@ -1103,6 +1159,9 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 			// can plant the link between writing the artifact and the
 			// adjudication reading it.
 			if rp.policy.ReadConfined {
+				if handle, ok, mountErr := rp.readConfinedMountHandle(realAbs); ok {
+					return handle, mountErr
+				}
 				return nil, fmt.Errorf(
 					"%w: %q resolves to %q, outside the effective working directory %q (read-confined turn)",
 					ErrOutsideScope, rp.rawPath, realAbs, rp.policy.WorkDir)
@@ -1229,6 +1288,56 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 	}
 
 	return &PathHandle{root: root, rel: rel, abs: realAbs, policy: rp.policy, skillsWriteAudit: skillsWriteAudit}, nil
+}
+
+// readConfinedMountHandle is the read-confined mount exception (#920,
+// ADR-081 D6 corrections 1-3; security-lead checks SL-1..SL-3). It reports
+// ok=false — refuse as read-confined — unless all of these hold:
+//
+//   - the op is FSOpRead or FSOpList. FSOpSend stays confined to the work
+//     dir (correction 3): widening it would change nothing reachable today
+//     (the Judge's seed denies send_file) while silently opening an
+//     exfiltration path for any future read-confined role;
+//   - realAbs lies on or under one of policy.AllowedRoots. For a read-
+//     confined policy that list is exactly the workspace's mounts:
+//     ResolveTurnFSPolicy sets it from workspace.AllowedMountRoots, and
+//     ResolvePathAllowingPatterns never appends an operator regex grant to a
+//     read-confined policy (correction 1), so an AllowReadPaths pattern
+//     cannot reopen $OMNIPUS_HOME transcripts here (JUDGE-FR-060).
+//
+// On a match it returns the mount-anchored os.Root handle newMountRootHandle
+// builds for writes (correction 2), never a host-filesystem handle: the
+// reviewed worker may control the mount's contents, and a host-fs handle
+// re-checks only the secret set at I/O time, not containment in the mount.
+//
+// The relative path is derived from realAbs (fully resolved, inside the
+// mount by the check above), not from the caller's spelling. A caller
+// spelling that reaches the mount through a symlink planted in the work dir
+// (`to-mount` -> <mount>/src, DS-3 row 9) has no lexical path under the
+// mount at all, so the write branch's leaf-preserving spelling would refuse
+// it. Anchoring the resolved location instead keeps the guarantee that
+// matters here: os.Root re-resolves every component, leaf included, fresh
+// and confined to the mount at each I/O call, so a component swapped for an
+// outward symlink after this returns fails the read (S-4.6) rather than
+// escaping the mount.
+func (rp *resolvePath) readConfinedMountHandle(realAbs string) (*PathHandle, bool, error) {
+	if rp.op != FSOpRead && rp.op != FSOpList {
+		return nil, false, nil
+	}
+	root, ok := matchedAllowedRoot(realAbs, rp.policy.AllowedRoots)
+	if !ok {
+		return nil, false, nil
+	}
+	handle, err := newMountRootHandle(root, realAbs, realAbs, rp.policy)
+	if handle != nil {
+		// T2: this is the ONLY call site that ever resolves FSOpRead/
+		// FSOpList for a mount handle (the guard at the top of this
+		// function) — mark it read-only at the type level rather than
+		// relying on that guard alone. newMountRootHandle's FSOpWrite/
+		// FSOpServe call site (resolveValidatedPath, above) never sets this.
+		handle.readOnly = true
+	}
+	return handle, true, err
 }
 
 // matchedAllowedRoot reports whether candidate falls on or under any of roots
@@ -1487,10 +1596,14 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool, g
 // this axis does NOT reopen a read-confined turn. The call-scoped copy below
 // inherits policy.ReadConfined unchanged, and ResolvePath's outside-WorkDir
 // branch consults ReadConfined BEFORE it consults Scope — so forcing Scope
-// to Unrestricted here cannot lift the confinement. That is the fail-closed
-// direction on purpose: an operator's AllowReadPaths pattern is configured
-// for ordinary agents and may well cover $OMNIPUS_HOME, which is exactly the
-// reach JUDGE-FR-060 exists to take away from a verifier turn.
+// to Unrestricted here cannot lift the confinement. And since that branch
+// now admits reads inside policy.AllowedRoots (the #920 mount exception),
+// the resolved-grant injection into AllowedRoots is skipped for a
+// read-confined policy (ADR-081 D6 correction 1): otherwise the pattern's
+// own location would become a "mount" the Judge may read. That is the
+// fail-closed direction on purpose: an operator's AllowReadPaths pattern is
+// configured for ordinary agents and may well cover $OMNIPUS_HOME, which is
+// exactly the reach JUDGE-FR-060 exists to take away from a verifier turn.
 func ResolvePathAllowingPatterns(
 	ctx context.Context,
 	policy fspolicy.FSPolicy,
@@ -1524,11 +1637,20 @@ func ResolvePathAllowingPatterns(
 			// a wider Unrestricted-for-writes reopening, which would defeat
 			// FR-2.2/FR-2.5's headline change for every OTHER outside-WorkDir
 			// write.
+			//
+			// Never for a read-confined policy (#920, ADR-081 D6 correction
+			// 1): its AllowedRoots must stay exactly the workspace's mounts,
+			// because ResolvePath's read-confined branch admits reads inside
+			// them. The only read-confined turn (the Judge's review) has no
+			// write tool, so this skip removes no write grant in practice.
+			if policy.ReadConfined {
+				return ResolvePath(ctx, granted, toolName, callID, op, rawPath)
+			}
 			if resolvedGrant, resolveErr := resolveRealpathUnderWorkDir(rawPath, policy.WorkDir); resolveErr == nil {
-				grantedRoots := make([]string, 0, len(policy.AllowedRoots)+1)
-				grantedRoots = append(grantedRoots, policy.AllowedRoots...)
-				grantedRoots = append(grantedRoots, resolvedGrant)
-				granted.AllowedRoots = grantedRoots
+				// Copy then append: never alias policy.AllowedRoots' backing
+				// array, and no hand-computed capacity (CodeQL
+				// go/allocation-size-overflow on PR #1037).
+				granted.AllowedRoots = append(slices.Clone(policy.AllowedRoots), resolvedGrant)
 			}
 
 			return ResolvePath(ctx, granted, toolName, callID, op, rawPath)

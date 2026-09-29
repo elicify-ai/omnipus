@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { AppShell } from '@/components/layout/AppShell'
-import { fetchAppState, validateToken, type AppState } from '@/lib/api'
+import type { AppState } from '@/lib/api'
 import { forceLogout } from '@/lib/authLogout'
 import { hasStoredSession } from '@/store/auth'
 import { checkTokenValidity, resetTokenValidationCache } from './authValidation'
@@ -13,6 +13,7 @@ export { resetTokenValidationCache }
 // /onboarding is also a sibling — no AppShell, no beforeLoad
 export const Route = createFileRoute('/_app')({
   beforeLoad: async () => {
+    const { fetchAppState, validateToken } = await import('@/lib/api')
     // First check onboarding state — if not complete, redirect to onboarding
     let state: AppState | undefined
     try {

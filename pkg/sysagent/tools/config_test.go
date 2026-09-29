@@ -21,7 +21,7 @@ import (
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigGet_ValidKey(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	// Set a known value in the in-memory config to verify the tool reads it.
 	cfg.Gateway.Port = 4242
 	tool := systools.NewConfigGetTool(deps)
@@ -48,7 +48,7 @@ func TestConfigGet_ValidKey(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigGet_Differentiation(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	// Use two gateway fields with distinct types — port (int) and host (string).
 	cfg.Gateway.Port = 5000
 	cfg.Gateway.Host = "127.0.0.1"
@@ -80,7 +80,7 @@ func TestConfigGet_Differentiation(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigGet_SensitiveKeyBlocked(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewConfigGetTool(deps)
 	ctx := context.Background()
 
@@ -109,7 +109,7 @@ func TestConfigGet_SensitiveKeyBlocked(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigGet_UnknownKey(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	result := systools.NewConfigGetTool(deps).Execute(context.Background(), map[string]any{
 		"key": "gateway.nonexistent_field_zzz",
 	})
@@ -127,7 +127,7 @@ func TestConfigGet_UnknownKey(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigGet_EmptyKey(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	result := systools.NewConfigGetTool(deps).Execute(context.Background(), map[string]any{"key": ""})
 	if !result.IsError {
 		t.Fatalf("expected error for empty key, got success: %s", result.ForLLM)
@@ -145,7 +145,7 @@ func TestConfigGet_EmptyKey(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigSet_NormalSet(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	ctx := context.Background()
 
 	// gateway.port is a known int field.
@@ -185,7 +185,7 @@ func TestConfigSet_NormalSet(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigSet_RequiresRestartFlag(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 		"key":   "gateway.port",
@@ -214,7 +214,7 @@ func TestConfigSet_RequiresRestartFlag(t *testing.T) {
 // requires_restart against a write that actually happens.
 // See TestConfigSet_PhantomSectionRejected for the heartbeat case itself.
 func TestConfigSet_NoRestartForNonRestartKey(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Gateway.HotReload = false
 
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
@@ -237,7 +237,7 @@ func TestConfigSet_NoRestartForNonRestartKey(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigSet_SensitiveKeyRejected(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewConfigSetTool(deps)
 	ctx := context.Background()
 
@@ -267,7 +267,7 @@ func TestConfigSet_SensitiveKeyRejected(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigSet_UnknownKeyRejected(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 		"key":   "totally_unknown_section.field",
 		"value": "anything",
@@ -289,7 +289,7 @@ func TestConfigSet_UnknownKeyRejected(t *testing.T) {
 //
 // Traces to: ADR-054 §11 checklist item 6.
 func TestConfigSet_AgentsListRejected(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 		"key":   "agents.list",
 		"value": []any{},
@@ -311,7 +311,7 @@ func TestConfigSet_AgentsListRejected(t *testing.T) {
 //
 // Traces to: ADR-054 §11 checklist item 6 / v2 review finding C-3.
 func TestConfigSet_AgentsDefaultsStillWorks(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 		"key":   "agents.defaults.default_model.model",
 		"value": "glm-4.7",
@@ -329,7 +329,7 @@ func TestConfigSet_AgentsDefaultsStillWorks(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigSet_PreviousValueReturned(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Gateway.Port = 1234
 
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
@@ -511,7 +511,7 @@ func TestConfigSet_OtherTypesStillWorkAfterBoolFix(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
 func TestConfigSet_EmptyKeyRejected(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 		"key":   "",
 		"value": "x",

@@ -5,8 +5,8 @@
 package gateway
 
 import (
-	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -87,7 +87,14 @@ func wireMaxParallelAgents(configured, effective int) int {
 }
 
 func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
-	cfg := a.agentLoop.GetConfig()
+	resp := performanceSettingsResponse(a.agentLoop.GetConfig())
+	resp.PendingApply = a.pendingApply.snapshot()
+	jsonOK(w, resp)
+}
+
+// performanceSettingsResponse builds the PerformanceSettings body from cfg;
+// shared by GET and PUT so both return the identical shape.
+func performanceSettingsResponse(cfg *config.Config) gen.PerformanceSettings {
 	effective, capped := cfg.Performance.EffectiveMaxParallelAgents()
 	configured := wireMaxParallelAgents(cfg.Performance.MaxParallelAgents, effective)
 	// tools_on_demand mirrors cfg.Tools.Manifest.Compressed:
@@ -99,28 +106,36 @@ func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
 	// is always the resolved value of the one config field, never echoed
 	// back as an unresolved 0. Always present in responses per the schema.
 	goalMaxRounds := cfg.Planning.EffectiveGoalMaxRounds()
-	jsonOK(w, gen.PerformanceSettings{
+	ps := gen.PerformanceSettings{
 		MaxParallelAgents:           &configured,
 		EffectiveMaxParallelAgents:  &effective,
 		MaxParallelAgentsConfigured: &capped,
 		ToolsOnDemand:               &toolsOnDemand,
 		GoalMaxRounds:               &goalMaxRounds,
-	})
+	}
+	// #904: the global tool-iteration limit in force, plus the D13 saved
+	// state (and raw value when out of range) for the Settings warning.
+	applyPerformanceMaxToolIterations(&ps, cfg)
+	return ps
 }
 
+// putPerformance applies a partial PerformanceSettingsUpdate. For the #904
+// global tool-iteration limit it follows the spec's D11/D16 write order:
+// (1) decode and bound-check; (2) drift pre-check before the step-up token
+// is consumed; (3) requireReAuth; (4–6) under configMu: the deciding drift
+// and revision check, the confirmed agents lowered, then config.json written
+// once (see writePerformanceLocked); (7) registry reload.
 func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
-	// Re-auth gate (Spec-6 FR-12.2 / Spec-3 FR-6.6): the Max-parallel-agents
-	// performance setting is a sensitive HTTP-layer change and requires the
-	// single-use re-auth consent token — the same gate the Integrations PUT
-	// enforces. RequireNotBypass (already in adminWrap) is a 503 dev-mode guard,
-	// NOT this consent check. The user is guaranteed in context here because the
-	// route is admin-wrapped.
+	// Re-auth gate (Spec-6 FR-12.2 / Spec-3 FR-6.6): the performance settings
+	// are a sensitive HTTP-layer change and require the single-use re-auth
+	// consent token — the same gate the Integrations PUT enforces.
+	// RequireNotBypass (already in adminWrap) is a 503 dev-mode guard, NOT
+	// this consent check. The user is guaranteed in context here because the
+	// route is admin-wrapped. The token is consumed only after the body is
+	// validated and the #904 drift pre-check passed (spec step 3).
 	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
 	if !ok || user == nil {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
-	if !a.requireReAuth(w, r, user.Username) {
 		return
 	}
 
@@ -134,8 +149,10 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 
 	// At least one field must be present — a PUT with no recognized fields is
 	// a no-op that almost certainly indicates a client bug.
-	if req.MaxParallelAgents == nil && req.ToolsOnDemand == nil && req.GoalMaxRounds == nil {
-		jsonErr(w, http.StatusBadRequest, "at least one of max_parallel_agents, tools_on_demand or goal_max_rounds is required")
+	if req.MaxParallelAgents == nil && req.ToolsOnDemand == nil && req.GoalMaxRounds == nil &&
+		req.MaxToolIterations == nil {
+		jsonErr(w, http.StatusBadRequest,
+			"at least one of max_parallel_agents, tools_on_demand, goal_max_rounds or max_tool_iterations is required")
 		return
 	}
 
@@ -154,7 +171,22 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	// #904 step 1 (bound, well-formed confirmation) and step 2 (drift
+	// pre-check, before the token is consumed).
+	limitUpd, ok := parseMaxToolIterationsUpdate(w, &req)
+	if !ok {
+		return
+	}
+	if limitUpd != nil && !a.preCheckMaxToolIterationsDrift(w, limitUpd) {
+		return
+	}
+
+	if !a.requireReAuth(w, r, user.Username) {
+		return
+	}
+
+	changed := performanceChangedFields(&req)
+	outcome, werr := a.writePerformanceLocked(r.Context(), limitUpd, changed, func(m map[string]any) error {
 		// Partial update: only touch the fields that were provided.
 		if req.MaxParallelAgents != nil {
 			// Accept 0 as "reset to auto-detect"; values < 0 rejected above.
@@ -171,10 +203,26 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 			planning := ensureMap(m, "planning")
 			planning["goal_max_rounds"] = *req.GoalMaxRounds
 		}
+		if limitUpd != nil {
+			defaults := ensureMap(m, "agents", "defaults")
+			defaults["max_tool_iterations"] = limitUpd.value
+			// D6: an admin-set global ends the one-time env import for
+			// good — the retired env var must never overwrite it on a
+			// later boot, even when the import itself never ran.
+			defaults["max_tool_iterations_env_imported"] = true
+		}
 		return nil
-	}); err != nil {
-		jsonErr(w, http.StatusInternalServerError,
-			fmt.Sprintf("could not update performance settings: %v", err))
+	})
+	if werr != nil {
+		writeJSON(w, werr.status, werr.body)
+		return
+	}
+	if outcome.notApplied != nil {
+		// Saved but not applied: config.json (and any lowered agents) are
+		// written, the in-memory refresh failed — same answer as a failed
+		// registry reload below.
+		// writePerformanceLocked already marked the fields pending apply.
+		writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageRefresh, changed)
 		return
 	}
 
@@ -187,16 +235,121 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		te.ResizeDispatchSema(newEffective)
 	}
 
-	newCfg := a.agentLoop.GetConfig()
-	effective, capped := newCfg.Performance.EffectiveMaxParallelAgents()
-	configured := wireMaxParallelAgents(newCfg.Performance.MaxParallelAgents, effective)
-	toolsOnDemand := newCfg.Tools.Manifest.Compressed
-	goalMaxRounds := newCfg.Planning.EffectiveGoalMaxRounds()
-	jsonOK(w, gen.PerformanceSettings{
-		MaxParallelAgents:           &configured,
-		EffectiveMaxParallelAgents:  &effective,
-		MaxParallelAgentsConfigured: &capped,
-		ToolsOnDemand:               &toolsOnDemand,
-		GoalMaxRounds:               &goalMaxRounds,
+	// #904 step 7 / FR-005: every agent instance snapshots its limit at
+	// construction, so a changed global (or a lowered agent) needs a
+	// registry reload for the next turn to use it. A turn already running
+	// keeps the limit it started with (D18). While an earlier save is
+	// pending apply the registry is reloaded whatever this request changed:
+	// that is how a later PUT applies it. reloadAgentsAndConfirm also fails
+	// when the reload ran but its rebuild failed (gate round 3) — plain
+	// triggerReloadAndWait reports that as success.
+	if outcome.globalChanged || len(outcome.lowered) > 0 || a.pendingApply.isSet() {
+		if err := a.reloadAgentsAndConfirm(); err != nil {
+			a.pendingApply.mark(gen.PerformanceReloadFailedDetailsStageReload, changed,
+				a.reloadOutcome.startedCount(), a.reloadOutcome.configReadsCount())
+			writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageReload, changed)
+			return
+		}
+	}
+	// The refresh and (when needed) the registry reload both succeeded:
+	// everything saved up to this request's refresh is in force.
+	a.pendingApply.clearIfEpoch(outcome.appliedEpoch)
+
+	resp := performanceSettingsResponse(a.agentLoop.GetConfig())
+	resp.PendingApply = a.pendingApply.snapshot()
+	if len(outcome.lowered) > 0 {
+		lowered := outcome.lowered
+		resp.MaxToolIterationsLoweredAgents = &lowered
+	}
+	jsonOK(w, resp)
+}
+
+// writePerformanceReloadFailed answers a PUT whose writes are COMMITTED
+// (config.json and any lowered agents are on disk and audited) but not in
+// force: 500 with code performance_reload_failed and a
+// PerformanceReloadFailedError body, so the client can say "saved, not
+// applied yet" instead of "failed". stage says how far the apply got —
+// refresh: the in-memory config was NOT swapped (GET /performance still
+// shows the old values); reload: the in-memory config was swapped but the
+// agent registry reload failed. The lowered agents travel in
+// details.lowered_agents — GET /performance does not carry them
+// (PerformanceSettings.max_tool_iterations_lowered_agents is PUT-only), so
+// this response is the only place the summary survives.
+func writePerformanceReloadFailed(w http.ResponseWriter, outcome performanceWriteOutcome,
+	stage gen.PerformanceReloadFailedDetailsStage, changed []gen.PerformanceReloadFailedDetailsChangedFields,
+) {
+	// The cause is NOT logged here: its text can carry a credential
+	// reference name (CodeQL clear-text logging, PR #932). For the refresh
+	// stage, refreshConfigAndRewireServices logs its load, roster and
+	// credential causes itself; the reload stage's cause is logged by
+	// waitForReloadOutcome ("config reload failed": the reload could not
+	// start), waitForReload (timeout) or runReloadCycle ("Config reload
+	// failed": the rebuild failed).
+	logsafeError("rest: PUT /performance: settings saved but not applied",
+		"stage", string(stage), "lowered_agents", len(outcome.lowered))
+	lowered := outcome.lowered
+	if lowered == nil {
+		lowered = []gen.MaxToolIterationAgentChange{}
+	}
+	writeJSON(w, http.StatusInternalServerError, gen.PerformanceReloadFailedError{
+		Error: performanceReloadFailedMessage(stage, changed),
+		Code:  performanceReloadFailedCode,
+		Details: gen.PerformanceReloadFailedDetails{
+			Stage:         stage,
+			ChangedFields: changed,
+			LoweredAgents: lowered,
+		},
 	})
+}
+
+// performanceChangedFields lists, in contract enum order, the Performance
+// fields present in the PUT body — the settings this request changed.
+func performanceChangedFields(req *gen.PerformanceSettingsUpdate) []gen.PerformanceReloadFailedDetailsChangedFields {
+	out := make([]gen.PerformanceReloadFailedDetailsChangedFields, 0, 4)
+	if req.MaxParallelAgents != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents)
+	}
+	if req.ToolsOnDemand != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand)
+	}
+	if req.GoalMaxRounds != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds)
+	}
+	if req.MaxToolIterations != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations)
+	}
+	return out
+}
+
+// performanceSettingLabels names each Performance field in user-facing text.
+var performanceSettingLabels = map[gen.PerformanceReloadFailedDetailsChangedFields]string{
+	gen.PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents: "the parallel-agent limit",
+	gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand:     "tools on demand",
+	gen.PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds:     "the goal round budget",
+	gen.PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations: "the tool-iteration limit",
+}
+
+// performanceReloadFailedMessage builds the human-readable error from the
+// fields this request actually changed and the stage the apply reached.
+func performanceReloadFailedMessage(stage gen.PerformanceReloadFailedDetailsStage,
+	changed []gen.PerformanceReloadFailedDetailsChangedFields,
+) string {
+	names := make([]string, 0, len(changed))
+	for _, f := range changed {
+		names = append(names, performanceSettingLabels[f])
+	}
+	what := "the new performance settings"
+	switch len(names) {
+	case 0:
+	case 1:
+		what = names[0]
+	default:
+		what = strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	}
+	if stage == gen.PerformanceReloadFailedDetailsStageRefresh {
+		return "performance settings saved but not applied: the running configuration could not be refreshed; " +
+			what + " will apply after the next reload or restart"
+	}
+	return "performance settings saved but the agent reload failed; " +
+		what + " will apply to agents after the next reload or restart"
 }

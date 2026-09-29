@@ -59,7 +59,15 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 		if err := agentmutation.ValidateFields(*a, fields); err != nil {
 			return err
 		}
-		return applyAgentToolArgs(a, args, known, inv)
+		// #904 D10/D15: read the global in force INSIDE the closure, under
+		// the agent store's per-entity lock, so the check runs against the
+		// config current at write time rather than at call start. Residual
+		// window: this path does not hold the gateway's configMu, so a
+		// PUT /performance lowering that commits between this read and the
+		// record write does not see this value — the agent then ends up
+		// above the new global, which the resolver caps and flags (D1).
+		// Never unbounded, and visible on the profile.
+		return applyAgentToolArgs(a, args, known, inv, t.deps.agentDefaults())
 	}, soul)
 	if mutateErr != nil {
 		return t.mutateErrorResult(id, result, mutateErr)

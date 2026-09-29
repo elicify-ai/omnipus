@@ -337,10 +337,12 @@ func (nai *newAgentInstance) registerTools() {
 	registerKnowledgeTools(nai.toolsRegistry)
 
 	// grep (ADR-081 / docs/internal/specs/unified-search-and-grep-spec.md
-	// FR-008/FR-019/FR-020): recursive file NAME and TEXT-CONTENT search
-	// over the calling agent's OWN workspace root and its mounts only — no
-	// workspace_id argument exists, so another agent's or workspace's files
-	// are never reachable (FR-020, US-3 AS-7). Registered unconditionally
+	// FR-008/FR-019, as amended by #920 read-boundary-consistency-spec.md):
+	// recursive file NAME and TEXT-CONTENT search. With no `path` it covers
+	// the calling agent's own workspace root and its mounts; a `path` is
+	// admitted or refused by the same single read decision read_file uses
+	// (FR-001), so the secret set — including another agent's or
+	// workspace's files — is never reachable. Registered unconditionally
 	// for EVERY agent, exactly like request_mount/list_mounts and the
 	// knowledge tools directly above, and for the identical Constraint #6
 	// reason: registration is not permission. The founder ruling (spec
@@ -416,20 +418,12 @@ func (nai *newAgentInstance) prepareIdentity() {
 
 // resolveRuntimeLimits resolves iteration, sampling, and thinking-level settings.
 func (nai *newAgentInstance) resolveRuntimeLimits() {
-	// Per-turn tool-round cap: per-agent override wins, then the global
-	// default, then 200. The per-agent field was persisted+displayed but never
-	// applied before 2026-07-03 (P0) — the runtime silently ran everything on
-	// the old emergency fallback of 20.
-	nai.maxIter = 0
-	if nai.agentCfg != nil {
-		nai.maxIter = nai.agentCfg.MaxToolIterations
-	}
-	if nai.maxIter <= 0 {
-		nai.maxIter = nai.defaults.MaxToolIterations
-	}
-	if nai.maxIter <= 0 {
-		nai.maxIter = 200
-	}
+	// Per-turn tool-round cap (#904): the single resolver —
+	// min(global in force, agent's own value), the global when the agent has
+	// none. Snapshotted onto AgentInstance.MaxIterations here; a running turn
+	// keeps the instance it started with, so a reload only affects the next
+	// turn (D18).
+	nai.maxIter = config.ResolveMaxToolIterations(nai.defaults, nai.agentCfg).Effective
 
 	// Sampling params: per-agent override (agentCfg.ModelParams) wins, then
 	// the global default, then the hardcoded fallback — same three-rung
