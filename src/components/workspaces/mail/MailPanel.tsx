@@ -81,6 +81,10 @@ function mailErrorCode(err: unknown): string {
   return 'unknown_error'
 }
 
+function isMailConnectionFailure(errorClass: string | null): boolean {
+  return errorClass === 'connect_refused' || errorClass === 'timeout' || errorClass === 'dns' || errorClass === 'tls'
+}
+
 /** File → base64 (MC-32 attach path) — chunked btoa to dodge call-stack
  * limits on large files. */
 function fileToBase64(file: File): Promise<string> {
@@ -435,6 +439,12 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
   }
 
   const replyTarget = detail === null ? null : { from: detail.from ?? '', subject: detail.subject ?? '', messageId: detail.message_id ?? '' }
+  const folderErrorCode = foldersQuery.isError ? mailErrorCode(foldersQuery.error) : null
+  // A 503 backoff is a retry posture, not the IMAP cause. Use the selected
+  // mailbox's saved watcher class when it is available; never borrow another mailbox's class.
+  const folderErrorClass = folderErrorCode === 'backoff' && watcherItem?.agent_id === agentId
+    ? watcherItem.last_error_class ?? folderErrorCode
+    : folderErrorCode
 
   return (
     <div data-testid="mail-panel" className="flex h-full min-h-0 w-full flex-col bg-[var(--color-surface-0)]">
@@ -483,7 +493,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
           <p className="min-w-0 flex-1 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
             {watcherItem.last_error_class === null
               ? 'Mail watcher is retrying'
-              : `Mail watcher error: ${watcherItem.last_error_class}`}
+              : isMailConnectionFailure(watcherItem.last_error_class)
+                ? `Can't connect to this mailbox · ${watcherItem.last_error_class}`
+                : `Mail watcher error: ${watcherItem.last_error_class}`}
             {watcherItem.next_attempt_at !== null && (
               <> — retrying at {formatMailTime(watcherItem.next_attempt_at)}</>
             )}
@@ -538,7 +550,10 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
                 className="flex flex-1 flex-col items-center justify-center gap-[var(--space-2)] p-[var(--space-4)]"
               >
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-                  {mailErrorCode(foldersQuery.error)}
+                  {isMailConnectionFailure(folderErrorClass) ? "Can't connect to this mailbox" : 'Could not load this mailbox'}
+                </p>
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                  Error class: {folderErrorClass}
                 </p>
                 <Button
                   variant="outline"
