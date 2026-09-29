@@ -4,11 +4,27 @@
 package knowledge
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 )
+
+// ViewMoveRetryTrackedNestedKBError names collection-relative nested roots
+// whose trusted view membership prevents a pending journal from replaying.
+type ViewMoveRetryTrackedNestedKBError struct {
+	Paths []string
+	Cause error
+}
+
+func (e *ViewMoveRetryTrackedNestedKBError) Error() string {
+	return fmt.Sprintf("knowledge: tracked nested knowledge base blocks Retry at %q: %v", e.Paths, e.Cause)
+}
+
+func (e *ViewMoveRetryTrackedNestedKBError) Unwrap() error { return e.Cause }
 
 // withRetryNestedViewMembershipRoots runs the entire retry, including journal
 // recovery, while holding the already-acquired enclosing lock and every nested
@@ -35,8 +51,19 @@ func withRetryNestedViewMembershipRoots(home string, renamer *Renamer, req Renam
 		}
 		for _, nested := range roots[1:] {
 			if err := members[nested].RefuseTrackedRootMove(); err != nil {
+				cause := prefixNestedTrackedMove(err, mainRoot, nested)
+				rel, relErr := filepath.Rel(mainRoot, nested)
+				if relErr != nil {
+					return fmt.Errorf("%w for %s: locate nested knowledge base: %w",
+						ErrViewMoveRetryPreflight, id, errors.Join(cause, relErr))
+				}
+				if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					return fmt.Errorf("%w for %s: nested knowledge base is outside the collection: %w",
+						ErrViewMoveRetryPreflight, id, cause)
+				}
 				return fmt.Errorf("%w for %s: nested knowledge base cannot move: %w",
-					ErrViewMoveRetryPreflight, id, prefixNestedTrackedMove(err, mainRoot, nested))
+					ErrViewMoveRetryPreflight, id, &ViewMoveRetryTrackedNestedKBError{
+						Paths: []string{filepath.ToSlash(rel)}, Cause: cause})
 			}
 		}
 		return replay()

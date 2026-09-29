@@ -87,6 +87,7 @@ func (a *restAPI) handleLibraryRetryMove(w http.ResponseWriter, r *http.Request,
 
 func mapLibraryRetryMoveErr(w http.ResponseWriter, err error, workspaceID, id string, paths []string) {
 	var timeout *knowledge.LockTimeoutError
+	var nested *knowledge.ViewMoveRetryTrackedNestedKBError
 	var incomplete *knowledge.ViewMembershipMoveIncompleteError
 	body := gen.RetryMoveError{PendingMoveId: id}
 	status := http.StatusConflict
@@ -97,6 +98,10 @@ func mapLibraryRetryMoveErr(w http.ResponseWriter, err error, workspaceID, id st
 		status, body.Code, body.Error = http.StatusGone, gen.RetryMoveErrorCodeRetryExpired, "retry receipt expired"
 	case errors.As(err, &timeout):
 		status, body.Code, body.Error = http.StatusServiceUnavailable, gen.RetryMoveErrorCodeRetryLocked, "collection is locked; retry later"
+	case errors.As(err, &nested) && len(nested.Paths) > 0:
+		body.Code = gen.RetryMoveErrorCodeRetryPreflightFailed
+		body.Error = "move cannot be replayed safely: " + strings.Join(nested.Paths, ", ") + " is a nested knowledge base with tracked views"
+		body.Paths = &nested.Paths
 	case errors.Is(err, knowledge.ErrViewMoveRetryPreflight):
 		body.Code, body.Error = gen.RetryMoveErrorCodeRetryPreflightFailed, "move cannot be replayed safely; the paths may have changed"
 	case errors.Is(err, knowledge.ErrViewMoveIdentityMismatch):
@@ -109,7 +114,7 @@ func mapLibraryRetryMoveErr(w http.ResponseWriter, err error, workspaceID, id st
 		jsonErr(w, http.StatusInternalServerError, "Retry failed; authority could not be confirmed")
 		return
 	}
-	if status == http.StatusConflict && len(paths) != 0 {
+	if status == http.StatusConflict && body.Paths == nil && len(paths) != 0 {
 		body.Paths = &paths
 	}
 	writeJSON(w, status, body)

@@ -114,6 +114,7 @@ func (t *RestructureTool) execRetryMove(ctx context.Context, args map[string]any
 // failures go to the server log; they never become a cross-workspace oracle.
 func (t *RestructureTool) retryMoveError(target mutationTarget, id string, relPaths, paths []string, mapped bool, err error) *tools.ToolResult {
 	var lockErr *LockTimeoutError
+	var nested *ViewMoveRetryTrackedNestedKBError
 	var incomplete *ViewMembershipMoveIncompleteError
 	code, message := "", "authority could not be confirmed; check state before retrying"
 	switch {
@@ -123,6 +124,10 @@ func (t *RestructureTool) retryMoveError(target mutationTarget, id string, relPa
 		code, message = "retry_expired", "retry receipt expired"
 	case errors.As(err, &lockErr):
 		code, message = "retry_locked", "collection is locked; retry later"
+	case errors.As(err, &nested) && len(nested.Paths) > 0:
+		code = "retry_preflight_failed"
+		message = "move cannot be replayed safely: " + strings.Join(nested.Paths, ", ") + " is a nested knowledge base with tracked views"
+		paths = nested.Paths
 	case errors.Is(err, ErrViewMoveRetryPreflight):
 		code, message = "retry_preflight_failed", "move cannot be replayed safely; the paths may have changed"
 	case errors.Is(err, ErrViewMoveIdentityMismatch):
