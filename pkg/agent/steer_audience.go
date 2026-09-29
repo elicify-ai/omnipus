@@ -376,11 +376,24 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	if classErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: classify message: %w", classErr)
 	}
+	// Q1=A (#984 follow-up): the producer's explicit suppression overrides the
+	// class's wake-eligibility. A suppressed event keeps EVERY other property
+	// of a wake-eligible delivery — frames, dedupe fall-through semantics,
+	// ack tracking — except the wake itself; see UpwardEvent.SuppressWake.
+	wakeEligible := class.WakeEligible && !event.SuppressWake
 	if matchErr := validateOutcomeMessage(event.Outcome, class); matchErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: %w", matchErr)
 	}
 	if isTerminalOutcome(event.Outcome) {
-		id := fmt.Sprintf("%s:%d:final", event.ChildSessionID, childRec.Generation)
+		generation := childRec.Generation
+		if event.Generation != 0 {
+			if event.Generation != childRec.Generation {
+				return steer.Delivery{}, fmt.Errorf("steer: deliver: child %q generation changed from %d to %d",
+					event.ChildSessionID, event.Generation, childRec.Generation)
+			}
+			generation = event.Generation
+		}
+		id := fmt.Sprintf("%s:%d:final", event.ChildSessionID, generation)
 		msg, err = withDeterministicMessageID(msg, id)
 		if err != nil {
 			return steer.Delivery{}, fmt.Errorf("steer: deliver: stamp deterministic id: %w", err)
@@ -414,7 +427,7 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	// deliverSubagentMessage/State/End's frame ids are deterministic and
 	// AppendTranscriptStrict rejects (id-dedupes) a repeat write.
 	if res.Deduped {
-		shortCircuit := !class.WakeEligible
+		shortCircuit := !wakeEligible
 		if !shortCircuit {
 			acked, ackedErr := deliverEntryIsAcked(inbox, ownerKey, event.ChildSessionID, res.MessageID)
 			if ackedErr != nil {
@@ -441,7 +454,7 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		al.deliverSubagentEnd(ownerKey, childRec, event.Outcome)
 	}
 
-	if !class.WakeEligible {
+	if !wakeEligible {
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
 

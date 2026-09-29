@@ -1090,11 +1090,16 @@ func (stg *setupAndStartServicesState) startPlanEngine() (*services, bool, error
 			planEngine.SetSnapshotMaxBytes(smb)
 		}
 		// session.failed hook: best-effort recovery signal. The plan engine's
-		// own tick loop re-arms idle settlement after Start; this hook is where
+		// own tick loop re-arms idle recovery after Start; this hook is where
 		// a future event-bus emission of session.failed would plug in.
 		planEngine.SetSessionFailedHook(func(sessionID, reason string) {
 			slog.Info("gateway: boot sweep: session.failed", "session_id", sessionID, "reason", reason)
 		})
+		// F3 (#984 follow-up): the boot sweep's pair-end for steered records —
+		// a steered session swept to failed(interrupted) ends its session-owned
+		// goal with it, the same seam SteerBootRecovery.EndSessionGoal wires
+		// (wireSteerDeps). Steered-only by construction in the sweep.
+		planEngine.SetSteeredGoalEndHook(stg.agentLoop.EndSessionOwnedGoalOnTerminal)
 		// These two exact call sites supply the real /goal and /loop
 		// active-loop counters (documented boot-ordering requirement on
 		// PlanEngine.RegisterActiveCounter's doc comment); "loop" counts

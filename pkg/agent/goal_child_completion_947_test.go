@@ -148,15 +148,39 @@ func TestGoalChildCompletion947_MetArmCompletesChildAndDeliversHandback(t *testi
 			got.State, got.Terminal())
 	}
 
-	messages, _, _, err := inbox.Drain(parentMeta.ID, rec.SessionID, "", 10)
+	// Q1=A (founder, #984 follow-up): the goal_status verdict entry is
+	// ACKED at hand-back time, so a Drain (unacked entries only) no longer
+	// shows it. Read the RAW entries and fold the ack lines — the two-entry
+	// delivery contract stands (verdict first, then handback), only its
+	// visibility oracle changes.
+	entries, err := inbox.Entries(parentMeta.ID)
 	if err != nil {
-		t.Fatalf("Drain(parent): %v", err)
+		t.Fatalf("Entries(parent): %v", err)
 	}
-	if len(messages) != 2 {
-		t.Errorf("parent messages after met verdict = %d, want 2 (goal_status verdict + "+
-			"completion handback); the met arm delivers the verdict but strands the handback", len(messages))
+	messages := make([]generated.SessionMessage, 0, len(entries))
+	acked := make(map[string]bool)
+	var entryKinds []string
+	for _, entry := range entries {
+		if entry.Kind == session.InboxEntryAck {
+			for _, id := range entry.AckedIDs {
+				acked[id] = true
+			}
+			continue
+		}
+		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
+			continue
+		}
+		if cls, cerr := session.ClassifySessionMessage(*entry.Message); cerr == nil {
+			entryKinds = append(entryKinds, cls.Kind)
+		}
+		messages = append(messages, *entry.Message)
+	}
+	if len(messages) != 2 || len(entryKinds) != 2 || entryKinds[0] != "goal_status" || entryKinds[1] != "handback" {
+		t.Errorf("parent entries after met verdict = %d %v, want [goal_status handback] — "+
+			"the met arm delivers the verdict but strands the handback", len(messages), entryKinds)
 	}
 	var sawStatus, sawHandback bool
+	var verdictID, handbackID string
 	for _, msg := range messages {
 		// Kind-gate FIRST: the generated As* accessors are lenient (a
 		// goal_status message carries the shared message_id field, so
@@ -173,6 +197,7 @@ func TestGoalChildCompletion947_MetArmCompletesChildAndDeliversHandback(t *testi
 				t.Fatalf("AsSessionMessageGoalStatus: %v", aerr)
 			}
 			sawStatus = true
+			verdictID = v.MessageId
 			if v.Condition != generated.SessionMessageGoalStatusConditionMet {
 				t.Errorf("goal_status condition = %q, want met", v.Condition)
 			}
@@ -185,6 +210,7 @@ func TestGoalChildCompletion947_MetArmCompletesChildAndDeliversHandback(t *testi
 				t.Fatalf("AsSessionMessageHandback: %v", herr)
 			}
 			sawHandback = true
+			handbackID = v.MessageId
 			wantID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
 			if v.MessageId != wantID {
 				t.Errorf("handback MessageId = %q, want %q (deterministic <child>:<gen>:final)", v.MessageId, wantID)
@@ -202,6 +228,14 @@ func TestGoalChildCompletion947_MetArmCompletesChildAndDeliversHandback(t *testi
 	}
 	if !sawHandback {
 		t.Errorf("no completion handback reached the parent inbox — the parent waits on a worker whose turn already ended")
+	}
+	// Q1=A ack state: the verdict is consumed at hand-back so boot recovery
+	// can never re-wake it; the handback stays unacked for the parent.
+	if !acked[verdictID] {
+		t.Errorf("verdict entry %q must be acked at hand-back time (Q1=A) — an unacked verdict is re-delivered and re-woken by boot recovery", verdictID)
+	}
+	if acked[handbackID] {
+		t.Errorf("handback %q must stay unacked for the parent to consume", handbackID)
 	}
 }
 
