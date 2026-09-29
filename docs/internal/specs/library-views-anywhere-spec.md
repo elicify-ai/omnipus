@@ -2256,6 +2256,12 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   reason; the Library UI shows it as a message; agent move/rename paths (`knowledge_restructure`
   rename/move — corrected 2026-09-29: `knowledge_configure` refuses rename/move and redirects to
   `knowledge_restructure`, see `knowledge_configure.go::vaultConfigureCascadeOps`) return the same refusal. Nothing is moved, copied, released or re-keyed. Tests 74, 75, 76.
+  **Clarification (team-lead, 2026-09-29, of the founder's "refuse"):** the refusal applies to any
+  MOVE of a tracked derived `.view`, or of a `.base` with tracked views, OUT of its source collection —
+  to another knowledge base OR to ordinary (non-knowledge-base) workspace storage. COPIES out stay
+  allowed: the copy has `derived_from` stripped (the D-DUPLICATE shared strip) and carries no
+  authority. Tests 74-76 plus 79 (move to plain workspace storage refused) and 80 (copy out allowed,
+  marker stripped, source untouched).
 - **FR-VA-032 *(founder-direction amendment, 2026-09-29, architect ruling Q-B = B)***: When an
   Omnipus-mediated move fails after the membership revocation (revoke-before-rename: preflight → persist
   revocation → rename → markers → enroll; see #1042 for full crash atomicity), the visible "incomplete"
@@ -2428,7 +2434,7 @@ registration/wiring, not the test suite).
 | FR-VA-026 | — (cross-cutting, OBS-003; **corrected in round 2, R2-MIN-007 — round 1 wrongly mapped this to test 10, a Library-listing test with no path-in-output assertion**) | — | 68 |
 | FR-VA-027 | — (cross-cutting, R2-MAJ-006) | — | 59, 60 |
 | FR-VA-030 | US-5, US-6 | founder-direction amendment 2026-09-29 (#1013) | 73 |
-| FR-VA-031 | US-2, US-3 | founder-direction amendment 2026-09-29 (architect Q-A) | 74, 75, 76 |
+| FR-VA-031 | US-2, US-3 | founder-direction amendment 2026-09-29 (architect Q-A) | 74, 75, 76, 79, 80 |
 | FR-VA-032 | US-2 | founder-direction amendment 2026-09-29 (architect Q-B) | 77, 78 |
 
 Every FR appears above. Remaining gaps between the TDD plan's numbered tests and a scenario are
