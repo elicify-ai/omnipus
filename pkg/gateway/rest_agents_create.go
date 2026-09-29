@@ -501,13 +501,13 @@ func (pap *restAPICreateAgentPrepareAgent) buildExecutor(wireType string, execut
 	return false
 }
 
-// validateAndBuildConfig validates shared fields and builds the base persistent agent config.
-func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool) {
+// validateCreateFields validates the incoming shared agent fields before constructing a config.
+func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, string, string, bool) {
 	// Referential validation: reject unknown skill IDs before doing any work.
 	if pap.skills != nil && len(*pap.skills) > 0 {
 		if errMsg := pap.cra.a.validateSkillIDs(*pap.skills); errMsg != "" {
 			jsonErr(pap.cra.w, http.StatusBadRequest, errMsg)
-			return true, true
+			return "", "", "", true
 		}
 	}
 	descTrimmed := ""
@@ -519,7 +519,7 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	// description cannot be routed to by the orchestrator.
 	if pap.createType == config.AgentTypeWorker && descTrimmed == "" {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
-		return true, true
+		return "", "", "", true
 	}
 	// O12.1 — voice is Main-only (form matrix row 13): no runtime check is
 	// needed here any more. AgentCreateRequestSubagent / …Subagent3p
@@ -533,7 +533,7 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	// has no fallback_models property (fallbackModels stays nil for that variant).
 	if pap.fallbackModels != nil && len(*pap.fallbackModels) > 2 {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
-		return true, true
+		return "", "", "", true
 	}
 	// model_params.top_p (T2): removed from the wire entirely — see
 	// agentModelParamsInput's doc comment. No explicit rejection is needed
@@ -547,7 +547,7 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	// soft-bypass). Backend trims before validation.
 	if pap.cra.soul == "" || strings.TrimSpace(pap.cra.soul) == "" {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "soul is required (whitespace-only is rejected as minLength violation)")
-		return true, true
+		return "", "", "", true
 	}
 	colorVal := ""
 	if pap.color != nil {
@@ -561,12 +561,21 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	if colorVal != "" {
 		if matched, _ := regexp.MatchString(`^#[0-9A-Fa-f]{6}$`, colorVal); !matched {
 			jsonErr(pap.cra.w, http.StatusBadRequest, "color must be a valid hex code (e.g. #D4AF37)")
-			return true, true
+			return "", "", "", true
 		}
 	}
 	// icon maxLength:50 (spec §4.4).
 	if len(iconVal) > 50 {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "icon exceeds maxLength: 50")
+		return "", "", "", true
+	}
+	return descTrimmed, colorVal, iconVal, false
+}
+
+// validateAndBuildConfig validates shared fields and builds the base persistent agent config.
+func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool) {
+	descTrimmed, colorVal, iconVal, stop := pap.validateCreateFields()
+	if stop {
 		return true, true
 	}
 	// ac is the in-memory config record. Locked is left at its zero value
