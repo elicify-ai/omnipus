@@ -671,14 +671,39 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
             )}
             {detail !== null && detailQuery.isSuccess && (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
-                  <p className="min-w-0 flex-1 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-                    From {detail.from ?? 'unknown'} · {formatMailDate(detail.date)}
-                  </p>
+                <div className="flex shrink-0 items-start gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
+                  {detail.is_draft !== true && folder !== 'sent' ? (
+                    <div className="min-w-0 flex-1">
+                      <h3 className="break-words text-[length:var(--type-section-title-size)] font-[var(--font-weight-medium)] text-[var(--color-secondary)]">
+                        {detail.subject || '(No subject)'}
+                      </h3>
+                      <p className="mt-[var(--space-1)] break-words text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                        From: {detail.from_name ? `${detail.from_name} · ` : ''}{detail.from || 'unknown'}
+                      </p>
+                      <p className="break-words text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                        To: {detail.to.length > 0 ? detail.to.join(', ') : 'No recipient'}
+                      </p>
+                      {detail.cc.length > 0 && (
+                        <p className="break-words text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                          Cc: {detail.cc.join(', ')}
+                        </p>
+                      )}
+                      {formatMailDate(detail.date) && (
+                        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                          Date: {formatMailDate(detail.date)}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="min-w-0 flex-1 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                      From {detail.from ?? 'unknown'} · {formatMailDate(detail.date)}
+                    </p>
+                  )}
                   {folder !== 'drafts' && (
                     <Button
                       variant="secondary"
                       size="sm"
+                      className="shrink-0"
                       onClick={() => setCompose({ mode: 'reply' })}
                     >
                       Reply
