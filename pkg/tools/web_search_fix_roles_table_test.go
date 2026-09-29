@@ -91,7 +91,7 @@ func specRoles(dState, fState string, ddgUsable bool) (fb string, auto bool, ign
 func TestFixK6_RolesCrossProduct(t *testing.T) {
 	dStates := []string{"usable", "unusable", "unknown", "absent"}
 	fStates := []string{"absent", "none", "same", "other-usable", "other-unusable", "unknown"}
-	allIDs := []string{"tavily", "ddg", "brave", "perplexity", "glm", "exa", "searxng", "baidu"}
+	allIDs := []string{"tavily", "ddg", "brave", "perplexity", "glm", "exa", "baidu"}
 
 	for _, dState := range dStates {
 		for _, fState := range fStates {
