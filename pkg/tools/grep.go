@@ -334,7 +334,7 @@ func defaultGrepRoots(policy fspolicy.FSPolicy, mounts []workspace.Mount, opened
 		return grepRootSet{}, fmt.Errorf("cannot open your workspace root: %w", wErr)
 	}
 	*opened = append(*opened, wr)
-	set.add(filegrep.Root{Name: "", FS: guardGrepRoot(policy.WorkDir, wr.FS(), policy)}, grepRootRealpath(policy.WorkDir))
+	set.add(filegrep.Root{Name: "", FS: guardGrepRoot(policy.WorkDir, wr.FS(), wr, policy)}, grepRootRealpath(policy.WorkDir))
 	for _, m := range mounts {
 		mr, mErr := os.OpenRoot(m.HostPath)
 		if mErr != nil {
@@ -342,7 +342,7 @@ func defaultGrepRoots(policy fspolicy.FSPolicy, mounts []workspace.Mount, opened
 			continue
 		}
 		*opened = append(*opened, mr)
-		set.add(filegrep.Root{Name: m.Name, FS: guardGrepRoot(m.HostPath, mr.FS(), policy)}, grepRootRealpath(m.HostPath))
+		set.add(filegrep.Root{Name: m.Name, FS: guardGrepRoot(m.HostPath, mr.FS(), mr, policy)}, grepRootRealpath(m.HostPath))
 	}
 	return set, nil
 }
@@ -352,6 +352,12 @@ func defaultGrepRoots(policy fspolicy.FSPolicy, mounts []workspace.Mount, opened
 func (t *GrepTool) mountScopeRoot(m workspace.Mount, rest string, policy fspolicy.FSPolicy, opened *[]*os.Root) (grepRootSet, error) {
 	var set grepRootSet
 	realPath := grepRootRealpath(filepath.Join(m.HostPath, filepath.FromSlash(rest)))
+	expected, identityErr := grepPreOpenIdentity(m.HostPath)
+	if identityErr != nil {
+		set.add(filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: identityErr}}, realPath)
+		return set, nil //nolint:nilerr // error is carried visibly by the unreachableRootFS root
+	}
+	runGrepPreOpenRootHook(m.HostPath)
 	mr, mErr := os.OpenRoot(m.HostPath)
 	if mErr != nil {
 		// FR-021: a dead mount is root_lost, not a request error — same
@@ -362,8 +368,12 @@ func (t *GrepTool) mountScopeRoot(m workspace.Mount, rest string, policy fspolic
 		return set, nil //nolint:nilerr // see comment above: error is packed into the unreachableRootFS root
 	}
 	*opened = append(*opened, mr)
+	if !grepOpenedRootMatches(mr, expected) {
+		set.add(filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: fmt.Errorf("mount %q changed before opening", m.Name)}}, realPath)
+		return set, nil
+	}
 	if rest == "" {
-		set.add(filegrep.Root{Name: m.Name, FS: guardGrepRoot(m.HostPath, mr.FS(), policy)}, realPath)
+		set.add(filegrep.Root{Name: m.Name, FS: guardGrepRoot(m.HostPath, mr.FS(), mr, policy)}, realPath)
 		return set, nil
 	}
 	r, n, rErr := t.resolveScopedRoot(mr, m.HostPath, rest, m.Name, fmt.Sprintf("mount %q", m.Name), policy, opened)
@@ -461,7 +471,7 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 	// Ancestor .gitignore/.ignore files are read through the container,
 	// which no grepGateFS covers; regularOnlyFS keeps a pipe planted there
 	// from blocking the call (D13).
-	ancestorFS := regularOnlyFS{fsys: container.FS(), root: containerHostPath}
+	ancestorFS := regularOnlyFS{bound: container}
 
 	switch {
 	case info.IsDir():
@@ -476,7 +486,7 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 		*opened = append(*opened, sub)
 		anchor := filepath.Join(containerHostPath, filepath.FromSlash(subPath))
 		return filegrep.Root{
-			Name: joinGrepName(namePrefix, subPath), FS: guardGrepRoot(anchor, sub.FS(), policy),
+			Name: joinGrepName(namePrefix, subPath), FS: guardGrepRoot(anchor, sub.FS(), sub, policy),
 			ScopePrefix: subPath, AncestorIgnore: ancestor,
 		}, unreadable, nil
 
@@ -508,7 +518,7 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 		}
 
 		anchor := filepath.Join(containerHostPath, filepath.FromSlash(parentRel))
-		fsys := guardGrepRoot(anchor, singleEntryFS{fsys: parent.FS(), name: base}, policy)
+		fsys := guardGrepRoot(anchor, singleEntryFS{fsys: parent.FS(), name: base}, parent, policy)
 		return filegrep.Root{
 			Name: name, FS: fsys, ScopePrefix: scopePrefix, AncestorIgnore: ancestor,
 		}, unreadable, nil

@@ -1388,6 +1388,8 @@ regressions.
 | 6 | per-file content cap | 4 MiB | S-1.10 |
 | 7 | tool output cap | 64,000 characters | S-1.10 |
 
+> **DS-5 correction (2026-09-29):** The existing engine also limits the *total content bytes scanned per search* to **256 MiB** (`pkg/filegrep/filegrep.go::DefaultMaxBytes`, applied and clamped by `Limits.Normalize`). The seven-row list omitted this existing budget; D7 keeps it unchanged. This note corrects the inventory, not the limit.
+
 ### Regression Test Requirements
 
 | Existing Behaviour | Existing Test | New Regression Test Needed | Notes |
