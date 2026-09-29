@@ -2325,10 +2325,24 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   lives outside it. Test 85 (revoke persisted → trash fails → re-trash succeeds;
   no authority remains at any point).
 - **FR-VA-037 *(team-lead ruling, 2026-09-29)***: Incomplete discovery (an unreadable subtree, SkipUnreadable)
-  MUST NOT retire any member of the record — the member is kept and a visible warning is shown. Test 86.
+  MUST NOT retire any member of the record — the member is kept. **Correction (team-lead, 2026-09-29):**
+  the kept-member notice is a server `Warn` log only (naming the collection and the skipped subtree), NOT a
+  user-visible warning; the unreadable subfolder itself is still reported on every surface under
+  FR-VA-025 — that visible report is unchanged. Test 86 (member kept after an incomplete walk; the `Warn`
+  log line is emitted).
 - **FR-VA-038 *(team-lead ruling, 2026-09-29)***: The membership record is guarded by a dedicated exact-key
   membership lock (not the striped note-write locks, which were proven to self-deadlock on a collision).
   Test 87 (regression: two keys that collide in the striped table do not deadlock).
+- **FR-VA-039 *(team-lead ruling, 2026-09-29)***: Permanently deleting a knowledge base's ROOT folder (the
+  plain `root.Delete` path) and permanently deleting its marker folder (`.obsidian` / `.omnipus-vault` —
+  KB demotion: the folder stops being a knowledge base) MUST both remove that collection's outside-vault
+  membership record (`view_membership.json` entry), including its pending moves and completed receipts,
+  under the dedicated membership lock (FR-VA-038). If that removal fails, the delete/demotion itself
+  fails with a visible error; it never succeeds while leaving the record behind. Tests 88 (delete the KB
+  root, recreate a knowledge base at the SAME path, plant a view with the same `name` and `derived_from`:
+  it gets NO authority — not derived, not read-only, no managed rewrite) and 89 (same, via marker-folder
+  deletion and re-creation of the marker; plus: an injected record-removal failure makes the delete fail
+  visibly and leaves the root/marker in place).
 
 ## 13. Success Criteria
 
@@ -2481,6 +2495,7 @@ registration/wiring, not the test suite).
 | FR-VA-036 | US-2, US-3 | team-lead ruling 2026-09-29 | 85 |
 | FR-VA-037 | US-1 | team-lead ruling 2026-09-29 | 86 |
 | FR-VA-038 | US-2 | team-lead ruling 2026-09-29 | 87 |
+| FR-VA-039 | US-2, US-3 | team-lead ruling 2026-09-29 | 88, 89 |
 
 Every FR appears above. Remaining gaps between the TDD plan's numbered tests and a scenario are
 flagged rather than silently left implicit, per "no false success": the implementing lead adds the
