@@ -129,7 +129,7 @@ func (a *restAPI) handleMailSendInner(w http.ResponseWriter, r *http.Request, wo
 			ct = "application/octet-stream"
 		}
 		in.Attachments = append(in.Attachments, email.Attachment{
-			Name:        at.Filename,
+			Name:        email.SanitizeAttachmentName(at.Filename),
 			ContentType: ct,
 			Data:        at.DataBase64,
 		})
