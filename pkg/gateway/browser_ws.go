@@ -1251,10 +1251,10 @@ func (h *BrowserWSHandler) readLoop(
 			// busy page — LiveView.SetViewport holds viewportMu across
 			// several CDP round trips by design — during which this
 			// connection could read nothing at all.
-			h.dispatchViewport(wc, &state, viewerID, userID, data)
+			h.dispatchViewport(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserDetach):
 			state.commands.discard()
-			h.handleDetach(wc, &state, viewerID, userID, data)
+			h.handleDetach(wc, &state, viewerID, userID)
 			// Unconditional for the same reason as readLoop's own cleanup
 			// defer above: an in-flight background offer (dispatchWebRTCOffer)
 			// may not have committed to state.webrtc yet, but this explicit
@@ -1337,7 +1337,7 @@ func (h *BrowserWSHandler) dispatchAttach(
 func (h *BrowserWSHandler) dispatchViewport(
 	wc *browserWSConn,
 	state *browserConnState,
-	viewerID, userID string,
+	viewerID string,
 	data []byte,
 ) {
 	now := time.Now()
@@ -1355,7 +1355,7 @@ func (h *BrowserWSHandler) dispatchViewport(
 		if err != nil {
 			return
 		}
-		h.handleViewportContext(attachment.ctx, wc, state, attachment, viewerID, userID, data)
+		h.handleViewportContext(attachment.ctx, wc, state, attachment, viewerID, data)
 	})
 }
 
@@ -1438,19 +1438,6 @@ func (h *BrowserWSHandler) handleAttach(
 	if frame.AgentId == "" || frame.SessionId == "" {
 		sendFailure(errorStatus("browser_attach: agent_id and session_id are required"),
 			dropContext(frame.SessionId, viewerID, "attach-missing-fields"))
-		return
-	}
-
-	// Session-ownership gate (founder ruling, 2026-09-28): a live-browser
-	// session is reachable only by the account that owns it. This runs BEFORE
-	// any attach side effect — before the manager resolve below, before
-	// Live().Attach, before bindAttachment — so a refused caller binds
-	// nothing and the owner's browser never moves.
-	if h.browserSessionOwnershipRefused(frame.SessionId, userID) {
-		h.auditControl(userID, frame.SessionId, viewerID, audit.SeverityWarn, "session_ownership_refused")
-		sendFailure(
-			sessionErrorStatus(frame.SessionId, "browser_attach: session not available"),
-			dropContext(frame.SessionId, viewerID, "attach-owner-refused"))
 		return
 	}
 
@@ -1668,10 +1655,10 @@ func (h *BrowserWSHandler) handleControlContext(ctx context.Context, wc *browser
 // OpenTab directly, never through this WS handler.
 func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
 	attachment := state.commandAttachment()
-	h.handleTabActionContext(attachment.ctx, wc, state, attachment, viewerID, "", data)
+	h.handleTabActionContext(attachment.ctx, wc, state, attachment, viewerID, data)
 }
 
-func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *browserWSConn, state *browserConnState, attachment browserAttachmentSnapshot, viewerID, userID string, data []byte) {
+func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *browserWSConn, state *browserConnState, attachment browserAttachmentSnapshot, viewerID string, data []byte) {
 	runBrowserConnWorkHook(workKindTabAction)
 	// One snapshot under attachMu for the whole handler — see handleInput.
 	if ctx.Err() != nil || attachment.ctx.Err() != nil {
@@ -1690,17 +1677,6 @@ func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *brows
 	if err := json.Unmarshal(data, &frame); err != nil {
 		sendResult(operationErrorStatus("", "browser_tab_action: invalid frame"),
 			dropContext(chatSessionID, viewerID, "tab-action-invalid"))
-		return
-	}
-
-	// Session-ownership gate (founder ruling, 2026-09-28): a frame naming a
-	// session other than this connection's own attachment must name a session
-	// the caller owns. Runs before the control-lock gate and any tab
-	// operation below.
-	if named := sessionIDOrEmpty(frame.SessionId); h.browserFrameSessionRefused(named, chatSessionID, userID) {
-		h.auditControl(userID, named, viewerID, audit.SeverityWarn, "session_ownership_refused")
-		sendResult(sessionErrorStatus(named, "browser_tab_action: session not available"),
-			dropContext(named, viewerID, "tab-action-owner-refused"))
 		return
 	}
 
@@ -1798,23 +1774,7 @@ func tabsToBrowserTabsWire(tabs []browser.Tab) []browserTabWire {
 }
 
 // handleDetach unbinds this connection from its current live view.
-//
-// The ownership gate runs BEFORE any state mutation — a browser_detach frame
-// that names a session the caller does not own is refused with an error
-// status and leaves the connection's own attachment (and its dedicated-input
-// mode) exactly as it was. A frame that names no session, or one the frame
-// cannot be parsed from, detaches as before: the attachment it would tear
-// down is the connection's own, owner-checked at attach.
-func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnState, viewerID, userID string, data []byte) {
-	var frame generated.BrowserDetachFrame
-	if err := json.Unmarshal(data, &frame); err == nil &&
-		h.browserFrameSessionRefused(sessionIDOrEmpty(frame.SessionId), state.commandAttachment().sessionID, userID) {
-		named := sessionIDOrEmpty(frame.SessionId)
-		h.auditControl(userID, named, viewerID, audit.SeverityWarn, "session_ownership_refused")
-		wc.sendCriticalGen(sessionErrorStatus(named, "browser_detach: session not available"),
-			dropContext(named, viewerID, "detach-owner-refused"))
-		return
-	}
+func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnState, viewerID, userID string) {
 	state.setDedicatedInput(false)
 	// Unconditional, and BEFORE the clear — the same discipline
 	// detachWebRTCViewer applies with invalidateWebRTCOffer, for the same
@@ -2201,10 +2161,10 @@ func sessionErrorStatus(sessionID, message string) generated.BrowserStatusFrame 
 // dispatchViewport, not here.
 func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
 	attachment := state.commandAttachment()
-	h.handleViewportContext(attachment.ctx, wc, state, attachment, viewerID, "", data)
+	h.handleViewportContext(attachment.ctx, wc, state, attachment, viewerID, data)
 }
 
-func (h *BrowserWSHandler) handleViewportContext(ctx context.Context, wc *browserWSConn, state *browserConnState, attachment browserAttachmentSnapshot, viewerID, userID string, data []byte) {
+func (h *BrowserWSHandler) handleViewportContext(ctx context.Context, wc *browserWSConn, state *browserConnState, attachment browserAttachmentSnapshot, viewerID string, data []byte) {
 	runBrowserConnWorkHook(workKindViewport)
 	if ctx.Err() != nil || attachment.ctx.Err() != nil {
 		return
@@ -2215,19 +2175,6 @@ func (h *BrowserWSHandler) handleViewportContext(ctx context.Context, wc *browse
 		return
 	}
 	mgr, sessionID, panelSessionID := attachment.mgr, attachment.sessionID, attachment.panelSessionID
-
-	// Session-ownership gate (founder ruling, 2026-09-28): a frame naming a
-	// session other than this connection's own attachment must name a session
-	// the caller owns. Refused before any resize is dispatched.
-	if named := sessionIDOrEmpty(frame.SessionId); h.browserFrameSessionRefused(named, sessionID, userID) {
-		h.auditControl(userID, named, viewerID, audit.SeverityWarn, "session_ownership_refused")
-		sendFailure := func(message, reason string) {
-			wc.sendCriticalScopedGen(operationErrorStatus(sessionID, message), dropContext(sessionID, viewerID, reason), attachment.ctx, nil)
-		}
-		sendFailure("browser_viewport: session not available", "viewport-owner-refused")
-		return
-	}
-
 	if mgr == nil || sessionID == "" {
 		return
 	}
@@ -2293,67 +2240,6 @@ func (h *BrowserWSHandler) sessionWorkspaceID(chatSessionID string) string {
 		return ""
 	}
 	return strings.TrimSpace(meta.WorkspaceID)
-}
-
-// browserSessionOwnershipRefused reports whether userID may act on the chat
-// session chatSessionID under the panel's session-ownership rule: a live
-// view is reachable only by the account that owns the session, so the caller
-// must match the session meta's Owner stamp (the same field the chat socket
-// stamps from the authenticated user at session creation, websocket_chat.go).
-//
-// Refusals are fail-closed: an unknown session id (no store owns it) and an
-// unreadable meta both refuse a named caller. The one deliberate carve-out
-// is the anonymous identity: on an install with no configured accounts the
-// env-token/dev-bypass caller resolves to userID "" and every session that
-// install mints is stamped with the same empty owner, so the comparison is
-// vacuous there and skipping it keeps the single-implicit-user install
-// working exactly as before. On any install WITH accounts this path is
-// unreachable — bearer/cookie identity always resolves a username there.
-//
-// The store resolution and meta read mirror sessionWorkspaceID (the same
-// shared session store the attach ladder already consults).
-func (h *BrowserWSHandler) browserSessionOwnershipRefused(chatSessionID, userID string) bool {
-	if userID == "" {
-		return false
-	}
-	if h == nil || h.agentLoop == nil {
-		return true
-	}
-	store := h.agentLoop.ResolveSessionStore(chatSessionID)
-	if store == nil {
-		return true
-	}
-	meta, err := store.GetMeta(chatSessionID)
-	if err != nil || meta == nil {
-		return true
-	}
-	return meta.Owner != userID
-}
-
-// browserFrameSessionRefused is the per-frame ownership gate for a frame that
-// names a session. namedSession is what the wire frame carries; boundSession
-// is the chat session this connection's own attachment resolved ("" when not
-// attached). A frame that names the connection's OWN attachment needs no
-// re-check — that attachment could only have been bound through the
-// owner-checked attach — and a frame that names no session at all acts purely
-// on the bound attachment, whose ownership the attach already settled. Only a
-// frame naming some OTHER session re-opens the question, and then the named
-// session must be the caller's own (fail-closed, see
-// browserSessionOwnershipRefused).
-func (h *BrowserWSHandler) browserFrameSessionRefused(namedSession, boundSession, userID string) bool {
-	if namedSession == "" || namedSession == boundSession {
-		return false
-	}
-	return h.browserSessionOwnershipRefused(namedSession, userID)
-}
-
-// sessionIDOrEmpty unpacks an optional wire session-id pointer to its string
-// value, "" when absent.
-func sessionIDOrEmpty(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
 }
 
 // browserNoWorkspaceRemedy is the ONE sentence-ending clause every surface that

@@ -417,9 +417,9 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 			case "browser_control":
 				h.handleControlContext(operation, wc, state, a, viewer, user, data, cfg)
 			case "browser_tab_action":
-				h.handleTabActionContext(operation, wc, state, a, viewer, user, data)
+				h.handleTabActionContext(operation, wc, state, a, viewer, data)
 			case "browser_viewport":
-				h.handleViewportContext(operation, wc, state, a, viewer, user, data)
+				h.handleViewportContext(operation, wc, state, a, viewer, data)
 			}
 		})
 		if ok {

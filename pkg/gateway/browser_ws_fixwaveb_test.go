@@ -444,7 +444,7 @@ func TestBrowserWS_HandleDetach_InvalidatesAnInFlightAttach(t *testing.T) {
 
 	epoch := state.beginAttach() // dispatchAttach ran; handleAttach is "still negotiating"
 
-	handler.handleDetach(wc, &state, "viewer-1", "user-1", nil)
+	handler.handleDetach(wc, &state, "viewer-1", "user-1")
 
 	require.False(t, state.bindAttachment(epoch, &browser.BrowserManager{}, "sess", "key/operator"),
 		"browser_detach must invalidate an in-flight attach even though nothing was attached yet — "+

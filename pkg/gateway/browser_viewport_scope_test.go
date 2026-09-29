@@ -25,7 +25,7 @@ func TestViewportQueuedCommandCannotUseReplacementAttachment(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("preceding queue work did not enter")
 	}
-	h.dispatchViewport(wc, state, "other-viewer", "", marshalViewportFrame(t, 900, 700))
+	h.dispatchViewport(wc, state, "other-viewer", marshalViewportFrame(t, 900, 700))
 	epoch := state.beginAttach()
 	require.True(t, state.bindAttachment(epoch, mgr, session, panel))
 	release()
