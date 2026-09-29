@@ -575,7 +575,9 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 		// mismatch surfaces as a lost root (FR-021, truncated
 		// root_lost), the same carrier the pre-existing stat-then-open
 		// race uses.
-		if same, sErr := sameFileCheck(mr, m.HostPath); sErr == nil && !same {
+		if same, sErr := sameFileCheck(mr, m.HostPath); sErr != nil {
+			return lost(fmt.Errorf("absolute root %q could not be verified after opening: %w", m.HostPath, sErr)), 0, nil
+		} else if !same {
 			return lost(fmt.Errorf("absolute root %q was lost after admission (post-open)", m.HostPath)), 0, nil
 		}
 		rel, relErr := filepath.Rel(m.HostPath, realAbs)
@@ -620,7 +622,9 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 	// (the opened path) — not realAbs, which is a sub-path the bound
 	// fd legitimately doesn't name (parent and realAbs are different
 	// directories, not the same).
-	if same, sErr := sameFileCheck(container, parent); sErr == nil && !same {
+	if same, sErr := sameFileCheck(container, parent); sErr != nil {
+		return lost(fmt.Errorf("absolute root %q could not be verified after opening: %w", parent, sErr)), 0, nil
+	} else if !same {
 		return lost(fmt.Errorf("absolute root %q was lost after admission (post-open)", parent)), 0, nil
 	}
 	label := fmt.Sprintf("folder %q", grepAbsoluteName(parent))
