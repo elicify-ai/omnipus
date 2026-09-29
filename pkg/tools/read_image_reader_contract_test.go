@@ -652,7 +652,6 @@ func TestReadImage_AccessAuditAndMetadataPrivacy(t *testing.T) {
 	}
 
 	checkReadImageAuditRows(t, auditLogger, auditDir, inside, outside, adjudicationID, judgeAgentID, sessionID)
-
 }
 
 // --- unchanged reading contracts (spec BDD-03, datasets A7/A13, R1-R5) -------

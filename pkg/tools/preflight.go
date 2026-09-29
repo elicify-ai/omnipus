@@ -245,8 +245,9 @@ func classifySedPathOperations(args []string, redirectTargets map[int]struct{}) 
 	if hasInPlace {
 		access = fspolicy.PathGrantAccessWrite
 	}
-	var ops []PathOperation
-	for _, p := range absShellPathArgs(args, redirectTargets) {
+	paths := absShellPathArgs(args, redirectTargets)
+	ops := make([]PathOperation, 0, len(paths))
+	for _, p := range paths {
 		ops = append(ops, PathOperation{Path: p, Access: access})
 	}
 	return ops

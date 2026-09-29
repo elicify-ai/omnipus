@@ -196,15 +196,18 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	// added two comment lines above delegationDepthCeiling, shifting both
 	// call sites in this file down by +1; still config.workspace.State's
 	// unrelated Workspace field, not agent-config.)
+	// (Re-pointed 2026-09-29: gocyclo-budget extractions in
+	// rest_workspaces.go/workspace.go shifted these lines; still
+	// config.workspace.State's unrelated field, not agent-config.)
 	"pkg/gateway/rest_workspace_delegation.go:139":             true,
 	"pkg/gateway/rest_workspace_delegation.go:212":             true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:32":      true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:37":      true,
 	"pkg/gateway/rest_workspaces.go:390":                       true,
 	"pkg/gateway/rest_workspaces.go:974":                       true,
-	"pkg/gateway/rest_workspaces.go:1265":                      true,
-	"pkg/gateway/rest_workspaces.go:1333":                      true,
-	"pkg/gateway/rest_workspaces.go:1591":                      true,
+	"pkg/gateway/rest_workspaces.go:1275":                      true,
+	"pkg/gateway/rest_workspaces.go:1343":                      true,
+	"pkg/gateway/rest_workspaces.go:1601":                      true,
 	"pkg/sysagent/tools/workspace.go:102":                      true,
 	"pkg/sysagent/tools/workspace.go:103":                      true,
 	"pkg/sysagent/tools/workspace.go:104":                      true,
@@ -213,9 +216,9 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/sysagent/tools/workspace.go:107":                      true,
 	"pkg/sysagent/tools/workspace.go:108":                      true,
 	"pkg/sysagent/tools/workspace.go:464":                      true,
-	"pkg/sysagent/tools/workspace.go:644":                      true,
-	"pkg/sysagent/tools/workspace.go:646":                      true,
-	"pkg/sysagent/tools/workspace.go:1364":                     true,
+	"pkg/sysagent/tools/workspace.go:617":                      true,
+	"pkg/sysagent/tools/workspace.go:619":                      true,
+	"pkg/sysagent/tools/workspace.go:1373":                     true,
 	"pkg/sysagent/tools/ava_configuration_context_test.go:236": true,
 	"pkg/sysagent/tools/ava_configuration_context_test.go:237": true,
 	"pkg/sysagent/tools/ava_configuration_context_test.go:238": true,
