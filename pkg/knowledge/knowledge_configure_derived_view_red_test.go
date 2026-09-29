@@ -10,16 +10,23 @@
 // `.base` file — never silently presenting it as an ordinary,
 // independently-owned file").
 //
-// Today's execWriteView (pkg/knowledge/knowledge_configure.go) has no
-// concept of a derived view at all: it parses the caller's `definition` into
-// a fresh ViewDef with no merge of an existing file's fields
-// (marshalDefinition(defMap)-style rebuild), so there is nothing that could
-// even READ a "derived_from" marker to refuse against — confirmed by
-// grep -rn "derived_from\|DerivedFrom" pkg/knowledge --include='*.go'
-// returning zero matches for the concept (only coincidental substring hits
-// in unrelated test names, e.g.
-// TestKnowledgeConfigure_KindDescriptionIsDerivedFromViewKinds). Both tests
-// below are BLOCKED per the qa-lead RED protocol.
+// UNBLOCKED for test 48 (2026-09-29, va-qa2 dispatch): generated.ViewDef.
+// DerivedFrom now exists on the merged feature branch (contract commit
+// 562acdc32) — verified by reading pkg/api/generated/openapi_types.gen.go.
+// Test 48 is rewritten below as a real assertion against execWriteView, the
+// real entry point: verified by reading it (pkg/knowledge/
+// knowledge_configure.go::execWriteView), the function has NO code path that
+// reads the EXISTING on-disk file's `derived_from` before overwriting it —
+// it only collision-checks OTHER views' names/labels via
+// viewNameCollisionRefusal, then unconditionally calls
+// overwriteControlPlaneFile at viewPath. So a write_view call against a
+// derived view's own name lands silently today, exactly the FD-6/FR-VA-008e
+// violation this test proves.
+//
+// Test 68 stays BLOCKED — it needs the pipeline-owned membership record
+// (D-PROVENANCE) across three surfaces, which still does not exist anywhere
+// (verified: zero hits for "ViewMembership"/"membership record" outside
+// comments).
 //
 // Run (one at a time, per omnipus-shared-rules rule 2):
 //
@@ -30,23 +37,72 @@
 // Copyright (c) 2026 Omnipus contributors
 package knowledge
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 // TestWriteView_RefusesDerivedView is TDD Plan test 48 (FD-6, R2-MAJ-003,
 // FR-VA-008e, Dataset F-9): write_view on a view whose CURRENT ViewSet entry
 // carries `derived_from` must refuse the write and name the managing .base
 // file, never silently drop the marker and land the edit.
 //
-// BLOCKED: neither the ViewDef.derived_from contract field nor a read-only
-// refusal path exists anywhere in execWriteView — there is no `derived_from`
-// for a fixture view to carry, and no code path that could refuse against
-// it.
+// REAL, EXECUTABLE: a view file is planted directly on disk (simulating one
+// the import/re-derivation pipeline produced) carrying `derived_from:
+// Projects.base`. write_view is then called against that SAME view name with
+// an ordinary, otherwise-legal edit. Today's execWriteView never reads the
+// existing file before overwriting it, so the call succeeds and the
+// `derived_from` marker is lost — both facts asserted below.
 func TestWriteView_RefusesDerivedView(t *testing.T) {
-	t.Fatal("BLOCKED: ViewDef.derived_from (contract FR-VA-009a) and write_view's read-only refusal " +
-		"for a derived view (FD-6, FR-VA-008e) are not implemented in " +
-		"pkg/knowledge/knowledge_configure.go::execWriteView — required before a write_view call " +
-		"against a derived view can be shown to be refused, naming the managing .base, per " +
-		"Dataset F-9 / TDD test 48.")
+	home, ws, root := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := kcTool(deps)
+
+	require.False(t, tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create_record_type", "type": "widget",
+		"definition": map[string]any{
+			"schema_version": float64(1),
+			"properties": map[string]any{
+				"status": map[string]any{"type": "enum", "values": []any{"draft", "shipped"}},
+			},
+		},
+	}).IsError)
+
+	viewsDir := filepath.Join(root, ".omnipus-vault", "views")
+	require.NoError(t, os.MkdirAll(viewsDir, 0o755))
+	viewPath := filepath.Join(viewsDir, "derived-dash.yaml")
+	original := "name: derived-dash\ntype: widget\nsource: Projects.base\nderived_from: Projects.base\n" +
+		"filter:\n  property: status\n  op: \"=\"\n  value: draft\n"
+	require.NoError(t, os.WriteFile(viewPath, []byte(original), 0o600))
+
+	write := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "write_view", "view": "derived-dash",
+		"definition": map[string]any{
+			"type":   "widget",
+			"filter": map[string]any{"property": "status", "op": "=", "value": "shipped"},
+		},
+	})
+	if !write.IsError {
+		t.Fatalf(
+			"FD-6/R2-MAJ-003/FR-VA-008e/Dataset F-9: write_view on \"derived-dash\", whose on-disk file "+
+				"carries derived_from: Projects.base, must be REFUSED naming the managing .base — got "+
+				"success instead: %s",
+			write.ForLLM,
+		)
+	}
+
+	after, rerr := os.ReadFile(viewPath)
+	require.NoError(t, rerr)
+	if string(after) != original {
+		t.Fatalf(
+			"FD-6/FR-VA-008e: the derived view's on-disk bytes changed even though the write should have "+
+				"been refused entirely.\nwant (unchanged): %q\ngot: %q",
+			original, string(after),
+		)
+	}
 }
 
 // TestKnowledgeTools_StateDerivedViewSourceOnAllThreeSurfaces is TDD Plan
