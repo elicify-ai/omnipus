@@ -7660,6 +7660,10 @@
       "lane": 1
     },
     {
+      "source": "src/components/workspaces/mail/MailAttachmentsEditor.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/workspaces/mail/MailComposeDialog.tsx",
       "lane": 6
     },
@@ -7689,6 +7693,14 @@
     },
     {
       "source": "src/components/workspaces/mail/MailRecipientInput.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailRecipientRow.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailSignaturePreview.tsx",
       "lane": 6
     },
     {
