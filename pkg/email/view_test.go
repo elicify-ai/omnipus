@@ -112,7 +112,14 @@ func mkViewMsg(subject, body string, draft bool) []byte {
 	add("--VBOUND\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + body + "\r\n")
 	add("--VBOUND\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body><p>" + body + "</p></body></html>\r\n")
 	if draft {
-		add("--VBOUND\r\nContent-Type: text/markdown; charset=utf-8\r\n\r\n" + body + " md\r\n")
+		// Matches what renderMarkdownPart (pkg/email/compose.go) actually
+		// sends on the wire for Omnipus's own draft-body bookkeeping part:
+		// Content-Disposition: attachment; filename="message.md" AND the
+		// X-Omnipus-Part: draft-body marker header — viewFromRaw recognizes
+		// this part by the marker header only, never by name/disposition.
+		add("--VBOUND\r\nContent-Type: text/markdown; charset=utf-8\r\n" +
+			"Content-Disposition: attachment; filename=\"message.md\"\r\n" +
+			draftBodyPartHeader + ": " + draftBodyPartValue + "\r\n\r\n" + body + " md\r\n")
 	}
 
 	att := "--VBOUND\r\nContent-Disposition: attachment; filename=\"notes.txt\"\r\nContent-Type: text/plain\r\n\r\nNOTES-BYTES\r\n"

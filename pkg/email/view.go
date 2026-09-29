@@ -627,7 +627,19 @@ func viewFromRaw(raw []byte, slug string, uid uint32) *MailView {
 		case ct == "text/html" && name == "" && disp == "":
 			view.HTMLBody = readViewText(part.Body)
 			view.HasHTML = view.HTMLBody != ""
-		case ct == "text/markdown" && name == "" && disp == "":
+		case ct == "text/markdown" && strings.TrimSpace(part.Header.Get(draftBodyPartHeader)) == draftBodyPartValue:
+			// Recognized by the X-Omnipus-Part: draft-body marker header
+			// ONLY (matching mailViewDraftBodyPart's contract in
+			// pkg/gateway/rest_mail_audit_fields.go) — never by name/
+			// disposition being empty. renderMarkdownPart
+			// (pkg/email/compose.go) always sets Content-Disposition:
+			// attachment; filename="message.md" on this part, so name/
+			// disposition are never empty for Omnipus's own bookkeeping
+			// part; matching on those fields let this branch go
+			// permanently unreached and the part fall into the generic
+			// attachment branch below instead, which fed the walk's
+			// text/plain lossy fallback (already-signed) back into
+			// BodyMarkdown as if it were the original unsigned source.
 			view.BodyMarkdown = readViewText(part.Body)
 			view.MarkdownLossy = false
 		default:
