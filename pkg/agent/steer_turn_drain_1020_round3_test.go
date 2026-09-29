@@ -131,18 +131,15 @@ func TestSteeredTurnDrain1020Round3_LateSteerDuringFinishAcceptedThenRevivesNext
 
 	// Item 4: a held post-finish steer must revive the child to generation
 	// startGeneration+1 immediately after the terminal commit landed
-	// above. This is synchronous — ReviveStoppedSession's admission
-	// commit (steer_launcher.go::dispatchSteeredSessionWithReservation's
-	// commitSteeredDispatchState) runs inline inside completeSteeredTurn;
-	// only the revived generation's own TURN EXECUTION is the detached
-	// goroutine awaited below — so it already holds true the instant
-	// completeSteeredTurn returned.
+	// above. The generation advances synchronously, but its detached turn
+	// may already have completed by the time we read the record; either
+	// running or terminal at startGeneration+1 is a valid observation.
 	rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
-	if rec.Generation != startGeneration+1 || rec.Terminal() {
-		t.Fatalf("BLOCKED: round-3 spec item 4 (a held post-finish steer immediately revives the child to a new generation right after the terminal commit) is not implemented — no call site in completeSteeredTurn (pkg/agent/steer_completion.go) or steeringQueue.runTerminalTransition (pkg/agent/steering.go) ever invokes SteerCanceller.Revive or dispatchSteeredSession after a successful commit; child record generation=%d terminal=%v, want generation=%d running", rec.Generation, rec.Terminal(), startGeneration+1)
+	if rec.Generation != startGeneration+1 {
+		t.Fatalf("BLOCKED: round-3 spec item 4 (a held post-finish steer immediately revives the child to a new generation right after the terminal commit) is not implemented — child record generation=%d terminal=%v, want generation=%d (running or already terminal)", rec.Generation, rec.Terminal(), startGeneration+1)
 	}
 
 	// The revived generation's own turn runs on a detached goroutine
@@ -321,20 +318,14 @@ func TestSteeredTurnDrain1020Round3_DeliveryFailureConsumesLateSteerAsSameGenera
 // MessageInboxStore.Append, then enqueue the wake with THAT entry's real
 // message id.
 //
-// Observable chosen for "never stranded": deliverEntryIsAcked
-// (steer_audience.go) is production's own primitive for "is this durable
-// entry still waiting for a consumer" — Drain still returning it means
-// unacked; not returning it means acked. Right after the terminal commit
-// the entry must still be unacked (proves the durable copy survived — only
-// the round-4 correction's in-memory drop is expected here, never a
-// durable loss). Then, bounded, this test waits to see whether ANYTHING
-// gives the entry a consumer: either the child is revived to a new
-// generation (whose own turn would then be the consumer), or the entry
-// becomes acked by some other route. processFinishingItems's wake branch
-// (pkg/agent/steer_completion.go) currently does neither — it only logs —
-// so this is expected to stay RED until the backend-lead wires an actual
-// durable-wake fallback for the post-finish case; the failure names that
-// exact gap rather than a generic mismatch.
+// The terminal-write hook captures the generation-g final in the parent's
+// durable inbox and the descendant entry in the child's UNACKED Drain
+// before a replay can revive and acknowledge it. A wake follows S1's
+// post-finish steer contract: the original final is unchanged, then the
+// child revives to g+1 and its real turn consumes (marks and acknowledges)
+// the descendant entry. The revived turn must finish with no wake queued
+// or unacknowledged. At HEAD, processFinishingItems only logs and drops
+// the in-memory wake, so this test must fail at that latter consumer check.
 func TestSteeredTurnDrain1020Round3_DescendantWakeDuringOwnTerminalDeliveryNeverStranded(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -367,74 +358,149 @@ func TestSteeredTurnDrain1020Round3_DescendantWakeDuringOwnTerminalDeliveryNever
 		t.Fatalf("Append(descendant inbox entry): %v", appendErr)
 	}
 
-	var hookErr error
+	// The hook fires BEFORE the generation-g terminal write and AFTER its
+	// final was delivered. Observe both inboxes here: a replay may already
+	// have acknowledged the descendant by the time completion returns.
+	// Only the first terminal write injects a wake; g+1's own write must
+	// not manufacture a second wake and an unbounded revival chain.
+	type commitObservation struct {
+		enqueueErr    error
+		parent        []session.InboxEntry
+		parentErr     error
+		descendant    []generated.SessionMessage
+		descendantErr error
+	}
+	var hookMu sync.Mutex
 	var hookCalls int
+	var observed commitObservation
 	completeStateWriteTestHook = func(sessionID string) {
+		hookMu.Lock()
 		hookCalls++
-		hookErr = al.EnqueueSteeringWake(
+		first := hookCalls == 1
+		hookMu.Unlock()
+		if !first {
+			return
+		}
+		enqueueErr := al.EnqueueSteeringWake(
 			sessionID, testDefaultAgentID, sessionID,
 			appendRes.MessageID,
 			providers.Message{Role: "user", Content: "ROUND3-S3-DESCENDANT-WAKE"},
 		)
+		parent, parentErr := inbox.Entries(rootID)
+		descendant, _, _, descendantErr := inbox.Drain(child.SessionID, descendantSessionID, "", 10)
+		hookMu.Lock()
+		observed = commitObservation{enqueueErr, parent, parentErr, descendant, descendantErr}
+		hookMu.Unlock()
 	}
 	t.Cleanup(func() { completeStateWriteTestHook = nil })
 
 	if err := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "pre-wake answer"}, nil); err != nil {
 		t.Fatalf("completeSteeredTurn: %v", err)
 	}
-	if hookCalls != 1 {
-		t.Fatalf("completeStateWriteTestHook calls = %d, want exactly 1", hookCalls)
+	hookMu.Lock()
+	firstHookCalls := hookCalls
+	commit := observed
+	hookMu.Unlock()
+	if firstHookCalls < 1 {
+		t.Fatal("completeStateWriteTestHook never observed the generation-g terminal write")
 	}
-	if hookErr != nil {
-		t.Fatalf("BLOCKED: round-3 spec item 2/S3 (a descendant's wake arriving during the child's own terminal delivery must be ACCEPTED, never refused) is not implemented — steeringQueue.pushItemScopeChecked (pkg/agent/steering.go) refused this wake (%v)", hookErr)
+	if commit.enqueueErr != nil {
+		t.Fatalf("BLOCKED: round-3 spec item 2/S3 (a descendant's wake arriving during the child's own terminal delivery must be ACCEPTED, never refused) — EnqueueSteeringWake returned %v", commit.enqueueErr)
 	}
-	rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
-	if err != nil {
-		t.Fatalf("Load(child): %v", err)
-	}
-	if !rec.Terminal() {
-		t.Fatalf("child did not reach terminal; state=%q", rec.State)
-	}
-	if got := al.pendingSteeringCountForScope(child.SessionID); got != 0 {
-		t.Errorf("descendant wake accepted (no error) but %d item(s) remain queued in the in-memory steering queue on a now-terminal child — round-3 spec S3 requires it never be lost", got)
+	if commit.parentErr != nil || commit.descendantErr != nil {
+		t.Fatalf("inspect inboxes before terminal write: parent=%v descendant=%v", commit.parentErr, commit.descendantErr)
 	}
 
-	// The durable copy must survive the in-memory drop: right after the
-	// terminal commit the entry is still unacked (a consumer has not run
-	// yet), never silently vanished.
-	acked, ackedErr := deliverEntryIsAcked(inbox, child.SessionID, descendantSessionID, appendRes.MessageID)
-	if ackedErr != nil {
-		t.Fatalf("deliverEntryIsAcked (immediately after commit): %v", ackedErr)
+	// Assert the generation-g final's deterministic identity and unchanged
+	// answer while the hand-off is paused, then confirm it remains durable
+	// after the successful terminal write. Never inspect the child's state
+	// here: the g+1 replay is free to have started already.
+	wantGenFinalID := fmt.Sprintf("%s:%d:final", child.SessionID, startGeneration)
+	assertGenFinal := func(entries []session.InboxEntry) {
+		t.Helper()
+		var found int
+		for _, entry := range entries {
+			if entry.Kind != session.InboxEntryMessage || entry.Message == nil || messageIDOf(*entry.Message) != wantGenFinalID {
+				continue
+			}
+			found++
+			final, decodeErr := entry.Message.AsSessionMessageHandback()
+			if decodeErr != nil {
+				t.Fatalf("generation %d final %q is not a handback: %v", startGeneration, wantGenFinalID, decodeErr)
+			}
+			if final.ResultSoFar != "pre-wake answer" {
+				t.Fatalf("generation %d final %q changed: got %q, want %q", startGeneration, wantGenFinalID, final.ResultSoFar, "pre-wake answer")
+			}
+		}
+		if found != 1 {
+			t.Fatalf("generation %d final %q durable entries = %d, want exactly 1 unchanged handback", startGeneration, wantGenFinalID, found)
+		}
 	}
-	if acked {
-		t.Fatalf("descendant entry %q reported ACKED immediately after the terminal commit — no consumer has run yet, so this can only mean the durable copy itself was lost, not merely the in-memory one", appendRes.MessageID)
+	assertGenFinal(commit.parent)
+	if len(commit.descendant) != 1 || messageIDOf(commit.descendant[0]) != appendRes.MessageID {
+		t.Fatalf("descendant durable UNACKED entries during terminal write = %d, want the one real entry %q", len(commit.descendant), appendRes.MessageID)
 	}
+	stored, decodeErr := commit.descendant[0].AsSessionMessageHandback()
+	if decodeErr != nil || stored.ResultSoFar != "ROUND3-S3-DESCENDANT-WAKE" {
+		t.Fatalf("durable descendant entry content = %q (decode err %v), want %q", stored.ResultSoFar, decodeErr, "ROUND3-S3-DESCENDANT-WAKE")
+	}
+	parentAfterCommit, parentErr := inbox.Entries(rootID)
+	if parentErr != nil {
+		t.Fatalf("Entries(parent) after terminal commit: %v", parentErr)
+	}
+	assertGenFinal(parentAfterCommit)
 
-	// Bounded wait for a real consumer: either the child is revived to a
-	// new generation (whose own turn would then be the consumer), or the
-	// entry becomes acked by some other route. Never a sleep-as-assertion
-	// — matches the codebase's own poll idiom
-	// (steer_boundary_containment_test.go::launchAndAwaitSteeredChild).
-	al.drainSteeredTurns(3 * time.Second)
+	// The real wake consumer must revive to exactly g+1, write its consumed
+	// marker, acknowledge the durable entry, and finish its turn. Neither a
+	// bare revival nor an ACK without a turn is sufficient. The drain joins
+	// admitted turns; the bounded poll checks the durable end state.
+	al.drainSteeredTurns(10 * time.Second)
+	transcriptStore := al.ResolveSessionStore(child.SessionID)
+	if transcriptStore == nil {
+		t.Fatal("ResolveSessionStore(child): no transcript store for the wake consumer")
+	}
 	deadline := time.Now().Add(3 * time.Second)
-	var revived bool
-	for time.Now().Before(deadline) {
-		rec, err = al.GetSessionLifecycleStore().Load(child.SessionID)
+	for {
+		rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
 		if err != nil {
-			t.Fatalf("Load(child) while waiting for a consumer: %v", err)
+			t.Fatalf("Load(child) while waiting for wake consumption: %v", err)
 		}
-		revived = rec.Generation != startGeneration
-		acked, ackedErr = deliverEntryIsAcked(inbox, child.SessionID, descendantSessionID, appendRes.MessageID)
+		acked, ackedErr := deliverEntryIsAcked(inbox, child.SessionID, descendantSessionID, appendRes.MessageID)
 		if ackedErr != nil {
-			t.Fatalf("deliverEntryIsAcked (while waiting for a consumer): %v", ackedErr)
+			t.Fatalf("deliverEntryIsAcked(descendant): %v", ackedErr)
 		}
-		if revived || acked {
+		unacked, _, more, drainErr := inbox.Drain(child.SessionID, "", "", 10)
+		if drainErr != nil {
+			t.Fatalf("Drain(child) while waiting for wake consumption: %v", drainErr)
+		}
+		transcript, readErr := transcriptStore.ReadTranscript(child.SessionID)
+		if readErr != nil {
+			t.Fatalf("ReadTranscript(child) while waiting for wake consumption: %v", readErr)
+		}
+		consumed := false
+		for _, entry := range transcript {
+			if entry.ID == "consumed-"+appendRes.MessageID && entry.Content == "consumed "+appendRes.MessageID {
+				consumed = true
+				break
+			}
+		}
+		queued := al.pendingSteeringCountForScope(child.SessionID)
+		if rec.Generation == startGeneration+1 && rec.Terminal() && consumed && acked && len(unacked) == 0 && !more && queued == 0 {
+			if rec.State != session.LifecycleCompleted {
+				t.Fatalf("revived wake consumer ended in state %q, want completed at generation %d", rec.State, startGeneration+1)
+			}
 			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("BLOCKED: round-3 spec S3 post-finish durable wake was not consumed by a revived generation — child generation=%d state=%q (want terminal g+1=%d), consumed marker=%v, descendant acked=%v, child unacked=%d more=%v, queued=%d; at HEAD processFinishingItems only logs/drops the wake", rec.Generation, rec.State, startGeneration+1, consumed, acked, len(unacked), more, queued)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !revived && !acked {
-		t.Fatalf("BLOCKED: round-3 spec S3's durable-wake fallback for a post-finish wake is not implemented — processFinishingItems (pkg/agent/steer_completion.go) drops the in-memory wake with only an INFO log line (\"post-finish wake on a terminalised child\") and never revives the child, wakes anyone, or otherwise arranges a consumer; descendant entry %q under owner %q remains durably stored (proven above) but is permanently unacknowledged with no consumer — generation stayed %d, acked=%v", appendRes.MessageID, child.SessionID, rec.Generation, acked)
+	hookMu.Lock()
+	totalHookCalls := hookCalls
+	hookMu.Unlock()
+	if totalHookCalls != 2 {
+		t.Fatalf("completeStateWriteTestHook calls = %d, want exactly 2 (one for generation %d and one for revived generation %d)", totalHookCalls, startGeneration, startGeneration+1)
 	}
 }
 
