@@ -736,7 +736,8 @@ func (h *PathHandle) ReadDir() ([]os.DirEntry, error) {
 		}
 		return entries, nil
 	}
-	entries, err := fs.ReadDir(h.root.FS(), h.rel)
+	// Root.FS uses io/fs names; h.rel stays OS-native for the os.Root methods.
+	entries, err := fs.ReadDir(h.root.FS(), filepath.ToSlash(h.rel))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
