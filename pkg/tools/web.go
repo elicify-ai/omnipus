@@ -1856,12 +1856,12 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("internal error: SSRF checker not initialized")
 	}
 
-	urlStr, maxChars, errResult := webFetchParseArgs(args, t.maxChars, t.ssrf)
+	urlStr, maxChars, note, errResult := webFetchParseArgs(args, t.maxChars, t.ssrf)
 	if errResult != nil {
 		return errResult
 	}
 
-	status, contentType, body, errResult := t.fetchURL(ctx, urlStr)
+	status, finalURL, contentType, body, errResult := t.fetchURL(ctx, urlStr)
 	if errResult != nil {
 		return errResult
 	}
@@ -1871,7 +1871,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return errResult
 	}
 
-	return webFetchBuildResult(urlStr, status, text, extractor, maxChars, nonUTF8Charset)
+	return webFetchBuildResult(finalURL, status, text, extractor, maxChars, note, nonUTF8Charset)
 }
 
 func looksLikeHTML(body string) bool {
