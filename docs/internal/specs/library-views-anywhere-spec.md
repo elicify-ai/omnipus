@@ -1781,6 +1781,19 @@ shape from round 1.
   requires local write access to the collection, which already permits deleting or overwriting that
   file directly; Omnipus is single-owner. The gate's security-lead confirms.
 
+- **Parent-directory swap between resolve and open (accepted residual, flagged by GREEN-backend,
+  2026-09-29; same threat model as the two residuals above — it needs local write access).** A
+  window exists between `CollectionRoot.ResolveContainedNoSymlink` resolving a path and the
+  subsequent `os.Open` (or equivalent) on it: a local writer could swap an ancestor DIRECTORY (not
+  just the leaf file) in that window and redirect the open outside the collection. Per-file identity
+  checks (D-SYMLINK-READ and friends) do not cover a parent-chain swap, only the leaf. The gateway's
+  index walker has the same parent-chain exposure. This is NOT immune the way the leaf-level checks
+  are — it must not be described as covered by them. Accepted for the same reason as the two
+  residuals above (requires local write access; Omnipus is single-owner), but the gate's
+  security-lead reviews it explicitly and rules: accept for v0.1.1 as stated, or require
+  handle-relative traversal (open-by-handle from an already-resolved parent, never re-resolving a
+  path string) to close it.
+
 ## 10. TDD Plan
 
 | Order | Test Name | Level | Traces to | Description |
