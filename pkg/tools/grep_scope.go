@@ -580,6 +580,11 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 		} else if !same {
 			return lost(fmt.Errorf("absolute root %q was lost after admission (post-open)", m.HostPath)), 0, nil
 		}
+		if realAbs == m.HostPath {
+			// The mount itself is the walk root: no "/." in match names and
+			// no ancestor preload of its own ignore files a second time.
+			return filegrep.Root{Name: grepAbsoluteName(m.HostPath), FS: guardGrepRoot(m.HostPath, mr.FS(), mr, policy)}, 0, nil
+		}
 		rel, relErr := filepath.Rel(m.HostPath, realAbs)
 		if relErr != nil {
 			return filegrep.Root{}, 0, fmt.Errorf("path %s could not be made relative to its mount %q: %w", rawPath, m.Name, relErr)
