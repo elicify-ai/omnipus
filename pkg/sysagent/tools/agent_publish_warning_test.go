@@ -27,6 +27,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -59,6 +60,15 @@ func TestAgentCreate_UpsertFastFuncFailure_StillSucceeds_WithPublishWarning(t *t
 	deps := newPublishWarningDeps(t, nil, func(string) error {
 		return errors.New("registry busy")
 	})
+	// Spy NotifyAgentCreated: when the publish step fails (ActivationFailed),
+	// the #1009 ordering gate (publishAndRespond's `if activation ==
+	// agentstore.ActivationActive`) must skip the notify — the agent is
+	// durably persisted but NOT yet listable, so notifying would recreate
+	// the exact race the fix exists to close. This extends the original
+	// publish_warning coverage (which only checked the publish_warning
+	// envelope) with the notify-side assertion the fix introduced.
+	var notifyCalls atomic.Int32
+	deps.NotifyAgentCreated = func(string) { notifyCalls.Add(1) }
 	tool := systools.NewAgentCreateTool(deps)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -94,6 +104,23 @@ func TestAgentCreate_UpsertFastFuncFailure_StillSucceeds_WithPublishWarning(t *t
 	if _, err := agentstore.New(deps.Home).Get(id); err != nil {
 		t.Fatalf("agent entity record must exist on disk despite the publish failure: %v", err)
 	}
+
+	// #1009 ordering gate: ActivationFailed (the publish hook returned an
+	// error) MUST NOT call NotifyAgentCreated — the agent is durable but
+	// genuinely not listable yet, so notifying would just recreate the
+	// #1009 race for this publish-failure path.
+	if got := notifyCalls.Load(); got != 0 {
+		t.Fatalf("NotifyAgentCreated must NOT fire when the publish step fails (activation_status=%s): "+
+			"the #1009 ordering gate must skip notify for non-Active activations; got %d call(s)",
+			agentstore.ActivationFailed, got)
+	}
+	// And the activation_status itself must be failed, not active — a
+	// regression that demoted the gate to "always notify when not
+	// explicitly not_attempted" would still pass the zero-calls check
+	// above but produce activation=active here.
+	if body["activation_status"] != string(agentstore.ActivationFailed) {
+		t.Errorf("activation_status=%v, want %s (publish-failure path)", body["activation_status"], agentstore.ActivationFailed)
+	}
 }
 
 func TestAgentCreate_ReloadFuncFailure_StillSucceeds_WithPublishWarning(t *testing.T) {
@@ -102,6 +129,11 @@ func TestAgentCreate_ReloadFuncFailure_StillSucceeds_WithPublishWarning(t *testi
 	deps := newPublishWarningDeps(t, func() error {
 		return errors.New("config reload failed: disk full")
 	}, nil)
+	// Spy NotifyAgentCreated — same gate as the UpsertFast test above: a
+	// failing ReloadFunc must land as ActivationFailed, which the gate
+	// skips. Regression coverage for the same order-of-operations bug.
+	var notifyCalls atomic.Int32
+	deps.NotifyAgentCreated = func(string) { notifyCalls.Add(1) }
 	tool := systools.NewAgentCreateTool(deps)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -120,6 +152,14 @@ func TestAgentCreate_ReloadFuncFailure_StillSucceeds_WithPublishWarning(t *testi
 	}
 	if !strings.Contains(warning, "disk full") {
 		t.Fatalf("publish_warning must name the underlying error, got: %q", warning)
+	}
+	if got := notifyCalls.Load(); got != 0 {
+		t.Fatalf("NotifyAgentCreated must NOT fire when the ReloadFunc publish path fails "+
+			"(activation_status=%s): the #1009 ordering gate must skip notify for non-Active activations; "+
+			"got %d call(s)", agentstore.ActivationFailed, got)
+	}
+	if body["activation_status"] != string(agentstore.ActivationFailed) {
+		t.Errorf("activation_status=%v, want %s (reload-failure path)", body["activation_status"], agentstore.ActivationFailed)
 	}
 }
 

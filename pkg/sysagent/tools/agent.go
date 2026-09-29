@@ -223,6 +223,19 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 		return r0
 	}
 
+	// agent-picker-freshness fix (#1009), corrected: NotifyAgentCreated used
+	// to fire HERE, right after persistAndJoin's durable-persist success —
+	// but persistAndJoin only writes the entity record to disk; it does NOT
+	// put the new agent into the live, in-memory registry/config list that
+	// pkg/gateway/rest_agents.go::listAgents (GET /api/v1/agents) reads. That
+	// happens inside publishAndRespond, via publishAgentActivation. Firing
+	// here raced a tab's agent_created handler (src/store/chat/slices/
+	// frames.ts) against publishAgentActivation: a refetch that landed before
+	// publishAgentActivation ran would get a response missing the new agent
+	// and cache that miss for 30s — the exact bug #1009 exists to close,
+	// reappearing via this ordering. The notify now lives inside
+	// publishAndRespond, gated on the agent actually being live — see that
+	// function for the exact point and why.
 	return ac.publishAndRespond()
 }
 
@@ -394,6 +407,19 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 }
 
 // persistAndJoin persists the agent and its workspace files, then joins the contextual workspace when present.
+//
+// Three of the early-return (stop=true) branches below — default-singleton
+// write failure, InitAgentHome failure, and the HEARTBEAT.md write failure —
+// run AFTER agentstore.CreateState has already durably saved the entity
+// record. None of them call Deps.NotifyAgentCreated, and that is intentional,
+// not a gap: returning stop=true here means Execute never reaches
+// publishAndRespond(), so publishAgentActivation() never runs and the agent
+// is never put into the live, in-memory config/registry that
+// pkg/gateway/rest_agents.go::listAgents reads — the agent is durably
+// persisted but genuinely not yet listable. This is consistent with the
+// #1009 ordering fix in Execute/publishAndRespond: firing agent_created for
+// an agent that isn't listable yet would just recreate that fix's exact
+// race for these three edge cases. Do not add a notify call to any of them.
 func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	// Resolve home ONCE, before constructing the agent store, so the entity
 	// record (below) and the agent's own workspace (SOUL.md/HEARTBEAT.md,
@@ -427,6 +453,9 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	if raw, present := ac.args["default"]; present {
 		if want, ok := raw.(bool); ok {
 			if err := writeDefaultSingleton(ac.t.deps, ac.finalID, want); err != nil {
+				// No NotifyAgentCreated here — see this function's doc comment:
+				// the entity is durable but not yet listable (stop=true skips
+				// publishAndRespond/publishAgentActivation entirely).
 				return defaultSingletonPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args)), true
 			}
 		}
@@ -437,6 +466,8 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 		// Entity (and optional default singleton) already durable. Do not
 		// delete them: report the actual revision so the caller can read
 		// and recover instead of claiming a complete create.
+		// No NotifyAgentCreated here — see this function's doc comment: the
+		// entity is durable but not yet listable.
 		slog.Error("sysagent: create_agent: InitAgentHome failed after entity save",
 			"id", ac.finalID, "error", err)
 		return createHomePartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), err), true
@@ -449,6 +480,8 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	if strings.TrimSpace(heartbeat) != "" {
 		hbPath := filepath.Join(omnipusHome, "agents", ac.finalID, "HEARTBEAT.md")
 		if err := os.WriteFile(hbPath, []byte(heartbeat), 0o600); err != nil {
+			// No NotifyAgentCreated here either — same reason: durable, not
+			// yet listable (see this function's doc comment).
 			slog.Error("sysagent: create_agent: HEARTBEAT.md write failed after entity save",
 				"id", ac.finalID, "error", err)
 			return createHeartbeatPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), err), true
@@ -510,6 +543,47 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 		publishWarning = fmt.Sprintf(
 			"agent %q was created but is not yet live: publish failed (%s); it will become routable "+
 				"after the next config reload or gateway restart", ac.finalID, publishErr)
+	}
+
+	// agent-picker-freshness fix (#1009), corrected ordering: notify ONLY
+	// after publishAgentActivation reports ActivationActive — i.e. only once
+	// the live, in-memory config/registry that pkg/gateway/rest_agents.go::
+	// listAgents reads actually contains the new agent. publishAgentActivation
+	// BLOCKS on deps.WaitForPendingReloadFunc after the publish hook's nil
+	// return to close the async-reload race the production wiring leaves open
+	// (the gateway's UpsertAgentFastFunc closure falls back to the async
+	// reloadTrigger on any failure, and the plain ReloadFunc is also
+	// fire-and-forget — see publishAgentActivation's own doc comment for the
+	// mechanism and why it uses the wait-only WaitForPendingReloadFunc rather
+	// than WaitForReloadFunc, whose production wiring calls TriggerReload
+	// unconditionally as its first action and would therefore kick off a fresh
+	// full reload cycle on every fast-path success). On the queued-reload
+	// branch this blocks until the queued reload has actually rebuilt the
+	// registry; on the fast-path branch (no reload queued) the pending flag is
+	// already clear so the call returns IMMEDIATELY. A nil return from
+	// publishAgentActivation is now a genuine "agent is live and listable"
+	// rather than "agent was queued for publication". Both
+	// ActivationFailed (the call ran but errored — publishWarning above) and
+	// ActivationNotAttempted (neither hook wired — degraded/test deps) leave
+	// the agent NOT listable, so notifying on either would recreate the exact
+	// race this ordering fix closes: a tab's agent_created handler
+	// (src/store/chat/slices/frames.ts) refetching ['agents'] and getting a
+	// response that still lacks the new agent. See Deps.NotifyAgentCreated's
+	// doc comment for why this tool needs its own hook at all: create_agent
+	// persists straight to the entity store and never reaches the gateway's
+	// REST createAgent handler, the only OTHER place this broadcast fires —
+	// that path is already correct here because its own equivalent
+	// (emitAgentCreated, pkg/gateway/rest_agents_create.go::createAgent) is
+	// called only after persistAgent's withToolPolicyCoverageGuard has
+	// already refilled the in-memory list via refreshConfigAndRewireServices
+	// AND waited it out via triggerReloadAndWait (the trigger-and-wait
+	// counterpart to WaitForPendingReloadFunc's wait-only shape; AgentDeleteTool
+	// uses the same WaitForPendingReloadFunc's sibling WaitForReloadFunc for
+	// its own delete_agent → list_agents ghost-listing race).
+	if activation == agentstore.ActivationActive {
+		if fn := ac.t.deps.NotifyAgentCreated; fn != nil {
+			fn(ac.finalID)
+		}
 	}
 
 	// status must reflect actual runnability, not
@@ -1006,6 +1080,23 @@ func (ad *agentDeleteToolExecute) reload() {
 	// same turn must not still see the deleted agent because the reload was
 	// only queued, not yet applied. Falls back to the fire-and-forget
 	// ReloadFunc when WaitForReloadFunc is nil (tests/degraded wiring).
+	//
+	// WHY WaitForReloadFunc (TRIGGER-and-wait) AND NOT WaitForPendingReloadFunc
+	// (wait-only): delete has no fast path on the publish side — nothing has
+	// already removed the agent from the live in-memory list the way
+	// UpsertAgentFast does for create/update — so we WANT the reload to
+	// actually fire here. WaitForPendingReloadFunc would only poll
+	// IsReloadPending and return immediately if nothing else happens to be
+	// pending, WITHOUT ever triggering the reload delete actually needs —
+	// leaving the just-deleted agent still ROUTED/listed (reachable) until
+	// some OTHER caller happens to trigger a reload for its own reasons,
+	// which may be never on an idle gateway.
+	// WaitForReloadFunc's production wiring (rest_auth.go::waitForReload,
+	// which calls TriggerReload unconditionally as its first action) is the
+	// right shape here. Compare to publishAgentActivation's comment, which
+	// uses WaitForPendingReloadFunc because that path's publish hook is the
+	// fast path that ALREADY updated the live registry when it succeeds
+	// inline — triggering again would be the bug #571 closed.
 
 	if ad.t.deps.WaitForReloadFunc != nil {
 		if err := ad.t.deps.WaitForReloadFunc(); err != nil {

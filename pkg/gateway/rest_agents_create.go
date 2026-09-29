@@ -221,6 +221,15 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if cra.persistAgent() {
 		return
 	}
+	// agent-picker-freshness fix (#1009): the new agent is now durably
+	// persisted (persistAgent returned success) — fan the agent_created
+	// frame out so every OTHER connected tab's Agent Picker drops its stale
+	// ['agents'] listing without waiting out the 30s query staleTime. Called
+	// before publishResponse deliberately: publishResponse can still report
+	// a partial "warning" (live-registry publish failed) in its 201 body,
+	// but the entity itself already exists either way — the frame means
+	// exactly that, nothing more.
+	cra.a.emitAgentCreated(cra.ac.ID)
 	cra.publishResponse()
 }
 

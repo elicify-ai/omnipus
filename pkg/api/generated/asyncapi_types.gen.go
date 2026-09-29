@@ -14,6 +14,13 @@ import "time"
 // Ensure time is used even if no date-time fields are present.
 var _ = time.Time{}
 
+// AgentCreatedFrame — Server → client. Emitted after a new agent is durably persisted (REST POST /api/v1/agents, or the create_agent tool). Scope is deliberately coarse, mirroring LibraryChangedFrame: clients invalidate the whole ['agents'] query and let it refetch. `agent_id` is informational only, never a scoping instruction. Broadcast, not addressed — the originating tab receives it too, where a redundant invalidate is a no-op.
+type AgentCreatedFrame struct {
+	// The newly created agent's ID. Informational only — never a scoping instruction. Clients invalidate the entire ['agents'] listing query regardless of which agent id triggered the frame.
+	AgentId string `json:"agent_id"`
+	Type    string `json:"type"`
+}
+
 // AgentSwitchedFrame — Server → client active agent changed. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
 type AgentSwitchedFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
@@ -1421,4 +1428,5 @@ const (
 	WsFrameTypeSessionSnapshot          WsFrameType = "session_snapshot"
 	WsFrameTypeCatchUpComplete          WsFrameType = "catch_up_complete"
 	WsFrameTypeUserMessage              WsFrameType = "user_message"
+	WsFrameTypeAgentCreated             WsFrameType = "agent_created"
 )

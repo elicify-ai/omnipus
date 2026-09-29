@@ -182,6 +182,17 @@ type restAPI struct {
 	// exists.
 	libraryChangeBroadcast atomic.Pointer[func(gen.LibraryChangedFrame)]
 
+	// agentCreatedBroadcast is the agent-picker-freshness cross-tab
+	// invalidation hook, the same D-107 shape as libraryChangeBroadcast
+	// above: createAgent (this file's caller) calls emitAgentCreated after
+	// the new agent is durably persisted, which fans an agent_created WS
+	// frame out through the chat WS handler so every connected tab
+	// (including the create_agent tool's own conversation tab, which has no
+	// invalidateQueries call of its own) drops its stale ['agents'] listing.
+	// Wired in gateway.go right after this struct is built, once wsHandler
+	// exists; nil-safe by design (unwired tests, partial boots).
+	agentCreatedBroadcast atomic.Pointer[func(gen.AgentCreatedFrame)]
+
 	// previewTokens is the live ADR-067 preview-token store (rest_library_preview.go),
 	// published by newLibraryPreviewRoutes at registration time.
 	//
