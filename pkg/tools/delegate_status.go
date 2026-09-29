@@ -105,6 +105,7 @@ type delegateStatusMessageEnvelope struct {
 	ResultSoFar string    `json:"result_so_far"`
 	Condition   string    `json:"condition"`
 	Note        string    `json:"note"`
+	Paths       []string  `json:"paths"` // artifact only: shown when it carries no note (#1011)
 }
 
 func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID string) *ToolResult {
@@ -155,7 +156,7 @@ func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID strin
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: status: decode latest inbox entry: %v", err))
 	}
-	line := firstNonBlank(envelope.Text, envelope.Summary, envelope.ResultSoFar, envelope.Condition, envelope.Note, envelope.Kind)
+	line := firstNonBlank(envelope.Text, envelope.Summary, envelope.ResultSoFar, envelope.Condition, envelope.Note, strings.Join(envelope.Paths, ", "), envelope.Kind)
 	return NewToolResult(fmt.Sprintf("%s, %s, %s ago", state, line, formatDelegateStatusAge(t.now().Sub(envelope.CreatedAt))) + extra)
 }
 
