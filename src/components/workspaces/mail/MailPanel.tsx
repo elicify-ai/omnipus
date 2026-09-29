@@ -291,6 +291,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     retry: false,
   })
   const detail: MailMessage | null = detailQuery.data ?? null
+  const headerDate = detail?.date && new Date(detail.date).getUTCFullYear() > 1
+    ? formatMailDate(detail.date)
+    : ''
   const compactDraftList = layout === 'stacked' && detail?.is_draft === true
     && draftEditingRef === `${agentId}:${folder}:${selectedRef}`
   const seenMutation = useMutation({
@@ -708,7 +711,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                     </div>
                   ) : (
                     <p className="min-w-0 flex-1 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-                      From {detail.from ?? 'unknown'} · {formatMailDate(detail.date)}
+                      From {detail.from ?? 'unknown'}{headerDate ? ` · ${headerDate}` : ''}
                     </p>
                   )}
                   {folder !== 'drafts' && (
