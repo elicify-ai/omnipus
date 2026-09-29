@@ -163,6 +163,11 @@ func TestTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgent(t *t
 		running:      make(map[string]*taskSlot),
 		dispatchSema: newDispatchSemaphore(10),
 	}
+	// runTask keeps writing the run record under tasks/<id>/runs after the
+	// task already reads StatusFailed; drain it before the deferred al.Close
+	// and the t.TempDir cleanups run (defers are LIFO), or RemoveAll races
+	// that write ("directory not empty", PR #1082 CI arm64).
+	defer te.Drain(10 * time.Second)
 
 	// A turn aborted by the denial budget breaks the run, which is one failed
 	// task attempt (founder decision 2026-09-14); a limit of 1 ends the task on
