@@ -6349,6 +6349,7 @@ export interface components {
         RetryMoveResult: {
             /** @enum {string} */
             outcome: "re_enrolled" | "already_complete";
+            /** @description Paths re-enrolled by this retry, WORKSPACE-RELATIVE (relative to the workspace root, not to the collection or the caller). May be empty when the outcome is `already_complete`. */
             re_enrolled_paths: string[];
         };
         /**

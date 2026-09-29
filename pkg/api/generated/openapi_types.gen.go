@@ -20754,8 +20754,10 @@ type RetryMoveRequest struct {
 
 // RetryMoveResult defines model for RetryMoveResult.
 type RetryMoveResult struct {
-	Outcome         RetryMoveResultOutcome `json:"outcome"`
-	ReEnrolledPaths []string               `json:"re_enrolled_paths"`
+	Outcome RetryMoveResultOutcome `json:"outcome"`
+
+	// ReEnrolledPaths Paths re-enrolled by this retry, WORKSPACE-RELATIVE (relative to the workspace root, not to the collection or the caller). May be empty when the outcome is `already_complete`.
+	ReEnrolledPaths []string `json:"re_enrolled_paths"`
 }
 
 // RetryMoveResultOutcome defines model for RetryMoveResult.Outcome.
