@@ -534,7 +534,7 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 	}
 	draftSendMu.Lock()
 	draftSendRecords[key] = draftSendRecord{
-		sentSaved: resp.SentSaved, saveWarning: cleanupWarningOf(resp),
+		sentSaved: resp.SentSaved, saveWarning: saveWarningOf(resp),
 		cleanupWarn: cleanupWarn, expunged: expunged,
 		messageID: out.MessageID, uid: cur.UID, uidvalidity: cur.UIDValidity, recordedAt: time.Now(),
 	}
@@ -562,10 +562,13 @@ func derefInts(list *[]int) []int {
 	return *list
 }
 
-// cleanupWarningOf extracts the cleanup warning text for the record.
-func cleanupWarningOf(resp gen.MailSendResponse) string {
-	if resp.DraftCleanupWarning != nil {
-		return *resp.DraftCleanupWarning
+// saveWarningOf extracts the Sent-folder save warning text for the record,
+// reading resp.SaveWarning — the field the send handler actually populates on
+// a failed Sent-copy AppendMessage — so a replay reconstructs the ORIGINAL
+// warning text instead of losing it.
+func saveWarningOf(resp gen.MailSendResponse) string {
+	if resp.SaveWarning != nil {
+		return *resp.SaveWarning
 	}
 	return ""
 }
