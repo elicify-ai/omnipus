@@ -256,31 +256,51 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	send := func(frame any, sessionID, kind string) bool {
 		return wc.sendCriticalScopedGen(frame, dropContext(sessionID, viewerID, kind), request.attachment.ctx, currentOrigin)
 	}
+	// earlySend delivers every check below that does not yet depend on this
+	// connection HAVING an attachment (invalid frame, missing fields,
+	// invalid claims, the session-ownership gate) — via the UNSCOPED
+	// sendCriticalGen (connection-wide; deliverable as long as the
+	// connection itself is alive), matching the pattern the attach and
+	// detach ownership refusals already use. Two scoped alternatives were
+	// tried and both silently drop the frame instead of sending it:
+	// request.attachment.ctx is nil without an attachment (send, below,
+	// requires it), and request.ctx itself gets canceled by this very
+	// function's own `defer state.finishWebRTCOffer(epoch)` the instant this
+	// function returns — a cancel-before-delivery race against writePump's
+	// own async dequeue that this handler consistently lost. send (above)
+	// remains correctly scoped to request.attachment.ctx +
+	// webRTCRequestOriginCurrent for every send AFTER awaitAttachment (below)
+	// has confirmed a real, current attachment.
+	earlySend := func(frame any, sessionID, kind string) {
+		wc.sendCriticalGen(frame, dropContext(sessionID, viewerID, kind))
+	}
 	var frame generated.BrowserWebRTCOfferFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
-		send(errorStatus("browser_webrtc_offer: invalid frame"), "", "webrtc-offer-invalid")
+		earlySend(errorStatus("browser_webrtc_offer: invalid frame"), "", "webrtc-offer-invalid")
 		return
 	}
 	sessID := frame.SessionId
 	if frame.AgentId == "" || frame.Sdp == "" {
-		send(sessionErrorStatus(sessID, "browser_webrtc_offer: agent_id and sdp are required"), sessID, "webrtc-offer-missing-fields")
+		earlySend(sessionErrorStatus(sessID, "browser_webrtc_offer: agent_id and sdp are required"), sessID, "webrtc-offer-missing-fields")
 		return
 	}
 	const maxSafeInteger = uint64(1<<53 - 1)
 	validID := func(value *int) bool { return value != nil && *value > 0 && uint64(*value) <= maxSafeInteger }
 	if !validID(frame.OfferId) || (frame.CaptureId == nil) != (frame.CaptureGeneration == nil) ||
 		(frame.CaptureId != nil && (*frame.CaptureId == "" || !validID(frame.CaptureGeneration))) {
-		send(operationErrorStatus(sessID, "browser_webrtc_offer: valid offer_id and paired capture claims are required"), sessID, "webrtc-offer-invalid-claims")
+		earlySend(operationErrorStatus(sessID, "browser_webrtc_offer: valid offer_id and paired capture claims are required"), sessID, "webrtc-offer-invalid-claims")
 		return
 	}
 
 	// Session-ownership gate (founder ruling, 2026-09-28): the offer names a
 	// session, so the named session must be the caller's own. Refused before
 	// any attachment await or media machinery — a non-owner gets an explicit
-	// refusal frame, never silence and never a state frame.
+	// refusal frame, never silence and never a state frame. This still must
+	// hold for a caller with NO attachment at all (e.g. its own attach was
+	// itself just refused) — see earlySend's doc comment above.
 	if h.browserFrameSessionRefused(sessID, state.commandAttachment().sessionID, userID) {
 		h.auditControl(userID, sessID, viewerID, audit.SeverityWarn, "session_ownership_refused")
-		send(sessionErrorStatus(sessID, "browser_webrtc_offer: session not available"), sessID, "webrtc-offer-owner-refused")
+		earlySend(sessionErrorStatus(sessID, "browser_webrtc_offer: session not available"), sessID, "webrtc-offer-owner-refused")
 		return
 	}
 	sendState := func(available, active, audio bool, reason string, cause error) {

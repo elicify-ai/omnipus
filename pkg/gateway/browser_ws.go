@@ -562,6 +562,19 @@ func (q *browserConnWorkQueue) close() {
 // actually arrived in: a second offer frame dispatched a moment later always
 // observes (and invalidates) whatever the first offer's goroutine captured,
 // regardless of which goroutine the Go scheduler happens to run first.
+//
+// ctx (this request's own, as opposed to attachment.ctx) stays live even
+// when this connection has no attachment at all (attachment.ctx == nil): a
+// canceled ctx here previously made webRTCOfferRequest reject the request
+// outright, so handleWebRTCOffer's session-ownership gate (founder ruling,
+// 2026-09-28) — which must deliver an explicit refusal, never silence, even
+// to a caller with no attachment — never even ran. handleWebRTCOffer's early
+// sends (before an attachment is confirmed) go out via the unscoped
+// sendCriticalGen regardless, not via this ctx — see earlySend's doc comment
+// there for why. A caller with no attachment that clears the ownership gate
+// still gets nothing to negotiate against: awaitAttachment
+// (browser_pending_attachment.go) sees attachment.ctx == nil and returns its
+// own "browser attachment has not been requested" error, unchanged by this.
 func (s *browserConnState) beginWebRTCOffer() uint64 {
 	attachment := s.attachmentRequest()
 	parent := attachment.ctx
@@ -569,9 +582,6 @@ func (s *browserConnState) beginWebRTCOffer() uint64 {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
-	if attachment.ctx == nil {
-		cancel()
-	}
 	s.webrtcMu.Lock()
 	defer s.webrtcMu.Unlock()
 	if s.webrtcRequest != nil {
@@ -1253,13 +1263,7 @@ func (h *BrowserWSHandler) readLoop(
 			// connection could read nothing at all.
 			h.dispatchViewport(wc, &state, viewerID, userID, data)
 		case string(generated.WsFrameTypeBrowserDetach):
-			state.commands.discard()
 			h.handleDetach(wc, &state, viewerID, userID, data)
-			// Unconditional for the same reason as readLoop's own cleanup
-			// defer above: an in-flight background offer (dispatchWebRTCOffer)
-			// may not have committed to state.webrtc yet, but this explicit
-			// detach must still invalidate it.
-			h.detachWebRTCViewer(&state, viewerID)
 		case "browser_input_offer":
 			h.dispatchDedicatedInputOffer(wc, &state, viewerID, data, cfg)
 		case string(generated.WsFrameTypeBrowserWebrtcOffer):
@@ -1310,13 +1314,24 @@ func (h *BrowserWSHandler) dispatchAttach(
 	data []byte,
 	cfg *config.Config,
 ) {
-	epoch := state.beginAttach()
 	var attach generated.BrowserAttachFrame
-	if err := json.Unmarshal(data, &attach); err == nil {
-		state.setDedicatedInput(attach.InputMode != nil && *attach.InputMode == "dedicated")
-	} else {
-		state.setDedicatedInput(false)
+	parseErr := json.Unmarshal(data, &attach)
+	if parseErr == nil && attach.AgentId != "" && attach.SessionId != "" {
+		_, _, outcome, authorized := resolveBrowserPanelTarget(context.Background(), h.agentLoop, attach.AgentId, attach.SessionId, userID)
+		if !authorized {
+			h.auditControl(userID, attach.SessionId, viewerID, audit.SeverityWarn, "session_ownership_refused")
+			wc.sendCriticalGen(sessionErrorStatus(attach.SessionId, "browser_attach: session not available"),
+				dropContext(attach.SessionId, viewerID, "attach-owner-refused"))
+			return
+		}
+		if outcome != agent.BrowserResolveOK {
+			wc.sendCriticalGen(sessionErrorStatus(attach.SessionId, browserResolveReason(outcome, attach.AgentId)),
+				dropContext(attach.SessionId, viewerID, "attach-no-manager"))
+			return
+		}
 	}
+	epoch := state.beginAttach()
+	state.setDedicatedInput(parseErr == nil && attach.InputMode != nil && *attach.InputMode == "dedicated")
 	state.work.submit(&h.activeConns, workKindAttach, func() {
 		h.handleAttach(wc, state, viewerID, userID, data, cfg, epoch)
 	})
@@ -1411,13 +1426,6 @@ func (h *BrowserWSHandler) handleAttach(
 ) {
 	runBrowserConnWorkHook(workKindAttach) // test-only seam; nil in production
 	defer state.abandonAttachment(epoch)
-	prev, prevSession, prevPanel, current := state.takePreviousAttachment(epoch)
-	if !current {
-		return
-	}
-	if prev != nil && prevSession != "" {
-		h.detach(prev, prevSession, prevPanel, viewerID, userID)
-	}
 	request := state.attachmentRequest()
 	if request.epoch != epoch || request.ctx == nil || request.ctx.Err() != nil {
 		return
@@ -1441,35 +1449,28 @@ func (h *BrowserWSHandler) handleAttach(
 		return
 	}
 
-	// Session-ownership gate (founder ruling, 2026-09-28): a live-browser
-	// session is reachable only by the account that owns it. This runs BEFORE
-	// any attach side effect — before the manager resolve below, before
-	// Live().Attach, before bindAttachment — so a refused caller binds
-	// nothing and the owner's browser never moves.
-	if h.browserSessionOwnershipRefused(frame.SessionId, userID) {
+	mgr, panelSessionID, outcome, authorized := resolveBrowserPanelTarget(
+		workCtx, h.agentLoop, frame.AgentId, frame.SessionId, userID)
+	if !authorized {
 		h.auditControl(userID, frame.SessionId, viewerID, audit.SeverityWarn, "session_ownership_refused")
-		sendFailure(
-			sessionErrorStatus(frame.SessionId, "browser_attach: session not available"),
+		sendFailure(sessionErrorStatus(frame.SessionId, "browser_attach: session not available"),
 			dropContext(frame.SessionId, viewerID, "attach-owner-refused"))
 		return
 	}
-
-	// FR-017: the workspace is resolved on the SERVER from the attaching chat
-	// session's own meta — the client sends a session id and nothing else, and
-	// never gets to name a workspace. See sessionWorkspaceID.
-	mgr, outcome := h.agentLoop.BrowserManagerForAgent(
-		workCtx, frame.AgentId, h.sessionWorkspaceID(frame.SessionId))
 	if outcome != agent.BrowserResolveOK {
-		sendFailure(
-			sessionErrorStatus(frame.SessionId, browserResolveReason(outcome, frame.AgentId)),
+		sendFailure(sessionErrorStatus(frame.SessionId, browserResolveReason(outcome, frame.AgentId)),
 			dropContext(frame.SessionId, viewerID, "attach-no-manager"))
 		return
 	}
+	prev, prevSession, prevPanel, current := state.takePreviousAttachment(epoch)
+	if !current {
+		return
+	}
+	if prev != nil && prevSession != "" {
+		h.detach(prev, prevSession, prevPanel, viewerID, userID)
+	}
 
 	chatSessionID := frame.SessionId // context/logging + wire echo ONLY — see doc comment above.
-	// Issue #671: resolved ONCE, here, and used for every live-view call this
-	// connection makes from now on (pinned via bindAttachment below).
-	panelSessionID := mgr.PanelTabSetID(chatSessionID)
 	onStatus, onControl, onTabs := browserAttachCallbacks(wc, request.ctx, chatSessionID, viewerID)
 	controlledByOther, err := mgr.Live().AttachContext(workCtx, panelSessionID, viewerID, onStatus, onControl, onTabs)
 	if err != nil {
@@ -1815,7 +1816,11 @@ func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnSta
 			dropContext(named, viewerID, "detach-owner-refused"))
 		return
 	}
+	state.commands.discard()
 	state.setDedicatedInput(false)
+	// An accepted detach also invalidates pending offers that have not yet
+	// committed a viewer, even when no media attachment exists yet.
+	h.detachWebRTCViewer(state, viewerID)
 	// Unconditional, and BEFORE the clear — the same discipline
 	// detachWebRTCViewer applies with invalidateWebRTCOffer, for the same
 	// reason: a browser_attach dispatched onto the worker may still be

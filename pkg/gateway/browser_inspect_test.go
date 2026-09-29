@@ -35,6 +35,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -56,6 +57,19 @@ func inspectRequestBody(t *testing.T, req gen.BrowserInspectRequest) *strings.Re
 	data, err := json.Marshal(req)
 	require.NoError(t, err)
 	return strings.NewReader(string(data))
+}
+
+func seedBrowserInspectChat(t *testing.T, api *restAPI, agentID, workspaceID string) string {
+	t.Helper()
+	require.NoError(t, writeWorkspaceFile(config.OmnipusHomeDir(), storedWorkspace{
+		ID: workspaceID, Name: "Inspect test", Status: "active", CoreTeam: []string{agentID},
+	}))
+	store := api.agentLoop.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", agentID)
+	require.NoError(t, err)
+	require.NoError(t, store.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &workspaceID}))
+	return meta.ID
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +125,8 @@ func TestHandleBrowserInspect_ValidToken_Proceeds(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "test-inspect-token-abc123")
 	handler := api.withAuth(api.HandleBrowserInspect)
 
-	body := inspectRequestBody(t, gen.BrowserInspectRequest{AgentId: "no-such-agent", SessionId: "s1", X: 1, Y: 1})
+	sessionID := seedBrowserInspectChat(t, api, "no-such-agent", "inspect-missing-agent")
+	body := inspectRequestBody(t, gen.BrowserInspectRequest{AgentId: "no-such-agent", SessionId: sessionID, X: 1, Y: 1})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/browser/inspect", body)
 	r.Header.Set("Content-Type", "application/json")
@@ -224,9 +239,10 @@ func TestHandleBrowserInspect_MalformedJSON_Rejected(t *testing.T) {
 // Then 200 OK with {"ok":false,"reason":"...agent-that-does-not-exist..."}.
 func TestHandleBrowserInspect_NoManagerForAgent(t *testing.T) {
 	api := newBrowserInspectTestAPI(t)
+	sessionID := seedBrowserInspectChat(t, api, "agent-that-does-not-exist", "inspect-missing-agent")
 
 	body := inspectRequestBody(t, gen.BrowserInspectRequest{
-		AgentId: "agent-that-does-not-exist", SessionId: "sess-1", X: 10, Y: 10,
+		AgentId: "agent-that-does-not-exist", SessionId: sessionID, X: 10, Y: 10,
 	})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/browser/inspect", body)
@@ -341,8 +357,9 @@ func TestHandleBrowserInspect_InspectPointHardError_SoftErrorWithReason(t *testi
 		"registerSharedTools must have built a browser even though its "+
 			"profile dir is unusable — the failure only surfaces lazily, on first Session() call")
 
+	sessionID := seedBrowserInspectChat(t, api, defaultAgent.ID, testHarnessWorkspaceMembershipID)
 	body := inspectRequestBody(t, gen.BrowserInspectRequest{
-		AgentId: defaultAgent.ID, SessionId: "sess-hard-error", X: 10, Y: 10,
+		AgentId: defaultAgent.ID, SessionId: sessionID, X: 10, Y: 10,
 	})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/browser/inspect", body)
@@ -419,8 +436,9 @@ func TestHandleBrowserInspect_Success_MarshalsTagTextHtml(t *testing.T) {
 	defer cancel()
 	require.NoError(t, chromedp.Run(navCtx, chromedp.Navigate(pageSrv.URL)))
 
+	sessionID := seedBrowserInspectChat(t, api, defaultAgent.ID, mgr.BrowsingKey().WorkspaceID())
 	body := inspectRequestBody(t, gen.BrowserInspectRequest{
-		AgentId: defaultAgent.ID, SessionId: "sess-success", X: 30, Y: 20, // inside the button's [10,10]-[110,50] box
+		AgentId: defaultAgent.ID, SessionId: sessionID, X: 30, Y: 20, // inside the button's [10,10]-[110,50] box
 	})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/browser/inspect", body)

@@ -883,20 +883,29 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create session: %v", err))
 		return
 	}
+	owner := actorUsername(r)
+	patch := session.MetaPatch{}
+	if owner != "" {
+		patch.Owner = &owner
+	}
 	if workspaceID != "" {
-		wsCopy := workspaceID
-		if setErr := store.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &wsCopy}); setErr != nil {
-			// Not fatal to the create — the session exists and is usable as a
-			// chat. But it is fatal to the binding, and a panel that then
-			// refuses would look like the original bug, so say so loudly
-			// rather than returning a session that quietly lost its workspace.
-			slog.Warn("rest: create session: could not stamp workspace",
-				"session_id", meta.ID, "workspace_id", workspaceID, "error", setErr)
-		} else if refreshed, getErr := store.GetMeta(meta.ID); getErr == nil && refreshed != nil {
-			// Return what was actually persisted, so the caller's own
-			// workspace_id echo is the stamp and not the request.
-			meta = refreshed
+		patch.WorkspaceID = &workspaceID
+	}
+	if patch.Owner != nil || patch.WorkspaceID != nil {
+		if setErr := store.SetMeta(meta.ID, patch); setErr != nil {
+			slog.Error("rest: create session: could not persist identity",
+				"session_id", meta.ID, "error", setErr)
+			jsonErr(w, http.StatusInternalServerError, "could not persist session identity")
+			return
 		}
+		refreshed, getErr := store.GetMeta(meta.ID)
+		if getErr != nil || refreshed == nil {
+			slog.Error("rest: create session: could not read persisted identity",
+				"session_id", meta.ID, "error", getErr)
+			jsonErr(w, http.StatusInternalServerError, "could not read created session")
+			return
+		}
+		meta = refreshed
 	}
 	jsonCreated(w, unifiedMetaToGenSession(meta))
 }

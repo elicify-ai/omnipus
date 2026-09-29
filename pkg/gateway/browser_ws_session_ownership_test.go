@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -29,6 +30,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // Session-ownership fixture identities. Two accounts, two workspaces, one
@@ -124,6 +126,10 @@ func soUserToken(t *testing.T, digit string) (string, string) {
 func newSessionOwnershipFixture(t *testing.T, mutate func(cfg *config.Config)) *soFixture {
 	t.Helper()
 	chrome := soSkipIfNoChrome(t)
+	t.Cleanup(config.SetMemoryProviderForTest(
+		func() (bool, bool) { return false, true },
+		func() (uint64, bool) { return 8 << 30, true },
+	))
 
 	tmpDir := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", tmpDir)
@@ -228,22 +234,23 @@ func (f *soFixture) closeConns() {
 
 // attachAndRequire sends browser_attach for (agentID, sessionID) and requires
 // the "attached" success status — the owner-allowed path every row leans on.
+//
+// Every successful attach unconditionally follows with a browser_webrtc_state
+// announcement (ADR-047, handleAttach's call to
+// announceWebRTCAvailabilityContext) — a real, deterministic side effect of
+// the OWNER's own attach, not something a later non-owner request could have
+// triggered. Drained here, so a subsequent soExpectQuiet on this same
+// connection cannot mistake this connection's own queued frame for a leak
+// caused by someone else's refused request.
 func (f *soFixture) attachAndRequire(t *testing.T, conn *websocket.Conn, agentID, sessionID string) {
 	t.Helper()
 	soSendAttach(t, conn, agentID, sessionID, false)
 	resp := readBrowserStatusFrame(t, conn, 20*time.Second)
 	require.Equal(t, "attached", resp.State,
 		"owner attach must succeed against real headless Chrome: %+v", resp)
-}
-
-// attemptAttach sends browser_attach and returns the response status WITHOUT
-// asserting its state — non-owner attach attempts are expected to be refused
-// after the fix and granted before it, so rows drain the outcome either way
-// and pin only what the ruling demands further down.
-func (f *soFixture) attemptAttach(t *testing.T, conn *websocket.Conn, agentID, sessionID string, dedicated bool) browserFrameDecoder {
-	t.Helper()
-	soSendAttach(t, conn, agentID, sessionID, dedicated)
-	return readBrowserStatusFrame(t, conn, 20*time.Second)
+	state := readBrowserFrame(t, conn, soRefusalTMO)
+	require.Equal(t, "browser_webrtc_state", state.Type,
+		"the post-attach WebRTC-availability announcement must follow immediately: %+v", state)
 }
 
 // --- frame senders (one per frame type in the ruling's scope) ---
@@ -352,6 +359,21 @@ func soExpectRefusal(t *testing.T, conn *websocket.Conn, label string) {
 	}
 	require.Equal(t, "error", resp.State,
 		"%s: non-owner frame must be refused with a browser_status error frame: %+v", label, resp)
+	if label == "browser_control" {
+		require.Equal(t, "browser_control: attach before requesting control", resp.Message)
+	} else {
+		require.Equal(t, label+": session not available", resp.Message,
+			"%s: only the ownership refusal qualifies: %+v", label, resp)
+	}
+}
+
+func soExpectOwnerRefusal(t *testing.T, conn *websocket.Conn, operation, sessionID string) {
+	t.Helper()
+	resp := readBrowserStatusFrame(t, conn, soRefusalTMO)
+	require.Equal(t, "error", resp.State, "%s: expected ownership refusal: %+v", operation, resp)
+	require.Equal(t, sessionID, resp.SessionID, "%s: refusal must name the requested session", operation)
+	require.Equal(t, operation+": session not available", resp.Message,
+		"%s: a different error must not count as an ownership refusal", operation)
 }
 
 // soExpectQuiet requires NO frame of any kind within the window. The owner's
@@ -416,6 +438,100 @@ func TestBrowserWS_SessionOwnership_Attach_OwnerAllowed(t *testing.T) {
 	f.attachAndRequire(t, f.bobConn, soAgentID, f.bobSess)
 }
 
+func TestBrowserWS_SessionOwnership_RESTCreatedSession_OwnerCanAttach(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	api := &restAPI{agentLoop: f.al, homePath: config.OmnipusHomeDir()}
+	req := generated.SessionCreateRequest{AgentId: strPtrSO(soAgentID), WorkspaceId: strPtrSO(soAliceWS)}
+	body, err := json.Marshal(req)
+	require.NoError(t, err)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", strings.NewReader(string(body)))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+f.aliceToken)
+	w := httptest.NewRecorder()
+	api.withAuth(api.HandleSessions)(w, r)
+	require.Equal(t, http.StatusCreated, w.Code, "REST create failed: %s", w.Body.String())
+
+	var created generated.Session
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	require.NotEmpty(t, created.Id)
+	meta, err := f.al.GetSessionStore().GetMeta(created.Id)
+	require.NoError(t, err)
+	require.Equal(t, soAliceUser, meta.Owner, "REST must persist the authenticated account")
+	require.Equal(t, soAliceWS, meta.WorkspaceID)
+
+	f.start(t)
+	f.attachAndRequire(t, f.aliceConn, soAgentID, created.Id)
+}
+
+func soLimitAgentToWorkspace(t *testing.T, workspaceID string) {
+	t.Helper()
+	home := config.OmnipusHomeDir()
+	ids, _ := workspace.FindAllForAgent(home, soAgentID)
+	require.Contains(t, ids, workspaceID)
+	for _, id := range ids {
+		if id != workspaceID {
+			seedBindingWorkspace(t, home, id)
+		}
+	}
+	ids, _ = workspace.FindAllForAgent(home, soAgentID)
+	require.Equal(t, []string{workspaceID}, ids)
+}
+
+func soInspectSession(t *testing.T, f *soFixture, token, sessionID string) generated.BrowserInspectResponse {
+	t.Helper()
+	api := &restAPI{agentLoop: f.al, homePath: config.OmnipusHomeDir()}
+	body := inspectRequestBody(t, generated.BrowserInspectRequest{
+		AgentId: soAgentID, SessionId: sessionID, X: 10, Y: 10,
+	})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/browser/inspect", body)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	api.withAuth(api.HandleBrowserInspect)(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "inspect response: %s", w.Body.String())
+	var response generated.BrowserInspectResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	return response
+}
+
+func soRequireInspectRefusal(t *testing.T, response generated.BrowserInspectResponse) {
+	t.Helper()
+	require.False(t, response.Ok)
+	require.NotNil(t, response.Reason)
+	require.Equal(t, "session not available", *response.Reason)
+	require.Nil(t, response.Tag)
+	require.Nil(t, response.Text)
+	require.Nil(t, response.Html)
+}
+
+func TestBrowserWS_SessionOwnership_Inspect_UnknownSessionRefused(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	soLimitAgentToWorkspace(t, soAliceWS)
+	soRequireInspectRefusal(t, soInspectSession(t, f, f.bobToken, "01JZZZZZZZZZZZZZZZZZZZZZZZ"))
+}
+
+func TestBrowserWS_SessionOwnership_Inspect_ResolvedWorkspaceMustMatchChat(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	soLimitAgentToWorkspace(t, soBobWS)
+	soRequireInspectRefusal(t, soInspectSession(t, f, f.aliceToken, f.aliceSess))
+}
+
+func TestBrowserWS_SessionOwnership_Attach_ResolvedWorkspaceMustMatchChat(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	soLimitAgentToWorkspace(t, soBobWS)
+	f.start(t)
+	soSendAttach(t, f.aliceConn, soAgentID, f.aliceSess, false)
+	soExpectOwnerRefusal(t, f.aliceConn, "browser_attach", f.aliceSess)
+}
+
+func TestBrowserWS_SessionOwnership_Attach_UnknownSessionRefused(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	const missingSession = "01JZZZZZZZZZZZZZZZZZZZZZZZ"
+	soSendAttach(t, f.aliceConn, soAgentID, missingSession, false)
+	soExpectOwnerRefusal(t, f.aliceConn, "browser_attach", missingSession)
+}
+
 // An attach naming a session outside the caller's account is refused.
 func TestBrowserWS_SessionOwnership_Attach_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, nil)
@@ -432,16 +548,32 @@ func TestBrowserWS_SessionOwnership_Attach_NonOwnerRefused(t *testing.T) {
 	soExpectQuiet(t, f.aliceConn, "browser_attach")
 }
 
+func TestBrowserWS_SessionOwnership_Attach_RefusalPreservesCurrentView(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	f.attachAndRequire(t, f.bobConn, soAgentID, f.bobSess)
+	mgr, outcome := f.al.BrowserManagerForAgent(context.Background(), soAgentID, soBobWS)
+	require.Equal(t, agent.BrowserResolveOK, outcome)
+	panel := mgr.PanelTabSetID(f.bobSess)
+
+	soSendAttach(t, f.bobConn, soAgentID, f.aliceSess, false)
+	soExpectOwnerRefusal(t, f.bobConn, "browser_attach", f.aliceSess)
+	soSendControlTake(t, f.bobConn)
+	controlled := readBrowserStatusFrame(t, f.bobConn, soRefusalTMO)
+	require.Equal(t, "controlling", controlled.State,
+		"refused attach must leave the previous attachment usable: %+v", controlled)
+	require.Equal(t, f.bobSess, controlled.SessionID)
+	require.NotEmpty(t, mgr.Live().Controller(panel), "the original viewer must still hold its own control lock")
+}
+
 // Browser input follows the connection's authorized attachment.
 func TestBrowserWS_SessionOwnership_Input_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, nil)
 	f.start(t)
 	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
 
-	resp := f.attemptAttach(t, f.bobConn, soAgentID, f.aliceSess, false)
-	require.Equal(t, "error", resp.State,
-		"non-owner attach must be refused: browser_input acts on the pinned attachment, "+
-			"so a granted attach IS input access to the owner's browser (got %q)", resp.State)
+	soSendAttach(t, f.bobConn, soAgentID, f.aliceSess, false)
+	soExpectOwnerRefusal(t, f.bobConn, "browser_attach", f.aliceSess)
 
 	// A refused attachment leaves input without a bound session.
 	soSendInput(t, f.bobConn)
@@ -455,7 +587,8 @@ func TestBrowserWS_SessionOwnership_Control_NonOwnerRefused(t *testing.T) {
 	f.start(t)
 	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
 
-	_ = f.attemptAttach(t, f.bobConn, soAgentID, f.aliceSess, false) // outcome unpinned by design
+	soSendAttach(t, f.bobConn, soAgentID, f.aliceSess, false)
+	soExpectOwnerRefusal(t, f.bobConn, "browser_attach", f.aliceSess)
 
 	soSendControlTake(t, f.bobConn)
 	soExpectRefusal(t, f.bobConn, "browser_control")
@@ -509,15 +642,44 @@ func TestBrowserWS_SessionOwnership_Detach_NonOwnerRefused(t *testing.T) {
 	soExpectQuiet(t, f.aliceConn, "browser_detach")
 }
 
+func TestBrowserWS_SessionOwnership_Detach_RefusalPreservesCurrentView(t *testing.T) {
+	f := newSessionOwnershipFixture(t, nil)
+	f.start(t)
+	f.attachAndRequire(t, f.bobConn, soAgentID, f.bobSess)
+	mgr, outcome := f.al.BrowserManagerForAgent(context.Background(), soAgentID, soBobWS)
+	require.Equal(t, agent.BrowserResolveOK, outcome)
+	panel := mgr.PanelTabSetID(f.bobSess)
+
+	entered, release := blockSlowHandler(t, workKindTabAction)
+	soWrite(t, f.bobConn, generated.BrowserTabActionFrame{
+		Type: string(generated.WsFrameTypeBrowserTabAction), Action: "open",
+	})
+	select {
+	case <-entered:
+	case <-time.After(soRefusalTMO):
+		t.Fatal("own tab command did not begin before the refused detach")
+	}
+	soSendControlTake(t, f.bobConn)
+	soSendDetach(t, f.bobConn, f.aliceSess)
+	soExpectOwnerRefusal(t, f.bobConn, "browser_detach", f.aliceSess)
+	release()
+	require.Eventually(t, func() bool { return mgr.Live().Controller(panel) != "" },
+		soRefusalTMO, 10*time.Millisecond,
+		"refused detach discarded Bob's queued control request or canceled his active command")
+	controlled := readBrowserStatusFrame(t, f.bobConn, soRefusalTMO)
+	require.Equal(t, "controlling", controlled.State,
+		"refused detach must leave the queued request and attachment usable: %+v", controlled)
+	require.Equal(t, f.bobSess, controlled.SessionID)
+}
+
 // A dedicated-input offer requires an authorized dedicated attachment.
 func TestBrowserWS_SessionOwnership_InputOffer_NonOwnerRefused(t *testing.T) {
 	f := newSessionOwnershipFixture(t, nil)
 	f.start(t)
 	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
 
-	resp := f.attemptAttach(t, f.bobConn, soAgentID, f.aliceSess, true)
-	require.Equal(t, "error", resp.State,
-		"non-owner dedicated attach must be refused: %+v", resp)
+	soSendAttach(t, f.bobConn, soAgentID, f.aliceSess, true)
+	soExpectOwnerRefusal(t, f.bobConn, "browser_attach", f.aliceSess)
 
 	sdp := soMintOfferSDP(t)
 	soSendInputOffer(t, f.bobConn, soAgentID, f.aliceSess, sdp)
@@ -533,19 +695,20 @@ func TestBrowserWS_SessionOwnership_WebrtcOffer_NonOwnerRefused(t *testing.T) {
 	f.start(t)
 	f.attachAndRequire(t, f.aliceConn, soAgentID, f.aliceSess)
 
-	_ = f.attemptAttach(t, f.bobConn, soAgentID, f.aliceSess, false) // outcome unpinned by design
+	soSendAttach(t, f.bobConn, soAgentID, f.aliceSess, false)
+	soExpectOwnerRefusal(t, f.bobConn, "browser_attach", f.aliceSess)
 
 	cfg := f.al.GetConfig()
 	require.True(t, cfg.Tools.Browser.WebRTCEnabled, "fixture must enable the webrtc path this row exercises")
 
 	sdp := soMintOfferSDP(t)
 	soSendWebrtcOffer(t, f.bobConn, soAgentID, f.aliceSess, sdp)
-	soExpectRefusalNoAnswer(t, f.bobConn, "browser_webrtc_offer")
+	soExpectRefusalNoAnswer(t, f.bobConn, "browser_webrtc_offer", f.aliceSess)
 	soExpectQuiet(t, f.aliceConn, "browser_webrtc_offer")
 }
 
 // soExpectRefusalNoAnswer requires a status refusal and excludes a media answer.
-func soExpectRefusalNoAnswer(t *testing.T, conn *websocket.Conn, label string) {
+func soExpectRefusalNoAnswer(t *testing.T, conn *websocket.Conn, label, sessionID string) {
 	t.Helper()
 	conn.SetReadDeadline(time.Now().Add(soWebrtcTMO)) // errcheck rationale: test-only conn deadline
 	for {
@@ -568,7 +731,10 @@ func soExpectRefusalNoAnswer(t *testing.T, conn *websocket.Conn, label string) {
 				"the ownership ruling requires a refusal", label, state, f.State, f.Message)
 		}
 		require.Equal(t, "error", f.State,
-			"%s: non-owner webrtc offer must be refused with a browser_status error: %s", label, raw)
+			"%s: expected browser_status refusal: %s", label, raw)
+		require.Equal(t, sessionID, f.SessionID, "%s: refusal must name the requested session", label)
+		require.Equal(t, label+": session not available", f.Message,
+			"%s: a different error must not count as an ownership refusal", label)
 		return
 	}
 }
@@ -581,7 +747,11 @@ func assertNoInputStateGranted(t *testing.T, conn *websocket.Conn) {
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
-			return // quiet window elapsed — nothing granted
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				return
+			}
+			t.Fatalf("dedicated input observer closed before the quiet window ended: %v", err)
 		}
 		var f browserFrameDecoder
 		if json.Unmarshal(raw, &f) == nil && f.Type == "browser_input_state" {

@@ -71,6 +71,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
@@ -404,28 +405,34 @@ func newE2EFakeViewer(t *testing.T) *e2eFakeViewer {
 // The centerpiece test.
 // ---------------------------------------------------------------------------
 
-// TestWebRTCEndToEndInProcess proves the full signaling + media + input path
-// end-to-end with no Chrome: a real gateway browser-WS handler and a real
-// capture-ingest handler on one httptest server, a real Pion relay Session,
-// a faked-only-at-the-CDP-launch-boundary encoder, and a real Pion viewer.
-//
-// Assertions (wave-plan W2-C):
-//
-//	(a) RTP packets arrive on BOTH viewer tracks, with count growth over ~2s.
-//	(b) A browser_webrtc_state frame with available:true (and active:true)
-//	    arrives.
-//	(c) Sending a BrowserInputFrame JSON on the viewer's "input" data channel
-//	    is refused before the Live layer — observed at the deepest seam reachable
-//	    without a real attached Chrome tab (see the sink wrapper below); the
-//	    frame→LiveInput conversion itself is already covered by
-//	    TestBrowserInputFrameToLiveInput_TableParity (browser_webrtc_test.go).
-//	(d) Viewer detach decrements the capture session's viewer refcount
-//	    (asserted via the exported ViewerCount() state — the grace-STOP
-//	    TIMER firing itself is already covered, with a shrunk grace period,
-//	    by TestCaptureSession_RemoveViewer_GraceStopFiresAfterTimer in
-//	    pkg/tools/browser/capture_session_test.go; captureGracePeriod is
-//	    unexported and this test lives in a different package).
-func TestWebRTCEndToEndInProcess(t *testing.T) {
+// e2eMediaEncoderStatus records the fake encoder's observed setup.
+type e2eMediaEncoderStatus struct {
+	enc          *e2eFakeEncoder
+	mintedToken  string
+	ingestURL    string
+	stunServer   string
+	starterCalls int
+}
+
+type e2eMediaFixture struct {
+	handler          *BrowserWSHandler
+	mgr              *browser.BrowserManager
+	cs               *browser.CaptureSession
+	viewerConn       *websocket.Conn
+	viewer           *e2eFakeViewer
+	answerFrame      generated.BrowserWebRTCAnswerFrame
+	encMu            *sync.Mutex
+	encState         *e2eMediaEncoderStatus
+	onStoppedCalls   *atomic.Int32
+	dcFramesObserved *atomic.Int32
+	inputDispatches  *atomic.Int32
+	ownerSessionID   string
+	foreignSessionID string
+	port             int
+}
+
+func newE2EMediaFixture(t *testing.T) *e2eMediaFixture {
+	t.Helper()
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		// chrome-for-testing publishes no linux/arm64 build (installer.go's
 		// cftPlatform errors before findInstalledBuild ever inspects the
@@ -448,8 +455,11 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	port := tcpAddr.Port
 
 	tmpDir := t.TempDir()
+	ownerToken, ownerHash := soUserToken(t, "9")
 	handler, al := newMeasuredBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Gateway.Port = port
+		cfg.Gateway.DevModeBypass = false
+		cfg.Gateway.Users = []config.UserConfig{{Username: "media-owner", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(ownerHash)}}}}
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		// WebRTCStunServer left "" — host-only ICE (ADR-047 D3 / wave-plan
@@ -461,6 +471,17 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
+	workspaceID := mgr.BrowsingKey().WorkspaceID()
+	require.NotEmpty(t, workspaceID)
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	ownerMeta, err := store.NewSession(session.SessionTypeChat, "webchat", defaultAgent.ID)
+	require.NoError(t, err)
+	foreignMeta, err := store.NewSession(session.SessionTypeChat, "webchat", defaultAgent.ID)
+	require.NoError(t, err)
+	owner, other := "media-owner", "different-owner"
+	require.NoError(t, store.SetMeta(ownerMeta.ID, session.MetaPatch{Owner: &owner, WorkspaceID: &workspaceID}))
+	require.NoError(t, store.SetMeta(foreignMeta.ID, session.MetaPatch{Owner: &other, WorkspaceID: &workspaceID}))
 
 	// Plant a fake, non-functional "chrome" binary at the exact path
 	// ClassifyVideoCapability/findInstalledBuild look for, so the capability
@@ -490,13 +511,14 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	// --- Real relay Session (Pion, host-only ICE) + FAKE encoder launch via
 	// the EncoderStarter seam ---
 	var encMu sync.Mutex
-	var encState struct {
-		enc          *e2eFakeEncoder
-		mintedToken  string
-		ingestURL    string
-		stunServer   string
-		starterCalls int
-	}
+	encState := &e2eMediaEncoderStatus{}
+	t.Cleanup(func() {
+		encMu.Lock()
+		defer encMu.Unlock()
+		if encState.enc != nil {
+			encState.enc.close()
+		}
+	})
 	pumpStop := make(chan struct{})
 	t.Cleanup(func() { close(pumpStop) })
 
@@ -547,7 +569,7 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	require.NoError(t, err)
 	_, err = cs.BeginFrameTransition("verified-target", 800, 600, 1)
 	require.NoError(t, err)
-	t.Cleanup(cs.Stop) // idempotent safety net; the test also calls Stop explicitly below
+	t.Cleanup(cs.Stop) // also covers callers that do not stop explicitly
 
 	var onStoppedCalls atomic.Int32
 	cs.SetOnStopped(func() {
@@ -556,17 +578,17 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	})
 
 	// Seed the exact panel capture and workspace registry used by the real offer and ingest routes.
-	_, err = mgr.EnsureCaptureSessionForPanel(mgr.PanelTabSetID("e2e-session"), func() (*browser.CaptureSession, error) { return cs, nil })
+	_, err = mgr.EnsureCaptureSessionForPanel(mgr.PanelTabSetID(ownerMeta.ID), func() (*browser.CaptureSession, error) { return cs, nil })
 	require.NoError(t, err)
 	handler.captures.set(mgr.BrowsingKey().String(), cs)
 
 	// --- FAKE VIEWER: real WS connection + real recvonly Pion PC + "input" DC ---
 	viewerConn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = viewerConn.Close() })
-	writeBrowserAuthFrame(t, viewerConn, "dev-token")
-	require.NoError(t, viewerConn.WriteJSON(generated.BrowserAttachFrame{Type: "browser_attach", AgentId: defaultAgent.ID, SessionId: "e2e-session"}))
+	writeBrowserAuthFrame(t, viewerConn, ownerToken)
+	require.NoError(t, viewerConn.WriteJSON(generated.BrowserAttachFrame{Type: "browser_attach", AgentId: defaultAgent.ID, SessionId: ownerMeta.ID}))
 	require.Equal(t, "attached", readBrowserStatusFrame(t, viewerConn, e2eWait).State)
-	require.NoError(t, mgr.Live().RefreshCaptureFrameContext(context.Background(), mgr.PanelTabSetID("e2e-session"), cs))
+	require.NoError(t, mgr.Live().RefreshCaptureFrameContext(context.Background(), mgr.PanelTabSetID(ownerMeta.ID), cs))
 
 	viewer := newE2EFakeViewer(t)
 	t.Cleanup(func() { _ = viewer.pc.Close() })
@@ -578,7 +600,7 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 		Type:      string(generated.WsFrameTypeBrowserWebrtcOffer),
 		AgentId:   defaultAgent.ID,
 		Sdp:       offerV,
-		SessionId: "e2e-session",
+		SessionId: ownerMeta.ID,
 	}
 	offerData, err := json.Marshal(offerFrame)
 	require.NoError(t, err)
@@ -599,6 +621,23 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	require.NotNil(t, stateFrame.Active)
 	require.True(t, *stateFrame.Active, "browser_webrtc_state.active must be true once the viewer PC is up")
 
+	return &e2eMediaFixture{
+		handler: handler, mgr: mgr, cs: cs, viewerConn: viewerConn, viewer: viewer,
+		answerFrame: answerFrame, encMu: &encMu, encState: encState,
+		onStoppedCalls: &onStoppedCalls, dcFramesObserved: &dcFramesObserved,
+		inputDispatches: &inputDispatches, ownerSessionID: ownerMeta.ID,
+		foreignSessionID: foreignMeta.ID, port: port,
+	}
+}
+
+// TestWebRTCEndToEndInProcess exercises signaling, media, input, and cleanup
+// through the gateway and Pion relay with only the encoder launch substituted.
+func TestWebRTCEndToEndInProcess(t *testing.T) {
+	f := newE2EMediaFixture(t)
+	encMu, encState := f.encMu, f.encState
+	cs, port, viewer, answerFrame := f.cs, f.port, f.viewer, f.answerFrame
+	dcFramesObserved, inputDispatches := f.dcFramesObserved, f.inputDispatches
+	viewerConn, handler, onStoppedCalls := f.viewerConn, f.handler, f.onStoppedCalls
 	encMu.Lock()
 	starterCalls := encState.starterCalls
 	mintedToken := encState.mintedToken
@@ -714,6 +753,39 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	if enc != nil {
 		enc.close()
 	}
+}
+
+func TestWebRTCEndToEndInProcess_RefusedDetachPreservesViewer(t *testing.T) {
+	f := newE2EMediaFixture(t)
+	require.NoError(t, f.viewer.pc.SetRemoteDescription(pion.SessionDescription{
+		Type: pion.SDPTypeAnswer, SDP: f.answerFrame.Sdp,
+	}))
+	e2eWaitCond(t, e2eWait, "initial video packets", func() bool { return f.viewer.videoPkts.Load() > 0 })
+	e2eWaitCond(t, e2eWait, "initial audio packets", func() bool { return f.viewer.audioPkts.Load() > 0 })
+	require.Equal(t, 1, f.cs.ViewerCount(), "real offer must establish a viewer before detach refusal")
+
+	require.NoError(t, f.viewerConn.WriteJSON(generated.BrowserDetachFrame{
+		Type: string(generated.WsFrameTypeBrowserDetach), SessionId: &f.foreignSessionID,
+	}))
+	refusal := readBrowserStatusFrame(t, f.viewerConn, e2eWait)
+	require.Equal(t, "error", refusal.State)
+	require.Equal(t, f.foreignSessionID, refusal.SessionID)
+	require.Equal(t, "browser_detach: session not available", refusal.Message)
+
+	// A subsequent handled frame establishes that the earlier detach has finished.
+	soSendControlTake(t, f.viewerConn)
+	controlled := readBrowserStatusFrame(t, f.viewerConn, e2eWait)
+	require.Equal(t, "controlling", controlled.State)
+	require.Equal(t, f.ownerSessionID, controlled.SessionID)
+	require.Equal(t, 1, f.cs.ViewerCount(), "refused detach must preserve the committed WebRTC viewer")
+	videoBefore, audioBefore := f.viewer.videoPkts.Load(), f.viewer.audioPkts.Load()
+	e2eWaitCond(t, e2eWait, "video after refused detach", func() bool {
+		return f.viewer.videoPkts.Load() > videoBefore
+	})
+	e2eWaitCond(t, e2eWait, "audio after refused detach", func() bool {
+		return f.viewer.audioPkts.Load() > audioBefore
+	})
+	require.Equal(t, 1, f.cs.ViewerCount())
 }
 
 // readE2EOfferResponse permits attachment health and availability to interleave,

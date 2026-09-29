@@ -72,35 +72,21 @@ func (a *restAPI) HandleBrowserInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The empty preferred-workspace argument is DELIBERATE and is US-10/AC3.
-	// BrowserInspectRequest.session_id is a BROWSER session id, not a chat
-	// session id — it is the one place in this file family where the field of
-	// that name means something else — so there is no chat-session meta to
-	// read a workspace_id off, and passing it as a preference would ask the
-	// resolver to match a browser session id against workspace ids and
-	// silently get "" back anyway.
-	//
-	// The consequence is intended and is not a gap: an agent that belongs to
-	// more than one workspace is REFUSED here (FR-033, rendered as
-	// BrowserResolveAmbiguous below) rather than borrowing whichever workspace
-	// the live panel most recently resolved. Borrowing would mean an inspect
-	// silently reads the DOM of a different workspace's browser — one holding
-	// a different set of live logins — from the one the caller is looking at.
-	mgr, outcome := a.agentLoop.BrowserManagerForAgent(r.Context(), req.AgentId, "")
+	// Inspect the same tab set the live panel resolves for this chat.
+	mgr, panelSessionID, outcome, authorized := resolveBrowserPanelTarget(
+		r.Context(), a.agentLoop, req.AgentId, req.SessionId, actorUsername(r))
+	if !authorized {
+		reason := "session not available"
+		jsonOK(w, gen.BrowserInspectResponse{Ok: false, Reason: &reason})
+		return
+	}
 	if outcome != agent.BrowserResolveOK {
 		reason := browserResolveReason(outcome, req.AgentId)
 		jsonOK(w, gen.BrowserInspectResponse{Ok: false, Reason: &reason})
 		return
 	}
 
-	// Issue #671: inspect the tab the live panel is actually showing, resolved
-	// by the same rule the panel's own WS attach uses. req.SessionId is the
-	// CHAT session id the SPA sends alongside the annotation upload
-	// (src/lib/browserAnnotate.ts) — a chat that has browsed resolves to its
-	// own tab set, and anything else (including an id that names no chat)
-	// resolves to the operator's workspace-owned set, which is what this call
-	// used unconditionally before.
-	result, err := mgr.InspectPoint(mgr.PanelTabSetID(req.SessionId), float64(req.X), float64(req.Y))
+	result, err := mgr.InspectPoint(panelSessionID, float64(req.X), float64(req.Y))
 	if err != nil {
 		// InspectPoint reserves a non-nil error for a genuine infrastructure
 		// failure (couldn't even resolve a tab session) — worth a log line,
