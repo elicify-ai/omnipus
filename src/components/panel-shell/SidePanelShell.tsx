@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils'
 import { IconButton } from '@/components/ui/icon-button'
 import { ResizeSeparator } from '@/components/ui/resize-separator'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
-import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
+import { shouldClosePanelOnEscape } from './panelEscape'
 import { usePanelShell, usePanelShellHistory } from './usePanelShell'
 import { usePanelUrlHistory } from './usePanelUrlHistory'
 import { useSwipeToClose } from './useSwipeToClose'
@@ -86,15 +86,9 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
     guardThenClose: shell.guardThenClose,
   })
 
-  // US-6/US-7 Escape closes the panel — EXCEPT the Browser panel (SP-19:
-  // Escape never closes it; only the header X does) and while the Library
-  // discard-confirm dialog is up (it owns its own Escape).
+  // US-6/US-7 and SP-19: use the same Escape rule as the full-screen route.
   const onShellKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Escape') return
-    if (e.defaultPrevented || e.nativeEvent.isComposing) return
-    if (getDiscardConfirmDialogOpen()) return
-    if (activePanel?.id === 'browser') return
-    shell.requestClose()
+    if (shouldClosePanelOnEscape(activePanel?.id, e)) shell.requestClose()
   }
 
   // SP-17 applied width: re-derived at render from (stored, geometry).

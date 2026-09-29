@@ -17,7 +17,7 @@ import type { OpenPanel, PanelDefinition, PanelContext, PanelId } from './types'
 import { usePanelShellStore } from './panelShellStore'
 import { readPanelWidth, writePanelWidth, deletePanelWidth, panelWidthScope } from './panelWidthMemory'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
-import { focusPanelTriggerOrigin } from './panelFocus'
+import { focusChatInput, focusPanelTriggerOrigin } from './panelFocus'
 import { generateId } from '@/lib/constants'
 import {
   panelIdentityFromContext,
@@ -36,12 +36,7 @@ export type PanelFocusReturnReason = 'trigger' | 'chat'
 let panelWidthPersistenceWarned = false
 
 function restoreFocusToChat(isCurrent: () => boolean): void {
-  const focus = (): boolean => {
-    if (!isCurrent()) return false
-    const input = document.querySelector<HTMLElement>('[data-testid="chat-input"]')
-    input?.focus()
-    return input !== null && document.activeElement === input
-  }
+  const focus = () => isCurrent() && focusChatInput()
   if (focus()) return
   requestAnimationFrame(focus)
 }
@@ -171,6 +166,10 @@ async function expandActivePanel(options: {
           const latest = usePanelShellStore.getState()
           if (latest.activePanel !== null && latest.activePanel.id !== definition.id) return
           ;(latest.openPanel as (id: PanelId, context?: PanelContext) => void)(definition.id, finalContext)
+          restoreFocusToChat(() => {
+            const current = usePanelShellStore.getState().activePanel
+            return current?.id === definition.id && current.context === finalContext
+          })
         })
       },
     })
