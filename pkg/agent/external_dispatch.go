@@ -430,9 +430,15 @@ func (ed *runExternalCLISubTurnState) prepareRunOptions() {
 	if ed.timeoutSecs <= 0 {
 		ed.timeoutSecs = int(defaultSubTurnTimeout.Seconds())
 	}
+	// Turn cap = the agent's effective tool-iteration limit (#904 D4/D14),
+	// already resolved onto MaxIterations by NewAgentInstance. An instance
+	// built without that constructor (MaxIterations <= 0) resolves through
+	// the same resolver from the live config, WITH the agent's own stored
+	// value when its record is in the live roster (so an own lower value
+	// still applies) — never a separate literal.
 	ed.maxTurns = ed.agent.MaxIterations
 	if ed.maxTurns <= 0 {
-		ed.maxTurns = DefaultExternalMaxTurns
+		ed.maxTurns = resolveExternalMaxTurns(ed.al.GetConfig(), ed.agent.ID)
 	}
 
 	// FIX 5: hoist the repeated strings.TrimSpace(agent.Model) computation
@@ -775,14 +781,22 @@ func recordExternalToolResultUpdateInPlace(
 	)
 }
 
-// DefaultExternalMaxTurns bounds an external run when the agent declares no
-// MaxIterations (FR-5.4 turn cap). Exported (not just package-internal) so
-// pkg/gateway's POST /api/v1/agents/executor-preview endpoint
-// (rest_executor_preview.go) can default its own previewed --max-turns to
-// the IDENTICAL value real dispatch applies when max_tool_iterations is
-// omitted — referencing this constant directly rather than a second
-// hardcoded "50" means the two can never drift apart.
-const DefaultExternalMaxTurns = 50
+// resolveExternalMaxTurns resolves agentID's effective tool-iteration limit
+// from cfg: the global in force (cfg may be nil — the shipped default) and the
+// agent's own value when cfg.Agents.List carries its record.
+func resolveExternalMaxTurns(cfg *config.Config, agentID string) int {
+	if cfg == nil {
+		return config.ResolveMaxToolIterations(nil, nil).Effective
+	}
+	var own *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == agentID {
+			own = &cfg.Agents.List[i]
+			break
+		}
+	}
+	return config.ResolveMaxToolIterations(&cfg.Agents.Defaults, own).Effective
+}
 
 // transcriptModelFor returns the model string to stamp on transcript entries
 // produced by an external-CLI sub-turn. It mirrors the trim applied in

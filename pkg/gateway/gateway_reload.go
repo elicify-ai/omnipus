@@ -219,8 +219,30 @@ func newReloadTrigger(runningServices *services, agentLoop *agent.AgentLoop) fun
 //
 // first is the config for the initial reload (the file-watcher path already has
 // a candidate), or nil to load it from disk via loadNext (the /reload path).
-// Every coalesced follow-up always re-reads from disk: serving it from the
-// snapshot the previous reload used would defeat the entire point.
+// firstReadSeq is the reloadOutcomeTracker.markConfigRead sequence number the
+// caller stamped first with when it loaded it (0 when first is nil — the
+// loadNext load below stamps its own). Every coalesced follow-up always
+// re-reads from disk: serving it from the snapshot the previous reload used
+// would defeat the entire point.
+//
+// Round-4 finding: first can be a file-watcher snapshot loaded well before
+// this cycle actually runs — a reload STARTING after
+// performancePendingApply's latest mark does not prove the config it
+// APPLIED was read after that mark. runReloadCycle threads the config's own
+// read-sequence number (firstReadSeq, or a fresh one from markConfigRead for
+// every loadNext-sourced config) through to reloadOutcomeTracker.finish
+// alongside the reload's own start-sequence number, so
+// performancePendingApply.clearAfterReload can require both.
+//
+// Round-6 finding: readSeq/firstReadSeq describes only the config this cycle
+// STARTED with. exec (executeReload in production) can swap in a DIFFERENT,
+// more-recently-read config partway through — handleConfigReload's swap-time
+// re-read (reloadConfigForSwap) — and that swapped-in config, not the
+// starting one, is what actually gets applied. runningServices.
+// lastAppliedConfigReadSeq carries that swap-time read's own sequence number
+// back out of exec; when set, it overrides readSeq before finish is called,
+// so clearAfterReload is always told the APPLIED config's provenance, never
+// a stale starting snapshot's.
 //
 // exec runs one reload (executeReload in production) and loadNext re-reads
 // config.json; both are parameters so the coalescing contract can be tested
@@ -229,6 +251,7 @@ func runReloadCycle(
 	agentLoop *agent.AgentLoop,
 	runningServices *services,
 	first *config.Config,
+	firstReadSeq uint64,
 	exec func(*config.Config) error,
 	loadNext func() (*config.Config, error),
 ) {
@@ -243,6 +266,7 @@ func runReloadCycle(
 	}()
 
 	cfg := first
+	readSeq := firstReadSeq
 	for {
 		if cfg == nil {
 			loaded, err := loadNext()
@@ -288,12 +312,42 @@ func runReloadCycle(
 				return
 			}
 			cfg = loaded
+			// This config was just read fresh from disk, right here — stamp
+			// it so a success below can prove (to
+			// performancePendingApply.clearAfterReload) that it postdates
+			// any mark that happened before this point (round-4 finding).
+			// Every loadNext call takes this path (the manual /reload path's
+			// very first iteration, and every coalesced follow-up), so a
+			// stale firstReadSeq from the initial first snapshot never
+			// survives past the first re-read.
+			readSeq = runningServices.reloadOutcome.markConfigRead()
 		}
-		if err := exec(cfg); err != nil {
-			logger.Errorf("Config reload failed: %v", err)
+		// Record the rebuild outcome BEFORE finishReload can clear the
+		// pending flag, so a poller it releases reads this outcome.
+		seq := runningServices.reloadOutcome.begin()
+		// Reset before exec: only a swap-time re-read that runs INSIDE this
+		// exec call (executeReload -> handleConfigReload ->
+		// reloadConfigForSwap) may set this, so a stale value left over
+		// from a PREVIOUS cycle's swap can never leak into this cycle's
+		// finish() call (round-6 finding — see the field's own doc comment
+		// on *services).
+		runningServices.lastAppliedConfigReadSeq = 0
+		execErr := exec(cfg)
+		if execErr != nil {
+			logger.Errorf("Config reload failed: %v", execErr)
 		} else {
 			logger.Info("Config reload completed successfully")
 		}
+		// The config actually APPLIED is whatever the swap-time re-read
+		// produced, when handleConfigReload ran one this exec call;
+		// otherwise it is exactly the config this cycle started with,
+		// already described by readSeq (round-6 finding: the outer readSeq
+		// alone does not prove the SWAPPED-IN config's own provenance).
+		appliedReadSeq := readSeq
+		if s := runningServices.lastAppliedConfigReadSeq; s != 0 {
+			appliedReadSeq = s
+		}
+		runningServices.reloadOutcome.finish(seq, execErr, appliedReadSeq)
 		if !runningServices.finishReload(agentLoop.ClearReloadPending) {
 			slotHeld = false
 			return
@@ -641,6 +695,19 @@ func lockConfigWrites(runningServices *services) (unlock func()) {
 // prepareReloadConfig, so it carries every write committed before the caller
 // took configMu. Returns loaded unchanged when no swap-time loader is wired.
 // The caller must hold configMu (lockConfigWrites).
+//
+// Round-6 finding: the config this returns is what handleConfigReload
+// actually applies next (its caller assigns `newCfg = swapCfg` immediately
+// after this returns) — so once it has fully passed prepareReloadConfig,
+// this stamps its own config-read sequence number
+// (runningServices.lastAppliedConfigReadSeq, via reloadOutcome.markConfigRead)
+// exactly like every other config-read call site (setupConfigWatcherPolling,
+// runReloadCycle's own loadNext calls) does once ITS read is known-good.
+// Without this stamp, runReloadCycle had no way to tell
+// performancePendingApply.clearAfterReload that the config it actually
+// applied was read from disk strictly after a pending-apply mark, even when
+// the reload cycle's own OUTER read (the `first`/loadNext snapshot, taken
+// before this swap-time re-read ran) predated it.
 func reloadConfigForSwap(runningServices *services, loaded *config.Config) (*config.Config, error) {
 	if runningServices == nil || runningServices.loadConfigForSwap == nil {
 		return loaded, nil
@@ -652,6 +719,7 @@ func reloadConfigForSwap(runningServices *services, loaded *config.Config) (*con
 	if prepErr := prepareReloadConfig(fresh, runningServices); prepErr != nil {
 		return nil, prepErr
 	}
+	runningServices.lastAppliedConfigReadSeq = runningServices.reloadOutcome.markConfigRead()
 	return fresh, nil
 }
 
@@ -945,9 +1013,23 @@ func (rs *restartServicesState) applyMessagingCaps() error {
 	return nil
 }
 
+// watchedConfigChange is what the file-watcher poller sends on the channel
+// setupConfigWatcherPolling returns: the freshly-loaded config plus the
+// reloadOutcomeTracker sequence number stamped at load time
+// (reloadOutcomeTracker.markConfigRead). Carrying the read-seq alongside the
+// config is what lets runReloadCycle pass it on to
+// performancePendingApply.clearAfterReload — round-4 finding: without it, a
+// reload cycle seeded from this snapshot has no way to prove its config
+// predates or postdates a pending-apply mark that happened after the poller
+// loaded it but before the cycle actually ran.
+type watchedConfigChange struct {
+	cfg     *config.Config
+	readSeq uint64
+}
+
 // setupConfigWatcherPolling starts a background goroutine that polls
-// configPath every 2 s for mtime/size changes and emits the new *config.Config
-// on the returned channel.
+// configPath every 2 s for mtime/size changes and emits the new config, paired
+// with its read-seq (watchedConfigChange), on the returned channel.
 //
 // selfWriteReg (may be nil) is consulted to suppress reloads for writes that
 // the app itself made via safeUpdateConfigJSON. When the detected change is
@@ -981,6 +1063,12 @@ func (rs *restartServicesState) applyMessagingCaps() error {
 // surface the same operator-visible /health degraded signal executeReload's
 // own internal checks already produce, for a failure that happens BEFORE
 // executeReload is even reached.
+//
+// reloadOutcome (may be nil, e.g. in tests that do not exercise pending-apply
+// provenance) is stamped via markConfigRead for every config this poller
+// accepts, so runReloadCycle can pass that read-seq on to
+// performancePendingApply.clearAfterReload (round-4 finding; see
+// watchedConfigChange's doc comment).
 func setupConfigWatcherPolling(
 	configPath string,
 	homePath string,
@@ -988,8 +1076,9 @@ func setupConfigWatcherPolling(
 	credStore *credentials.Store,
 	selfWriteReg *configSelfWriteRegistry,
 	markDegraded func(error),
-) (chan *config.Config, func()) {
-	configChan := make(chan *config.Config, 1)
+	reloadOutcome *reloadOutcomeTracker,
+) (chan watchedConfigChange, func()) {
+	configChan := make(chan watchedConfigChange, 1)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 
@@ -1090,8 +1179,14 @@ func setupConfigWatcherPolling(
 
 					logger.Info("✓ Config file validated and loaded (external edit)")
 
+					// Stamp this config's read-seq BEFORE handing it off, not
+					// after: the send below can block/drop, but the read
+					// itself already happened just above, and that is the
+					// instant clearAfterReload's provenance check must date
+					// this config from (round-4 finding).
+					change := watchedConfigChange{cfg: newCfg, readSeq: reloadOutcome.markConfigRead()}
 					select {
-					case configChan <- newCfg:
+					case configChan <- change:
 					default:
 						logger.Warn("⚠ Previous config reload still in progress, skipping")
 					}

@@ -167,7 +167,8 @@
       "specs": [
         "tests/e2e/whatsapp-qr.spec.ts",
         "tests/e2e/channel-instance-crud.spec.ts",
-        "tests/e2e/channel-routing.spec.ts"
+        "tests/e2e/channel-routing.spec.ts",
+        "tests/e2e/tool-iteration-limit.spec.ts"
       ]
     },
     {

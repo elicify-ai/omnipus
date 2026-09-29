@@ -97,13 +97,10 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
 
   it('falls back to the documented default (20) when an older backend omits goal_max_rounds', async () => {
     vi.useRealTimers()
-    vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
-      max_parallel_agents: 4,
-      effective_max_parallel_agents: 4,
-      max_parallel_agents_configured: true,
-      tools_on_demand: true,
-      // goal_max_rounds intentionally omitted.
-    } as never)
+    // SETTINGS with goal_max_rounds intentionally omitted.
+    const withoutGoal: Partial<typeof SETTINGS> = { ...SETTINGS }
+    delete withoutGoal.goal_max_rounds
+    vi.mocked(api.fetchPerformanceSettings).mockResolvedValue(withoutGoal as never)
     renderSection()
     await waitFor(() => {
       expect(screen.getByLabelText('Tries per goal')).toHaveValue(20)
@@ -393,6 +390,19 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     // chat and on tasks, so the negative here is structural: a single input,
     // not a list or a per-item field.
     expect(screen.getAllByLabelText('Tries per goal')).toHaveLength(1)
-    expect(screen.queryAllByRole('spinbutton')).toHaveLength(2) // max-parallel-agents + goal round budget
+    // Exactly one goal-shaped number field anywhere (no per-goal override).
+    expect(screen.getAllByRole('spinbutton', { name: /goal|round/i })).toHaveLength(1)
+    // Every number field on the screen is one of the known global controls —
+    // max parallel agents, the goal round budget, and (#904 D3) the global
+    // "Max tool calls per turn" beside it — so an unnamed extra budget field
+    // fails here instead of being absorbed by a bare count.
+    const known = [
+      screen.getByRole('spinbutton', { name: 'Max parallel agents' }),
+      screen.getByRole('spinbutton', { name: 'Tries per goal' }),
+      screen.getByRole('spinbutton', { name: /^Max tool calls per turn/ }),
+    ]
+    const all = screen.getAllByRole('spinbutton')
+    expect(all).toHaveLength(known.length)
+    expect(all).toEqual(expect.arrayContaining(known))
   })
 })

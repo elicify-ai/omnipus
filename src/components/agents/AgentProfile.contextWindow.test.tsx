@@ -78,6 +78,8 @@ const baseAgent: Agent = {
   soul: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   rate_limits: { use_global_defaults: true },
   memory_enabled: true,
 }

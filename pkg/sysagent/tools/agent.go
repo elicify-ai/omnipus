@@ -166,7 +166,9 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"max_tool_iterations": map[string]any{
 				"type":        "integer",
-				"description": "Max tool calls per turn (0 = inherit the system default)",
+				"minimum":     1,
+				"maximum":     1000,
+				"description": "Max tool calls per turn for this agent, 1-1000. Must not exceed the global limit set in Settings → Performance (a higher value is refused). Omit to use the global limit.",
 			},
 			"skills":              skillsParameters(false),
 			"mcp_servers":         mcpServersParameters(),
@@ -369,17 +371,9 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	if v, ok := ac.args["provider"].(string); ok {
 		ac.newAgent.Model.Provider = strings.TrimSpace(v)
 	}
-	// Optional: per-turn tool-call cap (config.AgentConfig.MaxToolIterations's
-	// doc comment: 0/absent inherits agents.defaults.max_tool_iterations).
-	// Same previously-silently-ignored-parameter bug as provider above.
-	if v, ok := ac.args["max_tool_iterations"].(float64); ok {
-		n := int(v)
-		if n < 0 {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"max_tool_iterations must be >= 0", "Use 0 to inherit the system default")), true
-		}
-		ac.newAgent.MaxToolIterations = n
-	}
+	// Optional: per-turn tool-call cap — applied (1..1000, not above the
+	// global, #904 D15) by applyAgentToolArgs below, the same code path
+	// update_agent uses.
 	// ADR-037: can_delegate_to is retired — it was write-only (its last real
 	// reader, config.ResolveDelegationTo, was deleted as part of the
 	// delegation-policy removal). Delegation trust is configured
@@ -400,7 +394,8 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	if err := agentmutation.ValidateFields(ac.newAgent, fields); err != nil {
 		return fieldErrorResult(err), true
 	}
-	if err := applyAgentToolArgs(&ac.newAgent, ac.args, knownToolPolicies(ac.t.deps), ac.t.deps.currentInventory()); err != nil {
+	if err := applyAgentToolArgs(&ac.newAgent, ac.args, knownToolPolicies(ac.t.deps), ac.t.deps.currentInventory(),
+		ac.t.deps.agentDefaults()); err != nil {
 		return fieldErrorResult(err), true
 	}
 	return nil, false
@@ -437,6 +432,18 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 		}
 	}
 	ac.finalID = ac.id
+	// #904 D10/D15: re-check the agent's own limit against a FRESH read of
+	// the global immediately before the write — prepareConfig checked it
+	// against the config current at call start. Residual window: this path
+	// does not hold the gateway's configMu, so a PUT /performance lowering
+	// that commits between this read and CreateState does not see the new
+	// agent; it then sits above the new global, which the resolver caps and
+	// flags (D1). Never unbounded, and visible on the profile.
+	if ac.newAgent.MaxToolIterations > 0 {
+		if err := config.ValidateAgentMaxToolIterations(ac.newAgent.MaxToolIterations, ac.t.deps.agentDefaults()); err != nil {
+			return fieldErrorResult(fieldErr("max_tool_iterations", err.Error())), true
+		}
+	}
 	mutation, err := agentstore.New(omnipusHome).CreateState(ac.id, &ac.newAgent, ac.soul)
 	ac.mutation = mutation
 	if err != nil {
@@ -718,9 +725,14 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",
 			},
-			"color":               map[string]any{"type": "string"},
-			"icon":                map[string]any{"type": "string"},
-			"max_tool_iterations": map[string]any{"type": "integer", "description": "New max tool calls per turn (0 = inherit the system default)"},
+			"color": map[string]any{"type": "string"},
+			"icon":  map[string]any{"type": "string"},
+			// #904 D15: JSON null clears the own value ("use the global
+			// limit"), so the schema admits null; 1..1000 bound structurally.
+			"max_tool_iterations": map[string]any{
+				"type": []string{"integer", "null"}, "minimum": 1, "maximum": 1000,
+				"description": "New max tool calls per turn for this agent, 1-1000. Must not exceed the global limit set in Settings → Performance (a higher value is refused). Pass null to clear the agent's own value and use the global limit; omit to leave it unchanged.",
+			},
 			"skills":              skillsParameters(true),
 			"mcp_servers":         mcpServersParameters(),
 			"tool_policy_changes": toolPolicyChangesParameters(),

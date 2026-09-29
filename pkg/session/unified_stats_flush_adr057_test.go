@@ -372,11 +372,32 @@ func TestStatsThrottle_UnforcedFlushConverges(t *testing.T) {
 	_, statErrBefore := os.Stat(statsPath)
 	require.True(t, errors.Is(statErrBefore, os.ErrNotExist), "stats.json must not exist yet — the append is still only in-memory (FR-061)")
 
-	// More than one flush interval elapses on the REAL clock.
-	time.Sleep(3 * store.StatsFlushInterval())
-
-	data, err := os.ReadFile(statsPath)
-	require.NoError(t, err, "stats.json must exist and be current with NO external trigger at all — this is the property that fails on a dead flusher")
+	// Poll for stats.json to appear via the REAL periodic flusher instead of
+	// sleeping a fixed multiple of the interval then reading once (issue
+	// #634: this package runs concurrently with pkg/agent's own test suite,
+	// and under that host contention the flusher's atomic write can
+	// legitimately land later than 3 intervals predicts — the same
+	// host-contention risk TestStatsThrottle_NoFileWriteWithinInterval and
+	// TestStatsThrottle_ExactCountersAfterInterval already fixed with this
+	// poll+backstop idiom). os.ErrNotExist means "not yet"; any other read
+	// error fails immediately. The 10s deadline below is a backstop against
+	// a dead flusher, not the thing under test.
+	var data []byte
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var readErr error
+		data, readErr = os.ReadFile(statsPath)
+		if readErr == nil {
+			break
+		}
+		if !errors.Is(readErr, os.ErrNotExist) {
+			require.NoError(t, readErr)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stats.json must exist and be current with NO external trigger at all — this is the property that fails on a dead flusher")
+		}
+		time.Sleep(store.StatsFlushInterval() / 2)
+	}
 	var onDisk u5StatsFile
 	require.NoError(t, json.Unmarshal(data, &onDisk))
 	assert.Equal(t, 6, onDisk.TokensIn)

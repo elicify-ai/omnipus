@@ -16,6 +16,8 @@ required:
   - soul
   - timeout_seconds
   - max_tool_iterations
+  - max_tool_iterations_source
+  - max_tool_iterations_override_ignored
   - needs_model
 properties:
   revision:
@@ -142,11 +144,36 @@ properties:
     example: 300
   max_tool_iterations:
     type: integer
-    minimum: 0
+    minimum: 1
+    maximum: 1000
     description: >
-      Maximum number of tool calls allowed per turn.
-      Inherited from agents.defaults.max_tool_iterations when not overridden.
+      The EFFECTIVE maximum number of tool calls allowed per turn (issue #904,
+      tool-iteration-limit spec D1): the global limit
+      (agents.defaults.max_tool_iterations) unless the agent has its own
+      value lower than or equal to it, in which case the own value. An own
+      value above the global never raises the limit — it is ignored (see
+      max_tool_iterations_override_ignored). max_tool_iterations_source says
+      which rule applied.
     example: 50
+  max_tool_iterations_source:
+    $ref: './MaxToolIterationsSource.yaml'
+    x-go-type: MaxToolIterationsSource
+  max_tool_iterations_override:
+    type: integer
+    minimum: 1
+    description: >
+      The agent's own stored tool-iteration limit (issue #904). Absent when
+      the agent has none (it rides the global). No maximum: a hand-edited
+      stored value may exceed 1000 and is shown truthfully.
+    example: 40
+  max_tool_iterations_override_ignored:
+    type: boolean
+    description: >
+      True when the agent's own stored value is above the global limit and
+      therefore has no effect (issue #904, tool-iteration-limit spec D1); the
+      effective value is then the global and max_tool_iterations_source is
+      "global". False otherwise, including when the agent has no own value.
+    example: false
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
   auto_approve_disabled:

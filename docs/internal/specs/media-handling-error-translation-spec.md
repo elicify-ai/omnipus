@@ -2,6 +2,8 @@
 
 **Created**: 2026-07-21
 **Status**: Draft (Revision 3 — operator decisions locked 2026-07-21; ADR-grill round-2 wiring findings corrected)
+
+Status: Draft
 **Branch**: `release/v0.1.1`
 **Input**: Operator UAT defect 2026-07-21 (xAI image-rejection 400 + raw error blob surfaced); ADR-051; `/grill-spec` reviews (spec round 1 BLOCK→corrected; ADR round 2 BLOCK→architecture endorsed, wiring pending).
 **Implements**: ADR-051 (Provider-Capability-Aware Media Handling and User-Facing Error Translation)

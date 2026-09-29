@@ -81,6 +81,10 @@ type CodexDriver struct {
 	eventCh chan RunEvent
 	consent ConsentHandler
 	runID   string
+	// runMaxTurns is the turn cap of the most recent Run; Resume reuses it
+	// so a resumed run keeps its original cap (#904 D4). Zero until the
+	// first Run, so a Resume with no prior Run is refused (FR-004).
+	runMaxTurns int
 }
 
 // NewCodexDriver creates a driver for the codex CLI.
@@ -93,11 +97,15 @@ func NewCodexDriver(consent ConsentHandler) *CodexDriver {
 // FR-5.2: does NOT pass --dangerously-bypass-approvals-and-sandbox.
 // FR-5.3: codex's own sandbox handles confinement.
 func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent, error) {
+	if err := validateMaxTurns("codex", opts.MaxTurns); err != nil {
+		return nil, err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.eventCh != nil {
 		return nil, fmt.Errorf("codex driver: Run called while a run is already active")
 	}
+	d.runMaxTurns = opts.MaxTurns
 
 	// Resolve the CLI binary: opts.CLIPath (ExecutorConfig.cli_path) wins; else
 	// the default name resolved via $PATH (MAJ-5).
@@ -204,10 +212,9 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 			cancelFn()
 		}()
 
+		// Turn cap (FR-5.4): the caller's resolved limit, validated > 0 at the
+		// top of Run — no hidden default (#904 FR-004).
 		maxTurns := opts.MaxTurns
-		if maxTurns <= 0 {
-			maxTurns = defaultMaxTurns
-		}
 		turnCount := 0
 
 		emittedFatal := streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
@@ -475,7 +482,12 @@ func (d *CodexDriver) Input(_ string) error {
 // Resume for codex: codex exec does not have native --resume support in all
 // versions; start a fresh run with the given runID as a label.
 func (d *CodexDriver) Resume(ctx context.Context, runID string) (<-chan RunEvent, error) {
-	return d.Run(ctx, RunOptions{RunID: runID})
+	// Reuse the prior Run's turn cap (#904 D4). With no prior Run it is 0 and
+	// Run refuses it with ErrMaxTurnsRequired — no hidden default (FR-004).
+	d.mu.Lock()
+	maxTurns := d.runMaxTurns
+	d.mu.Unlock()
+	return d.Run(ctx, RunOptions{RunID: runID, MaxTurns: maxTurns})
 }
 
 // Test validates the codex CLI is present.

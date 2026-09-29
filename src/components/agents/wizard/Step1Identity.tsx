@@ -495,14 +495,12 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
 
   // Live command-line preview (executor-command-preview) — built from the
   // flat wizard payload (no persisted agent id exists yet, hence the
-  // stateless/body-driven endpoint). `max_tool_iterations` is deliberately
-  // omitted: `initialPayload` in `CreateAgentWizard.tsx` only seeds it for
-  // non-subagent_3p types (agent-types-field-matrix.md Decisions #1 — the
-  // external CLI runs its own tool loop), so `payload.max_tool_iterations`
-  // is always undefined here anyway; omitting it lets the preview fall back
-  // to the same server-side default (50) real dispatch uses for this tier.
+  // stateless/body-driven endpoint). #904 D14: the worker's own
+  // tool-iteration limit (Advanced step) is sent when set; when empty the
+  // key is omitted and the server previews the global limit — the same
+  // effective turn cap real dispatch passes.
   const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = payload.cli
-    ? buildExecutorPreviewRequest(payload.cli, payload.model, payload.executor_cli_path, payload.executor_cli_args)
+    ? buildExecutorPreviewRequest(payload.cli, payload.model, payload.executor_cli_path, payload.executor_cli_args, payload.max_tool_iterations)
     : undefined
 
   // external-executor-cli-path-detection spec (ADR-030) — US-1/US-2: probe

@@ -1,0 +1,51 @@
+title: PerformanceReloadFailedDetails
+description: >
+  details of the 500 performance_reload_failed answer of PUT /performance
+  (issue #904). Every write of the request is COMMITTED (config.json and any
+  lowered agents are on disk and audited; nothing is rolled back), but the
+  new values are not in force yet. stage says how far the apply got, and so
+  what GET /performance shows until the next reload or restart.
+type: object
+additionalProperties: false
+required:
+  - stage
+  - changed_fields
+  - lowered_agents
+properties:
+  stage:
+    type: string
+    enum:
+      - refresh
+      - reload
+    description: >
+      refresh — config.json was written but the in-memory configuration was
+      NOT swapped: GET /performance still shows the OLD values and running
+      agents keep them until the gateway reloads its configuration or
+      restarts. reload — the in-memory configuration was updated (GET
+      /performance shows the NEW values) but the agent registry reload
+      failed: the agents' next turns keep the old limits until the next
+      reload or restart.
+    example: "reload"
+  changed_fields:
+    type: array
+    description: >
+      The performance settings this request changed, i.e. the fields present
+      in the PUT body. The client names these — and only these — in its
+      "saved, not applied yet" message.
+    items:
+      type: string
+      enum:
+        - max_parallel_agents
+        - tools_on_demand
+        - goal_max_rounds
+        - max_tool_iterations
+    example: ["max_tool_iterations"]
+  lowered_agents:
+    type: array
+    description: >
+      The agents whose own tool-iteration limit this request lowered (spec
+      D11); empty when none. GET /performance does not carry them, so this
+      is the only place the summary survives.
+    items:
+      $ref: './MaxToolIterationAgentChange.yaml'
+      x-go-type: MaxToolIterationAgentChange

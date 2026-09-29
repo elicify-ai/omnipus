@@ -192,7 +192,7 @@ func TestSkillRemoveTool_ProjectShelf_DeletesMountFile(t *testing.T) {
 	const wsID = "01SKILLPROJSHELF00000003"
 	seedProjectShelfFixture(t, home, wsID, "acme", mountRoot, "db-migrate", "Use when the user asks to run a database migration")
 
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.Home = home
 	// remove_skill's project-shelf branch does not need SkillInstaller at
 	// all — deliberately leave it nil to prove that.

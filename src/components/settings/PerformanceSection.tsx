@@ -14,6 +14,14 @@
  *
  * Both max_parallel_agents and tools_on_demand are sent together on every
  * PUT so neither field silently reverts when only one is changed.
+ *
+ * #904 adds the global "Max tool calls per turn" limit (MaxToolIterationsCard,
+ * tool-iteration-limit-spec.md US-1/US-6): a LOWERING is first previewed
+ * (GET /performance/max-tool-iterations/preview); agents it would lower are
+ * listed in MaxToolIterationsLoweringDialog before the step-up gate, and the
+ * PUT carries that exact list as confirmed_lowering. A 409 drift re-opens the
+ * dialog with the server's fresh list. A raise never rewrites an agent (D20)
+ * and saves directly behind the step-up gate.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -27,14 +35,26 @@ import { Switch } from '@/components/ui/switch'
 import {
   fetchPerformanceSettings,
   updatePerformanceSettings,
+  fetchMaxToolIterationsLoweringPreview,
+  isMaxToolIterationsLoweringConflict,
+  isPerformanceReloadFailed,
+  performancePendingApplyMessage,
   getErrorMessage,
   type PerformanceSettingsUpdate,
 } from '@/lib/api'
+import type { MaxToolIterationAgentChange, PerformanceSettings } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
+import {
+  MaxToolIterationsCard,
+  MAX_TOOL_ITERATIONS_MIN,
+  MAX_TOOL_ITERATIONS_MAX,
+  parseMaxToolIterations,
+} from './MaxToolIterationsCard'
+import { MaxToolIterationsLoweringDialog } from './MaxToolIterationsLoweringDialog'
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
@@ -107,6 +127,69 @@ const DEFAULT_GOAL_MAX_ROUNDS = 20
 const INVALID_GOAL_MAX_ROUNDS_MESSAGE =
   'Tries per goal must be a whole number of at least 1.'
 
+// #904 tool-iteration limit (tool-iteration-limit-spec.md US-1 AS-3): the
+// refusal names the bound, word for word as the server's 400 does.
+const INVALID_MAX_TOOL_ITERATIONS_MESSAGE =
+  `Max tool calls per turn must be between ${MAX_TOOL_ITERATIONS_MIN} and ${MAX_TOOL_ITERATIONS_MAX}.`
+
+// The F4 result toast stays up longer than the 4 s default so the list of
+// lowered agents can be read; the same text also stays inline under the field.
+const LOWERED_TOAST_DURATION_MS = 10_000
+
+function loweredSummaryText(agents: MaxToolIterationAgentChange[]): string {
+  const list = agents.map((a) => `${a.agent_name} ${a.old_value} \u2192 ${a.new_value}`).join(', ')
+  return `Lowered ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}: ${list}`
+}
+
+// Values a PUT saved to config.json whose in-memory refresh then failed
+// (performance_reload_failed with stage `refresh`, or a body that did not say
+// the stage): GET /performance keeps answering the OLD values until the
+// gateway reloads or restarts, so the inputs show these instead and the
+// tool-call limit is not compared against the stale in-memory global.
+type UnappliedValues = Pick<
+  PerformanceSettingsUpdate,
+  'max_parallel_agents' | 'tools_on_demand' | 'goal_max_rounds' | 'max_tool_iterations'
+>
+
+function savedValuesOf(body: PerformanceSettingsUpdate): UnappliedValues {
+  const out: UnappliedValues = {}
+  if (body.max_parallel_agents !== undefined) out.max_parallel_agents = body.max_parallel_agents
+  if (body.tools_on_demand !== undefined) out.tools_on_demand = body.tools_on_demand
+  if (body.goal_max_rounds !== undefined) out.goal_max_rounds = body.goal_max_rounds
+  if (body.max_tool_iterations !== undefined) out.max_tool_iterations = body.max_tool_iterations
+  return out
+}
+
+// configuredMaxParallel is the configured cap GET reports (0 = none set) —
+// see the input sync effect for why max_parallel_agents alone is not it.
+function configuredMaxParallel(data: PerformanceSettings): number {
+  return data.max_parallel_agents_configured === false ? 0 : (data.max_parallel_agents ?? 0)
+}
+
+// True once GET /performance reports every saved-but-unapplied value, i.e.
+// the gateway has reloaded its configuration since.
+function serverCaughtUp(u: UnappliedValues, data: PerformanceSettings): boolean {
+  return (
+    (u.max_parallel_agents === undefined || configuredMaxParallel(data) === u.max_parallel_agents) &&
+    (u.tools_on_demand === undefined || (data.tools_on_demand ?? true) === u.tools_on_demand) &&
+    (u.goal_max_rounds === undefined || data.goal_max_rounds === u.goal_max_rounds) &&
+    (u.max_tool_iterations === undefined || data.max_tool_iterations === u.max_tool_iterations)
+  )
+}
+
+const UNKNOWN_LOWERED_TEXT =
+  "Some agents' own tool-call limits may have been lowered, but the server's list could not be read — reload the page to see which."
+
+// The D11 confirm dialog's state. `retryBody` carries the other fields of a
+// PUT the server refused with a D16 drift 409, so confirming the fresh list
+// resends them too instead of silently dropping them.
+interface LoweringDialogState {
+  value: number
+  agents: MaxToolIterationAgentChange[]
+  listChanged: boolean
+  retryBody?: PerformanceSettingsUpdate
+}
+
 export function PerformanceSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -127,6 +210,29 @@ export function PerformanceSection(): React.ReactElement {
   // the same reason.
   const [goalMaxRoundsInput, setGoalMaxRoundsInput] = useState<string>('')
   const [goalDirty, setGoalDirty] = useState(false)
+
+  // #904 global tool-iteration limit — its own input, dirty flag and partial
+  // PUT body ({ max_tool_iterations, confirmed_lowering }), like the goal
+  // budget above. A change first asks the read-only preview endpoint which
+  // agents it would lower (D11); if any, the confirm dialog lists them before
+  // the step-up gate opens.
+  const [toolIterInput, setToolIterInput] = useState<string>('')
+  const [toolIterDirty, setToolIterDirty] = useState(false)
+  const [toolIterError, setToolIterError] = useState<string | null>(null)
+  const [lowering, setLowering] = useState<LoweringDialogState | null>(null)
+  const [loweredSummary, setLoweredSummary] = useState<string | null>(null)
+  // Saved-but-not-in-force values (see UnappliedValues; cleared by the next
+  // fully applied save or once GET /performance reports them) and this page's
+  // own notice text. The server's pending-apply state (GET /performance
+  // pending_apply, #904) owns whether the notice shows. noticeSince is when
+  // the last not-applied save answered: until GET has answered after it, the
+  // page's own message stands in for the server's state.
+  const [unapplied, setUnapplied] = useState<UnappliedValues | null>(null)
+  const [unappliedNotice, setUnappliedNotice] = useState<string | null>(null)
+  const [noticeSince, setNoticeSince] = useState(0)
+  // Bumped on every edit so a preview answer for a superseded value is dropped.
+  const previewSeqRef = useRef(0)
+  const toolIterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // The change waiting on the operator's confirmation, and whether the
   // confirmation is open (ADR-0008 ruling 6).
@@ -165,7 +271,7 @@ export function PerformanceSection(): React.ReactElement {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const goalDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const { data, isLoading, error, refetch, isFetching } = useQuery({
+  const { data, dataUpdatedAt, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['performance-settings'],
     queryFn: fetchPerformanceSettings,
     staleTime: 30_000,
@@ -174,6 +280,7 @@ export function PerformanceSection(): React.ReactElement {
   // Sync inputs with fetched values on first load.
   useEffect(() => {
     if (data && !dirty) {
+      // A saved-but-unapplied value wins over GET's stale in-memory one.
       // max_parallel_agents is NOT the configured value when nothing is
       // configured. The backend substitutes the resolved effective value
       // there, because 0 is an internal sentinel the schema forbids on the
@@ -182,50 +289,138 @@ export function PerformanceSection(): React.ReactElement {
       // would let an operator who saves without touching anything silently
       // turn a memory-bounded install into one with an explicit cap of 2000.
       // max_parallel_agents_configured is what distinguishes the two.
-      const configured =
-        data.max_parallel_agents_configured === false ? 0 : (data.max_parallel_agents ?? 0)
+      const configured = unapplied?.max_parallel_agents ?? configuredMaxParallel(data)
       setInputValue(configured === 0 ? '' : String(configured))
       // tools_on_demand defaults to true when absent from the response.
-      setToolsOnDemand(data.tools_on_demand ?? true)
+      setToolsOnDemand(unapplied?.tools_on_demand ?? data.tools_on_demand ?? true)
     }
-  }, [data, dirty])
+  }, [data, dirty, unapplied])
 
   // Sync the goal-round-budget input with the fetched value on first load —
   // a separate effect from the one above because it tracks its own dirty
   // flag (goalDirty), independent from max_parallel_agents/tools_on_demand.
   useEffect(() => {
     if (data && !goalDirty) {
-      setGoalMaxRoundsInput(String(data.goal_max_rounds ?? DEFAULT_GOAL_MAX_ROUNDS))
+      setGoalMaxRoundsInput(String(unapplied?.goal_max_rounds ?? data.goal_max_rounds ?? DEFAULT_GOAL_MAX_ROUNDS))
     }
-  }, [data, goalDirty])
+  }, [data, goalDirty, unapplied])
+
+  // Sync the tool-iteration input with the server's in-force global. No
+  // literal fallback: an older backend that omits the field shows an empty
+  // input rather than a number the runtime may not be using (spec FR-004).
+  useEffect(() => {
+    if (data && !toolIterDirty) {
+      const shown = unapplied?.max_tool_iterations ?? data.max_tool_iterations
+      setToolIterInput(shown === undefined ? '' : String(shown))
+    }
+  }, [data, toolIterDirty, unapplied])
+
+  // GET now reports every saved value: the inputs stop overriding it.
+  useEffect(() => {
+    if (data && unapplied && serverCaughtUp(unapplied, data)) setUnapplied(null)
+  }, [data, unapplied])
+
+  // Once GET has answered since the last not-applied save, the server's
+  // pending-apply state decides the notice: absent means everything saved is
+  // in force, so the page's own text goes too.
+  useEffect(() => {
+    if (data && dataUpdatedAt >= noticeSince && !data.pending_apply) setUnappliedNotice(null)
+  }, [data, dataUpdatedAt, noticeSince])
+
+  // Clear a dirty flag ONLY for a control a committed PUT actually carried,
+  // and only while the user has not re-edited that control since the body was
+  // handed to the mutation. Clearing a dirty flag re-arms the sync effect
+  // above, which overwrites the input with the server's value — doing that
+  // for a field the PUT never sent is precisely the silent revert finding
+  // 15 describes.
+  const clearCommittedDirty = useCallback((saved: PerformanceSettingsUpdate) => {
+    const queued = pendingRef.current
+    const parallelSaved = 'max_parallel_agents' in saved || 'tools_on_demand' in saved
+    const parallelRequeued =
+      queued !== null && ('max_parallel_agents' in queued || 'tools_on_demand' in queued)
+    if (parallelSaved && !parallelRequeued) setDirty(false)
+    if ('goal_max_rounds' in saved && !(queued !== null && 'goal_max_rounds' in queued)) {
+      setGoalDirty(false)
+    }
+    if ('max_tool_iterations' in saved && !(queued !== null && 'max_tool_iterations' in queued)) {
+      setToolIterDirty(false)
+    }
+  }, [])
+
+  // F4: name the agents a save actually lowered — a 10 s status toast plus
+  // the same text kept inline under the field.
+  const reportLowered = useCallback((lowered: MaxToolIterationAgentChange[] | undefined) => {
+    if (!lowered || lowered.length === 0) return
+    const text = loweredSummaryText(lowered)
+    addToast({ variant: 'success', message: text, duration: LOWERED_TOAST_DURATION_MS })
+    setLoweredSummary(text)
+  }, [addToast])
 
   const mutation = useMutation({
     mutationFn: ({ body, token }: { body: PerformanceSettingsUpdate; token?: string }) =>
       updatePerformanceSettings(body, token),
-    onSuccess: (_result, variables) => {
+    onSuccess: (result, variables) => {
       setSaveStatus('saved')
-      // Clear a dirty flag ONLY for a control this PUT actually carried, and
-      // only while the user has not re-edited that control since the body was
-      // handed to the mutation. Clearing a dirty flag re-arms the sync effect
-      // above, which overwrites the input with the server's value — doing that
-      // for a field the PUT never sent is precisely the silent revert finding
-      // 15 describes.
-      const saved = variables.body
-      const queued = pendingRef.current
-      const parallelSaved = 'max_parallel_agents' in saved || 'tools_on_demand' in saved
-      const parallelRequeued =
-        queued !== null && ('max_parallel_agents' in queued || 'tools_on_demand' in queued)
-      if (parallelSaved && !parallelRequeued) setDirty(false)
-      if ('goal_max_rounds' in saved && !(queued !== null && 'goal_max_rounds' in queued)) {
-        setGoalDirty(false)
+      // A successful PUT answers with the server's pending-apply state: only
+      // when it is absent is whatever an earlier failed apply left pending in
+      // force now. An unrelated save never clears the notice on its own.
+      if (!result?.pending_apply) {
+        setUnapplied(null)
+        setUnappliedNotice(null)
       }
+      clearCommittedDirty(variables.body)
+      reportLowered(result?.max_tool_iterations_lowered_agents)
       // The slot was emptied when the body was handed over (onConfirmed),
       // so anything sitting in it now is a NEWER edit — leave it queued.
       void queryClient.invalidateQueries({ queryKey: ['performance-settings'] })
       // Reset to 'idle' after showing 'saved' briefly.
       setTimeout(() => setSaveStatus('idle'), 2000)
     },
-    onError: (err) => {
+    onError: (err, variables) => {
+      // D16 drift: nothing was written because the set of agents to lower
+      // changed since the preview. Re-open the dialog with the server's fresh
+      // list; a new Confirm is required. Not an error toast — the dialog
+      // itself announces the change.
+      if (isMaxToolIterationsLoweringConflict(err)) {
+        setSaveStatus('idle')
+        // Keep the refused PUT's other fields; the value and confirmed list
+        // come from the fresh preview when the admin confirms again.
+        const rest: PerformanceSettingsUpdate = { ...variables.body }
+        delete rest.max_tool_iterations
+        delete rest.confirmed_lowering
+        setLowering({
+          value: err.preview.value,
+          agents: err.preview.agents,
+          listChanged: true,
+          retryBody: rest,
+        })
+        return
+      }
+      // The write committed but is not in force yet: not a failed save. Say
+      // so plainly and name the agents it lowered (from the error body — GET
+      // /performance does not carry them). Stage `reload`: GET already shows
+      // the new values, so re-read it. Stage `refresh` (or unknown): GET still
+      // shows the OLD values, so the saved ones stay on show (UnappliedValues)
+      // with a lasting notice, instead of the inputs snapping back to stale
+      // numbers that look current.
+      if (isPerformanceReloadFailed(err)) {
+        setSaveStatus('idle')
+        if (!err.inMemoryUpdated) {
+          const saved = savedValuesOf(variables.body)
+          setUnapplied((prev) => ({ ...prev, ...saved }))
+        }
+        setUnappliedNotice(err.userMessage)
+        setNoticeSince(Date.now())
+        clearCommittedDirty(variables.body)
+        addToast({ variant: 'warning', message: err.userMessage, duration: LOWERED_TOAST_DURATION_MS })
+        reportLowered(err.loweredAgents)
+        if (err.loweredUnknown) setLoweredSummary(UNKNOWN_LOWERED_TEXT)
+        void queryClient.invalidateQueries({ queryKey: ['performance-settings'] })
+        return
+      }
+      if ('max_tool_iterations' in variables.body) {
+        setToolIterError(getErrorMessage(err, 'Failed to save the tool-call limit.'))
+      }
       setSaveStatus('error')
       // Deliberately does NOT clear the slot or the dirty flags: the slot was
       // already emptied at hand-over, the inputs still hold the unsaved edit,
@@ -314,7 +509,7 @@ export function PerformanceSection(): React.ReactElement {
         runOnce,
         {
           title: 'Change the performance settings?',
-          body: 'This changes how many agents Omnipus runs at once, whether tools are loaded on demand, and how many tries a goal gets. It takes effect on the next message; nothing needs restarting.',
+          body: 'This changes how many agents Omnipus runs at once, whether tools are loaded on demand, how many tries a goal gets, and how many tool calls an agent may make per turn. It takes effect on the next message; nothing needs restarting.',
           confirmLabel: 'Change performance settings',
         },
       )
@@ -328,6 +523,7 @@ export function PerformanceSection(): React.ReactElement {
           setSaveStatus('idle')
           setDirty(false)
           setGoalDirty(false)
+          setToolIterDirty(false)
         }
         // A real save failure already surfaced its toast via the mutation's
         // onError above.
@@ -404,6 +600,115 @@ export function PerformanceSection(): React.ReactElement {
     }, AUTOSAVE_DEBOUNCE_MS)
   }
 
+  // settleToolIter runs once the tool-iteration input settles (debounce or
+  // the sr-only Save button): validate the 1–1000 bound, then:
+  //   - a raise (or the same value, repairing the file, D13) goes straight to
+  //     the step-up gate with no preview and no confirmed_lowering — a raise
+  //     never rewrites any agent (D20): an agent whose own value is above the
+  //     new global keeps it and stays capped and flagged;
+  //   - a lowering asks the preview endpoint which agents it would lower,
+  //     then opens the D11 confirm dialog (some agents) or the gate (none).
+  // With no in-force value to compare against (an older backend omitting
+  // it), a raise cannot be told from a lowering, so the preview is asked.
+  const settleToolIter = useCallback((raw: string) => {
+    const parsed = parseMaxToolIterations(raw)
+    if (parsed === null) {
+      setSaveStatus('idle')
+      setToolIterError(INVALID_MAX_TOOL_ITERATIONS_MESSAGE)
+      return
+    }
+    // Unchanged from the value in force — nothing to save, unless the value
+    // saved in config.json is missing or out of range (D13): then saving the
+    // in-force number is exactly how the admin repairs the file.
+    // After a failed refresh the saved value is the baseline; the in-memory
+    // global GET reports is stale, so a raise cannot be told from a lowering
+    // against it — the preview (the server's own answer) is asked instead.
+    const unappliedLimit = unapplied?.max_tool_iterations
+    const savedOk = unappliedLimit !== undefined || (data?.max_tool_iterations_saved_state ?? 'ok') === 'ok'
+    if (parsed === (unappliedLimit ?? data?.max_tool_iterations) && savedOk) {
+      setSaveStatus('idle')
+      setToolIterDirty(false)
+      return
+    }
+    const seq = ++previewSeqRef.current
+    setSaveStatus('saving')
+    const inForce = unappliedLimit === undefined ? data?.max_tool_iterations : undefined
+    if (inForce !== undefined && parsed >= inForce) {
+      enqueuePending({ max_tool_iterations: parsed })
+      openStepUp()
+      return
+    }
+    fetchMaxToolIterationsLoweringPreview(parsed).then(
+      (preview) => {
+        if (seq !== previewSeqRef.current) return
+        if (preview.agents.length > 0) {
+          setSaveStatus('idle')
+          setLowering({ value: parsed, agents: preview.agents, listChanged: false })
+          return
+        }
+        enqueuePending({ max_tool_iterations: parsed, confirmed_lowering: [] })
+        openStepUp()
+      },
+      (err: unknown) => {
+        if (seq !== previewSeqRef.current) return
+        // Nothing is saved when the affected agents cannot be listed.
+        setSaveStatus('error')
+        setToolIterError(
+          `Could not check which agents this would affect, so nothing was saved: ${getErrorMessage(err, 'unknown error')}`,
+        )
+      },
+    )
+  }, [data?.max_tool_iterations, data?.max_tool_iterations_saved_state, unapplied?.max_tool_iterations, enqueuePending, openStepUp])
+
+  function handleToolIterChange(value: string) {
+    setToolIterInput(value)
+    setToolIterDirty(true)
+    setToolIterError(null)
+    setLoweredSummary(null)
+    setLowering(null)
+    setSaveStatus('idle')
+    previewSeqRef.current += 1
+    if (toolIterDebounceRef.current) clearTimeout(toolIterDebounceRef.current)
+    toolIterDebounceRef.current = setTimeout(() => settleToolIter(value), AUTOSAVE_DEBOUNCE_MS)
+  }
+
+  function triggerToolIterSave() {
+    if (toolIterDebounceRef.current) clearTimeout(toolIterDebounceRef.current)
+    settleToolIter(toolIterInput)
+  }
+
+  // Confirm in the D11 dialog: queue the exact snapshot the admin saw (D16 —
+  // the server compares it as a set) and open the step-up gate.
+  function confirmLowering() {
+    if (!lowering) return
+    const { value, agents, retryBody } = lowering
+    setLowering(null)
+    setSaveStatus('saving')
+    enqueuePending({
+      ...retryBody,
+      max_tool_iterations: value,
+      confirmed_lowering: agents.map((a) => ({ agent_id: a.agent_id, old_value: a.old_value })),
+    })
+    openStepUp()
+  }
+
+  // Cancel writes nothing for the limit (US-6 AS-2); the field returns to the
+  // saved value. After a D16 drift the dialog also holds the refused PUT's
+  // OTHER fields (retryBody) — their inputs are still dirty, so they are
+  // re-sent on their own (behind the step-up gate) rather than dropped with
+  // a dirty input nothing will ever save. Cancelling that gate resets them.
+  function cancelLowering() {
+    const retryBody = lowering?.retryBody
+    setLowering(null)
+    setSaveStatus('idle')
+    setToolIterDirty(false)
+    if (retryBody && Object.keys(retryBody).length > 0) {
+      setSaveStatus('saving')
+      enqueuePending(retryBody)
+      openStepUp()
+    }
+  }
+
   // handleToolsOnDemandChange fires immediately (no debounce) — a toggle is an
   // unambiguous user action that doesn't need a settling delay.
   function handleToolsOnDemandChange(checked: boolean) {
@@ -432,6 +737,7 @@ export function PerformanceSection(): React.ReactElement {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
       if (goalDebounceRef.current) clearTimeout(goalDebounceRef.current)
+      if (toolIterDebounceRef.current) clearTimeout(toolIterDebounceRef.current)
     }
   }, [])
 
@@ -501,6 +807,18 @@ export function PerformanceSection(): React.ReactElement {
     !isNaN(inputValueNum) &&
     inputValueNum > PHYSICAL_THREAD_CEILING
 
+  // The not-applied notice (#904): shown while the server reports pending
+  // settings, or — right after a not-applied save, before GET has answered
+  // again — on this page's own failure message. Its text prefers that
+  // message (it carries the server's reason); otherwise, e.g. after a page
+  // reload, it names the settings the server reports as pending.
+  const pendingApply = data?.pending_apply ?? null
+  const awaitingServer = unappliedNotice !== null && dataUpdatedAt < noticeSince
+  const noticeText = unappliedNotice ?? (pendingApply ? performancePendingApplyMessage(pendingApply) : null)
+  const notice = (awaitingServer || pendingApply) && noticeText
+    ? { text: noticeText, fieldsShowSaved: pendingApply?.stage !== 'refresh' || unapplied !== null }
+    : null
+
   const recommendationText =
     typeof recommended === 'number'
       ? `Currently in use: ${recommended} parallel agents`
@@ -516,6 +834,29 @@ export function PerformanceSection(): React.ReactElement {
         </div>
         <AutoSaveIndicator status={saveStatus} />
       </div>
+
+      {notice && (
+        <Card
+          variant="inset"
+          role="status"
+          data-testid="performance-unapplied-notice"
+          className="p-[var(--space-2-5)] flex items-start gap-[var(--space-2)]"
+        >
+          <Warning size={14} className="text-[var(--color-warning)] mt-[var(--space-0-5)] shrink-0" aria-hidden />
+          <div className="flex-1 min-w-0">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] leading-relaxed">
+              {notice.text}
+            </p>
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
+              {notice.fieldsShowSaved
+                ? 'The fields below show the saved values. Until the restart or reload, Omnipus keeps running on the previous ones.'
+                : 'The fields below still show the values Omnipus is running on; the saved ones take effect after the restart or reload.'}{' '}
+              A new tool-call limit set here is checked against the saved limit; an agent{'\u2019'}s own limit, set on
+              its profile, is still checked against the running one.
+            </p>
+          </div>
+        </Card>
+      )}
 
       {/* Live concurrency card — shown above the input */}
       <Card variant="inset" className="p-[var(--space-2-5)] flex items-start gap-[var(--space-2)]">
@@ -675,6 +1016,27 @@ export function PerformanceSection(): React.ReactElement {
         </p>
       </Card>
 
+      <MaxToolIterationsCard
+        value={toolIterInput}
+        onChange={handleToolIterChange}
+        error={toolIterError}
+        inForce={data?.max_tool_iterations}
+        savedState={data?.max_tool_iterations_saved_state}
+        savedRaw={data?.max_tool_iterations_saved_raw}
+        loweredSummary={loweredSummary}
+      />
+
+      {lowering && (
+        <MaxToolIterationsLoweringDialog
+          open
+          value={lowering.value}
+          agents={lowering.agents}
+          listChanged={lowering.listChanged}
+          onConfirm={confirmLowering}
+          onCancel={cancelLowering}
+        />
+      )}
+
       {stepUp.dialogs}
 
       {/* Escape hatch: manual trigger exposed for keyboard users / edge cases */}
@@ -693,6 +1055,16 @@ export function PerformanceSection(): React.ReactElement {
           type="button"
           data-testid="performance-goal-save-btn"
           onClick={triggerGoalSave}
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50"
+        >
+          Save changes
+        </Button>
+      )}
+      {toolIterDirty && !stepUp.open && !lowering && (
+        <Button
+          type="button"
+          data-testid="performance-max-tool-iterations-save-btn"
+          onClick={triggerToolIterSave}
           className="sr-only focus:not-sr-only focus:absolute focus:z-50"
         >
           Save changes

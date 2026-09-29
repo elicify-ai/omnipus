@@ -251,6 +251,9 @@ type restAPICreateAgentPrepareAgent struct {
 	// autoApproveDisabled is ADR-092's per-agent "Never auto-approve"
 	// switch (Main and Subagent only; subagent_3p runs its own CLI's tools).
 	autoApproveDisabled *bool
+	// maxToolIterations is the new agent's own tool-iteration limit (#904,
+	// every variant incl. subagent_3p per D14); nil = rides the global.
+	maxToolIterations *int
 }
 
 // prepareAgent decodes and validates the request and builds the persistent agent config.
@@ -400,8 +403,8 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 	// and copies out only the fields that variant actually carries.
 	// AgentCreateRequestSubagent has no Executor field at all;
 	// AgentCreateRequestSubagent3p has no ToolsCfg/Skills/FallbackModels/
-	// Voice/MaxToolIterations
-	// fields — a subagent_3p create supplying any of those is rejected at
+	// Voice fields (it does carry max_tool_iterations — #904 D14)
+	// — a subagent_3p create supplying any of those is rejected at
 	// decode time, both because the Go type has no matching field and
 	// because the strict decoder refuses to silently drop it.
 
@@ -425,6 +428,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.fallbackModels = vreq.FallbackModels
 		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
+		pap.maxToolIterations = vreq.MaxToolIterations
 		return nil, false
 	case "Subagent":
 		var vreq gen.AgentCreateRequestSubagent
@@ -445,6 +449,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.fallbackModels = vreq.FallbackModels
 		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
+		pap.maxToolIterations = vreq.MaxToolIterations
 		return nil, false
 	case "subagent_3p":
 		var vreq gen.AgentCreateRequestSubagent3p
@@ -458,6 +463,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.color = vreq.Color
 		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
+		pap.maxToolIterations = vreq.MaxToolIterations
 		return &executorRequestInput{
 			Cli:          executorCliStr(vreq.Executor.Cli),
 			CliPath:      vreq.Executor.CliPath,
@@ -578,6 +584,21 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	if stop {
 		return true, true
 	}
+	// #904 FR-006/FR-007/FR-014: an own tool-iteration limit must be within
+	// 1..1000 and not above the global in force (D10). Re-checked under
+	// configMu in persistAgent, which closes the window against REST global
+	// writes (PUT /api/v1/performance holds configMu too). Not covered: a
+	// hand edit of config.json applied by a reload outside configMu, and the
+	// stale in-memory global after a refresh-stage performance_reload_failed
+	// — the agent is then capped and flagged (D1), never unbounded (both
+	// cases: rest_agents_update.go::persistAgent).
+	if pap.maxToolIterations != nil {
+		if err := config.ValidateAgentMaxToolIterations(*pap.maxToolIterations,
+			&pap.cra.a.agentLoop.GetConfig().Agents.Defaults); err != nil {
+			jsonErrField(pap.cra.w, http.StatusBadRequest, err.Error(), maxToolIterationsFieldName)
+			return true, true
+		}
+	}
 	// ac is the in-memory config record. Locked is left at its zero value
 	// (false) for BOTH custom and worker creates — the API is the operator's
 	// surface for editing; only SeedConfig-seeded agents are locked. A newly
@@ -590,6 +611,9 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 		Color:       colorVal,
 		Icon:        iconVal,
 		Type:        pap.createType,
+	}
+	if pap.maxToolIterations != nil {
+		pap.cra.ac.MaxToolIterations = *pap.maxToolIterations
 	}
 	if pap.model != nil && *pap.model != "" {
 		pap.cra.ac.Model = &config.AgentModelConfig{Primary: *pap.model}
@@ -783,6 +807,14 @@ func (cra *restAPICreateAgent) persistAgent() bool {
 		// a nil error here means ac is durably confirmed on disk before this
 		// handler ever reports success to the caller.
 		func(m map[string]any) error {
+			// #904 D10, the deciding check under configMu (see
+			// validateAndBuildConfig for the fast path).
+			if cra.ac.MaxToolIterations > 0 {
+				if err := config.ValidateAgentMaxToolIterations(cra.ac.MaxToolIterations,
+					&cra.a.agentLoop.GetConfig().Agents.Defaults); err != nil {
+					return &requestRefusalError{msg: err.Error(), field: maxToolIterationsFieldName}
+				}
+			}
 			result, err := agentstore.New(cra.a.homePath).CreateState(cra.ac.ID, &cra.ac, cra.createSoulContent)
 			cra.mutationResult = result
 			if err != nil {
@@ -843,7 +875,7 @@ func (cra *restAPICreateAgent) publishResponse() {
 	ag.Type = coreagent.ToWireType(cra.ac)
 	ag.Locked = cra.ac.Locked
 	applyAgentEditableFields(&ag, cra.ac)
-	applyAgentOverrides(&ag, &cra.ac)
+	applyAgentOverrides(&ag, &cfgAfterCreate.Agents.Defaults, &cra.ac)
 	ag.Model = &respModel
 	setAgentModelProvider(&ag, cra.ac.Model)
 	// Echo the just-persisted soul so the FE round-trip works. Status is
