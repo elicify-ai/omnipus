@@ -73,3 +73,66 @@ func TestFix1055_IntegrationGETReportsEffectiveTavilyDepthCap(t *testing.T) {
 		})
 	}
 }
+
+// TestFix1055_NonTavilyDepthHonouringProviderHasNoDepthCap: Perplexity and
+// GLM also honour depth (pkg/config/search_provider_catalogue.go's
+// HonoursDepth is true for both, not Tavily alone — ADR-096 D9/D12's
+// capability matrix). But the team-lead contract ruling (plan.md, "Contract
+// addition: search_depth_cap", 2026-09-29) restricts the wire field to
+// Tavily specifically: "filled from config tavily.search_depth ... absent
+// for providers that don't honour depth" — and #1055 itself only asks for
+// the cap "on the default card when the default honours depth (e.g.
+// Tavily)", with the operator setting existing nowhere except Tavily's own
+// config section. HonoursDepth alone must never be read as "gets a
+// search_depth_cap field" — this guards that exact boundary, which the
+// existing Tavily/DuckDuckGo-only table above cannot: DuckDuckGo doesn't
+// honour depth at all, so it can never expose whether the code keys off
+// HonoursDepth or off the provider id.
+func TestFix1055_NonTavilyDepthHonouringProviderHasNoDepthCap(t *testing.T) {
+	for _, id := range []string{config.SearchProviderPerplexity, config.SearchProviderGLM} {
+		t.Run(id, func(t *testing.T) {
+			def, ok := config.SearchProviderDefByID(id)
+			if !ok || !def.HonoursDepth {
+				t.Fatalf("BLOCKED: catalogue entry for %q must exist and honour depth for this test to be "+
+					"meaningful — required by ADR-096 D9/D12's capability matrix (pkg/config/search_provider_catalogue.go)", id)
+			}
+
+			api, user, _ := newRolesTestAPI(t)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/providers", nil)
+			req = req.WithContext(context.WithValue(req.Context(), UserContextKey{}, user))
+			w := httptest.NewRecorder()
+			api.HandleIntegrationProviders(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET integrations status = %d, want 200: %s", w.Code, w.Body.String())
+			}
+
+			var response map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatalf("decode GET integrations JSON: %v", err)
+			}
+			rows, ok := response["search"].([]any)
+			if !ok {
+				t.Fatalf("search catalogue = %T, want array", response["search"])
+			}
+			found := false
+			for _, item := range rows {
+				row, ok := item.(map[string]any)
+				if !ok {
+					t.Fatalf("search row = %T, want object", item)
+				}
+				if row["id"] != id {
+					continue
+				}
+				found = true
+				if depthCap, present := row["search_depth_cap"]; present {
+					t.Fatalf("BLOCKED: %s honours depth but is not Tavily — search_depth_cap must be absent "+
+						"per the team-lead contract ruling (plan.md: the operator setting only exists for "+
+						"Tavily), got %v", id, depthCap)
+				}
+			}
+			if !found {
+				t.Fatalf("GET search catalogue missing provider %q", id)
+			}
+		})
+	}
+}

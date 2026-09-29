@@ -26,6 +26,7 @@ package tools
 // class this test exercises; it is not a claim about TLS specifically.
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -90,6 +91,78 @@ func TestFixF1_DuckDuckGoNamedProviderNetworkFailureNamesBlockedRegions(t *testi
 	for _, region := range []string{"north korea", "indonesia", "mainland china"} {
 		if !strings.Contains(lower, region) {
 			t.Fatalf("blocked-region note must name %q, got: %s", region, res.ForLLM)
+		}
+	}
+}
+
+// TestFixF1_DuckDuckGoNonNetworkFailureOmitsBlockedRegionNote: founder
+// decision D-B (plan.md) scopes the note to explain a network/region block
+// specifically — "the note explains a network/region block to the agent; it
+// must not appear for other failures". A DuckDuckGo failure that is NOT
+// network-class must not carry it. DuckDuckGoSearchProvider.SearchWithCaps
+// (pkg/tools/web_search.go) classifies any non-200 HTTP response as
+// classBadResponse — never classNetwork, regardless of the status code
+// (auth-shaped 401 included) — so a swapped-in 401 response is a
+// deterministic, reproducible non-network-class failure, exercising exactly
+// the same no-fallback-configured / failureLine path the network-class
+// tests above use (only the failure class differs). Wrongly showing the
+// geo-block note here would mislead the agent into diagnosing a config/auth
+// problem as regional blocking.
+func TestFixF1_DuckDuckGoNonNetworkFailureOmitsBlockedRegionNote(t *testing.T) {
+	f := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
+		c.DefaultProvider = config.SearchProviderDuckDuckGo
+		c.FallbackProvider = config.SearchProviderNone
+	}, nil)
+	f.setHandler("ddg", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized) // non-network class: classBadResponse, never classNetwork
+	})
+
+	res := f.run(map[string]any{"query": "test"})
+	if !res.IsError {
+		t.Fatalf("expected the DuckDuckGo non-200 response to end the call (no fallback configured), "+
+			"got ForLLM=%q ForUser=%q", res.ForLLM, res.ForUser)
+	}
+
+	assertNoBlockedRegionNote(t, res, "a non-network (HTTP status) DuckDuckGo failure")
+}
+
+// TestFixF1_DuckDuckGoSuccessOmitsBlockedRegionNote: a successful DuckDuckGo
+// search must never carry the region-block note either — D-B/#1056 F-1 scope
+// the note to a specific failure, not a standing DuckDuckGo disclaimer that
+// would appear on every call regardless of outcome.
+func TestFixF1_DuckDuckGoSuccessOmitsBlockedRegionNote(t *testing.T) {
+	f := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
+		c.DefaultProvider = config.SearchProviderDuckDuckGo
+		c.FallbackProvider = config.SearchProviderNone
+	}, nil) // canonical DDG fixture handler already returns a well-formed, successful result
+
+	res := f.run(map[string]any{"query": "test"})
+	if res.IsError {
+		t.Fatalf("expected the canonical DuckDuckGo fixture handler to succeed, got: %s", res.ForLLM)
+	}
+
+	assertNoBlockedRegionNote(t, res, "a successful DuckDuckGo search")
+}
+
+// assertNoBlockedRegionNote asserts neither ForLLM nor ForUser carries the
+// F-1 blocked-region note's "blocked" wording or any of its three named
+// regions (issue #1056 F-1's own citations: North Korea, Indonesia,
+// mainland China).
+func assertNoBlockedRegionNote(t *testing.T, res *ToolResult, scenario string) {
+	t.Helper()
+	for _, field := range []struct {
+		name string
+		text string
+	}{{"ForLLM", res.ForLLM}, {"ForUser", res.ForUser}} {
+		lower := strings.ToLower(field.text)
+		if strings.Contains(lower, "blocked") {
+			t.Fatalf("%s must not carry the blocked-region note wording in %s, got: %s", scenario, field.name, field.text)
+		}
+		for _, region := range []string{"north korea", "indonesia", "mainland china"} {
+			if strings.Contains(lower, region) {
+				t.Fatalf("%s must not name %q in %s (the note is network-class only, D-B/plan.md), got: %s",
+					scenario, region, field.name, field.text)
+			}
 		}
 	}
 }
