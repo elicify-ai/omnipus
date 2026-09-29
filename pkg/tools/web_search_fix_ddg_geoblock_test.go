@@ -57,7 +57,7 @@ func TestFixF1_DuckDuckGoNetworkFailureNamesBlockedRegions(t *testing.T) {
 			"a DuckDuckGo network-class failure must carry a helpful note that it may be regionally "+
 				"blocked (issue #1056 F-1), got: %s", res.ForLLM)
 	}
-	for _, region := range []string{"north korea", "indonesia", "china"} {
+	for _, region := range []string{"north korea", "indonesia", "mainland china"} {
 		if !strings.Contains(lower, region) {
 			t.Fatalf("blocked-region note must name %q (issue #1056 F-1's documented exclusions), got: %s", region, res.ForLLM)
 		}
@@ -87,7 +87,7 @@ func TestFixF1_DuckDuckGoNamedProviderNetworkFailureNamesBlockedRegions(t *testi
 	if !strings.Contains(lower, "blocked") && !strings.Contains(lower, "unavailable") {
 		t.Fatalf("named-provider DuckDuckGo network failure must carry the blocked-region note, got: %s", res.ForLLM)
 	}
-	for _, region := range []string{"north korea", "indonesia", "china"} {
+	for _, region := range []string{"north korea", "indonesia", "mainland china"} {
 		if !strings.Contains(lower, region) {
 			t.Fatalf("blocked-region note must name %q, got: %s", region, res.ForLLM)
 		}
