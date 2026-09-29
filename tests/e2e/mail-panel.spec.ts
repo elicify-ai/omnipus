@@ -89,8 +89,12 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
   }
 
   async function openMail(page: Page) {
-    await page.goto(`/#/workspaces/${workspaceId}/mail`)
-    await page.getByRole('tab', { name: /^mail$/i }).click()
+    await page.goto(`/#/workspaces/${workspaceId}/chat`)
+    const mailToggle = page.getByTestId('workspace-tab-mail')
+    await expect(mailToggle).toHaveAttribute('aria-pressed', 'false')
+    await mailToggle.click()
+    await expect(mailToggle).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('mail-panel')).toBeVisible()
   }
 
   test('reads the seeded inbox message and marks it seen (US-3, US-6)', async ({ browser }) => {
@@ -124,12 +128,23 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
   test('edits an agent draft and sends it (US-7)', async ({ browser }) => {
     const page = await mailPage(browser)
     await openMail(page)
-    await page.getByRole('tab', { name: /drafts/i }).click()
-    await page.getByText('Draft note').click()
-    await page.getByRole('button', { name: /edit/i }).click()
-    const body = page.getByRole('textbox', { name: /body|message/i })
+    const drafts = page.getByRole('tab', { name: 'Drafts' })
+    await drafts.click()
+    await expect(drafts).toHaveAttribute('aria-selected', 'true')
+    const [detailResponse] = await Promise.all([
+      page.waitForResponse((response) => {
+        const url = new URL(response.url())
+        return response.request().method() === 'GET'
+          && /\/folders\/drafts\/messages\/[^/]+$/.test(url.pathname)
+      }),
+      page.getByRole('button', { name: /^Draft note\b/ }).click(),
+    ])
+    expect(detailResponse.status()).toBe(200)
+    await page.getByRole('button', { name: 'Edit' }).click()
+    const body = page.getByRole('textbox', { name: 'Message' })
     await body.fill('Please review. Updated.')
     await page.getByRole('button', { name: /save/i }).click()
+    await expect(page.getByText('Draft saved', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: /^send$/i }).click()
     const sent = await mail.smtpMessages()
     expect(sent.count).toBe(1)
@@ -140,14 +155,18 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     const page = await mailPage(browser)
     await openMail(page)
     await page.getByRole('button', { name: /compose/i }).click()
-    await page.getByRole('textbox', { name: /^to$/i }).fill('ada@example.test')
-    await page.getByRole('textbox', { name: /subject/i }).fill('With file')
-    await page.getByRole('textbox', { name: /body|message/i }).fill('See attached.')
-    await page.getByLabel(/attach/i).setInputFiles({
+    const compose = page.getByRole('dialog', { name: 'Compose message' })
+    const recipient = compose.getByRole('textbox', { name: 'To' })
+    await recipient.fill('ada@example.test')
+    await recipient.press('Enter')
+    await expect(compose.getByTestId('recipient-chip')).toHaveText('ada@example.test')
+    await compose.getByRole('textbox', { name: 'Subject' }).fill('With file')
+    await compose.getByRole('textbox', { name: 'Message' }).fill('See attached.')
+    await compose.getByLabel('Attach files').setInputFiles({
       name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('notes'),
     })
-    await page.getByRole('button', { name: /^send$/i }).click()
-    await expect(page.getByText(/sent/i)).toBeVisible()
+    await compose.getByRole('button', { name: 'Send' }).click()
+    await expect(page.getByText('Message sent', { exact: true })).toBeVisible()
     const sent = await mail.smtpMessages()
     const last = sent.messages[sent.messages.length - 1]
     expect(last).toContain('Kind regards')
