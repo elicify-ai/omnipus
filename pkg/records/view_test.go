@@ -88,7 +88,7 @@ func TestView_NoViewsDirectoryIsNotAnError(t *testing.T) {
 // yaml.Unmarshal into generated.ViewDef and this test fails on PropertyConfig.
 func TestView_MultiWordKeysSurviveTheDecode(t *testing.T) {
 	root, schemas := viewFixtureSchemas(t, "")
-	root = writeVaultView(t, root, "by-state.yaml", `
+	root = writeVaultView(t, root, "by-state.view", `
 name: by-state
 type: widget
 label: Widgets by state
@@ -129,7 +129,7 @@ property_config:
 	if v.DisplayLabel() != "Widgets by state" {
 		t.Errorf("label was dropped: DisplayLabel gave %q", v.DisplayLabel())
 	}
-	if v.SourcePath == "" || !strings.HasSuffix(v.SourcePath, "by-state.yaml") {
+	if v.SourcePath == "" || !strings.HasSuffix(v.SourcePath, "by-state.view") {
 		t.Errorf("SourcePath must name the file the view came from, got %q", v.SourcePath)
 	}
 }
@@ -233,8 +233,8 @@ func TestView_MalformedHeaderIsRefused(t *testing.T) {
 func TestView_DuplicateNameRejectsBothAndNamesBothPaths(t *testing.T) {
 	root, schemas := viewFixtureSchemas(t, "")
 	body := "name: shared\ntype: widget\n"
-	root = writeVaultView(t, root, "a.yaml", body)
-	root = writeVaultView(t, root, "b.yaml", body)
+	root = writeVaultView(t, root, "a.view", body)
+	root = writeVaultView(t, root, "b.view", body)
 
 	set, report, err := LoadViews(root, schemas)
 	if err != nil {
@@ -253,7 +253,7 @@ func TestView_DuplicateNameRejectsBothAndNamesBothPaths(t *testing.T) {
 	if len(rej.Paths) != 2 {
 		t.Fatalf("both paths must be named, got %v", rej.Paths)
 	}
-	for _, want := range []string{"a.yaml", "b.yaml"} {
+	for _, want := range []string{"a.view", "b.view"} {
 		if !strings.Contains(rej.Reason, want) {
 			t.Errorf("the rejection must name %s so the operator can find both files; got %q", want, rej.Reason)
 		}
