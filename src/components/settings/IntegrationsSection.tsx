@@ -25,12 +25,7 @@ import {
 import { useUiStore } from '@/store/ui'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
-import {
-  WEB_SEARCH_ROW_GRID,
-  WebSearchGroup,
-  WebSearchRowRoles,
-  WebSearchNoFallbackChoice,
-} from './WebSearchGroup'
+import { WebSearchGroup, orderSearchProviders } from './WebSearchGroup'
 
 export function IntegrationsSection() {
   const { addToast } = useUiStore()
@@ -94,10 +89,9 @@ export function IntegrationsSection() {
       })
   }
 
-  // Search rows: ADR-096 — ONE row per provider, drawn the way the spec
-  // draws it: each row carries its own default radio and fallback radio
-  // (the two radio groups remain one group each, semantically — only where
-  // they render changes). Role badges derive from the response-level
+  // Search rows: #1055 — ONE row per provider, status only; role assignment
+  // moved to the Default search / Fallback cards' "Change" selector
+  // (WebSearchGroup). Role badges derive from the response-level
   // resolved roles (default_search / fallback_search), not from the row's
   // own `active`/`fallback` flags — the response fields are what R5's
   // healing has already applied (an ignored fallback reads
@@ -131,9 +125,8 @@ export function IntegrationsSection() {
         className="overflow-hidden"
         data-testid={`search-row-${p.id}`}
       >
-        <div className="px-[var(--space-3)] py-[var(--space-2-5)]">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-[var(--space-2-5)]">
-            <div className="min-w-0">
+        <div className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]">
+          <div className="flex-1 min-w-0">
             <div className="flex items-center gap-[var(--space-2)] flex-wrap">
               <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{p.display_name}</span>
               {isDefaultRow && (
@@ -182,32 +175,23 @@ export function IntegrationsSection() {
                 )
               )}
             </div>
-            </div>
-
-            <WebSearchRowRoles
-              provider={p}
-              defaultSearch={data?.default_search}
-              fallbackSearch={data?.fallback_search}
-              saving={isSaving}
-              onSetDefault={onSetDefault}
-              onSetFallback={onSetFallback}
-            />
-            <div className="flex items-center gap-[var(--space-2)] shrink-0">
-              {p.requires_key && (
-                <Button
-                  size="sm"
-                  className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
-                  onClick={() => setExpanded(isExpanded ? null : p.id)}
-                  data-testid={`addkey-${p.id}`}
-                >
-                  {p.configured ? 'Edit key' : (
-                    <><Plus size={11} /> Add key</>
-                  )}
-                </Button>
-              )}
-            </div>
           </div>
 
+          <div className="flex items-center gap-[var(--space-2)] shrink-0">
+            {p.requires_key && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
+                onClick={() => setExpanded(isExpanded ? null : p.id)}
+                data-testid={`addkey-${p.id}`}
+              >
+                {p.configured ? 'Edit key' : (
+                  <><Plus size={11} /> Add key</>
+                )}
+              </Button>
+            )}
+          </div>
         </div>
 
         {isExpanded && p.requires_key && (
@@ -416,22 +400,18 @@ export function IntegrationsSection() {
             ) : (
               <>
                 <WebSearchGroup
+                  providers={data.search}
                   defaultSearch={data.default_search}
+                  fallbackSearch={data.fallback_search}
                   fallbackIgnoredReason={data.fallback_ignored_reason}
                   nativeSearchInEffect={data.native_search_in_effect}
-                />
-                <div className={`${WEB_SEARCH_ROW_GRID} px-[var(--space-3)] py-[var(--space-1)]`}>
-                  <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Provider</span>
-                  <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Default</span>
-                  <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Fallback</span>
-                  <span aria-hidden="true" />
-                </div>
-                {data.search.map(renderSearchRow)}
-                <WebSearchNoFallbackChoice
-                  fallbackSearch={data.fallback_search}
                   saving={isSaving}
+                  onSetDefault={onSetDefault}
+                  onSetFallback={onSetFallback}
                   onSetNoFallback={onSetNoFallback}
+                  onFixProvider={(id) => setExpanded(id)}
                 />
+                {orderSearchProviders(data.search).map(renderSearchRow)}
               </>
             )}
           </section>
