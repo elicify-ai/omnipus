@@ -993,6 +993,11 @@ func TestGoalDelegation_Judged(t *testing.T) {
 		t.Fatal("timed out waiting for delegated goal adjudication")
 	}
 
+	assertJudgedDelegationInbox(t, inbox, parentMeta.ID, rec, len(verdicts))
+}
+
+func assertJudgedDelegationInbox(t *testing.T, inbox *session.MessageInboxStore, parentID string, rec *session.LifecycleRecord, verdictCount int) {
+	t.Helper()
 	// Q1=A (founder, 2026-09-28, #984 follow-up) keeps decision (b)'s
 	// two-ENTRY contract and corrects the WAKE reading: the verdict entry is
 	// stored not woken and acked at hand-back time; the handback is the single
@@ -1000,7 +1005,7 @@ func TestGoalDelegation_Judged(t *testing.T) {
 	// would hide the acked verdict entry. ORDER stays part of the spec: the
 	// verdict lands first (goal_loop.go::writeGoalVerdictTranscript), the
 	// handback afterwards (steer_completion.go::completeSteeredTurnAfterGoal).
-	entries, err := inbox.Entries(parentMeta.ID)
+	entries, err := inbox.Entries(parentID)
 	if err != nil {
 		t.Fatalf("instrument: inbox.Entries(parent): %v", err)
 	}
@@ -1044,8 +1049,8 @@ func TestGoalDelegation_Judged(t *testing.T) {
 	}
 	if v.Condition != generated.SessionMessageGoalStatusConditionMet ||
 		v.Direction != generated.SessionMessageGoalStatusDirectionSessionToParent ||
-		v.Evidence == nil || len(*v.Evidence) != len(verdicts) {
-		t.Errorf("goal_status = %+v, want met/session_to_parent with %d evidence rows", v, len(verdicts))
+		v.Evidence == nil || len(*v.Evidence) != verdictCount {
+		t.Errorf("goal_status = %+v, want met/session_to_parent with %d evidence rows", v, verdictCount)
 	}
 	h, herr := got[1].msg.AsSessionMessageHandback()
 	if herr != nil {
@@ -1067,7 +1072,7 @@ func TestGoalDelegation_Judged(t *testing.T) {
 	if acked[got[1].id] {
 		t.Fatalf("handback entry %q must stay unacked for the parent to consume", got[1].id)
 	}
-	unacked, _, _, derr := inbox.Drain(parentMeta.ID, rec.SessionID, "", 10)
+	unacked, _, _, derr := inbox.Drain(parentID, rec.SessionID, "", 10)
 	if derr != nil {
 		t.Fatalf("Drain(parent): %v", derr)
 	}

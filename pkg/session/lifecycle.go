@@ -448,6 +448,54 @@ func (s *LifecycleStore) Persist(rec *LifecycleRecord) error {
 // Lock(rec.SessionID); persistLocked does not take the lock itself (taking
 // it again would self-deadlock — sync.Mutex is not reentrant).
 func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
+	if err := validateLifecycleRecordForPersist(rec); err != nil {
+		return err
+	}
+
+	prev, found, err := s.tail(rec.SessionID)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	switch {
+	case !found:
+		if rec.CreatedAt.IsZero() {
+			rec.CreatedAt = now
+		}
+	case prev.Terminal() && rec.Generation == prev.Generation:
+		return fmt.Errorf(
+			"%w: session %q generation %d is terminal (%s); a follow_up/Play must mint generation %d via resumed_from",
+			ErrLifecycleTerminalImmutable, rec.SessionID, prev.Generation, prev.State, prev.Generation+1,
+		)
+	case rec.Generation == prev.Generation:
+		if rec.CreatedAt.IsZero() {
+			rec.CreatedAt = prev.CreatedAt
+		}
+	default:
+		// A genuine new generation (follow_up/Play). CreatedAt starts fresh
+		// for this generation unless the caller already set one.
+		if rec.CreatedAt.IsZero() {
+			rec.CreatedAt = now
+		}
+	}
+	rec.UpdatedAt = now
+
+	if err := fileutil.AppendJSONL(s.path(rec.SessionID), rec); err != nil {
+		return err
+	}
+	// FR-020 — maintain the secondary parent index inside Persist, under the
+	// per-session striped lock persistLocked's caller (Persist/Mutate)
+	// already holds. add() itself is a no-op when SteeringSessionID is empty
+	// (an unattributable record, FR-015's degraded-mode mint), and is
+	// idempotent across a session's later generations, which all carry the
+	// same SteeringSessionID.
+	s.parentIndex.add(rec.SteeringSessionID(), rec.SessionID)
+	return nil
+}
+
+// validateLifecycleRecordForPersist validates and normalizes before the tail read.
+func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 	if rec == nil {
 		return fmt.Errorf("session: lifecycle: nil record")
 	}
@@ -510,46 +558,6 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 			return fmt.Errorf("session: lifecycle: terminal record (state %q) cannot carry a current-generation stop marker", rec.State)
 		}
 	}
-
-	prev, found, err := s.tail(rec.SessionID)
-	if err != nil {
-		return err
-	}
-
-	now := time.Now().UTC()
-	switch {
-	case !found:
-		if rec.CreatedAt.IsZero() {
-			rec.CreatedAt = now
-		}
-	case prev.Terminal() && rec.Generation == prev.Generation:
-		return fmt.Errorf(
-			"%w: session %q generation %d is terminal (%s); a follow_up/Play must mint generation %d via resumed_from",
-			ErrLifecycleTerminalImmutable, rec.SessionID, prev.Generation, prev.State, prev.Generation+1,
-		)
-	case rec.Generation == prev.Generation:
-		if rec.CreatedAt.IsZero() {
-			rec.CreatedAt = prev.CreatedAt
-		}
-	default:
-		// A genuine new generation (follow_up/Play). CreatedAt starts fresh
-		// for this generation unless the caller already set one.
-		if rec.CreatedAt.IsZero() {
-			rec.CreatedAt = now
-		}
-	}
-	rec.UpdatedAt = now
-
-	if err := fileutil.AppendJSONL(s.path(rec.SessionID), rec); err != nil {
-		return err
-	}
-	// FR-020 — maintain the secondary parent index inside Persist, under the
-	// per-session striped lock persistLocked's caller (Persist/Mutate)
-	// already holds. add() itself is a no-op when SteeringSessionID is empty
-	// (an unattributable record, FR-015's degraded-mode mint), and is
-	// idempotent across a session's later generations, which all carry the
-	// same SteeringSessionID.
-	s.parentIndex.add(rec.SteeringSessionID(), rec.SessionID)
 	return nil
 }
 

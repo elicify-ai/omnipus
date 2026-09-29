@@ -148,12 +148,17 @@ func TestGoalChildCompletion947_MetArmCompletesChildAndDeliversHandback(t *testi
 			got.State, got.Terminal())
 	}
 
+	assertMetGoalChildParentInbox947(t, inbox, parentMeta.ID, rec)
+}
+
+func assertMetGoalChildParentInbox947(t *testing.T, inbox *session.MessageInboxStore, parentID string, rec *session.LifecycleRecord) {
+	t.Helper()
 	// Q1=A (founder, #984 follow-up): the goal_status verdict entry is
 	// ACKED at hand-back time, so a Drain (unacked entries only) no longer
 	// shows it. Read the RAW entries and fold the ack lines — the two-entry
 	// delivery contract stands (verdict first, then handback), only its
 	// visibility oracle changes.
-	entries, err := inbox.Entries(parentMeta.ID)
+	entries, err := inbox.Entries(parentID)
 	if err != nil {
 		t.Fatalf("Entries(parent): %v", err)
 	}

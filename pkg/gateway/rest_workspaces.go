@@ -1012,10 +1012,24 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	if rw.loadAndValidateTeam() {
 		return
 	}
+	if rw.prepareWorkspacePutMembers() {
+		return
+	}
+
+	if rw.applyUpdate() {
+		return
+	}
+
+	rw.persistAndRespond()
+}
+
+// prepareWorkspacePutMembers keeps rollback setup, delegation checks, and heartbeat
+// session creation in their original order under the workspace ID lock.
+func (rw *restAPIHandleWorkspacePut) prepareWorkspacePutMembers() bool {
 	// HIGH-2: sessionsCreated tracks heartbeat sessions minted this request so
 	// they can be rolled back on any error path before the workspace is persisted.
-	// Declared at function scope so the writeWorkspaceFile error branch can also
-	// roll back (not just the eager-session loop).
+	// Captured by rollbackCreatedSessions so the writeWorkspaceFile error branch
+	// can also roll back (not just the eager-session loop).
 	type sessionCreated struct {
 		agentID   string
 		sessionID string
@@ -1040,7 +1054,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		effectiveCoreTeam = deduplicateStrings(*rw.req.CoreTeam)
 	}
 	if rw.prepareDelegation(effectiveCoreTeam) {
-		return
+		return true
 	}
 
 	// FR-010/022: validate and eagerly-session incoming member_configs before
@@ -1053,7 +1067,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 			configOnlyIsWorker(cfg),
 		); vErr != nil {
 			jsonErr(rw.w, http.StatusUnprocessableEntity, vErr.Error())
-			return
+			return true
 		}
 
 		// FR-010: for each newly-enabled heartbeat with no SessionID, create an
@@ -1164,7 +1178,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 					"workspace_id", rw.id, "agent_id", agentID)
 				rw.rollbackCreatedSessions()
 				jsonErr(rw.w, http.StatusInternalServerError, "session store unavailable for heartbeat session")
-				return
+				return true
 			}
 			meta, sessErr := sessStore.NewHeartbeatSession(rw.id, agentID)
 			if sessErr != nil {
@@ -1173,7 +1187,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 				// HIGH-2: roll back sessions created earlier in this loop.
 				rw.rollbackCreatedSessions()
 				jsonErr(rw.w, http.StatusInternalServerError, "failed to create heartbeat session")
-				return
+				return true
 			}
 			sessionsCreated = append(sessionsCreated, sessionCreated{agentID: agentID, sessionID: meta.ID})
 			hb.SessionID = meta.ID
@@ -1182,11 +1196,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		}
 	}
 
-	if rw.applyUpdate() {
-		return
-	}
-
-	rw.persistAndRespond()
+	return false
 }
 
 // validateRequest decodes and validates the workspace update request.

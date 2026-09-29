@@ -288,32 +288,11 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 	// Bounded output capture — the same 1MB buffer + truncation marker as
 	// bash (maxOutputBufferSize/outputTruncateMarker in session.go).
 	session.outputBuffer = &bytes.Buffer{}
-	pipeReadFn := func(r io.Reader) {
-		buf := make([]byte, 4096)
-		for {
-			n, readErr := r.Read(buf)
-			if n > 0 {
-				session.mu.Lock()
-				if session.outputBuffer.Len() >= maxOutputBufferSize {
-					if !session.outputTruncated {
-						session.outputBuffer.WriteString(outputTruncateMarker)
-						session.outputTruncated = true
-					}
-				} else {
-					session.outputBuffer.Write(buf[:n])
-				}
-				session.mu.Unlock()
-			}
-			if readErr != nil {
-				return
-			}
-		}
-	}
 
 	var pipeWG sync.WaitGroup
 	pipeWG.Add(2)
-	go func() { defer pipeWG.Done(); pipeReadFn(stdoutReader) }()
-	go func() { defer pipeWG.Done(); pipeReadFn(stderrReader) }()
+	go func() { defer pipeWG.Done(); readSetupSessionPipe(session, stdoutReader) }()
+	go func() { defer pipeWG.Done(); readSetupSessionPipe(session, stderrReader) }()
 
 	// naturalCompletionCh guards the timeout timer against the stale-timer
 	// false positive (see runBackground's doc comment in shell_bg.go: a
@@ -440,6 +419,29 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 		ForLLM:  string(data) + notice,
 		ForUser: fmt.Sprintf("Installation session %s started", session.ID),
 		IsError: marshalErr != nil,
+	}
+}
+
+// readSetupSessionPipe captures the bounded output for either session pipe.
+func readSetupSessionPipe(session *ProcessSession, r io.Reader) {
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			session.mu.Lock()
+			if session.outputBuffer.Len() >= maxOutputBufferSize {
+				if !session.outputTruncated {
+					session.outputBuffer.WriteString(outputTruncateMarker)
+					session.outputTruncated = true
+				}
+			} else {
+				session.outputBuffer.Write(buf[:n])
+			}
+			session.mu.Unlock()
+		}
+		if readErr != nil {
+			return
+		}
 	}
 }
 
