@@ -1185,7 +1185,11 @@ func buildEmailBody(from, to, subject, text, inReplyTo string) string {
 	sb.WriteString("MIME-Version: 1.0\r\n")
 	sb.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
 	sb.WriteString("\r\n")
-	sb.WriteString(text)
+	// FR-029 ("rendered, not raw Markdown"): render through the SAME
+	// markdownToPlain helper Compose uses for its own text/plain part,
+	// rather than pasting the Markdown source verbatim — a human recipient
+	// must never see raw syntax ("# Heading", "**bold**") in the body.
+	sb.WriteString(markdownToPlain(text))
 	return sb.String()
 }
 
