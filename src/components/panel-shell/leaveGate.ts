@@ -29,6 +29,7 @@
 
 import { getPanelDefinition } from './registry'
 import type { PanelId } from './types'
+import { useUiStore } from '@/store/ui'
 
 /**
  * Run the outgoing panel's leave gate, then `go()` if it allows the
@@ -47,6 +48,10 @@ export function leaveGateThen(outgoingPanelId: PanelId | null, go: () => void): 
       if (await guard()) go()
     } catch (error) {
       console.error('[side-panel] Leave guard failed; transition cancelled.', error)
+      useUiStore.getState().addToast({
+        message: 'Could not leave this panel; the change was cancelled.',
+        variant: 'error',
+      })
     }
   })()
 }
