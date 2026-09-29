@@ -719,6 +719,10 @@ test(
       const moreLink = page.locator(
         `.fc-daygrid-day[data-date="${formatYMD(onceAt)}"] .fc-daygrid-more-link`,
       );
+      await Promise.race([
+        expect(moreLink).toBeVisible({ timeout: 15_000 }).catch(() => {}),
+        expect(onceChip).toBeVisible({ timeout: 15_000 }).catch(() => {}),
+      ]);
       if (await moreLink.isVisible()) {
         await moreLink.click();
         const popover = page.locator('.fc-more-popover');
