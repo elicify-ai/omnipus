@@ -24,6 +24,22 @@
 // this is a present-day defect the source itself documents as MIN-009 in the
 // spec, not a hypothetical).
 //
+// ARCHITECT RULING (2026-09-29, external moves): tests 22 and 23 assert the
+// view's INITIAL (pre-move) location at the spec's real target — a sibling
+// `<slug>.view` file beside the `.base` (FR-VA-008), NOT
+// records.ViewsDir — per the same reasoning va-redfix1/combined-brief
+// Priority 2 applied to TestVaultImport_WritesViewBesideBaseFile. This is a
+// stricter setup than before: the very first `os.ReadFile(oldPath)` below
+// now fails today (RederiveBase still writes only to ViewsDir — FR-VA-008's
+// location fix has not landed), which is red for the right reason — it is
+// the missing location fix these tests are pinned against, not a
+// setup bug. This is UNLIKE the occupied-path test's sibling-path attempt
+// (see rederive_provenance_security_red_test.go's row-47 comment): there the
+// assertion was negative ("an occupant survives untouched") and would have
+// passed vacuously; here the assertion path is used to read back a file the
+// pipeline is REQUIRED to have written, so failing to find it is exactly the
+// gap under test.
+//
 // Run (one at a time, per omnipus-shared-rules rule 2):
 //
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestRederive_FindsMovedManagedViewByDerivedFrom$' ./pkg/vaultimport/
@@ -55,18 +71,20 @@ import (
 func TestRederive_FindsMovedManagedViewByDerivedFrom(t *testing.T) {
 	root := buildRederiveVault(t, rederiveBaseWithViews, nil)
 
+	baseAbsPath := filepath.Join(root, "Projects.base")
 	first, err := RederiveBase(root, "Projects.base")
 	require.NoError(t, err)
 	require.NotEqual(t, OutcomeRefused, first.Status, "reason: %s", first.RefusedReason)
 	require.Contains(t, first.Written, "projects--open")
 
-	// A person moves the managed view out of the hidden control directory,
-	// into an ordinary collection folder — exactly what "a view lives
-	// wherever an agent or human puts it" (US-1) promises is safe to do.
-	oldPath := filepath.Join(records.ViewsDir(root), "projects--open.yaml")
+	// A person moves the managed view from beside its `.base` (FR-VA-008's
+	// real target — architect ruling, 2026-09-29) into an ordinary
+	// collection folder — exactly what "a view lives wherever an agent or
+	// human puts it" (US-1) promises is safe to do.
+	oldPath := filepath.Join(filepath.Dir(baseAbsPath), "projects--open.view")
 	newDir := filepath.Join(root, "archive")
 	require.NoError(t, os.MkdirAll(newDir, 0o755))
-	newPath := filepath.Join(newDir, "projects--open.yaml")
+	newPath := filepath.Join(newDir, "projects--open.view")
 	body, rerr := os.ReadFile(oldPath)
 	require.NoError(t, rerr)
 	require.NoError(t, os.WriteFile(newPath, body, 0o600))
@@ -102,14 +120,15 @@ func TestRederive_FindsMovedManagedViewByDerivedFrom(t *testing.T) {
 func TestRederive_DeletesMovedManagedViewWhenNoLongerDeclared(t *testing.T) {
 	root := buildRederiveVault(t, rederiveBaseWithViews, nil)
 
+	baseAbsPath := filepath.Join(root, "Projects.base")
 	first, err := RederiveBase(root, "Projects.base")
 	require.NoError(t, err)
 	require.NotEqual(t, OutcomeRefused, first.Status, "reason: %s", first.RefusedReason)
 
-	oldPath := filepath.Join(records.ViewsDir(root), "projects--open.yaml")
+	oldPath := filepath.Join(filepath.Dir(baseAbsPath), "projects--open.view")
 	newDir := filepath.Join(root, "archive")
 	require.NoError(t, os.MkdirAll(newDir, 0o755))
-	newPath := filepath.Join(newDir, "projects--open.yaml")
+	newPath := filepath.Join(newDir, "projects--open.view")
 	body, rerr := os.ReadFile(oldPath)
 	require.NoError(t, rerr)
 	require.NoError(t, os.WriteFile(newPath, body, 0o600))

@@ -46,13 +46,28 @@ func TestVaultImport_WritesViewBesideBaseFile(t *testing.T) {
 	require.NotEqual(t, OutcomeRefused, res.Status, "reason: %s", res.RefusedReason)
 	require.NotEmpty(t, res.Written)
 
-	besidePath := filepath.Join(sub, "projects--open.yaml")
+	// va-redfix1-brief item 1 / FR-VA-008: the spec's real write path is a
+	// sibling `<slug>.view` file, not the legacy `.yaml` name this test used
+	// to assert (the wrong extension AND the wrong test of "beside" — a
+	// `.yaml` file has never been the spec's chosen extension, Q1/A).
+	besidePath := filepath.Join(sub, "projects--open.view")
 	legacyPath := filepath.Join(records.ViewsDir(root), "projects--open.yaml")
 	if _, err := os.Stat(besidePath); err != nil {
 		t.Fatalf(
-			"US-2 AS-1: the imported view must be written beside its .base file (%s), not the legacy "+
-				"control directory — stat error: %v (legacy path exists: %v)",
+			"US-2 AS-1/FR-VA-008: the imported view must be written beside its .base file as %s (the "+
+				"spec's sibling `.view` path, Q1/A), not the legacy control directory — stat error: %v "+
+				"(legacy path exists: %v)",
 			besidePath, err, fileExists(legacyPath),
+		)
+	}
+	// Keeping the test AT LEAST as strict as before: also assert the legacy
+	// location was never written to, so a partial fix that keeps writing the
+	// old file alongside a new one cannot pass silently.
+	if fileExists(legacyPath) {
+		t.Fatalf(
+			"US-2 AS-1/FR-VA-008: the legacy control-directory file %s must not be written at all once "+
+				"the importer writes the view beside its .base file",
+			legacyPath,
 		)
 	}
 }
