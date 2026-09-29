@@ -245,7 +245,7 @@ export function MailComposeDialog({ open, mode, replyTo, senderName, senderAddre
             />
           )}
         </Field>
-        <MailSignaturePreview html={signatureHtml} className="px-0" />
+        <MailSignaturePreview html={signatureHtml} />
         <div
           data-testid="compose-attachments-row"
           className="flex shrink-0 flex-wrap items-center gap-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2)]"

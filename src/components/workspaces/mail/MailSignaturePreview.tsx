@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
 import { mintMailSignaturePreviewToken } from '@/lib/api/mail'
 import { MailHtmlFrame } from './MailHtmlFrame'
 
 /** Read-only identity for the mailbox selected in the Mail panel. */
-export function MailSenderRow({ name, address, className }: { name: string; address: string; className?: string }) {
+export function MailSenderRow({ name, address, padded = false }: { name: string; address: string; padded?: boolean }) {
   return (
     <div
       data-compose-header-row
-      className={cn('mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] py-[var(--space-0-5)]', className)}
+      className={padded
+        ? 'mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] px-[var(--space-3)] py-[var(--space-0-5)]'
+        : 'mail-compose-header-row grid grid-cols-[var(--space-8)_minmax(0,1fr)] items-center gap-x-[var(--space-2)] py-[var(--space-0-5)]'}
     >
       <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">From</span>
       <span className="min-w-0 truncate text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
@@ -20,7 +21,7 @@ export function MailSenderRow({ name, address, className }: { name: string; addr
 }
 
 /** The signature is sanitized by the gateway and shown only in its sandboxed, token-scoped frame. */
-export function MailSignaturePreview({ html, className }: { html?: string; className?: string }) {
+export function MailSignaturePreview({ html, placement = 'compose' }: { html?: string; placement?: 'compose' | 'editor' | 'preview' }) {
   const [tokenUrl, setTokenUrl] = useState<string | null>(null)
   const [error, setError] = useState(false)
   const [retry, setRetry] = useState(0)
@@ -54,7 +55,11 @@ export function MailSignaturePreview({ html, className }: { html?: string; class
   if (!html?.trim()) return null
 
   return (
-    <div className={cn('shrink-0 px-[var(--space-3)]', className)}>
+    <div className={placement === 'editor'
+      ? 'shrink-0 px-[var(--space-3)] py-[var(--space-2)]'
+      : placement === 'preview'
+        ? 'shrink-0 mt-[var(--space-3)] px-0'
+        : 'shrink-0 px-0'}>
       <p className="mb-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Signature</p>
       {error && (
         <div role="alert" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">

@@ -110,7 +110,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, senderName, 
     return (
       <section aria-label="Draft" className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-[var(--color-surface-0)]">
         <div className="shrink-0 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
-          {senderName && senderAddress && <MailSenderRow name={senderName} address={senderAddress} className="px-[var(--space-3)]" />}
+          {senderName && senderAddress && <MailSenderRow name={senderName} address={senderAddress} padded />}
           <Field
             label="To"
             required
@@ -156,7 +156,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, senderName, 
             />
           )}
         </Field>
-        <MailSignaturePreview html={signatureHtml} className="py-[var(--space-2)]" />
+        <MailSignaturePreview html={signatureHtml} placement="editor" />
         <div className="flex shrink-0 items-center gap-[var(--space-1)] border-t border-[var(--color-border)] bg-[var(--color-surface-0)] px-[var(--space-3)] py-[var(--space-2)]">
           <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(false)}>
             Back to preview
@@ -231,7 +231,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, senderName, 
         <div className="text-[length:var(--type-body-size)] text-[var(--color-secondary)]">
           <HistoricalMessageMarkdown content={bodyMarkdown} />
         </div>
-        <MailSignaturePreview html={signatureHtml} className="mt-[var(--space-3)] px-0" />
+        <MailSignaturePreview html={signatureHtml} placement="preview" />
       </div>
     </section>
   )
