@@ -631,7 +631,22 @@ func viewFromRaw(raw []byte, slug string, uid uint32) *MailView {
 	var leaf int
 	for {
 		part, perr := reader.NextPart()
-		if perr != nil || part == nil {
+		if perr != nil {
+			if !errors.Is(perr, io.EOF) {
+				// Round-2 delta review, item 4 (code-reviewer, I7): a REAL
+				// mid-walk MIME parse error is NOT the normal end-of-parts
+				// signal (io.EOF) and must not be treated the same way —
+				// mirror decodeBody's loud-degrade contract (the "partial"
+				// marker, transport.go::decodeBody): stop the walk, keep
+				// whatever was already parsed, and mark the degrade LOUDLY
+				// rather than silently rendering as a clean end of parts.
+				view.TextBody += "\n[body incomplete: MIME parse error]"
+				slog.Warn("email view: MIME walk stopped on a mid-stream parse error; serving what was already parsed",
+					"error", perr, "folder", slug, "uid", uid)
+			}
+			break
+		}
+		if part == nil {
 			break
 		}
 		ct, ctParams, _ := mime.ParseMediaType(part.Header.Get("Content-Type"))
