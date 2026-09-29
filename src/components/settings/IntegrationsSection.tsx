@@ -25,7 +25,7 @@ import {
 import { useUiStore } from '@/store/ui'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
-import { WebSearchGroup, orderSearchProviders } from './WebSearchGroup'
+import { WebSearchGroup, orderSearchProviders, KEY_NOT_REACHING_SEARCH_LABEL } from './WebSearchGroup'
 
 export function IntegrationsSection() {
   const { addToast } = useUiStore()
@@ -154,7 +154,7 @@ export function IntegrationsSection() {
                 <Badge data-testid={`ready-${p.id}`} variant="muted">Ready</Badge>
               ) : p.usable === false ? (
                 p.configured && p.requires_key ? (
-                  <Badge data-testid={`key-not-reaching-${p.id}`} variant="warning">Key not reaching search</Badge>
+                  <Badge data-testid={`key-not-reaching-${p.id}`} variant="warning">{KEY_NOT_REACHING_SEARCH_LABEL}</Badge>
                 ) : !p.configured && p.requires_key ? (
                   <Badge variant="muted">Needs API key</Badge>
                 ) : (

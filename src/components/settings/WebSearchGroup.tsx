@@ -43,9 +43,19 @@ export function orderSearchProviders(
   return [...ready, ...needsSetup]
 }
 
+/** Shared wording for a keyed provider whose saved key still doesn't reach
+ *  search (`configured: true`, `usable: false`) — the service-row badge
+ *  (IntegrationsSection.tsx::renderSearchRow) and the Default/Fallback
+ *  selectors below must show this exact text, never "Needs configuration",
+ *  so the two surfaces can't drift into two vocabularies for one status
+ *  (#1055 heuristic H4). */
+export const KEY_NOT_REACHING_SEARCH_LABEL = 'Key not reaching search'
+
 /** Why a provider can't be picked from a role selector right now. */
 function selectorDisabledReason(p: IntegrationProvider): string {
-  return p.requires_key && !p.configured ? 'Add a key first' : 'Needs configuration'
+  if (p.requires_key && !p.configured) return 'Add a key first'
+  if (p.requires_key && p.configured) return KEY_NOT_REACHING_SEARCH_LABEL
+  return 'Needs configuration'
 }
 
 /** Why an already-chosen default/fallback stopped being usable. */
@@ -161,11 +171,6 @@ export function WebSearchGroup({
           </p>
         </Card>
       )}
-
-      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-        The order of this list does not choose who is tried first. You choose the default and the fallback;
-        the default gets the first try, and the fallback one retry on a retryable failure.
-      </p>
     </div>
   )
 }
