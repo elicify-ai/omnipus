@@ -74,8 +74,8 @@ vi.mock("@/store/ui", () => ({
 // modelled here by a mock that receives `proceed` but never invokes it,
 // exactly like a real declined guard never reaching `go()`.
 vi.mock("@/components/panel-shell/leaveGate", () => ({
-  leaveGateThen: vi.fn((_outgoing: unknown, _proceed: () => void) => {
-    /* declined: intentionally never calls _proceed */
+  leaveGateThen: vi.fn(() => {
+    /* declined: intentionally never calls the proceed callback */
   }),
 }));
 
