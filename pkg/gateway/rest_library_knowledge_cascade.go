@@ -262,7 +262,13 @@ func mapKnowledgeRestructureErr(w http.ResponseWriter, op, workspaceID string, e
 	var ambiguity *knowledge.AmbiguityError
 	var timeout *knowledge.LockTimeoutError
 	var incomplete *knowledge.ViewMembershipMoveIncompleteError
+	var trashIncomplete *knowledge.ViewMembershipTrashIncompleteError
+	var tracked *knowledge.TrackedViewTransferError
 	switch {
+	case errors.As(err, &tracked):
+		jsonErr(w, http.StatusConflict, err.Error())
+	case errors.As(err, &trashIncomplete):
+		jsonErr(w, http.StatusInternalServerError, err.Error())
 	case errors.As(err, &incomplete):
 		// The rename may already be on disk. Never tell the caller merely to
 		// retry it: the old membership was revoked for safety and the views
@@ -383,20 +389,8 @@ func (a *restAPI) trashNoteInCollection(
 	request := knowledge.TrashRequest{Path: note.relInCol, Folder: isFolder}
 	var res *knowledge.TrashResult
 	var err error
-	if !isFolder && isLibraryBasePath(note.relInCol) {
-		err = knowledge.WithViewMembership(a.homePath, note.col.Root(), func(m *knowledge.ViewMembership) error {
-			if reconcileErr := m.ReconcileDiscoveredViewPaths(); reconcileErr != nil {
-				return reconcileErr
-			}
-			if verifyErr := m.VerifyBase(note.relInCol); verifyErr != nil {
-				return verifyErr
-			}
-			if releaseErr := m.ReleaseBase(note.relInCol); releaseErr != nil {
-				return releaseErr
-			}
-			res, err = trasher.Trash(request)
-			return err
-		})
+	if isFolder || isLibraryBasePath(note.relInCol) || strings.EqualFold(filepath.Ext(note.relInCol), ".view") {
+		res, err = knowledge.TrashWithViewMembership(a.homePath, trasher, request)
 	} else {
 		res, err = trasher.Trash(request)
 	}

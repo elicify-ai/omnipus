@@ -358,7 +358,7 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := root.Delete(rel); err != nil {
+	if err := a.deleteLibraryWithViewCleanup(root, rel); err != nil {
 		mapLibraryErr(w, "delete entry", workspaceID, err)
 		return
 	}

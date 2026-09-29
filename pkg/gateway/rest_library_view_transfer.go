@@ -112,19 +112,8 @@ func (a *restAPI) moveLibraryWithViewGuard(
 		col := collections[i]
 		return knowledge.WithViewMembership(a.homePath, col.root, func(m *knowledge.ViewMembership) error {
 			if col.rootMoves {
-				var paths []string
-				for base, names := range m.Bases {
-					if len(names) == 0 {
-						continue
-					}
-					paths = append(paths, path.Join(col.workspaceRel, base))
-					for _, view := range names {
-						paths = append(paths, path.Join(col.workspaceRel, view))
-					}
-				}
-				if len(paths) > 0 {
-					sort.Strings(paths)
-					return &knowledge.TrackedViewTransferError{Paths: paths}
+				if err := m.RefuseTrackedRootMove(); err != nil {
+					return prefixTrackedTransferError(err, col.workspaceRel)
 				}
 			} else if err := m.RefuseTrackedTransfer(col.sourceRel, col.sourceFolder); err != nil {
 				return prefixTrackedTransferError(err, col.workspaceRel)
@@ -144,7 +133,7 @@ func prefixTrackedTransferError(err error, collRel string) error {
 	for _, rel := range tracked.Paths {
 		paths = append(paths, path.Join(collRel, rel))
 	}
-	return &knowledge.TrackedViewTransferError{Paths: paths}
+	return &knowledge.TrackedViewTransferError{Paths: paths, PendingMoveIDs: tracked.PendingMoveIDs}
 }
 
 // mapTrackedLibraryTransferErr uses the existing contracted error response

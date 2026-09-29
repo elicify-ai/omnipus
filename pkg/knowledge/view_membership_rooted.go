@@ -54,7 +54,7 @@ func (m *ViewMembership) managedViewParent(rel string) (*os.Root, string, error)
 // writeManagedViewBytes replaces only an existing, verified regular view. The
 // temp file and rename use the SAME pinned parent, not two pathname lookups
 // separated by a symlink-swap window.
-func (m *ViewMembership) writeManagedViewBytes(rel string, data []byte) error {
+func (m *ViewMembership) writeManagedViewBytes(rel string, data []byte) (returnErr error) {
 	parent, leaf, err := m.managedViewParent(rel)
 	if err != nil {
 		return err
@@ -77,12 +77,13 @@ func (m *ViewMembership) writeManagedViewBytes(rel string, data []byte) error {
 		return errors.Join(statErr, file.Close())
 	}
 	cleanup := true
+	fileClosed := false
 	defer func() {
 		if cleanup {
-			_ = file.Close()
-			if err := removeCreatedView(parent, name, created); err != nil {
-				slog.Warn("knowledge: could not clean up managed view temp file", "path", rel, "error", err)
+			if !fileClosed {
+				returnErr = errors.Join(returnErr, file.Close())
 			}
+			returnErr = errors.Join(returnErr, removeCreatedView(parent, name, created))
 		}
 	}()
 	if _, err := file.Write(data); err != nil {
@@ -91,8 +92,10 @@ func (m *ViewMembership) writeManagedViewBytes(rel string, data []byte) error {
 	if err := file.Sync(); err != nil {
 		return err
 	}
-	if err := file.Close(); err != nil {
-		return err
+	closeErr := file.Close()
+	fileClosed = true
+	if closeErr != nil {
+		return closeErr
 	}
 	if err := parent.Rename(name, leaf); err != nil {
 		return fmt.Errorf("knowledge: atomically replace managed view %q: %w", rel, err)

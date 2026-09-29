@@ -30,43 +30,45 @@ func RetryViewMembershipMove(home string, renamer *Renamer, id string) (*RenameR
 		}
 		req := RenameRequest{From: pending.From, To: pending.To,
 			Folder: pending.Folder, AllowAmbiguity: pending.AllowAmbiguity}
-		// The renamer journal is forward-only. Recovery can finish a rename
-		// that was interrupted before membership enrollment; an incomplete
-		// journal is a visible failure and never grants authority.
-		if _, recoverErr := renamer.RecoverPending(); recoverErr != nil {
-			return &ViewMembershipMoveIncompleteError{
-				From: pending.From, To: pending.To, RetryID: id, Cause: recoverErr}
-		}
-		landed, stateErr := viewMoveAlreadyLanded(renamer.Root, req)
-		if stateErr != nil {
-			return fmt.Errorf("%w for %s: %v", ErrViewMoveRetryPreflight, id, stateErr)
-		}
-		if !landed {
-			for _, member := range pending.affectedMembers() {
-				if err := m.withManagedViewLock(member.oldRel, func() error {
-					_, _, readErr := m.readManagedView(member.oldBase, member.name, member.oldRel)
-					return readErr
-				}); err != nil {
-					return fmt.Errorf("%w for %s: source view %q changed: %v", ErrViewMoveRetryPreflight, id, member.oldRel, err)
-				}
-			}
-			if _, planErr := renamer.Plan(req); planErr != nil {
-				return fmt.Errorf("%w for %s: %v", ErrViewMoveRetryPreflight, id, planErr)
-			}
-			var renameErr error
-			result, renameErr = renamer.Rename(req)
-			if renameErr != nil {
+		return withRetryNestedViewMembershipRoots(home, renamer, req, id, func() error {
+			// The renamer journal is forward-only. Recovery can finish a rename
+			// that was interrupted before membership enrollment; an incomplete
+			// journal is a visible failure and never grants authority.
+			if _, recoverErr := renamer.RecoverPending(); recoverErr != nil {
 				return &ViewMembershipMoveIncompleteError{
-					From: pending.From, To: pending.To, RetryID: id, Cause: renameErr}
+					From: pending.From, To: pending.To, RetryID: id, Cause: recoverErr}
 			}
-		} else {
-			result = &RenameResult{From: pending.From, To: pending.To}
-		}
-		if enrollErr := m.enrollMovedMembers(pending.affectedMembers(), id, pending.From, pending.To); enrollErr != nil {
-			return &ViewMembershipMoveIncompleteError{
-				From: pending.From, To: pending.To, RetryID: id, Cause: enrollErr}
-		}
-		return nil
+			landed, stateErr := viewMoveAlreadyLanded(renamer.Root, req)
+			if stateErr != nil {
+				return fmt.Errorf("%w for %s: %v", ErrViewMoveRetryPreflight, id, stateErr)
+			}
+			if !landed {
+				for _, member := range pending.affectedMembers() {
+					if err := m.withManagedViewLock(member.oldRel, func() error {
+						_, _, readErr := m.readManagedView(member.oldBase, member.name, member.oldRel)
+						return readErr
+					}); err != nil {
+						return fmt.Errorf("%w for %s: source view %q changed: %v", ErrViewMoveRetryPreflight, id, member.oldRel, err)
+					}
+				}
+				if _, planErr := renamer.Plan(req); planErr != nil {
+					return fmt.Errorf("%w for %s: %v", ErrViewMoveRetryPreflight, id, planErr)
+				}
+				var renameErr error
+				result, renameErr = renamer.Rename(req)
+				if renameErr != nil {
+					return &ViewMembershipMoveIncompleteError{
+						From: pending.From, To: pending.To, RetryID: id, Cause: renameErr}
+				}
+			} else {
+				result = &RenameResult{From: pending.From, To: pending.To}
+			}
+			if enrollErr := m.enrollMovedMembers(pending.affectedMembers(), id, pending.From, pending.To); enrollErr != nil {
+				return &ViewMembershipMoveIncompleteError{
+					From: pending.From, To: pending.To, RetryID: id, Cause: enrollErr}
+			}
+			return nil
+		})
 	})
 	var incomplete *ViewMembershipMoveIncompleteError
 	if errors.As(err, &incomplete) {

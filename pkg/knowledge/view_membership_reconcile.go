@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/records"
@@ -24,6 +25,12 @@ func (m *ViewMembership) ReconcileManagedViewPaths(set *records.ViewSet, report 
 	rejected := make(map[string]bool)
 	for _, name := range report.RejectedNames() {
 		rejected[name] = true
+	}
+	var unknownClaims []string
+	for _, rejection := range report.Rejections {
+		if rejection.Name == "" {
+			unknownClaims = append(unknownClaims, rejection.String())
+		}
 	}
 	seen := make(map[string]*records.SavedView)
 	for _, view := range set.Views() {
@@ -69,6 +76,14 @@ func (m *ViewMembership) ReconcileManagedViewPaths(set *records.ViewSet, report 
 			case err == nil:
 				// A transient discovery skip cannot revoke a still-present view.
 			case errors.Is(err, fs.ErrNotExist):
+				if len(unknownClaims) != 0 {
+					// A moved claimant may be inside an unreadable subtree or
+					// an unparseable file. Discovery cannot prove retirement.
+					slog.Warn("knowledge: view discovery incomplete; retained managed membership",
+						"base", base, "view", name, "recorded_path", old,
+						"unreadable_paths", unknownClaims)
+					continue
+				}
 				updates = append(updates, update{base, name, ""})
 			default:
 				return fmt.Errorf("knowledge: cannot reconcile managed view %q at %q: %w", name, old, err)

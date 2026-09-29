@@ -34,8 +34,17 @@ func RenameWithViewMembership(home string, renamer *Renamer, req RenameRequest) 
 	if renamer == nil || !renamer.Root.Valid() {
 		return nil, fmt.Errorf("knowledge: rename requires a configured collection root")
 	}
+	roots, err := viewRenameCollectionRoots(renamer.Root, req)
+	if err != nil {
+		// Preserve the renamer's existing typed source/path refusals when
+		// preflight fails, rather than turning a missing folder into a 500.
+		if _, planErr := renamer.Plan(req); planErr != nil {
+			return nil, planErr
+		}
+		return nil, err
+	}
 	var result *RenameResult
-	err := WithViewMembership(home, renamer.Root.Path(), func(m *ViewMembership) error {
+	err = withRenameMembershipRoots(home, renamer.Root.Path(), roots, func(m *ViewMembership) error {
 		if reconcileErr := m.ReconcileDiscoveredViewPaths(); reconcileErr != nil {
 			return reconcileErr
 		}

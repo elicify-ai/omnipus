@@ -177,7 +177,13 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 // anything else → 500 (logged).
 func mapLibraryErr(w http.ResponseWriter, op, workspaceID string, err error) {
 	var destErr *library.DestinationParentNotFoundError
+	var cleanupErr *knowledge.ViewMembershipRecordDeleteError
 	switch {
+	case errors.As(err, &cleanupErr):
+		logger.ErrorCF("rest", "library: knowledge-base deletion incomplete",
+			map[string]any{"workspace_id": workspaceID, "error": cleanupErr.Error()})
+		jsonErr(w, http.StatusInternalServerError,
+			"knowledge-base deletion incomplete; check the folder and retry after the server error is fixed")
 	case errors.Is(err, library.ErrInvalidPath):
 		jsonErr(w, http.StatusBadRequest, "invalid path")
 	case errors.Is(err, library.ErrNotDir):

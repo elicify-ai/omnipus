@@ -556,10 +556,11 @@ func (t *RestructureTool) execTrash(ctx context.Context, target mutationTarget, 
 	if err != nil {
 		return t.deps.refuse(restructureTrashOp, target, nil, err.Error())
 	}
-	res, err := tr.Trash(TrashRequest{Path: stringArg(args["path"]), Folder: boolArg(args["folder"])})
+	res, err := TrashWithViewMembership(t.deps.Home, tr,
+		TrashRequest{Path: stringArg(args["path"]), Folder: boolArg(args["folder"])})
 	if err != nil {
-		// The Trasher has already audited this outcome — see execRenameMove's
-		// identical rule for Renamer.
+		// The membership wrapper audits preflight refusals; the Trasher
+		// audits any attempted filesystem operation.
 		return restructureFailure(restructureTrashOp, err)
 	}
 	// A note LEAVING the index (epoch.go's second bump site) — never on

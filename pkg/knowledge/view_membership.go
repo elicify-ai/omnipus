@@ -155,7 +155,7 @@ func WithViewMembershipLock(home, collectionRoot string, fn func() error) error 
 	if err != nil {
 		return err
 	}
-	return WithNoteWriteLock(NoteLockConfig{CollectionRoot: root, LockDir: lockDir}, viewMembershipLockKey, fn)
+	return withExactViewMembershipLock(root, lockDir, fn)
 }
 
 // WithViewMembership loads a record under its lock for a Library lifecycle
