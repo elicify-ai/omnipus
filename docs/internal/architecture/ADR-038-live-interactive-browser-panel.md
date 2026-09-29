@@ -44,6 +44,18 @@ A right-side `Sheet` overlay (`overlay={false}`, chat stays visible), opened fro
 ### D6 — Take-control gating, turn coordination, security
 Input injection is refused unless a prior `browser_control:take` succeeded; the backend authorizes it for **any authenticated connection** (this release's trust model is **authenticated == authorized**, consistent with the app's existing session-access posture — session REST reads are not owner-gated either; a per-session-`Owner` check is a tracked follow-up for hardened multi-user deployments) and records a control-lock on the session. Config: `browser.live_view_enabled` (default true), `browser.take_control_enabled` (default true) — operator can disable either. **Turn coordination (v1, cooperative):** while a human holds control, the agent's browser tools observe the control-lock and return a soft "user is controlling the browser" result rather than fighting for the cursor; the panel shows **"Agent driving" vs "You're driving."** No mid-tool preemption in v1 (documented limitation). Security: frames are pixels (safe to render, sanitized as `data:image/jpeg`); the raw CDP `9223` port is never exposed to the browser (all frames proxied through the gateway); `browser_input` is rate-limited; take/release control is audit-logged.
 
+**Correction (2026-09-29; founder ruling Q1=A):** D6's earlier
+"any authenticated connection" rule, including the post-review D6 trust-model
+note below, is superseded for human browser access by the D1.2/D1.9c
+clarification in [ADR-075 — Browser tools: workspace-scoped, and usable by an
+agent](ADR-075-workspace-scoped-browser-sessions.md). The authenticated operator
+must pass the verified chat's authorization (including the private-chat
+`Owner` check), and the resolved browser's workspace must equal that chat's
+workspace, with no cross-workspace fallback. This is the single-user support
+posture, not per-account browser isolation or a human-membership model; a later
+move to multi-user support requires the cross-account isolation review in that
+ADR.
+
 ## Consequences
 
 **Positive:** Codex-grade UX; reuses the existing browser, WS, and overlay infrastructure; pure Go, single binary; the security surface is bounded (image-out, gated input-in). **Negative / risks:** a new authenticated WS + a remote-control surface (needs the 7-reviewer + security pass); repaint-driven frames require a synthetic cursor; the per-agent `BrowserManager` refactor touches shared `loop.go`; turn-coordination is cooperative, not preemptive, in v1.

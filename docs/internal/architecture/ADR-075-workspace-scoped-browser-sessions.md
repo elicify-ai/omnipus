@@ -186,6 +186,20 @@ work: different clients, different projects.
 
 Operator ruling, 2026-08-31.
 
+**Clarification (2026-09-29; founder ruling Q1=A; also applies to D1.9c):**
+Omnipus currently **supports a single user per instance**. The multi-user
+infrastructure — accounts, session `Owner` stamps, and owner checks — stays in
+place for a potential later change; it is **not removed**. No human-membership
+permission model or per-account browser is built now. The workspace browser's
+profile, cookies, and operator-opened tabs are shared by design under this
+single-user posture. Human browser access means the authenticated operator,
+subject to the verified chat's authorization (including the private-chat
+`Owner` check): the resolved browser's workspace **must equal** that verified
+chat's workspace, with **no cross-workspace fallback** for human access. The
+older live-panel resolution fallback in D1.13 does not override this boundary.
+If multi-user support is enabled later, cross-account browser isolation must
+be revisited through an amendment to this ADR.
+
 ### D1.3 What this changes in ADR-043 and ADR-048
 
 **Isolation is not being moved. It is being turned on.**
@@ -652,6 +666,10 @@ has its own tab" from today's behaviour; that is now replaced.
 
 One browser per workspace and one cookie jar (D1.3, D1.10) are unchanged. Only
 the tab-ownership key moves: **agent → session**.
+
+**Clarification (2026-09-29):** Session and workspace tab sets are not
+per-account browser isolation; the D1.2 clarification governs the shared
+profile, cookies, operator-opened tabs, and human access.
 
 **It resolves the round-4 blocker C-402 rather than patching it.** The general
 lease case had been deleted on the premise that two agents never share a tab
