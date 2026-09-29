@@ -134,9 +134,21 @@ describe("Mail unsaved-edit leave guard", () => {
     // markdown/katex) takes 3.7-11s in this environment, well past
     // findByRole's default 1000ms wait. Explicit timeout matches the
     // precedent in src/routes/_app/-workspaces.$workspaceId.chat.mailPanel.test.tsx.
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Compose" }, { timeout: 30000 }),
+    const composeButton = await screen.findByRole(
+      "button",
+      { name: "Compose" },
+      { timeout: 30000 },
     );
+    // F4 (MailPanel.tsx::MailPanel, `disabled={agentId === null}`): Compose
+    // stays disabled until the mailbox list resolves and an agent is
+    // selected. The lazy chunk mounts the real component before the mocked
+    // fetchMailboxes() promise has settled, so the button can appear in the
+    // DOM — findByRole matches disabled buttons too — before it is
+    // clickable. Wait for the real user-observable enabled state (a mailbox
+    // has resolved) before clicking; clicking while disabled is a no-op and
+    // never opens the compose editor.
+    await waitFor(() => expect(composeButton).toBeEnabled());
+    fireEvent.click(composeButton);
     fireEvent.change(screen.getByRole("textbox", { name: "Message" }), {
       target: { value: "Unsent compose text" },
     });

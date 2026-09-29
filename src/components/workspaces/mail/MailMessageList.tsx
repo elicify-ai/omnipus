@@ -1,8 +1,7 @@
 // MailMessageList — the list zone of the Mail panel (US-3): rows with
-// unread dot, subject, sender, timestamp, and the US-6 "Read by agent" tag
-// (exactly once per flagged message — the tag marks the flag, not the read
-// state). Timestamps render via formatMailTime; absent dates render as ''
-// (the panel tolerates partial payloads in tests).
+// unread dot, subject, sender or outgoing recipient, timestamp, and the US-6
+// "Read by agent" tag (exactly once per flagged message — the tag marks the
+// flag, not the read state). Invalid or zero dates have no timestamp.
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { mailUidRef } from '@/lib/api/mail'
@@ -59,6 +58,9 @@ export function MailMessageList({ messages, selectedRef, onSelect }: MailMessage
 /** Row top line: subject (bold when unread) + the US-6 read-by-agent tag +
  * the timestamp. */
 function ListRowTop({ message }: { message: MailMessageSummary }) {
+  const timestamp = message.date && new Date(message.date).getUTCFullYear() > 1
+    ? formatMailTime(message.date)
+    : ''
   return (
     <span className="flex items-baseline justify-between gap-[var(--space-2)]">
       <span
@@ -76,19 +78,24 @@ function ListRowTop({ message }: { message: MailMessageSummary }) {
           </span>
         )}
       </span>
-      <span className="shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-text-tertiary)]">
-        {formatMailTime(message.date)}
-      </span>
+      {timestamp && (
+        <span className="shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-text-tertiary)]">
+          {timestamp}
+        </span>
+      )}
     </span>
   )
 }
 
-/** Row bottom line: the sender. */
+/** Row bottom line: the sender in Inbox, recipients in Drafts and Sent. */
 function ListRowBottom({ message }: { message: MailMessageSummary }) {
+  const address = message.folder === 'sent' || message.folder === 'drafts'
+    ? `To: ${message.to.length > 0 ? message.to.join(', ') : 'No recipient'}`
+    : message.from
   return (
     <span className="mt-[var(--space-0-5)] flex items-baseline justify-between gap-[var(--space-2)]">
       <span className="min-w-0 truncate text-[length:var(--type-caption-size)] text-[var(--color-text-tertiary)]">
-        {message.from}
+        {address}
       </span>
     </span>
   )

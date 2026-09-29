@@ -81,6 +81,10 @@ function mailErrorCode(err: unknown): string {
   return 'unknown_error'
 }
 
+function isMailConnectionFailure(errorClass: string | null): boolean {
+  return errorClass === 'connect_refused' || errorClass === 'timeout' || errorClass === 'dns' || errorClass === 'tls'
+}
+
 /** File → base64 (MC-32 attach path) — chunked btoa to dodge call-stack
  * limits on large files. */
 function fileToBase64(file: File): Promise<string> {
@@ -176,6 +180,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     // stored selection does not override the link's directive.
     if (mailboxId === null) return null
     if (typeof mailboxId === 'string') {
+      // A named mailbox can open Compose while the list is still loading;
+      // once it settles, only enabled/configured mailboxes survive the filter.
+      if (mailboxesQuery.isPending && mailboxId !== '') return mailboxId
       const named = workspaceMailboxes.find((mb) => mb.agent_id === mailboxId)
       if (named !== undefined) return mailboxId
     }
@@ -184,7 +191,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       if (stored !== undefined) return intent.agentId
     }
     return workspaceMailboxes[0]?.agent_id ?? null
-  }, [mailboxId, intent.agentId, workspaceMailboxes])
+  }, [mailboxId, intent.agentId, mailboxesQuery.isPending, workspaceMailboxes])
   const folder: string = intent.folder ?? 'inbox'
   // The open message ref — session state, not persisted (a fresh panel opens
   // with the list, not a message). Reset when folder/mailbox changes.
@@ -433,6 +440,12 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
   }
 
   const replyTarget = detail === null ? null : { from: detail.from ?? '', subject: detail.subject ?? '', messageId: detail.message_id ?? '' }
+  const folderErrorCode = foldersQuery.isError ? mailErrorCode(foldersQuery.error) : null
+  // A 503 backoff is a retry posture, not the IMAP cause. Use the selected
+  // mailbox's saved watcher class when it is available; never borrow another mailbox's class.
+  const folderErrorClass = folderErrorCode === 'backoff' && watcherItem?.agent_id === agentId
+    ? watcherItem.last_error_class ?? folderErrorCode
+    : folderErrorCode
 
   return (
     <div data-testid="mail-panel" className="flex h-full min-h-0 w-full flex-col bg-[var(--color-surface-0)]">
@@ -463,7 +476,13 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
           </SelectContent>
         </Select>
         <div className="min-w-0 flex-1" />
-        <Button size="sm" className="gap-[var(--space-1)]" onClick={() => setCompose({ mode: 'new' })}>
+        <Button
+          size="sm"
+          className="gap-[var(--space-1)]"
+          disabled={agentId === null}
+          aria-describedby={workspaceMailboxes.length === 0 && mailboxesQuery.isSuccess ? 'mail-no-mailbox-help' : undefined}
+          onClick={() => setCompose({ mode: 'new' })}
+        >
           Compose
         </Button>
       </div>
@@ -476,7 +495,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
           <p className="min-w-0 flex-1 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
             {watcherItem.last_error_class === null
               ? 'Mail watcher is retrying'
-              : `Mail watcher error: ${watcherItem.last_error_class}`}
+              : isMailConnectionFailure(watcherItem.last_error_class)
+                ? `Can't connect to this mailbox · ${watcherItem.last_error_class}`
+                : `Mail watcher error: ${watcherItem.last_error_class}`}
             {watcherItem.next_attempt_at !== null && (
               <> — retrying at {formatMailTime(watcherItem.next_attempt_at)}</>
             )}
@@ -504,9 +525,12 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
             No mailbox is configured for this workspace yet.
           </p>
-          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-            Connect an email account on the agent&apos;s Connectors screen to use Mail here.
+          <p id="mail-no-mailbox-help" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+            On the Connectors screen, in Email choose Add mailbox to use Mail here.
           </p>
+          <Button asChild size="sm">
+            <a href="#/connectors">Connect mailbox</a>
+          </Button>
         </div>
       )}
       {agentId !== null && (
@@ -531,7 +555,10 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                 className="flex flex-1 flex-col items-center justify-center gap-[var(--space-2)] p-[var(--space-4)]"
               >
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-                  {mailErrorCode(foldersQuery.error)}
+                  {isMailConnectionFailure(folderErrorClass) ? "Can't connect to this mailbox" : 'Could not load this mailbox'}
+                </p>
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                  Error class: {folderErrorClass}
                 </p>
                 <Button
                   variant="outline"
