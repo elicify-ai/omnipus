@@ -77,6 +77,37 @@ assert_positive_timed_exit_line() {
   fi
 }
 
+assert_independent_guard_timing() {
+  local label="$1" companion_prefix="$2" guard_prefix="$3" log="$4"
+  local companion_line guard_line companion_start guard_start companion_dur guard_dur
+  companion_line="$(grep -F -- "$companion_prefix start=" "$log")"
+  guard_line="$(grep -F -- "$guard_prefix start=" "$log")"
+  if [[ "$companion_line" =~ start=([^[:space:]]+)[[:space:]]dur=([0-9]+)s$ ]]; then
+    companion_start="${BASH_REMATCH[1]}"
+    companion_dur="${BASH_REMATCH[2]}"
+  else
+    companion_start=""
+    companion_dur=""
+  fi
+  if [[ "$guard_line" =~ start=([^[:space:]]+)[[:space:]]dur=([0-9]+)s$ ]]; then
+    guard_start="${BASH_REMATCH[1]}"
+    guard_dur="${BASH_REMATCH[2]}"
+  else
+    guard_start=""
+    guard_dur=""
+  fi
+  if [[ -n "$companion_start" && -n "$guard_start" && "$guard_start" > "$companion_start" &&
+        "$companion_dur" =~ ^[0-9]+$ && "$guard_dur" =~ ^[0-9]+$ ]] &&
+        (( 10#$guard_dur < 10#$companion_dur )); then
+    echo "  PASS [$label]: guard start=$guard_start dur=${guard_dur}s follows companion start=$companion_start dur=${companion_dur}s"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [$label]: guard start=$guard_start dur=${guard_dur}s must follow companion start=$companion_start dur=${companion_dur}s with a shorter duration"
+    FAIL=$((FAIL + 1))
+    ERRORS+=("[$label] expected guard's independent start and shorter duration")
+  fi
+}
+
 assert_file_exists() {
   local label="$1" path="$2"
   if [ -f "$path" ]; then
@@ -347,6 +378,18 @@ assert_file_exists "t16-later-companion-ran" "$ROOT/zulu-companion.ran"
 assert_output_contains "t16-clock-error" "GUARD RUNNER TIMING FAILURE:" "$(cat "$ROOT/.out.log")"
 assert_output_contains "t16-summary" "=== summary ===" "$(cat "$ROOT/.out.log")"
 assert_output_contains "t16-timed-guard" "check-zulu.sh exit=0 start=unavailable dur=" "$(cat "$ROOT/.out.log")"
+rm -rf "$ROOT"
+
+# ── T17: a slow companion and fast guard use separate clocks ────────────────
+echo ""
+echo "T17: a slow companion reports elapsed time and the fast guard starts afresh"
+ROOT="$(fresh_root)"
+write_guard "$ROOT" "check-clock.sh" 0
+printf '#!/usr/bin/env bash\nsleep 3\nexit 0\n' > "$ROOT/scripts/check-clock.test.sh"
+CODE="$(run_guards "$ROOT")"
+assert_exit_code "t17-exit" 0 "$CODE"
+assert_positive_timed_exit_line "t17-companion-positive-duration" ">> companion(check-clock.test.sh) exit=0" "$ROOT/.out.log"
+assert_independent_guard_timing "t17-guard-independent-timing" ">> companion(check-clock.test.sh) exit=0" "check-clock.sh exit=0" "$ROOT/.out.log"
 rm -rf "$ROOT"
 
 echo ""
