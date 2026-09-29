@@ -1583,12 +1583,6 @@ type PerplexityConfig struct {
 	MaxResults        int    `json:"max_results"                   yaml:"-" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_MAX_RESULTS"`
 }
 
-type SearXNGConfig struct {
-	Enabled    bool   `json:"enabled"     env:"OMNIPUS_TOOLS_WEB_SEARXNG_ENABLED"`
-	BaseURL    string `json:"base_url"    env:"OMNIPUS_TOOLS_WEB_SEARXNG_BASE_URL"`
-	MaxResults int    `json:"max_results" env:"OMNIPUS_TOOLS_WEB_SEARXNG_MAX_RESULTS"`
-}
-
 type GLMSearchConfig struct {
 	Enabled bool `json:"enabled" yaml:"-" env:"OMNIPUS_TOOLS_WEB_GLM_ENABLED"`
 	// APIKeyRef references a named credential in credentials.json (e.g. "GLM_API_KEY").
@@ -1637,8 +1631,7 @@ type ExaConfig struct {
 type WebToolsConfig struct {
 	// DefaultProvider is tools.web.default_provider (ADR-096 D4): the
 	// catalogue id of who is tried first — perplexity, brave, tavily,
-	// duckduckgo, baidu, glm, exa; searxng only when the migration found
-	// today's chain already selected it. A missing key means "this file has
+	// duckduckgo, baidu, glm, exa. A missing key means "this file has
 	// not been migrated"; an explicit value must survive every save, so the
 	// JSON tag carries NO omitempty.
 	//
@@ -1664,7 +1657,6 @@ type WebToolsConfig struct {
 	Tavily      TavilyConfig      `yaml:"tavily,omitempty"                                      json:"tavily"`
 	DuckDuckGo  DuckDuckGoConfig  `yaml:"-"                                                     json:"duckduckgo"`
 	Perplexity  PerplexityConfig  `yaml:"perplexity,omitempty"                                  json:"perplexity"`
-	SearXNG     SearXNGConfig     `yaml:"-"                                                     json:"searxng"`
 	GLMSearch   GLMSearchConfig   `yaml:"glm_search,omitempty"                                  json:"glm_search"`
 	BaiduSearch BaiduSearchConfig `yaml:"baidu_search,omitempty"                                json:"baidu_search"`
 	// PreferNative controls whether to use provider-native web search when
@@ -2513,6 +2505,12 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 		// Current version
 		cfg, err = loadConfig(data)
 		if err != nil {
+			return nil, err
+		}
+		// Remove unsupported SearXNG settings and roles from the persisted
+		// file before later load-time repairs read it again. A failed rewrite
+		// is a visible load error, not an in-memory-only correction.
+		if err := scrubSearXNGConfig(cfg, path, data, onSelfHeal); err != nil {
 			return nil, err
 		}
 

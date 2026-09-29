@@ -463,8 +463,8 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 		}
 	}
 
-	// Keyless search providers with prerequisites (SearXNG base_url) must
-	// have those set before activation — today's check, unchanged.
+	// Keyless search providers with prerequisites must have them set
+	// before activation.
 	if def.kind == "search" && !def.requiresKey && body.Active != nil && *body.Active {
 		if ok, reason := a.integrationActivationReady(a.agentLoop.GetConfig(), def); !ok {
 			jsonErr(w, http.StatusBadRequest, reason)
@@ -599,8 +599,6 @@ func applySearchIntegrationRoles(m map[string]any, def integrationDef, write int
 		switch def.id {
 		case "duckduckgo":
 			mapChild(web, "duckduckgo")["enabled"] = true
-		case "searxng":
-			mapChild(web, "searxng")["enabled"] = true
 		default:
 			if sec, ok := searchRefSectionByID(def.id); ok {
 				mapChild(web, sec)["enabled"] = true

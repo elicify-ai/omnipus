@@ -160,21 +160,6 @@ func mapDuckDuckGoDateFilter(rangeCode string) string {
 	}
 }
 
-func mapSearXNGTimeRange(rangeCode string) string {
-	switch rangeCode {
-	case "d":
-		return "day"
-	case "w":
-		return "week"
-	case "m":
-		return "month"
-	case "y":
-		return "year"
-	default:
-		return ""
-	}
-}
-
 func mapGLMRecencyFilter(rangeCode string) string {
 	switch rangeCode {
 	case "d":
@@ -730,86 +715,6 @@ func (p *PerplexitySearchProvider) Search(
 	return "", fmt.Errorf("all api keys failed, last error: %w", lastErr)
 }
 
-type SearXNGSearchProvider struct {
-	baseURL     string
-	client      *http.Client
-	ingestBound int64 // ADR-066 D10 / ADR-096 D10: <= 0 means the config default
-}
-
-func (p *SearXNGSearchProvider) Search(
-	ctx context.Context,
-	query string,
-	count int,
-	rangeCode string,
-) (string, error) {
-	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=general",
-		strings.TrimSuffix(p.baseURL, "/"),
-		url.QueryEscape(query))
-	if timeRange := mapSearXNGTimeRange(rangeCode); timeRange != "" {
-		searchURL += "&time_range=" + url.QueryEscape(timeRange)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// FR-020 / ADR-096 D10: bound the body before decode. SearXNG's base
-	// URL is operator-set, so an unbounded read can exhaust memory. The
-	// bound error is returned unwrapped so the ladder classifies it as
-	// ingest-bound and does not hop.
-	body, err := readIngestBounded(resp.Body, p.ingestBound, "SearXNG")
-	if err != nil {
-		return "", err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("SearXNG returned status %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Results []struct {
-			Title   string  `json:"title"`
-			URL     string  `json:"url"`
-			Content string  `json:"content"`
-			Engine  string  `json:"engine"`
-			Score   float64 `json:"score"`
-		} `json:"results"`
-	}
-
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(result.Results) == 0 {
-		return fmt.Sprintf("No results for: %s", query), nil
-	}
-
-	// Limit results to requested count
-	if len(result.Results) > count {
-		result.Results = result.Results[:count]
-	}
-
-	// Format results in standard Omnipus format
-	var b strings.Builder
-	fmt.Fprintf(&b, "Results for: %s (via SearXNG)\n", query)
-	for i, r := range result.Results {
-		fmt.Fprintf(&b, "%d. %s\n", i+1, r.Title)
-		fmt.Fprintf(&b, "   %s\n", r.URL)
-		if r.Content != "" {
-			fmt.Fprintf(&b, "   %s\n", r.Content)
-		}
-	}
-
-	return b.String(), nil
-}
-
 type GLMSearchProvider struct {
 	apiKey string
 	// keySource is the D4a live resolver handle (finding K1): when non-nil
@@ -1051,9 +956,6 @@ type WebSearchToolOptions struct {
 	PerplexityAPIKeys     []string
 	PerplexityMaxResults  int
 	PerplexityEnabled     bool
-	SearXNGBaseURL        string
-	SearXNGMaxResults     int
-	SearXNGEnabled        bool
 	GLMSearchAPIKey       string
 	GLMSearchBaseURL      string
 	GLMSearchEngine       string
@@ -1138,8 +1040,7 @@ type misconfiguredSearchProvider struct {
 
 // enabledButKeylessSearchProviders returns the keyed providers that are
 // enabled but carry no key at tool construction. DuckDuckGo is never included
-// (keyless by design) and SearXNG is never included (self-hosted: it has an
-// optional base URL but no credential ref). Two paths (D15/FR-035): with a
+// (keyless by design). Two paths (D15/FR-035): with a
 // live-roles config the list derives from the provider catalogue; the legacy
 // flat-options walk stays for constructions without Roles.
 func enabledButKeylessSearchProviders(opts WebSearchToolOptions) []misconfiguredSearchProvider {
@@ -1262,26 +1163,6 @@ func newBraveSearchProvider(opts WebSearchToolOptions, ingestBound int64) (Searc
 	}
 	if opts.BraveMaxResults > 0 {
 		return provider, min(opts.BraveMaxResults, 10), nil
-	}
-	return provider, 0, nil
-}
-
-// newSearXNGSearchProvider builds the SearXNG search provider from opts.
-// The client comes from makeSearchClient, like every other provider
-// (ADR-096 D10 / AC-9): SSRF-safe when a checker is set, proxy-aware
-// otherwise. The response body is capped at ingestBound.
-func newSearXNGSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchProvider, int, error) {
-	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create HTTP client for SearXNG: %w", err)
-	}
-	provider := &SearXNGSearchProvider{
-		baseURL:     opts.SearXNGBaseURL,
-		client:      client,
-		ingestBound: ingestBound,
-	}
-	if opts.SearXNGMaxResults > 0 {
-		return provider, min(opts.SearXNGMaxResults, 10), nil
 	}
 	return provider, 0, nil
 }
@@ -1428,7 +1309,7 @@ func newDuckDuckGoFallbackSearchProvider(opts WebSearchToolOptions, ingestBound 
 	//     → WARN, because this almost certainly means a config migration issue.
 	//   • "nothing configured" (fresh/minimal config, no provider section at all)
 	//     → INFO, because DuckDuckGo-as-default is the expected initial state.
-	anyEnabled := opts.PerplexityEnabled || opts.BraveEnabled || opts.SearXNGEnabled ||
+	anyEnabled := opts.PerplexityEnabled || opts.BraveEnabled ||
 		opts.TavilyEnabled || opts.DuckDuckGoEnabled || opts.BaiduSearchEnabled || opts.GLMSearchEnabled
 	if anyEnabled {
 		logger.WarnCF("tool", "no search provider configured; defaulting to keyless DuckDuckGo",
@@ -1495,7 +1376,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	// (names only, never key values).
 	warnKeylessSearchProviders(opts)
 
-	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu Search > GLM Search.
+	// Priority: Perplexity > Brave > Tavily > DuckDuckGo > Baidu Search > GLM Search.
 	// A constructor error fails the tool only on the legacy path (Roles nil),
 	// where this one provider is the whole tool. With Roles set, the dynamic
 	// map records the cause and the call reports "not usable" — boot continues.
@@ -1518,10 +1399,6 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 		}
 	} else if opts.BraveEnabled && len(opts.BraveAPIKeys) > 0 {
 		if err := assign(newBraveSearchProvider(opts, ingestBound)); err != nil {
-			return nil, err
-		}
-	} else if opts.SearXNGEnabled && opts.SearXNGBaseURL != "" {
-		if err := assign(newSearXNGSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
 		}
 	} else if opts.TavilyEnabled && len(opts.TavilyAPIKeys) > 0 {
@@ -1603,11 +1480,6 @@ func buildDynamicSearchProviders(opts WebSearchToolOptions, ingestBound int64) (
 		note(config.SearchProviderBrave, err)
 	} else {
 		dynamic[config.SearchProviderBrave] = p
-	}
-	if p, _, err := newSearXNGSearchProvider(opts, ingestBound); err != nil {
-		note(config.SearchProviderSearXNG, err)
-	} else {
-		dynamic[config.SearchProviderSearXNG] = p
 	}
 	if p, _, err := newTavilySearchProvider(opts, ingestBound); err != nil {
 		note(config.SearchProviderTavily, err)

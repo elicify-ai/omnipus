@@ -279,11 +279,6 @@
         "max_results": 0
       },
       "prefer_native": false,
-      "searxng": {
-        "base_url": "",
-        "enabled": false,
-        "max_results": 0
-      },
       "tavily": {
         "base_url": "",
         "enabled": false,
