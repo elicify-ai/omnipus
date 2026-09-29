@@ -31,6 +31,30 @@ the effective pixel value at this app's actual root, so the written number match
 user's browser does. The collapse behaviour itself is unchanged — this is a units/label
 fix, not a new decision or a behaviour change, and needs no further grill round.
 
+**Post-approval wave-3 amendment (2026-09-29, founder-direction, after wireframe v2 —
+`coordination/wireframes/side-panel-wave3.html`):** the founder answered every open
+wave-3 layout question (decisions SP-32..SP-42, logged in the Decision coverage table
+in §13). Two of these are corrections to earlier sections rather than new wave-3-only
+content, so they are called out here:
+
+1. **SP-38 supersedes FR-008/US-6 for Tasks, Team and Calendar only.** Those three
+   panels' full-screen presentation is the SAME chrome-less, in-app "Back to chat"
+   shell route already specified for Library/Browser/Mail's full-screen work (landing
+   on `feat/resizable-side-panels`) — NOT the "Expand opens a new browser tab" route
+   FR-008/US-6 describe. There is no separate full-page route for Tasks/Team/Calendar;
+   §10's Wave 3 table is corrected accordingly.
+2. **SP-40 removes the Chat tab-strip entry.** Chat is the base route the shell sits
+   over, not a togglable panel entry — FR-007's "Chat stays the page underneath" is
+   unchanged in effect, but Chat is never rendered as a strip/dropdown entry. The
+   compact tab-bar trigger becomes a menu ICON (no text label).
+
+The remaining wave-3 decisions (Tasks' three narrow views, Board/List narrow layouts,
+container-query breakpoints measured from real content, the Plans band, the plan
+editor, Calendar's default view and Month behaviour, and the new cross-view running
+indicator, FR-022) are new wave-3 scope and are stated in full in §10 and §13; none of
+them touch wave 1/2 behaviour. Search across tasks/team agents/calendar events is
+explicitly OUT OF SCOPE for wave 3 (tracked in issue #1054).
+
 ---
 
 ## 1. Context and scope
@@ -1273,19 +1297,28 @@ spec; `?panel=mail` without a mailbox opens the "choose a mailbox" state (SP-23)
 chat draft-link opens the Mail panel through the same single-panel state. Stories:
 Mail set replaces its wave-0 stand-in (SP-24).
 
-**Wave 3 — Team, Tasks, Calendar become panels (SP-6).** Their tab entries become
-toggles (ending mixed mode — until then they are navigation links, US-5); their
-existing routes remain the full-page expand targets and deep links. Stories: the three
-sets replace their stand-ins (SP-24). Narrow layouts are per-panel content work,
-explicitly in scope per SP-6:
+**Wave 3 — Team, Tasks, Calendar become panels (SP-6), amended 2026-09-29 per the
+founder's wireframe-v2 answers (SP-32..SP-42).** Their tab entries become toggles
+(ending mixed mode — until then they are navigation links, US-5); Chat is REMOVED from
+the tab strip entirely (SP-40) and the compact dropdown trigger becomes a menu icon,
+not a text label. Tasks/Team/Calendar's full-screen presentation is the shared
+chrome-less "Back to chat" shell route (SP-38), not a new-tab Expand — their existing
+routes stay their deep-link targets only. Stories: the three sets replace their
+stand-ins (SP-24). Narrow layouts are per-panel content work, explicitly in scope per
+SP-6, and are PANEL-container-width-responsive (CSS container queries, the same
+mechanism as the compact-dropdown breakpoint above) with breakpoints measured from
+real content, not assumed:
 
-| Panel | Narrow-panel layout (SP-6) |
+| Panel | Narrow-panel layout |
 |---|---|
-| Tasks | List view fits; the board needs a narrow layout (single-column swim or stacked cards) |
+| Tasks | ALL THREE views (Board, List, Graph) stay available narrowed, never dropped (SP-32). Board narrow = cards stacked by status, single column (SP-33), breakpoint measured at the full board's real width (≈970px). List narrow hides the Tags/Updated columns behind a "…" overflow control below a measured width (SP-34). Graph's narrow layout is deferred — checked against real node counts in a later pass, not blocking this wave (SP-35). |
+| Tasks — Plans band | Keeps its tile strip with side (horizontal) scroll; completed plans hidden by default behind a "Show done" toggle; a small "scroll for more →" hint shows when the strip overflows, on phone too (SP-36). The plan editor is UNCHANGED — it slides in from the window edge like the existing agent/task editors; no large modal is introduced; where it needs the full viewport it uses the same chrome-less full-screen presentation as the rest of the panel (SP-37). |
 | Team | Graph gets zoom/scroll inside the panel |
-| Calendar | Day/week views fit the panel; month view routes to the full page (expand) |
+| Calendar | Docks by default on Week; Day/Week/Month all user-selectable. Month MUST work inside the docked panel AND in the phone full-screen presentation — it never jumps to a different, wider surface (SP-39, corrects the earlier "month view routes to the full page" line). |
+| Board, List, Graph, Plans | Every running task shows the ONE standard running indicator (chat's spinning icon + token count), extracted into a catalogued `omnipus-design-system` component rather than a second copy (SP-41, FR-022). |
 
-Settings stays a page in every wave (SP-6).
+Search (tasks, team agents, calendar events) is OUT OF SCOPE for wave 3 — issue #1054
+(SP-42). Settings stays a page in every wave (SP-6).
 
 **Sequencing rule**: each wave lands on `feat/resizable-side-panels` / the feature
 branches in order; a wave starts only after the previous wave's gate (review gate; for
@@ -1863,12 +1896,24 @@ panel automatically.
   MUST toggle their panel — `aria-pressed` while open, second click closes — on both the
   full strip and the compact dropdown (MAJ-007's ARIA model); unregistered entries stay
   navigation links until their wave; Chat stays the page underneath; Settings stays
-  a page. [SP-11, SP-6; US-5]
-- **FR-008** [wave 1]: Expand MUST open the panel's full-page route in a NEW browser tab
-  (plain `_blank`; no stable window name — MAJ-202) and close the docked panel in the
-  source tab; the open runs synchronously in the user gesture (MAJ-209), the handle is
-  kept by severing `window.opener` after the open, and a blocked popup is fail-visible
-  (toast, docked panel stays). [SP-12, MAJ-202, MAJ-209; US-6]
+  a page. **Amended (SP-40, 2026-09-29): Chat is NEVER rendered as a tab-strip or
+  compact-dropdown entry** (it is the base route, not a togglable panel); the compact
+  dropdown's trigger is a menu ICON, not a text label. [SP-11, SP-6, SP-40; US-5]
+- **FR-008** [wave 1; Library/Browser/Mail only from 2026-09-29]: Expand MUST open the
+  panel's full-page route in a NEW browser tab (plain `_blank`; no stable window name —
+  MAJ-202) and close the docked panel in the source tab; the open runs synchronously in
+  the user gesture (MAJ-209), the handle is kept by severing `window.opener` after the
+  open, and a blocked popup is fail-visible (toast, docked panel stays). **Amended
+  (SP-38, 2026-09-29): Tasks, Team and Calendar do NOT use this new-tab route** — their
+  full-screen presentation is the shared chrome-less "Back to chat" shell route (same
+  mechanism as Library/Browser/Mail's full-screen work). [SP-12, MAJ-202, MAJ-209,
+  SP-38; US-6]
+- **FR-022** [wave 3, NEW requirement, SP-41]: Every running task surfaced in the Tasks
+  panel's Board, List and Graph views, and in the Plans band, MUST show ONE standard
+  "running" indicator — the same spinning-icon-plus-token-count treatment already used
+  in chat. This indicator MUST be a catalogued `omnipus-design-system` component; the
+  implementing lead extracts chat's existing indicator into that catalogued component
+  if it is not already one, rather than building a second, divergent copy. [SP-41]
 - **FR-009** [wave 1]: If a panel's full-page tab with the SAME identity key is already
   open, re-invoking ANY of its entry points MUST SWITCH to it — toggle, Expand, sidebar
   Library, "Open library", "Watch live" (SP-30) — via the in-memory handle registry
@@ -1997,9 +2042,11 @@ panel automatically.
 | FR-019 | US-7 | Browser never restores (reload + ANY link); sign-in return | 6, 17, 18 |
 | FR-020 | US-3 | Workspace switch moves panels per SP-29 | 20 |
 | FR-021 | US-8 | Phone ✕ / Back / swipe; scroller non-conflict; 680 boundary | 12, 21 |
+| FR-022 | US-5 (Tasks/Plans) | Wave-3 running-task rows show the catalogued running indicator | wave-3 component tests, TBD at build |
 
 **Completeness**: every FR appears; every BDD scenario traces; test numbers refer to
-§12's order column (including 8b, 8c, 9b).
+§12's order column (including 8b, 8c, 9b). FR-022's own wave-3 test numbers are added
+when wave 3's TDD plan is written (§12 covers waves 1-2 only as of this amendment).
 
 ### Decision coverage (SP-16..SP-31 + round-2 defaults)
 
@@ -2021,6 +2068,17 @@ panel automatically.
 | SP-29 | Workspace switch per panel: Browser anchored; Library only if workspace-scoped; Tasks/Calendar/Mail follow | §6, FR-020 | Test 20; §11 SP-29 scenario |
 | SP-30 | EVERY entry point switches to the already-open tab | §5, §8.3, FR-009 | Test 14; W5/W6 |
 | SP-31 | Demo gate split: wave-0 Storybook rows; wave-1 real-app exit criterion | §9, §10, SC-001/SC-009 | Test 16; §9 W-rows |
+| SP-32 *(2026-09-29, wireframe v2)* | Tasks keeps ALL THREE views (Board, List, Graph) narrowed — none dropped in the panel | §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-33 *(2026-09-29)* | Panel-width container queries (not window width); breakpoints measured from real content (full Board ≈970px) | §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-34 *(2026-09-29)* | Board narrow = cards stacked by status, single column | §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-35 *(2026-09-29)* | List narrow hides Tags/Updated behind "…"; Graph narrow deferred to a later real-node-count pass | §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-36 *(2026-09-29)* | Plans band: tile strip + side scroll kept; done plans hidden by default + toggle; "scroll for more →" hint (incl. phone) | §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-37 *(2026-09-29)* | Plan editor unchanged (slides from window edge); no large modal; full-viewport case uses the shared chrome-less full-screen presentation | §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-38 *(2026-09-29, amends FR-008)* | Tasks/Team/Calendar full screen = shared chrome-less "Back to chat" shell route, NOT a new-tab Expand | FR-008, §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-39 *(2026-09-29)* | Calendar docks default Week, view selectable; Month works inside the panel AND on phone, never jumps out | §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-40 *(2026-09-29, amends FR-007)* | Chat entry removed from the tab strip entirely; compact trigger becomes a menu icon | FR-007, §10 Wave 3 | Wave-3 stories/tests, TBD |
+| SP-41 *(2026-09-29)* | One catalogued running-indicator component (chat's spinner + token count) on every running task, Board/List/Graph/Plans | FR-022, §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-42 *(2026-09-29)* | Search (tasks/team agents/calendar events) is OUT OF SCOPE for wave 3 | §10 Wave 3 | Issue #1054 |
 | MAJ-201 | Identity keys: panelId × workspaceId (Browser + session + agent) | §8.1, §8.3, FR-009 | Test 14 |
 | MAJ-202 | No stable window names; `_blank` opens; opener severed after | §8.3, FR-008 | Test 14; W4 |
 | MAJ-203 | Default = clamp(0.45·row, 320, min(720, ceiling)) | §4 US-2, FR-003 | Test 2; dataset rows 5/6/8–11 |
