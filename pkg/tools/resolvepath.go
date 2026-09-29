@@ -36,6 +36,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1646,10 +1647,10 @@ func ResolvePathAllowingPatterns(
 				return ResolvePath(ctx, granted, toolName, callID, op, rawPath)
 			}
 			if resolvedGrant, resolveErr := resolveRealpathUnderWorkDir(rawPath, policy.WorkDir); resolveErr == nil {
-				grantedRoots := make([]string, 0, len(policy.AllowedRoots)+1)
-				grantedRoots = append(grantedRoots, policy.AllowedRoots...)
-				grantedRoots = append(grantedRoots, resolvedGrant)
-				granted.AllowedRoots = grantedRoots
+				// Copy then append: never alias policy.AllowedRoots' backing
+				// array, and no hand-computed capacity (CodeQL
+				// go/allocation-size-overflow on PR #1037).
+				granted.AllowedRoots = append(slices.Clone(policy.AllowedRoots), resolvedGrant)
 			}
 
 			return ResolvePath(ctx, granted, toolName, callID, op, rawPath)
