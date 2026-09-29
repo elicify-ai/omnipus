@@ -48,7 +48,7 @@ import type {
 } from '@/lib/api'
 import { MailFolderRail } from './MailFolderRail'
 import { MailMessageList } from './MailMessageList'
-import { MailPreviewPane } from './MailPreviewPane'
+import { MailPreviewPane, type MailPreviewPaneProps } from './MailPreviewPane'
 import { MailHtmlFrame } from './MailHtmlFrame'
 import { MailComposeDialog } from './MailComposeDialog'
 import type { MailComposeBody } from './MailComposeDialog'
@@ -192,6 +192,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     }
     return workspaceMailboxes[0]?.agent_id ?? null
   }, [mailboxId, intent.agentId, mailboxesQuery.isPending, workspaceMailboxes])
+  const selectedMailbox = workspaceMailboxes.find((mailbox) => mailbox.agent_id === agentId)
+  const senderName = agentId === null ? undefined : agentNamesById.get(agentId) ?? agentId
+  const senderAddress = selectedMailbox?.username ?? 'Address unavailable'
   const folder: string = intent.folder ?? 'inbox'
   // The open message ref — session state, not persisted (a fresh panel opens
   // with the list, not a message). Reset when folder/mailbox changes.
@@ -200,6 +203,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
   const [selectedRef, setSelectedRef] = useState<string | null>(() =>
     initialMessageRef ?? readMailPanelIntent(workspaceId).messageRef,
   )
+  const [draftEditingRef, setDraftEditingRef] = useState<string | null>(null)
 
   // Persist the per-workspace intent whenever mailbox/folder selection moves
   // (FR-010). Effect-based so programmatic and click-driven changes persist.
@@ -271,6 +275,8 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     retry: false,
   })
   const detail: MailMessage | null = detailQuery.data ?? null
+  const compactDraftList = layout === 'stacked' && detail?.is_draft === true
+    && draftEditingRef === `${agentId}:${folder}:${selectedRef}`
   const seenMutation = useMutation({
     mutationFn: (ref: string) => markMailSeen(workspaceId, agentId as string, folder, ref),
     onSuccess: () => {
@@ -281,15 +287,23 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
 
   // ── Draft actions (US-7, D12/D23) ────────────────────────────────────
   const draftSave = useMutation({
-    mutationFn: (next: { to: string; subject: string; bodyMarkdown: string }) => {
+    mutationFn: async (next: Parameters<MailPreviewPaneProps['onSave']>[0]) => {
       const d = detail as MailMessage
+      const newAttachments = await Promise.all((next.attachments ?? []).map(async (file) => ({
+        filename: file.name,
+        content_type: file.type || 'application/octet-stream',
+        data_base64: await fileToBase64(file),
+      })))
       return saveMailDraft(workspaceId, agentId as string, selectedRef as string, {
         to: next.to.split(',').map((s) => s.trim()).filter(Boolean),
+        cc: next.cc ?? d.cc,
+        bcc: next.bcc ?? d.bcc ?? [],
         subject: next.subject,
         body_markdown: next.bodyMarkdown,
         uidvalidity: d.uidvalidity,
         uid: d.uid,
-        keep_attachment_parts: d.attachments.map((a) => a.part_index),
+        attachments: newAttachments.length > 0 ? newAttachments : undefined,
+        keep_attachment_parts: next.keepAttachmentParts ?? d.attachments.map((item) => item.part_index),
       })
     },
     onSuccess: (updated) => {
@@ -310,10 +324,13 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       const d = detail as MailMessage
       return sendMailDraft(workspaceId, agentId as string, selectedRef as string, {
         to: d.to,
+        cc: d.cc,
+        bcc: d.bcc ?? [],
         subject: d.subject,
         body_markdown: d.body_markdown ?? '',
         uidvalidity: d.uidvalidity,
         uid: d.uid,
+        keep_attachment_parts: d.attachments.map((item) => item.part_index),
       })
     },
     onSuccess: (res) => {
@@ -539,6 +556,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
             layout={layout}
             region="list"
             previewVisible
+            compactList={compactDraftList}
             surface="mail-list"
             testId="mail-list-region"
           >
@@ -614,6 +632,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
             layout={layout}
             region="preview"
             previewVisible
+            compactList={compactDraftList}
             surface="mail-preview"
             testId="mail-reading-zone"
           >
@@ -648,14 +667,39 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
             )}
             {detail !== null && detailQuery.isSuccess && (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
-                  <p className="min-w-0 flex-1 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-                    From {detail.from ?? 'unknown'} · {formatMailDate(detail.date)}
-                  </p>
+                <div className="flex shrink-0 items-start gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
+                  {detail.is_draft !== true && folder !== 'sent' ? (
+                    <div className="min-w-0 flex-1">
+                      <h3 className="break-words text-[length:var(--type-section-title-size)] font-[var(--font-weight-medium)] text-[var(--color-secondary)]">
+                        {detail.subject || '(No subject)'}
+                      </h3>
+                      <p className="mt-[var(--space-1)] break-words text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                        From: {detail.from_name ? `${detail.from_name} · ` : ''}{detail.from || 'unknown'}
+                      </p>
+                      <p className="break-words text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                        To: {detail.to.length > 0 ? detail.to.join(', ') : 'No recipient'}
+                      </p>
+                      {detail.cc.length > 0 && (
+                        <p className="break-words text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                          Cc: {detail.cc.join(', ')}
+                        </p>
+                      )}
+                      {formatMailDate(detail.date) && (
+                        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                          Date: {formatMailDate(detail.date)}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="min-w-0 flex-1 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                      From {detail.from ?? 'unknown'} · {formatMailDate(detail.date)}
+                    </p>
+                  )}
                   {folder !== 'drafts' && (
                     <Button
                       variant="secondary"
                       size="sm"
+                      className="shrink-0"
                       onClick={() => setCompose({ mode: 'reply' })}
                     >
                       Reply
@@ -668,8 +712,15 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                     subject={detail.subject ?? ''}
                     bodyMarkdown={detail.body_markdown ?? detail.body_text ?? ''}
                     to={detail.to.join(', ')}
+                    cc={detail.cc}
+                    bcc={detail.bcc}
+                    attachments={detail.attachments}
+                    senderName={senderName}
+                    senderAddress={senderAddress}
+                    signatureHtml={selectedMailbox?.signature_html}
                     sentOn={folder === 'sent' ? formatMailDate(detail.date) : undefined}
                     onSave={(next) => draftSave.mutateAsync(next).then(() => true, () => false)}
+                    onEditingChange={(editing) => setDraftEditingRef(editing ? `${agentId}:${folder}:${selectedRef}` : null)}
                     onSend={() => draftSend.mutate()}
                     onDiscard={() => draftDiscard.mutate()}
                   />
@@ -720,6 +771,9 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
         open={compose !== null}
         mode={compose?.mode ?? 'new'}
         replyTo={compose?.mode === 'reply' && replyTarget !== null ? replyTarget : undefined}
+        senderName={senderName}
+        senderAddress={senderAddress}
+        signatureHtml={selectedMailbox?.signature_html}
         onSend={(body) => {
           composeSend.mutate(body)
           setCompose(null)
