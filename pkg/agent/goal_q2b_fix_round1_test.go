@@ -16,9 +16,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/goal"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -309,12 +310,34 @@ func TestGoalQ2B_BootRepairsTerminalDescendantWhoseLiveHookDidNotRun(t *testing.
 	q2bAssertExactlyOneReevaluation(t, h)
 }
 
-func TestGoalQ2B_MetClaimWithoutLifecycleStoreFailsClosed(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+// TestGoalQ2B_MetClaimWithoutLifecycleStoreIsQuietAndAdjudicates supersedes
+// the retired TestGoalQ2B_MetClaimWithoutLifecycleStoreFailsClosed (fix-890
+// squad-lead contract A). OLD rule (wrong, per the pinned contract): a met
+// claim with no lifecycle store must fail closed and never schedule
+// adjudication. NEW rule: SteerLauncher.Launch (steer_launcher.go, the
+// `lifecycle == nil || sessions == nil` refusal at the top of Launch, before
+// launchOrdinaryRoot/launchSteered ever run) refuses EVERY child launch when
+// the lifecycle store is nil — no descendant can ever exist on this session
+// — so the completion subtree is quiet BY CONSTRUCTION, not merely
+// "unreadable". hasRunningOrQueuedDescendant (steer_completion.go) encodes
+// this exact reasoning: "lifecycle == nil: SteerLauncher.Launch refuses a
+// child without a lifecycle store, so there is no descendant to wait for" —
+// returns (false, nil), never an error. A met claim with no store therefore
+// proceeds straight to adjudication: no panic, deferred adjudication IS
+// recorded, and — driving the Judge with this harness's own fake provider —
+// the goal reaches a verdict.
+func TestGoalQ2B_MetClaimWithoutLifecycleStoreIsQuietAndAdjudicates(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 	if !ok {
 		t.Fatal("native-agent not registered")
 	}
+	const verdictReason = "no descendant can exist without a lifecycle store"
+	judge := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{Content: cannedJudgeVerdictJSON(true, verdictReason)}, nil
+	}}
+	judgeInst.Provider = judge
+
 	store, sessionID := newGoalTestSession(t, al, agentInst.ID)
 	goalID := activateTestGoalRecord(t, sessionID, "ordinary session goal remains active")
 	al.SetSessionMessagingStores(nil, nil)
@@ -332,14 +355,37 @@ func TestGoalQ2B_MetClaimWithoutLifecycleStoreFailsClosed(t *testing.T) {
 	if panicValue != nil {
 		t.Fatalf("met claim panicked without lifecycle authority: %v", panicValue)
 	}
-	if result.goalDeferredAdjudication != nil {
-		t.Fatal("met claim without lifecycle authority scheduled adjudication, want fail closed")
+	work := result.goalDeferredAdjudication
+	if work == nil {
+		t.Fatal("BUG: met claim without a lifecycle store did not record deferred adjudication — SteerLauncher.Launch refuses every child launch when the store is nil, so the subtree is quiet by construction and the claim must proceed to adjudication, not hold")
+	}
+
+	done := make(chan string, 1)
+	oldDone := goalDeferredAdjudicationDoneFn
+	goalDeferredAdjudicationDoneFn = func(sid string) { done <- sid }
+	t.Cleanup(func() { goalDeferredAdjudicationDoneFn = oldDone })
+	al.dispatchDeferredGoalAdjudication(work)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("adjudication with no lifecycle store did not finish")
+	}
+
+	if calls := judge.callCount(); calls != 1 {
+		t.Fatalf("Judge calls with no lifecycle store = %d, want exactly 1", calls)
 	}
 	g, err := resolveGoalRecordStore().Get(goalID)
 	if err != nil {
 		t.Fatalf("Get(goal): %v", err)
 	}
-	if !goal.IsActiveState(g.State) || g.LatestVerdict != nil {
-		t.Fatalf("goal without lifecycle authority = state %q verdict %+v, want active with no verdict", g.State, g.LatestVerdict)
+	if g.LatestVerdict == nil || !g.LatestVerdict.Met {
+		t.Fatalf("goal after adjudication with no lifecycle store = verdict %+v, want a met verdict recorded", g.LatestVerdict)
 	}
 }
+
+// TestGoalQ2B_QuietnessReadFailureFailsClosed (above, in this same file) is
+// contract A's other half: a WIRED lifecycle store whose List fails still
+// holds the claim (fail closed) — corrupting a real descendant's lifecycle
+// file into an unreadable directory and asserting no deferred adjudication,
+// no verdict, and no Judge call. Reused as-is; its scenario (a wired,
+// unreadable store) is orthogonal to this test's (no store at all).

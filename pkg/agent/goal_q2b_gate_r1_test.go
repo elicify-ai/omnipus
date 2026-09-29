@@ -150,7 +150,9 @@ func TestGoalQ2B_RestateDuringAdjudicationClearsCompletionPhaseInsteadOfWedging(
 // container (memory: docker-container-acceptance-harness).
 func TestGoalQ2B_FenceFailsOpenWhenGoalStoreUnreadable(t *testing.T) {
 	h := newQ2BHarness(t, "q2b-fence-store-unreadable")
-	h.al.goalSetCompletionPhase(h.child.GoalRef, goalCompletionWaitingDescendants)
+	if !h.al.goalInstallWaitingCompletion(h.child.GoalRef) {
+		t.Fatal("arrange: could not install waiting_descendants completion phase")
+	}
 	if !h.al.goalPromoteCompletionToAdjudicating(h.child.GoalRef) {
 		t.Fatal("arrange: could not promote completion phase to adjudicating")
 	}
