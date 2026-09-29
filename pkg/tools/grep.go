@@ -352,6 +352,12 @@ func defaultGrepRoots(policy fspolicy.FSPolicy, mounts []workspace.Mount, opened
 func (t *GrepTool) mountScopeRoot(m workspace.Mount, rest string, policy fspolicy.FSPolicy, opened *[]*os.Root) (grepRootSet, error) {
 	var set grepRootSet
 	realPath := grepRootRealpath(filepath.Join(m.HostPath, filepath.FromSlash(rest)))
+	expected, identityErr := grepPreOpenIdentity(m.HostPath)
+	if identityErr != nil {
+		set.add(filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: identityErr}}, realPath)
+		return set, nil
+	}
+	runGrepPreOpenRootHook(m.HostPath)
 	mr, mErr := os.OpenRoot(m.HostPath)
 	if mErr != nil {
 		// FR-021: a dead mount is root_lost, not a request error — same
@@ -362,6 +368,10 @@ func (t *GrepTool) mountScopeRoot(m workspace.Mount, rest string, policy fspolic
 		return set, nil //nolint:nilerr // see comment above: error is packed into the unreachableRootFS root
 	}
 	*opened = append(*opened, mr)
+	if !grepOpenedRootMatches(mr, expected) {
+		set.add(filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: fmt.Errorf("mount %q changed before opening", m.Name)}}, realPath)
+		return set, nil
+	}
 	if rest == "" {
 		set.add(filegrep.Root{Name: m.Name, FS: guardGrepRoot(m.HostPath, mr.FS(), policy)}, realPath)
 		return set, nil

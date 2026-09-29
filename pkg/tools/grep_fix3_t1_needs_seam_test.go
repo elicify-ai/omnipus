@@ -70,8 +70,6 @@
 // is platform-restricted. Folding it into an existing file rather than
 // keeping it standalone is also acceptable once the seam exists.
 //
-//go:build fix3seam
-
 package tools
 
 import (

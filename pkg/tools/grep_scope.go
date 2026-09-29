@@ -92,6 +92,81 @@ func runGrepAbsolutePostOpenHook(anchor string) {
 	}
 }
 
+// grepPreOpenRootHook drives a swap after capturing the admitted root's
+// identity but immediately before the raw os.OpenRoot binds its descriptor.
+var grepPreOpenRootHook atomic.Pointer[func(hostPath string)]
+
+func setGrepPreOpenRootHook(fn func(hostPath string)) (restore func()) {
+	var next *func(string)
+	if fn != nil {
+		next = &fn
+	}
+	prev := grepPreOpenRootHook.Swap(next)
+	return func() { grepPreOpenRootHook.Store(prev) }
+}
+
+func runGrepPreOpenRootHook(hostPath string) {
+	if hook := grepPreOpenRootHook.Load(); hook != nil {
+		(*hook)(hostPath)
+	}
+}
+
+// grepPreOpenIdentity walks the admitted realpath from its volume root,
+// refusing symlink components. Each component is checked against the
+// directory actually opened through the preceding os.Root: a swap between
+// Lstat and OpenRoot cannot silently change the identity we capture. The
+// returned identity is taken BEFORE the caller's raw host-path os.OpenRoot.
+func grepPreOpenIdentity(canonical string) (fs.FileInfo, error) {
+	if !filepath.IsAbs(canonical) || filepath.Clean(canonical) != canonical {
+		return nil, fmt.Errorf("search root %q is not a clean absolute realpath: %w", canonical, fs.ErrPermission)
+	}
+	volume := filepath.VolumeName(canonical)
+	base := volume + string(os.PathSeparator)
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	if canonical == base {
+		return root.Stat(".")
+	}
+	rel, err := filepath.Rel(base, canonical)
+	if err != nil || !filepath.IsLocal(rel) {
+		return nil, fmt.Errorf("search root %q cannot be traversed from its volume root: %w", canonical, fs.ErrPermission)
+	}
+	for _, component := range strings.Split(rel, string(os.PathSeparator)) {
+		before, statErr := root.Lstat(component)
+		if statErr != nil {
+			return nil, statErr
+		}
+		if !before.IsDir() || before.Mode()&fs.ModeSymlink != 0 {
+			return nil, fmt.Errorf("search root %q has a non-directory or symlink component %q: %w", canonical, component, fs.ErrPermission)
+		}
+		next, openErr := root.OpenRoot(component)
+		if openErr != nil {
+			return nil, openErr
+		}
+		after, checkErr := next.Stat(".")
+		if checkErr != nil || !os.SameFile(before, after) {
+			next.Close()
+			if checkErr != nil {
+				return nil, checkErr
+			}
+			return nil, fmt.Errorf("search root %q changed while capturing its identity: %w", canonical, fs.ErrPermission)
+		}
+		root.Close()
+		root = next
+	}
+	return root.Stat(".")
+}
+
+// grepOpenedRootMatches checks the bound descriptor against the identity
+// captured before its raw host-path open. An unanswerable Stat is not a match.
+func grepOpenedRootMatches(root *os.Root, expected fs.FileInfo) bool {
+	actual, err := root.Stat(".")
+	return err == nil && os.SameFile(actual, expected)
+}
+
 // grepGateFIFOSwapHook is the A3 test-only seam (Opus security-lead
 // review): invoked in refuseNonRegular (the OLD code's Stat-then-check
 // window, between Stat and the kind check) and via refuseNonRegularViaOpen
@@ -352,11 +427,19 @@ func (t *GrepTool) resolvedScopeRoot(ctx context.Context, policy fspolicy.FSPoli
 // the workspace-scoped root it always was (FR-001 step 4): workspace-relative
 // match paths, ancestor ignore layers preloaded up to the workspace root.
 func (t *GrepTool) workspaceScopeRoot(policy fspolicy.FSPolicy, realWorkDir, realAbs string, opened *[]*os.Root) (filegrep.Root, int, error) {
+	expected, err := grepPreOpenIdentity(realWorkDir)
+	if err != nil {
+		return filegrep.Root{}, 0, fmt.Errorf("cannot verify your workspace root before opening it: %w", err)
+	}
+	runGrepPreOpenRootHook(policy.WorkDir)
 	wr, err := os.OpenRoot(policy.WorkDir)
 	if err != nil {
 		return filegrep.Root{}, 0, fmt.Errorf("cannot open your workspace root: %w", err)
 	}
 	*opened = append(*opened, wr)
+	if !grepOpenedRootMatches(wr, expected) {
+		return filegrep.Root{}, 0, fmt.Errorf("your workspace root changed before it could be opened")
+	}
 	rel, err := filepath.Rel(realWorkDir, realAbs)
 	if err != nil {
 		return filegrep.Root{}, 0, fmt.Errorf("path could not be made relative to your workspace: %w", err)
@@ -428,11 +511,19 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 	if parent == realAbs {
 		// A volume root (`/`, `C:\`) has no parent: open it directly, the
 		// shape of resolveGrepRoots' mount branch with no sub-path (ADR-081 D4).
+		expected, err := grepPreOpenIdentity(realAbs)
+		if err != nil {
+			return lost(err), 0, nil
+		}
+		runGrepPreOpenRootHook(realAbs)
 		root, err := os.OpenRoot(realAbs)
 		if err != nil {
 			return lost(err), 0, nil
 		}
 		*opened = append(*opened, root)
+		if !grepOpenedRootMatches(root, expected) {
+			return lost(fmt.Errorf("absolute root %q changed before opening", realAbs)), 0, nil
+		}
 		return filegrep.Root{Name: name, FS: guardGrepRoot(realAbs, root.FS(), policy)}, 0, nil
 	}
 	// Security A1: a path under a mount anchors at the mount root, not at
@@ -443,11 +534,19 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 		if !isWithinWorkspace(realAbs, m.HostPath) {
 			continue
 		}
+		expected, identityErr := grepPreOpenIdentity(m.HostPath)
+		if identityErr != nil {
+			return lost(identityErr), 0, nil
+		}
+		runGrepPreOpenRootHook(m.HostPath)
 		mr, mErr := os.OpenRoot(m.HostPath)
 		if mErr != nil {
 			return lost(mErr), 0, nil
 		}
 		*opened = append(*opened, mr)
+		if !grepOpenedRootMatches(mr, expected) {
+			return lost(fmt.Errorf("absolute root %q changed before opening", m.HostPath)), 0, nil
+		}
 		// A2 seam (post-open): a test installs a hook here to swap the
 		// mount root AFTER the open has bound its fd, driving the
 		// post-open SameFile race the A2 fix catches.
@@ -484,11 +583,19 @@ func (t *GrepTool) absoluteGrepRoot(rawPath, realAbs string, mounts []workspace.
 		}
 		return r, n, nil
 	}
+	expected, err := grepPreOpenIdentity(parent)
+	if err != nil {
+		return lost(err), 0, nil
+	}
+	runGrepPreOpenRootHook(parent)
 	container, err := os.OpenRoot(parent)
 	if err != nil {
 		return lost(err), 0, nil
 	}
 	*opened = append(*opened, container)
+	if !grepOpenedRootMatches(container, expected) {
+		return lost(fmt.Errorf("absolute root %q changed before opening", parent)), 0, nil
+	}
 	// A2 seam (post-open): same shape, fires after the unanchored
 	// os.OpenRoot(parent) too — a swap of parent (the opened path)
 	// drives the same race.
