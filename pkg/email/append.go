@@ -38,14 +38,21 @@ func (c *Client) AppendMessage(ctx context.Context, folder string, flags []strin
 	if len(imapFlags) > 0 {
 		opts = &imap.AppendOptions{Flags: imapFlags, Time: time.Now()}
 	}
-	cmd := client.Append(folder, int64(len(raw)), opts)
-	if _, werr := cmd.Write(raw); werr != nil {
-		return 0, 0, fmt.Errorf("email transport: append to %s: %w", folder, werr)
-	}
-	if cerr := cmd.Close(); cerr != nil {
-		return 0, 0, fmt.Errorf("email transport: append to %s: %w", folder, cerr)
-	}
-	data, err := cmd.Wait()
+	// Bounded like every other IMAP command in this package (runIMAP's
+	// goroutine + ctx-bounded select): a stalling server that accepts the
+	// APPEND literal but never sends the tagged response must not hang this
+	// call forever. Write/Close/Wait all run inside the same fn so the
+	// timeout covers the whole sequence, not just the final Wait.
+	data, err := runIMAP(ctx, "append to "+folder, func() (*imap.AppendData, error) {
+		cmd := client.Append(folder, int64(len(raw)), opts)
+		if _, werr := cmd.Write(raw); werr != nil {
+			return nil, werr
+		}
+		if cerr := cmd.Close(); cerr != nil {
+			return nil, cerr
+		}
+		return cmd.Wait()
+	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("email transport: append to %s: %w", folder, err)
 	}

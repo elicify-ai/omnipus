@@ -194,8 +194,9 @@ func mailContentDisposition(name string) string {
 }
 
 // applyMailByteHeaders sets every header a mail attachment response must carry
-// (MC-42): Content-Type from the part's recorded type with the extension as
-// fallback (caller-derived), the always-dual attachment disposition above, and
+// (MC-42): Content-Type derived (by the caller) from the sanitized filename's
+// EXTENSION first, falling back to the part's recorded type only when the
+// extension is unknown, the always-dual attachment disposition above, and
 // nosniff. A mail attachment carries NO CSP — an attachment is not rendered,
 // so there is nothing to isolate; MV-13's attachment half.
 //

@@ -17,6 +17,43 @@ import (
 // write-sized. Declared in rest_mail.go next to its handlers.
 var mailMutationLimiter = newAPIRateLimiter(10, 1*time.Minute)
 
+// mailBodyLimit bounds the wire (JSON) request body for every /mail/ route
+// registered under HandleWorkspaces — generous enough to actually reach
+// MC-32's 25 MiB decoded-attachment budget (mailMaxAttachmentBytes,
+// rest_mail_send.go), unlike the generic withAuth's 1 MiB cap. Attachment
+// bytes travel base64-encoded on the wire (~4/3 inflation: 25 MiB decoded is
+// ~33.3 MiB encoded), a send may carry up to mailMaxAttachments (10)
+// attachments plus their filenames/content-types, and the enclosing JSON
+// envelope adds its own overhead — 40 MiB leaves comfortable headroom over
+// the 4/3-inflated 25 MiB budget while staying a small, bounded multiple of
+// it (compare withUploadAuth's 1 GB for /api/v1/library, which streams
+// arbitrary file uploads with no fixed budget at all).
+const mailBodyLimit = 40 << 20
+
+// withWorkspacesBodyLimit picks the request body limit BEFORE the body is
+// wrapped in http.MaxBytesReader (withAuthAndBodyLimit does that wrapping
+// exactly once, so the choice must be made here, at the mux entry point, not
+// inside HandleWorkspaces — by the time HandleWorkspaces runs, the generic
+// withAuth's 1 MiB limit has already truncated the read). /mail/ routes
+// (handleWorkspaceMail: manual send, draft create/update/send, and the
+// mail-panel read routes) get mailBodyLimit; every other workspace-scoped
+// route keeps the generic withAuth's 1 MiB. The path check mirrors
+// HandleWorkspaces' own dispatch (rest_workspaces.go) — the mux has no path
+// wildcards, so both do the same substring check independently.
+func (a *restAPI) withWorkspacesBodyLimit(handler http.HandlerFunc) http.HandlerFunc {
+	mailLimited := a.withAuthAndBodyLimit(handler, mailBodyLimit)
+	generic := a.withAuth(handler)
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimSuffix(r.URL.Path, "/")
+		rest := strings.TrimPrefix(path, "/api/v1/workspaces")
+		if idx := strings.Index(rest, "/mail/"); idx > 0 {
+			mailLimited(w, r)
+			return
+		}
+		generic(w, r)
+	}
+}
+
 // mailUIDToWire widens the IMAP uint32 domain into the signed 64-bit wire
 // domain without passing through architecture-sized int.
 func mailUIDToWire(uid uint32) int64 { return int64(uid) }

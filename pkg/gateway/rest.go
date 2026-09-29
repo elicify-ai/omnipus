@@ -640,8 +640,13 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// GET/PUT/DELETE and /approve /stop live here.
 	rae.cm.RegisterHTTPHandler("/api/v1/plans", rae.a.withAuth(rae.a.HandlePlans))
 	rae.cm.RegisterHTTPHandler("/api/v1/plans/", rae.a.withAuth(rae.a.HandlePlans))
-	rae.cm.RegisterHTTPHandler("/api/v1/workspaces", rae.a.withAuth(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
-	rae.cm.RegisterHTTPHandler("/api/v1/workspaces/", rae.a.withAuth(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
+	// withWorkspacesBodyLimit (rest_mail.go): the Mail panel's /mail/ routes
+	// get their own larger body limit (mailBodyLimit) instead of the
+	// generic withAuth's 1 MiB, which truncated any real MC-32 attachment
+	// over 1 MiB before mail's own 25 MiB budget check ever ran; every
+	// other workspace-scoped route is unaffected (still the generic 1 MiB).
+	rae.cm.RegisterHTTPHandler("/api/v1/workspaces", rae.a.withWorkspacesBodyLimit(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
+	rae.cm.RegisterHTTPHandler("/api/v1/workspaces/", rae.a.withWorkspacesBodyLimit(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
 	// Library file explorer (rest_library.go). withUploadAuth, not plain
 	// withAuth: /library/{id}/upload streams multipart straight through this
 	// dispatcher, and withAuth's body limit would truncate it. Every JSON

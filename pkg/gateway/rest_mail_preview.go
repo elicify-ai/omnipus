@@ -493,8 +493,36 @@ func (p *mailPreviewRoutes) serveImage(w http.ResponseWriter, r *http.Request, t
 // loopback, private ranges, link-local unicast/multicast (link-local also
 // covers the cloud metadata address 169.254.169.254), multicast, and
 // unspecified.
+// mailCGNATRange is RFC 6598's shared address space (100.64.0.0/10) —
+// net.IP.IsPrivate() only recognizes RFC 1918's three ranges (10.0.0.0/8,
+// 172.16.0.0/12, 192.168.0.0/16), so a CGNAT-range address sails through the
+// checks below unblocked without this explicit clause. The canonical SSRF
+// checker (pkg/security/ssrf.go::SSRFChecker, blockedCIDRs) already covers
+// this range; mailAddrForbidden adds it directly rather than delegating,
+// since delegating would require threading a possibly-nil, globally
+// configurable SSRFChecker (restAPI.ssrfChecker is nil when SSRF protection
+// is disabled) into this narrow, always-on image-proxy pinning check — a
+// bigger behavioral change than the finding calls for.
+var mailCGNATRange = mustParseCIDR("100.64.0.0/10")
+
+// mustParseCIDR parses a compile-time-constant CIDR literal. Panics only on
+// a programmer error (a malformed literal), never on caller input.
+func mustParseCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic("mail: invalid CIDR literal " + s + ": " + err.Error())
+	}
+	return n
+}
+
 func mailAddrForbidden(ip net.IP) bool {
-	return ip == nil || ip.IsLoopback() || ip.IsPrivate() ||
+	if ip == nil {
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil && mailCGNATRange.Contains(v4) {
+		return true
+	}
+	return ip.IsLoopback() || ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsMulticast() || ip.IsUnspecified()
 }
