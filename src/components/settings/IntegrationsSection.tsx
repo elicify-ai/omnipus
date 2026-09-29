@@ -25,6 +25,12 @@ import {
 import { useUiStore } from '@/store/ui'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
+import {
+  WEB_SEARCH_ROW_GRID,
+  WebSearchGroup,
+  WebSearchRowRoles,
+  WebSearchNoFallbackChoice,
+} from './WebSearchGroup'
 
 export function IntegrationsSection() {
   const { addToast } = useUiStore()
@@ -54,6 +60,12 @@ export function IntegrationsSection() {
       setApiKeys({})
     },
     onError: (err: Error) => {
+      // A failed save can still have persisted state: the gateway stores the
+      // credential and writes config.json BEFORE the reload (or the
+      // post-reload usability judgment) fails — the persisted write stays
+      // (ADR-096 FR-033). Invalidate so the list reflects what the backend
+      // actually holds instead of the stale pre-save cache.
+      queryClient.invalidateQueries({ queryKey: ['integrations'] })
       addToast({
         message: getErrorMessage(err, 'Integration update failed'),
         variant: 'error',
@@ -71,7 +83,7 @@ export function IntegrationsSection() {
         (token) => applyChange({ id, body, token }),
         {
           title: 'Update this integration?',
-          body: 'The key is stored encrypted, and the provider you picked becomes the one Omnipus uses for this kind of work from now on.',
+          body: 'API keys are stored encrypted, and provider roles decide which provider Omnipus uses for this kind of work.',
           confirmLabel: 'Update integration',
         },
       )
@@ -82,7 +94,182 @@ export function IntegrationsSection() {
       })
   }
 
-  const renderProvider = (p: IntegrationProvider) => {
+  // Search rows: ADR-096 — ONE row per provider, drawn the way the spec
+  // draws it: each row carries its own default radio and fallback radio
+  // (the two radio groups remain one group each, semantically — only where
+  // they render changes). Role badges derive from the response-level
+  // resolved roles (default_search / fallback_search), not from the row's
+  // own `active`/`fallback` flags — the response fields are what R5's
+  // healing has already applied (an ignored fallback reads
+  // fallback_search:null with a reason), so a row flag would lie exactly
+  // where healing kicked in. Readiness is reported honestly: "Ready" only
+  // when the tool's own test passes; a stored key whose resolved value is
+  // empty reads "Key not reaching search" — configured (the secret is in
+  // the vault) is not the badge test (FR-028). There is no per-row "Set
+  // active" button. When default_search is on the wire, a key save carries
+  // api_key only — storing a key is separable from assigning a role (spec
+  // § Contract shape). A payload without that field is still the pre-role
+  // screen, whose save is "Save & activate".
+  const onSetDefault = (id: string) => requestChange(id, { kind: 'search', active: true })
+  const onSetFallback = (id: string) => requestChange(id, { kind: 'search', fallback: true })
+  const onSetNoFallback = () => {
+    // The contract clears the fallback "regardless of the addressed id"; the PUT still needs a real search id in
+    // its path, so anchor it to the default (or first row).
+    const anchor = data?.default_search ?? data?.search[0]?.id
+    if (anchor) requestChange(anchor, { kind: 'search', fallback: false })
+  }
+  const renderSearchRow = (p: IntegrationProvider) => {
+    const isExpanded = expanded === p.id
+    const keyVal = apiKeys[p.id] ?? ''
+    const rolesOnWire = data?.default_search !== undefined
+    const isDefaultRow = data?.default_search === p.id
+    const isFallbackRow = data?.fallback_search === p.id
+
+    return (
+      <Card
+        key={p.id}
+        className="overflow-hidden"
+        data-testid={`search-row-${p.id}`}
+      >
+        <div className="px-[var(--space-3)] py-[var(--space-2-5)]">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-[var(--space-2-5)]">
+            <div className="min-w-0">
+            <div className="flex items-center gap-[var(--space-2)] flex-wrap">
+              <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{p.display_name}</span>
+              {isDefaultRow && (
+                <Badge data-testid={`badge-default-${p.id}`} variant="success" className="gap-[var(--space-1)]">
+                  <Star size={10} weight="fill" /> Default
+                </Badge>
+              )}
+              {isFallbackRow && (
+                <Badge data-testid={`badge-fallback-${p.id}`} variant="secondary" className="gap-[var(--space-1)]">
+                  Fallback{p.fallback_automatic ? ' (automatic)' : ''}
+                </Badge>
+              )}
+              {/* Spec § Settings screen "Badge": "Active" goes away for search
+                  rows, replaced by "Default". The pre-role payload has no
+                  default_search, so the provider it marks `active` is that
+                  default. The word is "Default"; the testid stays `active-*`
+                  because the pre-ADR section test locks that marker. A
+                  role-bearing response never takes this branch. */}
+              {!rolesOnWire && p.active && (
+                <Badge data-testid={`active-${p.id}`} variant="success" className="gap-[var(--space-1)]">
+                  <Star size={10} weight="fill" /> Default
+                </Badge>
+              )}
+              {p.usable === true ? (
+                <Badge data-testid={`ready-${p.id}`} variant="muted">Ready</Badge>
+              ) : p.usable === false ? (
+                p.configured && p.requires_key ? (
+                  <Badge data-testid={`key-not-reaching-${p.id}`} variant="warning">Key not reaching search</Badge>
+                ) : !p.configured && p.requires_key ? (
+                  <Badge variant="muted">Needs API key</Badge>
+                ) : (
+                  <Badge data-testid={`needs-config-${p.id}`} variant="muted">Needs configuration</Badge>
+                )
+              ) : (
+                // usable is absent on this row (pre-ADR-096 payload shape or
+                // a shape the tool does not report); keep the original status
+                // badges so the row is not statusless.
+                p.configured ? (
+                  <Badge variant="muted" className="gap-[var(--space-1)]">
+                    <CheckCircle size={10} weight="fill" /> Configured
+                  </Badge>
+                ) : p.requires_key ? (
+                  <Badge variant="muted">Needs API key</Badge>
+                ) : (
+                  <Badge data-testid={`needs-config-${p.id}`} variant="muted">Needs configuration</Badge>
+                )
+              )}
+            </div>
+            </div>
+
+            <WebSearchRowRoles
+              provider={p}
+              defaultSearch={data?.default_search}
+              fallbackSearch={data?.fallback_search}
+              saving={isSaving}
+              onSetDefault={onSetDefault}
+              onSetFallback={onSetFallback}
+            />
+            <div className="flex items-center gap-[var(--space-2)] shrink-0">
+              {p.requires_key && (
+                <Button
+                  size="sm"
+                  className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
+                  onClick={() => setExpanded(isExpanded ? null : p.id)}
+                  data-testid={`addkey-${p.id}`}
+                >
+                  {p.configured ? 'Edit key' : (
+                    <><Plus size={11} /> Add key</>
+                  )}
+                </Button>
+              )}
+            </div>
+          </div>
+
+        </div>
+
+        {isExpanded && p.requires_key && (
+          <div className="border-t border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)] bg-[var(--color-surface-2)]">
+            <div>
+              <Label htmlFor={`key-input-${p.id}`} className="mb-[var(--space-2)] block">API Key</Label>
+              <div className="relative">
+                <Input
+                  id={`key-input-${p.id}`}
+                  type={showKey[p.id] ? 'text' : 'password'}
+                  value={keyVal}
+                  onChange={(e) => setApiKeys((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                  placeholder={`${p.display_name} API key`}
+                  className="pr-[var(--space-5)] font-mono text-[length:var(--type-utility-xs-size)]"
+                  autoComplete="off"
+                  data-testid={`key-input-${p.id}`}
+                />
+                <IconButton
+                  variant="ghost"
+                  type="button"
+                  onClick={() => setShowKey((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
+                  className="absolute right-2.5 top-1/2 h-auto w-auto -translate-y-1/2 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
+                  aria-label={showKey[p.id] ? 'Hide API key' : 'Show API key'}
+                >
+                  {showKey[p.id] ? <EyeSlash size={14} /> : <Eye size={14} />}
+                </IconButton>
+              </div>
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
+                Stored encrypted (AES-256-GCM) — saving requires re-typing your password.
+              </p>
+            </div>
+            <div className="flex justify-end gap-[var(--space-2)]">
+              <Button variant="outline" size="sm" onClick={() => setExpanded(null)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() =>
+                  requestChange(
+                    p.id,
+                    rolesOnWire
+                      ? { kind: p.kind, api_key: keyVal.trim() }
+                      : { kind: p.kind, api_key: keyVal.trim(), active: true },
+                  )
+                }
+                disabled={!keyVal.trim() || isSaving}
+                data-testid={`save-${p.id}`}
+              >
+                {rolesOnWire ? 'Save key' : 'Save & activate'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Card>
+    )
+  }
+
+  // Voice rows: untouched by ADR-096 — the spec leaves voice integrations
+  // alone (one active transcriber). The "Active" badge, the "Set active"
+  // button and the coupled "Save & activate" keep their pre-ADR behaviour
+  // and their pre-ADR testids, which the existing voice tests assert.
+  const renderVoiceProvider = (p: IntegrationProvider) => {
     const isExpanded = expanded === p.id
     const keyVal = apiKeys[p.id] ?? ''
 
@@ -107,16 +294,10 @@ export function IntegrationsSection() {
               ) : p.requires_key ? (
                 <Badge variant="muted">Needs API key</Badge>
               ) : (
-                // D14 fix: a keyless provider (requires_key:false) that also
-                // isn't configured yet — e.g. SearXNG (needs a base_url) or
-                // audio-model (needs a voice.model_name) — previously fell
-                // through both branches above and rendered NO badge at all,
-                // leaving the row looking inert/unstatused next to every
-                // other provider. There is no UI path to set SearXNG's
-                // base_url today (no `base_url` field on
-                // IntegrationProviderUpdateRequest), so this is status-only;
-                // wiring an action is a separate, out-of-scope contract change.
-                <Badge variant="muted" data-testid={`needs-config-${p.id}`}>
+                // Keyless, unconfigured (e.g. audio-model needing a
+                // voice.model_name): previously fell through both branches
+                // above and rendered no badge at all.
+                <Badge data-testid={`needs-config-${p.id}`} variant="muted">
                   Needs configuration
                 </Badge>
               )}
@@ -124,7 +305,6 @@ export function IntegrationsSection() {
           </div>
 
           <div className="flex items-center gap-[var(--space-2)] shrink-0">
-            {/* Activate — only when configured and not already active. */}
             {p.configured && !p.active && (
               <Button
                 size="sm"
@@ -234,7 +414,25 @@ export function IntegrationsSection() {
             {data.search.length === 0 ? (
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No search providers available.</p>
             ) : (
-              data.search.map(renderProvider)
+              <>
+                <WebSearchGroup
+                  defaultSearch={data.default_search}
+                  fallbackIgnoredReason={data.fallback_ignored_reason}
+                  nativeSearchInEffect={data.native_search_in_effect}
+                />
+                <div className={`${WEB_SEARCH_ROW_GRID} px-[var(--space-3)] py-[var(--space-1)]`}>
+                  <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Provider</span>
+                  <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Default</span>
+                  <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Fallback</span>
+                  <span aria-hidden="true" />
+                </div>
+                {data.search.map(renderSearchRow)}
+                <WebSearchNoFallbackChoice
+                  fallbackSearch={data.fallback_search}
+                  saving={isSaving}
+                  onSetNoFallback={onSetNoFallback}
+                />
+              </>
             )}
           </section>
 
@@ -245,7 +443,7 @@ export function IntegrationsSection() {
             {data.voice.length === 0 ? (
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No voice providers available.</p>
             ) : (
-              data.voice.map(renderProvider)
+              data.voice.map(renderVoiceProvider)
             )}
           </section>
         </>

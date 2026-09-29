@@ -26,7 +26,7 @@ const library: PanelDefinition = {
   id: 'library',
   title: 'Library',
   content: Probe,
-  expandTarget: () => '/library',
+  fullScreen: { toSearch: () => ({}), fromSearch: () => ({}) },
 }
 
 function renderShell(definition: PanelDefinition = library) {
@@ -42,7 +42,7 @@ function renderShell(definition: PanelDefinition = library) {
 beforeEach(() => {
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })

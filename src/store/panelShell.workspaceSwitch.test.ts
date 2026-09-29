@@ -37,6 +37,7 @@ async function load(): Promise<{
   } catch (importErr) {
     throw new Error(
       `BLOCKED: workspace-switch rule module not implemented — required by side-panel-shell-spec.md §12 test #20 / FR-020 (import of ${MODULE_PATH} failed: ${importErr instanceof Error ? importErr.message : String(importErr)})`,
+      { cause: importErr },
     )
   }
   const fn = (mod as { resolveWorkspaceSwitch?: (input: SwitchInput) => Promise<Decision> })

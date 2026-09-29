@@ -257,6 +257,14 @@ func (c *BaiduSearchConfig) APIKey() string {
 	return os.Getenv(c.APIKeyRef)
 }
 
+// APIKey returns the resolved Exa API key from the process environment.
+func (c *ExaConfig) APIKey() string {
+	if c.APIKeyRef == "" {
+		return ""
+	}
+	return os.Getenv(c.APIKeyRef)
+}
+
 // EffectiveRequireParentAgentID resolves tools.delegate.require_parent_agent_id
 // (R2-MAJ-015). An unset key resolves to TRUE — the fail-closed posture is the
 // default, and an operator must opt OUT of it explicitly.

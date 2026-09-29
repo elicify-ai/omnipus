@@ -49,7 +49,6 @@ describe('multiple owned Library pop-outs', () => {
   it('routes workspace changes and close signals by opener-generated pop-out id', async () => {
     vi.stubGlobal('BroadcastChannel', LinkedBroadcastChannel)
     const lifecycle = await import('./panelPopoutLifecycle')
-    const handoff = await import('./libraryHandoff')
     const stopOwner = lifecycle.startPanelPopoutLifecycleOwner()
     const closedA = vi.fn()
     const closedB = vi.fn()
@@ -58,27 +57,43 @@ describe('multiple owned Library pop-outs', () => {
       lifecycle.registerPanelPopout({
         popoutId: 'library-popout-a',
         identity: { panelId: 'library', workspaceId: 'workspace-a' },
+        context: { workspaceId: 'workspace-a' },
         handle: popup(),
         onClosed: closedA,
       })
       lifecycle.registerPanelPopout({
         popoutId: 'library-popout-b',
         identity: { panelId: 'library', workspaceId: 'workspace-b' },
+        context: { workspaceId: 'workspace-b' },
         handle: popup(),
         onClosed: closedB,
       })
 
-      handoff.announceLibraryWorkspaceChanged('library-popout-a', 'workspace-a-next')
-      handoff.announceLibraryPopoutClosed('library-popout-a', 'workspace-a-stale')
+      lifecycle.announcePanelPopoutContext('library', 'library-popout-a', {
+        workspaceId: 'workspace-a-next',
+        path: 'Notes/A.md',
+      })
+      lifecycle.announcePanelPopoutClosed('library', 'library-popout-a', {
+        workspaceId: 'workspace-a-next',
+        path: 'Notes/A.md',
+      })
 
       expect(closedA).toHaveBeenCalledWith({
         panelId: 'library',
         workspaceId: 'workspace-a-next',
+      }, {
+        workspaceId: 'workspace-a-next',
+        path: 'Notes/A.md',
       })
       expect(closedB).not.toHaveBeenCalled()
 
-      handoff.announceLibraryPopoutClosed('library-popout-b', 'workspace-b')
-      expect(closedB).toHaveBeenCalledWith({ panelId: 'library', workspaceId: 'workspace-b' })
+      lifecycle.announcePanelPopoutClosed('library', 'library-popout-b', {
+        workspaceId: 'workspace-b',
+      })
+      expect(closedB).toHaveBeenCalledWith(
+        { panelId: 'library', workspaceId: 'workspace-b' },
+        { workspaceId: 'workspace-b' },
+      )
     } finally {
       stopOwner()
     }

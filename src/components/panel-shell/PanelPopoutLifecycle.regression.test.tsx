@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { announceLibraryPopoutClosed, announceLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
+import { announcePanelPopoutClosed, announcePanelPopoutContext } from '@/lib/panelPopoutLifecycle'
 import { useUiStore } from '@/store/ui'
 import type { PanelContentProps, PanelDefinition } from './types'
 import { SidePanelShell } from './SidePanelShell'
@@ -40,14 +40,26 @@ const browserDefinition: PanelDefinition = {
   id: 'browser',
   title: 'Browser',
   content: (props: PanelContentProps) => <BrowserLivePanel shellProps={props} />,
-  expandTarget: () => '/#/browser-live?session=session-secret&agent=agent-secret',
+  fullScreen: {
+    toSearch: ({ sessionId, agentId }) => ({ session: sessionId!, agent: agentId! }),
+    fromSearch: ({ session, agent }) => typeof session === 'string' && typeof agent === 'string'
+      ? { sessionId: session, agentId: agent }
+      : null,
+  },
 }
 
 const libraryDefinition: PanelDefinition = {
   id: 'library',
   title: 'Library',
   content: (props: PanelContentProps) => <LibraryPanel shellProps={props} />,
-  expandTarget: () => '/#/library',
+  fullScreen: {
+    toSearch: ({ workspaceId }) => {
+      const search: Record<string, string> = {}
+      if (workspaceId) search.workspace = workspaceId
+      return search
+    },
+    fromSearch: ({ workspace }) => typeof workspace === 'string' ? { workspaceId: workspace } : {},
+  },
   beforeLeave: async () => true,
 }
 
@@ -81,7 +93,7 @@ function renderShell(definition: PanelDefinition) {
 beforeEach(() => {
   useUiStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
     toasts: [],
@@ -113,6 +125,9 @@ describe('app-owned pop-out lifecycle survives SidePanelShell content unmount', 
 
     expect(useUiStore.getState().activePanel).toBeNull()
     expect(child.close).not.toHaveBeenCalled()
+    expect(child.location.replace).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/#\/panel\/browser\?session=session-secret&agent=agent-secret&popout=/),
+    )
     child.closed = true
     act(() => {
       vi.advanceTimersByTime(250)
@@ -135,14 +150,22 @@ describe('app-owned pop-out lifecycle survives SidePanelShell content unmount', 
     await waitFor(() => expect(useUiStore.getState().activePanel).toBeNull())
     expect(child.close).not.toHaveBeenCalled()
 
+    const href = child.location.replace.mock.calls[0]?.[0] as string
+    const popoutId = new URLSearchParams(href.split('?')[1]).get('popout')!
     act(() => {
-      announceLibraryWorkspaceChanged('workspace-b')
-      announceLibraryPopoutClosed('workspace-a')
+      announcePanelPopoutContext('library', popoutId, {
+        workspaceId: 'workspace-b',
+        path: 'Notes/Current.md',
+      })
+      announcePanelPopoutClosed('library', popoutId, {
+        workspaceId: 'workspace-b',
+        path: 'Notes/Current.md',
+      })
     })
     await waitFor(() => {
       expect(useUiStore.getState().activePanel).toEqual({
         id: 'library',
-        context: { workspaceId: 'workspace-b' },
+        context: { workspaceId: 'workspace-b', path: 'Notes/Current.md' },
       })
     })
   })

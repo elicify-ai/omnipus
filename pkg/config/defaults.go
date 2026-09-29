@@ -7,6 +7,7 @@ package config
 
 import (
 	"path/filepath"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg"
 )
@@ -829,6 +830,18 @@ func defaultToolsConfig() ToolsConfig {
 			Interval: 5,
 		},
 		Web: WebToolsConfig{
+			// ADR-096: a fresh install ships PRE-MIGRATED — duckduckgo is
+			// the live provider today, so default_provider/fallback are
+			// seeded, and the marker tells MigrateWebSearchRoles a fresh
+			// install never needs the migration. The timestamp is when the
+			// defaults were generated, not a config-load event.
+			DefaultProvider:  "duckduckgo",
+			FallbackProvider: "none",
+			RolesMigratedAt:  time.Now().UTC().Format(time.RFC3339),
+			Exa: ExaConfig{
+				Enabled:    false,
+				MaxResults: 5,
+			},
 			ToolConfig: ToolConfig{
 				Enabled: true,
 			},
@@ -841,8 +854,14 @@ func defaultToolsConfig() ToolsConfig {
 				MaxResults: 5,
 			},
 			Tavily: TavilyConfig{
-				Enabled:    false,
-				MaxResults: 5,
+				Enabled: false,
+				// ADR-096 D12: shipped default is Tavily's cheapest tier.
+				// An EXISTING install inherits "advanced" instead, via the
+				// roles migration, because TavilySearchProvider hardcodes
+				// advanced today and the migration must not raise or lower
+				// anyone's bill.
+				SearchDepth: "basic",
+				MaxResults:  5,
 			},
 			DuckDuckGo: DuckDuckGoConfig{
 				Enabled:    true,
@@ -858,8 +877,12 @@ func defaultToolsConfig() ToolsConfig {
 				MaxResults: 5,
 			},
 			GLMSearch: GLMSearchConfig{
-				Enabled:      false,
-				BaseURL:      "https://open.bigmodel.cn/api/paas/v4/web_search",
+				Enabled: false,
+				BaseURL: "https://open.bigmodel.cn/api/paas/v4/web_search",
+				// ADR-096 D12: medium is what GLMSearchProvider hardcodes
+				// today; recording it changes nothing for anyone until the
+				// operator edits it.
+				ContentSize:  "medium",
 				SearchEngine: "search_std",
 				MaxResults:   5,
 			},

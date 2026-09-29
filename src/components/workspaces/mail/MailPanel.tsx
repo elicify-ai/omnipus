@@ -12,10 +12,11 @@
 // (D25); error shows the error CLASS (e.g. connect_refused) + Retry, never
 // the empty-state text; the US-6 read-by-agent tag appears exactly once per
 // flagged message; watcher backoff renders "Retrying at …" (D29/R2-8).
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import {
   Select,
   SelectContent,
@@ -56,6 +57,12 @@ import type { MailPanelIntent } from './mailPanelIntent'
 import { formatMailDate, formatMailTime, formatMailBytes } from './mail-format'
 import { ListPreviewLayout, ListPreviewRegion } from '@/components/panel-shell/ListPreviewLayout'
 import type { ListPreviewLayoutMode } from '@/components/panel-shell/ListPreviewLayout'
+import {
+  getMailDiscardConfirmDialogOpen,
+  mailDiscardConfirmDialogHostUnmounted,
+  resolveMailDiscardConfirmDialog,
+  subscribeMailDiscardConfirmDialog,
+} from './mailUnsavedGuard'
 
 /** Folders refetch cadence — D25: while mounted only (refetchInterval is
  * observer-bound, so unmount stops it). */
@@ -130,6 +137,13 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
 
+  // CRIT-001: the ONE discard-unsaved-edits dialog for both of Mail's
+  // unsaved-text surfaces (compose, draft editor) — hosted here because
+  // MailPanel stays mounted for as long as either surface could be open,
+  // in both docked and full-screen presentation (mailUnsavedGuard.ts).
+  const discardDialogOpen = useSyncExternalStore(subscribeMailDiscardConfirmDialog, getMailDiscardConfirmDialogOpen)
+  useEffect(() => mailDiscardConfirmDialogHostUnmounted, [])
+
   // ── Mailbox resolution (FR-010 / SP-23) ───────────────────────────────
   const mailboxesQuery = useQuery({
     queryKey: ['mailboxes'],
@@ -190,8 +204,12 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
   }, [workspaceId, agentId, folder])
 
   useEffect(() => {
+    // Before the mailbox list resolves, agentId is only a loading placeholder.
+    // Reporting it as null would overwrite a deep link's requested mailbox
+    // while the full-screen shell registers its live context getter.
+    if (!mailboxesQuery.isSuccess) return
     onLocationChange?.({ mailboxId: agentId, folder, messageRef: selectedRef })
-  }, [agentId, folder, selectedRef, onLocationChange])
+  }, [agentId, folder, selectedRef, onLocationChange, mailboxesQuery.isSuccess])
 
   // ── Queries ───────────────────────────────────────────────────────────
   // Human-initiated dialing (D29/R2-9, MC-33): a human gesture that must
@@ -268,8 +286,13 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       })
     },
     onSuccess: (updated) => {
+      const updatedRef = mailUidRef(updated.uidvalidity, updated.uid)
+      const updatedDetailKey = [...DETAIL_KEY, workspaceId, agentId, 'drafts', updatedRef]
+      queryClient.setQueryData(updatedDetailKey, updated)
+      void queryClient.invalidateQueries({ queryKey: updatedDetailKey })
+      setSelectedRef(updatedRef)
+      void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
       void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
-      void queryClient.invalidateQueries({ queryKey: DETAIL_KEY })
       addToast({ message: updated.draft_cleanup_warning ?? 'Draft saved', variant: updated.draft_cleanup_warning ? 'warning' : 'success' })
     },
     onError: (err) => addToast({ message: mailErrorCode(err), variant: 'error' })
@@ -619,7 +642,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                     bodyMarkdown={detail.body_markdown ?? detail.body_text ?? ''}
                     to={detail.to.join(', ')}
                     sentOn={folder === 'sent' ? formatMailDate(detail.date) : undefined}
-                    onSave={(next) => draftSave.mutate(next)}
+                    onSave={(next) => draftSave.mutateAsync(next).then(() => true, () => false)}
                     onSend={() => draftSend.mutate()}
                     onDiscard={() => draftDiscard.mutate()}
                   />
@@ -675,6 +698,17 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
           setCompose(null)
         }}
         onClose={() => setCompose(null)}
+      />
+      <ConfirmDialog
+        open={discardDialogOpen}
+        onOpenChange={(next) => {
+          if (!next) resolveMailDiscardConfirmDialog(false)
+        }}
+        title="Discard unsaved changes?"
+        description="You have unsaved changes in Mail. Leaving now will discard them. Continue?"
+        confirmLabel="Discard"
+        destructive
+        onConfirm={() => resolveMailDiscardConfirmDialog(true)}
       />
     </div>
   )

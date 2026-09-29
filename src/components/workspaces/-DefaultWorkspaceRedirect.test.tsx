@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const mockNavigate = vi.fn()
@@ -17,11 +17,12 @@ import { DefaultWorkspaceRedirect } from './DefaultWorkspaceRedirect'
 
 function renderRedirect(tab?: 'chat' | 'board' | 'calendar') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
       <DefaultWorkspaceRedirect tab={tab} />
     </QueryClientProvider>,
   )
+  return { ...rendered, client }
 }
 
 const DEFAULT_WS = {
@@ -73,6 +74,93 @@ describe('DefaultWorkspaceRedirect — folded-route redirect map', () => {
         replace: true,
       })
     })
+  })
+
+  it('suppresses a late redirect when workspace data settles after pagehide', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('redirects after persisted pageshow restores a document whose data settled while hidden', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+    expect(mockNavigate).not.toHaveBeenCalled()
+
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/workspaces/$workspaceId/chat',
+        params: { workspaceId: 'ws-default' },
+        replace: true,
+      })
+    })
+  })
+
+  it('warns when a settled redirect is suppressed, then retries when the document becomes visible', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(
+      '[workspace redirect] settled redirect skipped while the document is leaving',
+    )
+
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-default' },
+      replace: true,
+    }))
+    if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility)
   })
 })
 

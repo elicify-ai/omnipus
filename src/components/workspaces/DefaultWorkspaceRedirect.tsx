@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
@@ -33,12 +33,41 @@ interface DefaultWorkspaceRedirectProps {
  */
 export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedirectProps) {
   const navigate = useNavigate()
+  const documentLeavingRef = useRef(false)
+  const skippedRedirectWarnedRef = useRef(false)
+  const [documentLeaving, setDocumentLeaving] = useState(false)
 
   const { data: workspaces, isError, isLoading, isFetching, refetch } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
   })
+
+  // The workspace query may settle after a full-document navigation has begun.
+  // Do not let that late result replace the destination with a hash-router URL.
+  useEffect(() => {
+    const markDocumentLeaving = () => {
+      documentLeavingRef.current = true
+      skippedRedirectWarnedRef.current = false
+      setDocumentLeaving(true)
+    }
+    const restoreDocument = () => {
+      documentLeavingRef.current = false
+      skippedRedirectWarnedRef.current = false
+      setDocumentLeaving(false)
+    }
+    const restoreVisibleDocument = () => {
+      if (document.visibilityState === 'visible') restoreDocument()
+    }
+    window.addEventListener('pagehide', markDocumentLeaving)
+    window.addEventListener('pageshow', restoreDocument)
+    document.addEventListener('visibilitychange', restoreVisibleDocument)
+    return () => {
+      window.removeEventListener('pagehide', markDocumentLeaving)
+      window.removeEventListener('pageshow', restoreDocument)
+      document.removeEventListener('visibilitychange', restoreVisibleDocument)
+    }
+  }, [])
 
   useEffect(() => {
     if (isLoading) return
@@ -47,6 +76,13 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
       return
     }
     const target = workspaces?.find((w) => w.is_default) ?? workspaces?.[0]
+    if (target && (documentLeavingRef.current || documentLeaving)) {
+      if (!skippedRedirectWarnedRef.current) {
+        skippedRedirectWarnedRef.current = true
+        console.warn('[workspace redirect] settled redirect skipped while the document is leaving')
+      }
+      return
+    }
     if (target) {
       void navigate({
         to: `/workspaces/$workspaceId/${tab}`,
@@ -54,7 +90,7 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
         replace: true,
       })
     }
-  }, [workspaces, isLoading, isError, navigate, tab])
+  }, [workspaces, isLoading, isError, navigate, tab, documentLeaving])
 
   if (isError) {
     return (

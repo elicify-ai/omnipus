@@ -384,15 +384,6 @@
       ]
     },
     {
-      "source": "src/components/ui/error-boundary.tsx",
-      "classification": "application",
-      "exports": [
-        "ErrorBoundary"
-      ],
-      "publicExports": [],
-      "publicTypes": []
-    },
-    {
       "source": "src/components/ui/error-state.tsx",
       "classification": "composite",
       "exports": [

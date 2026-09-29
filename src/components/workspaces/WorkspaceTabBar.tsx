@@ -179,21 +179,6 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
     void navigate({ to: `/workspaces/$workspaceId/${segment}`, params: { workspaceId } })
   }
 
-  const tabEntryClass = (active: boolean) =>
-    cn(
-      // h-chrome-header (the literal 44px token, NOT h-11) makes the entry
-      // fill the workspace top bar's exact height so the active underline
-      // lands flush on the bar's bottom edge. h-11 is rem-based and would be
-      // 38.5px at the default 14px root font-size (globals.css clamps root
-      // to 14px), leaving the underline ~5px high. NOT h-full either: the
-      // parent header uses items-center, so height:100% resolves to auto
-      // (no-op) and the underline would float mid-header.
-      'group relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors rounded-t-sm',
-      active
-        ? 'text-[var(--color-accent)]'
-        : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-    )
-
   const tabUnderline = (active: boolean) =>
     active ? (
       <motion.div
@@ -256,7 +241,14 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 aria-pressed={pressed}
                 data-panel-trigger={panelId}
                 data-testid={`workspace-tab-${segment}`}
-                className={tabEntryClass(pressed)}
+                className={cn(
+                  // h-chrome-header fills the exact 44px tokenized chrome row;
+                  // h-11 is rem-based and is only 38.5px at the app root size.
+                  'group relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors rounded-t-sm',
+                  pressed
+                    ? 'text-[var(--color-accent)]'
+                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+                )}
               >
                 <Icon size={16} weight={pressed ? 'fill' : 'regular'} />
                 <span>{label}</span>
@@ -277,7 +269,12 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 title={label}
                 aria-current={isActive ? 'page' : undefined}
                 data-testid={`workspace-tab-${segment}`}
-                className={tabEntryClass(isActive)}
+                className={cn(
+                  'group relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors rounded-t-sm',
+                  isActive
+                    ? 'text-[var(--color-accent)]'
+                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+                )}
               >
                 <Icon size={16} weight={isActive ? 'fill' : 'regular'} />
                 <span>{label}</span>
@@ -298,7 +295,12 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               aria-current={isActive ? 'page' : undefined}
               aria-label={label}
               data-testid={`workspace-tab-${segment}`}
-              className={tabEntryClass(isActive)}
+              className={cn(
+                'group relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors rounded-t-sm',
+                isActive
+                  ? 'text-[var(--color-accent)]'
+                  : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+              )}
             >
               <Icon size={16} weight={isActive ? 'fill' : 'regular'} />
               <span>{label}</span>

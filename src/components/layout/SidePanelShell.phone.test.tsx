@@ -19,10 +19,8 @@ import { cleanup, fireEvent, render, screen, act, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
 import { usePanelShellStore } from '@/components/panel-shell/panelShellStore'
-import type {
-  PanelDefinition,
-  PanelContentProps,
-} from '@/components/panel-shell/types'
+import { Button } from '@/components/ui/button'
+import type { PanelDefinition } from '@/components/panel-shell/types'
 
 class RowRO {
   static last: RowRO | null = null
@@ -43,7 +41,7 @@ class RowRO {
 }
 vi.stubGlobal('ResizeObserver', RowRO)
 
-function probeContent(_props: PanelContentProps) {
+function probeContent() {
   return (
     <div data-testid="probe-content">
       <div data-testid="probe-scroller" style={{ overflowX: 'auto', width: 200 }}>
@@ -58,7 +56,7 @@ function makeDef(): PanelDefinition {
     id: 'library',
     title: 'Library',
     content: probeContent,
-    expandTarget: () => '/library',
+    fullScreen: { toSearch: () => ({}), fromSearch: () => ({}) },
   }
 }
 
@@ -69,7 +67,7 @@ function renderShell() {
       username="dana"
       chat={
         <div>
-          <button data-testid="chat-button">chat button</button>
+          <Button variant="ghost" data-testid="chat-button">chat button</Button>
         </div>
       }
     />,
@@ -93,7 +91,7 @@ function docked() {
 function resetStore() {
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })

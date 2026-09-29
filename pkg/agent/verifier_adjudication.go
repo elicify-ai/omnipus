@@ -57,6 +57,17 @@ import (
 // EffectiveVerifierWindowTokens, zero-backfilled at boot).
 const verifierWindowTokensDefault = 20000
 
+// VerifierConcurrencyBackoffReason is the distinct Unavailable reason
+// runVerifierAdjudication returns when it backs off because ANOTHER
+// adjudication already holds the unit's verifier-session registry entry
+// (corr-MAJOR-3/G-1) — both at the Lookup pre-check and at the atomic
+// Register CAS rejection. It is a BACK-OFF, not an outage: the in-flight
+// adjudication resolves the unit, so it must never be retried, surfaced as
+// judge-unavailable, or counted toward the consecutive-Unavailable streak.
+// Consumers key on this exact value — keep it in sync with every return
+// that produces it.
+const VerifierConcurrencyBackoffReason = "concurrent adjudication in flight for unit"
+
 // effectiveVerifierWindowTokens resolves the transcript-window token budget
 // (FR-032) from PlanningConfig, falling back to the compiled default when no
 // config is reachable (test scaffolding without a full config).
@@ -1395,7 +1406,15 @@ func (al *AgentLoop) runVerifierAdjudication(
 	// consecutive-Unavailable streak. Reads the named return `unavailable`
 	// AFTER it has been set by whichever return statement below fires — a
 	// defer over a named return always observes the final value.
+	//
+	// #984: a concurrency back-off (VerifierConcurrencyBackoffReason) is NOT
+	// an outage — it is NEITHER counted toward (which would escalate to a
+	// false "verification is stalled" ERROR after three) NOR cleared (which
+	// would erase a genuine in-progress streak): neutral for the streak.
 	defer func() {
+		if unavailable && reason == VerifierConcurrencyBackoffReason {
+			return
+		}
 		recordVerifierAvailabilityOutcome(vs.va.unitID, unavailable)
 	}()
 
@@ -1476,7 +1495,10 @@ agentLoopRunVerifierAdjudicationLoop1:
 			// spy's Register returns nil, so the CAS never rejects in tests).
 			if richer, ok := vs.registry.(VerifierSessionRegistry); ok {
 				if existing, held := richer.Lookup(vs.va.unitID); held && existing != "" {
-					reason = "concurrent adjudication in flight for unit"
+					// #984: this is a BACK-OFF, not an outage — return the
+					// distinct reason so no caller retries it or paints it as
+					// a judge failure (see VerifierConcurrencyBackoffReason).
+					reason = VerifierConcurrencyBackoffReason
 					unavailable = true
 					return nil, "", "", true, reason, nil, nil
 				}
@@ -1498,7 +1520,11 @@ agentLoopRunVerifierAdjudicationLoop1:
 				// Unregister must not evict the other adjudication's live
 				// session. The chatID just minted is an abandoned shell, same
 				// as any other pre-create failure path above.
-				reason = "concurrent adjudication in flight for unit"
+				//
+				// #984: like the Lookup pre-check arm above, this is a
+				// BACK-OFF, not an outage — return the distinct reason so no
+				// caller retries it or paints it as a judge failure.
+				reason = VerifierConcurrencyBackoffReason
 				unavailable = true
 				return nil, "", "", true, reason, nil, nil
 			}
@@ -1883,6 +1909,10 @@ func judgeDispatchNeedsOperator(callErr error) (code LLMErrorCode, message strin
 		return code, "the Judge agent is not on any workspace team; add it to one", true
 	case operatorFixWorkDirUnavailable:
 		return code, "the Judge's working folder could not be opened; check that the disk has space and the folder is writable", true
+	case operatorFixQuotaBilling:
+		return code, "the Judge's provider account is out of credit; top up the account or give the Judge agent a provider with credit", true
+	case operatorFixModelRetired:
+		return code, "the Judge's model has been withdrawn; pick a new model on the Judge agent", true
 	}
 	return code, "", false
 }

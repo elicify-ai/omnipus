@@ -18,6 +18,7 @@ import {
   MailRecipientInput,
   type MailRecipientValue,
 } from './MailRecipientInput'
+import { setMailEditorDirty } from './mailUnsavedGuard'
 
 /** The compose send payload, as handed to `onSend`. Cc/Bcc ride the wire
  * too (D26) — the oracle pins the required fields via objectContaining. */
@@ -93,6 +94,14 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
     setAttachError(null)
     bodyRef.current = ''
   }, [open, mode, replyTo?.from, replyTo?.messageId, replyTo?.subject])
+
+  // CRIT-001: report unsaved compose text to the shared Mail leave guard
+  // (mailUnsavedGuard.ts) — dirty only while open with a non-empty message,
+  // clearing on close so a later, clean open never inherits a stale flag.
+  useEffect(() => {
+    setMailEditorDirty('compose', open && values.body.trim() !== '')
+    return () => setMailEditorDirty('compose', false)
+  }, [open, values.body])
 
   const setSubject = (event: React.ChangeEvent<HTMLInputElement>) =>
     setValues((previous) => ({ ...previous, subject: event.target.value }))

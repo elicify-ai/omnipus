@@ -38,6 +38,7 @@ import {
   DropdownMenuTrigger,
 } from './dropdown-menu'
 import { cn } from '@/lib/utils'
+import { isEditableEventTarget } from '@/lib/isEditableEventTarget'
 
 // ── Shared range & math (D18: "One zoom range: 25% to 400% on every surface") ──
 
@@ -167,24 +168,6 @@ export interface ZoomableViewKeyboardHandlers {
   onZoomOut: () => void
   onFit: () => void
   onZoomTo100: () => void
-}
-
-/** True when `target` is a form control or text-entry surface that owns its
- *  own keystrokes — an editable form field living inside the same view
- *  frame (e.g. a fillable PDF form field inside `LibraryPdfPreview`) must
- *  receive `+ − 0 1` as ordinary typed characters, never as zoom shortcuts. */
-function isEditableEventTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  if (target.isContentEditable) return true
-  if (target.getAttribute('role') === 'textbox') return true
-  switch (target.tagName) {
-    case 'INPUT':
-    case 'TEXTAREA':
-    case 'SELECT':
-      return true
-    default:
-      return false
-  }
 }
 
 /** Binds `+`/`−`/`0`/`1` to the pill's own actions. Attached as `onKeyDown`

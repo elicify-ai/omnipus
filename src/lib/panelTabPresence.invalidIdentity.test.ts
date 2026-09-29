@@ -7,6 +7,13 @@ class UnexpectedBroadcastChannel {
   }
 }
 
+class NoopBroadcastChannel {
+  postMessage() {}
+  addEventListener() {}
+  removeEventListener() {}
+  close() {}
+}
+
 const validBrowser: PanelIdentity = {
   panelId: 'browser',
   sessionId: 'session-1',
@@ -43,5 +50,20 @@ describe('panel presence identity validation', () => {
     expect(() => second.stop()).not.toThrow()
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalledWith('Panel tab presence ignored an invalid panel identity.')
+  })
+
+  it('warns once when an active announcement is updated with an invalid identity', async () => {
+    vi.stubGlobal('BroadcastChannel', NoopBroadcastChannel)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const api = await import('./panelTabPresence')
+    const announcement = api.announcePanelTabPresence({ panelId: 'library', workspaceId: 'ws-1' })
+    const invalid = { panelId: 'browser', sessionId: 'session-only' } as unknown as PanelIdentity
+
+    announcement.update(invalid)
+    announcement.update(invalid)
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith('Panel tab presence ignored an invalid panel identity.')
+    announcement.stop()
   })
 })

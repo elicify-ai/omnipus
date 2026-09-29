@@ -56,7 +56,12 @@ function makeDef(
     id,
     title: id === 'library' ? 'Library' : 'Browser',
     content: probeContent,
-    expandTarget: () => (id === 'library' ? '/library' : '/browser-live?session=s1&agent=a1'),
+    fullScreen: {
+      toSearch: () => ({}),
+      fromSearch: () => id === 'browser'
+        ? { sessionId: 's1', agentId: 'a1' }
+        : {},
+    },
     ...(beforeLeave ? { beforeLeave } : {}),
   }
 }
@@ -81,7 +86,7 @@ function openPanel(id: 'library' | 'browser', context: Record<string, unknown> =
 function resetStore() {
   usePanelShellStore.setState({
     activePanel: null,
-    panelWidth: -1,
+    panelWidth: null,
     guardPending: false,
     historyPushed: false,
   })
@@ -189,7 +194,13 @@ describe('Expand (SP-12 + FR-013 + MAJ-209)', () => {
 
   it('RED — an accepted expand guard CLOSES the docked panel after the pop-out opens (SP-12)', async () => {
     const beforeLeave = vi.fn().mockResolvedValue(true)
-    vi.spyOn(window, 'open').mockReturnValue({ closed: false } as unknown as Window)
+    vi.spyOn(window, 'open').mockReturnValue({
+      closed: false,
+      opener: {},
+      close: vi.fn(),
+      focus: vi.fn(),
+      location: { replace: vi.fn() },
+    } as unknown as Window)
     renderShell([makeDef('library', beforeLeave)])
     openPanel('library', { workspaceId: 'ws-1' })
     fireEvent.click(screen.getByRole('button', { name: /expand/i }))
