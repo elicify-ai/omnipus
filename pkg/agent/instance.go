@@ -418,20 +418,12 @@ func (nai *newAgentInstance) prepareIdentity() {
 
 // resolveRuntimeLimits resolves iteration, sampling, and thinking-level settings.
 func (nai *newAgentInstance) resolveRuntimeLimits() {
-	// Per-turn tool-round cap: per-agent override wins, then the global
-	// default, then 200. The per-agent field was persisted+displayed but never
-	// applied before 2026-07-03 (P0) — the runtime silently ran everything on
-	// the old emergency fallback of 20.
-	nai.maxIter = 0
-	if nai.agentCfg != nil {
-		nai.maxIter = nai.agentCfg.MaxToolIterations
-	}
-	if nai.maxIter <= 0 {
-		nai.maxIter = nai.defaults.MaxToolIterations
-	}
-	if nai.maxIter <= 0 {
-		nai.maxIter = 200
-	}
+	// Per-turn tool-round cap (#904): the single resolver —
+	// min(global in force, agent's own value), the global when the agent has
+	// none. Snapshotted onto AgentInstance.MaxIterations here; a running turn
+	// keeps the instance it started with, so a reload only affects the next
+	// turn (D18).
+	nai.maxIter = config.ResolveMaxToolIterations(nai.defaults, nai.agentCfg).Effective
 
 	// Sampling params: per-agent override (agentCfg.ModelParams) wins, then
 	// the global default, then the hardcoded fallback — same three-rung

@@ -12,6 +12,8 @@ const agent = {
   revision, id: 'mia', name: 'Mia', type: 'core', locked: true,
   needs_model: false, model: 'test-model', status: 'active', soul: 'fixed',
   timeout_seconds: 60, max_tool_iterations: 20, memory_enabled: true,
+  // Issue #904: the effective limit's provenance is required on every Agent.
+  max_tool_iterations_source: 'global', max_tool_iterations_override_ignored: false,
 }
 const state = { revision, persistence_status: 'complete', activation_status: 'active', changed_fields: ['model'] }
 const fetchMock = vi.fn()

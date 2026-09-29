@@ -100,6 +100,10 @@ type ClaudeDriver struct {
 	eventCh chan RunEvent
 	consent ConsentHandler
 	runID   string
+	// runMaxTurns is the turn cap of the most recent Run; Resume reuses it
+	// so a resumed run keeps its original cap (#904 D4). Zero until the
+	// first Run, so a Resume with no prior Run is refused (FR-004).
+	runMaxTurns int
 }
 
 // NewClaudeDriver creates a driver for the claude CLI.
@@ -119,11 +123,15 @@ func NewClaudeDriver(consent ConsentHandler) *ClaudeDriver {
 //
 //nolint:dupl // driver-specific process lifecycle; the parallel exit/stderr handling shares shape with OpencodeDriver.Run but differs in per-CLI log prefixes and error-message text — a shared helper would obscure those per-CLI differences and risk behavior changes
 func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent, error) {
+	if err := validateMaxTurns("claude", opts.MaxTurns); err != nil {
+		return nil, err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.eventCh != nil {
 		return nil, fmt.Errorf("claude driver: Run called while a run is already active")
 	}
+	d.runMaxTurns = opts.MaxTurns
 
 	// Resolve the CLI binary: opts.CLIPath (ExecutorConfig.cli_path) wins; else
 	// the default name resolved via $PATH (MAJ-5).
@@ -233,10 +241,9 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 		}()
 
 		// Apply turn cap if requested (FR-5.4).
+		// Turn cap (FR-5.4): the caller's resolved limit, validated > 0 at the
+		// top of Run — no hidden default (#904 FR-004).
 		maxTurns := opts.MaxTurns
-		if maxTurns <= 0 {
-			maxTurns = defaultMaxTurns
-		}
 		turnCount := 0
 
 		emittedFatal := streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
@@ -596,9 +603,18 @@ func (d *ClaudeDriver) Input(_ string) error {
 	return nil
 }
 
-// Resume re-starts the claude process with `--resume <runID>`.
+// Resume starts a NEW claude run under runID, reusing the prior Run's turn
+// cap. It does NOT pass `--resume <runID>`: buildArgs deliberately omits
+// --resume (runID is an Omnipus dispatch identifier, never a claude session
+// ID, and `claude --resume <id>` errors on an unknown session — ADR-032 fix
+// C), so the prior conversation is not continued; the run starts fresh.
 func (d *ClaudeDriver) Resume(ctx context.Context, runID string) (<-chan RunEvent, error) {
-	return d.Run(ctx, RunOptions{RunID: runID})
+	// Reuse the prior Run's turn cap (#904 D4). With no prior Run it is 0 and
+	// Run refuses it with ErrMaxTurnsRequired — no hidden default (FR-004).
+	d.mu.Lock()
+	maxTurns := d.runMaxTurns
+	d.mu.Unlock()
+	return d.Run(ctx, RunOptions{RunID: runID, MaxTurns: maxTurns})
 }
 
 // Test validates the claude CLI is present and can produce version output.
@@ -635,9 +651,6 @@ func (d *ClaudeDriver) logVersionCheck(binary, ver string) bool {
 
 // compile-time interface assertion
 var _ ExternalAgentRunner = (*ClaudeDriver)(nil)
-
-// defaultMaxTurns is the default turn cap applied when RunOptions.MaxTurns is 0 (FR-5.4).
-const defaultMaxTurns = 50
 
 // newLineScanner is a thin wrapper around bufio.NewScanner for use in goroutines.
 func newLineScanner(r io.Reader) interface {

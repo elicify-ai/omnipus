@@ -595,8 +595,11 @@ type AgentConfig struct {
 	Model       *AgentModelConfig `json:"model,omitempty"`
 	// MaxToolIterations caps the LLM/tool rounds PER TURN for this agent
 	// (one chat message, board task, or heartbeat run = one turn; the turn
-	// pauses at the cap and can be continued). 0 = inherit
-	// agents.defaults.max_tool_iterations (which itself falls back to 200).
+	// pauses at the cap and can be continued). This is the agent's OWN value:
+	// it may only lower the global agents.defaults.max_tool_iterations —
+	// config.ResolveMaxToolIterations runs min(global, own); a value above the
+	// global is kept but ignored and flagged (#904 D1). <= 0 = no own value
+	// (D17), the agent rides the global.
 	// This field previously existed only on the wire and in raw config.json —
 	// it was silently dropped on load and never applied by the runtime
 	// (P0 bug, fixed 2026-07-03).
@@ -962,8 +965,21 @@ type AgentDefaults struct {
 	// (pkg/agent ResolveWindow) — there is no agents.defaults.context_window
 	// key and no matching env var. A stale key in an operator's config.json
 	// is ignored (greenfield, no migration).
-	Temperature       *float64 `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations int      `json:"max_tool_iterations"             env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	Temperature *float64 `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
+	// MaxToolIterations is the saved global "max tool calls per turn" limit
+	// (#904). Read it only through EffectiveGlobalMaxToolIterations /
+	// ResolveMaxToolIterations (max_tool_iterations.go), which apply the
+	// 1-1000 in-memory correction; the raw value is kept as saved so Settings
+	// can show it. No env tag: OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS is
+	// imported once on load (importMaxToolIterationsEnv), never read live.
+	MaxToolIterations int `json:"max_tool_iterations"`
+	// MaxToolIterationsEnvImported is the one-time env import marker (D6).
+	// Config-file-only bookkeeping: stripped from GET /api/v1/config.
+	MaxToolIterationsEnvImported bool `json:"max_tool_iterations_env_imported,omitempty"`
+	// MaxToolIterationsKeyMissing is load provenance, not configuration: true
+	// when config.json had no agents.defaults.max_tool_iterations key (D13
+	// saved-state "missing"). Set by applyMaxToolIterationsOnLoad.
+	MaxToolIterationsKeyMissing bool `json:"-"`
 	// summarize_token_percent was deleted by ADR-066 D6 (FR-004, T066-03).
 	// The legacy summariser's percentage knob had outlived ADR-028 only to
 	// scale the timeout-recovery trim trigger; every consumer now reads the
@@ -2466,6 +2482,7 @@ func freshInstallConfig() (*Config, error) {
 	if err := env.Parse(c); err != nil {
 		return nil, err
 	}
+	applyMaxToolIterationsEnvFreshInstall(c)
 	return c, nil
 }
 
@@ -2523,6 +2540,11 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if err := env.Parse(cfg); err != nil {
 		return nil, err
 	}
+
+	// #904: global tool-iteration limit — key provenance, the one-time
+	// import of the retired env var, and the saved-state WARN. Never refuses
+	// the load and never rewrites the saved global except for the import.
+	applyMaxToolIterationsOnLoad(cfg, data, path, onSelfHeal)
 
 	// ADR-067 FR-036 / A-19: the config boundary is the ONE place a provider
 	// id is normalised, and the normalisation is TRIM-ONLY. Case is

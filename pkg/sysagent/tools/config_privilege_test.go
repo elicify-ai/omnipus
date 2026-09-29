@@ -85,7 +85,7 @@ func TestConfigSet_SecurityCriticalKeysRefused(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			before := snapshotConfig(t, cfg)
 
 			result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
@@ -115,7 +115,7 @@ func TestConfigSet_SecurityCriticalKeysRefused(t *testing.T) {
 // refuses every key, which would be a broken tool rather than a secure one.
 func TestConfigSet_LegitimateKeysStillWritable(t *testing.T) {
 	t.Run("gateway.port", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 			"key":   "gateway.port",
 			"value": float64(7331),
@@ -129,7 +129,7 @@ func TestConfigSet_LegitimateKeysStillWritable(t *testing.T) {
 	})
 
 	t.Run("agents.defaults.default_model.model", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 			"key":   "agents.defaults.default_model.model",
 			"value": "glm-4.7",
@@ -143,7 +143,7 @@ func TestConfigSet_LegitimateKeysStillWritable(t *testing.T) {
 	})
 
 	t.Run("tools.read_file.max_read_file_size", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 			"key":   "tools.read_file.max_read_file_size",
 			"value": float64(123456),

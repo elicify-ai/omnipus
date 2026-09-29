@@ -20,7 +20,7 @@ import (
 // (an LLM agent) does.
 func knownChannelToolIDs(t *testing.T) []string {
 	t.Helper()
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	res := systools.NewChannelListTool(deps).Execute(context.Background(), nil)
 	if res.IsError {
 		t.Fatalf("list_channels returned an error: %s", res.ForLLM)
@@ -83,7 +83,7 @@ func TestKnownChannels_MatchesCanonicalChannelTypes(t *testing.T) {
 // CHANNEL_NOT_FOUND rather than silently accepted and then dropped on the
 // next config reload.
 func TestKnownChannels_SignalNotAccepted(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	res := systools.NewChannelEnableTool(deps).Execute(context.Background(), map[string]any{"id": "signal"})
 	if !res.IsError {
 		t.Fatalf("enable_channel(\"signal\") should be rejected (signal is not a canonical channel type "+
@@ -99,7 +99,7 @@ func TestKnownChannels_PreviouslyMissingChannelsAreAccepted(t *testing.T) {
 	previouslyMissing := []string{"feishu", "qq", "dingtalk", "matrix", "wecom", "weixin", "google-chat"}
 	for _, id := range previouslyMissing {
 		t.Run(id, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			if cfg.Channels == nil {
 				cfg.Channels = map[string]config.ChannelInstanceConfig{}
 			}

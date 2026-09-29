@@ -1,0 +1,45 @@
+title: PerformancePendingApply
+description: >
+  Server-side "saved but not applied yet" state of the Performance settings
+  (issue #904). Set when a PUT /performance ends in a
+  performance_reload_failed answer (its writes are committed on disk but not
+  in force). It survives page reloads and new sessions — it lives in the
+  gateway, not in the client — and is cleared only when a later refresh of
+  the running configuration AND an agent registry reload both succeed: a
+  later successful PUT /performance (which always reloads the agents while
+  this state is set), or a successful manual or automatic configuration
+  reload. A gateway restart applies everything on disk, so a restarted
+  gateway never reports it.
+type: object
+additionalProperties: false
+required:
+  - stage
+  - changed_fields
+properties:
+  stage:
+    type: string
+    enum:
+      - refresh
+      - reload
+    description: >
+      How far the most recent failed apply got (same meaning as
+      PerformanceReloadFailedDetails.stage). refresh — the running
+      configuration was NOT refreshed: the other fields of this response
+      still show the OLD values. reload — the running configuration shows the
+      NEW values but the agents were not rebuilt: their next turns keep the
+      old limits.
+    example: "reload"
+  changed_fields:
+    type: array
+    description: >
+      Every Performance setting saved but not yet in force — the union of the
+      changed_fields of each failed PUT since the settings were last fully
+      applied, in contract enum order.
+    items:
+      type: string
+      enum:
+        - max_parallel_agents
+        - tools_on_demand
+        - goal_max_rounds
+        - max_tool_iterations
+    example: ["max_tool_iterations"]

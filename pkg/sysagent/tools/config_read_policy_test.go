@@ -67,7 +67,7 @@ func TestConfigGet_UndisclosableKeysRefused(t *testing.T) {
 		"Gateway.CLI_Token", // case variant of a credential
 	} {
 		t.Run(key, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			seedSecrets(cfg)
 
 			m, isErr := readConfig(t, deps, key)
@@ -88,7 +88,7 @@ func TestConfigGet_UndisclosableKeysRefused(t *testing.T) {
 // [REDACTED] — and still returns the ordinary fields, which is what keeps the
 // tool useful.
 func TestConfigGet_SectionReadIsRedacted(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	seedSecrets(cfg)
 
 	m, isErr := readConfig(t, deps, "gateway")
@@ -136,7 +136,7 @@ func TestConfigGet_SectionReadIsRedacted(t *testing.T) {
 // than secure them.
 func TestConfigGet_LegitimateKeysStillReadable(t *testing.T) {
 	t.Run("gateway.port", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		cfg.Gateway.Port = 5123
 		m, isErr := readConfig(t, deps, "gateway.port")
 		if isErr {
@@ -148,7 +148,7 @@ func TestConfigGet_LegitimateKeysStillReadable(t *testing.T) {
 	})
 
 	t.Run("gateway.public_url is a deliberate read carve-out", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		cfg.Gateway.PublicURL = "https://omnipus.example"
 		m, isErr := readConfig(t, deps, "gateway.public_url")
 		if isErr {
@@ -161,7 +161,7 @@ func TestConfigGet_LegitimateKeysStillReadable(t *testing.T) {
 	})
 
 	t.Run("tools.skills.marketplaces is a deliberate read carve-out", func(t *testing.T) {
-		deps, _ := newTestDeps()
+		deps, _ := newTestDeps(t)
 		m, isErr := readConfig(t, deps, "tools.skills.marketplaces")
 		if isErr {
 			t.Fatalf("get_config(tools.skills.marketplaces) refused — install_skill REQUIRES a "+
@@ -174,7 +174,7 @@ func TestConfigGet_LegitimateKeysStillReadable(t *testing.T) {
 	})
 
 	t.Run("agents.defaults.default_model.model", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "glm-4.7"}
 		m, isErr := readConfig(t, deps, "agents.defaults.default_model.model")
 		if isErr {

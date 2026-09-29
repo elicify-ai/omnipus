@@ -304,7 +304,7 @@ func TestOpencodeDriver_Test_DelegatesToTestConnection(t *testing.T) {
 // Uses a recorded fixture under testdata/fixtures/ — no real CLI invoked.
 func TestClaudeDriver_ParsesStreamJSONFixture(t *testing.T) {
 	fixtureData := readFixture(t, "claude_stream_json.ndjson")
-	events := runner.ParseClaudeStreamJSON(fixtureData, "test-run-1")
+	events := runner.ParseClaudeStreamJSON(fixtureData, "test-run-1", config.DefaultMaxToolIterations)
 
 	if len(events) == 0 {
 		t.Fatal("ParseClaudeStreamJSON returned no events from fixture")
@@ -337,7 +337,7 @@ func TestClaudeDriver_ParsesStreamJSONFixture(t *testing.T) {
 // correctly parses a recorded stream-json fixture (FR-5.2).
 func TestCodexDriver_ParsesStreamJSONFixture(t *testing.T) {
 	fixtureData := readFixture(t, "codex_stream_json.ndjson")
-	events := runner.ParseCodexStreamJSON(fixtureData, "test-run-2")
+	events := runner.ParseCodexStreamJSON(fixtureData, "test-run-2", config.DefaultMaxToolIterations)
 
 	if len(events) == 0 {
 		t.Fatal("ParseCodexStreamJSON returned no events from fixture")
@@ -369,7 +369,7 @@ func TestCodexDriver_ParsesStreamJSONFixture(t *testing.T) {
 // correctly parses a recorded stream-json fixture (FR-5.2).
 func TestOpencodeDriver_ParsesStreamJSONFixture(t *testing.T) {
 	fixtureData := readFixture(t, "opencode_stream_json.ndjson")
-	events := runner.ParseOpencodeStreamJSON(fixtureData, "test-run-3")
+	events := runner.ParseOpencodeStreamJSON(fixtureData, "test-run-3", config.DefaultMaxToolIterations)
 
 	if len(events) == 0 {
 		t.Fatal("ParseOpencodeStreamJSON returned no events from fixture")
@@ -401,7 +401,7 @@ func TestOpencodeDriver_ParsesStreamJSONFixture(t *testing.T) {
 // a stream do not crash the parser and produce non-fatal error events (FR-5.2 edge).
 func TestClaudeDriver_MalformedJSON_NonFatal(t *testing.T) {
 	malformed := []byte("not-valid-json\n{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\"}\n")
-	events := runner.ParseClaudeStreamJSON(malformed, "run-malformed")
+	events := runner.ParseClaudeStreamJSON(malformed, "run-malformed", config.DefaultMaxToolIterations)
 
 	if len(events) == 0 {
 		t.Fatal("expected events even when one line is malformed")
@@ -617,7 +617,7 @@ func TestDenyByDefault_SetsCorrectFields(t *testing.T) {
 func TestUnknownEventType_SkippedGracefully(t *testing.T) {
 	data := []byte(`{"type":"some_future_event","payload":{"foo":"bar"}}` + "\n" +
 		`{"type":"result","subtype":"success","result":"done"}` + "\n")
-	events := runner.ParseClaudeStreamJSON(data, "run-unknown")
+	events := runner.ParseClaudeStreamJSON(data, "run-unknown", config.DefaultMaxToolIterations)
 	// We expect 0 unknown-type events and possibly 1 end event from result.
 	for _, ev := range events {
 		if ev.Kind == runner.EventKindError && ev.Err != nil && ev.Err.Fatal {

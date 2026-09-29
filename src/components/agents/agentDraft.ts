@@ -42,6 +42,11 @@ function normalizedBaselineValue(baseline: Agent, field: string): unknown {
   if (field === 'voice' && value === undefined) return null
   if (field === 'model_params' && value === undefined) return { temperature: 1, max_tokens: 4096 }
   if (field === 'auto_approve_disabled' && value === undefined) return false
+  // #904: Agent.max_tool_iterations is the server's EFFECTIVE limit; the
+  // draft edits the agent's OWN value, so diff against the stored own value
+  // (null = none). Saving exactly the global when the agent rides it is a
+  // real change (source becomes "agent"), and reset diffs null vs own value.
+  if (field === 'max_tool_iterations') return baseline.max_tool_iterations_override ?? null
   return value
 }
 

@@ -1,4 +1,4 @@
-import { isApiError } from '@/lib/api'
+import { isApiError } from '@/lib/api-error'
 
 // #359: validateToken() used to run as a raw, uncached fetch on EVERY route
 // transition, and the route guard cleared auth on ANY error. With hot_reload now

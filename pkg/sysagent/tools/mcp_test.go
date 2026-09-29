@@ -155,7 +155,7 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 // falling back to writing them in plaintext (the regression this whole
 // fix exists to close).
 func TestMCPAdd_EnvRequiresCredentialStore(t *testing.T) {
-	deps, cfg := newTestDeps() // CredStore is nil
+	deps, cfg := newTestDeps(t) // CredStore is nil
 	add := systools.NewMCPAddTool(deps)
 	res := add.Execute(context.Background(), map[string]any{
 		"name":    "no-cred-store",
@@ -264,7 +264,7 @@ func TestMCPAdd_NameCollisionDoesNotHijackExistingCredentials(t *testing.T) {
 // still removes the config entry (the server is gone either way) even when it
 // cannot clean up the associated credential-store entries, and says so.
 func TestMCPRemove_OrphansCredentialsWhenStoreUnavailable(t *testing.T) {
-	deps, cfg := newTestDeps() // CredStore is nil
+	deps, cfg := newTestDeps(t) // CredStore is nil
 	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 		"srv": {Enabled: true, Type: "stdio", Command: "npx", EnvRefs: map[string]string{"TOKEN": "mcp_srv_TOKEN"}},
 	}
@@ -286,7 +286,7 @@ func TestMCPRemove_OrphansCredentialsWhenStoreUnavailable(t *testing.T) {
 // live connection status per server when deps.MCPStatus is wired, and omits
 // it cleanly when it is not (nil-safe for tests / a partially wired gateway).
 func TestMCPList_ReportsLiveStatus(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 		"connected-srv":    {Enabled: true, Type: "stdio", Command: "npx"},
 		"disconnected-srv": {Enabled: false, Type: "stdio", Command: "npx"},
@@ -314,7 +314,7 @@ func TestMCPList_ReportsLiveStatus(t *testing.T) {
 	}
 
 	// Without MCPStatus wired, the field is simply absent — not fabricated.
-	nilStatusDeps, nilCfg := newTestDeps()
+	nilStatusDeps, nilCfg := newTestDeps(t)
 	nilCfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 		"srv": {Enabled: true, Type: "stdio", Command: "npx"},
 	}
@@ -327,7 +327,7 @@ func TestMCPList_ReportsLiveStatus(t *testing.T) {
 // TestMCPAdd_TransportValidation asserts per-transport field validation mirrors
 // the gateway (stdio→command required; sse/http→url required + scheme check).
 func TestMCPAdd_TransportValidation(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	ctx := context.Background()
 	add := systools.NewMCPAddTool(deps)
 
@@ -367,7 +367,7 @@ func TestMCPAdd_TransportValidation(t *testing.T) {
 // already enabled under it.
 func TestMCPAdd_GlobalKillSwitchGating(t *testing.T) {
 	t.Run("flips when no other server is enabled", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		add := systools.NewMCPAddTool(deps)
 		res := add.Execute(context.Background(), map[string]any{"name": "fresh-srv", "command": "npx"})
 		m := resultJSON(t, res.ForLLM)
@@ -384,7 +384,7 @@ func TestMCPAdd_GlobalKillSwitchGating(t *testing.T) {
 	})
 
 	t.Run("does not flip when another server is already enabled under an off switch", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 			"existing-enabled": {Enabled: true, Type: "stdio", Command: "npx"},
 		}
@@ -415,7 +415,7 @@ func TestMCPAdd_GlobalKillSwitchGating(t *testing.T) {
 // each status branch plus the nil-funcs fallback.
 func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 	t.Run("connected", func(t *testing.T) {
-		deps, _ := newTestDeps()
+		deps, _ := newTestDeps(t)
 		var reconcileCalls int
 		var reconciledHadDeadline bool
 		deps.ReconcileMCP = func(ctx context.Context) error {
@@ -456,7 +456,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 	})
 
 	t.Run("error", func(t *testing.T) {
-		deps, _ := newTestDeps()
+		deps, _ := newTestDeps(t)
 		deps.ReconcileMCP = func(ctx context.Context) error { return nil }
 		deps.MCPStatus = func(name string) (string, int, string) {
 			return "error", 0, "connection refused"
@@ -481,7 +481,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 	})
 
 	t.Run("disconnected", func(t *testing.T) {
-		deps, _ := newTestDeps()
+		deps, _ := newTestDeps(t)
 		deps.ReconcileMCP = func(ctx context.Context) error { return nil }
 		deps.MCPStatus = func(name string) (string, int, string) {
 			return "disconnected", 0, ""
@@ -502,7 +502,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 	})
 
 	t.Run("reconcile error is logged but does not fail the add", func(t *testing.T) {
-		deps, _ := newTestDeps()
+		deps, _ := newTestDeps(t)
 		deps.ReconcileMCP = func(ctx context.Context) error { return fmt.Errorf("boom") }
 		add := systools.NewMCPAddTool(deps)
 		res := add.Execute(context.Background(), map[string]any{"name": "srv-reconcile-err", "command": "npx"})
@@ -532,7 +532,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 	})
 
 	t.Run("nil funcs use fallback note and no status field", func(t *testing.T) {
-		deps, _ := newTestDeps() // ReconcileMCP and MCPStatus left nil
+		deps, _ := newTestDeps(t) // ReconcileMCP and MCPStatus left nil
 		add := systools.NewMCPAddTool(deps)
 		res := add.Execute(context.Background(), map[string]any{"name": "srv-nil", "command": "npx"})
 		m := resultJSON(t, res.ForLLM)
@@ -553,7 +553,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 // reconciliation hook and adjusts its note accordingly.
 func TestMCPRemove_Reconcile(t *testing.T) {
 	t.Run("reconcile wired", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 			"srv": {Enabled: true, Type: "stdio", Command: "npx"},
 		}
@@ -588,7 +588,7 @@ func TestMCPRemove_Reconcile(t *testing.T) {
 	})
 
 	t.Run("reconcile nil falls back to old note", func(t *testing.T) {
-		deps, cfg := newTestDeps() // ReconcileMCP left nil
+		deps, cfg := newTestDeps(t) // ReconcileMCP left nil
 		cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 			"srv": {Enabled: true, Type: "stdio", Command: "npx"},
 		}
@@ -605,7 +605,7 @@ func TestMCPRemove_Reconcile(t *testing.T) {
 	})
 
 	t.Run("reconcile error is logged but does not fail the remove", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 			"srv": {Enabled: true, Type: "stdio", Command: "npx"},
 		}
@@ -736,7 +736,7 @@ func TestGetUsageTool_BasicBehaviour(t *testing.T) {
 	t.Run("nil_list_sessions_handled", func(t *testing.T) {
 		// A nil ListSessions wiring is a configuration bug that must fail loudly
 		// with USAGE_UNAVAILABLE rather than returning a fake-zero empty report.
-		nilDeps, _ := newTestDeps() // newTestDeps does NOT wire ListSessions
+		nilDeps, _ := newTestDeps(t) // newTestDeps does NOT wire ListSessions
 		nilTool := systools.NewUsageQueryTool(nilDeps)
 		result := nilTool.Execute(ctx, map[string]any{"period": "month"})
 		if result == nil {

@@ -48,19 +48,14 @@ func testMutateConfig(mu *sync.Mutex, getCfg func() *config.Config) func(fn func
 // isolated-per-call directory. The historical shared fixed path
 // ("/tmp/omnipus-test") would leak entity files across test functions within
 // the same test binary run, causing order-dependent AGENT_ALREADY_EXISTS /
-// AGENT_NOT_FOUND failures. newTestDeps has no *testing.T (many call sites
-// predate this helper's use in agent-store-backed tests), so it cannot use
-// t.TempDir(); os.MkdirTemp gives each call its own unique directory instead
-// — never cleaned up automatically, but negligible (a handful of small JSON
-// files) for an ephemeral test run.
-func newTestDeps() (*systools.Deps, *config.Config) {
+// AGENT_NOT_FOUND failures. t.TempDir() gives each call its own unique
+// directory and removes it when the test ends.
+func newTestDeps(t *testing.T) (*systools.Deps, *config.Config) {
+	t.Helper()
 	cfg := config.DefaultConfig()
 	var mu sync.Mutex
 	getCfg := func() *config.Config { return cfg }
-	home, err := os.MkdirTemp("", "omnipus-agent-test-*")
-	if err != nil {
-		home = "/tmp/omnipus-test"
-	}
+	home := t.TempDir()
 	deps := &systools.Deps{
 		Home:         home,
 		ConfigPath:   filepath.Join(home, "config.json"),
@@ -156,7 +151,7 @@ func newTestDepsWithHome(t *testing.T) (*systools.Deps, string) {
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.create
 func TestAgentCreate_WithColorAndIcon(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -195,7 +190,7 @@ func TestAgentCreate_WithColorAndIcon(t *testing.T) {
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.delete
 func TestAgentDelete_RequiresConfirm(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	// ADR-054: pre-populate a REAL entity record (entities/agents/my-agent.json)
 	// — delete_agent now resolves against the agent store, not cfg.Agents.List.
 	store := agentstore.New(deps.Home)
@@ -238,7 +233,7 @@ func TestAgentDelete_RequiresConfirm(t *testing.T) {
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.update
 func TestAgentUpdate_PartialFields(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	// ADR-054: pre-populate a REAL entity record — update_agent now resolves
 	// against the agent store, not cfg.Agents.List.
 	store := agentstore.New(deps.Home)
@@ -340,7 +335,7 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 //
 // Traces to: architect finding #3 — self-deactivation guard
 func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	// ADR-054: seed a locked core agent as a REAL entity record — delete_agent
 	// now resolves the Locked check against the agent store, not
 	// cfg.Agents.List.
@@ -392,7 +387,7 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 
 // TestAgentCreate_RejectsInvalidColor verifies that invalid hex colors are rejected.
 func TestAgentCreate_RejectsInvalidColor(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	for _, bad := range []string{"red", "#GGGGGG", "#12345", "22C55E", "#22C55E00"} {
 		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 			"name":        "Bot",
@@ -414,7 +409,7 @@ func TestAgentCreate_RejectsInvalidColor(t *testing.T) {
 
 // TestAgentCreate_RejectsInvalidIcon verifies that invalid icon names are rejected.
 func TestAgentCreate_RejectsInvalidIcon(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	for _, bad := range []string{"my icon", "icon!", "icon/sub", "icon..bad"} {
 		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 			"name":        "Bot",
@@ -436,7 +431,7 @@ func TestAgentCreate_RejectsInvalidIcon(t *testing.T) {
 
 // TestAgentUpdate_RejectsInvalidColor verifies update validates color.
 func TestAgentUpdate_RejectsInvalidColor(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Agents.List = []config.AgentConfig{{ID: "my-agent", Name: "My Agent"}}
 	store := agentstore.New(deps.Home)
 	if err := store.Create("my-agent", &config.AgentConfig{ID: "my-agent", Name: "My Agent"}); err != nil {
@@ -933,7 +928,7 @@ func TestAgentReadMetadataTool_DefinitionHasThreeKinds(t *testing.T) {
 // tool path (AgentCreateTool.Execute), with no explicit bash policy entry
 // supplied by the caller — resolves the tool to "deny" by default.
 func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name":        "Research Bot",

@@ -47,6 +47,10 @@ type OpencodeDriver struct {
 	eventCh chan RunEvent
 	consent ConsentHandler
 	runID   string
+	// runMaxTurns is the turn cap of the most recent Run; Resume reuses it
+	// so a resumed run keeps its original cap (#904 D4). Zero until the
+	// first Run, so a Resume with no prior Run is refused (FR-004).
+	runMaxTurns int
 }
 
 // NewOpencodeDriver creates a driver for the opencode CLI.
@@ -59,11 +63,15 @@ func NewOpencodeDriver(consent ConsentHandler) *OpencodeDriver {
 //
 //nolint:dupl // driver-specific process lifecycle; the parallel exit/stderr handling shares shape with ClaudeDriver.Run but differs in per-CLI log prefixes and error-message text — a shared helper would obscure those per-CLI differences and risk behavior changes
 func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent, error) {
+	if err := validateMaxTurns("opencode", opts.MaxTurns); err != nil {
+		return nil, err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.eventCh != nil {
 		return nil, fmt.Errorf("opencode driver: Run called while a run is already active")
 	}
+	d.runMaxTurns = opts.MaxTurns
 
 	// Detect and pin CLI version (FR-5.6 / N3).
 	// Resolve the CLI binary: opts.CLIPath (ExecutorConfig.cli_path) wins; else
@@ -171,10 +179,9 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 			cancelFn()
 		}()
 
+		// Turn cap (FR-5.4): the caller's resolved limit, validated > 0 at the
+		// top of Run — no hidden default (#904 FR-004).
 		maxTurns := opts.MaxTurns
-		if maxTurns <= 0 {
-			maxTurns = defaultMaxTurns
-		}
 		turnCount := 0
 
 		emittedFatal := streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
@@ -470,7 +477,12 @@ func (d *OpencodeDriver) Input(_ string) error {
 
 // Resume re-starts opencode with `--session <runID>`.
 func (d *OpencodeDriver) Resume(ctx context.Context, runID string) (<-chan RunEvent, error) {
-	return d.Run(ctx, RunOptions{RunID: runID})
+	// Reuse the prior Run's turn cap (#904 D4). With no prior Run it is 0 and
+	// Run refuses it with ErrMaxTurnsRequired — no hidden default (FR-004).
+	d.mu.Lock()
+	maxTurns := d.runMaxTurns
+	d.mu.Unlock()
+	return d.Run(ctx, RunOptions{RunID: runID, MaxTurns: maxTurns})
 }
 
 // Test runs the binary-present → handshake → authed health check (FR-4.2) by

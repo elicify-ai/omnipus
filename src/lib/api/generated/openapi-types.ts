@@ -973,14 +973,35 @@ export interface paths {
         };
         /**
          * Get agent concurrency settings
-         * @description Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use.
+         * @description Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use. pending_apply is present while saved settings are not in force yet (see PerformancePendingApply).
          */
         get: operations["getPerformanceSettings"];
         /**
          * Update agent concurrency settings
          * @description Updates max_parallel_agents. An explicit value is honored exactly as given — there is no ceiling, only a floor of 1; a value is never silently lowered. Set to 0 to restore the auto-detected default (available memory / ~3.5 MB per agent, floored at 2, physically bounded around 2000). Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
+         *     Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1–1000; out of range → 400). Only a LOWERING — a new value below the global currently in force — can rewrite agents (D20): a raise, or the current value, rewrites no agent and needs no confirmation; agents whose stored value is above the global keep it (capped and flagged). A lowering below some agents' own values lowers those agents too, but only with consent (D11): confirmed_lowering must equal — as a set keyed by agent_id, order-independent — the agents whose own value is above the new global at write time. Any difference (extra, missing or changed agent, confirmed_lowering absent while agents would be lowered, or a NON-EMPTY list on a raise — an empty or absent one on a raise is fine) is drift (D16): nothing is written and the response is 409 MaxToolIterationsLoweringConflict carrying the fresh preview. The same 409 is returned when an agent record changes (revision conflict) between the deciding check and its lowering write — the agents already lowered are rolled back first. A failure part-way through the writes rolls back the agents already lowered and leaves the global unchanged (500 ErrorResponse, code max_tool_iterations_lowering_failed, or max_tool_iterations_rollback_incomplete if a rollback also failed, with the original failure in details.cause). A failure to read the agent store while computing or checking the affected set is 500 code max_tool_iterations_agents_read_failed, nothing written. Setting the global also ends the retired environment-variable import for good (D6). A successful change reloads the agent registry so every agent's next turn uses the new limit; the response lists the lowered agents in max_tool_iterations_lowered_agents. If the save is committed but the in-memory refresh or that reload fails, the response is 500 code performance_reload_failed with a PerformanceReloadFailedError body: the settings ARE saved on disk and nothing is rolled back, but they are not in force yet. details.stage tells how far the apply got — refresh: the in-memory configuration was NOT swapped, so GET /performance still shows the OLD values until the next configuration reload or restart; reload: the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed, so agents' next turns keep the old limits until the next reload or restart. details.changed_fields lists the settings this request changed and details.lowered_agents the agents it lowered (GET /performance does not carry them). A registry reload whose rebuild itself fails (not only one that cannot start or times out) is the reload stage too. After any performance_reload_failed answer, GET /performance (and every later PUT response) carries pending_apply until a later refresh AND registry reload both succeed; while it is set, a later PUT always reloads the agent registry, whatever fields it changes.
          */
         put: operations["updatePerformanceSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/performance/max-tool-iterations/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview which agents a lower global tool-iteration limit would lower
+         * @description Read-only (issue #904, tool-iteration-limit spec D11). Lists the agents whose own tool-iteration limit is strictly above `value` and would therefore be lowered to it if the global limit were set to `value`. A `value` at or above the global limit currently in force is a raise, which never rewrites an agent (D20): the list is empty. Nothing is written and no step-up token is needed (the PUT /performance that applies the change consumes it). Same access gate as GET /performance.
+         */
+        get: operations["previewMaxToolIterationsLowering"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -7985,10 +8006,21 @@ export interface components {
              */
             timeout_seconds: number;
             /**
-             * @description Maximum number of tool calls allowed per turn. Inherited from agents.defaults.max_tool_iterations when not overridden.
+             * @description The EFFECTIVE maximum number of tool calls allowed per turn (issue #904, tool-iteration-limit spec D1): the global limit (agents.defaults.max_tool_iterations) unless the agent has its own value lower than or equal to it, in which case the own value. An own value above the global never raises the limit — it is ignored (see max_tool_iterations_override_ignored). max_tool_iterations_source says which rule applied.
              * @example 50
              */
             max_tool_iterations: number;
+            max_tool_iterations_source: components["schemas"]["MaxToolIterationsSource"];
+            /**
+             * @description The agent's own stored tool-iteration limit (issue #904). Absent when the agent has none (it rides the global). No maximum: a hand-edited stored value may exceed 1000 and is shown truthfully.
+             * @example 40
+             */
+            max_tool_iterations_override?: number;
+            /**
+             * @description True when the agent's own stored value is above the global limit and therefore has no effect (issue #904, tool-iteration-limit spec D1); the effective value is then the global and max_tool_iterations_source is "global". False otherwise, including when the agent has no own value.
+             * @example false
+             */
+            max_tool_iterations_override_ignored: boolean;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
              * @description ADR-092 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-092 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
@@ -8303,7 +8335,7 @@ export interface components {
              */
             voice?: string | null;
             /**
-             * @description Maximum number of tool calls allowed per turn.
+             * @description The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
              * @example 50
              */
             max_tool_iterations?: number;
@@ -8396,14 +8428,14 @@ export interface components {
              */
             soul: string;
             /**
-             * @description Maximum number of tool calls allowed per turn.
+             * @description The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
              * @example 50
              */
             max_tool_iterations?: number;
         };
         /**
          * AgentCreateRequestSubagent3p
-         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, voice, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
          */
         AgentCreateRequestSubagent3p: {
             /**
@@ -8477,6 +8509,11 @@ export interface components {
              * @example 300
              */
             timeout_seconds?: number;
+            /**
+             * @description The new worker's own tool-iteration limit (issue #904, D14), passed to the external CLI as its turn cap. Omitted = the worker rides the global limit. Refused (400) if above the current global limit.
+             * @example 50
+             */
+            max_tool_iterations?: number;
         };
         /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. */
         AgentUpdateRequest: {
@@ -8515,10 +8552,10 @@ export interface components {
              */
             soul?: string;
             /**
-             * @description New maximum tool calls per turn. Allowed on all agents.
+             * @description The agent's own tool-iteration limit (issue #904, tool-iteration-limit spec D9/D10/D14). Omitted = unchanged; null = clear the own value (the agent rides the global limit — "Use global limit"); a number = set the own value, refused (400) if above the current global limit. Allowed on every agent type, including subagent_3p.
              * @example 100
              */
-            max_tool_iterations?: number;
+            max_tool_iterations?: number | null;
             /**
              * @description Hex color code for agent avatar display (e.g. "#D4AF37").
              * @example #D4AF37
@@ -8653,7 +8690,7 @@ export interface components {
              *       "--no-chrome",
              *       "--model <configured model> (only when a model is configured)",
              *       "--dangerously-skip-permissions",
-             *       "--max-turns <configured max turns> (only when a turn cap is configured)"
+             *       "--max-turns <the agent's tool-iteration limit> (always passed; a run without a turn cap is refused)"
              *     ]
              */
             auto_applied_flags: string[];
@@ -8672,7 +8709,7 @@ export interface components {
             cli_path?: string;
             /** @description Free-form additional CLI arguments to preview, same shape and same tokenizer as ExecutorConfig.cli_args. Any token the safety filter would strip at real dispatch time is NOT included in the previewed command — it is reported instead in the response's dropped_args, so the operator sees before saving that an argument they typed will be silently ignored and why. */
             cli_args?: string;
-            /** @description Optional turn cap to preview (mirrors AgentConfig.max_tool_iterations). Omitted or zero previews with the external-CLI dispatch default (50) — the same fallback runExternalCLISubTurn applies when an agent has no explicit cap. */
+            /** @description Optional: the agent's own tool-iteration limit being previewed (mirrors AgentConfig.max_tool_iterations); omit when the agent has none. The server previews the same effective value the runtime uses (issue #904): min(global limit, this value), or the global limit when omitted. */
             max_tool_iterations?: number;
         };
         /** @description The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. cli_args tokens the safety filter would strip at real dispatch time are surfaced in dropped_args rather than silently omitted, so the operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored. */
@@ -9646,6 +9683,21 @@ export interface components {
              * @example 20
              */
             goal_max_rounds?: number;
+            /**
+             * @description The global tool-iteration limit IN FORCE ("Max tool calls per turn", issue #904, tool-iteration-limit spec): the ceiling for every agent's turns. An agent's own value may only lower it. When the value saved in config.json is missing or out of range this is the value actually used, not the saved one (see max_tool_iterations_saved_state). Always present in responses.
+             * @example 200
+             */
+            max_tool_iterations?: number;
+            max_tool_iterations_saved_state?: components["schemas"]["MaxToolIterationsSavedState"];
+            /**
+             * @description The global limit exactly as found in config.json. Present only when max_tool_iterations_saved_state is below_min or above_max (spec D13 Settings warning); absent otherwise.
+             * @example 5000
+             */
+            max_tool_iterations_saved_raw?: number;
+            /** @description Agents whose own limit this request lowered to the new global (spec D11). Present only on a PUT response that lowered at least one agent; absent on GET and on every other PUT. */
+            max_tool_iterations_lowered_agents?: components["schemas"]["MaxToolIterationAgentChange"][];
+            /** @description Present only while saved Performance settings are not in force yet (see PerformancePendingApply); absent when everything saved is applied. Returned on GET and on every successful PUT (a successful PUT clears it, so it is then absent). */
+            pending_apply?: components["schemas"]["PerformancePendingApply"];
         };
         /**
          * PerformanceSettingsUpdate
@@ -9667,6 +9719,154 @@ export interface components {
              * @example 20
              */
             goal_max_rounds?: number;
+            /**
+             * @description New global tool-iteration limit (issue #904). Omitted = unchanged (partial update). When the new value is below some agents' own values, confirmed_lowering must list exactly those agents (see below), or the PUT is refused with 409.
+             * @example 200
+             */
+            max_tool_iterations?: number;
+            /** @description The exact agent snapshot (id + old value) the admin saw in GET /performance/max-tool-iterations/preview and confirmed (spec D11, D16). Absent = empty. At write time the server recomputes the set of agents whose own value is above the new max_tool_iterations; the PUT succeeds only if that set equals this list compared as a set keyed by agent_id — order-independent (same ids, and for each id the same old value). Naming the same agent_id twice is malformed (400). Any difference — an extra agent, a missing agent, a changed old value, or this field absent while agents would be lowered — is drift: nothing is written and the PUT answers 409 MaxToolIterationsLoweringConflict. */
+            confirmed_lowering?: components["schemas"]["MaxToolIterationsConfirmedAgent"][];
+        };
+        /**
+         * MaxToolIterationsSource
+         * @description Which rule produced an agent's effective tool-iteration limit (issue #904, tool-iteration-limit spec D1). $ref'd by Agent.max_tool_iterations_source — never an inline enum anywhere else (mirrors ContextWindowSource). "global" = the effective value is the global limit (agents.defaults.max_tool_iterations): the agent has no own value, or its own value is above the global and therefore ignored (Agent.max_tool_iterations_override_ignored is then true). "agent" = the agent's own value, lower than or equal to the global, applies.
+         * @enum {string}
+         */
+        MaxToolIterationsSource: "global" | "agent";
+        /**
+         * MaxToolIterationsSavedState
+         * @description State of the global tool-iteration limit as saved in config.json (agents.defaults.max_tool_iterations), used for the Settings warning (issue #904, tool-iteration-limit spec D13). The file is never rewritten to correct it; the value in force is PerformanceSettings.max_tool_iterations. "ok" = saved value within 1–1000 and in force as saved; "missing" = key absent (the shipped default is in force); "below_min" = saved value below 1 (0 and negative included; the shipped default is in force); "above_max" = saved value above 1000 (1000 is in force).
+         * @enum {string}
+         */
+        MaxToolIterationsSavedState: "ok" | "missing" | "below_min" | "above_max";
+        /**
+         * MaxToolIterationAgentChange
+         * @description One agent whose own tool-iteration limit is (or would be) lowered to a new global limit (issue #904, tool-iteration-limit spec D11). Used by the lowering preview, the 409 drift body and the PUT /performance response.
+         */
+        MaxToolIterationAgentChange: {
+            /**
+             * @description ID of the affected agent.
+             * @example agent-a
+             */
+            agent_id: string;
+            /**
+             * @description Display name of the affected agent.
+             * @example Researcher
+             */
+            agent_name: string;
+            /**
+             * @description The agent's own value before lowering. No upper bound: a hand-edited stored value may exceed 1000 and is shown truthfully.
+             * @example 250
+             */
+            old_value: number;
+            /**
+             * @description The agent's own value after lowering (the new global limit).
+             * @example 200
+             */
+            new_value: number;
+        };
+        /**
+         * MaxToolIterationsLoweringPreview
+         * @description Read-only preview of which agents' own tool-iteration limits would be lowered if the global limit were set to `value` (issue #904, tool-iteration-limit spec D11). Only agents whose own value is strictly above `value` are listed; agents equal to or below it, and agents with no own value, are excluded. Returned by GET /performance/max-tool-iterations/preview and embedded in the 409 MaxToolIterationsLoweringConflict body.
+         */
+        MaxToolIterationsLoweringPreview: {
+            /**
+             * @description The candidate global limit the preview was computed for.
+             * @example 200
+             */
+            value: number;
+            /** @description Agents that would be lowered; empty when nothing would change. */
+            agents: components["schemas"]["MaxToolIterationAgentChange"][];
+        };
+        /**
+         * MaxToolIterationsConfirmedAgent
+         * @description One entry of PerformanceSettingsUpdate.confirmed_lowering: an agent the admin saw in the lowering preview and confirmed (issue #904, tool-iteration-limit spec D11/D16). The new value is implied by the PUT's max_tool_iterations.
+         */
+        MaxToolIterationsConfirmedAgent: {
+            /**
+             * @description ID of the agent whose own value will be lowered.
+             * @example agent-a
+             */
+            agent_id: string;
+            /**
+             * @description The agent's own value as shown in the preview. Must still match the stored value at write time, or the PUT is refused as drift (409).
+             * @example 250
+             */
+            old_value: number;
+        };
+        /**
+         * MaxToolIterationsLoweringConflict
+         * @description 409 body of PUT /performance when the set of agents that the new global tool-iteration limit would lower differs from confirmed_lowering (issue #904, tool-iteration-limit spec D16 drift). Nothing was written. Envelope-compatible with ErrorResponse (error + code) and additionally carries the fresh preview computed at refusal time, so the client can re-open the confirm dialog without a second preview call.
+         */
+        MaxToolIterationsLoweringConflict: {
+            /**
+             * @description Human-readable error message.
+             * @example the agents affected by lowering the limit to 200 changed since the preview; review the updated list and confirm again
+             */
+            error: string;
+            /**
+             * @description Machine-readable error code; always "max_tool_iterations_lowering_drift".
+             * @example max_tool_iterations_lowering_drift
+             */
+            code: string;
+            preview: components["schemas"]["MaxToolIterationsLoweringPreview"];
+        };
+        /**
+         * PerformanceReloadFailedDetails
+         * @description details of the 500 performance_reload_failed answer of PUT /performance (issue #904). Every write of the request is COMMITTED (config.json and any lowered agents are on disk and audited; nothing is rolled back), but the new values are not in force yet. stage says how far the apply got, and so what GET /performance shows until the next reload or restart.
+         */
+        PerformanceReloadFailedDetails: {
+            /**
+             * @description refresh — config.json was written but the in-memory configuration was NOT swapped: GET /performance still shows the OLD values and running agents keep them until the gateway reloads its configuration or restarts. reload — the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed: the agents' next turns keep the old limits until the next reload or restart.
+             * @example reload
+             * @enum {string}
+             */
+            stage: "refresh" | "reload";
+            /**
+             * @description The performance settings this request changed, i.e. the fields present in the PUT body. The client names these — and only these — in its "saved, not applied yet" message.
+             * @example [
+             *       "max_tool_iterations"
+             *     ]
+             */
+            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "max_tool_iterations")[];
+            /** @description The agents whose own tool-iteration limit this request lowered (spec D11); empty when none. GET /performance does not carry them, so this is the only place the summary survives. */
+            lowered_agents: components["schemas"]["MaxToolIterationAgentChange"][];
+        };
+        /**
+         * PerformanceReloadFailedError
+         * @description 500 body of PUT /performance with code performance_reload_failed (issue #904): the settings are saved but not applied yet. Envelope-compatible with ErrorResponse (error + code + details); details is typed as PerformanceReloadFailedDetails.
+         */
+        PerformanceReloadFailedError: {
+            /**
+             * @description Human-readable message naming only the settings this request changed.
+             * @example performance settings saved but the reload failed; the new tool-iteration limit applies after the next reload or restart
+             */
+            error: string;
+            /**
+             * @description Machine-readable error code; always "performance_reload_failed".
+             * @example performance_reload_failed
+             */
+            code: string;
+            details: components["schemas"]["PerformanceReloadFailedDetails"];
+        };
+        /**
+         * PerformancePendingApply
+         * @description Server-side "saved but not applied yet" state of the Performance settings (issue #904). Set when a PUT /performance ends in a performance_reload_failed answer (its writes are committed on disk but not in force). It survives page reloads and new sessions — it lives in the gateway, not in the client — and is cleared only when a later refresh of the running configuration AND an agent registry reload both succeed: a later successful PUT /performance (which always reloads the agents while this state is set), or a successful manual or automatic configuration reload. A gateway restart applies everything on disk, so a restarted gateway never reports it.
+         */
+        PerformancePendingApply: {
+            /**
+             * @description How far the most recent failed apply got (same meaning as PerformanceReloadFailedDetails.stage). refresh — the running configuration was NOT refreshed: the other fields of this response still show the OLD values. reload — the running configuration shows the NEW values but the agents were not rebuilt: their next turns keep the old limits.
+             * @example reload
+             * @enum {string}
+             */
+            stage: "refresh" | "reload";
+            /**
+             * @description Every Performance setting saved but not yet in force — the union of the changed_fields of each failed PUT since the settings were last fully applied, in contract enum order.
+             * @example [
+             *       "max_tool_iterations"
+             *     ]
+             */
+            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "max_tool_iterations")[];
         };
         /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
         Provider: {
@@ -18413,6 +18613,75 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            /** @description Lowering drift (issue #904, D16) — the agents the new global limit would lower differ from confirmed_lowering, or an agent record changed mid-write (revision conflict; agents already lowered were rolled back). Nothing was written; the body carries the fresh preview. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaxToolIterationsLoweringConflict"];
+                };
+            };
+            /** @description Server-side failure. code tells them apart: max_tool_iterations_agents_read_failed (the agent store could not be read; nothing written), max_tool_iterations_lowering_failed (a write failed; everything rolled back, nothing changed), max_tool_iterations_rollback_incomplete (a write failed and some agents could not be restored — the error names them; details.cause carries the original failure; the global is unchanged), performance_reload_failed (the settings ARE saved — config.json and any lowered agents are written, nothing is rolled back — but not in force yet; the body is a PerformanceReloadFailedError whose details carry stage (refresh: in-memory config not swapped, GET still shows the old values; reload: in-memory config updated, registry reload failed), changed_fields and lowered_agents). Any other failure to write config.json carries no code. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    previewMaxToolIterationsLowering: {
+        parameters: {
+            query: {
+                /** @description Candidate global tool-iteration limit (1–1000). */
+                value: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The agents that would be lowered (empty when none). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaxToolIterationsLoweringPreview"];
+                };
+            };
+            /** @description Missing, non-integer or out-of-range value. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The agent store could not be read (code max_tool_iterations_agents_read_failed). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -23820,6 +24089,15 @@ export type HealthResponse = components["schemas"]["HealthResponse"];
 export type GatewayStatus = components["schemas"]["GatewayStatus"];
 export type PerformanceSettings = components["schemas"]["PerformanceSettings"];
 export type PerformanceSettingsUpdate = components["schemas"]["PerformanceSettingsUpdate"];
+export type MaxToolIterationsSource = components["schemas"]["MaxToolIterationsSource"];
+export type MaxToolIterationsSavedState = components["schemas"]["MaxToolIterationsSavedState"];
+export type MaxToolIterationAgentChange = components["schemas"]["MaxToolIterationAgentChange"];
+export type MaxToolIterationsLoweringPreview = components["schemas"]["MaxToolIterationsLoweringPreview"];
+export type MaxToolIterationsConfirmedAgent = components["schemas"]["MaxToolIterationsConfirmedAgent"];
+export type MaxToolIterationsLoweringConflict = components["schemas"]["MaxToolIterationsLoweringConflict"];
+export type PerformanceReloadFailedDetails = components["schemas"]["PerformanceReloadFailedDetails"];
+export type PerformanceReloadFailedError = components["schemas"]["PerformanceReloadFailedError"];
+export type PerformancePendingApply = components["schemas"]["PerformancePendingApply"];
 export type Provider = components["schemas"]["Provider"];
 export type ProviderDependent = components["schemas"]["ProviderDependent"];
 export type ProviderDeleteRequest = components["schemas"]["ProviderDeleteRequest"];
