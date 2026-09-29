@@ -43,6 +43,7 @@ export interface MailPreviewPaneProps {
   signatureHtml?: string
   /** Shown in the 'sent' state (US-4 AS-4). */
   sentOn?: string
+  onEditingChange?(editing: boolean): void
   onSave(next: {
     to: string
     subject: string
@@ -60,7 +61,7 @@ function toRecipientValue(value: string): MailRecipientValue {
   return { recipients: splitMailRecipients(value), draft: '' }
 }
 
-export function MailPreviewPane({ state, subject, bodyMarkdown, to, cc, bcc, attachments, senderName, senderAddress, signatureHtml, sentOn, onSave, onSend, onDiscard }: MailPreviewPaneProps) {
+export function MailPreviewPane({ state, subject, bodyMarkdown, to, cc, bcc, attachments, senderName, senderAddress, signatureHtml, sentOn, onEditingChange, onSave, onSend, onDiscard }: MailPreviewPaneProps) {
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editTo, setEditTo] = useState<MailRecipientValue>(() => toRecipientValue(to))
@@ -178,7 +179,10 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, cc, bcc, att
           />
         </div>
         <div className="flex shrink-0 items-center gap-[var(--space-1)] border-t border-[var(--color-border)] bg-[var(--color-surface-0)] px-[var(--space-3)] py-[var(--space-2)]">
-          <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(false)}>
+          <Button variant="ghost" size="sm" disabled={saving} onClick={() => {
+            setEditing(false)
+            onEditingChange?.(false)
+          }}>
             Back to preview
           </Button>
           <div className="min-w-0 flex-1" />
@@ -203,7 +207,10 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, cc, bcc, att
                   ...(attachments !== undefined ? { keepAttachmentParts: keptAttachments.map((item) => item.part_index) } : {}),
                   ...(newFiles.length > 0 ? { attachments: newFiles } : {}),
                 })
-                if (saved !== false) setEditing(false)
+                if (saved !== false) {
+                  setEditing(false)
+                  onEditingChange?.(false)
+                }
               } finally {
                 setSaving(false)
               }
@@ -252,6 +259,7 @@ export function MailPreviewPane({ state, subject, bodyMarkdown, to, cc, bcc, att
             setEditBody(bodyMarkdown)
             editBodyRef.current = bodyMarkdown
             setEditing(true)
+            onEditingChange?.(true)
           }}>
             Edit
           </Button>

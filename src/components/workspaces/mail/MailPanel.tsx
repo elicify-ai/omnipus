@@ -202,6 +202,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
   const [selectedRef, setSelectedRef] = useState<string | null>(() =>
     initialMessageRef ?? readMailPanelIntent(workspaceId).messageRef,
   )
+  const [draftEditingRef, setDraftEditingRef] = useState<string | null>(null)
 
   // Persist the per-workspace intent whenever mailbox/folder selection moves
   // (FR-010). Effect-based so programmatic and click-driven changes persist.
@@ -273,6 +274,8 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
     retry: false,
   })
   const detail: MailMessage | null = detailQuery.data ?? null
+  const compactDraftList = layout === 'stacked' && detail?.is_draft === true
+    && draftEditingRef === `${agentId}:${folder}:${selectedRef}`
   const seenMutation = useMutation({
     mutationFn: (ref: string) => markMailSeen(workspaceId, agentId as string, folder, ref),
     onSuccess: () => {
@@ -557,6 +560,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
             layout={layout}
             region="list"
             previewVisible
+            compactList={compactDraftList}
             surface="mail-list"
             testId="mail-list-region"
           >
@@ -632,6 +636,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
             layout={layout}
             region="preview"
             previewVisible
+            compactList={compactDraftList}
             surface="mail-preview"
             testId="mail-reading-zone"
           >
@@ -694,6 +699,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
                     signatureHtml={selectedMailbox?.signature_html}
                     sentOn={folder === 'sent' ? formatMailDate(detail.date) : undefined}
                     onSave={(next) => draftSave.mutateAsync(next).then(() => true, () => false)}
+                    onEditingChange={(editing) => setDraftEditingRef(editing ? `${agentId}:${folder}:${selectedRef}` : null)}
                     onSend={() => draftSend.mutate()}
                     onDiscard={() => draftDiscard.mutate()}
                   />

@@ -13,6 +13,8 @@ interface ListPreviewRegionProps {
   layout: ListPreviewLayoutMode;
   region: "list" | "preview";
   previewVisible: boolean;
+  /** Reserve most of a stacked panel for an active editor; default stays Library's 45/55. */
+  compactList?: boolean;
   children: ReactNode;
   surface?: "library-list" | "mail-list" | "mail-preview";
   testId?: string;
@@ -42,6 +44,7 @@ export function ListPreviewRegion({
   layout,
   region,
   previewVisible,
+  compactList = false,
   children,
   surface,
   testId,
@@ -55,7 +58,7 @@ export function ListPreviewRegion({
             ? "flex-1"
             : layout === "split"
               ? "flex-[40]"
-              : "flex-[45]",
+              : compactList ? "flex-[20]" : "flex-[45]",
           surface === "library-list" &&
             "overflow-y-auto p-[var(--space-2)] relative",
           surface === "mail-list" && "flex overflow-hidden",
@@ -71,7 +74,7 @@ export function ListPreviewRegion({
     <div
       className={cn(
         "min-h-0 min-w-0 border-[var(--color-border)]",
-        layout === "split" ? "flex-[60] border-l" : "flex-[55] border-t",
+        layout === "split" ? "flex-[60] border-l" : compactList ? "flex-[80] border-t" : "flex-[55] border-t",
         surface === "mail-preview" && "flex overflow-hidden",
       )}
       {...(testId ? { "data-testid": testId } : {})}
