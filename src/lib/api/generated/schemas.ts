@@ -5140,6 +5140,18 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
     .partial()
     .optional(),
 });
+export const LibraryMoveConflictError = z.object({
+  error: z.string().min(1),
+  code: z.enum([
+    "already_exists",
+    "is_mount_root",
+    "view_tracked_transfer_refused",
+    "move_incomplete",
+  ]),
+  tracked_paths: z.array(z.string()).optional(),
+  paths: z.array(z.string()).optional(),
+  pending_move_id: z.string().optional(),
+});
 export const LibraryContentResponse = z.object({
   path: z.string(),
   content: z.string().optional(),
@@ -5181,6 +5193,29 @@ export const LibraryRenameRequest = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
 });
+export const RetryMoveRequest = z.object({
+  pending_move_id: z.string().min(1),
+});
+export const RetryMoveResult = z
+  .object({
+    outcome: z.enum(["re_enrolled", "already_complete"]),
+    re_enrolled_paths: z.array(z.string().min(1)),
+  })
+  .passthrough();
+export const RetryMoveError = z
+  .object({
+    error: z.string(),
+    code: z.enum([
+      "retry_not_found",
+      "retry_expired",
+      "retry_identity_mismatch",
+      "retry_preflight_failed",
+      "retry_locked",
+    ]),
+    pending_move_id: z.string(),
+    paths: z.array(z.string()).optional(),
+  })
+  .passthrough();
 export const LibraryPreviewTokenRequest = z.object({
   workspace_id: z.string().min(1),
   path: z.string().min(1),
@@ -9885,13 +9920,62 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists.`,
-        schema: ErrorResponse,
+        description: `Conflict: destination already exists (already_exists); source is a mount root (is_mount_root); transfer of tracked views is refused (view_tracked_transfer_refused); or a move is incomplete after membership revocation (move_incomplete).
+`,
+        schema: LibraryMoveConflictError,
       },
       {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/retry-move",
+    alias: "retryLibraryMove",
+    description: `Replays a trusted pending move from its pending_move_id, scoped to the named workspace. Checks whether the rename already landed, verifies the revoked view&#x27;s identity, restores markers, and enrolls the named paths. A repeat request after success is an idempotent no-op.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ pending_move_id: z.string().min(1) }),
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: RetryMoveResult,
+    errors: [
+      {
+        status: 404,
+        description: `Pending move ID not found (retry_not_found).`,
+        schema: RetryMoveError,
+      },
+      {
+        status: 409,
+        description: `Revoked view identity mismatch or preflight failed (retry_identity_mismatch or retry_preflight_failed).`,
+        schema: RetryMoveError,
+      },
+      {
+        status: 410,
+        description: `Pending or completed move ID expired (retry_expired).`,
+        schema: RetryMoveError,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Collection lock unavailable (retry_locked).`,
+        schema: RetryMoveError,
       },
     ],
   },
@@ -10087,8 +10171,9 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists.`,
-        schema: ErrorResponse,
+        description: `Conflict: destination already exists (already_exists); source is a mount root (is_mount_root); transfer of tracked views is refused (view_tracked_transfer_refused); or a move is incomplete after membership revocation (move_incomplete).
+`,
+        schema: LibraryMoveConflictError,
       },
       {
         status: 500,

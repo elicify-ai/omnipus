@@ -1,0 +1,8 @@
+title: RetryMoveRequest
+type: object
+additionalProperties: false
+required: [pending_move_id]
+properties:
+  pending_move_id:
+    type: string
+    minLength: 1
