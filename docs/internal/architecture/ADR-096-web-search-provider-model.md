@@ -282,6 +282,8 @@ Migration still has to know about it: in today's chain SearXNG sits **above** Ta
 
 Both carry an acceptance criterion and a test. Neither is optional because the provider is descoped.
 
+**Amendment, 2026-09-29 (founder, via #1056 F-2/squad `websearch-1055-1056`): reversed — SearXNG is fully removed, not merely descoped.** The founder's original "the provider code stays, it is not deleted" instruction above is superseded: the catalogue entry, its `WebToolsConfig.SearXNG` field, its settings-surface exposure, and its documentation are deleted outright, and any persisted `tools.web.searxng` block in an existing install's `config.json` is dropped on load (silently — `pkg/config`'s loader has no `DisallowUnknownFields`, so an unrecognised key is simply ignored once the Go field no longer exists; no new migration marker is introduced for this). The one open risk this reversal creates against D11's own migration (below) — whether any not-yet-migrated install with SearXNG enabled can still be awarded SearXNG's legacy chain position 3 once the typed field is gone — is tracked and resolved in the implementation (`pkg/config` roles-migration code, raw-JSON read if needed instead of new alias/marker machinery), not reopened here as a design question.
+
 ### D11 — Migration must not silently change who answers, or what it costs — and it must run where it can tell
 
 **The trigger.** Runs once, when `default_provider` is absent on disk. Writes both keys plus a marker. Does not run again once the marker is present, so a later hand-edit that removes only the fallback key is the unset state in R3, not a second migration. Does not change an `enabled` flag except in the two cases named below. Does not delete a key reference.
