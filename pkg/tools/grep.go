@@ -355,7 +355,7 @@ func (t *GrepTool) mountScopeRoot(m workspace.Mount, rest string, policy fspolic
 	expected, identityErr := grepPreOpenIdentity(m.HostPath)
 	if identityErr != nil {
 		set.add(filegrep.Root{Name: m.Name, FS: unreachableRootFS{err: identityErr}}, realPath)
-		return set, nil
+		return set, nil //nolint:nilerr // error is carried visibly by the unreachableRootFS root
 	}
 	runGrepPreOpenRootHook(m.HostPath)
 	mr, mErr := os.OpenRoot(m.HostPath)

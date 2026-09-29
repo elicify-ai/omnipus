@@ -775,8 +775,8 @@ func (h *PathHandle) OpenNonBlockingRead() (fs.File, error) {
 	var f *os.File
 	var err error
 	if h.root == nil {
-		if err := h.recheckUnrestrictedCarveOut(); err != nil {
-			return nil, err
+		if carveErr := h.recheckUnrestrictedCarveOut(); carveErr != nil {
+			return nil, carveErr
 		}
 		f, err = os.OpenFile(h.abs, regularReadOpenFlags(), 0)
 	} else {

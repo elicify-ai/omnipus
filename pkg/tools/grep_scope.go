@@ -480,10 +480,10 @@ func (t *GrepTool) workspaceScopeRoot(policy fspolicy.FSPolicy, realWorkDir, rea
 // (truncated root_lost naming it), never a hard error and never a silent
 // zero.
 //
-// Residual (SL-4, stated in ADR-081): realAbs is advisory; an ancestor
-// swapped for a symlink between ResolvePath and os.OpenRoot is the same
-// class existing mount roots carry. carveOutFS re-judges every entry by
-// string against the secret set.
+// Residual (SL-4, stated in ADR-081): realAbs is advisory; a child entry
+// can change after ResolvePath. The admitted root has a symlink-free pre-open
+// identity check, while os.Root confines child traversal and carveOutFS
+// re-judges every entry by string against the secret set.
 //
 // FR-010's seam, fired between the existence check above and the os.OpenRoot
 // below, drives the "swap between resolve and open" race for the absolute
