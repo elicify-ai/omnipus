@@ -306,6 +306,8 @@ components:
       $ref: ./components/schemas/HostFolderEntry.yaml
     LibraryEntry:
       $ref: ./components/schemas/LibraryEntry.yaml
+    LibraryEntryView:
+      $ref: ./components/schemas/LibraryEntryView.yaml
     LibraryEntryMount:
       $ref: ./components/schemas/LibraryEntryMount.yaml
     LibraryContentResponse:
@@ -977,7 +979,8 @@ components:
             (FR-024), never an empty result.
           example: "deal"
         kind:
-          $ref: "./components/schemas/RecordRowKind.yaml"
+          type: string
+          enum: [note, record, task, attachment]
           description: >
             What sort of row to return. Omitted means `note`.
 

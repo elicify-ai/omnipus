@@ -21,12 +21,11 @@ import (
 // ---------------------------------------------------------------------------
 // WHAT THIS FILE IS, AND THE ONE THING IT DELIBERATELY IS NOT
 //
-// A saved view is a saved query, stored as data in
-// <vault>/.omnipus-vault/views/<name>.yaml — the location is stated in the
-// contract (the ViewDef schema, hosted INLINE in contracts/openapi.yaml
-// under components.schemas since it references the recursive VaultFilterNode
-// — see that file's own note), which is the single
-// source of truth for the format under Hard Constraint #8.
+// A saved view is a saved query stored as a `.view` file inside its
+// knowledge base. Its format is stated in the contract (the ViewDef schema,
+// hosted INLINE in contracts/openapi.yaml under components.schemas since it
+// references the recursive VaultFilterNode — see that file's own note),
+// which is the single source of truth under Hard Constraint #8.
 //
 // THREE CALLERS NEED TO READ ONE, and they arrived at three different times:
 //
@@ -97,6 +96,8 @@ const (
 // mistranslate here, which is a stronger guarantee than the guard was.
 // ---------------------------------------------------------------------------
 
+// TODO(#1017): delete ViewsDir after the GREEN-security vaultimport writer
+// changes replace its last production callers on the integration branch.
 // ViewsDir returns <vault>/.omnipus-vault/views.
 func ViewsDir(vaultRoot string) string {
 	return filepath.Join(vaultRoot, VaultMarkerDirName, ViewsDirName)
@@ -542,54 +543,6 @@ func (s *ViewSet) add(v *SavedView) {
 // ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
-
-// LoadViews reads every saved view in a vault.
-//
-// schemas may be nil, and the distinction is deliberate rather than a
-// convenience: with a schema set, a view is additionally checked against it
-// and a view naming a vanished type or property is REJECTED and reported;
-// without one, only the view's own format is checked.
-//
-// (Round 2 / library-views-anywhere-spec §4 step 1+3.) Discovery is no
-// longer restricted to one directory: views live anywhere inside a
-// knowledge base (FR-VA-001, FD-1). pkg/knowledge owns the canonical
-// helper for that discovery (`pkg/knowledge.DiscoverViewFiles`,
-// WalkContained + D-SYMLINK-READ + D-SIZECAP) — this package cannot import
-// it (MAJ-008's import cycle), so for the lone public `records.LoadViews`
-// shim a small, view-only walker runs here. Both walkers honour the same
-// four control-plane names and the same `.view`-extension rule; the
-// canonical one in pkg/knowledge is what the rest of the package uses.
-//
-// A vault with no `.view` files anywhere is NOT an error. It is the
-// ordinary state of every vault nobody has authored a view in, which is
-// most of them.
-//
-// This shim remains because the spec's RED test pack pins the
-// `(root, schemas)` signature; production callers should prefer
-// `pkg/knowledge.LoadViewsForCollection(fsys, root, schemas)` once they
-// have a LinkFS-aware walk available. The two are observationally
-// equivalent (same dedup rule, same rejection codes, same skip list).
-func LoadViews(vaultRoot string, schemas *SchemaSet) (*ViewSet, *ViewLoadReport, error) {
-	if vaultRoot == "" {
-		return nil, nil, errors.New("records.LoadViews: empty vault root")
-	}
-	report := &ViewLoadReport{}
-	files, skipped, err := walkViewFiles(vaultRoot)
-	if err != nil {
-		return nil, nil, fmt.Errorf("records.LoadViews: walk collection: %w", err)
-	}
-	for _, d := range skipped {
-		report.Rejections = append(report.Rejections, ViewRejection{
-			Paths:  []string{d},
-			Code:   RejectViewUnreadable,
-			Reason: fmt.Sprintf("could not read subfolder %q during view discovery; views under it may have been missed", d),
-		})
-	}
-	if len(files) == 0 {
-		return NewViewSet(), report, nil
-	}
-	return loadViewBytes(files, schemas, report)
-}
 
 // loadViewBytes parses a slice of already-read view files into a ViewSet
 // plus a rejection report. Round-2 (library-views-anywhere-spec §4 step 3,

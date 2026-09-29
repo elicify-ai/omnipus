@@ -17394,45 +17394,8 @@ type LibraryEntry struct {
 
 	// View Per-entry facts about a `.view` file, surfaced directly on the `LibraryEntry` so the tree can show its kind icon and the preview can open it without a second round trip (library-views-anywhere-spec D-CONTRACT, US-4). PRESENT IFF `is_view` is true on the parent entry — a single presence check replaces what would otherwise be six-to-nine independent "present iff inside a knowledge base" markers (R2-OBS-001), and mirrors `mount`'s own pattern of nesting related optional facts on `LibraryEntry` (the `LibraryEntryMount.yaml` precedent).
 	// A `.view` file outside every knowledge base never carries `is_view` (D-SCOPE, FD-1) and so never carries this object — it renders as a plain, unrunnable file (founder: "a view runs only inside a knowledge base").
-	View *struct {
-		// CollectionId The opaque `kb_`-prefixed identifier of the ENCLOSING knowledge base (D-ADDRESS, R2-CRIT-003) — the same value `KnowledgeBaseViews.collection_id` carries for a `.base` file in the same collection, computed by the same `knowledgeCollectionID` function. The Library preview uses it together with `name` to call the existing `GET .../knowledge/view` endpoint directly, with no SPA-side enclosing-collection resolution step (BasePreview's own resolution path does not exist for non-`.base` entries, hence the round-2 contract addition).
-		// Present exactly when this object is present — D-SCOPE already guarantees an enclosing knowledge base at that point.
-		CollectionId *string `json:"collection_id,omitempty"`
-
-		// ConflictPaths Every file involved in a duplicate-name collision, collection- relative — the same two (or more) paths `ViewRejection.Paths` already carries on the server, now reaching the wire so a person can tell BOTH views apart. Present exactly when `rejection` is `view_duplicate_name`; absent otherwise (a parse failure names the single file involved through `path` on the entry itself).
-		ConflictPaths *[]string `json:"conflict_paths,omitempty"`
-
-		// DerivedFrom The collection-relative path of the `.base` file currently managing this view (the file's own `ViewDef.derived_from` field, D-PROVENANCE / FR-VA-009a). Present iff that field is set on the underlying `ViewDef` — the read-only / "derived" / "managed by" markers a UI surfaces from it are display-only and never influence what re-derivation may rewrite or delete (the pipeline-owned membership record is the authority for that, not this field, per R2-CRIT-001).
-		DerivedFrom *string `json:"derived_from,omitempty"`
-
-		// Kind WHICH OF THE EIGHT NAMED VIEW KINDS A VIEW IS (view-kinds-design-2026-09-03 §2.3, §4). Shared between `ViewDef.kind` (what an agent or composer authored) and `LibraryEntryView.kind` (what the Library tree's icon must key off) — extracted to its own schema (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 / round-1 MIN-004) so the two references stay in lockstep by construction, not by two enums that happen to read the same eight strings today.
-		// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what was asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
-		// A view that does not declare a kind (legal under the schema — only `name` is required) reports `kind` absent on `LibraryEntryView`; the tree falls back to a generic view icon (library-views-anywhere-spec EC-3).
-		Kind *LibraryEntryViewKind `json:"kind,omitempty"`
-
-		// Label The view's `DisplayLabel()` — the human-readable label the Library tree shows without a second round trip. Absent when the file fails to parse.
-		Label *string `json:"label,omitempty"`
-
-		// Name The view's authoritative `Def.Name`. Present iff the file parsed successfully AND `is_view` is true on the parent; absent whenever `rejection` is present (the only handle the preview has on a broken or duplicate-rejected view is `rejection_reason` and, for a duplicate, `conflict_paths`).
-		Name *string `json:"name,omitempty"`
-
-		// Rejection Every reason a `.view` file can fail to load — extracted to its own enum (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 2) so the SPA's duplicate / parse / oversize badges compare against one canonical list of reason codes, not against a hand-written wire literal that can drift from the server's actual `RejectView*` set.
-		// Present on `LibraryEntryView.rejection` exactly when the file is `is_view: true` but broken, oversize, or duplicate-rejected; absent on a healthy view. The operator-facing text lives on the sibling `rejection_reason` field (`ViewRejection.Reason` on the server), and — for a duplicate-name collision only — the colliding paths live on the sibling `conflict_paths` field (`ViewRejection.Paths` on the server).
-		Rejection *LibraryEntryViewRejection `json:"rejection,omitempty"`
-
-		// RejectionReason The operator-facing text the loader emitted with the rejection, verbatim from `ViewRejection.Reason` on the server. Present exactly when `rejection` is present. This is what the preview surfaces to a person opening a broken or duplicate-rejected view, so it never shows a blank or generic error.
-		RejectionReason *string `json:"rejection_reason,omitempty"`
-	} `json:"view,omitempty"`
+	View *LibraryEntryView `json:"view,omitempty"`
 }
-
-// LibraryEntryViewKind WHICH OF THE EIGHT NAMED VIEW KINDS A VIEW IS (view-kinds-design-2026-09-03 §2.3, §4). Shared between `ViewDef.kind` (what an agent or composer authored) and `LibraryEntryView.kind` (what the Library tree's icon must key off) — extracted to its own schema (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 / round-1 MIN-004) so the two references stay in lockstep by construction, not by two enums that happen to read the same eight strings today.
-// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what was asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
-// A view that does not declare a kind (legal under the schema — only `name` is required) reports `kind` absent on `LibraryEntryView`; the tree falls back to a generic view icon (library-views-anywhere-spec EC-3).
-type LibraryEntryViewKind string
-
-// LibraryEntryViewRejection Every reason a `.view` file can fail to load — extracted to its own enum (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 2) so the SPA's duplicate / parse / oversize badges compare against one canonical list of reason codes, not against a hand-written wire literal that can drift from the server's actual `RejectView*` set.
-// Present on `LibraryEntryView.rejection` exactly when the file is `is_view: true` but broken, oversize, or duplicate-rejected; absent on a healthy view. The operator-facing text lives on the sibling `rejection_reason` field (`ViewRejection.Reason` on the server), and — for a duplicate-name collision only — the colliding paths live on the sibling `conflict_paths` field (`ViewRejection.Paths` on the server).
-type LibraryEntryViewRejection string
 
 // LibraryEntryMount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
 // It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
@@ -17446,6 +17409,47 @@ type LibraryEntryMount struct {
 	// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
 	Name string `json:"name"`
 }
+
+// LibraryEntryView Per-entry facts about a `.view` file, surfaced directly on the `LibraryEntry` so the tree can show its kind icon and the preview can open it without a second round trip (library-views-anywhere-spec D-CONTRACT, US-4). PRESENT IFF `is_view` is true on the parent entry — a single presence check replaces what would otherwise be six-to-nine independent "present iff inside a knowledge base" markers (R2-OBS-001), and mirrors `mount`'s own pattern of nesting related optional facts on `LibraryEntry` (the `LibraryEntryMount.yaml` precedent).
+// A `.view` file outside every knowledge base never carries `is_view` (D-SCOPE, FD-1) and so never carries this object — it renders as a plain, unrunnable file (founder: "a view runs only inside a knowledge base").
+type LibraryEntryView struct {
+	// CollectionId The opaque `kb_`-prefixed identifier of the ENCLOSING knowledge base (D-ADDRESS, R2-CRIT-003) — the same value `KnowledgeBaseViews.collection_id` carries for a `.base` file in the same collection, computed by the same `knowledgeCollectionID` function. The Library preview uses it together with `name` to call the existing `GET .../knowledge/view` endpoint directly, with no SPA-side enclosing-collection resolution step (BasePreview's own resolution path does not exist for non-`.base` entries, hence the round-2 contract addition).
+	// Present exactly when this object is present — D-SCOPE already guarantees an enclosing knowledge base at that point.
+	CollectionId *string `json:"collection_id,omitempty"`
+
+	// ConflictPaths Every file involved in a duplicate-name collision, collection- relative — the same two (or more) paths `ViewRejection.Paths` already carries on the server, now reaching the wire so a person can tell BOTH views apart. Present exactly when `rejection` is `view_duplicate_name`; absent otherwise (a parse failure names the single file involved through `path` on the entry itself).
+	ConflictPaths *[]string `json:"conflict_paths,omitempty"`
+
+	// DerivedFrom The collection-relative path of the `.base` file currently managing this view (the file's own `ViewDef.derived_from` field, D-PROVENANCE / FR-VA-009a). Present iff that field is set on the underlying `ViewDef` — the read-only / "derived" / "managed by" markers a UI surfaces from it are display-only and never influence what re-derivation may rewrite or delete (the pipeline-owned membership record is the authority for that, not this field, per R2-CRIT-001).
+	DerivedFrom *string `json:"derived_from,omitempty"`
+
+	// Kind WHICH OF THE EIGHT NAMED VIEW KINDS A VIEW IS (view-kinds-design-2026-09-03 §2.3, §4). Shared between `ViewDef.kind` (what an agent or composer authored) and `LibraryEntryView.kind` (what the Library tree's icon must key off) — extracted to its own schema (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 / round-1 MIN-004) so the two references stay in lockstep by construction, not by two enums that happen to read the same eight strings today.
+	// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what was asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+	// A view that does not declare a kind (legal under the schema — only `name` is required) reports `kind` absent on `LibraryEntryView`; the tree falls back to a generic view icon (library-views-anywhere-spec EC-3).
+	Kind *LibraryEntryViewKind `json:"kind,omitempty"`
+
+	// Label The view's `DisplayLabel()` — the human-readable label the Library tree shows without a second round trip. Absent when the file fails to parse.
+	Label *string `json:"label,omitempty"`
+
+	// Name The view's authoritative `Def.Name`. Present iff the file parsed successfully AND `is_view` is true on the parent; absent whenever `rejection` is present (the only handle the preview has on a broken or duplicate-rejected view is `rejection_reason` and, for a duplicate, `conflict_paths`).
+	Name *string `json:"name,omitempty"`
+
+	// Rejection Every reason a `.view` file can fail to load — extracted to its own enum (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 2) so the SPA's duplicate / parse / oversize badges compare against one canonical list of reason codes, not against a hand-written wire literal that can drift from the server's actual `RejectView*` set.
+	// Present on `LibraryEntryView.rejection` exactly when the file is `is_view: true` but broken, oversize, or duplicate-rejected; absent on a healthy view. The operator-facing text lives on the sibling `rejection_reason` field (`ViewRejection.Reason` on the server), and — for a duplicate-name collision only — the colliding paths live on the sibling `conflict_paths` field (`ViewRejection.Paths` on the server).
+	Rejection *LibraryEntryViewRejection `json:"rejection,omitempty"`
+
+	// RejectionReason The operator-facing text the loader emitted with the rejection, verbatim from `ViewRejection.Reason` on the server. Present exactly when `rejection` is present. This is what the preview surfaces to a person opening a broken or duplicate-rejected view, so it never shows a blank or generic error.
+	RejectionReason *string `json:"rejection_reason,omitempty"`
+}
+
+// LibraryEntryViewKind WHICH OF THE EIGHT NAMED VIEW KINDS A VIEW IS (view-kinds-design-2026-09-03 §2.3, §4). Shared between `ViewDef.kind` (what an agent or composer authored) and `LibraryEntryView.kind` (what the Library tree's icon must key off) — extracted to its own schema (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 3 / round-1 MIN-004) so the two references stay in lockstep by construction, not by two enums that happen to read the same eight strings today.
+// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what was asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+// A view that does not declare a kind (legal under the schema — only `name` is required) reports `kind` absent on `LibraryEntryView`; the tree falls back to a generic view icon (library-views-anywhere-spec EC-3).
+type LibraryEntryViewKind string
+
+// LibraryEntryViewRejection Every reason a `.view` file can fail to load — extracted to its own enum (library-views-anywhere-spec D-CONTRACT, R2-MAJ-005 finding 2) so the SPA's duplicate / parse / oversize badges compare against one canonical list of reason codes, not against a hand-written wire literal that can drift from the server's actual `RejectView*` set.
+// Present on `LibraryEntryView.rejection` exactly when the file is `is_view: true` but broken, oversize, or duplicate-rejected; absent on a healthy view. The operator-facing text lives on the sibling `rejection_reason` field (`ViewRejection.Reason` on the server), and — for a duplicate-name collision only — the colliding paths live on the sibling `conflict_paths` field (`ViewRejection.Paths` on the server).
+type LibraryEntryViewRejection string
 
 // LibraryInlineDisposition Inline-preview metadata for one Library file (ADR-067 D18 / D15). Returned by GET /api/v1/library/{workspace_id}/inline-disposition?path=...
 // Answers one question before the SPA commits to a renderer: may these bytes be shown inline, as what type, and does showing them require the sandboxed token path? The SPA MUST NOT re-derive any of this from the file extension — the allow-list and the extension-to-type table are compiled into the binary and are the single source of truth (FR-015a, FR-015b), and a second copy in TypeScript is a second answer waiting to disagree.
@@ -24465,7 +24469,9 @@ type VaultFindRequest struct {
 	// Join Relation properties whose columns to BORROW onto each row (FR-124). A borrowed value renders visibly as borrowed and is never merged into the row's own columns: it is not a property of this record and must never read as one.
 	Join *[]string `json:"join,omitempty"`
 
-	// Kind The kind of row a `knowledge_find` call may return (ADR-068 D15.3, spec FR-076a). Extracted to its own schema so this enum lives in one place — the same pattern ViewKind.yaml applies to `ViewDef.kind`, applied here to `VaultFindRequest.kind`, which the contract shape test would otherwise misread as an inline kind enum.
+	// Kind What sort of row to return. Omitted means `note`.
+	//
+	// `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX LINES, not notes: each row carries `path`, `line`, `status` and `text`, and renders with its line number so a reader can never mistake it for the note that contains it (FR-076a). This narrowly amends the rule that a row is one note: a row is one real THING AT A PATH — a note, or a checkbox line within one. The whole-collection regex walk that `knowledge_tasks` performed does not survive; checkboxes are indexed, so the ordinary bounds apply and the old 5,000-file read cap is gone.
 	Kind *VaultFindRequestKind `json:"kind,omitempty"`
 
 	// Limit Rows per page. Omitted means 50. A value above the cap of 200 is CLAMPED and the clamp is REPORTED (FR-063) — deliberately no `maximum` here, so an over-large request comes back with a stated clamp rather than a bare schema error that says nothing about what was applied.
@@ -24497,7 +24503,9 @@ type VaultFindRequest struct {
 // VaultFindRequestDetail Rendering density. Omitted means `standard`. `minimal` drops columns and borrowed values to roughly 80 bytes per hit; the completeness header and the problem COUNT always survive the trim, because the caveat is the one thing a shorter answer must not lose.
 type VaultFindRequestDetail string
 
-// VaultFindRequestKind The kind of row a `knowledge_find` call may return (ADR-068 D15.3, spec FR-076a). Extracted to its own schema so this enum lives in one place — the same pattern ViewKind.yaml applies to `ViewDef.kind`, applied here to `VaultFindRequest.kind`, which the contract shape test would otherwise misread as an inline kind enum.
+// VaultFindRequestKind What sort of row to return. Omitted means `note`.
+//
+// `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX LINES, not notes: each row carries `path`, `line`, `status` and `text`, and renders with its line number so a reader can never mistake it for the note that contains it (FR-076a). This narrowly amends the rule that a row is one note: a row is one real THING AT A PATH — a note, or a checkbox line within one. The whole-collection regex walk that `knowledge_tasks` performed does not survive; checkboxes are indexed, so the ordinary bounds apply and the old 5,000-file read cap is gone.
 type VaultFindRequestKind string
 
 // VaultFindResponse The answer to `knowledge_find` — rows AND the account of everything the query could not include, in the SAME response (ADR-068 D13, D22; spec FR-025, FR-121).

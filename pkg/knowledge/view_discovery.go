@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 )
@@ -275,13 +274,10 @@ const (
 	viewRejectionTooLarge   = "view_too_large"
 )
 
-// openNoFollow opens abs without following a terminal symlink. On Linux
-// and macOS the syscall.O_NOFOLLOW flag does the work; on platforms that
-// lack it (today: Windows) the caller is expected to have used
-// ResolveContainedNoSymlink upstream, which already compares the resolved
-// path against the lexical one — any link anywhere in the chain refuses
-// before this call. The Stat-then-Fstat guard in openAndReadView then
-// closes the open-time window D-SYMLINK-READ requires.
+// openNoFollow opens abs without following a terminal symlink on Linux and
+// macOS. Windows opens first and checks the opened file's identity against
+// Lstat before reading in openAndReadView/ReadViewFile. Both paths first call
+// ResolveContainedNoSymlink to refuse links in enclosing directories.
 func openNoFollow(fsys LinkFS, abs string) (fs.File, error) {
 	if o, ok := fsys.(interface {
 		OpenNoFollow(string) (fs.File, error)
@@ -289,12 +285,6 @@ func openNoFollow(fsys LinkFS, abs string) (fs.File, error) {
 		return o.OpenNoFollow(abs)
 	}
 	return openNoFollowDefault(abs)
-}
-
-func openNoFollowDefault(abs string) (fs.File, error) {
-	// fs.OpenFile is the only standard-library call site that accepts
-	// syscall.O_NOFOLLOW.
-	return os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 }
 
 // ReadViewFile reads ONE .view file's bytes from root at rel with the
@@ -354,31 +344,20 @@ func ReadViewFile(fsys LinkFS, root CollectionRoot, rel string) (ViewFile, error
 	}, nil
 }
 
-// sameRegularFile reports whether two fs.FileInfo describe the SAME
-// underlying file. Device + Inode is the test on POSIX; a caller on
-// Windows where Inode is zero falls through to size+name+mtime which is
-// the best portable approximation.
+// sameRegularFile compares the actual file identity on supported operating
+// systems: os.SameFile checks device/inode on Unix and volume/file ID on
+// Windows. Metadata equality is used only by test filesystems without OS
+// file information; real files with distinct IDs must never pass that check.
 func sameRegularFile(a, b fs.FileInfo) bool {
-	if a == nil || b == nil {
+	if a == nil || b == nil || !a.Mode().IsRegular() || !b.Mode().IsRegular() {
 		return false
 	}
-	if !a.Mode().IsRegular() || !b.Mode().IsRegular() {
+	if os.SameFile(a, b) {
+		return true
+	}
+	if a.Sys() != nil || b.Sys() != nil {
 		return false
 	}
-	if sysA := a.Sys(); sysA != nil {
-		if sysB := b.Sys(); sysB != nil {
-			if sa, ok := sysA.(*syscall.Stat_t); ok {
-				if sb, ok := sysB.(*syscall.Stat_t); ok {
-					if sa.Dev != 0 && sb.Dev != 0 && sa.Ino != 0 && sb.Ino != 0 {
-						return sa.Dev == sb.Dev && sa.Ino == sb.Ino
-					}
-				}
-			}
-		}
-	}
-	// Fallback for platforms / fakes that do not surface a syscall.Stat_t:
-	// size + name + mtime is the closest portable identity the standard
-	// library exposes.
 	return a.Size() == b.Size() && a.Name() == b.Name() && a.ModTime().Equal(b.ModTime())
 }
 

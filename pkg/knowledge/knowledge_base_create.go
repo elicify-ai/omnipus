@@ -242,15 +242,11 @@ func (t *CreateBaseTool) Execute(ctx context.Context, args map[string]any) *tool
 		}
 	}
 
-	// Seed the two records subdirectories, matching what
-	// handleLibraryCreateVault does for a Library-created knowledge base —
-	// so a base created by an agent looks identical, on disk, to one created
-	// from the SPA.
+	// Seed the schema directory, matching Library-created knowledge bases.
+	// Views are content files anywhere in the collection, not control-plane
+	// files in a dedicated directory.
 	if mkErr := os.MkdirAll(records.SchemaDir(collection.Root()), 0o755); mkErr != nil {
 		return refuse(fmt.Sprintf("created the knowledge base but could not seed its schema directory: %v", mkErr))
-	}
-	if mkErr := os.MkdirAll(records.ViewsDir(collection.Root()), 0o755); mkErr != nil {
-		return refuse(fmt.Sprintf("created the knowledge base but could not seed its views directory: %v", mkErr))
 	}
 
 	t.deps.record(AuthorAuditRecord{

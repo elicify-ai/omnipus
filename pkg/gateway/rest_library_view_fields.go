@@ -23,6 +23,8 @@ package gateway
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -219,48 +221,16 @@ func annotateViewFields(root *library.Root, homePath, workspaceID, parentCollRel
 		}
 		b := true
 		e.IsView = &b
-		// e.View's struct shape is the LibraryEntryView schema. The
-		// oapi-codegen output is an anonymous struct nested in LibraryEntry;
-		// we build it via the gateway-local helper newLibraryEntryView
-		// (rest_library_view_fields_helpers.go) which uses reflection
-		// driven by the generated package's own type — keeping the gateway
-		// generated-type-clean per Hard Constraint #8.
-		v := newLibraryEntryView(libraryEntryViewFields{
-			Label:        nonEmptyPtr(entry.Label),
-			Name:         nonEmptyPtr(entry.Name),
-			Kind:         libraryEntryViewKindPtr(entry.Kind),
-			CollectionID: nonEmptyPtr(collID),
-		})
-		if entry.Rejection != "" {
-			rr := entry.Rejection
-			r := gen.LibraryEntryViewRejection(rr)
-			v = newLibraryEntryView(libraryEntryViewFields{
-				Label:           nonEmptyPtr(entry.Label),
-				Name:            nonEmptyPtr(entry.Name),
-				Kind:            libraryEntryViewKindPtr(entry.Kind),
-				CollectionID:    nonEmptyPtr(collID),
-				Rejection:       &r,
-				RejectionReason: nonEmptyPtr(entry.RejectionReason),
-				ConflictPaths:   ptrStringSlice(append([]string(nil), entry.ConflictPaths...)),
-			})
+		e.View = &gen.LibraryEntryView{
+			Label:           nonEmptyPtr(entry.Label),
+			Name:            nonEmptyPtr(entry.Name),
+			Kind:            libraryEntryViewKindPtr(entry.Kind),
+			CollectionId:    nonEmptyPtr(collID),
+			Rejection:       rejectionEntryRejection(entry.Rejection),
+			RejectionReason: nonEmptyPtr(entry.RejectionReason),
+			ConflictPaths:   ptrStringSlice(append([]string(nil), entry.ConflictPaths...)),
+			DerivedFrom:     nonEmptyPtr(entry.DerivedFrom),
 		}
-		if entry.DerivedFrom != "" {
-			df := entry.DerivedFrom
-			// Rebuild with derived_from included (the previous v's
-			// derived_from is empty by construction; one new call is
-			// cheaper than another reflection-driven update).
-			v = newLibraryEntryView(libraryEntryViewFields{
-				Label:           nonEmptyPtr(entry.Label),
-				Name:            nonEmptyPtr(entry.Name),
-				Kind:            libraryEntryViewKindPtr(entry.Kind),
-				CollectionID:    nonEmptyPtr(collID),
-				Rejection:       rejectionEntryRejection(entry.Rejection),
-				RejectionReason: nonEmptyPtr(entry.RejectionReason),
-				ConflictPaths:   ptrStringSlice(append([]string(nil), entry.ConflictPaths...)),
-				DerivedFrom:     &df,
-			})
-		}
-		assignLibraryEntryView(e, v)
 	}
 }
 
@@ -377,30 +347,47 @@ func readAndParseViewForIndex(abs string) (*viewIndexEntry, *viewRejectionInfo) 
 	return out, nil
 }
 
-// readCappedViewFile opens abs and reads up to cap+1 bytes; returns the
-// bytes (capped at cap if longer), the on-disk size, and any error.
+// readCappedViewFile opens abs without following a terminal symlink on Unix;
+// on Windows it checks the opened file's identity before reading any bytes.
+// It reads at most cap+1 bytes so even a file that grows after Lstat is
+// reported as too large by readAndParseViewForIndex.
 func readCappedViewFile(abs string, cap int64) ([]byte, int64, error) {
-	info, err := os.Lstat(abs)
+	before, err := os.Lstat(abs)
 	if err != nil {
 		return nil, 0, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, 0, os.ErrInvalid
+	if !before.Mode().IsRegular() {
+		return nil, before.Size(), os.ErrInvalid
 	}
-	f, err := os.OpenFile(abs, os.O_RDONLY, 0)
+	f, err := openViewForIndex(abs)
 	if err != nil {
-		return nil, info.Size(), err
+		return nil, before.Size(), err
 	}
 	defer f.Close()
-	buf := make([]byte, cap+1)
-	n, err := f.Read(buf)
-	if err != nil && err.Error() != "EOF" {
-		return nil, info.Size(), err
+	after, err := os.Lstat(abs)
+	if err != nil {
+		return nil, before.Size(), err
 	}
-	if int64(n) > cap {
-		buf = buf[:cap]
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, before.Size(), err
 	}
-	return buf, info.Size(), nil
+	if !after.Mode().IsRegular() || !opened.Mode().IsRegular() ||
+		!os.SameFile(before, after) || !os.SameFile(after, opened) {
+		return nil, before.Size(), fmt.Errorf("view file changed between discovery and read: %w", os.ErrInvalid)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, cap+1))
+	if err != nil {
+		return nil, before.Size(), err
+	}
+	size := before.Size()
+	if int64(len(data)) > size {
+		size = int64(len(data))
+	}
+	if int64(len(data)) > cap {
+		data = data[:cap]
+	}
+	return data, size, nil
 }
 
 // walkViewRootForIndex walks absRoot looking for .view files. Symlinks

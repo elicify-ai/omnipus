@@ -1050,13 +1050,6 @@ func (a *restAPI) handleLibraryCreateVault(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	if mkErr := os.MkdirAll(records.ViewsDir(collection.Root()), 0o755); mkErr != nil {
-		logger.ErrorCF("rest", "library: create vault: seed views dir failed",
-			map[string]any{"workspace_id": workspaceID, "path": rel, "error": mkErr.Error()})
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
 	fi, err := root.StatDir(rel)
 	if err != nil {
 		mapLibraryErr(w, "create vault", workspaceID, err)

@@ -4656,6 +4656,38 @@ export interface components {
             view?: components["schemas"]["LibraryEntryView"];
         };
         /**
+         * LibraryEntryView
+         * @description Per-entry facts about a `.view` file, surfaced directly on the `LibraryEntry` so the tree can show its kind icon and the preview can open it without a second round trip (library-views-anywhere-spec D-CONTRACT, US-4). PRESENT IFF `is_view` is true on the parent entry — a single presence check replaces what would otherwise be six-to-nine independent "present iff inside a knowledge base" markers (R2-OBS-001), and mirrors `mount`'s own pattern of nesting related optional facts on `LibraryEntry` (the `LibraryEntryMount.yaml` precedent).
+         *     A `.view` file outside every knowledge base never carries `is_view` (D-SCOPE, FD-1) and so never carries this object — it renders as a plain, unrunnable file (founder: "a view runs only inside a knowledge base").
+         * @example {
+         *       "kind": "summary",
+         *       "label": "Open deals by owner",
+         *       "name": "open-by-owner",
+         *       "collection_id": "kb_abc123"
+         *     }
+         */
+        LibraryEntryView: {
+            /** @description The view's authored kind (`ViewDef.kind`), absent when the file does not declare one (legal under the schema — only `name` is required) or fails to parse. Never a fabricated default (EC-3). */
+            kind?: components["schemas"]["ViewKind"];
+            /** @description The view's `DisplayLabel()` — the human-readable label the Library tree shows without a second round trip. Absent when the file fails to parse. */
+            label?: string;
+            /** @description The view's authoritative `Def.Name`. Present iff the file parsed successfully AND `is_view` is true on the parent; absent whenever `rejection` is present (the only handle the preview has on a broken or duplicate-rejected view is `rejection_reason` and, for a duplicate, `conflict_paths`). */
+            name?: string;
+            /**
+             * @description The opaque `kb_`-prefixed identifier of the ENCLOSING knowledge base (D-ADDRESS, R2-CRIT-003) — the same value `KnowledgeBaseViews.collection_id` carries for a `.base` file in the same collection, computed by the same `knowledgeCollectionID` function. The Library preview uses it together with `name` to call the existing `GET .../knowledge/view` endpoint directly, with no SPA-side enclosing-collection resolution step (BasePreview's own resolution path does not exist for non-`.base` entries, hence the round-2 contract addition).
+             *     Present exactly when this object is present — D-SCOPE already guarantees an enclosing knowledge base at that point.
+             */
+            collection_id?: string;
+            /** @description The loader's rejection code when the file is `is_view: true` but broken, oversize, or duplicate-rejected. Absent on a healthy view. When present, `rejection_reason` is also present, and — exactly when the code is `view_duplicate_name` — `conflict_paths` lists every colliding file (D-VALIDATE / R2-MAJ-005). */
+            rejection?: components["schemas"]["ViewRejectionCode"];
+            /** @description The operator-facing text the loader emitted with the rejection, verbatim from `ViewRejection.Reason` on the server. Present exactly when `rejection` is present. This is what the preview surfaces to a person opening a broken or duplicate-rejected view, so it never shows a blank or generic error. */
+            rejection_reason?: string;
+            /** @description Every file involved in a duplicate-name collision, collection- relative — the same two (or more) paths `ViewRejection.Paths` already carries on the server, now reaching the wire so a person can tell BOTH views apart. Present exactly when `rejection` is `view_duplicate_name`; absent otherwise (a parse failure names the single file involved through `path` on the entry itself). */
+            conflict_paths?: string[];
+            /** @description The collection-relative path of the `.base` file currently managing this view (the file's own `ViewDef.derived_from` field, D-PROVENANCE / FR-VA-009a). Present iff that field is set on the underlying `ViewDef` — the read-only / "derived" / "managed by" markers a UI surfaces from it are display-only and never influence what re-derivation may rewrite or delete (the pipeline-owned membership record is the authority for that, not this field, per R2-CRIT-001). */
+            derived_from?: string;
+        };
+        /**
          * LibraryEntryMount
          * @description Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
          *     It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
@@ -16354,38 +16386,6 @@ export interface components {
          * @enum {string}
          */
         ViewRejectionCode: "view_unreadable" | "view_invalid_yaml" | "view_empty" | "view_missing_name" | "view_missing_type" | "view_duplicate_name" | "view_unknown_key" | "view_unknown_type" | "view_unknown_property" | "view_invalid_layout" | "view_filter_too_large" | "view_invalid_filter_node" | "view_invalid_formula" | "view_unknown_formula" | "view_invalid_kind" | "view_invalid_part" | "view_unknown_enum_value" | "view_too_large";
-        /**
-         * LibraryEntryView
-         * @description Per-entry facts about a `.view` file, surfaced directly on the `LibraryEntry` so the tree can show its kind icon and the preview can open it without a second round trip (library-views-anywhere-spec D-CONTRACT, US-4). PRESENT IFF `is_view` is true on the parent entry — a single presence check replaces what would otherwise be six-to-nine independent "present iff inside a knowledge base" markers (R2-OBS-001), and mirrors `mount`'s own pattern of nesting related optional facts on `LibraryEntry` (the `LibraryEntryMount.yaml` precedent).
-         *     A `.view` file outside every knowledge base never carries `is_view` (D-SCOPE, FD-1) and so never carries this object — it renders as a plain, unrunnable file (founder: "a view runs only inside a knowledge base").
-         * @example {
-         *       "kind": "summary",
-         *       "label": "Open deals by owner",
-         *       "name": "open-by-owner",
-         *       "collection_id": "kb_abc123"
-         *     }
-         */
-        LibraryEntryView: {
-            /** @description The view's authored kind (`ViewDef.kind`), absent when the file does not declare one (legal under the schema — only `name` is required) or fails to parse. Never a fabricated default (EC-3). */
-            kind?: components["schemas"]["ViewKind"];
-            /** @description The view's `DisplayLabel()` — the human-readable label the Library tree shows without a second round trip. Absent when the file fails to parse. */
-            label?: string;
-            /** @description The view's authoritative `Def.Name`. Present iff the file parsed successfully AND `is_view` is true on the parent; absent whenever `rejection` is present (the only handle the preview has on a broken or duplicate-rejected view is `rejection_reason` and, for a duplicate, `conflict_paths`). */
-            name?: string;
-            /**
-             * @description The opaque `kb_`-prefixed identifier of the ENCLOSING knowledge base (D-ADDRESS, R2-CRIT-003) — the same value `KnowledgeBaseViews.collection_id` carries for a `.base` file in the same collection, computed by the same `knowledgeCollectionID` function. The Library preview uses it together with `name` to call the existing `GET .../knowledge/view` endpoint directly, with no SPA-side enclosing-collection resolution step (BasePreview's own resolution path does not exist for non-`.base` entries, hence the round-2 contract addition).
-             *     Present exactly when this object is present — D-SCOPE already guarantees an enclosing knowledge base at that point.
-             */
-            collection_id?: string;
-            /** @description The loader's rejection code when the file is `is_view: true` but broken, oversize, or duplicate-rejected. Absent on a healthy view. When present, `rejection_reason` is also present, and — exactly when the code is `view_duplicate_name` — `conflict_paths` lists every colliding file (D-VALIDATE / R2-MAJ-005). */
-            rejection?: components["schemas"]["ViewRejectionCode"];
-            /** @description The operator-facing text the loader emitted with the rejection, verbatim from `ViewRejection.Reason` on the server. Present exactly when `rejection` is present. This is what the preview surfaces to a person opening a broken or duplicate-rejected view, so it never shows a blank or generic error. */
-            rejection_reason?: string;
-            /** @description Every file involved in a duplicate-name collision, collection- relative — the same two (or more) paths `ViewRejection.Paths` already carries on the server, now reaching the wire so a person can tell BOTH views apart. Present exactly when `rejection` is `view_duplicate_name`; absent otherwise (a parse failure names the single file involved through `path` on the entry itself). */
-            conflict_paths?: string[];
-            /** @description The collection-relative path of the `.base` file currently managing this view (the file's own `ViewDef.derived_from` field, D-PROVENANCE / FR-VA-009a). Present iff that field is set on the underlying `ViewDef` — the read-only / "derived" / "managed by" markers a UI surfaces from it are display-only and never influence what re-derivation may rewrite or delete (the pipeline-owned membership record is the authority for that, not this field, per R2-CRIT-001). */
-            derived_from?: string;
-        };
     };
     responses: {
         /** @description Bad request — missing or invalid field. */
@@ -23740,6 +23740,7 @@ export type LibraryWorkspaceNode = components["schemas"]["LibraryWorkspaceNode"]
 export type HostFolderListing = components["schemas"]["HostFolderListing"];
 export type HostFolderEntry = components["schemas"]["HostFolderEntry"];
 export type LibraryEntry = components["schemas"]["LibraryEntry"];
+export type LibraryEntryView = components["schemas"]["LibraryEntryView"];
 export type LibraryEntryMount = components["schemas"]["LibraryEntryMount"];
 export type LibraryContentResponse = components["schemas"]["LibraryContentResponse"];
 export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];

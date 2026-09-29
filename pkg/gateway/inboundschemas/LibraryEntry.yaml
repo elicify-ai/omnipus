@@ -111,6 +111,7 @@ properties:
     example: true
   view:
     $ref: "./LibraryEntryView.yaml"
+    x-go-type: LibraryEntryView
     description: >
       Per-entry facts about a `.view` file (library-views-anywhere-spec
       D-CONTRACT) — kind, label, authoritative name, enclosing collection

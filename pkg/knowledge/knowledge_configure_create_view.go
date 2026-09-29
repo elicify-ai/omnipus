@@ -879,19 +879,14 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	// the same destination is invisible to it, and a silent overwrite
 	// there is exactly the failure CRIT-001 names for the create side.
 	//
-	// The check covers BOTH the new default location (Q5/B) AND the
-	// legacy `records.ViewsDir` location — an older install's
-	// `.omnipus-vault/views/<name>.yaml` from before the spec is a
-	// legitimate occupant we must not silently clobber.
+	// Only the collection-root default path is checked; old control-plane
+	// views are not part of a greenfield collection.
 	defaultPath := filepath.Join(root, viewName+viewFileExt)
-	legacyPath := filepath.Join(records.ViewsDir(root), viewName+controlPlaneFileExt)
-	for _, p := range []string{defaultPath, legacyPath} {
-		if _, statErr := os.Stat(p); statErr == nil {
-			return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, p)},
-				fmt.Sprintf("create_view: the destination %s is already occupied; create_view refuses to overwrite an unrelated file. "+
-					"Move or delete the existing occupant, or use write_view on the view that already lives there.",
-					relControlPlanePath(root, p)))
-		}
+	if _, statErr := os.Stat(defaultPath); statErr == nil {
+		return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, defaultPath)},
+			fmt.Sprintf("create_view: the destination %s is already occupied; create_view refuses to overwrite an unrelated file. "+
+				"Move or delete the existing occupant, or use write_view on the view that already lives there.",
+				relControlPlanePath(root, defaultPath)))
 	}
 
 	parts, refusal := composePartsForKind(kind, schema, bindings)
