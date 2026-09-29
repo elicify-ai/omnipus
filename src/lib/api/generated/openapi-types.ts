@@ -2897,6 +2897,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/retry-move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry enrollment after an incomplete Library move
+         * @description Replays a trusted pending move from its pending_move_id, scoped to the named workspace. Checks whether the rename already landed, verifies the revoked view's identity, restores markers, and enrolls the named paths. A repeat request after success is an idempotent no-op.
+         */
+        post: operations["retryLibraryMove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/download": {
         parameters: {
             query?: never;
@@ -4797,6 +4817,27 @@ export interface components {
             actual_version?: string;
         };
         /**
+         * LibraryMoveConflictError
+         * @description Typed 409 body for POST /library/move and POST /library/{workspace_id}/rename (FR-VA-031/FR-VA-032). Both operations can reach 409 for four distinct causes; `code` discriminates, following the multi-cause pattern of LLMError.yaml. Shares "error"/"code" with the standard ErrorResponse envelope so a generic handler still works unchanged. Which optional field is populated is a function of `code`:
+         *       - already_exists / is_mount_root: no extra field (today's 409s,
+         *         pkg/library/root.go ErrAlreadyExists/ErrIsMountRoot; `code` is new).
+         *       - view_tracked_transfer_refused (FR-VA-031): tracked_paths is present.
+         *       - move_incomplete (FR-VA-032): paths and pending_move_id are present;
+         *         retryable via POST /library/{workspace_id}/retry-move.
+         */
+        LibraryMoveConflictError: {
+            /** @description Human-readable message, safe to display. */
+            error: string;
+            /** @enum {string} */
+            code: "already_exists" | "is_mount_root" | "view_tracked_transfer_refused" | "move_incomplete";
+            /** @description Only for view_tracked_transfer_refused. */
+            tracked_paths?: string[];
+            /** @description Only for move_incomplete. */
+            paths?: string[];
+            /** @description Only for move_incomplete; pass to retry-move. */
+            pending_move_id?: string;
+        };
+        /**
          * CreateVaultRequest
          * @description Request body for POST /api/v1/library/{workspace_id}/vaults. Creates a new Omnipus knowledge base ("vault") as a folder inside the workspace's work tree (pkg/knowledge.CreateInWorkspace — FR-022/FR-023/FR-025), writing the .omnipus-vault/ marker plus empty records/ and views/ control-plane directories so the vault is immediately usable by knowledge_configure. workspace_id is NOT a body field — it is already the {workspace_id} path parameter, matching every other per-workspace Library create/write route (LibraryMkdirRequest, LibraryContentRequest, ...) rather than duplicating it and risking the two disagreeing.
          */
@@ -6290,6 +6331,24 @@ export interface components {
             stored_targets: string[];
             /** @description Non-fatal problems the write surfaced (e.g. a search index that could not be refreshed after the change). Always present — an empty array, never null. The write itself is on disk regardless. */
             warnings: string[];
+        };
+        /** RetryMoveError */
+        RetryMoveError: {
+            error: string;
+            /** @enum {string} */
+            code: "retry_not_found" | "retry_expired" | "retry_identity_mismatch" | "retry_preflight_failed" | "retry_locked";
+            pending_move_id: string;
+            paths?: string[];
+        };
+        /** RetryMoveRequest */
+        RetryMoveRequest: {
+            pending_move_id: string;
+        };
+        /** RetryMoveResult */
+        RetryMoveResult: {
+            /** @enum {string} */
+            outcome: "re_enrolled" | "already_complete";
+            re_enrolled_paths: string[];
         };
         /**
          * ViewGroupBy
@@ -22159,7 +22218,15 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
+            /** @description Conflict: destination already exists (already_exists); source is a mount root (is_mount_root); transfer of tracked views is refused (view_tracked_transfer_refused); or a move is incomplete after membership revocation (move_incomplete). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryMoveConflictError"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -22531,8 +22598,80 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
+            /** @description Conflict: destination already exists (already_exists); source is a mount root (is_mount_root); transfer of tracked views is refused (view_tracked_transfer_refused); or a move is incomplete after membership revocation (move_incomplete). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryMoveConflictError"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
+        };
+    };
+    retryLibraryMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryMoveRequest"];
+            };
+        };
+        responses: {
+            /** @description Move re-enrolled, or already complete without changes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryMoveResult"];
+                };
+            };
+            /** @description Pending move ID not found (retry_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryMoveError"];
+                };
+            };
+            /** @description Revoked view identity mismatch or preflight failed (retry_identity_mismatch or retry_preflight_failed). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryMoveError"];
+                };
+            };
+            /** @description Pending or completed move ID expired (retry_expired). */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryMoveError"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Collection lock unavailable (retry_locked). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryMoveError"];
+                };
+            };
         };
     };
     downloadLibraryFile: {
@@ -23745,6 +23884,7 @@ export type LibraryContentResponse = components["schemas"]["LibraryContentRespon
 export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];
 export type LibraryBinaryContentRequest = components["schemas"]["LibraryBinaryContentRequest"];
 export type LibraryConflictError = components["schemas"]["LibraryConflictError"];
+export type LibraryMoveConflictError = components["schemas"]["LibraryMoveConflictError"];
 export type CreateVaultRequest = components["schemas"]["CreateVaultRequest"];
 export type LibraryRenameRequest = components["schemas"]["LibraryRenameRequest"];
 export type LibraryUploadResponse = components["schemas"]["LibraryUploadResponse"];
@@ -23788,6 +23928,9 @@ export type RecordWriteRequestCreate = components["schemas"]["RecordWriteRequest
 export type RecordWriteRequestUpdate = components["schemas"]["RecordWriteRequestUpdate"];
 export type RelationWriteRequest = components["schemas"]["RelationWriteRequest"];
 export type RelationWriteResponse = components["schemas"]["RelationWriteResponse"];
+export type RetryMoveError = components["schemas"]["RetryMoveError"];
+export type RetryMoveRequest = components["schemas"]["RetryMoveRequest"];
+export type RetryMoveResult = components["schemas"]["RetryMoveResult"];
 export type ViewGroupBy = components["schemas"]["ViewGroupBy"];
 export type ViewPropertyConfig = components["schemas"]["ViewPropertyConfig"];
 export type ViewPart = components["schemas"]["ViewPart"];

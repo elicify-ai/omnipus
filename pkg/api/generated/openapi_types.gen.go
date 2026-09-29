@@ -4883,6 +4883,30 @@ func (e LibraryInlineDispositionRenderer) Valid() bool {
 	}
 }
 
+// Defines values for LibraryMoveConflictErrorCode.
+const (
+	LibraryMoveConflictErrorCodeAlreadyExists              LibraryMoveConflictErrorCode = "already_exists"
+	LibraryMoveConflictErrorCodeIsMountRoot                LibraryMoveConflictErrorCode = "is_mount_root"
+	LibraryMoveConflictErrorCodeMoveIncomplete             LibraryMoveConflictErrorCode = "move_incomplete"
+	LibraryMoveConflictErrorCodeViewTrackedTransferRefused LibraryMoveConflictErrorCode = "view_tracked_transfer_refused"
+)
+
+// Valid indicates whether the value is a known member of the LibraryMoveConflictErrorCode enum.
+func (e LibraryMoveConflictErrorCode) Valid() bool {
+	switch e {
+	case LibraryMoveConflictErrorCodeAlreadyExists:
+		return true
+	case LibraryMoveConflictErrorCodeIsMountRoot:
+		return true
+	case LibraryMoveConflictErrorCodeMoveIncomplete:
+		return true
+	case LibraryMoveConflictErrorCodeViewTrackedTransferRefused:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LibraryPreviewTokenRequestScope.
 const (
 	LibraryPreviewTokenRequestScopeBundle LibraryPreviewTokenRequestScope = "bundle"
@@ -7970,6 +7994,51 @@ func (e RelationWriteRequestOp) Valid() bool {
 	case RelationWriteRequestOpRemove:
 		return true
 	case RelationWriteRequestOpReplace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RetryMoveErrorCode.
+const (
+	RetryMoveErrorCodeRetryExpired          RetryMoveErrorCode = "retry_expired"
+	RetryMoveErrorCodeRetryIdentityMismatch RetryMoveErrorCode = "retry_identity_mismatch"
+	RetryMoveErrorCodeRetryLocked           RetryMoveErrorCode = "retry_locked"
+	RetryMoveErrorCodeRetryNotFound         RetryMoveErrorCode = "retry_not_found"
+	RetryMoveErrorCodeRetryPreflightFailed  RetryMoveErrorCode = "retry_preflight_failed"
+)
+
+// Valid indicates whether the value is a known member of the RetryMoveErrorCode enum.
+func (e RetryMoveErrorCode) Valid() bool {
+	switch e {
+	case RetryMoveErrorCodeRetryExpired:
+		return true
+	case RetryMoveErrorCodeRetryIdentityMismatch:
+		return true
+	case RetryMoveErrorCodeRetryLocked:
+		return true
+	case RetryMoveErrorCodeRetryNotFound:
+		return true
+	case RetryMoveErrorCodeRetryPreflightFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RetryMoveResultOutcome.
+const (
+	RetryMoveResultOutcomeAlreadyComplete RetryMoveResultOutcome = "already_complete"
+	RetryMoveResultOutcomeReEnrolled      RetryMoveResultOutcome = "re_enrolled"
+)
+
+// Valid indicates whether the value is a known member of the RetryMoveResultOutcome enum.
+func (e RetryMoveResultOutcome) Valid() bool {
+	switch e {
+	case RetryMoveResultOutcomeAlreadyComplete:
+		return true
+	case RetryMoveResultOutcomeReEnrolled:
 		return true
 	default:
 		return false
@@ -17485,6 +17554,31 @@ type LibraryMkdirRequest struct {
 	Path string `json:"path"`
 }
 
+// LibraryMoveConflictError Typed 409 body for POST /library/move and POST /library/{workspace_id}/rename (FR-VA-031/FR-VA-032). Both operations can reach 409 for four distinct causes; `code` discriminates, following the multi-cause pattern of LLMError.yaml. Shares "error"/"code" with the standard ErrorResponse envelope so a generic handler still works unchanged. Which optional field is populated is a function of `code`:
+//   - already_exists / is_mount_root: no extra field (today's 409s,
+//     pkg/library/root.go ErrAlreadyExists/ErrIsMountRoot; `code` is new).
+//   - view_tracked_transfer_refused (FR-VA-031): tracked_paths is present.
+//   - move_incomplete (FR-VA-032): paths and pending_move_id are present;
+//     retryable via POST /library/{workspace_id}/retry-move.
+type LibraryMoveConflictError struct {
+	Code LibraryMoveConflictErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+
+	// Paths Only for move_incomplete.
+	Paths *[]string `json:"paths,omitempty"`
+
+	// PendingMoveId Only for move_incomplete; pass to retry-move.
+	PendingMoveId *string `json:"pending_move_id,omitempty"`
+
+	// TrackedPaths Only for view_tracked_transfer_refused.
+	TrackedPaths *[]string `json:"tracked_paths,omitempty"`
+}
+
+// LibraryMoveConflictErrorCode defines model for LibraryMoveConflictError.Code.
+type LibraryMoveConflictErrorCode string
+
 // LibraryPreviewTokenRequest Request body for POST /api/v1/library/preview-token (FR-003f). Mints a short-lived, path-bearing credential that lets a SANDBOXED document — which has an opaque origin and can therefore send neither the SameSite=Strict session cookie nor an Authorization header — load itself and its relative subresources (FR-003a, FR-003).
 // Minting is authenticated and NEVER WIDENS ACCESS (FR-003b): the caller must already be able to read the path, and the token is scoped to one workspace and one path. There is no whole-workspace scope, by design.
 // No workspace_id in the route: this is a mint operation over the Library as a whole, matching the existing /library/move and /library/copy shape, and the workspace it applies to is part of the request rather than the path.
@@ -20637,6 +20731,31 @@ type RetentionUpdateResponse struct {
 	// SessionDays Number of days to retain session logs. 0 = system default (90 days).
 	SessionDays int `json:"session_days"`
 }
+
+// RetryMoveError defines model for RetryMoveError.
+type RetryMoveError struct {
+	Code          RetryMoveErrorCode `json:"code"`
+	Error         string             `json:"error"`
+	Paths         *[]string          `json:"paths,omitempty"`
+	PendingMoveId string             `json:"pending_move_id"`
+}
+
+// RetryMoveErrorCode defines model for RetryMoveError.Code.
+type RetryMoveErrorCode string
+
+// RetryMoveRequest defines model for RetryMoveRequest.
+type RetryMoveRequest struct {
+	PendingMoveId string `json:"pending_move_id"`
+}
+
+// RetryMoveResult defines model for RetryMoveResult.
+type RetryMoveResult struct {
+	Outcome         RetryMoveResultOutcome `json:"outcome"`
+	ReEnrolledPaths []string               `json:"re_enrolled_paths"`
+}
+
+// RetryMoveResultOutcome defines model for RetryMoveResult.Outcome.
+type RetryMoveResultOutcome string
 
 // RevisionEntry A single owner-loop plan correction record (ADR-053 §Contract Surface — "Revision entry"). Committed transactionally with the tail members + edges it introduces via the write-ahead intent-log (INV-6/N-8) — the intent record, the tail members, their edges, and the plan-record patch land all-or-nothing. This is the single canonical shape for a revision record; `SessionMessageRevisionEntry` (the SessionMessage transport variant, `kind: revision_entry`) nests this same schema under a `revision` key rather than duplicating its fields — see that file's description for why the two `generation` concepts cannot be flattened into one object.
 type RevisionEntry struct {
@@ -26027,6 +26146,9 @@ type CreateLibraryDirectoryJSONRequestBody = LibraryMkdirRequest
 
 // RenameLibraryEntryJSONRequestBody defines body for RenameLibraryEntry for application/json ContentType.
 type RenameLibraryEntryJSONRequestBody = LibraryRenameRequest
+
+// RetryLibraryMoveJSONRequestBody defines body for RetryLibraryMove for application/json ContentType.
+type RetryLibraryMoveJSONRequestBody = RetryMoveRequest
 
 // UploadLibraryFilesMultipartRequestBody defines body for UploadLibraryFiles for multipart/form-data ContentType.
 type UploadLibraryFilesMultipartRequestBody UploadLibraryFilesMultipartBody

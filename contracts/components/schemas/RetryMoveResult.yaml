@@ -1,0 +1,12 @@
+title: RetryMoveResult
+type: object
+required: [outcome, re_enrolled_paths]
+properties:
+  outcome:
+    type: string
+    enum: [re_enrolled, already_complete]
+  re_enrolled_paths:
+    type: array
+    items:
+      type: string
+      minLength: 1

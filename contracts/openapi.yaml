@@ -316,6 +316,8 @@ components:
       $ref: ./components/schemas/LibraryBinaryContentRequest.yaml
     LibraryConflictError:
       $ref: ./components/schemas/LibraryConflictError.yaml
+    LibraryMoveConflictError:
+      $ref: ./components/schemas/LibraryMoveConflictError.yaml
     CreateVaultRequest:
       $ref: ./components/schemas/CreateVaultRequest.yaml
     LibraryRenameRequest:
@@ -470,6 +472,12 @@ components:
       $ref: ./components/schemas/RelationWriteRequest.yaml
     RelationWriteResponse:
       $ref: ./components/schemas/RelationWriteResponse.yaml
+    RetryMoveError:
+      $ref: ./components/schemas/RetryMoveError.yaml
+    RetryMoveRequest:
+      $ref: ./components/schemas/RetryMoveRequest.yaml
+    RetryMoveResult:
+      $ref: ./components/schemas/RetryMoveResult.yaml
     ViewGroupBy:
       $ref: ./components/schemas/ViewGroupBy.yaml
     ViewPropertyConfig:
@@ -8360,7 +8368,15 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
         '409':
-          $ref: '#/components/responses/409Conflict'
+          description: >
+            Conflict: destination already exists (already_exists); source is a
+            mount root (is_mount_root); transfer of tracked views is refused
+            (view_tracked_transfer_refused); or a move is incomplete after
+            membership revocation (move_incomplete).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryMoveConflictError'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
@@ -8947,7 +8963,75 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
         '409':
-          $ref: '#/components/responses/409Conflict'
+          description: >
+            Conflict: destination already exists (already_exists); source is a
+            mount root (is_mount_root); transfer of tracked views is refused
+            (view_tracked_transfer_refused); or a move is incomplete after
+            membership revocation (move_incomplete).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryMoveConflictError'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/retry-move:
+    post:
+      operationId: retryLibraryMove
+      summary: Retry enrollment after an incomplete Library move
+      description: >
+        Replays a trusted pending move from its pending_move_id, scoped to the
+        named workspace. Checks whether the rename already landed, verifies the
+        revoked view's identity, restores markers, and enrolls the named paths.
+        A repeat request after success is an idempotent no-op.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetryMoveRequest'
+      responses:
+        '200':
+          description: Move re-enrolled, or already complete without changes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryMoveResult'
+        '404':
+          description: Pending move ID not found (retry_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryMoveError'
+        '409':
+          description: Revoked view identity mismatch or preflight failed (retry_identity_mismatch or retry_preflight_failed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryMoveError'
+        '410':
+          description: Pending or completed move ID expired (retry_expired).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryMoveError'
+        '503':
+          description: Collection lock unavailable (retry_locked).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryMoveError'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
