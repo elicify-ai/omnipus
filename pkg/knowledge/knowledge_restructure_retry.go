@@ -33,6 +33,12 @@ func (t *RestructureTool) execRetryMove(ctx context.Context, args map[string]any
 			"unknown argument(s) %s; accepted: %s",
 			strings.Join(unknown, ", "), strings.Join(restructureArgNames, ", ")))
 	}
+	for _, name := range []string{"collection", "path", "new_name", "new_folder", "allow_ambiguity", "trashed_at", "folder"} {
+		if _, supplied := args[name]; supplied {
+			return t.deps.refuse(restructureRetryMoveOp, target, nil,
+				"retry_move takes only pending_move_id; remove "+name)
+		}
+	}
 	id := strings.TrimSpace(stringArg(args["pending_move_id"]))
 	if id == "" {
 		return t.deps.refuse(restructureRetryMoveOp, target, nil, "pending_move_id is required")
