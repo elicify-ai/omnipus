@@ -480,7 +480,13 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
             Return to chat
           </Button>
         )}
-        <Button size="sm" className="gap-[var(--space-1)]" onClick={() => setCompose({ mode: 'new' })}>
+        <Button
+          size="sm"
+          className="gap-[var(--space-1)]"
+          disabled={agentId === null}
+          aria-describedby={workspaceMailboxes.length === 0 && mailboxesQuery.isSuccess ? 'mail-no-mailbox-help' : undefined}
+          onClick={() => setCompose({ mode: 'new' })}
+        >
           Compose
         </Button>
       </div>
@@ -523,9 +529,12 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', onReturn
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
             No mailbox is configured for this workspace yet.
           </p>
-          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-            Connect an email account on the agent&apos;s Connectors screen to use Mail here.
+          <p id="mail-no-mailbox-help" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+            On the Connectors screen, in Email choose Add mailbox to use Mail here.
           </p>
+          <Button asChild size="sm">
+            <a href="#/connectors">Connect mailbox</a>
+          </Button>
         </div>
       )}
       {agentId !== null && (
