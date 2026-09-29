@@ -108,11 +108,12 @@ type Report struct {
 	// IdentityStamps is the ADR-068 D7 identifier pass: which notes were
 	// given an `id:`, which already had one, and which declare a type this
 	// vault has no schema for and were therefore deliberately left alone.
-	IdentityStamps IdentityStampReport
-	Bases          []BaseOutcome
-	SchemaReload   *records.SchemaLoadReport
-	ViewReload     *records.ViewLoadReport
-	Validation     ValidationSummary
+	IdentityStamps        IdentityStampReport
+	Bases                 []BaseOutcome
+	SchemaReload          *records.SchemaLoadReport
+	ViewReload            *records.ViewLoadReport
+	ViewMembershipWarning string // unreadable/corrupt record was treated as empty
+	Validation            ValidationSummary
 }
 
 // Render writes the full, human-readable report.
@@ -122,6 +123,9 @@ func (r *Report) Render(w io.Writer) {
 		fmt.Fprintln(w, "DRY RUN — nothing was written to the vault. Every number below was produced by rendering the schemas and views this run WOULD write into a throwaway directory and loading them back through the real loaders, so they are the numbers a real run produces.")
 	}
 	fmt.Fprintln(w, strings.Repeat("=", 78))
+	if r.ViewMembershipWarning != "" {
+		fmt.Fprintf(w, "WARNING — pipeline view provenance record unreadable; treated as empty: %s\n", r.ViewMembershipWarning)
+	}
 
 	fmt.Fprintln(w, "\n-- Type discriminator check --")
 	fmt.Fprintf(w, "%d notes total; %d carry a `type:` key (%d distinct types); %d carry none.\n",

@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
@@ -260,7 +261,13 @@ func sameCollectionDestination(root *library.Root, entry *libraryCollectionNote,
 func mapKnowledgeRestructureErr(w http.ResponseWriter, op, workspaceID string, err error) {
 	var ambiguity *knowledge.AmbiguityError
 	var timeout *knowledge.LockTimeoutError
+	var incomplete *knowledge.ViewMembershipMoveIncompleteError
 	switch {
+	case errors.As(err, &incomplete):
+		// The rename may already be on disk. Never tell the caller merely to
+		// retry it: the old membership was revoked for safety and the views
+		// need a visible repair path, not another blind move.
+		jsonErr(w, http.StatusInternalServerError, err.Error())
 	case errors.Is(err, knowledge.ErrRenameSourceMissing),
 		errors.Is(err, knowledge.ErrTrashSourceMissing),
 		errors.Is(err, knowledge.ErrNoteNotFound):
@@ -307,9 +314,15 @@ func (a *restAPI) renameNoteInCollection(
 			})
 		},
 	}
-	res, err := renamer.Rename(knowledge.RenameRequest{
-		From: note.relInCol, To: relWithinCollection(note.collRel, toRel), Folder: isFolder,
-	})
+	toInCol := relWithinCollection(note.collRel, toRel)
+	request := knowledge.RenameRequest{From: note.relInCol, To: toInCol, Folder: isFolder}
+	var res *knowledge.RenameResult
+	var err error
+	if isFolder || isLibraryBasePath(note.relInCol) || strings.EqualFold(filepath.Ext(note.relInCol), ".view") {
+		res, err = knowledge.RenameWithViewMembership(a.homePath, renamer, request)
+	} else {
+		res, err = renamer.Rename(request)
+	}
 	if err != nil {
 		mapKnowledgeRestructureErr(w, op, workspaceID, err)
 		return false
@@ -367,7 +380,26 @@ func (a *restAPI) trashNoteInCollection(
 			})
 		},
 	}
-	res, err := trasher.Trash(knowledge.TrashRequest{Path: note.relInCol, Folder: isFolder})
+	request := knowledge.TrashRequest{Path: note.relInCol, Folder: isFolder}
+	var res *knowledge.TrashResult
+	var err error
+	if !isFolder && isLibraryBasePath(note.relInCol) {
+		err = knowledge.WithViewMembership(a.homePath, note.col.Root(), func(m *knowledge.ViewMembership) error {
+			if reconcileErr := m.ReconcileDiscoveredViewPaths(); reconcileErr != nil {
+				return reconcileErr
+			}
+			if verifyErr := m.VerifyBase(note.relInCol); verifyErr != nil {
+				return verifyErr
+			}
+			if releaseErr := m.ReleaseBase(note.relInCol); releaseErr != nil {
+				return releaseErr
+			}
+			res, err = trasher.Trash(request)
+			return err
+		})
+	} else {
+		res, err = trasher.Trash(request)
+	}
 	if err != nil {
 		mapKnowledgeRestructureErr(w, "delete entry", workspaceID, err)
 		return

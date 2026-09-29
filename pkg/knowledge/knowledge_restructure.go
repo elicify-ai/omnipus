@@ -289,7 +289,14 @@ func (t *RestructureTool) execRenameMove(
 	if err != nil {
 		return t.deps.refuse(op, target, nil, err.Error())
 	}
-	if !folder {
+	root, err := NewCollectionRoot(OSLinkFS(), target.col.Root)
+	if err != nil {
+		return t.deps.refuse(op, target, []string{from}, err.Error())
+	}
+	// Keep an existing non-markdown file's exact path. The destination
+	// inherits that choice, rather than appending .md to a moved .view.
+	preserveExtension := !folder && regularNonMarkdownRenameSource(root, from)
+	if !folder && !preserveExtension {
 		from = ensureMarkdown(from)
 	}
 
@@ -319,12 +326,19 @@ func (t *RestructureTool) execRenameMove(
 		return t.deps.refuse(op, target, []string{from}, err.Error())
 	}
 	if !folder {
-		to = ensureMarkdown(to)
-	}
-
-	root, err := NewCollectionRoot(OSLinkFS(), target.col.Root)
-	if err != nil {
-		return t.deps.refuse(op, target, []string{from}, err.Error())
+		if preserveExtension {
+			if strings.EqualFold(path.Ext(from), ".view") || strings.EqualFold(path.Ext(from), ".base") {
+				if path.Ext(newName) == "" {
+					to += path.Ext(from)
+				}
+				if strings.EqualFold(path.Ext(from), ".view") && !strings.EqualFold(path.Ext(to), ".view") {
+					return t.deps.refuse(op, target, []string{from},
+						fmt.Sprintf("renaming a .view file to a different extension is refused: %s would become %s", from, to))
+				}
+			}
+		} else {
+			to = ensureMarkdown(to)
+		}
 	}
 	// UAT 2026-09-13 D-53: a move into a folder that does not exist yet
 	// creates the folder — `to` has already passed cleanNoteArg, so the
@@ -343,9 +357,13 @@ func (t *RestructureTool) execRenameMove(
 		FS: OSLinkFS(), Root: root, AgentID: target.agentID,
 		Audit: restructureRenameAuditFunc(t.deps, target), Lock: target.lock,
 	}
-	res, err := renamer.Rename(RenameRequest{
-		From: from, To: to, AllowAmbiguity: boolArg(args["allow_ambiguity"]), Folder: folder,
-	})
+	request := RenameRequest{From: from, To: to, AllowAmbiguity: boolArg(args["allow_ambiguity"]), Folder: folder}
+	var res *RenameResult
+	if folder || (preserveExtension && (strings.EqualFold(path.Ext(from), ".view") || strings.EqualFold(path.Ext(from), ".base"))) {
+		res, err = RenameWithViewMembership(t.deps.Home, renamer, request)
+	} else {
+		res, err = renamer.Rename(request)
+	}
 	if err != nil {
 		// rename.go has already audited this outcome (including "incomplete",
 		// where the journal is retained and completable) — see renameEngine's
@@ -382,6 +400,20 @@ func (t *RestructureTool) execRenameMove(
 		IndexWarning: indexWarning, FolderCreated: folderCreated,
 		Folder: folder, FolderFiles: len(res.Moves),
 	}))
+}
+
+// regularNonMarkdownRenameSource applies the same exact-path-first rule as
+// trash: an existing regular file is addressed as given, not as <name>.md.
+func regularNonMarkdownRenameSource(root CollectionRoot, rel string) bool {
+	if IsMarkdownPath(rel) {
+		return false
+	}
+	abs, err := root.ResolveContainedNoSymlink(OSLinkFS(), rel)
+	if err != nil {
+		return false
+	}
+	info, err := os.Lstat(abs)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // ensureMoveDestinationFolder creates the parent folder of the move

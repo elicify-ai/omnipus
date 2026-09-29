@@ -561,11 +561,15 @@ func (a *restAPI) refreshLibraryWriteIndexes(r *http.Request, workspaceID, colle
 // can see the base no longer translates — the previously written views stay
 // as they were rather than being destroyed over a refusal.
 func (a *restAPI) rederiveBaseViewsAfterSave(r *http.Request, workspaceID, collectionRoot, relInCollection string) {
-	res, err := vaultimport.RederiveBase(collectionRoot, relInCollection)
+	res, err := vaultimport.RederiveBaseWithHome(a.homePath, collectionRoot, relInCollection)
 	if err != nil {
 		logger.ErrorCF("rest", "library: base save landed but its views could not be re-derived",
 			map[string]any{"workspace_id": workspaceID, "path": relInCollection, "error": err.Error()})
 		return
+	}
+	if res.MembershipWarning != "" {
+		logger.WarnCF("rest", "library: view provenance record was unreadable; starting with empty membership",
+			map[string]any{"workspace_id": workspaceID, "path": relInCollection, "warning": res.MembershipWarning})
 	}
 	if res.Status == vaultimport.OutcomeRefused {
 		logger.WarnCF("rest", "library: base save landed but its views were not re-derived — the base no longer translates",
@@ -1122,9 +1126,13 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 		return
 	}
 
-	fi, err := root.Rename(fromRel, toRel)
+	fi, err := a.moveLibraryWithViewGuard(root, fromRel, func() (os.FileInfo, error) {
+		return root.Rename(fromRel, toRel)
+	})
 	if err != nil {
-		mapLibraryErr(w, "rename", workspaceID, err)
+		if !mapTrackedLibraryTransferErr(w, err) {
+			mapLibraryErr(w, "rename", workspaceID, err)
+		}
 		return
 	}
 	// U-58: renaming a knowledge base's last marker away demotes the folder.
@@ -1230,12 +1238,16 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 	var opErr error
 	switch mode {
 	case transferModeMove:
-		fi, opErr = library.MoveInto(fromRoot, toRoot, fromRel, toRel)
+		fi, opErr = a.moveLibraryWithViewGuard(fromRoot, fromRel, func() (os.FileInfo, error) {
+			return library.MoveInto(fromRoot, toRoot, fromRel, toRel)
+		})
 	case transferModeCopy:
 		fi, opErr = library.CopyInto(fromRoot, toRoot, fromRel, toRel)
 	}
 	if opErr != nil {
-		mapLibraryErr(w, string(mode), req.FromWorkspaceId, opErr)
+		if !mapTrackedLibraryTransferErr(w, opErr) {
+			mapLibraryErr(w, string(mode), req.FromWorkspaceId, opErr)
+		}
 		return
 	}
 

@@ -93,7 +93,7 @@ type ViewOutcome struct {
 
 // ProducedView is one view file this importer is about to write.
 type ProducedView struct {
-	RelPath string // vault-relative, under .omnipus-vault/views/
+	RelPath string // collection-relative, beside the source .base file
 	Bytes   []byte
 }
 
