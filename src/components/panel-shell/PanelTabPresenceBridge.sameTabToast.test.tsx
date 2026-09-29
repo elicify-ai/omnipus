@@ -30,11 +30,7 @@ describe('same-tab registered panel handle', () => {
       expect(useUiStore.getState().activePanel).toBeNull()
       const toasts = useUiStore.getState().toasts
       expect(toasts).toHaveLength(1)
-      // The directive permits either the existing "already open" copy or an
-      // equivalent focus confirmation; both must identify the tab for the user.
-      expect(toasts[0]?.message).toMatch(/library/i)
-      expect(toasts[0]?.message).toMatch(/tab/i)
-      expect(toasts[0]?.message).toMatch(/already open|switch|focus/i)
+      expect(toasts[0]?.message).toBe("Library is open in another browser tab. If you don't see it, switch to that tab.")
       expect(screen.getByRole('status')).toBeVisible()
     } finally {
       forgetPanelTabHandle(identity, handle)
