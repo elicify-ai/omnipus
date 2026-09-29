@@ -2253,8 +2253,9 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   mode other than a same-collection move) MUST be REFUSED when it involves a tracked derived `.view`
   (a view in its `.base`'s membership record) or a `.base` that has tracked views — including a folder
   transfer containing either. The refusal is a visible REST error naming the tracked paths and the
-  reason; the Library UI shows it as a message; agent move/rename paths (`knowledge_configure`
-  rename/move) return the same refusal. Nothing is moved, copied, released or re-keyed. Tests 74, 75, 76.
+  reason; the Library UI shows it as a message; agent move/rename paths (`knowledge_restructure`
+  rename/move — corrected 2026-09-29: `knowledge_configure` refuses rename/move and redirects to
+  `knowledge_restructure`, see `knowledge_configure.go::vaultConfigureCascadeOps`) return the same refusal. Nothing is moved, copied, released or re-keyed. Tests 74, 75, 76.
 - **FR-VA-032 *(founder-direction amendment, 2026-09-29, architect ruling Q-B = B)***: When an
   Omnipus-mediated move fails after the membership revocation (revoke-before-rename: preflight → persist
   revocation → rename → markers → enroll; see #1042 for full crash atomicity), the visible "incomplete"
@@ -2263,6 +2264,22 @@ FR-VA-017/SC-VA-007/TDD test 18/Holdout 7 — D-Q4-NO-WARN (§2) drops the diagn
   second time), never grants authority to a path whose identity is not the revoked view's, and restores
   management on success. Available to the user (UI action on the error) and to agents (same backend
   operation). Tests 77, 78.
+  **Amendment (team-lead, 2026-09-29) — Retry mechanics and contract:** revocation atomically writes a
+  trusted PENDING-MOVE record outside the vault (beside the collection's `manifest.json`,
+  `pending-moves.json`, keyed by `pending_move_id`: collection, old/new `.base`-or-folder path, view
+  names, old/new view paths, timestamp). Retry replays ONLY from that record, never from file content.
+  The record EXPIRES 7 days after its timestamp (a named constant); Retry on an expired record returns a
+  visible `retry_expired` error. If the rename already landed, Retry verifies and enrolls; otherwise it
+  re-runs the same saved, preflighted request under the collection lock; a preflight that now fails
+  (destination occupied, source changed or disappeared) returns a visible `retry_preflight_failed`
+  error. Neither error grants authority. The record is cleared on success. Contract: `POST
+  /library/{workspace_id}/retry-move` (`RetryMoveRequest` → `RetryMoveResult`; `RetryMoveError` codes
+  `retry_not_found` 404, `retry_expired` 410, `retry_identity_mismatch` 409, `retry_preflight_failed`
+  409, `retry_locked` 503); moves that fail after revocation return `LibraryMoveIncompleteError`
+  (`move_incomplete`, paths, `pending_move_id`); FR-VA-031 refusals return 409
+  `ViewTransferRefusedError` (`view_tracked_transfer_refused`, `tracked_paths`). Agent surface:
+  `knowledge_restructure` op `retry_move` (arg `pending_move_id`), prose results carrying the same
+  fields. Tests 77/78 cover expired, preflight_failed, already-landed and the normal retry.
 
 ## 13. Success Criteria
 
