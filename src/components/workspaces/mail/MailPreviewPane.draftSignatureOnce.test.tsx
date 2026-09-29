@@ -22,8 +22,12 @@ describe('MailPreviewPane — saved draft signature (F10)', () => {
         state="draft"
         subject="Proposal review"
         to="alice@example.test"
-        // The saved draft's read-back text/plain includes the appended signature.
-        bodyMarkdown={`Please review the proposal.\n\n--\n${signatureText}`}
+        // Post-fix (pkg/email/view.go::viewFromRaw, commit 6e9c4fbe2): the
+        // server-delivered draft body no longer has the signature baked in —
+        // viewFromRaw now recognizes the real, unsigned Markdown part by its
+        // X-Omnipus-Part marker header, so the lossy already-signed
+        // text/plain fallback that used to win BodyMarkdown no longer fires.
+        bodyMarkdown="Please review the proposal."
         signatureHtml={signatureHtml}
         onSave={vi.fn()}
         onSend={vi.fn()}
