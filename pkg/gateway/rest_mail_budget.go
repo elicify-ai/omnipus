@@ -44,11 +44,10 @@ func mailRetryParam(r *http.Request) bool {
 	return err == nil && b
 }
 
-// mailBudgetErr maps a budget/transport error to the HTTP response. A typed
-// backoff refusal and ErrMailBusy become the contract's 503
-// MailUnavailableError (code backoff / busy); every other error is the MC-8
-// 502 envelope — an upstream failure AFTER a dial happened. Returns false
-// when err is none of these (caller continues).
+// mailBudgetErr maps a budget refusal to the contract's 503
+// MailUnavailableError (code backoff / busy). Returns false for other errors;
+// mailBudgetWrap distinguishes invalid refs (400), missing messages (404),
+// and genuine upstream failures (MC-8 502) after the dial.
 func (a *restAPI) mailBudgetErr(w http.ResponseWriter, err error) bool {
 	if err == nil {
 		return false
@@ -126,11 +125,14 @@ func mailBudgetWrap[T any](
 		return zero, true
 	}
 	if err != nil {
-		// Not a budget refusal: an upstream dial failure (MC-8 502) or an
-		// invalid ref (400).
-		if errors.Is(err, email.ErrMailRefInvalid) {
+		// Invalid refs are 400, absent messages are 404, and real upstream
+		// failures after a dial retain the MC-8 502 envelope.
+		switch {
+		case errors.Is(err, email.ErrMailRefInvalid):
 			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
+		case errors.Is(err, email.ErrMessageNotFound):
+			jsonErr(w, http.StatusNotFound, "message not found")
+		default:
 			mailErr502(w, err)
 		}
 		return zero, true
