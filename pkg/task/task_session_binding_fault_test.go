@@ -91,8 +91,8 @@ func (f *bindingWriteFault) write(path string, data []byte, perm os.FileMode, ne
 		return fmt.Errorf("binding fault fixture: read durable prior task: %w", err)
 	}
 	var prior task.Task
-	if err := json.Unmarshal(priorData, &prior); err != nil {
-		return fmt.Errorf("binding fault fixture: decode durable prior task: %w", err)
+	if decodeErr := json.Unmarshal(priorData, &prior); decodeErr != nil {
+		return fmt.Errorf("binding fault fixture: decode durable prior task: %w", decodeErr)
 	}
 	if attempted.SessionID == prior.SessionID {
 		return next(path, data, perm)

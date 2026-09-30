@@ -657,18 +657,15 @@ func (te *TaskExecutor) executeTask(
 	// SessionID was only assigned asynchronously could be dispatched and
 	// then immediately escape a concurrently-running Stop fan-out (the fan-
 	// out's snapshot, taken microseconds earlier under the same lock, would
-	// have seen no SessionID for it yet). Mirrors StartTaskNow's existing
-	// synchronous pattern; unlike StartTaskNow (which aborts the whole call
-	// on a session-creation failure), this logs-and-continues — dispatch
-	// still proceeds session-less exactly as it always has when sessStore is
-	// nil (see createTaskSessionSync's own doc comment for why these two
-	// callers' error-handling divergence is intentional, not an oversight).
+	// have seen no SessionID for it yet). Mirrors StartTaskNow's synchronous
+	// pattern. A setup error aborts before worker execution and is recorded
+	// as Failed; a missing store still returns the existing ("", nil) result.
 	taskSessionID, sessErr := te.createTaskSessionSync(t)
 	if sessErr != nil {
-		logger.ErrorCF("task_executor",
-			"Could not create task session (dispatch continues without a session)",
-			map[string]any{"task_id": taskID, "agent_id": t.AgentID, "error": sessErr.Error()})
-	} else if taskSessionID != "" {
+		release()
+		return te.failTaskBeforeDispatch(taskID, sessErr)
+	}
+	if taskSessionID != "" {
 		t.SessionID = taskSessionID
 	}
 
@@ -688,10 +685,9 @@ func (te *TaskExecutor) executeTask(
 // meta (Title/TaskID/WorkspaceID), persists SessionID on the task record via
 // te.store.Update, and appends the initial prompt transcript entry — all
 // synchronously, in the CALLER's own goroutine (M1/FR-029; see ExecuteTask's
-// doc comment for why this matters). Shared by ExecuteTask; StartTaskNow
-// performs the equivalent block inline (its own error-handling — abort the
-// whole call on failure — deliberately differs from ExecuteTask's log-and-
-// continue, so it is not routed through this helper).
+// doc comment for why this matters). ExecuteTask calls this; StartTaskNow
+// performs the equivalent block inline. Both retry the binding write once
+// and fail the dispatch visibly if it cannot be persisted.
 //
 // Returns ("", nil) when sessStore is nil (no agent store configured for
 // t.AgentID) — callers treat that as "no session", not an error, exactly as
@@ -719,9 +715,8 @@ func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 		logger.ErrorCF("task_executor", "Could not set task session meta",
 			map[string]any{"task_id": t.ID, "error": setErr.Error()})
 	}
-	if _, updateErr := te.store.Update(t.ID, task.Patch{SessionID: &taskSessionID}); updateErr != nil {
-		logger.ErrorCF("task_executor", "Could not persist session_id on task",
-			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": updateErr.Error()})
+	if _, updateErr := te.persistTaskSessionBinding(t.ID, taskSessionID); updateErr != nil {
+		return "", updateErr
 	}
 	// FR-118/G-13: mint the durable S2 lifecycle record for this session — see
 	// mintTaskLifecycleRecord's doc comment for why this is the producer that
@@ -1173,13 +1168,12 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 			logger.ErrorCF("task_executor", "StartTaskNow: could not set task session meta",
 				map[string]any{"task_id": taskID, "error": setErr.Error()})
 		}
-		updated, updateErr := te.store.Update(taskID, task.Patch{SessionID: &taskSessionID})
+		updated, updateErr := te.persistTaskSessionBinding(taskID, taskSessionID)
 		if updateErr != nil {
-			logger.ErrorCF("task_executor", "StartTaskNow: could not persist session_id on task",
-				map[string]any{"task_id": taskID, "session_id": taskSessionID, "error": updateErr.Error()})
-		} else {
-			t = updated
+			release()
+			return "", te.failTaskBeforeDispatch(taskID, updateErr)
 		}
+		t = updated
 		// FR-118/G-13: mint the durable S2 lifecycle record for this session —
 		// see mintTaskLifecycleRecord's doc comment. StartTaskNow is the SECOND
 		// (and only other) task-session creation chokepoint besides

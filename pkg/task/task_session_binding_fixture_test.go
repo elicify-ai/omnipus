@@ -141,7 +141,7 @@ func bindingProseCriterion(text string) task.AcceptanceCriterion {
 		Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: bindingWorkerID}}
 }
 
-func (f *bindingRunFixture) executeAndDrain(t *testing.T) (error, *task.Task) {
+func (f *bindingRunFixture) executeAndDrain(t *testing.T) (*task.Task, error) {
 	t.Helper()
 	// Drain itself has a log-only timeout. Put its budget AFTER the test
 	// binary's deadline so it cannot return a timeout mistaken for completion.
@@ -156,5 +156,5 @@ func (f *bindingRunFixture) executeAndDrain(t *testing.T) (error, *task.Task) {
 	if readErr != nil {
 		t.Fatalf("binding fixture: read task after real executor drained: %v", readErr)
 	}
-	return err, stored
+	return stored, err
 }

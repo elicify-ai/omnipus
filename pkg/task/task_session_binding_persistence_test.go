@@ -26,7 +26,7 @@ func TestExecuteTask_SessionBindingRetryRecoversAndCompletes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newBindingRunFixture(t, tc.mode, false)
-			err, stored := f.executeAndDrain(t)
+			stored, err := f.executeAndDrain(t)
 			if err != nil {
 				t.Errorf("recoverable dispatch error = %v, want nil", err)
 			}
@@ -66,7 +66,7 @@ func TestExecuteTask_SessionBindingRetryRecoversAndCompletes(t *testing.T) {
 
 func TestExecuteTask_SessionBindingRetryExhaustedFailsWithoutWorker(t *testing.T) {
 	f := newBindingRunFixture(t, bindingFailAlways, false)
-	err, stored := f.executeAndDrain(t)
+	stored, err := f.executeAndDrain(t)
 	assertBindingWriteAttempts(t, f.fault.snapshot(), []error{f.fault.bindingCause, f.fault.bindingCause})
 	assertNoBindingWorkerExecution(t, f)
 	if stored.Status != task.StatusFailed {
@@ -82,7 +82,7 @@ func TestExecuteTask_SessionBindingRetryExhaustedFailsWithoutWorker(t *testing.T
 
 func TestExecuteTask_SessionBindingAndFailedWriteErrorsBothReachCaller(t *testing.T) {
 	f := newBindingRunFixture(t, bindingFailAlways, true)
-	err, _ := f.executeAndDrain(t)
+	_, err := f.executeAndDrain(t)
 	snapshot := f.fault.snapshot()
 	assertBindingWriteAttempts(t, snapshot, []error{f.fault.bindingCause, f.fault.bindingCause})
 	assertNoBindingWorkerExecution(t, f)
