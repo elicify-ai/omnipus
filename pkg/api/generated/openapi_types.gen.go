@@ -8411,6 +8411,69 @@ func (e ScheduleUpdateTriggerKind) Valid() bool {
 	}
 }
 
+// Defines values for SearchProviderCheckResponseProviderId.
+const (
+	SearchProviderCheckResponseProviderIdBaidu      SearchProviderCheckResponseProviderId = "baidu"
+	SearchProviderCheckResponseProviderIdBrave      SearchProviderCheckResponseProviderId = "brave"
+	SearchProviderCheckResponseProviderIdExa        SearchProviderCheckResponseProviderId = "exa"
+	SearchProviderCheckResponseProviderIdGlm        SearchProviderCheckResponseProviderId = "glm"
+	SearchProviderCheckResponseProviderIdPerplexity SearchProviderCheckResponseProviderId = "perplexity"
+	SearchProviderCheckResponseProviderIdTavily     SearchProviderCheckResponseProviderId = "tavily"
+)
+
+// Valid indicates whether the value is a known member of the SearchProviderCheckResponseProviderId enum.
+func (e SearchProviderCheckResponseProviderId) Valid() bool {
+	switch e {
+	case SearchProviderCheckResponseProviderIdBaidu:
+		return true
+	case SearchProviderCheckResponseProviderIdBrave:
+		return true
+	case SearchProviderCheckResponseProviderIdExa:
+		return true
+	case SearchProviderCheckResponseProviderIdGlm:
+		return true
+	case SearchProviderCheckResponseProviderIdPerplexity:
+		return true
+	case SearchProviderCheckResponseProviderIdTavily:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SearchProviderCheckResponseStatus.
+const (
+	SearchProviderCheckResponseStatusAuthError       SearchProviderCheckResponseStatus = "auth_error"
+	SearchProviderCheckResponseStatusInvalidResponse SearchProviderCheckResponseStatus = "invalid_response"
+	SearchProviderCheckResponseStatusNetworkError    SearchProviderCheckResponseStatus = "network_error"
+	SearchProviderCheckResponseStatusProviderError   SearchProviderCheckResponseStatus = "provider_error"
+	SearchProviderCheckResponseStatusRateLimited     SearchProviderCheckResponseStatus = "rate_limited"
+	SearchProviderCheckResponseStatusSuccess         SearchProviderCheckResponseStatus = "success"
+	SearchProviderCheckResponseStatusTimeout         SearchProviderCheckResponseStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SearchProviderCheckResponseStatus enum.
+func (e SearchProviderCheckResponseStatus) Valid() bool {
+	switch e {
+	case SearchProviderCheckResponseStatusAuthError:
+		return true
+	case SearchProviderCheckResponseStatusInvalidResponse:
+		return true
+	case SearchProviderCheckResponseStatusNetworkError:
+		return true
+	case SearchProviderCheckResponseStatusProviderError:
+		return true
+	case SearchProviderCheckResponseStatusRateLimited:
+		return true
+	case SearchProviderCheckResponseStatusSuccess:
+		return true
+	case SearchProviderCheckResponseStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionStatus.
 const (
 	SessionStatusActive      SessionStatus = "active"
@@ -16867,6 +16930,9 @@ type IntegrationProviderUpdateRequest struct {
 	// ApiKey API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider. Storing a key alone (with no role fields in the same request) changes no role (ADR-096 D18 / AC-15).
 	ApiKey *string `json:"api_key,omitempty"`
 
+	// ClearApiKey Search-only, keyed providers: true explicitly removes the catalogue-owned saved key and switches this service off without changing the default, fallback or role migration marker. Requires the same consent as saving. When true, api_key, active and fallback must all be absent, including empty or false values. Omitted or false leaves existing update semantics unchanged; an empty api_key never deletes a key. Undecided roles, a custom credential reference or a key shared with another connection return 409 without writes. Removal does not revoke the upstream key. A later-stage failure returns a non-success response describing any persisted change.
+	ClearApiKey *bool `json:"clear_api_key,omitempty"`
+
 	// Fallback Assign the fallback role. Search only; a fallback field on a voice request is rejected with 400. Search, true: make this provider the web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17). Rejected with 400 when this id is also the default in the same request, or is the stored default — a provider cannot fall back to itself (ADR-096 FR-006 / R5's save rule). Search, false: set the fallback to none ("No fallback"), regardless of which provider id is addressed — an explicit none is a choice, and is never flipped when the default changes (ADR-096 D4). An explicit false on a voice request is rejected with 400 for the same reason an explicit false active is.
 	Fallback *bool `json:"fallback,omitempty"`
 
@@ -21349,6 +21415,30 @@ type ScheduleUpdateSessionMode string
 
 // ScheduleUpdateTriggerKind defines model for ScheduleUpdate.Trigger.Kind.
 type ScheduleUpdateTriggerKind string
+
+// SearchProviderCheckRequest Body for a manual web-search connection check. The empty object is required; keys, queries, URLs, depth, roles and all other fields are rejected. The gateway supplies a fixed non-personal query and uses the saved key.
+type SearchProviderCheckRequest = map[string]interface{}
+
+// SearchProviderCheckResponse Temporary outcome of one real search through the addressed service. Readiness is unchanged: success is not persisted health, and failure does not disable the service or change its roles. Contains no key, results, authorization, upstream payload or free-form upstream error.
+type SearchProviderCheckResponse struct {
+	// CheckedAt UTC completion timestamp for this attempt.
+	CheckedAt time.Time `json:"checked_at"`
+
+	// ProviderId The keyed search catalogue entry that was checked.
+	ProviderId SearchProviderCheckResponseProviderId `json:"provider_id"`
+
+	// RetryAfterSeconds Optional upstream retry guidance for rate_limited. No automatic retry is scheduled. Local admission limits instead use HTTP 429 and Retry-After.
+	RetryAfterSeconds *int `json:"retry_after_seconds,omitempty"`
+
+	// Status Normalized diagnostic outcome; a valid empty result is success.
+	Status SearchProviderCheckResponseStatus `json:"status"`
+}
+
+// SearchProviderCheckResponseProviderId The keyed search catalogue entry that was checked.
+type SearchProviderCheckResponseProviderId string
+
+// SearchProviderCheckResponseStatus Normalized diagnostic outcome; a valid empty result is success.
+type SearchProviderCheckResponseStatus string
 
 // Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
 type Session struct {
@@ -26151,6 +26241,9 @@ type SetGodModeJSONRequestBody = GodModeUpdateRequest
 
 // UpdateIntegrationProviderJSONRequestBody defines body for UpdateIntegrationProvider for application/json ContentType.
 type UpdateIntegrationProviderJSONRequestBody = IntegrationProviderUpdateRequest
+
+// CheckSearchProviderConnectionJSONRequestBody defines body for CheckSearchProviderConnection for application/json ContentType.
+type CheckSearchProviderConnectionJSONRequestBody = SearchProviderCheckRequest
 
 // CopyLibraryEntryJSONRequestBody defines body for CopyLibraryEntry for application/json ContentType.
 type CopyLibraryEntryJSONRequestBody = LibraryTransferRequest
