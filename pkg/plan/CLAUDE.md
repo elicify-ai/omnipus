@@ -5,11 +5,11 @@ What it does not own: Task execution or the Judge; the engine consumes these pla
 
 ## Run its tests
 
-`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestClampHandoverText_IsIdempotentAndDeterministic$' -v -p 1 ./pkg/plan/`
+`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^(TestStoreWrite_ClampsHandoverForAWriterThatSkipsNormalize|TestUpdate_OverlongJudgeErrorHandoverIsWrittenNotRejected)$' -count=1 -v -p 1 ./pkg/plan/`
 
 ## Pitfalls here
 
-- Clamp handover text at its shared storage boundary rather than at one writer: a later writer can otherwise persist an overlong handover. `handover_clamp.go` and `TestClampHandoverText_IsIdempotentAndDeterministic` cover the bound.
+- Clamp handover at the shared write boundary: `TestStoreWrite_ClampsHandoverForAWriterThatSkipsNormalize` writes without normalization and checks the persisted bound and truncation marker; `TestUpdate_OverlongJudgeErrorHandoverIsWrittenNotRejected` checks a long provider-error note is saved within the bound while still naming the failure. Require a named `--- PASS` for each test, not just a green package result.
 
 ## Never bring back
 
