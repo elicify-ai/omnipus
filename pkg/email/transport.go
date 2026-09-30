@@ -32,6 +32,7 @@ import (
 	"net/smtp"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -296,12 +297,19 @@ func NewClient(acct Account) (*Client, error) {
 // Address returns the mailbox's own email address (the SMTP/IMAP username).
 func (c *Client) Address() string { return c.acct.Username }
 
-// AccountKey is the per-account budget key ("host|username"): the SAME
+// AccountKey is the per-account budget key ("host:port|username"): the SAME
 // derivation on every path (REST handler, agent tool, watcher cycle), so all
 // three share one 2-per-account gate and one coalescing map. Implements the
 // AccountKeyer capability.
+//
+// The port is part of the key (not just the host) because two distinct
+// mailboxes can share one IMAP host at different ports — a real, confirmed
+// defect: with the port omitted, such accounts collided onto the same
+// 2-per-account semaphore AND the same singleflight coalescing map, so an
+// in-flight fetch for one account's port could be handed to a waiter that
+// actually asked for a different account's port.
 func (c *Client) AccountKey() string {
-	return c.acct.IMAPHost + "|" + c.acct.Username
+	return c.acct.IMAPHost + ":" + strconv.Itoa(c.acct.IMAPPort) + "|" + c.acct.Username
 }
 
 // clampLimit normalises a caller-supplied limit: <=0 becomes the default, and
