@@ -47,7 +47,7 @@ Each tab and neighbor screen has one job.
 | Settings, Memory | What the team remembers: recap and retrospective settings |
 | Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
 | Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, how deep delegation may go, and how long a delegation may run |
-| Settings, Chat | Chat display, including the verbose view of tool calls |
+| Settings, Chat | Chat display, including the verbose view of tool calls; the **Verbose chat** toggle shows or hides the context-window retry notice, "Context window exceeded. Compressing history and retrying..." |
 | Settings, About | Version and build information |
 | Profile | Your name, timezone, font size, password, and workspace context |
 | Usage | Token totals by period, agent, model, and session |
