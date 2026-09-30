@@ -342,6 +342,9 @@ func (p *cancelPreArm) consume(now time.Time, keys ...string) (latch *cancelPreA
 // session id) exists at all.
 func preArmKeyForScope(sessionID string, scope CancelScope) string {
 	if sessionID != "" {
+		if scope.TurnOnly {
+			return "t:" + sessionID
+		}
 		return "s:" + sessionID
 	}
 	if scope.Channel != "" && scope.ChatID != "" {
@@ -375,7 +378,12 @@ func preArmKeyForScope(sessionID string, scope CancelScope) string {
 // the SAME "s:"+chat-id key a chat-level Stop armed under, exactly
 // preserving the original invariant.
 func preArmKeysForTurn(ts *turnState) []string {
-	var keys []string
+	// Turn-only Stop latches use the session's OWN identity, never the
+	// inherited routing root that legacy subtree cancellation follows.
+	keys := []string{"t:" + ts.sessionKey}
+	if ts.transcriptSessionID != "" && ts.transcriptSessionID != ts.sessionKey {
+		keys = append(keys, "t:"+ts.transcriptSessionID)
+	}
 	if ts.routingSessionID != "" {
 		keys = append(keys, "s:"+string(ts.routingSessionID))
 	}
@@ -561,7 +569,7 @@ func (al *AgentLoop) armCancelOrFindActiveTurn(
 
 	var hook TurnCancelHook
 	if sessionID != "" {
-		hook = al.GetActiveTurnHookForSession(sessionID)
+		hook = al.activeTurnForCancel(sessionID, scope)
 	} else if scope.Channel != "" && scope.ChatID != "" {
 		if sid := al.resolveSessionIDByChannelChat(scope.Channel, scope.ChatID); sid != "" {
 			hook = al.GetActiveTurnHookForSession(sid)

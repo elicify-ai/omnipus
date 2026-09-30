@@ -208,6 +208,12 @@ func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, session
 // record exists. Ordinary chats with no steering record keep using the legacy
 // live-turn cancel path and must not be falsely reported as partial.
 func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID string, by steer.Principal) (steer.CancelReport, bool) {
+	return applySteeredCancel(al, sessionID, func(canceller steer.Canceller) (steer.CancelReport, error) {
+		return canceller.CancelSubtree(ctx, sessionID, by)
+	})
+}
+
+func applySteeredCancel(al *agent.AgentLoop, sessionID string, apply func(steer.Canceller) (steer.CancelReport, error)) (steer.CancelReport, bool) {
 	var report steer.CancelReport
 	if al == nil {
 		return report, false
@@ -230,7 +236,7 @@ func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID st
 		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: "steer canceller is not configured"})
 		return report, true
 	}
-	result, err := canceller.CancelSubtree(ctx, sessionID, by)
+	result, err := apply(canceller)
 	if err != nil {
 		result.Unreachable = append(result.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
 	}
@@ -434,6 +440,10 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 // This function is intentionally thin: it builds scope/canceller/hooks and
 // delegates. All state-machine logic lives in pkg/agent.RequestCancel.
 func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
+	h.handleCancelWithScope(wc, sessionID, false)
+}
+
+func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll bool) {
 	if sessionID == "" {
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
@@ -442,27 +452,12 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		return
 	}
 
-	report, cascaded := cancelSteeredSubtree(context.Background(), h.agentLoop, sessionID, steer.Principal{
-		Kind: steer.PrincipalKindHuman,
-		ID:   wc.userID,
-	})
+	report, cascaded, outcome, err := h.requestScopedStop(wc, sessionID, stopAll)
 	if cascaded {
 		h.sendCancelPartialNotice(wc, sessionID, report)
 		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)
 	}
 
-	scope := agent.CancelScope{SessionID: sessionID}
-	canceller := agent.CancelCanceller{
-		UserID:  wc.userID,
-		Channel: "web",
-	}
-	var reportForHooks *steer.CancelReport
-	if cascaded {
-		reportForHooks = &report
-	}
-	hooks := h.buildCancelHooksWithReport(wc, reportForHooks)
-
-	outcome, err := h.agentLoop.RequestCancel(context.Background(), scope, canceller, hooks)
 	if err != nil {
 		slog.Warn("ws: handleCancel: RequestCancel error",
 			"session_id", sessionID, "error", err)

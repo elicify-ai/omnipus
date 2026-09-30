@@ -391,7 +391,11 @@ func (c *SteerCanceller) SetRevivalStateWriter(writer RevivalStateWriter) *Steer
 // cascade lock: enumerate, stamp, generation-aware cancel, then enumerate once
 // more for children published during the first pass.
 func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by steer.Principal) (steer.CancelReport, error) {
-	return c.cascade(ctx, sessionID, by, true)
+	var cancelTurn GenerationCancelFunc
+	if c != nil {
+		cancelTurn = c.cancelTurn
+	}
+	return c.cascade(ctx, sessionID, by, true, cancelTurn)
 }
 
 // StopSubtree is CancelSubtree's DURABLE half on its own: the same cascade
@@ -407,11 +411,19 @@ func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by
 // turns to stop cooperatively and escalates after its own grace window;
 // see steer_delegate_cancel.go::cancelDelegatedSubtree.
 func (c *SteerCanceller) StopSubtree(ctx context.Context, sessionID string, by steer.Principal) (steer.CancelReport, error) {
-	return c.cascade(ctx, sessionID, by, false)
+	return c.cascade(ctx, sessionID, by, true, nil)
+}
+
+// StopTurns stamps the requested session (and, for stop-all, its durable
+// subtree) and calls the supplied non-terminal Stop adapter with each stamped
+// generation. It shares the existing cascade lock and late-child pass, but
+// never invokes the administrative cancellation/goal-ending adapter.
+func (c *SteerCanceller) StopTurns(ctx context.Context, sessionID string, by steer.Principal, subtree bool, stopTurn GenerationCancelFunc) (steer.CancelReport, error) {
+	return c.cascade(ctx, sessionID, by, subtree, stopTurn)
 }
 
 func (c *SteerCanceller) cascade(
-	ctx context.Context, sessionID string, by steer.Principal, cancelLiveTurns bool,
+	ctx context.Context, sessionID string, by steer.Principal, subtree bool, cancelTurn GenerationCancelFunc,
 ) (steer.CancelReport, error) {
 	var report steer.CancelReport
 	if c == nil || c.Lifecycle == nil {
@@ -451,17 +463,22 @@ func (c *SteerCanceller) cascade(
 	}
 
 	fireLiveCancels := func() {
-		if cancelLiveTurns {
-			c.cancelStamped(ctx, stamped, &report)
-		}
+		c.cancelStamped(ctx, stamped, &report, cancelTurn)
 	}
 
-	first, walkErr := CollectDescendantSessionIDs(c.Lifecycle, sessionID)
-	if walkErr != nil {
-		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: walkErr.Error()})
+	var first []string
+	if subtree {
+		var walkErr error
+		first, walkErr = CollectDescendantSessionIDs(c.Lifecycle, sessionID)
+		if walkErr != nil {
+			report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: walkErr.Error()})
+		}
 	}
 	process(append([]string{sessionID}, first...))
 	fireLiveCancels()
+	if !subtree {
+		return report, nil
+	}
 
 	second, secondErr := CollectDescendantSessionIDs(c.Lifecycle, sessionID)
 	if secondErr != nil {
@@ -629,8 +646,8 @@ func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Prin
 
 var errStopAlreadyStamped = errors.New("steer: cancel subtree: current generation already stamped")
 
-func (c *SteerCanceller) cancelStamped(ctx context.Context, stamped map[string]int, report *steer.CancelReport) {
-	if c.cancelTurn == nil {
+func (c *SteerCanceller) cancelStamped(ctx context.Context, stamped map[string]int, report *steer.CancelReport, cancelTurn GenerationCancelFunc) {
+	if cancelTurn == nil {
 		return
 	}
 	for _, id := range report.Reached {
@@ -639,7 +656,7 @@ func (c *SteerCanceller) cancelStamped(ctx context.Context, stamped map[string]i
 			continue
 		}
 		delete(stamped, id)
-		result, err := c.cancelTurn(ctx, id, generation)
+		result, err := cancelTurn(ctx, id, generation)
 		if err != nil {
 			report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: id, Reason: err.Error()})
 			continue
