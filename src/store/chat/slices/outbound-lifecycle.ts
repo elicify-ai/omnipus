@@ -18,6 +18,7 @@ import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpen
 import { EMPTY_BUCKET, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
+import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
 
 // ── #823 message-status helpers ──────────────────────────────────────────────
 // Kept at module scope (not nested inside createOutboundLifecycleSlice/
@@ -70,14 +71,6 @@ function markUserMessageFailed(draft: { messagesById: Record<string, { status?: 
   }
 }
 
-/** Same as markUserMessageFailed, for an array-mapped (non-draft) message list. */
-function withUserMessageFailed(m: ChatMessage, targetId: string): ChatMessage {
-  // #3: UserMessage allows status:'error'; cast is safe because a caller only
-  // ever passes this the message it just constructed with role:'user'. The
-  // discriminated union prevents inline spread without the cast.
-  return m.id === targetId ? ({ ...m, status: 'error' as const, deliveryStatus: 'failed' as const } as ChatMessage) : m
-}
-
 /** Review finding 17: resends messageId IN PLACE — same id, original
  * mediaRefs, no duplicate bubble — replacing the old `sendMessage(content)`
  * "Try again" call, which minted a fresh id (duplicate bubble) and threaded
@@ -112,6 +105,12 @@ function performResendMessage(
     }
   }
   if (!sid || !existing || existing.role !== 'user') return
+
+  const ordinary = getPendingFirstSend(state)
+  if (ordinary && (existing.clientMessageId ?? existing.id) === ordinary.clientMessageId) {
+    state.retryFirstSend()
+    return
+  }
 
   const content = existing.content
   const mediaRefs = existing.mediaRefs ?? []
@@ -375,10 +374,13 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         return
       }
 
-      // When activeSessionId is null we do NOT render optimistically until
-      // session_started arrives and gives us a real bucket key. This avoids
-      // a temporary bucket that we'd have to migrate on the ack, at the cost
-      // of ~1 round-trip of perceived latency on the very first message.
+      // An uncertain ordinary send owns __pending until confirmed or abandoned.
+      if (getPendingFirstSend(get()) && (rawActiveSessionId === null || rawActiveSessionId === '__pending')) {
+        if (!get().enqueueOutboundMessage(content, queuedMessage)) {
+          useConnectionStore.getState().setConnectionError('Queue full (5 messages max) — confirm delivery or start a new chat.')
+        }
+        return
+      }
       if (activeSessionId !== null) {
         const userMsg: ChatMessage = buildQueuedUserMessage(activeSessionId, content, clientMessageId, queuedAt, attachments, mediaRefs)
 
@@ -644,73 +646,17 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           return
         }
 
-        // No active session — send without session_id; server will mint one
-        // and ack with session_started.
-        //
-        // #253(a): Render the user message optimistically in a temporary bucket
-        // so it is visible immediately. If the WS send fails, mark the message
-        // with status:'error' so the user sees a Retry affordance instead of a
-        // silent drop. The temporary bucket key '__pending' is replaced by the
-        // real session_id once session_started arrives (see handleFrame case
-        // 'session_started'). If the send succeeds, the message stays visible
-        // until session_started migrates the bucket.
-        const pendingSid = '__pending'
-        const userMsg: ChatMessage = buildQueuedUserMessage(pendingSid, content, clientMessageId, queuedAt, [], mediaRefs)
-        const assistantMsg: ChatMessage = {
-          id: generateId(),
-          session_id: pendingSid,
-          role: 'assistant',
-          content: '',
-          timestamp: new Date().toISOString(),
-          status: 'streaming',
-          isStreaming: true,
-        }
-        // Render optimistically in the pending bucket and activate it.
-        withBucket(pendingSid, (b) => {
-          const allMsgs = [...getMessages(b), userMsg, assistantMsg]
-          return { ...applyMessageArray(allMsgs, b), isStreaming: true, lastUserMessageAt: Date.now() }
-        })
-        useSessionStore.getState().setActiveSession(pendingSid, activeAgentId)
-        // Remember what this mint went out under, so its session_started ack
-        // can tell "server resolved an agent we didn't have" from "the user
-        // has since picked a different one" (see runtime.agentIdAtLastMintSend).
         runtime.agentIdAtLastMintSend = activeAgentId ?? null
-
-        // ADR-092 (founder, 2026-09-24): a per-chat Auto choice made before this
-        // chat had a session rides on the minting message as `auto_approve`, so
-        // the server records it before the first turn runs (no post-ack race).
-        // Omitted when the user never touched the toggle.
         const autoApproveChoice = get().pendingAutoApproveChoice
-        const payload2 = {
-          type: 'message' as const,
+        startOrdinaryFirstSend({ set, get, withBucket }, {
+          type: 'message',
           content,
-          client_message_id: userMsg.id,
+          client_message_id: clientMessageId,
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
           ...(autoApproveChoice !== null ? { auto_approve: autoApproveChoice } : {}),
-        }
-        get()._validateOutboundFrame(payload2, pendingSid)
-        const sent = connection.send(payload2)
-
-        // Sticky model selection — see the active-session branch above: the
-        // pick persists after a successful send so the composer keeps showing
-        // it and the next message defaults to the same model.
-        if (!sent) {
-          // #253(a): Mark the user message with status:'error' and remove the
-          // optimistic assistant placeholder. This preserves the typed content
-          // as a retriable error bubble rather than silently dropping the message.
-          withBucket(pendingSid, (b) => {
-            const msgs = getMessages(b)
-              .map((m) => withUserMessageFailed(m, userMsg.id))
-              .filter((m) => m.id !== assistantMsg.id)
-            return { ...applyMessageArray(msgs, b), isStreaming: false }
-          })
-          useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Please try again.')
-          // The attempted turn is over (it never started) — free the next
-          // drained message to send, if any.
-          maybeDrainNext()
-        }
+        }, queuedAt, workspaceId || null, attachments)
       }
   },
 
@@ -742,7 +688,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // a second kickoff here would collide with the first on the shared
       // `'__pending'` bucket key. Bail exactly like the other guards; the
       // hook releases its own guard on `false` and retries later.
-      if (pendingKickoff !== null) return false
+      if (pendingKickoff !== null || getPendingFirstSend(get())) return false
 
       const content = buildWorkspaceSetupKickoffContent(workspaceName)
       const pendingSid = '__pending'
@@ -925,7 +871,8 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // leaving `pendingKickoff` wedged non-null forever, which would
       // otherwise permanently block every future kickoff attempt via
       // `sendWorkspaceSetupKickoff`'s own `pendingKickoff` guard.
-      abandonPendingKickoffInternal()
+      if (getPendingFirstSend(get())) get().markFirstSendDisconnected()
+      else abandonPendingKickoffInternal()
       // F-S3: a socket drop means no more terminal frames are coming for any
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
