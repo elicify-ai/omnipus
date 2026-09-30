@@ -1,0 +1,13 @@
+file:///Users/danielpiatkowski/.local/share/fnm/node-versions/v24.18.0/installation/lib/node_modules/gitnexus/dist/mcp/local/local-backend.js:805
+            throw new Error(`Repository "${repoParam}" not found. Available: ${labels.join(', ')}`);
+                  ^
+
+Error: Repository "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/execution-identity" not found. Available: omnipus (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-websearch/integ), omnipus (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/email-mail)
+    at LocalBackend.resolveRepo (file:///Users/danielpiatkowski/.local/share/fnm/node-versions/v24.18.0/installation/lib/node_modules/gitnexus/dist/mcp/local/local-backend.js:805:19)
+    at async LocalBackend.callTool (file:///Users/danielpiatkowski/.local/share/fnm/node-versions/v24.18.0/installation/lib/node_modules/gitnexus/dist/mcp/local/local-backend.js:1299:22)
+    at async detectChangesCommand (file:///Users/danielpiatkowski/.local/share/fnm/node-versions/v24.18.0/installation/lib/node_modules/gitnexus/dist/cli/tool.js:255:20)
+    at async Command.<anonymous> (file:///Users/danielpiatkowski/.local/share/fnm/node-versions/v24.18.0/installation/lib/node_modules/gitnexus/dist/cli/lazy-action.js:33:9)
+
+Node.js v24.18.0
+
+raw-exit=1
