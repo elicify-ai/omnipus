@@ -56,7 +56,10 @@ func TestClient_AddressReturnsUsername(t *testing.T) {
 }
 
 func TestBuildEmailBody_Headers(t *testing.T) {
-	body := buildEmailBody("from@x.com", "to@x.com", "Hello", "the body", "")
+	body, err := buildEmailBody("from@x.com", "to@x.com", "Hello", "the body", "")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	for _, want := range []string{
 		"From: from@x.com\r\n",
 		"To: to@x.com\r\n",
@@ -79,7 +82,10 @@ func TestBuildEmailBody_Headers(t *testing.T) {
 }
 
 func TestBuildEmailBody_ReplyThreadingHeaders(t *testing.T) {
-	body := buildEmailBody("from@x.com", "to@x.com", "Re: Hi", "reply text", "<orig@x.com>")
+	body, err := buildEmailBody("from@x.com", "to@x.com", "Re: Hi", "reply text", "<orig@x.com>")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	if !strings.Contains(body, "In-Reply-To: <orig@x.com>\r\n") {
 		t.Error("reply must set In-Reply-To")
 	}
@@ -140,7 +146,10 @@ func TestSanitizeHeader_Differentiation(t *testing.T) {
 // in the subject is neutralized in the output wire format.
 // Traces to: transport.go buildEmailBody + sanitizeHeader (injection guard)
 func TestBuildEmailBody_InjectionInSubject(t *testing.T) {
-	body := buildEmailBody("from@x.com", "to@x.com", "Hi\r\nBcc: evil@x.com", "body text", "")
+	body, err := buildEmailBody("from@x.com", "to@x.com", "Hi\r\nBcc: evil@x.com", "body text", "")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	lines := strings.Split(body, "\r\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "Bcc:") {
@@ -154,7 +163,10 @@ func TestBuildEmailBody_InjectionInSubject(t *testing.T) {
 // buildEmailBody accepts whatever subject the caller passes; with empty it stays empty.
 // Traces to: transport.go buildEmailBody
 func TestBuildEmailBody_EmptySubjectPassThrough(t *testing.T) {
-	body := buildEmailBody("f@x.com", "t@x.com", "", "body", "")
+	body, err := buildEmailBody("f@x.com", "t@x.com", "", "body", "")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	if !strings.Contains(body, "Subject: \r\n") {
 		t.Fatalf("empty subject must produce 'Subject: \\r\\n' header, got body:\n%s", body)
 	}
@@ -163,8 +175,14 @@ func TestBuildEmailBody_EmptySubjectPassThrough(t *testing.T) {
 // TestBuildEmailBody_Differentiation ensures two distinct recipients yield two
 // distinct wire bodies (rules out hardcoded output).
 func TestBuildEmailBody_Differentiation(t *testing.T) {
-	a := buildEmailBody("f@x.com", "alice@x.com", "Hello", "body", "")
-	b := buildEmailBody("f@x.com", "bob@x.com", "Hello", "body", "")
+	a, aerr := buildEmailBody("f@x.com", "alice@x.com", "Hello", "body", "")
+	if aerr != nil {
+		t.Fatalf("buildEmailBody: %v", aerr)
+	}
+	b, berr := buildEmailBody("f@x.com", "bob@x.com", "Hello", "body", "")
+	if berr != nil {
+		t.Fatalf("buildEmailBody: %v", berr)
+	}
 	if a == b {
 		t.Fatalf("buildEmailBody must differ for different recipients")
 	}

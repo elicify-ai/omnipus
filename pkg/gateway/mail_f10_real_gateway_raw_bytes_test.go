@@ -1,35 +1,49 @@
 package gateway
 
-// F10 real-gateway-path investigation (this task, 2026-09-29).
+// F10 real-gateway-path — Omnipus-draft case (delta-review round 2, item 3;
+// pr-test-analyzer).
 //
-// A prior investigator (pkg/email/compose_readback_signature_real_imap_test.go)
-// drove Compose -> real IMAP APPEND -> real IMAP FETCH -> ReadView directly at
-// the pkg/email package level and could NOT reproduce the F10 bug: the
-// draft-body marker header (X-Omnipus-Part: draft-body) is recognized
-// correctly, MarkdownLossy comes back false, BodyMarkdown comes back
-// unsigned. Squad-lead separately ran the REAL gateway HTTP path (a live
-// ./build/omnipus-darwin-amd64 gateway process against a live fakemail
-// binary) and the bug reproduced every time: a fresh GET on a just-saved
-// draft already shows markdown_lossy: true and a signed body_markdown.
+// Delta-review finding: this file used to be
+// TestMailDraftSave_RealGatewayPath_RawBytesInvestigation, an investigation
+// probe that only t.Logf'd its findings — it could never fail, so it was not
+// a test (repo rule: no test that can't fail). The live F10 bug it was
+// written to investigate is a SEPARATE, narrower case — a FOREIGN draft (no
+// X-Omnipus-Draft header) getting its account signature baked in at Save,
+// and then double-signed at Send — already covered and fixed by
+// mail_f10_foreign_draft_double_sign_red_test.go
+// (TestMailForeignDraftSave_SignatureNotBakedIntoStoredBody /
+// TestMailForeignDraftSend_SignatureAppliedExactlyOnce) and the F10 Option B
+// fix (rest_mail_draft.go::handleMailDraftUpdate). This file is a SEPARATE
+// test-quality fix, not a functional fix: it turns the old investigation
+// probe into a real, asserting test for the OMNIPUS-draft case (a draft
+// Omnipus itself composed, carrying X-Omnipus-Draft and the X-Omnipus-Part:
+// draft-body bookkeeping part) through the same real gateway HTTP path,
+// which is supposed to stay clean end to end — Save never bakes the
+// signature into the stored copy, the marker part survives Save, a
+// subsequent GET reports markdown_lossy=false, and Send applies the
+// signature exactly once with no setext-heading corruption.
 //
-// This test exercises the ACTUAL production HTTP path — the real
-// handleMailDraftUpdate / handleMailFolderMessage handlers, dispatched
-// through the real mux (env.mux, same as every other pkg/gateway mail RED
-// test), backed by a real in-memory IMAP server (imapmemserver, same family
-// tests/e2e/fixtures/fakemail wraps) — never the in-process
-// Compose()->ParseViewRaw() shortcut. It reads the RAW BYTES fakemail
-// actually stored right after the real Save (a raw IMAP FETCH BODY[] issued
-// on a SEPARATE connection, before any GET happens), then drives the real
-// GET, so the reported mechanism is evidence, not inference.
+// ORACLE PROVENANCE: expected values come from the spec (FR-030's converse —
+// an Omnipus-authored draft's bookkeeping part is recognized by
+// X-Omnipus-Part: draft-body, per the F1 ruling in
+// mail_draft_marker_header_red_test.go) and from the already-landed F10 fix
+// (6e9c4fbe2) this test exercises through the real HTTP path rather than
+// pkg/email's own unit-level tests — never read off this test's own first
+// run.
+
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	gomail "github.com/emersion/go-message/mail"
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -80,35 +94,73 @@ func f10rgFetchRawBytes(t *testing.T, cl *imapclient.Client, folder string, uid 
 	return raw
 }
 
-// f10rgLogLeaves dumps every MIME leaf's Content-Type / filename /
-// X-Omnipus-Part header plus a body snippet, so the raw-bytes evidence is
-// legible in the test log rather than a wall of MIME.
-func f10rgLogLeaves(t *testing.T, label string, raw []byte) {
-	t.Helper()
-	leaves := mdhWireLeaves(t, string(raw))
-	t.Logf("%s: %d MIME leaves", label, len(leaves))
-	for i, l := range leaves {
-		t.Logf("%s: leaf[%d] content-type=%q filename=%q X-Omnipus-Part=%q",
-			label, i, l.ContentType, l.Filename, l.OmnipusPart)
+// f10rgDerefStr returns the empty-safe form of a possibly-nil *string, for
+// readable failure messages.
+func f10rgDerefStr(p *string) string {
+	if p == nil {
+		return "<nil>"
 	}
-	t.Logf("%s: raw bytes contains signature marker %q: %v", label, f10rgSigMarker, strings.Contains(string(raw), f10rgSigMarker))
+	return *p
 }
 
-// TestMailDraftSave_RealGatewayPath_RawBytesInvestigation is the decisive
-// probe: PUT through the real handler, then a raw FETCH on a SEPARATE IMAP
-// connection (never through ReadView/viewFromRaw) before any GET, then the
-// real GET. Determines (a) the SAVE handler wrote something already-signed
-// to fakemail, vs (b) the stored bytes are clean and the READ path is what
-// diverges.
-func TestMailDraftSave_RealGatewayPath_RawBytesInvestigation(t *testing.T) {
+// f10rgLeaf is one MIME leaf's content type, filename (empty for a primary
+// body part), the X-Omnipus-Part marker header value, and its decoded body —
+// the ground truth for what a set of bytes (stored or transmitted) actually
+// carries, independent of any production view/compose code.
+type f10rgLeaf struct {
+	ContentType string
+	Filename    string
+	OmnipusPart string
+	Body        string
+}
+
+// f10rgParseLeaves walks raw RFC 5322 bytes and returns each MIME leaf's
+// content type, filename, X-Omnipus-Part header value and decoded body.
+func f10rgParseLeaves(t *testing.T, raw []byte) []f10rgLeaf {
+	t.Helper()
+	r, err := gomail.CreateReader(bytes.NewReader(raw))
+	require.NoError(t, err, "instrument: bytes under test must parse as MIME")
+	var leaves []f10rgLeaf
+	for {
+		p, perr := r.NextPart()
+		if perr != nil || p == nil {
+			break
+		}
+		ct, ctParams, _ := mime.ParseMediaType(p.Header.Get("Content-Type"))
+		_, dispParams, _ := mime.ParseMediaType(p.Header.Get("Content-Disposition"))
+		name := dispParams["filename"]
+		if name == "" {
+			name = ctParams["name"]
+		}
+		body, _ := io.ReadAll(p.Body)
+		leaves = append(leaves, f10rgLeaf{
+			ContentType: ct,
+			Filename:    name,
+			OmnipusPart: strings.TrimSpace(p.Header.Get("X-Omnipus-Part")),
+			Body:        string(body),
+		})
+	}
+	return leaves
+}
+
+// TestMailOmnipusDraftSave_RealGatewayPath_StaysClean is the OMNIPUS-draft
+// counterpart to the foreign-draft tests in
+// mail_f10_foreign_draft_double_sign_red_test.go: PUT through the real
+// handler (handleMailDraftUpdate), a raw FETCH on a SEPARATE IMAP connection
+// (never through ReadView/viewFromRaw) to prove what was actually stored,
+// the real GET, then the real Send — asserting the OMNIPUS-draft path stays
+// clean throughout, per the F10 fix already landed for it.
+func TestMailOmnipusDraftSave_RealGatewayPath_StaysClean(t *testing.T) {
 	env := newMailRedEnv(t)
 	imapPort, cl := startPlainIMAP(t)
-	smtpPort, _ := listenCount(t)
-	pointMailboxAt(t, env, imapPort, smtpPort)
+	sink := startSMTPSink(t)
+	pointMailboxAt(t, env, imapPort, portOfAddr(t, sink.addr))
 	f10rgSetSignature(t, env, f10rgSigHTML)
 
 	// Step 0: the agent's original draft — unsigned, exactly like
 	// tools/email_compose.go's create_email_draft (never sets SignatureHTML).
+	// This is a REAL Omnipus draft: it carries X-Omnipus-Draft and the
+	// X-Omnipus-Part: draft-body bookkeeping part.
 	origOut, cerr := email.Compose(email.ComposeInput{
 		From: f10rgFrom, To: []string{f10rgTo}, Subject: "F10 real gateway readback",
 		Markdown: f10rgFirstLine, Draft: true,
@@ -126,63 +178,100 @@ func TestMailDraftSave_RealGatewayPath_RawBytesInvestigation(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "Save PUT must succeed; body: %s", rec.Body.String())
 	var saveResp gen.MailMessage
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &saveResp), "Save response must decode as MailMessage")
-	t.Logf("Save response: uid=%d uidvalidity=%d markdown_lossy=%v body_markdown=%q",
-		saveResp.Uid, saveResp.Uidvalidity, saveResp.MarkdownLossy,
-		f10rgDerefStr(saveResp.BodyMarkdown))
+	require.True(t, saveResp.IsOmnipusDraft,
+		"instrument: the seeded draft (composed by Omnipus with Draft:true) must be recognized as an Omnipus draft, or this test proves nothing about the Omnipus-draft path")
 
 	// Step 2 (THE DECISIVE PROBE): raw FETCH BODY[] on a SEPARATE IMAP
 	// connection, before any GET — the ground truth for what fakemail
-	// actually stored, bypassing viewFromRaw/ReadView entirely.
+	// actually stored, bypassing viewFromRaw/ReadView entirely. The
+	// bookkeeping part (the unsigned Markdown source) must have survived
+	// Save; its OWN body must stay unsigned — the signature belongs only in
+	// the rendered plain/html display parts Compose already produces on
+	// every save, never in the bookkeeping source itself.
 	newUID := uint32(saveResp.Uid)
 	rawStored := f10rgFetchRawBytes(t, cl, "Drafts", newUID)
-	f10rgLogLeaves(t, "RAW-STORED (immediately after Save, before any GET)", rawStored)
+	leavesStored := f10rgParseLeaves(t, rawStored)
 
-	leavesStored := mdhWireLeaves(t, string(rawStored))
-	var plainLeafSigned, markerLeafPresent, markerLeafSigned bool
+	var markerLeafPresent bool
+	var markerBody string
 	for _, l := range leavesStored {
-		if l.ContentType == "text/plain" && l.Filename == "" && l.OmnipusPart == "" {
-			plainLeafSigned = strings.Contains(string(rawStored), f10rgSigMarker)
-			_ = plainLeafSigned
-		}
 		if l.OmnipusPart == "draft-body" {
 			markerLeafPresent = true
+			markerBody = l.Body
 		}
 	}
-	// Extract the marker leaf's own decoded body to check whether IT carries
-	// the signature (which would mean the SAVE handler baked the signature
-	// into the bookkeeping part itself — a distinct (a)-shaped bug from the
-	// plain-text-leaf-signed case).
-	_ = markerLeafSigned
+	require.True(t, markerLeafPresent,
+		"F10: the stored raw bytes after Save must still carry the X-Omnipus-Part: draft-body bookkeeping part — its absence is how a foreign-draft-shaped bug would manifest for an Omnipus draft too")
+	require.NotContains(t, markerBody, f10rgSigMarker,
+		"F10: the bookkeeping part's own Markdown source must stay unsigned — the signature belongs only in the rendered display parts, never baked into the editable source")
 
 	// Step 3: the real GET, by the NEW uid/uidvalidity Save's own response
-	// returned — exactly what a real subsequent panel refresh uses.
+	// returned — exactly what a real subsequent panel refresh uses. The
+	// Omnipus-draft path is supposed to stay clean: markdown_lossy must be
+	// false (the marker part gives ReadView an exact, non-derived source).
 	getPath := mailMessagesPath("drafts") + "/" + fmt.Sprintf("uid:%d:%d", saveResp.Uidvalidity, saveResp.Uid)
 	getRec := mailDo(env.mux, http.MethodGet, getPath, nextMailIP(), true, "")
 	require.Equal(t, http.StatusOK, getRec.Code, "GET must succeed; body: %s", getRec.Body.String())
 	var getResp gen.MailMessage
 	require.NoError(t, json.Unmarshal(getRec.Body.Bytes(), &getResp), "GET response must decode as MailMessage")
-	t.Logf("GET response: markdown_lossy=%v body_markdown=%q", getResp.MarkdownLossy, f10rgDerefStr(getResp.BodyMarkdown))
+	require.False(t, getResp.MarkdownLossy,
+		"F10: an Omnipus draft's GET must report markdown_lossy=false — a marker-recognized draft has an exact editable source, never a server-derived, signature-carrying fallback")
+	require.NotContains(t, f10rgDerefStr(getResp.BodyMarkdown), f10rgSigMarker,
+		"F10: BodyMarkdown for an Omnipus draft must not already carry the account signature")
 
-	// Report plainly which hypothesis the raw bytes support. This test
-	// intentionally does NOT hard-fail on either shape — it is the
-	// investigation probe; the report below is read from its log output,
-	// not from a pass/fail verdict, per the task's "state plainly (a) or
-	// (b), do not guess" instruction.
-	if !markerLeafPresent {
-		t.Logf("FINDING: the draft-body bookkeeping part (X-Omnipus-Part: draft-body) is ABSENT from the stored bytes -- hypothesis (a): the SAVE handler did not write what its own response implies.")
-	}
-	bodyMd := f10rgDerefStr(getResp.BodyMarkdown)
-	if getResp.MarkdownLossy || strings.Contains(bodyMd, f10rgSigMarker) {
-		t.Logf("FINDING: GET after Save reproduces the bug (markdown_lossy=%v, body_markdown contains signature=%v) through the REAL gateway HTTP path.",
-			getResp.MarkdownLossy, strings.Contains(bodyMd, f10rgSigMarker))
-	} else {
-		t.Logf("FINDING: GET after Save does NOT reproduce the bug through this real-gateway-path harness (markdown_lossy=false, body_markdown clean).")
-	}
-}
+	// Step 4: Send the saved copy, by the exact new ref Save's response
+	// returned, with body_markdown omitted — the send handler's own
+	// documented fallback to cur.BodyMarkdown, exactly what a panel refresh
+	// that never re-typed the body would submit. The signature must apply
+	// exactly once in each part, with no setext-heading corruption — same
+	// shape as TestMailForeignDraftSend_SignatureAppliedExactlyOnce's
+	// send-side assertions, but for the OMNIPUS-draft case.
+	sendPath := draftRefPath(uint32(saveResp.Uidvalidity), uint32(saveResp.Uid)) + "/send"
+	sendReqBody := fmt.Sprintf(`{"uid":%d,"uidvalidity":%d,"to":[%q],"subject":"F10 real gateway readback","body_markdown":""}`,
+		saveResp.Uid, saveResp.Uidvalidity, f10rgTo)
+	sendRec := mailDo(env.mux, http.MethodPost, sendPath, nextMailIP(), true, sendReqBody)
+	require.Equal(t, http.StatusOK, sendRec.Code, "Send POST must succeed against the loopback sink; body: %s", sendRec.Body.String())
+	var sendResp gen.MailSendResponse
+	require.NoError(t, json.Unmarshal(sendRec.Body.Bytes(), &sendResp), "Send response must decode as MailSendResponse")
+	require.True(t, sendResp.SentSaved, "send must succeed cleanly; body: %s", sendRec.Body.String())
 
-func f10rgDerefStr(p *string) string {
-	if p == nil {
-		return "<nil>"
+	n, bodies := sink.acceptedBodies()
+	require.Equal(t, 1, n, "exactly one DATA body may be transmitted")
+	require.Len(t, bodies, 1)
+
+	leavesSent := f10rgParseLeaves(t, []byte(bodies[0]))
+
+	var plainBody, htmlBody string
+	var markedCount int
+	for _, l := range leavesSent {
+		if l.OmnipusPart != "" {
+			markedCount++
+			continue // the bookkeeping part is never sent — excluded from the primary-body scan below
+		}
+		if l.Filename != "" {
+			continue // an attachment, not the primary plain/html body
+		}
+		switch l.ContentType {
+		case "text/plain":
+			plainBody = l.Body
+		case "text/html":
+			htmlBody = l.Body
+		}
 	}
-	return *p
+	require.Equal(t, 0, markedCount,
+		"F10: the sent message must carry zero X-Omnipus-Part-marked leaves — the bookkeeping part is never sent")
+
+	plainCount := strings.Count(plainBody, f10rgSigMarker)
+	require.Equal(t, 1, plainCount,
+		"F10: the transmitted text/plain part must carry the account signature EXACTLY ONCE; got %d occurrences — plain body: %q", plainCount, plainBody)
+
+	htmlCount := strings.Count(htmlBody, f10rgSigMarker)
+	require.Equal(t, 1, htmlCount,
+		"F10: the transmitted text/html part must carry the account signature EXACTLY ONCE; got %d occurrences — html body: %q", htmlCount, htmlBody)
+
+	for lvl := 1; lvl <= 6; lvl++ {
+		tag := fmt.Sprintf("<h%d", lvl)
+		require.NotContains(t, htmlBody, tag,
+			"F10: a double-appended signature's \"--\" separator would corrupt the body's first line into a CommonMark setext heading (%s) — html body: %q", tag, htmlBody)
+	}
 }

@@ -1025,7 +1025,11 @@ func (c *Client) Send(ctx context.Context, req SendRequest) error {
 		if subject == "" {
 			subject = "(no subject)"
 		}
-		body = buildEmailBody(c.acct.Username, to, subject, req.Body, req.InReplyTo)
+		var berr error
+		body, berr = buildEmailBody(c.acct.Username, to, subject, req.Body, req.InReplyTo)
+		if berr != nil {
+			return berr
+		}
 	}
 
 	smtpAddr := fmt.Sprintf("%s:%d", c.acct.SMTPHost, c.acct.SMTPPort)
@@ -1142,10 +1146,18 @@ func isDeadlineFlavored(err error) bool {
 // to a single plain-text paragraph keeps the historical single-part text/plain
 // shape; anything with Markdown structure becomes multipart/alternative via
 // Compose (MC-3). When inReplyTo is set, the In-Reply-To and References headers
-// are added so the message threads. The helper never fails: unparseable
-// recipients are dropped (the CRLF-injection guard) and a Compose error falls
-// back to the plain shape.
-func buildEmailBody(from, to, subject, text, inReplyTo string) string {
+// are added so the message threads. Unparseable recipients are dropped (the
+// CRLF-injection guard); a Compose error on the Markdown-structured path is
+// returned to the caller (round-2 delta review, item 5 — silent-failure-
+// hunter) rather than silently falling back to the plain shape: the only
+// realistically reachable Compose failure here is an operator-configured
+// mailbox Username that is not itself a parseable RFC 5322 address (IMAP/SMTP
+// login and the From header share one config field; rest_mailbox.go's setup
+// validation checks only non-emptiness, never address format) — the SAME
+// From-address problem a silent plain-shape fallback would carry too, just
+// undetected. A caller that cannot tell a degraded send from a normal one
+// cannot warn its operator or retry with corrected config.
+func buildEmailBody(from, to, subject, text, inReplyTo string) (string, error) {
 	fromHdr := formatFromHeader(from)
 	toList, _ := parseRecipientList([]string{to})
 	toStr := formatAddressList(toList)
@@ -1164,15 +1176,10 @@ func buildEmailBody(from, to, subject, text, inReplyTo string) string {
 			Markdown:  text,
 			InReplyTo: inReplyTo,
 		})
-		if err == nil {
-			return string(out.Transmitted)
+		if err != nil {
+			return "", fmt.Errorf("email transport: building multipart body: %w", err)
 		}
-		// Round-8 F8 (FR-018/FR-036): the documented "helper never fails"
-		// fallback was UNLOGGED on HEAD — outgoing mail silently lost its
-		// multipart/HTML render. One WARN naming the compose fallback; the
-		// plain shape below is unchanged.
-		slog.Warn("email transport: compose fallback: building the multipart body failed, sending the plain shape",
-			"error", err)
+		return string(out.Transmitted), nil
 	}
 	var sb strings.Builder
 	sb.WriteString("From: " + fromHdr + "\r\n")
@@ -1190,7 +1197,7 @@ func buildEmailBody(from, to, subject, text, inReplyTo string) string {
 	// rather than pasting the Markdown source verbatim — a human recipient
 	// must never see raw syntax ("# Heading", "**bold**") in the body.
 	sb.WriteString(markdownToPlain(text))
-	return sb.String()
+	return sb.String(), nil
 }
 
 // formatFromHeader renders the From header, RFC 2047 encoding a non-ASCII
