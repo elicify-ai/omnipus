@@ -371,6 +371,8 @@ func (a agentLoopGoalRecordAccess) DirectNonTerminalChildren(sessionID string) (
 		switch child.State {
 		case session.LifecycleQueued:
 			active = append(active, child.SessionID)
+		case session.LifecycleNeedsInput:
+			active = append(active, child.SessionID)
 		case session.LifecycleRunning:
 			if a.al.steeredCompletionWriteActive(child.SessionID) {
 				active = append(active, child.SessionID)
