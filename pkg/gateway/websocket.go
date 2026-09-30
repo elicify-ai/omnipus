@@ -1302,7 +1302,7 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			})
 			return wsHandlerReadLoopContinue
 		}
-		stopAll := f.Scope != nil && *f.Scope == "stop-all"
+		stopAll := f.Scope != nil && *f.Scope == "tree"
 		wh.h.handleCancelWithScope(wh.wc, f.SessionId, stopAll)
 	case string(generated.WsFrameTypeAttachSession):
 		var f generated.AttachSessionFrame
