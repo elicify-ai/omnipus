@@ -108,6 +108,9 @@ type wsHandlerHandleChatMessage struct {
 	// firstMessage is an ordinary, within-bound session-less user send.
 	// Oversized input keeps ADR-066's separate agent-side refusal path.
 	firstMessage bool
+	// firstRequestDigest captures original requested fields before intake mutates
+	// them, so a retry compares the request, not newly resolved server defaults.
+	firstRequestDigest firstClientMessageDigest
 }
 
 // pendingMessageStatus is one persisted user message still waiting for its
@@ -315,6 +318,7 @@ func (h *WSHandler) handleChatMessageWithClientID(
 // append/cache population, and is released before the caller's bus admission.
 func (hcm *wsHandlerHandleChatMessage) prepareMessage() bool {
 	if hcm.frameSessionID == "" && !hcm.setupKickoff && hcm.clientMessageID != "" {
+		hcm.firstRequestDigest = hcm.digestFirstMessageRequest()
 		// One intake mutex, never a principal-keyed claim/lock store. h.mu is
 		// free during disk I/O; a slow admission cannot block other new chats.
 		hcm.h.firstMessageMu.Lock()

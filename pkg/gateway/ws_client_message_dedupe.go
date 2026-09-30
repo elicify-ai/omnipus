@@ -21,6 +21,8 @@
 package gateway
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -46,6 +48,8 @@ const (
 	acceptedFirstClientMessagesTotal        = 10_000
 )
 
+type firstClientMessageDigest [sha256.Size]byte
+
 // acceptedFirstClientMessage is recorded only after a successful durable
 // append. It is an extension of the in-memory dedupe, never a prepared claim.
 type acceptedFirstClientMessage struct {
@@ -53,6 +57,7 @@ type acceptedFirstClientMessage struct {
 	agentID         string
 	store           *session.UnifiedStore
 	acceptanceOrder uint64
+	requestDigest   firstClientMessageDigest
 }
 
 func (wc *wsConn) messageRetryPrincipal() (clientMessagePrincipal, bool) {
@@ -67,6 +72,41 @@ func (wc *wsConn) messageRetryPrincipal() (clientMessagePrincipal, bool) {
 		return clientMessagePrincipal{kind: kind, identity: wc.userID}, true
 	}
 	return wc.retryPrincipal, wc.retryPrincipal.kind != ""
+}
+
+// digestFirstMessageRequest runs before any routing/default resolution or media
+// normalization. Length prefixes and a media count preserve field boundaries
+// and reference order; absent/false/true Auto choices have distinct bytes. Only
+// the SHA-256 result survives intake, never the raw request text in this cache.
+func (hcm *wsHandlerHandleChatMessage) digestFirstMessageRequest() firstClientMessageDigest {
+	digest := sha256.New()
+	writeString := func(value string) {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		// hash.Hash.Write is documented never to return an error.
+		_, _ = digest.Write(length[:])
+		_, _ = digest.Write([]byte(value))
+	}
+	for _, value := range []string{hcm.content, hcm.agentID, hcm.workspaceID, hcm.modelName} {
+		writeString(value)
+	}
+	var mediaCount [8]byte
+	binary.BigEndian.PutUint64(mediaCount[:], uint64(len(hcm.mediaRefs)))
+	_, _ = digest.Write(mediaCount[:])
+	for _, ref := range hcm.mediaRefs {
+		writeString(ref)
+	}
+	autoChoice := byte(0)
+	if hcm.autoApprove != nil {
+		autoChoice = 1
+		if *hcm.autoApprove {
+			autoChoice = 2
+		}
+	}
+	_, _ = digest.Write([]byte{autoChoice})
+	var result firstClientMessageDigest
+	copy(result[:], digest.Sum(nil))
+	return result
 }
 
 func (hcm *wsHandlerHandleChatMessage) rememberAcceptedFirstMessage() {
@@ -92,6 +132,7 @@ func (hcm *wsHandlerHandleChatMessage) rememberAcceptedFirstMessage() {
 		agentID:         hcm.targetAgentID,
 		store:           hcm.store,
 		acceptanceOrder: order,
+		requestDigest:   hcm.firstRequestDigest,
 	}
 }
 
@@ -132,6 +173,15 @@ func (hcm *wsHandlerHandleChatMessage) answerRetriedFirstMessage() bool {
 	hcm.h.mu.Unlock()
 	if !found {
 		return false
+	}
+	if accepted.requestDigest != hcm.firstRequestDigest {
+		cid := hcm.clientMessageID
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:            string(generated.WsFrameTypeError),
+			Message:         "client_message_id conflict: this ID was already used for a different request",
+			ClientMessageId: &cid,
+		})
+		return true
 	}
 
 	// The cache never authorizes disclosure after deletion or an owner change.
