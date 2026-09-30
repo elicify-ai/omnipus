@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -225,6 +226,15 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	autoApprove *bool,
 	wc *wsConn,
 ) {
+	// Schema validation is optional, but the client-id bound is not. Reject
+	// before resolution, persistence, or the deferred status/cache cleanup.
+	if utf8.RuneCountInString(clientMessageID) > maxClientMessageIDChars {
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "client_message_id must be at most 128 characters",
+		})
+		return
+	}
 	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, wc: wc}
 	hcm.firstMessage = frameSessionID == "" && !setupKickoff &&
 		agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound()

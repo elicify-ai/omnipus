@@ -15,7 +15,9 @@
 // sends also retain their authenticated principal + client id in memory (#1090).
 // Their retries receive a recovered session_started and a received status, then
 // attach for replay. A restart loses this cache, including the save-before-ack
-// crash window; there is deliberately no on-disk first-send ledger.
+// crash window; there is deliberately no on-disk first-send ledger. First-send
+// entries are bounded per principal and globally, oldest accepted first. A retry
+// of an evicted first id can mint a second chat, just like a retry after restart.
 package gateway
 
 import (
@@ -38,12 +40,19 @@ type firstClientMessageKey struct {
 	clientMessageID string
 }
 
+const (
+	maxClientMessageIDChars                 = 128
+	acceptedFirstClientMessagesPerPrincipal = 256
+	acceptedFirstClientMessagesTotal        = 10_000
+)
+
 // acceptedFirstClientMessage is recorded only after a successful durable
 // append. It is an extension of the in-memory dedupe, never a prepared claim.
 type acceptedFirstClientMessage struct {
-	sessionID string
-	agentID   string
-	store     *session.UnifiedStore
+	sessionID       string
+	agentID         string
+	store           *session.UnifiedStore
+	acceptanceOrder uint64
 }
 
 func (wc *wsConn) messageRetryPrincipal() (clientMessagePrincipal, bool) {
@@ -68,13 +77,47 @@ func (hcm *wsHandlerHandleChatMessage) rememberAcceptedFirstMessage() {
 	key := firstClientMessageKey{principal: principal, clientMessageID: hcm.clientMessageID}
 	hcm.h.mu.Lock()
 	defer hcm.h.mu.Unlock()
-	if hcm.h.acceptedFirstClientMsgs == nil {
-		hcm.h.acceptedFirstClientMsgs = make(map[firstClientMessageKey]acceptedFirstClientMessage)
+	h := hcm.h
+	if h.acceptedFirstClientMsgs == nil {
+		h.acceptedFirstClientMsgs = make(map[firstClientMessageKey]acceptedFirstClientMessage)
 	}
-	hcm.h.acceptedFirstClientMsgs[key] = acceptedFirstClientMessage{
-		sessionID: hcm.sessionID,
-		agentID:   hcm.targetAgentID,
-		store:     hcm.store,
+	order := h.acceptedFirstClientMsgs[key].acceptanceOrder
+	if _, exists := h.acceptedFirstClientMsgs[key]; !exists {
+		h.evictAcceptedFirstMessageLocked(principal)
+		h.firstMessageAcceptanceOrder++
+		order = h.firstMessageAcceptanceOrder
+	}
+	h.acceptedFirstClientMsgs[key] = acceptedFirstClientMessage{
+		sessionID:       hcm.sessionID,
+		agentID:         hcm.targetAgentID,
+		store:           hcm.store,
+		acceptanceOrder: order,
+	}
+}
+
+// evictAcceptedFirstMessageLocked makes room for a new accepted id. The scan
+// is bounded by the global entry limit; no principal counters outlive entries.
+// A principal at its limit loses its own oldest entry, otherwise the global
+// limit evicts the oldest entry across principals. Caller holds h.mu.
+func (h *WSHandler) evictAcceptedFirstMessageLocked(principal clientMessagePrincipal) {
+	var oldest, oldestForPrincipal firstClientMessageKey
+	var oldestOrder, oldestPrincipalOrder uint64
+	principalCount := 0
+	for key, accepted := range h.acceptedFirstClientMsgs {
+		if oldestOrder == 0 || accepted.acceptanceOrder < oldestOrder {
+			oldest, oldestOrder = key, accepted.acceptanceOrder
+		}
+		if key.principal == principal {
+			principalCount++
+			if oldestPrincipalOrder == 0 || accepted.acceptanceOrder < oldestPrincipalOrder {
+				oldestForPrincipal, oldestPrincipalOrder = key, accepted.acceptanceOrder
+			}
+		}
+	}
+	if principalCount >= acceptedFirstClientMessagesPerPrincipal {
+		delete(h.acceptedFirstClientMsgs, oldestForPrincipal)
+	} else if len(h.acceptedFirstClientMsgs) >= acceptedFirstClientMessagesTotal {
+		delete(h.acceptedFirstClientMsgs, oldest)
 	}
 }
 
