@@ -96,10 +96,9 @@ func requireSearchCheckResult(t *testing.T, w *httptest.ResponseRecorder, id, st
 	return body
 }
 
-// Use existing configuration endpoint overrides. No diagnostic stub and no
-// mocked Search implementation are installed. Brave and Perplexity currently
-// lack a gateway-config endpoint seam; their separate loud blocker test below
-// prevents that coverage gap from being mistaken for a skipped/passing check.
+// Use configuration endpoint overrides, not a diagnostic stub or mocked Search.
+// Load Brave/Perplexity's optional base_url through real configuration parsing
+// so missing support fails an assertion rather than referring to absent Go fields.
 func wireSearchCheckEdge(t *testing.T, api *restAPI, cfg *config.Config, id, url string) {
 	t.Helper()
 	def, ok := config.SearchProviderDefByID(id)
@@ -127,11 +126,25 @@ func wireSearchCheckEdge(t *testing.T, api *restAPI, cfg *config.Config, id, url
 	case "exa":
 		cfg.Tools.Web.Exa.APIKeyRef = def.CredRef
 		cfg.Tools.Web.Exa.BaseURL = url
+	case "brave", "perplexity":
+		// The #1105 team-lead ruling specifies optional base_url for both.
+		// Use the same persisted key as the existing controllable clients.
 	default:
 		t.Fatalf("BLOCKED: controlled gateway transport for %s not implemented — required by QA acceptance Actual check; do not invent a config field or mock Search", id)
 	}
 	web[def.Section] = section
 	writeRolesWebConfig(t, api, web)
+	if id == "brave" || id == "perplexity" {
+		fresh, err := config.LoadConfig(api.configPath())
+		require.NoError(t, err)
+		cfg.Tools.Web = fresh.Tools.Web
+		loaded, err := json.Marshal(cfg.Tools.Web)
+		require.NoError(t, err)
+		var loadedWeb map[string]any
+		require.NoError(t, json.Unmarshal(loaded, &loadedWeb))
+		require.Equal(t, url, roleSection(t, loadedWeb, def.Section)["base_url"],
+			"missing base_url support: tools.web.%s.base_url must survive configuration loading to address the controlled provider", def.Section)
+	}
 	require.True(t, cfg.Tools.Web.UsableSearchProvider(id), "fixture must be runtime-usable")
 	requireSaved, err := api.credStore.Get(def.CredRef)
 	require.NoError(t, err)
@@ -197,13 +210,35 @@ func TestSearchConnectionCheck_OneRealAddressedAttemptForEveryControllableKeyedC
 	}
 }
 
-func TestSearchConnectionCheck_BraveAndPerplexityControlledTransportMissing(t *testing.T) {
-	for _, id := range []string{"brave", "perplexity"} {
-		t.Run(id, func(t *testing.T) {
-			def, ok := config.SearchProviderDefByID(id)
-			require.True(t, ok)
-			require.True(t, def.Keyed)
-			t.Fatalf("BLOCKED: controlled gateway diagnostic transport for %s not implemented — required by design QA acceptance Actual check for every keyed client; backend-lead must expose a real-client process-edge seam, not a mocked Search", id)
+func TestSearchConnectionCheck_BraveAndPerplexityUseBaseURL(t *testing.T) {
+	// Service IDs: IntegrationProvider contract enum.
+	// base_url: #1105 team-lead ruling; one attempt and success: design Decision #1105.
+	// Protocol/auth oracles, not observed client output:
+	// https://api-dashboard.search.brave.com/app/documentation/web-search/get-started
+	// https://docs.perplexity.ai/api-reference/chat-completions-post
+	for _, tc := range []struct{ id, protocolReply, authHeader, authPrefix string }{
+		{"brave", `{"web":{"results":[{"title":"private-upstream-result-must-be-discarded","url":"https://example.invalid/result","description":"private-upstream-result-must-be-discarded"}]}}`, "X-Subscription-Token", ""},
+		{"perplexity", `{"choices":[{"message":{"content":"private-upstream-result-must-be-discarded"}}],"citations":["https://example.invalid/result"]}`, "Authorization", "Bearer "},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			api, cfg, mux := newSearchCheckMux(t)
+			var calls atomic.Int32
+			headers := make(chan http.Header, 8)
+			edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				headers <- r.Header.Clone()
+				w.Header().Set("Content-Type", "application/json")
+				_, err := io.WriteString(w, tc.protocolReply)
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(edge.Close)
+			wireSearchCheckEdge(t, api, cfg, tc.id, edge.URL)
+			before := readRolesWebConfig(t, api)
+			w := postSearchCheck(t.Context(), mux, tc.id, `{}`, diagnosticBearer)
+			requireSearchCheckResult(t, w, tc.id, "success")
+			require.Equal(t, int32(1), calls.Load(), "one real addressed attempt through base_url: no retries, discovery, result fetches or cached success")
+			assert.Equal(t, tc.authPrefix+searchSettingsSecret, (<-headers).Get(tc.authHeader), "the addressed request must carry the saved key")
+			assert.Equal(t, before, readRolesWebConfig(t, api), "diagnostics do not mutate configuration or roles")
 		})
 	}
 }
