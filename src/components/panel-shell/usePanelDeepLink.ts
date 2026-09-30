@@ -118,43 +118,22 @@ function isAlreadyAdopted(
 
 /**
  * Adoption context per panel (§8.1: context carries what the panel needs).
- * Mail (SP-23): the URL's `agent` param is the mailbox directive — present,
- * land on that mailbox. Absent, TWO different situations both reach here
- * and must NOT be conflated (the mailbox-config-query-refetch fix, 2026-09-30):
- *
- *   - A genuine fresh landing (no Mail panel of any kind was already open
- *     for this or any workspace) — the deep link named `panel=mail` with NO
- *     mailbox is an explicit choose-a-mailbox directive (null — the picker
- *     faces the user and Mail starts nothing costly, MailPanelProps' own
- *     `mailboxId` doc comment).
- *   - Mail was ALREADY open (for a different workspace) and is merely
- *     FOLLOWING the workspace switch (F3's "stays mounted" case — this
- *     effect re-fires on every workspaceId change while `panel=mail` stays
- *     in the URL, whether or not the navigation was a real deep link). This
- *     is `undefined` = "no directive… the panel keeps its own posture" —
- *     forcing `null` here overrides MailPanel's intent/auto-select fallback
- *     every single time, which is the bug: a plain workspace-tab switch
- *     (never carries an `agent` URL param) permanently masks a workspace's
- *     own real, still-cached, configured mailbox behind "Choose a mailbox".
- *
- * `previousMailboxId` distinguishes the two: the caller passes the
- * ALREADY-OPEN mail panel's own current `context.mailboxId` (itself
- * `undefined`/`null`/a string) when this adoption is a same-panel-type
- * re-adoption (isAlreadyAdopted said "no" purely because the workspace
- * moved); the caller passes the literal `null` default for every other
- * case (fresh open, or switching FROM a different panel type), which
- * `context.mailboxId = ... : previousMailboxId` then reproduces unchanged.
- * Library needs only the workspace.
+ * Mail (SP-23): the URL's `agent` param is the mailbox directive. A named
+ * `panel=mail` link WITHOUT `agent` explicitly requests the chooser, even
+ * when another workspace's Mail panel is already open. An ordinary workspace
+ * switch is different: Sidebar navigates without `panel`, and
+ * WorkspaceTabContainer's SP-29 follow moves the existing panel context.
+ * Projecting that followed panel into the URL is a self-write, not a new
+ * deep-link adoption. Library needs only the workspace.
  */
 function adoptionContext(
   id: WorkspacePanelId,
   workspaceId: string,
   search: SearchRecord,
-  previousMailboxId: string | null | undefined,
 ): WorkspacePanelContext {
   const context: WorkspacePanelContext = workspaceId ? { workspaceId } : {}
   if (id === 'mail') {
-    context.mailboxId = typeof search.agent === 'string' ? search.agent : previousMailboxId
+    context.mailboxId = typeof search.agent === 'string' ? search.agent : null
   }
   return context
 }
@@ -165,6 +144,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   const activePanel = useUiStore((s) => s.activePanel)
   const backForwardRef = useRef(false)
   const selfWriteRef = useRef(false)
+  const freshLinkRef = useRef<{ href: string; workspaceId: string } | null>(null)
 
   // MAJ-205: URL-started transitions are intercepted before the route,
   // address, or panel can move. App-started close/replace paths clear the
@@ -191,7 +171,27 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   )
 
   useEffect(() => {
+    // A new same-document hash link emits popstate too. Navigation API's
+    // navigationType distinguishes that push from a Back/Forward traversal;
+    // the latter must still re-project the store (SP-22). Keep the destination
+    // until its workspace route renders: the old route can render the new
+    // search first, before the new workspaceId reaches this hook.
+    if (!window.navigation) return
+    const onNavigate = (event: NavigateEvent) => {
+      freshLinkRef.current = null
+      if (event.navigationType !== 'push' || !event.hashChange || !event.destination.sameDocument) return
+      const url = new URL(event.destination.url)
+      const match = /^#\/workspaces\/([^/?#]+)\/chat\?(.+)$/.exec(url.hash)
+      if (!match || !new URLSearchParams(match[2]).has('panel')) return
+      freshLinkRef.current = { href: url.href, workspaceId: match[1] }
+    }
+    window.navigation.addEventListener('navigate', onNavigate)
+    return () => window.navigation.removeEventListener('navigate', onNavigate)
+  }, [])
+
+  useEffect(() => {
     const onPopState = () => {
+      if (freshLinkRef.current?.href === window.location.href) return
       backForwardRef.current = true
       const current = useUiStore.getState().activePanel
       replaceSearch(projectedPanel(current))
@@ -201,32 +201,28 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   }, [replaceSearch])
 
   useEffect(() => {
+    const freshLink = freshLinkRef.current?.href === window.location.href
+      && freshLinkRef.current.workspaceId === workspaceId
     if (backForwardRef.current) {
       backForwardRef.current = false
       selfWriteRef.current = false
-      return
+      if (!freshLink) return
     }
     if (selfWriteRef.current) {
       selfWriteRef.current = false
-      return
+      if (!freshLink) return
     }
+    if (freshLink) freshLinkRef.current = null
     const rawNamed = typeof rawSearch.panel === 'string' ? rawSearch.panel : undefined
     const named = rawPanel(rawSearch)
     if (named !== undefined) {
       if (hasForeignKey(rawSearch)) replaceSearch(named)
       const { activePanel: current, openPanel } = useUiStore.getState()
       if (isAlreadyAdopted(current, named, workspaceId, rawSearch)) return
-      // A same-panel-type re-adoption (current already `named` — the ONLY
-      // reason isAlreadyAdopted said "no" is the workspace moved, F3's
-      // case) carries the panel's own current mailboxId forward instead of
-      // the fresh-landing `null` default; every other case (no panel was
-      // open, or switching FROM a different panel type) passes `null`
-      // unchanged, preserving the original explicit-choose behavior.
-      const previousMailboxId: string | null | undefined =
-        current !== null && current.id === named
-          ? (current.context as WorkspacePanelContext).mailboxId
-          : null
-      const context = adoptionContext(named, workspaceId, rawSearch, previousMailboxId)
+      // Adoption follows the URL directive, never the prior workspace's
+      // context. The separate workspace-follow effect retains the mailbox
+      // when navigation does not include a new panel directive.
+      const context = adoptionContext(named, workspaceId, rawSearch)
       if (current !== null) {
         leaveGateThen(current.id, () => {
           const { activePanel: still, openPanel: open } = useUiStore.getState()

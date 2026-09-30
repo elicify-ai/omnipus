@@ -34,6 +34,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   fetchWorkspaces: vi.fn(async () => [
     { id: 'ws-a', name: 'Workspace A', status: 'active', is_default: true },
     { id: 'ws-b', name: 'Workspace B', status: 'active', is_default: false },
+    { id: 'ws-c', name: 'Workspace C', status: 'active', is_default: false },
   ]),
   fetchSessions: vi.fn(async () => []),
   fetchMailboxes,
@@ -56,11 +57,27 @@ const newMailbox = {
   agent_id: 'mia', workspace_id: 'ws-b', enabled: true, configured: true,
   username: 'mia-outage@example.test',
 }
+const thirdMailbox = {
+  agent_id: 'mia', workspace_id: 'ws-c', enabled: true, configured: true,
+  username: 'mia-third@example.test',
+}
 let serverMailboxes = [initialMailbox]
 let client: QueryClient | null = null
 const originalMatchMedia = window.matchMedia
 
+// jsdom fires popstate for a newly assigned hash but has no Navigation API.
+// Browsers report this as a same-document push, distinct from Back/Forward's
+// traverse; dispatch that event before assigning the hash, as the browser does.
+function openHashLink(path: string) {
+  window.navigation.dispatchEvent(Object.assign(new Event('navigate'), {
+    navigationType: 'push', hashChange: true,
+    destination: { url: new URL(`#${path}`, window.location.href).href, sameDocument: true },
+  }))
+  window.location.hash = path
+}
+
 beforeEach(() => {
+  vi.stubGlobal('navigation', new EventTarget())
   window.history.replaceState(null, '', '/#/workspaces/ws-a/chat?panel=mail&agent=mia')
   localStorage.setItem('omnipus_auth_username', 'uat-tester')
   sessionStorage.removeItem('omnipus.mail-panel.intent.ws-a')
@@ -94,6 +111,7 @@ afterEach(() => {
   sessionStorage.removeItem('omnipus.mail-panel.intent.ws-b')
   window.history.replaceState(null, '', '/')
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia })
+  vi.unstubAllGlobals()
 })
 
 describe('Mail stays in the newly routed workspace on a same-page hash navigation', () => {
@@ -112,7 +130,7 @@ describe('Mail stays in the newly routed workspace on a same-page hash navigatio
     // An API client outside the SPA configures B. Its PUT cannot invalidate
     // this page's React Query cache; only the mock server's roster changes.
     serverMailboxes = [initialMailbox, newMailbox]
-    act(() => { window.location.hash = '/workspaces/ws-b/chat?panel=mail&agent=mia' })
+    act(() => { openHashLink('/workspaces/ws-b/chat?panel=mail&agent=mia') })
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/ws-b/chat'))
     await waitFor(() => expect(useUiStore.getState().activePanel).toMatchObject({
@@ -128,5 +146,81 @@ describe('Mail stays in the newly routed workspace on a same-page hash navigatio
     expect(within(error).getByText("Can't connect to this mailbox")).toBeInTheDocument()
     expect(within(error).getByText('Error class: connect_refused')).toBeInTheDocument()
     expect(screen.queryByTestId('mail-choose-mailbox')).not.toBeInTheDocument()
+  })
+
+  it('keeps the open Mail mailbox on an ordinary workspace switch with no deep link (SP-29)', async () => {
+    serverMailboxes = [initialMailbox, newMailbox]
+    client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const router = createRouter({ routeTree, history: createHashHistory() })
+    render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>)
+
+    await waitFor(() => expect(useUiStore.getState().activePanel).toMatchObject({
+      id: 'mail', context: { workspaceId: 'ws-a', mailboxId: 'mia' },
+    }))
+    await screen.findByText('INBOX')
+
+    // Sidebar's workspace button calls navigate with `to` and `params`, but
+    // no search object. Unlike a new `?panel=mail` link, this is a follow.
+    await act(async () => {
+      await router.navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-b' } })
+    })
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/ws-b/chat'))
+    expect(router.state.location.search.agent).toBeUndefined()
+    await waitFor(() => expect(useUiStore.getState().activePanel).toMatchObject({
+      id: 'mail', context: { workspaceId: 'ws-b', mailboxId: 'mia' },
+    }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Mailbox' }))
+      .toHaveTextContent('Mia · mia-outage@example.test'))
+    expect(fetchMailFolders.mock.calls.some(([workspace]) => workspace === 'ws-b')).toBe(true)
+  })
+
+  it('shows the chooser without dialing when a new bare Mail link targets another workspace (SP-23)', async () => {
+    serverMailboxes = [initialMailbox, newMailbox]
+    client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const router = createRouter({ routeTree, history: createHashHistory() })
+    render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>)
+
+    await waitFor(() => expect(useUiStore.getState().activePanel).toMatchObject({
+      id: 'mail', context: { workspaceId: 'ws-a', mailboxId: 'mia' },
+    }))
+    await screen.findByText('INBOX')
+
+    // A same-tab URL landing is a fresh link, not a workspace switch through
+    // Sidebar's panel-follow path. B also has Mia, so inheriting A's mailbox
+    // would start a real folders request rather than showing SP-23's chooser.
+    act(() => { openHashLink('/workspaces/ws-b/chat?panel=mail') })
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/ws-b/chat'))
+    await waitFor(() => expect(useUiStore.getState().activePanel).toMatchObject({
+      id: 'mail', context: { workspaceId: 'ws-b', mailboxId: null },
+    }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Mailbox' }))
+      .toHaveTextContent('Choose a mailbox'))
+    expect(fetchMailFolders.mock.calls.some(([workspace]) => workspace === 'ws-b')).toBe(false)
+  })
+
+  it('keeps consecutive bare Mail links in the chooser even when the middle workspace has no mailbox', async () => {
+    serverMailboxes = [initialMailbox, thirdMailbox]
+    client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const router = createRouter({ routeTree, history: createHashHistory() })
+    render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>)
+
+    await waitFor(() => expect(useUiStore.getState().activePanel).toMatchObject({
+      id: 'mail', context: { workspaceId: 'ws-a', mailboxId: 'mia' },
+    }))
+    await screen.findByText('INBOX')
+
+    act(() => { openHashLink('/workspaces/ws-b/chat?panel=mail') })
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/ws-b/chat'))
+    await waitFor(() => expect(useUiStore.getState().activePanel?.context.workspaceId).toBe('ws-b'))
+    await screen.findByTestId('mail-choose-mailbox')
+
+    act(() => { openHashLink('/workspaces/ws-c/chat?panel=mail') })
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/ws-c/chat'))
+    await waitFor(() => expect(useUiStore.getState().activePanel).toMatchObject({
+      id: 'mail', context: { workspaceId: 'ws-c', mailboxId: null },
+    }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Mailbox' }))
+      .toHaveTextContent('Choose a mailbox'))
+    expect(fetchMailFolders.mock.calls.some(([workspace]) => workspace === 'ws-c')).toBe(false)
   })
 })

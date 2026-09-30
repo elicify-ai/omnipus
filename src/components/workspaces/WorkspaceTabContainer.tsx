@@ -50,6 +50,7 @@ interface WorkspaceTabContainerProps {
  */
 export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProps) {
   const navigate = useNavigate()
+  const location = useLocation()
   const { activeWorkspaceId, setActiveWorkspaceId, setActivePlanId } = useWorkspacesStore()
   const toggle = useSidebarStore((s) => s.toggle)
   const enterWorkspaceChat = useSessionStore((s) => s.enterWorkspaceChat)
@@ -96,6 +97,12 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
       return
     }
 
+    // A named panel in the incoming URL is an adoption, not an ordinary
+    // workspace switch. Leave its mailbox decision to usePanelDeepLink: moving
+    // Mail here first could make that hook mistake a bare link for an already
+    // adopted panel and keep the previous workspace's mailbox.
+    if (typeof location.search.panel === 'string') return
+
     const activePanel = useUiStore.getState().activePanel
     if (!activePanel) return
     const openedWorkspaceId =
@@ -129,7 +136,7 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
         workspaceId: decision.workspaceId,
       })
     })
-  }, [workspaceId, navigate])
+  }, [workspaceId, navigate, location.search.panel])
 
   // Bind the active workspace from the route.
   useEffect(() => {

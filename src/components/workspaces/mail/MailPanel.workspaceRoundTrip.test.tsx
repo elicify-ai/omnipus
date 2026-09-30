@@ -8,24 +8,13 @@
 // time (confirmed via the actual response body — this test asserts the
 // SAME oracle: mailboxesQuery never loses A's row).
 //
-// Root cause traced via the real state machine (usePanelDeepLink.ts +
-// MailPanel.tsx), NOT the mailboxesQuery/invalidateQueries path F3
-// targeted: usePanelDeepLink's adoption effect fires on every workspaceId
-// change while Mail stays mounted (F3's own "stays mounted" case). Its
-// isAlreadyAdopted correctly detects the workspace changed (F3), but the
-// follow-up `adoptionContext` call UNCONDITIONALLY derives a fresh
-// mailboxId directive from the URL's `agent` search param — which is
-// simply never set for an ordinary workspace-tab switch (no deep link
-// involved) — collapsing every workspace-follow re-adoption to the
-// EXPLICIT "choose a mailbox" `null` directive (MailPanelProps' own
-// documented null semantics, `MailPanel.tsx` lines 110-119). That
-// `mailboxId: null` directive short-circuits MailPanel's `agentId` memo
-// at `if (mailboxId === null) return null` BEFORE it ever reaches the
-// intent/auto-select fallback that would have found A's real, still-cached
-// mailbox. `mailboxesQuery` itself is never wrong — the oracle below
-// confirms fetchMailboxes is called at most once and always answers with
-// A's own mailbox in its list; the panel just never asks it because the
-// directive says "show the picker," not "auto-select."
+// An ordinary workspace switch carries the open panel context through
+// WorkspaceTabContainer's SP-29 follow path. This harness invokes the same
+// resolveWorkspaceSwitch helper and clears the old URL's search keys, as the
+// Sidebar's navigation does; a fresh `?panel=mail` URL instead requests
+// the chooser (SP-23), covered by the real-router integration test.
+// `mailboxesQuery` remains in cache throughout; the oracle below confirms
+// its response still contains A's own mailbox after the round trip.
 //
 // Oracle: MailPanelProps' own doc comment on `mailboxId` (undefined = "no
 // directive... the panel keeps its own posture... else a single configured
@@ -90,6 +79,7 @@ vi.mock('@/lib/api/mail', async (importOriginal) => {
 import { usePanelDeepLink } from '@/components/panel-shell/usePanelDeepLink'
 import { useUiStore } from '@/store/ui'
 import type { WorkspacePanelContext } from '@/components/panel-shell/types'
+import { resolveWorkspaceSwitch } from '@/components/panel-shell/workspaceSwitch'
 import { MailPanel } from './MailPanel'
 
 const folders = {
@@ -168,8 +158,22 @@ describe('Mail panel — workspace round trip keeps the mailbox directive correc
     await waitFor(() => expect(screen.queryByTestId('mail-choose-mailbox')).not.toBeInTheDocument())
     expect(await screen.findByText('INBOX')).toBeInTheDocument()
 
-    const rerenderAt = (workspaceId: string) => {
-      act(() => {
+    const rerenderAt = async (workspaceId: string) => {
+      const current = useUiStore.getState().activePanel
+      expect(current).toMatchObject({ id: 'mail' })
+      if (current?.id !== 'mail') throw new Error('Mail panel closed before workspace switch')
+      const decision = await resolveWorkspaceSwitch({
+        panelId: current.id,
+        openedWorkspaceId: current.context.workspaceId,
+        nextWorkspaceId: workspaceId,
+      })
+      expect(decision).toEqual({ action: 'follow', workspaceId })
+      if (decision.action !== 'follow') throw new Error('Mail panel did not follow workspace switch')
+      await act(async () => {
+        // Ordinary Sidebar navigation omits search; SP-29 follows the open
+        // panel instead of invoking the SP-23 named-link adoption path.
+        mockSearch = {}
+        useUiStore.getState().openPanel(current.id, { ...current.context, workspaceId: decision.workspaceId })
         rerender(
           <QueryClientProvider client={client}>
             <Harness workspaceId={workspaceId} />
@@ -179,15 +183,15 @@ describe('Mail panel — workspace round trip keeps the mailbox directive correc
     }
 
     // A -> B (no mailbox at all for B).
-    rerenderAt('ws-B')
+    await rerenderAt('ws-B')
     await waitFor(() => expect(screen.getByTestId('mail-choose-mailbox')).toBeInTheDocument())
 
     // B -> C (a configured mailbox, connection broken — still a real row).
-    rerenderAt('ws-C')
+    await rerenderAt('ws-C')
     await act(async () => { await Promise.resolve() })
 
     // C -> back to A.
-    rerenderAt('ws-A')
+    await rerenderAt('ws-A')
 
     // Oracle (independent of the buggy code path): the app-wide mailbox
     // list, served by the fetchMailboxes mock, has ALWAYS included A's own
