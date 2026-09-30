@@ -2,9 +2,11 @@
 
 > **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
 
-**Status:** draft (2026-09-12; re-validated 2026-09-15 after the library-improvements merge ff11e8249; not implemented, not an ADR, not a spec)
-**Companion:** [draft-module-map.md](draft-module-map.md) (code). This note is the same idea for **docs**. The companion is adding a **knowledge** product module for the same feature this note calls Knowledge Base — cross-reference it, don't duplicate its module boundary here.
-**Do not:** rewrite user guides or delete `docs/internal/_archive/preview-doc-v03-concept/` until this is accepted.
+**Current status (2026-09-30):** This draft maps work already delivered as well as work still open; it is not an ADR or a specification. All 13 handbook pages called “NEW” in the September 15 target exist now, as do `docs/connectors.md`, the connector guides and the stale-user-docs guard. The September 12–15 audit, “Sequence” and “Validation 2026-09-15” below record what was true *then*, not today's action list. The September 16 founder ruling to archive rather than delete superseded material remains below as a dated decision; the September 30 founder instruction for this cleanup supersedes **that archival disposition for the BRD and v0.3 concept only**: remove both folders from the live tree after checking current references. Their historical contents remain in Git history, not as live documentation. The five rooms-era drafts remain archived. Other incomplete or unverified documentation work is not declared done here.
+
+**Historical status (2026-09-12–15):** draft (re-validated 2026-09-15 after the library-improvements merge ff11e8249; not implemented at that time).
+**Companion:** [draft-module-map.md](draft-module-map.md) (code). This note is the same idea for **docs**. The companion maps the **knowledge** product module for the same feature this note calls Knowledge Base — cross-reference it, don't duplicate its module boundary here.
+**Historical hold (2026-09-12–15; superseded for this cleanup):** Do not rewrite user guides or delete the v0.3 concept until this map is accepted.
 
 **Changes 2026-09-15** (re-validation after `ff11e8249` landed on `release/v0.1.1`):
 - Second pass after PR #685 (browser-improvements, `a809b838f`): no user handbook file changed, no stale-text line moved. PR #685 added 78 loose investigation notes at the root of `docs/internal/` (`browser-*-2026-09-*.md`, `runtime-latency-validation.md`) and one more ADR-081 ("dedicated browser input connection"). Archive rule and ADR notes below updated; ADR file count is now 151.
