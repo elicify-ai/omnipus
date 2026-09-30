@@ -40,6 +40,32 @@ vi.mock('@/components/browser/BrowserLivePanel', () => ({
   },
 }))
 
+vi.mock('@/components/workspaces/mail/MailPanel', () => ({
+  // Mail's registered `content` (MailPanelContent, private to
+  // mailPanelDefinition.tsx) derives narrower named props for MailPanel
+  // instead of forwarding PanelContentProps directly like Library/Browser —
+  // reconstruct the equivalent shape from those props for the assertion.
+  MailPanel: (props: {
+    workspaceId: string
+    mailboxId?: string | null
+    initialFolder?: string
+    initialMessageRef?: string | null
+  }) => {
+    renderedPanels('mail', {
+      context: {
+        workspaceId: props.workspaceId,
+        mailboxId: props.mailboxId ?? null,
+      },
+      presentation: 'fullscreen',
+      close: () => undefined,
+      expand: () => undefined,
+      registerExpandContext: () => undefined,
+      onWidthSettle: () => undefined,
+    })
+    return <div data-testid="fullscreen-mail" />
+  },
+}))
+
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   fetchAppState: vi.fn(async () => ({
@@ -72,6 +98,10 @@ const routeExpectations = {
   browser: {
     context: { sessionId: 'session-current', agentId: 'agent-current' },
     surfaceTestId: 'fullscreen-browser',
+  },
+  mail: {
+    context: { workspaceId: 'workspace-current', mailboxId: 'agent-current' },
+    surfaceTestId: 'fullscreen-mail',
   },
 } satisfies Partial<Record<PanelId, RouteExpectation>>
 
