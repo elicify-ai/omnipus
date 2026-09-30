@@ -15,6 +15,7 @@ import { test, expect, type Browser, type Page } from '@playwright/test'
 import { GatewayProcess } from './fixtures/gateway-process'
 import { startFakeMail, type FakeMail } from './fixtures/fake-mail-server'
 import { getFreePort } from './setup.js'
+import type { MailMessagePage, MailMessage } from '../../src/lib/api/generated/openapi-types'
 
 test.use({ storageState: { cookies: [], origins: [] } })
 
@@ -379,5 +380,112 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
       body: JSON.stringify(draftsListResponses, null, 2),
       contentType: 'application/json',
     })
+  })
+
+  function outsideDraft(subject: string, messageId: string, body: string): string {
+    return [
+      'From: mailbox@test.local',
+      'To: alice@test.local',
+      `Subject: ${subject}`,
+      'Date: Mon, 02 Jan 2006 15:04:05 +0000',
+      `Message-ID: <${messageId}>`,
+      'X-Omnipus-Draft: 1',
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=utf-8',
+      '', body, '',
+    ].join('\r\n')
+  }
+
+  function isDraftDetail(response: { url(): string; request(): { method(): string } }): boolean {
+    return response.request().method() === 'GET'
+      && /\/folders\/drafts\/messages\/[^/]+$/.test(new URL(response.url()).pathname)
+  }
+
+  test('opens the updated draft from a stale list after another browser tab saves it', async ({ browser }) => {
+    const subject = 'F5 cross-tab draft'
+    const messageId = `f5-cross-tab-${Date.now()}@test.local`
+    const original = await mail.append('Drafts', outsideDraft(subject, messageId, 'First version.'), ['\\Draft'])
+    const tabA = await mailPage(browser)
+    const tabB = await mailPage(browser)
+    try {
+      await openMail(tabA)
+      const listResponse = tabA.waitForResponse((response) => response.request().method() === 'GET'
+        && /\/folders\/drafts\/messages$/.test(new URL(response.url()).pathname))
+      await tabA.getByRole('tab', { name: 'Drafts' }).click()
+      const initialList = await (await listResponse).json() as MailMessagePage
+      expect(initialList.messages.find((message) => message.subject === subject)?.uid).toBe(original.uid)
+      await expect(tabA.getByRole('button', { name: new RegExp(`^${subject}`) })).toBeVisible()
+
+      await openMail(tabB)
+      await tabB.getByRole('tab', { name: 'Drafts' }).click()
+      await tabB.getByRole('button', { name: new RegExp(`^${subject}`) }).click()
+      await tabB.getByRole('button', { name: 'Edit' }).click()
+      await tabB.getByRole('textbox', { name: 'Message' }).fill('Updated in browser tab B.')
+      const saveResponse = tabB.waitForResponse((response) => response.request().method() === 'PUT'
+        && /\/folders\/drafts\/messages\/[^/]+$/.test(new URL(response.url()).pathname))
+      await tabB.getByRole('button', { name: /^save$/i }).click()
+      const saved = await (await saveResponse).json() as MailMessage
+      await expect(tabB.getByText('Draft saved', { exact: true })).toBeVisible()
+      expect(saved.uid).not.toBe(original.uid)
+      const fresh = await gw.apiFetch<MailMessagePage>('GET', `/api/v1/workspaces/${workspaceId}/mail/mia/folders/drafts/messages`)
+      expect(fresh.ok).toBe(true)
+      expect(fresh.body.messages.find((message) => message.subject === subject)?.uid).toBe(saved.uid)
+
+      const detailResponse = tabA.waitForResponse(isDraftDetail)
+      await tabA.getByRole('button', { name: new RegExp(`^${subject}`) }).click()
+      const detail = await detailResponse
+      console.log('F5 cross-tab detail:', JSON.stringify({ oldUid: original.uid, currentUid: saved.uid, url: detail.url(), status: detail.status() }))
+      await expect(tabA.getByText('Updated in browser tab B.')).toBeVisible()
+      await expect(tabA.getByTestId('mail-reading-zone')).not.toContainText('404:')
+    } finally {
+      await tabA.context().close()
+      await tabB.context().close()
+    }
+  })
+
+  test('opens the updated draft after a background mailbox mutation renumbers its UID', async ({ browser }) => {
+    const subject = 'F5 background draft'
+    const messageId = `f5-background-${Date.now()}@test.local`
+    const original = await mail.append('Drafts', outsideDraft(subject, messageId, 'First background version.'), ['\\Draft'])
+    const page = await mailPage(browser)
+    try {
+      await openMail(page)
+      await page.getByRole('tab', { name: 'Drafts' }).click()
+      await expect(page.getByRole('button', { name: new RegExp(`^${subject}`) })).toBeVisible()
+      const replacement = await mail.append('Drafts', outsideDraft(subject, messageId, 'Updated by the background actor.'), ['\\Draft'])
+      await mail.storeFlags('Drafts', original.uid, ['\\Deleted'])
+      const fresh = await gw.apiFetch<MailMessagePage>('GET', `/api/v1/workspaces/${workspaceId}/mail/mia/folders/drafts/messages`)
+      expect(fresh.ok).toBe(true)
+      expect(fresh.body.messages.find((message) => message.subject === subject)?.uid).toBe(replacement.uid)
+      const detailResponse = page.waitForResponse(isDraftDetail)
+      await page.getByRole('button', { name: new RegExp(`^${subject}`) }).click()
+      const detail = await detailResponse
+      console.log('F5 background detail:', JSON.stringify({ oldUid: original.uid, currentUid: replacement.uid, url: detail.url(), status: detail.status() }))
+      await expect(page.getByText('Updated by the background actor.')).toBeVisible()
+      await expect(page.getByTestId('mail-reading-zone')).not.toContainText('404:')
+    } finally {
+      await page.context().close()
+    }
+  })
+
+  test('refreshes the list and explains when a draft was deleted elsewhere', async ({ browser }) => {
+    const subject = 'F5 deleted draft'
+    const original = await mail.append('Drafts', outsideDraft(subject, `f5-deleted-${Date.now()}@test.local`, 'Will be deleted.'), ['\\Draft'])
+    const page = await mailPage(browser)
+    try {
+      await openMail(page)
+      await page.getByRole('tab', { name: 'Drafts' }).click()
+      await expect(page.getByRole('button', { name: new RegExp(`^${subject}`) })).toBeVisible()
+      await mail.storeFlags('Drafts', original.uid, ['\\Deleted'])
+      const detailResponse = page.waitForResponse(isDraftDetail)
+      await page.getByRole('button', { name: new RegExp(`^${subject}`) }).click()
+      const detail = await detailResponse
+      console.log('F5 deleted detail:', JSON.stringify({ oldUid: original.uid, url: detail.url(), status: detail.status() }))
+      await expect(page.getByTestId('mail-reading-zone')).toContainText('This draft was changed or deleted elsewhere. The list has been refreshed.')
+      await expect(page.getByTestId('mail-reading-zone')).not.toContainText('404:')
+      await expect(page.getByRole('button', { name: new RegExp(`^${subject}`) })).toHaveCount(0)
+    } finally {
+      await page.context().close()
+    }
   })
 })
