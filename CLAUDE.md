@@ -8,8 +8,7 @@ Guidance for Claude Code when working in this repository. This root file holds o
 
 Omnipus is an agentic core: a single Go binary with the SPA embedded via `go:embed`, kernel-level sandboxing (Landlock + seccomp on Linux 5.13+), audit logging, encrypted credential management, and compiled-in Go channels. Community-facing, MIT-licensed, no telemetry. **Domain:** omnipus.ai
 
-**Code wins over docs on any disagreement.** Authoritative references: `docs/internal/architecture/AS-IS-architecture.md` (evidence-based as-is, code-cited), `plugin-extensibility-assessment.md`, `ADR-*.md` (cite by title, not number alone), `docs/internal/_archive/BRD/` (original intent, superseded where it conflicts), and `docs/internal/_archive/preview-doc-v03-concept/` — the pre-ADR
-workspaces-redesign concept (superseded by ADRs).
+**Code wins over docs on any disagreement.** Authoritative references: `docs/internal/architecture/AS-IS-architecture.md` (evidence-based as-is, code-cited), `plugin-extensibility-assessment.md`, and `ADR-*.md` (cite by title, not number alone). The original BRD and pre-ADR workspaces concept were removed from the live tree on 2026-09-30; consult Git history only for historical context, never as current authority.
 
 **Brand & UI:** "The Sovereign Deep", dark-first, chat-first — `docs/internal/brand/brand-guidelines.md`. No emoji in stored data or UI chrome.
 
@@ -23,11 +22,11 @@ releases; v0.1.1 carries near the full scope once labelled v0.3).
   #155 security hardening (closed 2026-05-04 — env-var allowlist, master.key 0600
   check, shell-guard hardening, internal-CIDR egress blocking, audit HMAC chain,
   auth-endpoint rate limiting), and the bulk of the #156 workspaces redesign
-  (closed 2026-06-27; direction doc archived at
-  `docs/internal/_archive/preview-doc-v03-concept/`, superseded by ADRs).
+  (closed 2026-06-27; the pre-ADR concept was removed from the live tree,
+  remains in Git history and is superseded by ADRs).
   The five rooms-era drafts in `docs/internal/_archive/design-2026-05-rooms-era/`
   are superseded pre-ADR background (retired Rooms/5-core vocabulary) — do not
-  implement from them without checking the concept and the ADRs.
+  implement from them; check the later ADRs and the code instead.
 - **No version label names a future release anymore.** Work the closed issues left
   open stays on its tracked issues (#884, #885, #886, #887, #888, #306, #42) until
   the founder rules where it lands.

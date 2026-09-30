@@ -82,7 +82,7 @@ The issue's "Rooms" redesign closed with part of its scope landed in a different
 | LAST_SESSION.md / retrospectives replacement | ❌ Open — tracked | [#886](https://github.com/elicify-ai/omnipus/issues/886) |
 | Process isolation + capability-based RBAC | ❌ Open — tracked | [#887](https://github.com/elicify-ai/omnipus/issues/887) |
 
-The five rooms-era design documents in `docs/internal/_archive/design-2026-05-rooms-era/` are superseded pre-ADR background (retired Rooms/5-core vocabulary) — do **not** implement from them without checking the archived concept (`docs/internal/_archive/preview-doc-v03-concept/`) and the ADRs.
+The five rooms-era design documents in `docs/internal/_archive/design-2026-05-rooms-era/` are superseded pre-ADR background (retired Rooms/5-core vocabulary) — do **not** implement from them; check the later ADRs and the code instead. The intermediate v0.3 concept is historical and available in Git history, not in the live tree.
 
 ---
 
