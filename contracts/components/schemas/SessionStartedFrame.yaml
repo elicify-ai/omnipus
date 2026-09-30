@@ -1,9 +1,11 @@
 title: SessionStartedFrame
 description: >
-  Server → client. Emitted by the server immediately after it mints a new
-  session_id in response to a message frame sent without a session_id. The SPA
-  stores this id as the activeSessionId for all subsequent frames in this turn.
-  session_id here is the NEWLY MINTED session id, not routing context.
+  Server → client. Acknowledges a session-less message. For an ordinary first
+  user message, emitted only after its transcript entry is durably saved. The
+  SPA stores session_id as activeSessionId. A recovered acknowledgement names
+  an already-saved first message found in this gateway process's retry cache:
+  no new entry or turn is created, and the client must attach without a cursor.
+  Recovery is in-memory only and does not survive a gateway restart.
 type: object
 required:
   - type
@@ -16,10 +18,22 @@ properties:
   session_id:
     type: string
     minLength: 1
-    description: The newly minted session ID.
+    description: The newly minted or recovered session ID.
   agent_id:
     type: string
     description: The agent that will handle this session.
+  client_message_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: The initiating ordinary first message's client-supplied ID.
+  recovered:
+    type: boolean
+    description: >-
+      True only for an already-saved first message found in the process-local
+      retry cache. No new entry or turn is admitted. The client must attach
+      without a cursor; seq and boot_id are absent on this acknowledgement.
+      Absent or false denotes a fresh acknowledgement.
   seq:
     type: integer
     format: int64
