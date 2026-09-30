@@ -167,10 +167,23 @@ func TestCWSlideR1_RejectionMarksBlockedOlderBeforeNewestText(t *testing.T) {
 	requests := r.requests(t)
 	require.Len(t, requests, 2, "one genuine rejection and one progressing retry")
 	first, second := cwR1Messages(t, requests[0]), cwR1Messages(t, requests[1])
+	// MAJ-CW-002/005: the archive-backed view preserves the exact original
+	// anchor and order; provider normalization may merge adjacent user text.
+	anchor := providers.Message{Role: "user", Content: ts.userMessage}
+	live := h.agent.Sessions.GetHistory(h.key)
+	require.NotEmpty(t, live, "archive-backed live view retains the original anchor")
+	require.Equal(t, anchor, live[0], "archive-backed live view keeps the exact original anchor before the retained suffix")
+	cwR1AssertAnchor(t, live, anchor)
 	for _, sent := range [][]providers.Message{first, second} {
 		cwR1AssertControls(t, sent, []providers.Message{control})
 		cwR1AssertComplete(t, sent)
-		cwR1AssertAnchor(t, sent, archive[0].Message)
+		var wireText strings.Builder
+		for _, message := range sent {
+			wireText.WriteString(message.Content)
+			wireText.WriteByte('\n')
+		}
+		require.Equal(t, 1, strings.Count(wireText.String(), anchor.Content),
+			"normalized wire retains one exact original anchor text, even when merged with adjacent user text")
 	}
 	require.True(t, cwR1HasCall(second, "reactive-blocked-older"), "the protected prefix keeps the older call/result slots")
 	cwR1AssertMarkAtTurn(t, cwR1Result(t, second, "reactive-blocked-older").Content,
