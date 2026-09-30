@@ -333,7 +333,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
         // The old UID is gone and no surviving copy resolved. Refresh before
         // explaining that the clicked row disappeared; a failed refresh remains
         // a visible fetch error rather than a claim that the list was refreshed.
-        const refreshed = await fetchMailMessages(workspaceId, agentId as string, folder)
+        const refreshed = await fetchMailMessages(workspaceId, agentId as string, folder, { retry })
         queryClient.setQueryData([...MESSAGES_KEY, workspaceId, agentId, folder], refreshed)
         throw new Error('This draft was changed or deleted elsewhere. The list has been refreshed.', { cause: error })
       }
