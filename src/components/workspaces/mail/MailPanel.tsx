@@ -202,11 +202,19 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     const stored = readMailPanelIntent(workspaceId)
     return { ...stored, folder: initialFolder ?? stored.folder }
   })
+  // A bare link ignores saved intent until a picker gesture in this context.
+  // Scope that acknowledgement so re-adopting Mail cannot dial before reset.
+  const [mailboxChoice, setMailboxChoice] = useState<{
+    workspaceId: string; directive: MailPanelProps['mailboxId']
+  } | null>(null)
+  useEffect(() => { setMailboxChoice(null) }, [workspaceId, mailboxId])
+  const hasMailboxChoice = mailboxChoice !== null
+    && mailboxChoice.workspaceId === workspaceId && mailboxChoice.directive === mailboxId
   const agentId = useMemo(() => {
     // SP-23's explicit choose directive: the deep link named panel=mail with
     // no agent — the picker faces the user, nothing costly starts, and a
     // stored selection does not override the link's directive.
-    if (mailboxId === null) return null
+    if (mailboxId === null && !hasMailboxChoice) return null
     if (typeof mailboxId === 'string') {
       // A named mailbox can open Compose while the list is still loading;
       // once it settles, only enabled/configured mailboxes survive the filter.
@@ -219,7 +227,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       if (stored !== undefined) return intent.agentId
     }
     return workspaceMailboxes[0]?.agent_id ?? null
-  }, [mailboxId, intent.agentId, mailboxesQuery.isPending, workspaceMailboxes])
+  }, [mailboxId, hasMailboxChoice, intent.agentId, mailboxesQuery.isPending, workspaceMailboxes])
   const selectedMailbox = workspaceMailboxes.find((mailbox) => mailbox.agent_id === agentId)
   const senderName = agentId === null ? undefined : agentNamesById.get(agentId) ?? agentId
   const senderAddress = selectedMailbox?.username ?? 'Address unavailable'
@@ -325,7 +333,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
         // The old UID is gone and no surviving copy resolved. Refresh before
         // explaining that the clicked row disappeared; a failed refresh remains
         // a visible fetch error rather than a claim that the list was refreshed.
-        const refreshed = await fetchMailMessages(workspaceId, agentId as string, folder)
+        const refreshed = await fetchMailMessages(workspaceId, agentId as string, folder, { retry })
         queryClient.setQueryData([...MESSAGES_KEY, workspaceId, agentId, folder], refreshed)
         throw new Error('This draft was changed or deleted elsewhere. The list has been refreshed.', { cause: error })
       }
@@ -547,7 +555,12 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
         <Select
           value={agentId ?? ''}
-          onValueChange={(next) => { setIntent((prev) => ({ ...prev, agentId: next })); setSelectedRow(null); setSelectedRef(null) }}
+          onValueChange={(next) => {
+            setMailboxChoice({ workspaceId, directive: mailboxId })
+            setIntent((prev) => ({ ...prev, agentId: next }))
+            setSelectedRow(null)
+            setSelectedRef(null)
+          }}
         >
           <SelectTrigger
             aria-label="Mailbox"
