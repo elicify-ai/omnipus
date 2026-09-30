@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // lifecycle_bridge.go is the SINGLE MEDIATOR that transitions BOTH session
-// stores jointly: the durable LifecycleRecord (the 8-state S2 authority the
+// stores jointly: the durable LifecycleRecord (the 6-state S2 authority the
 // boot sweep reconciles) first, then the UnifiedMeta (the 3-status
 // chat-transcript metadata GET /api/v1/sessions and the SPA actually read) as
 // a best-effort mirror.
@@ -47,24 +47,23 @@ func lifecycleMutatorIsNil(ls LifecycleMutator) bool {
 	return false
 }
 
-// lifecycleToUnifiedStatus is the CANONICAL mapping from a terminal
-// LifecycleState to the UnifiedMeta SessionStatus that mirrors it. It is the
-// single authority — no other site in the codebase may hand-roll this mapping.
-// Returns (zero, false) for non-terminal lifecycle states: a non-terminal
-// transition must NOT touch UnifiedMeta (the chat session stays Active).
+// lifecycleToUnifiedStatus is the CANONICAL mapping from a LifecycleState
+// to the UnifiedMeta SessionStatus that mirrors it. It is the single authority
+// — no other site in the codebase may hand-roll this mapping. Stopped is
+// non-terminal, but still mirrors the interrupted turn onto chat metadata.
+// The queued/running/needs_input states return (zero, false): no mirror.
 //
-//   - LifecycleCompleted  → StatusArchived
-//   - LifecycleFailed     → StatusInterrupted
-//   - LifecycleCancelled  → StatusInterrupted
-//   - LifecycleTimedOut   → StatusInterrupted
-//   - Queued/Running/NeedsInput/Paused → (no mirror; chat stays Active)
+//   - LifecycleCompleted → StatusArchived
+//   - LifecycleFailed    → StatusInterrupted
+//   - LifecycleStopped   → StatusInterrupted
+//   - Queued/Running/NeedsInput → (no mirror; chat stays Active)
 func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 	switch to {
 	case LifecycleCompleted:
 		return StatusArchived, true
-	case LifecycleFailed, LifecycleCancelled, LifecycleTimedOut:
+	case LifecycleFailed, LifecycleStopped:
 		return StatusInterrupted, true
-	default: // LifecycleQueued, LifecycleRunning, LifecycleNeedsInput, LifecyclePaused
+	default: // LifecycleQueued, LifecycleRunning, LifecycleNeedsInput
 		return "", false
 	}
 }
@@ -75,9 +74,9 @@ func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 //     store's own atomic Mutate RMW so two concurrent transitions on the same
 //     session_id serialize (Correctness-MAJOR-3 / S4 INV-3: cancel-vs-complete
 //     race).
-//  2. Mirrors the transition onto UnifiedMeta (best-effort) for terminal
-//     states, via the canonical lifecycleToUnifiedStatus mapping. Non-terminal
-//     states skip the mirror (chat stays Active).
+//  2. Mirrors completed/failed/stopped onto UnifiedMeta (best-effort), via
+//     the canonical lifecycleToUnifiedStatus mapping. Other states skip the
+//     mirror (chat stays Active).
 //
 // Parameters:
 //   - ls: the durable lifecycle store (any LifecycleMutator — *LifecycleStore
@@ -130,13 +129,13 @@ func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to Lif
 		// comment.
 	}
 
-	// 2. UnifiedMeta mirror (best-effort, terminal states only).
+	// 2. UnifiedMeta mirror (best-effort, completed/failed/stopped).
 	if us == nil {
 		return lifecycleErr
 	}
 	mapped, ok := lifecycleToUnifiedStatus(to)
 	if !ok {
-		// Non-terminal state: chat stays Active — no SetMeta needed.
+		// No mirrored status: chat stays Active — no SetMeta needed.
 		return lifecycleErr
 	}
 	if err := us.SetMeta(sid, MetaPatch{Status: &mapped}); err != nil {

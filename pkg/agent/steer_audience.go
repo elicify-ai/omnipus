@@ -237,10 +237,8 @@ func subagentStateForOutcome(o steer.Outcome) string {
 		return string(session.LifecycleCompleted)
 	case steer.OutcomeEmptyAnswer, steer.OutcomeFailed:
 		return string(session.LifecycleFailed)
-	case steer.OutcomeInterrupted:
-		return string(session.LifecycleCancelled)
-	case steer.OutcomeTimedOut:
-		return string(session.LifecycleTimedOut)
+	case steer.OutcomeInterrupted, steer.OutcomeTimedOut:
+		return string(session.LifecycleStopped)
 	default:
 		return ""
 	}
