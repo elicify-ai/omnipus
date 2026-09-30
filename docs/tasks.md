@@ -78,6 +78,8 @@ flowchart LR
 
 A task flows from Inbox toward Done; Blocked hangs off to the side until its dependencies finish.
 
+**Agents cannot certify their own task runs with `update_task`.** While working on that task, an agent cannot set its status to Done or Failed; it uses `goal_claim` with `met` and evidence when finished, or `blocked` if it cannot proceed. The judge decides the outcome of the run. Outside a run, `update_task` also refuses Done for a regular task with acceptance criteria: start the task so its work can be judged rather than skipping those checks.
+
 ## The task detail panel
 
 Click any card or List row and the detail panel slides in. Every field saves as you edit; there is no Save button. From here you can:
