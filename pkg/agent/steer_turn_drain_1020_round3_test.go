@@ -86,6 +86,7 @@ func TestSteeredTurnDrain1020Round3_LateSteerDuringFinishAcceptedThenRevivesNext
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
+	provider := recordSteerRevivalInput1020(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
 	child := launchRunningChild(t, al, rootID, "round3-s1-revive")
 	startGeneration := child.Generation
@@ -213,14 +214,13 @@ func TestSteeredTurnDrain1020Round3_LateSteerDuringFinishAcceptedThenRevivesNext
 	if !strings.HasPrefix(nextHandback.ResultSoFar, wantPrefix) {
 		t.Errorf("generation %d final ResultSoFar = %q, must carry the late-instruction prefix (founder ruling Q10, round-4 correction item 4)", startGeneration+1, nextHandback.ResultSoFar)
 	}
-	// mockProvider (newAL's default provider, mock_provider_test.go) always
-	// answers "Mock response" regardless of input — the revived generation
-	// ran a REAL turn, not a value this test invented; dozens of other
-	// tests in this package (e.g. loop_test.go) rely on the same fixed
-	// reply as their oracle.
+	// The recording provider delegates its reply to mockProvider, preserving
+	// this fixed-response check. The actual input assertion below, not that
+	// canned reply, proves the accepted late instruction reached the turn.
 	if got := strings.TrimPrefix(nextHandback.ResultSoFar, wantPrefix); got != "Mock response" {
 		t.Errorf("generation %d final ResultSoFar = %q, after stripping the prefix = %q, want %q", startGeneration+1, nextHandback.ResultSoFar, got, "Mock response")
 	}
+	assertSteerRevivalInput1020(t, provider.Requests(), []string{"ROUND3-S1-LATE-STEER"})
 }
 
 // TestSteeredTurnDrain1020Round3_DeliveryFailureConsumesLateSteerAsSameGenerationContinuation

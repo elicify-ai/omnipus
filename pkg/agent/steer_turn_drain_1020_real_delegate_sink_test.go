@@ -17,6 +17,7 @@ func TestSteeredTurnDrain1020_RealDelegateSinkReportsFinishingChild(t *testing.T
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
+	provider := recordSteerRevivalInput1020(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	child := launchRunningChild(t, al, parentID, "round4-real-delegate-sink")
 
@@ -63,4 +64,5 @@ func TestSteeredTurnDrain1020_RealDelegateSinkReportsFinishingChild(t *testing.T
 	if rec.Generation != child.Generation+1 || rec.State != session.LifecycleCompleted {
 		t.Fatalf("late steer not consumed in exactly one revived generation: generation=%d state=%s, want generation=%d state=completed", rec.Generation, rec.State, child.Generation+1)
 	}
+	assertSteerRevivalInput1020(t, provider.Requests(), []string{"ROUND4-REAL-SINK-LATE-STEER"})
 }
