@@ -1782,6 +1782,12 @@ components:
           type: string
           minLength: 1
           maxLength: 128
+        scope:
+          type: string
+          enum:
+          - this-turn
+          - stop-all
+          default: this-turn
     PingFrame:
       title: PingFrame
       description: Client → server heartbeat.

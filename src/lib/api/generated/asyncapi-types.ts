@@ -110,6 +110,7 @@ export interface MessageFrame {
 export interface CancelFrame {
   type: "cancel";
   session_id: string;
+  scope?: "this-turn" | "stop-all";
 }
 
 export interface PingFrame {

@@ -17,3 +17,9 @@ properties:
     minLength: 1
     maxLength: 128
     description: Session whose in-progress turn should be cancelled.
+  scope:
+    type: string
+    enum:
+      - this-turn
+      - stop-all
+    default: this-turn

@@ -42,6 +42,7 @@ export const CancelFrame = z
   .object({
     type: z.literal("cancel"),
     session_id: z.string().min(1).max(128),
+    scope: z.enum(["this-turn", "stop-all"]).optional(),
   })
   .strict();
 
