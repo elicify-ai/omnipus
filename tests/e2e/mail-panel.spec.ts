@@ -379,6 +379,7 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     await page.getByRole('button', { name: /^save$/i }).click()
     await expect(page.getByText('Draft saved', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: /^send$/i }).click()
+    await expect(page.getByText('Draft sent', { exact: true })).toBeVisible()
 
     // 3. A fresh bare link to B (no mailbox), in the SAME document, must
     // adopt Mail rather than reload into a new SPA instance.
