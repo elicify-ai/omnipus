@@ -416,10 +416,22 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	if err != nil {
 		return false, err
 	}
+	// [ADR sub-agent control plane D2/D5/T27] A record that has already
+	// LANDED at LifecycleStopped (reportSteeredSessionTerminalUpward's
+	// terminaliseNeverRanStop write) clears its current-generation Stop
+	// fence in the SAME mutation that sets State — so rec.Stopped()'s
+	// marker-only tri-state (still needed as-is for every other caller: the
+	// in-flight fence before it has landed) no longer sees it as stopped.
+	// Recognising the landed state here, locally, is what lets an explicit
+	// RESUME reach a session a Stop cascade already finished processing;
+	// widening rec.Stopped() itself would also change executeSteer's and
+	// enqueueSteeringFromMessage's own (unrelated) guards, which this fix
+	// must not touch.
+	landedStopped := rec.State == session.LifecycleStopped
 	// Neither terminal nor durably stopped for this generation: nothing to
 	// revive — the caller's ordinary path applies. (A terminal child takes
 	// the revive path below, not this decline branch.)
-	if !rec.Terminal() && !rec.Stopped() {
+	if !rec.Terminal() && !rec.Stopped() && !landedStopped {
 		return false, nil
 	}
 	// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] The instruction lands
@@ -441,7 +453,36 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 			return false, fmt.Errorf("steer: revive %q: %w", sessionID, aerr)
 		}
 	}
-	newGeneration, rerr := al.steerCanceller().Revive(ctx, sessionID, by)
+	// [ADR sub-agent control plane D2/D5/T27] An explicit human RESUME on a
+	// record that already landed LifecycleStopped keeps the current
+	// generation and replaces the run (reviveSameGeneration below), exactly
+	// as D2's "same-generation resume" requires — "only done/failed mints a
+	// next generation". Every OTHER caller of this function keeps today's
+	// generation-bump behavior unchanged:
+	//   - executeSteer (pkg/tools/delegate_followup.go) is D3's own
+	//     agent-initiated steer path; D3 keeps it queue-behind-resume only,
+	//     never a same-generation reviver, so its Principal is never
+	//     PrincipalKindHuman here (verifyCallerPrincipal only returns Human
+	//     for an ALREADY-authenticated human passed in via
+	//     WithDelegatePrincipal, a context no production agent-steer call
+	//     sets) — routing on by.Kind alone cannot silently change
+	//     executeSteer's own pinned generation-bump result
+	//     (TestDelegateSteer_RevivesStoppedQueuedChild).
+	//   - A record that is terminal, or merely fenced but not yet landed
+	//     (rec.Stopped() true, landedStopped false — e.g. a Stop mid-flight
+	//     that never finished delivering upward), is unaffected: generation
+	//     always bumps for those, matching SteerCanceller.Revive's own
+	//     pinned callers (steer_cancel_test.go, steer_dispatch_race_test.go,
+	//     steer_completion_race_test.go, goal_followup_round3_984_test.go)
+	//     that invoke Revive directly and never reach landedStopped.
+	sameGeneration := landedStopped && by.Kind == steer.PrincipalKindHuman
+	var newGeneration int
+	var rerr error
+	if sameGeneration {
+		newGeneration, rerr = al.reviveSameGeneration(sessionID)
+	} else {
+		newGeneration, rerr = al.steerCanceller().Revive(ctx, sessionID, by)
+	}
 	if rerr != nil {
 		// Gate SFH#6: record the failed revive so the D2 launch backstop
 		// refuses truthfully instead of send-a-new-message — the user's
@@ -471,6 +512,60 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 		return false, fmt.Errorf("steer: revive %q: dispatch generation %d: %w", sessionID, newGeneration, derr)
 	}
 	return true, nil
+}
+
+// reviveSameGeneration is ReviveStoppedSession's explicit-human-RESUME
+// counterpart to SteerCanceller.Revive: [ADR sub-agent control plane]
+// D2's "Same-generation resume and restart fence" — an explicit RESUME on a
+// record that has already LANDED LifecycleStopped "atomically clears the
+// current stop_note/any current marker ... changes the SAME-GENERATION
+// state to queued and installs a NEW execution identity". Clearing
+// ExecutionID here is what forces that fresh identity: the dispatch commit
+// this call's caller runs next
+// (steer_launcher.go::commitSteeredDispatchStateWithPendingMessage) mints a
+// new run_id only when rec.ExecutionID is nil or names a different
+// generation, and this generation is, by definition, NOT different — D2
+// is explicit that a new admission "never reuses a previous run's identity
+// ... even at the same generation".
+//
+// Deliberately NOT a SteerCanceller method and NOT reachable from
+// executeSteer's own agent-initiated steer path or from any direct
+// SteerCanceller.Revive caller (race tests, goal/completion tests all call
+// Revive directly and are untouched by this method's existence). Re-derives
+// eligibility from the record under the SAME lock Mutate takes, so a
+// concurrent transition landing between ReviveStoppedSession's routing read
+// and this call is a safe no-op, not a stale write — mirrors Revive's own
+// "stopped := ..." re-check inside its Mutate closure.
+func (al *AgentLoop) reviveSameGeneration(sessionID string) (int, error) {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return 0, session.ErrLifecycleNotFound
+	}
+	var generation int
+	err := lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
+		if rec == nil {
+			return session.ErrLifecycleNotFound
+		}
+		generation = rec.Generation
+		if rec.Terminal() || rec.State != session.LifecycleStopped {
+			// Raced away since the routing read (e.g. a newer Stop/RESUME or
+			// a terminal completion already landed) — a safe no-op; the
+			// caller's own dispatchSteeredSession re-validates against the
+			// CURRENT record and refuses truthfully if it is no longer
+			// dispatchable.
+			return nil
+		}
+		rec.State = session.LifecycleQueued
+		rec.Stop = nil
+		rec.ExecutionID = nil
+		rec.FailedReason = ""
+		rec.NeedsInput = nil
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return generation, nil
 }
 
 // appendSteeredInstruction is ReviveStoppedSession's analogue of
