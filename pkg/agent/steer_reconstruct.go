@@ -6,13 +6,15 @@
 // wake, follow-up) rebuilds a steered session's turn from its lifecycle
 // record through this ONE function, never by hand.
 //
-// reconstructSteeredTurn is called from two entry points:
-// SessionLauncher.Dispatch (first run and revival, steer_launcher.go) and
-// loop_inbound.go::processSteeredSystemWake (the wake path). The latter also
-// appends I-3's consumption marker (step 3: "before executing, the turn
-// appends a `consumed <MessageID>` marker") once the woken turn is certain
-// to run. Boot recovery (boot_sweep.go::SteerBootRecovery) does not call
-// this function — a steered session still mid-flight at boot is marked
+// reconstructSteeredTurn is called from three entry paths:
+// SessionLauncher.Dispatch (first run and revival, steer_launcher.go),
+// loop_inbound.go::processSteeredSystemWake (the wake path), and the bounded
+// post-turn steering drain (steer_turn_drain.go). The wake path also appends
+// I-3's consumption marker (step 3: "before executing, the turn appends a
+// `consumed <MessageID>` marker") once the woken turn is certain to run; the
+// drain writes the equivalent marker through Continue's shared dequeue path.
+// Boot recovery (boot_sweep.go::SteerBootRecovery) does not call this
+// function — a steered session still mid-flight at boot is marked
 // OutcomeInterrupted and delivered to its parent rather than resumed.
 package agent
 

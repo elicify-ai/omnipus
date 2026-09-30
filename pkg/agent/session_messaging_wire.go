@@ -45,6 +45,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -109,6 +110,18 @@ func (al *AgentLoop) GetSessionLifecycleStore() *session.LifecycleStore {
 	return al.sessionLifecycleStoreForTools
 }
 
+// delegateSteeringSink adapts the named EnqueueStatus to the delegate tool's
+// optional int-returning status interface. Embedding preserves the basic
+// enqueue and ReviveStoppedSession capabilities without a tools -> agent import.
+type delegateSteeringSink struct {
+	*AgentLoop
+}
+
+func (s delegateSteeringSink) EnqueueSteeringMessageWithStatus(scope, agentID string, msg providers.Message, correlationID string) (string, int, error) {
+	resolvedID, status, err := s.AgentLoop.EnqueueSteeringMessageWithStatus(scope, agentID, msg, correlationID)
+	return resolvedID, int(status), err
+}
+
 // wireSessionMessagingForAgent wires the ADR-053 session-control hooks onto
 // ONE agent's delegate + message_parent tools, reading the stores from the
 // AgentLoop fields (which may still be nil on the first registerSharedTools
@@ -119,7 +132,7 @@ func (al *AgentLoop) GetSessionLifecycleStore() *session.LifecycleStore {
 // This wires ONLY the existing substrate hooks — it does not change tool
 // logic. The delegate tool keeps its own action handlers; message_parent
 // keeps its own kind switch. We inject: the inbox + lifecycle stores, the
-// steering sink (= the AgentLoop itself, via EnqueueSteeringMessage), the
+// steering sink (the delegateSteeringSink adapter around the AgentLoop), the
 // cancel hooks (ADR-057 FR-041's collapsed Interrupt / InterruptSessionHard,
 // called with ScopeSubtree per D8/R-13 — see the delegate-tool wiring block
 // below for why), the waker (the process-wide asyncNotifier, which implements
@@ -198,11 +211,11 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			} else {
 				dt.SetMessageInbox(nil)
 			}
-			// The AgentLoop satisfies tools.DelegateSteeringSink via its
-			// exported EnqueueSteeringMessage wrapper (steering.go) — same sink
-			// a chat steer uses, so a parent->child steer lands at the child's
-			// next tool boundary exactly like a chat interrupt (INV-3).
-			dt.SetSteeringSink(al)
+			// Adapt the named enqueue status to the delegate tool's optional
+			// int-returning interface; the embedded loop preserves basic enqueue
+			// and revival. Both paths still use the same queue as a chat steer,
+			// so delivery at the child's next tool boundary is unchanged (INV-3).
+			dt.SetSteeringSink(delegateSteeringSink{AgentLoop: al})
 			// Cancel hooks. Both closures go through ADR-091's DURABLE Stop
 			// cascade (steer_delegate_cancel.go::cancelDelegatedSubtree), the
 			// same one a human's Stop uses over the socket and REST

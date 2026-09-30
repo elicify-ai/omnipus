@@ -538,13 +538,32 @@ func (d *SteerUpwardDeliverer) wakeOwnerOrStore(
 
 	sessionKey := ownerKey
 	if ts := al.getActiveTurnState(sessionKey); ts != nil && ts.IsAlive() {
+		if steerUpwardDelivererAfterLiveTurnCheckTestHook != nil {
+			steerUpwardDelivererAfterLiveTurnCheckTestHook(sessionKey, ownerRec.Generation)
+		}
 		pm := providers.Message{Role: "user", Content: deliverySummary(msg)}
 		if enqErr := al.EnqueueSteeringWake(sessionKey, ownerRec.AgentID, ownerKey, res.MessageID, pm); enqErr != nil {
+			current, loadErr := lifecycle.Load(ownerKey)
+			if errors.Is(enqErr, errSteeringScopeClosed) && loadErr == nil &&
+				current.Generation == ownerRec.Generation && !current.Terminal() {
+				return d.wakeStoredMessage(ctx, childRec, current, msg, res.MessageID)
+			}
 			return steer.Delivery{}, fmt.Errorf("steer: deliver: enqueue steering message: %w", enqErr)
 		}
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryQueuedIntoLiveTurn}, nil
 	}
+	return d.wakeStoredMessage(ctx, childRec, ownerRec, msg, res.MessageID)
+}
 
+func (d *SteerUpwardDeliverer) wakeStoredMessage(
+	ctx context.Context,
+	childRec *session.LifecycleRecord,
+	ownerRec *session.LifecycleRecord,
+	msg generated.SessionMessage,
+	messageID string,
+) (steer.Delivery, error) {
+	al := d.agentLoop
+	ownerKey := ownerRec.SessionID
 	kindStr, _ := msg.Discriminator()
 	if al.asyncNotifier != nil {
 		target := childRec.SteeredBy.ReportingTarget
@@ -554,18 +573,28 @@ func (d *SteerUpwardDeliverer) wakeOwnerOrStore(
 			AgentID:             ownerRec.AgentID,
 			TranscriptSessionID: ownerKey,
 			Content:             deliverySummary(msg),
-			MessageID:           res.MessageID,
+			MessageID:           messageID,
 			Generation:          ownerRec.Generation,
 		}
-		if werr := al.asyncNotifier.WakeParentAlways(ctx, kindStr, wakeEvent); werr != nil {
-			// Best-effort (matches message_parent.go's own contract): the
-			// message is already durably stored; a wake failure is never
-			// fatal to Deliver — the boot re-nudge (WP-D) covers it.
-			logger.WarnCF("agent", "steer: deliver: wake failed (message is durable)",
-				map[string]any{"kind": kindStr, "error": werr.Error()})
-			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+		if wakeParentStoredMessage(ctx, al.asyncNotifier, kindStr, wakeEvent) {
+			return steer.Delivery{MessageID: messageID, Outcome: steer.DeliveryWoke}, nil
 		}
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
 	}
-	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+	return steer.Delivery{MessageID: messageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 }
+
+func wakeParentStoredMessage(ctx context.Context, notifier *asyncNotifierImpl, kind string, event tools.MessageParentWakeEvent) bool {
+	if err := notifier.WakeParentAlways(ctx, kind, event); err != nil {
+		// Best-effort: the message is already durable, and boot recovery can
+		// re-nudge it. Reporting false keeps error handling out of Deliver's
+		// successful stored-not-woken result.
+		logger.WarnCF("agent", "steer: deliver: wake failed (message is durable)",
+			map[string]any{"kind": kind, "error": err.Error()})
+		return false
+	}
+	return true
+}
+
+// steerUpwardDelivererAfterLiveTurnCheckTestHook is a deterministic seam for
+// the IsAlive-to-enqueue boundary. It is nil in production.
+var steerUpwardDelivererAfterLiveTurnCheckTestHook func(sessionID string, generation int)

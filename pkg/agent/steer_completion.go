@@ -10,6 +10,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/google/uuid"
@@ -108,58 +109,209 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	if err != nil {
 		return false, err
 	}
-	// Snapshot the Stop marker BEFORE Deliver's I/O window so the Mutate
-	// below can tell "a Stop raced my write" from "the Stop that caused
-	// my write". See the closure for why the distinction matters.
+	// Keep the wake result separate from the terminal-transition result:
+	// goal completion needs to know whether the parent's durable final woke
+	// it, while the finishing hand-off needs to know whether the child became
+	// terminal and a late steer must revive it.
 	stopBeforeDelivery := rec.Stop
-
 	finalWoke := false
-	if !finalAlreadyStored {
+	prepare := func() error {
+		if finalAlreadyStored {
+			return nil
+		}
 		message, messageErr := al.completionMessage(rec, outcome, answer, failureReason)
 		if messageErr != nil {
-			return false, messageErr
+			return messageErr
 		}
-		deliverer := al.getUpwardDeliverer()
-		if deliverer == nil {
-			return false, errSteerUpwardDelivererNotWired
-		}
-		// Finding A (ADR-091 fix lane 1, CRITICAL — the release blocker):
-		// this Deliver call is the ONLY upward path left. The former
-		// completeWaitingAncestors shortcut is deleted: it substituted the
-		// parent's stale answer instead of re-entering it with the child's
-		// result. Deliver's wake is the required re-entry.
 		event := steer.UpwardEvent{
 			ChildSessionID: rec.SessionID,
 			Generation:     rec.Generation,
 			Outcome:        outcome,
 			Message:        message,
 		}
-		delivery, deliverErr := deliverer.Deliver(ctx, event)
-		if deliverErr != nil {
-			return false, fmt.Errorf("steer: complete: deliver %q: %w", rec.SessionID, deliverErr)
-		}
-		reportUndeliveredWake("steer: complete", event, steerParentSessionID(rec), rec.Generation, delivery)
-		finalWoke = deliveryWokeRecipient(delivery.Outcome)
+		var deliverErr error
+		finalWoke, deliverErr = al.deliverSteeredTerminal(ctx, rec, event)
+		return deliverErr
 	}
+	// Round-3 finishing-window protocol (issue #1020): items accepted during
+	// the terminal-transition window are returned via the runTerminalTransitionWithFinishing
+	// onFinishing closure (after prepare, after the durable transition, after
+	// the deferred finish), and routed to one of three dispositions: revive
+	// the child into a new generation (post-finish STEER on a successful
+	// commit), replay the durable inbox entry (post-finish WAKE on a
+	// successful commit), or drain as a
+	// same-generation continuation (commit refused OR prepare failed — the
+	// child stays non-terminal and the items get a consumer via the existing
+	// retry loop).
+	var finishingItems []steeringQueueItem
+	transition := func() (bool, error) {
+		return al.commitSteeredTerminal(lifecycle, rec, stopBeforeDelivery, nextState, failureReason)
+	}
+	if al.steering == nil {
+		if prepareErr := prepare(); prepareErr != nil {
+			return finalWoke, prepareErr
+		}
+		_, transitionErr := transition()
+		return finalWoke, transitionErr
+	}
+	started, terminal, transitionErr := al.steering.runTerminalTransitionWithFinishing(
+		rec.SessionID,
+		prepare,
+		transition,
+		func(items []steeringQueueItem) { finishingItems = items },
+	)
+	if !started {
+		return finalWoke, errCompleteSteeringPending
+	}
+	if len(finishingItems) > 0 {
+		return finalWoke, al.processFinishingItems(ctx, rec, transitionErr, finishingItems, terminal)
+	}
+	return finalWoke, transitionErr
+}
 
+// processFinishingItems disposes of the items accepted during the
+// terminal-transition finishing window (issue #1020 round-3 / round-4
+// correction).
+//
+// Successful terminal commit: revive the child into a new generation
+// carrying every post-finish STEER. A post-finish WAKE is replayed from
+// its real durable inbox entry: revive the terminal recipient without
+// repeating its old instruction, then run the existing wake consumer,
+// which writes the consumed marker and acknowledges that entry.
+//
+// Commit refused (Stop landed, terminal-write conflict) OR prepare failed:
+// the child is non-terminal; drain waiting items as a same-generation
+// continuation right away. No silent drop on a subsequent prepare
+// failure either — the bounded retry budget lives in disposeSteeredTurnResult
+// (continueDrainMaxRetries + loud abandonment, the same shape the
+// session_worker uses), not here.
+//
+// Returns the error completeSteeredTurn should propagate to
+// disposeSteeredTurnResult.
+func (al *AgentLoop) processFinishingItems(
+	ctx context.Context,
+	rec *session.LifecycleRecord,
+	transitionErr error,
+	finishingItems []steeringQueueItem,
+	terminalCommitted bool,
+) error {
+	if al == nil || len(finishingItems) == 0 {
+		return transitionErr
+	}
+	// Successful terminal commit: revive the child into a new generation
+	// carrying every post-finish STEER. Every accepted item of THIS
+	// hand-off goes into ONE revival (round-4 correction — the previous
+	// bounded-drain sentinel capped revival at one per session, which
+	// dropped later-arriving items with no consumer; "all accepted steers
+	// of one hand-off go into ONE revival carrying all of them in order").
+	if terminalCommitted && transitionErr == nil {
+		steers := make([]string, 0, len(finishingItems))
+		wakes := make([]steeringQueueItem, 0, len(finishingItems))
+		for _, item := range finishingItems {
+			if item.wake != nil {
+				wakes = append(wakes, item)
+				continue
+			}
+			text := strings.TrimSpace(item.message.Content)
+			if text == "" {
+				continue
+			}
+			steers = append(steers, text)
+		}
+		// Carry every accepted post-finish steer in the FIRST revived
+		// generation, exactly in arrival order, so the child's next turn
+		// actually sees all of them. ReviveStoppedSession appends the
+		// text to the transcript BEFORE minting the new generation
+		// (its own appendSteeredInstruction call), so the very first
+		// revival already carries the full text; subsequent items ride
+		// on the same revival by waiting until it registers before
+		// enqueueing again — see the brief's "if a revival is already
+		// in flight" item, which the natural queue path satisfies
+		// because the steering scope is keyed by sessionID, not
+		// generation.
+		if len(steers) == 0 {
+			return al.schedulePostFinishWakes(rec, wakes)
+		}
+		by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "system:post-finish-steer"}
+		// Round-4 correction: mark the post-finish revival at the
+		// NEW generation (rec.Generation+1) so completionMessage for
+		// THIS session at generation N+1 prefixes the hand-back text.
+		// The OLD generation's terminal commit (gen N) does NOT
+		// consume the stamp — it carries the pre-late answer
+		// unchanged (round-3 spec item 3's contract). Cleared on
+		// completion read; cleared on revive failure so a stale
+		// stamp never leaks across generations.
+		al.markPostFinishRevival(rec.SessionID, rec.Generation+1)
+		// Pass the FIRST steer through ReviveStoppedSession's normal
+		// path so its appendSteeredInstruction + generation mint runs
+		// (the latter is the only place the new generation is created).
+		if _, err := al.ReviveStoppedSession(ctx, rec.SessionID, by, steers[0]); err != nil {
+			al.clearPostFinishRevival(rec.SessionID)
+			return errors.Join(fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
+				al.schedulePostFinishWakes(rec, wakes))
+		}
+		// Every remaining post-finish steer rides on the revived
+		// generation. They go onto the same sessionID scope, which the
+		// new turn dequeues on its next tool boundary; that is the
+		// round-4 "append to the revived generation's scope" path.
+		for _, text := range steers[1:] {
+			if _, err := al.EnqueueSteeringMessage(rec.SessionID, "", providers.Message{
+				Role:    "user",
+				Content: text,
+			}, ""); err != nil {
+				return errors.Join(fmt.Errorf("steer: post-finish enqueue onto revived scope %q: %w", rec.SessionID, err),
+					al.schedulePostFinishWakes(rec, wakes))
+			}
+		}
+		return al.schedulePostFinishWakes(rec, wakes)
+	}
+	// Commit refused (Stop landed, terminal-write conflict, etc.) OR
+	// prepare failed: drain waiting items as a same-generation
+	// continuation right away. The child is non-terminal; the items
+	// already have a consumer in the existing drain machinery
+	// (retrySteeringContinuation's continueDrainMaxRetries budget inside
+	// drainSteeredTurn, then abandonSteeredQueuedSteering's loud
+	// abandonment if the budget is exhausted). The round-4 correction
+	// removed the previous bounded-drain sentinel here; the bound lives
+	// in disposeSteeredTurnResult, not in this function.
+	if al.steering == nil {
+		return transitionErr
+	}
+	al.steering.prependItemsScope(rec.SessionID, finishingItems)
+	return errCompleteSteeringPending
+}
+
+func (al *AgentLoop) deliverSteeredTerminal(
+	ctx context.Context,
+	rec *session.LifecycleRecord,
+	event steer.UpwardEvent,
+) (bool, error) {
+	deliverer := al.getUpwardDeliverer()
+	if deliverer == nil {
+		return false, errSteerUpwardDelivererNotWired
+	}
+	delivery, err := deliverer.Deliver(ctx, event)
+	if err != nil {
+		return false, fmt.Errorf("steer: complete: deliver %q: %w", rec.SessionID, err)
+	}
+	reportUndeliveredWake("steer: complete", event, steerParentSessionID(rec), rec.Generation, delivery)
+	return deliveryWokeRecipient(delivery.Outcome), nil
+}
+
+// commitSteeredTerminal performs the durable half of the terminal transition.
+// The queue has been rechecked empty; later enqueues join the finishing buffer
+// and are disposed of after this write according to its terminal outcome.
+func (al *AgentLoop) commitSteeredTerminal(
+	lifecycle *session.LifecycleStore,
+	rec *session.LifecycleRecord,
+	stopBeforeDelivery *session.Stop,
+	nextState session.LifecycleState,
+	failureReason string,
+) (bool, error) {
 	if completeStateWriteTestHook != nil {
 		completeStateWriteTestHook(rec.SessionID)
 	}
 
-	// Finding D (ADR-091 fix lane 1, HIGH — three reviewers found this
-	// independently): this used to be a raw Load (above) -> Deliver (I/O,
-	// just above) -> mutate the PRE-Deliver snapshot in memory -> Persist —
-	// the exact stale-write-back shape already fixed on the dispatch path
-	// (steer_launcher.go::commitSteeredDispatchState), with a WIDER window
-	// here because Deliver does real I/O (an inbox append, transcript
-	// writes, a parent wake). A Stop pressed while Deliver was still
-	// running used to be ERASED by this write: state went straight to
-	// completed/failed, Stop became nil, and the durable record that Stop
-	// was ever pressed was gone. pkg/session/lifecycle.go's own rule is
-	// explicit: a caller doing read-then-decide-then-write MUST use Mutate.
-	// This re-checks generation AND the Stop marker inside the SAME lock
-	// the write happens under, refusing rather than writing a stale
-	// snapshot over either — mirrors commitSteeredDispatchState exactly.
 	mutateErr := lifecycle.Mutate(rec.SessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return fmt.Errorf("steer: complete: record %q vanished during delivery", rec.SessionID)
@@ -213,24 +365,23 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	})
 	switch {
 	case mutateErr == nil:
-		// (e)① #947 defect 1 — the pair ends together (FD1=A): the terminal
-		// write just landed, so the child's ACTIVE session-owned goal ends
-		// with its session, the outcome recording why. Idempotent (no active
-		// goal, no action), and it never speaks for a task-owned goal.
 		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
 			goalEndingForTerminalState(nextState), goalSessionEndedReasonForState(nextState))
-		return finalWoke, nil
+		return true, nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
 		errors.Is(mutateErr, errCompleteAlreadyTerminal),
 		errors.Is(mutateErr, session.ErrLifecycleTerminalImmutable):
-		// The message is already durably delivered (Deliver ran above); a
-		// Stop, a Revive or a second completion racing this write is a
-		// legitimate outcome, not a caller-actionable failure — mirrors the
-		// top-of-function guard's own "already terminal" no-op.
-		return finalWoke, nil
+		// Deliver has already stored the final. Read the current lifecycle:
+		// a concurrent Stop or Revive may have left this child non-terminal,
+		// and its finishing items must then continue on the same generation.
+		current, loadErr := lifecycle.Load(rec.SessionID)
+		if loadErr != nil {
+			return false, fmt.Errorf("steer: complete: reload %q: %w", rec.SessionID, loadErr)
+		}
+		return current.Terminal(), nil
 	default:
-		return finalWoke, fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, mutateErr)
+		return false, fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, mutateErr)
 	}
 }
 
@@ -336,6 +487,7 @@ var (
 	errCompleteStaleGeneration       = errors.New("steer: complete: generation changed during delivery")
 	errCompleteAlreadyTerminal       = errors.New("steer: complete: record became terminal during delivery")
 	errCompleteStoppedDuringDelivery = errors.New("steer: complete: a Stop landed during delivery")
+	errCompleteSteeringPending       = errors.New("steer: complete: steering arrived before terminal transition")
 )
 
 // completeStateWriteTestHook is a test-only synchronization seam, fired
@@ -583,6 +735,70 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 	}
 }
 
+// postFinishRevivalPrefix is the parent-visible prefix added to the
+// hand-back text when the revived generation was triggered by a late
+// steer (issue #1020 round-4 correction, founder ruling Q10). The text
+// mirrors the spec literally — see completeSteeredTurn's revive branch
+// for the marking site and completionMessage for the consumption site.
+const postFinishRevivalPrefix = "Follow-up after a late instruction: "
+
+// markPostFinishRevival stamps (sessionID, newGeneration) as a generation
+// whose terminal write was triggered by a post-finish revival.
+// completionMessage reads-and-clears the stamp on the matching generation;
+// if the revive itself fails before the new turn runs,
+// clearPostFinishRevival removes the stale stamp so a later
+// (non-post-finish) revival does not inherit it. The generation key
+// (not sessionID alone) is the load-bearing piece — only the NEW
+// generation's completionMessage consumes the stamp; the OLD
+// generation's terminal commit (which is the one the post-finish steer
+// arrives DURING) does not.
+func (al *AgentLoop) markPostFinishRevival(sessionID string, newGeneration int) {
+	if al == nil || sessionID == "" || newGeneration <= 0 {
+		return
+	}
+	al.postFinishRevivalMu.Lock()
+	defer al.postFinishRevivalMu.Unlock()
+	if al.postFinishRevival == nil {
+		al.postFinishRevival = map[string]int{}
+	}
+	al.postFinishRevival[sessionID] = newGeneration
+}
+
+// clearPostFinishRevival removes a sessionID from the post-finish-revival
+// stamp without reading it. Used on a failed revive so the next hand-off
+// for the SAME session is not mislabelled.
+func (al *AgentLoop) clearPostFinishRevival(sessionID string) {
+	if al == nil || sessionID == "" {
+		return
+	}
+	al.postFinishRevivalMu.Lock()
+	defer al.postFinishRevivalMu.Unlock()
+	delete(al.postFinishRevival, sessionID)
+}
+
+// consumePostFinishRevival reads-and-clears the post-finish-revival stamp
+// for sessionID at generation. Returns true when generation matches the
+// stamp — meaning the completion is for the new generation created by the
+// revival, so the caller (completionMessage) prefixes the hand-back text.
+// A subsequent completionMessage for the SAME session at a DIFFERENT
+// generation is unaffected (its generation key doesn't match).
+func (al *AgentLoop) consumePostFinishRevival(sessionID string, generation int) bool {
+	if al == nil || sessionID == "" || generation <= 0 {
+		return false
+	}
+	al.postFinishRevivalMu.Lock()
+	defer al.postFinishRevivalMu.Unlock()
+	if al.postFinishRevival == nil {
+		return false
+	}
+	stamped, ok := al.postFinishRevival[sessionID]
+	if !ok || stamped != generation {
+		return false
+	}
+	delete(al.postFinishRevival, sessionID)
+	return true
+}
+
 func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome steer.Outcome, answer, failureReason string) (generated.SessionMessage, error) {
 	now := time.Now().UTC()
 	var message generated.SessionMessage
@@ -590,6 +806,16 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 		questions, err := al.parkedQuestions(rec.SessionID)
 		if err != nil {
 			return message, fmt.Errorf("steer: complete: collect parked questions: %w", err)
+		}
+		// Round-4: a hand-back from a post-finish revival prefixes the
+		// answer text so the parent sees "Follow-up after a late
+		// instruction: ..." in the wake-up summary. Keyed by the
+		// generation the revival minted (rec.Generation+1 at revival
+		// time), so the OLD generation's terminal commit — the one
+		// whose pre-late answer is round-3 spec item 3's contract —
+		// never consumes the stamp.
+		if al.consumePostFinishRevival(rec.SessionID, rec.Generation) {
+			answer = postFinishRevivalPrefix + answer
 		}
 		err = message.FromSessionMessageHandback(generated.SessionMessageHandback{
 			MessageId:      rec.SessionID,
