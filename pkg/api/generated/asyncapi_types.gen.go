@@ -480,6 +480,25 @@ type CommandSegmentInfo struct {
 	SuggestedPrefix *string `json:"suggested_prefix,omitempty"`
 }
 
+// ContextWindowNoticeFrame — Server → client classified context-window diagnostic (ADR-066 MAJ-CW-009). Live and replay use the same frame with the original transcript entry_id and timestamp. Retained independently of the browser's Verbose chat preference; hidden notices still advance the session cursor.
+type ContextWindowNoticeFrame struct {
+	AgentId string                         `json:"agent_id"`
+	EntryId string                         `json:"entry_id"`
+	Notice  ContextWindowNoticeFrameNotice `json:"notice"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	Timestamp string `json:"timestamp"`
+	TurnId    string `json:"turn_id"`
+	Type      string `json:"type"`
+}
+
+// ContextWindowNoticeFrameNotice — Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
+type ContextWindowNoticeFrameNotice struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+
 // DelegationFailure — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth). The SPA matches on the fixed error="delegation_denied" discriminator, but (policy 2026-07-16) only renders a distinct delegation-failure block in verbose chat or an ActivityPanel step context — the default thread presentation is the calling agent's own narration of the denial, not a dedicated SPA-rendered block. The frame's top-level `error` field carries the same `reason`.
 type DelegationFailure struct {
 	// Fixed discriminator the SPA matches on.
@@ -1379,6 +1398,7 @@ const (
 	WsFrameTypeReplayProviderFallback   WsFrameType = "replay_provider_fallback"
 	WsFrameTypeRateLimit                WsFrameType = "rate_limit"
 	WsFrameTypeProviderRetry            WsFrameType = "provider_retry"
+	WsFrameTypeContextWindowNotice      WsFrameType = "context_window_notice"
 	WsFrameTypeProviderFallback         WsFrameType = "provider_fallback"
 	WsFrameTypeMedia                    WsFrameType = "media"
 	WsFrameTypeAgentSwitched            WsFrameType = "agent_switched"
