@@ -248,8 +248,10 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     // Escape in the full-screen tab must close it and re-dock Mail in the
     // ORIGINAL tab — not just close the tab and leave nothing docked, and
     // not navigate the original tab away from workspace chat.
-    await pop.keyboard.press('Escape')
-    await pop.waitForEvent('close')
+    const closed = pop.waitForEvent('close')
+    // Escape closes on keydown; a keyup would target an already closed tab.
+    await pop.keyboard.down('Escape')
+    await closed
 
     await expect(page).toHaveURL(/\/workspaces\/[^/]+\/chat/)
     await expect(page.getByTestId('mail-panel')).toBeVisible()

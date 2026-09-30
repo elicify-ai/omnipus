@@ -10,6 +10,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 const mocks = vi.hoisted(() => ({
   beforeLeave: vi.fn<() => Promise<boolean>>(),
   announceClosed: vi.fn(),
+  stopPresence: vi.fn(),
   fetchWorkspaces: vi.fn(),
   delayChat: false,
   completeRestore: null as (() => void) | null,
@@ -70,7 +71,7 @@ vi.mock('@/components/workspaces/WorkspaceChatTab', () => ({
   },
 }))
 vi.mock('@/lib/panelTabPresence', () => ({
-  announcePanelTabPresence: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+  announcePanelTabPresence: vi.fn(() => ({ update: vi.fn(), stop: mocks.stopPresence })),
   panelIdentityFromContext: (panelId: PanelId, context: PanelContext) => ({ panelId, ...context }),
 }))
 vi.mock('@/lib/panelPopoutLifecycle', () => ({
@@ -103,6 +104,7 @@ beforeEach(() => {
   mocks.completeRestore = null
   mocks.beforeLeave.mockReset().mockResolvedValue(true)
   mocks.announceClosed.mockReset()
+  mocks.stopPresence.mockReset()
   mocks.fetchWorkspaces.mockReset().mockResolvedValue([
     { id: 'ws-home', name: 'Home', status: 'active', is_default: true },
   ])
@@ -144,6 +146,7 @@ describe('shared full-screen exit', () => {
     await waitFor(() => expect(mocks.beforeLeave).toHaveBeenCalledTimes(1))
     expect(screen.getByTestId('panel-editor')).toHaveValue('unsaved edit')
     expect(mocks.announceClosed).not.toHaveBeenCalled()
+    expect(mocks.stopPresence).not.toHaveBeenCalled()
     expect(window.close).not.toHaveBeenCalled()
     expect(router.state.location.pathname).toBe('/panel/library')
     client.clear()
@@ -158,6 +161,25 @@ describe('shared full-screen exit', () => {
       'library', 'popout-a', { workspaceId: 'ws-a' },
     )
     expect(mocks.beforeLeave.mock.invocationCallOrder[0]).toBeLessThan(mocks.announceClosed.mock.invocationCallOrder[0])
+    expect(mocks.announceClosed.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(window.close).mock.invocationCallOrder[0])
+    client.clear()
+  })
+
+  it.each(['escape', 'back'])('releases presence before %s announces closure so the opener can re-dock', async (action) => {
+    Object.defineProperty(window, 'closed', { configurable: true, value: true })
+    const { client } = await renderPanel('/panel/library?workspace=ws-a&popout=popout-a')
+    if (action === 'escape') {
+      fireEvent.keyDown(screen.getByTestId('fullscreen-panel'), { key: 'Escape' })
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'Back to chat' }))
+    }
+    await waitFor(() => expect(window.close).toHaveBeenCalledOnce())
+    expect(mocks.stopPresence).toHaveBeenCalledOnce()
+    expect(mocks.announceClosed).toHaveBeenCalledExactlyOnceWith(
+      'library', 'popout-a', { workspaceId: 'ws-a' },
+    )
+    expect(mocks.beforeLeave.mock.invocationCallOrder[0]).toBeLessThan(mocks.stopPresence.mock.invocationCallOrder[0])
+    expect(mocks.stopPresence.mock.invocationCallOrder[0]).toBeLessThan(mocks.announceClosed.mock.invocationCallOrder[0])
     expect(mocks.announceClosed.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(window.close).mock.invocationCallOrder[0])
     client.clear()
   })

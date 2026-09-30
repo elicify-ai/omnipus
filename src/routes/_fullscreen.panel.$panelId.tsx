@@ -80,6 +80,8 @@ function FullScreenPanelRoute() {
 
   const announceClosed = useCallback(() => {
     if (closedRef.current || !definition || !popoutId || contextRef.current === null) return
+    // Release exclusive tab presence before the opener tries to re-dock this panel.
+    announcementRef.current?.stop()
     closedRef.current = true
     announcePanelPopoutClosed(definition.id, popoutId, contextRef.current)
   }, [definition, popoutId])
