@@ -1,6 +1,8 @@
 # Draft architecture — module map and per-module CLAUDE.md
 
-**Status:** draft, now partly implemented (shape agreed 2026-09-12; re-baselined 2026-09-15 after the library-improvements merge ff11e8249; size budgets ratified by the founder 2026-09-15; browser rows updated after PR #685; **budget gates and the first three splits merged to `release/v0.1.1` on 2026-09-15**, see "Progress"; not an ADR, not a spec)
+**Current status (2026-09-30):** The file/function budget gates, the first splits and the later mechanical migration described under “Progress” and “Migration complete” have landed; the older “still open” and “today” counts below are dated snapshots, not live inventory. The module-guide pass has added 40 `CLAUDE.md` files with matching `AGENTS.md` twins in existing `pkg/` folders, including `pkg/goal/`, `pkg/plan/`, `pkg/records/`, `pkg/vaultimport/`, `pkg/vaultprops/` and `pkg/media/library/`. The 28 pre-existing guides under `pkg/` and `src/` were audited, not rewritten; eight exceed the new 60-line target. `pkg/devices/` in the historical inventory does not exist, so no guide was created there. Root `CLAUDE.md` remains unsplit; the proposed package moves and UI knowledge-folder promotion are not part of this guide pass. The tables below remain a record of the 2026-09-12–16 plans and measurements, not instructions to repeat completed steps. This is a draft map, not an ADR or a specification.
+
+**Earlier status (2026-09-15):** draft, partly implemented (shape agreed 2026-09-12; re-baselined 2026-09-15 after the library-improvements merge ff11e8249; size budgets ratified by the founder 2026-09-15; browser rows updated after PR #685; budget gates and the first three splits merged to `release/v0.1.1` on 2026-09-15; see “Progress”).
 
 **Agreed so far**
 

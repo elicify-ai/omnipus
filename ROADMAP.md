@@ -60,7 +60,7 @@ Shipped on `main` as part of `#157` (`feat(v0.1+v0.2): iframe preview, web_serve
 | Per-agent + per-IP rate limit on memory writes | ✅ | `a7da565` — `MemoryRateLimiter` |
 | 14-reviewer security review findings | ✅ | `ba8ec56` (CRIT-1, CRIT-2, B1, H1, H2, test gap) |
 
-Items that **required architectural change** (process isolation, capability-based RBAC) were deferred — tracked as [#887](https://github.com/elicify-ai/omnipus/issues/887); no release scheduled.
+**Process isolation and capability-based RBAC** remain in the [Deferred — no release scheduled register](docs/internal/v0.1.0-gap-register.md#deferred--no-release-scheduled). The related namespace and cross-agent filesystem isolation decisions are tracked in [#885](https://github.com/elicify-ai/omnipus/issues/885); neither deferral has a release date.
 
 ---
 
@@ -80,9 +80,9 @@ The issue's "Rooms" redesign closed with part of its scope landed in a different
 | `DefaultChildPolicy` production wiring | ❌ Open — tracked | [#884](https://github.com/elicify-ai/omnipus/issues/884) — built but unwired (pentest C1/C2 kernel path-guard) |
 | Structural sandbox findings (cross-agent FS + namespace isolation) | ❌ Open — tracked | [#885](https://github.com/elicify-ai/omnipus/issues/885) |
 | LAST_SESSION.md / retrospectives replacement | ❌ Open — tracked | [#886](https://github.com/elicify-ai/omnipus/issues/886) |
-| Process isolation + capability-based RBAC | ❌ Open — tracked | [#887](https://github.com/elicify-ai/omnipus/issues/887) |
+| Process isolation + capability-based RBAC | Deferred — no release scheduled | [Deferred register](docs/internal/v0.1.0-gap-register.md#deferred--no-release-scheduled); process-isolation decision also tracked in [#885](https://github.com/elicify-ai/omnipus/issues/885) |
 
-The five rooms-era design documents in `docs/internal/_archive/design-2026-05-rooms-era/` are superseded pre-ADR background (retired Rooms/5-core vocabulary) — do **not** implement from them without checking the archived concept (`docs/internal/_archive/preview-doc-v03-concept/`) and the ADRs.
+The five rooms-era design documents in `docs/internal/_archive/design-2026-05-rooms-era/` are superseded pre-ADR background (retired Rooms/5-core vocabulary) — do **not** implement from them; check the later ADRs and the code instead. The intermediate v0.3 concept is historical and available in Git history, not in the live tree.
 
 ---
 
