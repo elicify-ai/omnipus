@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
+import { isApiError } from '@/lib/api-error'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -46,6 +47,7 @@ import {
 import type {
   MailboxNewMailSummary,
   MailMessage,
+  MailMessageSummary,
 } from '@/lib/api'
 import { MailFolderRail } from './MailFolderRail'
 import { MailMessageList } from './MailMessageList'
@@ -84,6 +86,15 @@ function mailErrorCode(err: unknown): string {
 
 function isMailConnectionFailure(errorClass: string | null): boolean {
   return errorClass === 'connect_refused' || errorClass === 'timeout' || errorClass === 'dns' || errorClass === 'tls'
+}
+
+/** IMAP envelopes can omit the angle brackets that the mid: route requires. */
+function draftMidRef(messageId: string | null): string | null {
+  if (messageId === null) return null
+  const value = messageId.trim()
+  const inner = value.startsWith('<') && value.endsWith('>') ? value.slice(1, -1) : value
+  if (!inner.includes('@') || /[<>\r\n]/.test(inner) || inner.trim() !== inner || `<${inner}>`.length > 998) return null
+  return `mid:<${inner}>`
 }
 
 /** File → base64 (MC-32 attach path) — chunked btoa to dodge call-stack
@@ -220,6 +231,16 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
   const [selectedRef, setSelectedRef] = useState<string | null>(() =>
     initialMessageRef ?? readMailPanelIntent(workspaceId).messageRef,
   )
+  // not-wire-format: remembers only the clicked row so a renumbered draft can
+  // be resolved by its Message-ID without applying another workspace's row.
+  const [selectedRow, setSelectedRow] = useState<{
+    message: MailMessageSummary; workspaceId: string; agentId: string | null
+  } | null>(null)
+  const activeSelectedRow = selectedRow?.workspaceId === workspaceId
+    && selectedRow.agentId === agentId
+    && selectedRow.message.folder === folder
+    && selectedRef === mailUidRef(selectedRow.message.uidvalidity, selectedRow.message.uid)
+    ? selectedRow.message : null
   const [draftEditingRef, setDraftEditingRef] = useState<string | null>(null)
 
   // Persist the per-workspace intent whenever mailbox/folder selection moves
@@ -283,15 +304,45 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
   // ── Detail query + mark-seen (B-27) ──────────────────────────────────
   const detailQuery = useQuery({
     queryKey: [...DETAIL_KEY, workspaceId, agentId, folder, selectedRef],
-    queryFn: () => {
+    queryFn: async () => {
       const retry = detailHumanRef.current
       detailHumanRef.current = false
-      return fetchMailMessage(workspaceId, agentId as string, folder, selectedRef as string, { retry })
+      try {
+        return await fetchMailMessage(workspaceId, agentId as string, folder, selectedRef as string, { retry })
+      } catch (error) {
+        if (!isApiError(error) || error.status !== 404 || folder !== 'drafts' || activeSelectedRow === null) throw error
+        const midRef = draftMidRef(activeSelectedRow.message_id)
+        const duplicateIds = midRef !== null && (messagesQuery.data?.messages.filter((message) => draftMidRef(message.message_id) === midRef).length ?? 0) > 1
+        if (midRef !== null && !duplicateIds) {
+          try {
+            const updated = await fetchMailMessage(workspaceId, agentId as string, folder, midRef, { retry })
+            void queryClient.invalidateQueries({ queryKey: [...MESSAGES_KEY, workspaceId, agentId, folder] })
+            return updated
+          } catch (recoveryError) {
+            if (!isApiError(recoveryError) || recoveryError.status !== 404) throw recoveryError
+          }
+        }
+        // The old UID is gone and no surviving copy resolved. Refresh before
+        // explaining that the clicked row disappeared; a failed refresh remains
+        // a visible fetch error rather than a claim that the list was refreshed.
+        const refreshed = await fetchMailMessages(workspaceId, agentId as string, folder)
+        queryClient.setQueryData([...MESSAGES_KEY, workspaceId, agentId, folder], refreshed)
+        throw new Error('This draft was changed or deleted elsewhere. The list has been refreshed.', { cause: error })
+      }
     },
     enabled: agentId !== null && folder !== null && selectedRef !== null,
     retry: false,
   })
   const detail: MailMessage | null = detailQuery.data ?? null
+  useEffect(() => {
+    if (!detailQuery.isSuccess || detail === null || selectedRef === null || activeSelectedRow === null) return
+    const resolvedRef = mailUidRef(detail.uidvalidity, detail.uid)
+    const rowMidRef = draftMidRef(activeSelectedRow.message_id)
+    if (resolvedRef === selectedRef || rowMidRef === null || draftMidRef(detail.message_id) !== rowMidRef) return
+    queryClient.setQueryData([...DETAIL_KEY, workspaceId, agentId, folder, resolvedRef], detail)
+    setSelectedRow({ message: detail, workspaceId, agentId })
+    setSelectedRef(resolvedRef)
+  }, [detailQuery.isSuccess, detail, selectedRef, activeSelectedRow, queryClient, workspaceId, agentId, folder])
   const headerDate = detail?.date && new Date(detail.date).getUTCFullYear() > 1
     ? formatMailDate(detail.date)
     : ''
@@ -331,6 +382,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       const updatedDetailKey = [...DETAIL_KEY, workspaceId, agentId, 'drafts', updatedRef]
       queryClient.setQueryData(updatedDetailKey, updated)
       void queryClient.invalidateQueries({ queryKey: updatedDetailKey })
+      setSelectedRow({ message: updated, workspaceId, agentId })
       setSelectedRef(updatedRef)
       void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
       void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
@@ -354,6 +406,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       })
     },
     onSuccess: (res) => {
+      setSelectedRow(null)
       setSelectedRef(null)
       void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
       void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
@@ -368,6 +421,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
   const draftDiscard = useMutation({
     mutationFn: () => discardMailDraft(workspaceId, agentId as string, selectedRef as string),
     onSuccess: () => {
+      setSelectedRow(null)
       setSelectedRef(null)
       void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
       void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
@@ -493,7 +547,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
         <Select
           value={agentId ?? ''}
-          onValueChange={(next) => { setIntent((prev) => ({ ...prev, agentId: next })); setSelectedRef(null) }}
+          onValueChange={(next) => { setIntent((prev) => ({ ...prev, agentId: next })); setSelectedRow(null); setSelectedRef(null) }}
         >
           <SelectTrigger
             aria-label="Mailbox"
@@ -587,7 +641,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
             <MailFolderRail
               folders={foldersQuery.data?.folders ?? []}
               active={folder}
-              onFolderChange={(slug) => { setIntent((prev) => ({ ...prev, folder: slug })); setSelectedRef(null) }}
+              onFolderChange={(slug) => { setIntent((prev) => ({ ...prev, folder: slug })); setSelectedRow(null); setSelectedRef(null) }}
             />
             <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="mail-list-zone">
             {foldersQuery.isError ? (
@@ -645,7 +699,10 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                   <MailMessageList
                     messages={messagesQuery.data.messages}
                     selectedRef={selectedRef}
-                    onSelect={(message) => setSelectedRef(mailUidRef(message.uidvalidity, message.uid))}
+                    onSelect={(message) => {
+                      setSelectedRow({ message, workspaceId, agentId })
+                      setSelectedRef(mailUidRef(message.uidvalidity, message.uid))
+                    }}
                   />
                 )}
               </>
