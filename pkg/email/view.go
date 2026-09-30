@@ -585,7 +585,7 @@ func (c *Client) searchMessageID(ctx context.Context, client *imapclient.Client,
 func splitAddressList(joined string) []string {
 	joined = strings.TrimSpace(joined)
 	if joined == "" {
-		return nil
+		return []string{}
 	}
 	parts := strings.Split(joined, ",")
 	out := make([]string, 0, len(parts))
