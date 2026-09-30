@@ -204,6 +204,30 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
 			cur.Stop = nil
 		}
+		// D2: landing retains an existing stop_note (a prior stampStop
+		// already wrote one, for an OutcomeInterrupted turn a cascade
+		// cancelled — cause stop/cascade depending on whether this session
+		// was the cascade's own target or a swept descendant). Two outcomes
+		// reach LifecycleStopped with no prior stamp and need one
+		// synthesized here: OutcomeTimedOut (a lifetime-budget expiry is
+		// never stamped by any cascade — D2/Vocabulary line 137) always
+		// gets cause timeout; OutcomeInterrupted with no stamp is the
+		// "legacy" RequestCancel path landing directly on a steered
+		// session's own completion (cancel.go, no SteerCanceller stamp
+		// involved) — cause stop, since this record is by definition the
+		// call's own direct target, never a cascade sweep, in that path.
+		// Neither branch has a session.Principal available at this layer,
+		// so the actor is "system".
+		if nextState == session.LifecycleStopped && cur.StopNote == nil {
+			cause := session.StopCauseStop
+			if outcome == steer.OutcomeTimedOut {
+				cause = session.StopCauseTimeout
+			}
+			cur.StopNote = &session.StopNote{
+				At: time.Now().UTC(), By: session.StopActorSystem,
+				Seq: uint64(cur.Generation), Cause: cause,
+			}
+		}
 		if nextState == session.LifecycleFailed {
 			cur.FailedReason = failureReason
 		}

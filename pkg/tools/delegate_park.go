@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -221,6 +222,27 @@ func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 			cur.State = dt.nextState
 			cur.NeedsInput = nil
 			cur.FailedReason = dt.failedReason
+			if dt.nextState == session.LifecycleStopped {
+				// No cascade/stamp precedes this write — a 3P respond that
+				// supersedes its own parked original with a freshly
+				// dispatched corrective session (D5), never a Stop/cascade.
+				// Of D2/D6's closed vocabulary this is closest to
+				// redirect_pause (a new instruction superseding the current
+				// generation) rather than stop/cascade/restart/timeout; the
+				// ADR's own redirect_pause text describes the NOT-YET-BUILT
+				// `redirect` delegate action resuming the SAME session_id,
+				// while this legacy 3P path mints a different session_id —
+				// flagged for verification, not a confident match.
+				if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+					cur.Stop = nil
+				}
+				cur.StopNote = &session.StopNote{
+					At:    time.Now().UTC(),
+					By:    session.StopActorAgent(ToolAgentID(dt.ctx)),
+					Seq:   uint64(cur.Generation),
+					Cause: session.StopCauseRedirectPause,
+				}
+			}
 			return nil
 		}); merr != nil {
 			// The corrective successor is already running by this point —
@@ -287,7 +309,7 @@ func (dt *delegateToolExecuteRespond) resumeNative() *ToolResult {
 	// hasRunningOrQueuedDescendant).
 	instruction := fmt.Sprintf("Answer to your question (correlation_id=%s): %s", dt.correlationID, dt.text)
 	if err := dt.t.appendFollowUpInstruction(dt.sessionID, instruction); err != nil {
-		dt.t.transitionLifecycle(dt.sessionID, session.LifecycleFailed, err.Error())
+		dt.t.transitionLifecycle(dt.sessionID, session.LifecycleFailed, err.Error(), nil)
 		slog.Error("delegate: respond: answer did not land; resume refused",
 			"session_id", dt.sessionID,
 			"correlation_id", dt.correlationID,

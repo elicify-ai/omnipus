@@ -257,7 +257,7 @@ func (te *TaskExecutor) finishRunTurn(
 
 		if errors.Is(turnErr, ErrTaskRunNotDispatched) {
 			te.appendRunErrorTranscript(t, taskSessionID, sessStore, fmt.Sprintf("Task execution failed: %v", turnErr))
-			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "not_dispatched")
+			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "not_dispatched", nil)
 			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf("The task could not be started: %v", turnErr), run)
 			return runStepEnded, "", ""
 		}
@@ -291,7 +291,7 @@ func (te *TaskExecutor) finishRunTurn(
 			logger.ErrorCF("task_executor", "task run: refused for a reason only an operator can fix — failing the task, no attempt used",
 				map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "code": string(code)})
 			te.appendRunErrorTranscript(t, taskSessionID, sessStore, reason)
-			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "operator_action_required")
+			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "operator_action_required", nil)
 			te.endTaskWithoutAttempt(t, taskSessionID, reason, run)
 			return runStepEnded, "", ""
 		}
@@ -319,7 +319,7 @@ func (te *TaskExecutor) finishRunTurn(
 		// credentials are scrubbed.
 		plain := turnErrorUserText(turnErr)
 		te.appendRunErrorTranscript(t, taskSessionID, sessStore, "Task execution failed: "+plain)
-		te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "execution_error")
+		te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "execution_error", nil)
 		return te.failedRunStep(ctx, t, taskSessionID, "execution error: "+plain, run)
 	}
 

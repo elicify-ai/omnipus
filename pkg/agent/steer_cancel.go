@@ -208,6 +208,20 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
 			cur.Stop = nil
 		}
+		// D2: landing retains whatever stop_note a prior stampStop already
+		// wrote for this generation (terminaliseNeverRanStop's only caller,
+		// below, always has one — the cascade that reached a never-ran
+		// session stamped it in the SAME Mutate that set cur.Stop above).
+		// The synthesis here is a defensive fallback for any OTHER caller of
+		// this shared landing function that reaches LifecycleStopped with no
+		// prior stamp, so persistLocked's stopped-requires-note invariant
+		// never strands a record instead of landing it.
+		if nextState == session.LifecycleStopped && cur.StopNote == nil {
+			cur.StopNote = &session.StopNote{
+				At: time.Now().UTC(), By: session.StopActorSystem,
+				Seq: uint64(cur.Generation), Cause: session.StopCauseStop,
+			}
+		}
 		if nextState == session.LifecycleFailed {
 			cur.FailedReason = failureReason
 		}
@@ -431,13 +445,21 @@ func (c *SteerCanceller) cascade(
 	stamped := make(map[string]int)
 	seen := make(map[string]struct{})
 	at := time.Now().UTC()
-	process := func(ids []string) {
+	// process stamps each id with ONE cause (D2/D6's closed vocabulary):
+	// StopCauseStop for the cascade's own direct target (sessionID — the
+	// session named in the CancelSubtree/StopSubtree call), StopCauseCascade
+	// for every OTHER id, which is reachable only because it is sessionID's
+	// descendant. Callers below split the combined root+first-pass-
+	// descendants slice the pre-stop_note code processed as one list into
+	// two calls purely to attach the right cause per id; seen/ordering are
+	// otherwise unchanged from before this split.
+	process := func(ids []string, cause session.StopCause) {
 		for _, id := range ids {
 			if _, ok := seen[id]; ok {
 				continue
 			}
 			seen[id] = struct{}{}
-			generation, outcome, err := c.stampStop(id, at, by)
+			generation, outcome, err := c.stampStop(id, at, by, cause)
 			switch {
 			case errors.Is(err, errCascadeTerminal):
 				report.SkippedTerminal = append(report.SkippedTerminal, id)
@@ -460,7 +482,8 @@ func (c *SteerCanceller) cascade(
 	if walkErr != nil {
 		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: walkErr.Error()})
 	}
-	process(append([]string{sessionID}, first...))
+	process([]string{sessionID}, session.StopCauseStop)
+	process(first, session.StopCauseCascade)
 	fireLiveCancels()
 
 	second, secondErr := CollectDescendantSessionIDs(c.Lifecycle, sessionID)
@@ -468,7 +491,7 @@ func (c *SteerCanceller) cascade(
 		report.Unreachable = appendUniqueUnreachable(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: secondErr.Error()})
 	}
 	lateStart := len(stamped)
-	process(second)
+	process(second, session.StopCauseCascade)
 	if len(stamped) > lateStart {
 		fireLiveCancels()
 	}
@@ -602,7 +625,7 @@ func (c *SteerCanceller) cascadeLock(sessionID string) *sync.Mutex {
 	return m
 }
 
-func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Principal) (int, stopStampOutcome, error) {
+func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Principal, cause session.StopCause) (int, stopStampOutcome, error) {
 	var generation int
 	var outcome stopStampOutcome
 	err := c.Lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
@@ -618,6 +641,14 @@ func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Prin
 			return errStopAlreadyStamped
 		}
 		rec.Stop = &session.Stop{At: at, Generation: rec.Generation, By: by}
+		// D2: the stop action stamps the in-flight fence AND the lasting
+		// stop_note in the SAME mutation. Landing (steer_completion.go::
+		// deliverSteeredCompletion, this file's reportSteeredSessionTerminalUpward)
+		// later clears rec.Stop but retains this note untouched.
+		rec.StopNote = &session.StopNote{
+			At: at, By: session.StopActorFromPrincipal(by),
+			Seq: uint64(rec.Generation), Cause: cause,
+		}
 		outcome = stopStamped
 		return nil
 	})

@@ -92,6 +92,19 @@ func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 //   - to: the target LifecycleState.
 //   - reason: the FailedReason (set on the record for ANY state, but only
 //     REQUIRED — enforced by persistLocked — when to == LifecycleFailed).
+//   - note: the StopNote to land when to == LifecycleStopped (D2/D6).
+//     Ignored for every other target state. A non-nil note always WINS —
+//     pass one whenever this call is itself the stop event (a fresh human
+//     Stop, a fresh cascade stamp synthesized by the caller, ...). Pass nil
+//     when a prior write (typically steer_cancel.go's stampStop, part of
+//     the SAME stop event) already landed the note on this generation —
+//     TransitionSession then RETAINS whatever rec.StopNote already holds,
+//     matching D2's "landing clears the fence but keeps the note." Seq is
+//     always re-stamped from the record's OWN current generation at write
+//     time, never taken from note.Seq (see StopNote's own doc comment).
+//     persistLocked rejects the write outright if to == LifecycleStopped
+//     and neither a passed-in note nor an existing rec.StopNote is present
+//     — a loud failure instead of a silently wrong or missing cause.
 //
 // Return value: the error from the LifecycleRecord Mutate, if any (including
 // ErrLifecycleNotFound when no record exists for sid, and
@@ -102,7 +115,7 @@ func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 // (never rolled back; the durable record is the authority and the boot sweep
 // reconciles). Callers that treat ErrLifecycleNotFound as expected (e.g. a
 // chat session with no lifecycle record) should silence it with errors.Is.
-func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to LifecycleState, reason string) error {
+func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to LifecycleState, reason string, note *StopNote) error {
 	// 1. LifecycleRecord (authoritative).
 	//
 	// lifecycleMutatorIsNil guards against BOTH a nil interface and a nil
@@ -121,6 +134,21 @@ func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to Lif
 			rec.FailedReason = reason
 			if to != LifecycleNeedsInput {
 				rec.NeedsInput = nil
+			}
+			if to == LifecycleStopped {
+				if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+					rec.Stop = nil
+				}
+				if note != nil {
+					stamped := *note
+					stamped.Seq = uint64(rec.Generation)
+					rec.StopNote = &stamped
+				}
+				// note == nil: retain whatever rec.StopNote already holds (a
+				// prior write in the same stop event already landed it); if
+				// nothing ever did, persistLocked's own stopped-requires-note
+				// invariant rejects this write rather than stranding the
+				// record silently mislabeled.
 			}
 			return nil
 		})
