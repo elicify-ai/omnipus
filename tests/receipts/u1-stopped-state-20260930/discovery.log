@@ -60,8 +60,8 @@ Named test execution / assertion lines
 named_execution_search_exit=1
 
 Exact D6 stop metadata / notice names (after positive inbox control)
-command=rg -n --glob *.go --glob !*_test.go \b(stop_note|stop_seq|StoppedChildNotice|stopped_child_notice|StoppedNotice)\b /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg
+command=rg -n --glob '*.go' --glob '!**/*_test.go' '\b(stop_note|stop_seq|StoppedChildNotice|stopped_child_notice|StoppedNotice)\b' /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg
 exact_d6_metadata_search_exit=1
 
-Alternate-name hit inspected: tool_failure_circuit_breaker.go::toolRepeatStopNotice
+Alternate-name hit inspected: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/tool_failure_circuit_breaker.go::toolRepeatStopNotice
 Read confirms identical-tool-repeat turn-final text only; no durable stop_note, child-parent inbox delivery, resume/redirect choices, or stop-sequence identity in that symbol. This is not the D6 independent stopped-child mechanism.
