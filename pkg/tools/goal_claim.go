@@ -63,12 +63,15 @@ const (
 )
 
 // GoalClaimAccess is the optional claim-side read a GoalRecordAccess may also
-// implement: the goal BOUND to the session, for either owner kind. goal_claim
-// prefers it over ReadGoalState, whose owner-keyed lookup cannot see a
-// task-owned goal from the task run's session. A seam without it (test
-// doubles) falls back to ReadGoalState.
+// implement: the goal BOUND to the session, for either owner kind, and the
+// session bound to a running task. goal_claim prefers ReadClaimableGoal over
+// ReadGoalState, whose owner-keyed lookup cannot see a task-owned goal from
+// the task run's session. A seam without it (test doubles) falls back to
+// ReadGoalState for depth-zero callers; a task run at depth > 0 must have the
+// bound-session lookup to prove it owns the session it is claiming for.
 type GoalClaimAccess interface {
 	ReadClaimableGoal(sessionID string) (goalID, goalCondition string, err error)
+	ReadTaskSessionID(taskID string) (string, error)
 }
 
 // GoalClaimDirectChildrenAccess is a claim-only read of live direct children.
@@ -189,9 +192,24 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	// turn names its running task; its goal is bound to the run's own session,
 	// so the bound-session lookup below still refuses any turn that is not
 	// that session's owner.
-	if depth := ToolDelegationDepth(ctx); depth > 0 && ToolRunningTaskID(ctx) == "" {
-		return ErrorResult("goal_claim is owner-session-only: a delegated sub-turn cannot claim " +
-			"this session's goal (ADR-084 JUDGE-FR-090) — report your findings back to the parent instead")
+	const ownerSessionOnly = "goal_claim is owner-session-only: a delegated sub-turn cannot claim " +
+		"this session's goal (ADR-084 JUDGE-FR-090) — report your findings back to the parent instead"
+	if depth := ToolDelegationDepth(ctx); depth > 0 {
+		taskID := ToolRunningTaskID(ctx)
+		if taskID == "" {
+			return ErrorResult(ownerSessionOnly)
+		}
+		claimAccess, ok := access.(GoalClaimAccess)
+		if !ok {
+			return ErrorResult("goal_claim: running task's bound-session lookup is not wired on this deployment")
+		}
+		boundSessionID, taskErr := claimAccess.ReadTaskSessionID(taskID)
+		if taskErr != nil {
+			return ErrorResult(fmt.Sprintf("goal_claim: could not read running task %q: %v", taskID, taskErr)).WithError(taskErr)
+		}
+		if boundSessionID != sessionID {
+			return ErrorResult(ownerSessionOnly)
+		}
 	}
 
 	var goalID, goalCondition string

@@ -386,6 +386,21 @@ func (a agentLoopGoalRecordAccess) DirectNonTerminalChildren(sessionID string) (
 	return active, nil
 }
 
+// ReadTaskSessionID implements the claim-side owner check: the task store's
+// run session is the authority for whether a depth>0 task turn may claim the
+// goal bound to its transcript session. An unwired store or failed read must
+// refuse the claim rather than granting the delegation exception.
+func (a agentLoopGoalRecordAccess) ReadTaskSessionID(taskID string) (string, error) {
+	if a.al.taskStore == nil {
+		return "", errors.New("goal record access: task store is not wired")
+	}
+	t, err := a.al.taskStore.Get(taskID)
+	if err != nil {
+		return "", fmt.Errorf("goal record access: reading running task %q: %w", taskID, err)
+	}
+	return t.SessionID, nil
+}
+
 var _ tools.GoalClaimAccess = agentLoopGoalRecordAccess{}
 var _ tools.GoalClaimDirectChildrenAccess = agentLoopGoalRecordAccess{}
 
