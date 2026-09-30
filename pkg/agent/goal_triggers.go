@@ -1798,7 +1798,10 @@ func (al *AgentLoop) dispatchGoalFallbackCompile(
 	// FR-020 channel echo entirely, on the path MOST likely to serve
 	// channel goals (a channel-origin recordless goal that never got a
 	// set_goal call from its own agent within two nudges).
-	al.afterGoalRecordWrite(sessionID, criteriaJSON, reason)
+	if err := al.afterGoalRecordWrite(sessionID, criteriaJSON, reason); err != nil {
+		al.reportGoalReadError(sessionID, "fallback record delivery (record saved)", err)
+		return
+	}
 
 	// ADR-082 D9 (review CR8): this is the path MOST likely to produce a
 	// record the operator never sees — no turn ran, no tool ran, and under
@@ -1806,7 +1809,11 @@ func (al *AgentLoop) dispatchGoalFallbackCompile(
 	// the engine-authored record as a synthetic set_goal(mode:register)
 	// call: transcript entry (replays after reload) plus live start/end
 	// frames (the card appears now on a bound webchat connection).
-	route := goalTriggers().routeFor(sessionID)
+	route, err := goalTriggers().routeFor(sessionID)
+	if err != nil {
+		al.reportGoalReadError(sessionID, "fallback record anchoring (record saved)", err)
+		return
+	}
 	anchorAgentID := route.agentID
 	if agentInst != nil {
 		anchorAgentID = agentInst.ID
@@ -2103,7 +2110,12 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 		al.goalMarkIdleSettling(goalID, false)
 		return
 	}
-	route := goalTriggers().routeFor(sessionID)
+	route, readErr := goalTriggers().routeFor(sessionID)
+	if readErr != nil {
+		al.reportGoalReadError(sessionID, "goal follow-up dispatch", readErr)
+		al.goalMarkIdleSettling(goalID, false)
+		return
+	}
 	if route.channel == "" || route.chatID == "" {
 		// routeFor itself already WARNed + persisted latest_reason when the
 		// route is missing on BOTH sides (FR-031); nothing further to log
@@ -2184,15 +2196,18 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 // idempotency (never overwrite a fresher reason, never re-write the
 // identical note) replaces the switch this function used to run by hand
 // against session meta's GoalLatestReason.
-func (s *goalTriggerState) routeFor(sessionID string) goalRoute {
+func (s *goalTriggerState) routeFor(sessionID string) (goalRoute, error) {
 	s.mu.Lock()
 	route, ok := s.routing[sessionID]
 	s.mu.Unlock()
 	if ok && route.channel != "" && route.chatID != "" {
-		return route
+		return route, nil
 	}
 	gstore := resolveGoalRecordStore()
-	g := activeGoalForSession(sessionID)
+	g, err := activeGoalForSession(sessionID)
+	if err != nil {
+		return goalRoute{}, fmt.Errorf("goal trigger: reading persisted routing: %w", err)
+	}
 	if g == nil || g.RouteChannel == "" || g.RouteChatID == "" {
 		if route.channel == "" && route.chatID == "" {
 			logger.WarnCF("agent", "goal trigger: no routing available (neither in-memory nor persisted) — keeper cannot reach the goal's channel",
@@ -2207,13 +2222,13 @@ func (s *goalTriggerState) routeFor(sessionID string) goalRoute {
 				}
 			}
 		}
-		return route
+		return route, nil
 	}
 	persisted := goalRoute{channel: g.RouteChannel, chatID: g.RouteChatID}
 	s.mu.Lock()
 	s.routing[sessionID] = persisted
 	s.mu.Unlock()
-	return persisted
+	return persisted, nil
 }
 
 // resolveGoalAgent resolves the AgentInstance that runs the goal-bearing

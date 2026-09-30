@@ -125,7 +125,8 @@ func resolveGoalRecordStore() *goal.Store {
 
 // activeGoalForSession returns the ACTIVE goal record currently BOUND to
 // sessionID — the record whose ActiveSessionID is this session — for EITHER
-// owner kind, or nil when this session carries no active goal.
+// owner kind. (nil, nil) means genuine absence; a store read failure returns
+// an error preserving the filesystem cause and must never be treated as absence.
 //
 // This is the ADR-086 replacement for the retired
 // `meta.GoalCondition != ""` entry predicate that every goal reader in this
@@ -147,15 +148,13 @@ func resolveGoalRecordStore() *goal.Store {
 // order is used, rather than silently returning nil — losing the goal loop
 // entirely would be a worse failure than continuing against the older of two
 // records.
-func activeGoalForSession(sessionID string) *goal.Goal {
+func activeGoalForSession(sessionID string) (*goal.Goal, error) {
 	if sessionID == "" {
-		return nil
+		return nil, nil
 	}
 	active, err := resolveGoalRecordStore().ListActive()
 	if err != nil {
-		logger.WarnCF("agent", "goal: could not list active goal records; treating this session as goal-less",
-			map[string]any{"component": "goal", "session_id": sessionID, "error": err.Error()})
-		return nil
+		return nil, &goalRecordReadError{cause: fmt.Errorf("goal: read active goal for session %q: %w", sessionID, err)}
 	}
 	var found *goal.Goal
 	for i := range active {
@@ -170,7 +169,7 @@ func activeGoalForSession(sessionID string) *goal.Goal {
 		g := active[i]
 		found = &g
 	}
-	return found
+	return found, nil
 }
 
 // bumpGoalRecordActivity moves goalID's own LastActivityAt clock forward —
@@ -344,7 +343,10 @@ func (a agentLoopGoalRecordAccess) ReadClaimableGoal(sessionID string) (goalID, 
 	if a.al.ResolveSessionStore(sessionID) == nil {
 		return "", "", fmt.Errorf("goal record access: session %q is not known to any session store", sessionID)
 	}
-	rec := activeGoalForSession(sessionID)
+	rec, readErr := activeGoalForSession(sessionID)
+	if readErr != nil {
+		return "", "", fmt.Errorf("goal record access: reading claimable goal: %w", readErr)
+	}
 	if rec == nil {
 		return "", "", nil
 	}
@@ -646,7 +648,9 @@ func (a agentLoopGoalRecordAccess) WriteRecord(sessionID, recordJSON string) err
 		return fmt.Errorf("goal record access: writing goal record: %w", uerr)
 	}
 
-	a.al.afterGoalRecordWrite(sessionID, recordJSON, goalRecordDiffAdapter(priorRecordJSON, recordJSON))
+	if err := a.al.afterGoalRecordWrite(sessionID, recordJSON, goalRecordDiffAdapter(priorRecordJSON, recordJSON)); err != nil {
+		return fmt.Errorf("goal record access: record saved but post-write delivery deferred: %w", err)
+	}
 	return nil
 }
 
@@ -713,14 +717,19 @@ func (al *AgentLoop) goalRecordFeasibilityFn(ctx context.Context, criteria []tas
 //     formatGoalEcho) as one channel text message via the outbound bus —
 //     exactly once per write. A web-routed (or not-yet-routed) goal
 //     receives no text echo; the frame is the surface there.
-func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary string) {
+func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary string) error {
 	// ADR-086: the goal's own record, not session meta, is where the frame's
 	// id / condition / round / budget / reason now come from.
-	rec := activeGoalForSession(sessionID)
+	rec, err := activeGoalForSession(sessionID)
+	if err != nil {
+		return fmt.Errorf("goal: post-write state read: %w", err)
+	}
 	if rec == nil {
-		logger.WarnCF("agent", "goal: could not re-read the goal record after a record write; frame/echo skipped",
-			map[string]any{"component": "goal", "session_id": sessionID})
-		return
+		return fmt.Errorf("goal: post-write delivery deferred: no active goal bound to session %q", sessionID)
+	}
+	route, err := goalTriggers().routeFor(sessionID)
+	if err != nil {
+		return fmt.Errorf("goal: post-write routing read: %w", err)
 	}
 
 	g := loadCompiledGoal(recordJSON)
@@ -736,7 +745,7 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 		rec.LatestReason, goalPillActive, definition, criteria, dod,
 	)
 
-	if route := goalTriggers().routeFor(sessionID); route.channel != "" && route.channel != goalForcingWebChannel {
+	if route.channel != "" && route.channel != goalForcingWebChannel {
 		switch al.bus {
 		case nil:
 			logger.WarnCF("agent", "goal: channel record echo skipped — no message bus wired",
@@ -758,14 +767,15 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 
 	logger.InfoCF("agent", "goal: record write applied",
 		map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "diff": diffSummary})
+	return nil
 }
 
 // EmitGoalStatusRehydrate re-emits ONE goal_status event for sessionID
 // carrying its CURRENT persisted state — reusing the SAME emission call
 // afterGoalRecordWrite (above) uses — whenever the session carries an
 // active, non-terminal goal, WITH or WITHOUT a registered record. No-op
-// (returns false, no event emitted) when there is no active goal at all, or
-// the store/session cannot be resolved.
+// (returns false, no goal event emitted) when there is no active goal at all.
+// A read failure returns false with a visible error instead of an absence frame.
 //
 // Item 14 (review-round-1, ADR-088): a WS reattach (SPA reload/reconnect)
 // has no rehydration path for a goal's already-registered record —
@@ -800,7 +810,11 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 // still excluded for free: Terminate moves the record out of the active
 // state, so activeGoalForSession stops finding it.
 func (al *AgentLoop) EmitGoalStatusRehydrate(sessionID string) bool {
-	rec := activeGoalForSession(sessionID)
+	rec, err := activeGoalForSession(sessionID)
+	if err != nil {
+		al.reportGoalReadError(sessionID, "goal-status replay", err)
+		return false
+	}
 	if rec == nil {
 		return false
 	}

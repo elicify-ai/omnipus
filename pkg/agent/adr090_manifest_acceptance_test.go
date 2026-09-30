@@ -121,7 +121,7 @@ func adr090AssertContextsForRole(t *testing.T, al *AgentLoop, agentID string) {
 
 	normalNames := adr090DefNames(tools.ToolsToProviderDefs(stripInfraToolDefs(pf)))
 	ts := fakeTurnState(inst, "sess-adr090-ctx-"+agentID)
-	compressedNames := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	compressedNames := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 
 	for _, name := range upfront {
 		assert.Truef(t, normalNames[name],
@@ -257,7 +257,7 @@ func TestADR090_Acceptance_KnowledgeDeferredRequiresDiscovery(t *testing.T) {
 
 	sess := "sess-adr090-knowledge-deferred"
 	ts := fakeTurnState(jim, sess)
-	preNames := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	preNames := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	note := al.buildToolManifestNote(ts, pf)
 	for _, name := range []string{"knowledge_read", "knowledge_edit"} {
 		assert.Falsef(t, preNames[name],
@@ -276,12 +276,12 @@ func TestADR090_Acceptance_KnowledgeDeferredRequiresDiscovery(t *testing.T) {
 	// Post-discovery, both appear in the SAME session's compressed defs —
 	// and a different session still sees neither (ADR-071 D3 §4.6: loaded
 	// tools are bucketed per (agent, session)).
-	postNames := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	postNames := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	assert.True(t, postNames["knowledge_read"],
 		"knowledge_read must be callable in the compressed context after discovery")
 	assert.True(t, postNames["knowledge_edit"],
 		"knowledge_edit must be callable in the compressed context after discovery")
-	otherNames := adr090DefNames(al.buildCompressedToolDefs(fakeTurnState(jim, sess+"-other"), pf))
+	otherNames := adr090DefNames(mustBuildCompressedToolDefs(t, al, fakeTurnState(jim, sess+"-other"), pf))
 	assert.False(t, otherNames["knowledge_read"],
 		"a different session must not inherit the discovery")
 	assert.False(t, otherNames["knowledge_edit"],

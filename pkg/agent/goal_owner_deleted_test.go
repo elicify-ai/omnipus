@@ -81,7 +81,7 @@ func TestEndGoalsOfDeletedAgent_EndsOnlyThatAgentsActiveChatGoals_UATE3(t *testi
 		if len(after.Criteria) != tc.wantCriteria {
 			t.Errorf("%s: criteria = %d, want %d retained (D9: a transition, never an erasure)", tc.name, len(after.Criteria), tc.wantCriteria)
 		}
-		if activeGoalForSession(tc.sid) != nil {
+		if mustActiveGoalForSession(t, tc.sid) != nil {
 			t.Errorf("%s: an active goal is still bound to the session", tc.name)
 		}
 		terminal := terminalPayloads(goalStatusPayloadsFor(c, tc.sid))

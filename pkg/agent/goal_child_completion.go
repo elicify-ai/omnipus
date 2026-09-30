@@ -92,7 +92,11 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 		// The goal may have been cleared, restated or its session cancelled
 		// since the last attempt — re-read fresh, exactly as the dispatch
 		// does before its own single call today.
-		rec := activeGoalForSession(work.sessionID)
+		rec, err := activeGoalForSession(work.sessionID)
+		if err != nil {
+			al.reportGoalReadError(work.sessionID, "deferred adjudication re-drive", err)
+			return
+		}
 		if rec == nil {
 			logger.InfoCF("agent", "goal: deferred adjudication re-drive stopped — no active goal on this session any more",
 				map[string]any{"session_id": work.sessionID, "attempt": attempt})
@@ -177,7 +181,11 @@ func (al *AgentLoop) endSessionOwnedGoalOnTerminal(sessionID string, ending gene
 	if al == nil || sessionID == "" {
 		return
 	}
-	rec := activeGoalForSession(sessionID)
+	rec, err := activeGoalForSession(sessionID)
+	if err != nil {
+		al.reportGoalReadError(sessionID, "ending the session-owned goal", err)
+		return
+	}
 	if rec == nil {
 		// No active goal — the common case (most steered children have no
 		// goal, and an already-ended goal must not be re-ended). Idempotent.

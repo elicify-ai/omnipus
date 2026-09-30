@@ -158,7 +158,7 @@ func TestCompressedToolDefs_FullTierAlwaysPresent(t *testing.T) {
 	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
 
 	ts := fakeTurnState(jimAgent, "sess-test")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
@@ -198,7 +198,7 @@ func TestCompressedToolDefs_LazyTierAbsentWhenNotLoaded(t *testing.T) {
 	require.True(t, hasLazy, "Jim must have at least one lazy tool in policy-filtered set")
 
 	ts := fakeTurnState(jimAgent, "sess-lazy")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
@@ -235,7 +235,7 @@ func TestCompressedToolDefs_LazyToolAppearsAfterLoad(t *testing.T) {
 	al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyName})
 
 	ts := fakeTurnState(jimAgent, sessionID)
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
@@ -271,7 +271,7 @@ func TestCompressedToolDefs_DifferentSessionNoInheritance(t *testing.T) {
 
 	// Session B must not see the loaded tool.
 	tsB := fakeTurnState(jimAgent, "sess-B")
-	defsB := al.buildCompressedToolDefs(tsB, policyFiltered)
+	defsB := mustBuildCompressedToolDefs(t, al, tsB, policyFiltered)
 	for _, d := range defsB {
 		if d.Function.Name == lazyName {
 			t.Errorf("sess-B must not inherit sess-A's loaded tool %q", lazyName)
@@ -293,7 +293,7 @@ func TestCompressedToolDefs_InfraAlwaysPresent(t *testing.T) {
 	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
 
 	ts := fakeTurnState(jimAgent, "sess-infra")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		defNames[d.Function.Name] = true
@@ -353,7 +353,7 @@ func TestCompressedToolDefs_LegacyPath(t *testing.T) {
 
 	// Compressed path must be strictly smaller.
 	ts := fakeTurnState(jimOn, "sess-compare")
-	compressedDefs := alOn.buildCompressedToolDefs(ts, pfOn)
+	compressedDefs := mustBuildCompressedToolDefs(t, alOn, ts, pfOn)
 	assert.Less(t, len(compressedDefs), len(pfOn),
 		"compressed defs must be a strict subset of all policy-filtered tools (token win)")
 }
@@ -373,7 +373,7 @@ func TestCompressedToolDefs_TokenWin(t *testing.T) {
 	fullDefs := tools.ToolsToProviderDefs(policyFiltered)
 
 	ts := fakeTurnState(jimAgent, "sess-token")
-	compressedDefs := al.buildCompressedToolDefs(ts, policyFiltered)
+	compressedDefs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	assert.Less(t, len(compressedDefs), len(fullDefs),
 		"compressed defs must be fewer than full defs (token win); compressed=%d full=%d",
@@ -645,7 +645,7 @@ func TestReachabilityInvariant_AllCoreAgents(t *testing.T) {
 
 			sessionID := "sess-reachability-" + agentID
 			ts := fakeTurnState(agentInst, sessionID)
-			defs := al.buildCompressedToolDefs(ts, policyFiltered)
+			defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 			note := al.buildToolManifestNote(ts, policyFiltered)
 
 			defNames := make(map[string]bool, len(defs))
@@ -721,7 +721,7 @@ func TestReachabilityInvariant_ToolsInfra_DenyDefaultAgent(t *testing.T) {
 	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
 
 	ts := fakeTurnState(avaAgent, "sess-ava-infra")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
@@ -905,7 +905,7 @@ func TestSessionID_NoTranscript_LoadedToolsVisible(t *testing.T) {
 	ts := fakeTurnStateNoTranscript(jimAgent, sessionKey)
 
 	// Reader: buildCompressedToolDefs must find the loaded tool.
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		defNames[d.Function.Name] = true
@@ -1164,7 +1164,7 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 
 	// Before load: lazyName must NOT be in compressed defs.
 	tsBefore := fakeTurnState(jimAgent, transcriptID)
-	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
+	defsBefore := mustBuildCompressedToolDefs(t, al, tsBefore, policyFiltered)
 	for _, d := range defsBefore {
 		require.NotEqual(t, lazyName, d.Function.Name,
 			"lazy tool %q must not be callable before tools{names:[...]} is called", lazyName)
@@ -1186,7 +1186,7 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 
 	// After load: lazyName must appear in compressed defs.
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
-	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
+	defsAfter := mustBuildCompressedToolDefs(t, al, tsAfter, policyFiltered)
 	defNamesAfter := make(map[string]bool, len(defsAfter))
 	for _, d := range defsAfter {
 		defNamesAfter[d.Function.Name] = true
@@ -1394,7 +1394,7 @@ func TestTokenWin_ByteSizeMaterially(t *testing.T) {
 
 	// Step 0: zero lazy tools loaded — compressed must be < full.
 	ts0 := fakeTurnState(jimAgent, sessionID)
-	defs0 := al.buildCompressedToolDefs(ts0, policyFiltered)
+	defs0 := mustBuildCompressedToolDefs(t, al, ts0, policyFiltered)
 	json0, err := json.Marshal(defs0)
 	require.NoError(t, err)
 	prevBytes := len(json0)
@@ -1413,7 +1413,7 @@ func TestTokenWin_ByteSizeMaterially(t *testing.T) {
 		al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyNames[i]})
 
 		ts := fakeTurnState(jimAgent, sessionID)
-		defs := al.buildCompressedToolDefs(ts, policyFiltered)
+		defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 		defsJSON, err := json.Marshal(defs)
 		require.NoError(t, err)
 		curBytes := len(defsJSON)
@@ -1464,7 +1464,7 @@ func TestTokenWin_LoadingAllLazyReachesFullSize(t *testing.T) {
 	pfDefs := tools.ToolsToProviderDefs(policyFiltered)
 
 	ts := fakeTurnState(jimAgent, sessionID)
-	compressedDefs := al.buildCompressedToolDefs(ts, policyFiltered)
+	compressedDefs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	// Once all lazy tools are loaded, compressed defs must be >= pf count
 	// (infra tools are force-included so compressed may be slightly larger).
@@ -1517,7 +1517,7 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 	// Step 2: Before load, it must NOT be in compressed defs.
 	transcriptID := "sess-search-load-chain"
 	tsBefore := fakeTurnState(jimAgent, transcriptID)
-	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
+	defsBefore := mustBuildCompressedToolDefs(t, al, tsBefore, policyFiltered)
 	for _, d := range defsBefore {
 		require.NotEqual(t, lazyName, d.Function.Name,
 			"lazy tool %q must not be callable before tools{names:[...]} is called", lazyName)
@@ -1540,7 +1540,7 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 
 	// Step 4: After load, the tool must appear in compressed defs (callable).
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
-	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
+	defsAfter := mustBuildCompressedToolDefs(t, al, tsAfter, policyFiltered)
 	defNamesAfter := make(map[string]bool, len(defsAfter))
 	for _, d := range defsAfter {
 		defNamesAfter[d.Function.Name] = true
@@ -1582,7 +1582,7 @@ func TestVisibility_SearchOnlyToolFoundByDescriptionBecomesUsable(t *testing.T) 
 	// Before the query: nothing new is loaded, so the manifest note is
 	// unaffected by this test's own future actions (baseline).
 	tsBefore := fakeTurnState(jimAgent, transcriptID)
-	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
+	defsBefore := mustBuildCompressedToolDefs(t, al, tsBefore, policyFiltered)
 	beforeNames := make(map[string]bool, len(defsBefore))
 	for _, d := range defsBefore {
 		beforeNames[d.Function.Name] = true
@@ -1635,7 +1635,7 @@ func TestVisibility_SearchOnlyToolFoundByDescriptionBecomesUsable(t *testing.T) 
 	// stray loads) and no fewer (a promotion that never reached the manifest
 	// builder) — proving the query-path promotion is usable end to end.
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
-	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
+	defsAfter := mustBuildCompressedToolDefs(t, al, tsAfter, policyFiltered)
 
 	var newlyCallable []string
 	for _, d := range defsAfter {
@@ -1691,13 +1691,13 @@ func TestManifestDeterminism_LoadSameToolTwice(t *testing.T) {
 	// Load the tool once.
 	al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyName})
 	ts1 := fakeTurnState(jimAgent, sessionID)
-	defs1 := al.buildCompressedToolDefs(ts1, policyFiltered)
+	defs1 := mustBuildCompressedToolDefs(t, al, ts1, policyFiltered)
 	note1 := al.buildToolManifestNote(ts1, policyFiltered)
 
 	// Load the same tool again (idempotent).
 	al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyName})
 	ts2 := fakeTurnState(jimAgent, sessionID)
-	defs2 := al.buildCompressedToolDefs(ts2, policyFiltered)
+	defs2 := mustBuildCompressedToolDefs(t, al, ts2, policyFiltered)
 	note2 := al.buildToolManifestNote(ts2, policyFiltered)
 
 	// Sent-defs set must be identical (no duplicates introduced by double-load).
@@ -1890,7 +1890,7 @@ func TestGetWorkspace_UpfrontFullTier_ADR090(t *testing.T) {
 	// Turn 1: no markToolsLoaded call — the upfront name is directly callable.
 	sessionID := "sess-ava-get-workspace-adr090"
 	ts := fakeTurnState(avaAgent, sessionID)
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		defNames[d.Function.Name] = true
@@ -1927,7 +1927,7 @@ func TestGetWorkspace_UpfrontFullTier_ADR090(t *testing.T) {
 	}
 	require.False(t, jimHasGetWorkspace,
 		"fixture: Jim's ADR-090 seeded policy must deny get_workspace for the boundary half to be non-vacuous")
-	jimDefs := al.buildCompressedToolDefs(fakeTurnState(jimAgent, "sess-jim-get-workspace-adr090"), jimFiltered)
+	jimDefs := mustBuildCompressedToolDefs(t, al, fakeTurnState(jimAgent, "sess-jim-get-workspace-adr090"), jimFiltered)
 	for _, d := range jimDefs {
 		assert.NotEqual(t, "get_workspace", d.Function.Name,
 			"ADR-090 §5.4 boundary: the upfront name must NOT reach the defs of an agent whose policy denies it")
@@ -2037,7 +2037,7 @@ func TestPromotedTaskTools_CallableOnTurn1_NoLoad(t *testing.T) {
 
 			// Turn 1: NO markToolsLoaded call — the upfront trio is directly callable.
 			ts := fakeTurnState(agentInst, tc.sessionID)
-			defs := al.buildCompressedToolDefs(ts, policyFiltered)
+			defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 			defNames := make(map[string]bool, len(defs))
 			for _, d := range defs {
@@ -2109,7 +2109,7 @@ func TestPromotedTaskTools_DifferentiationCheck(t *testing.T) {
 
 	// Turn 1: no load call.
 	ts := fakeTurnState(miaAgent, "sess-gap2-diff")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
@@ -2166,7 +2166,7 @@ func TestPromotedTaskTools_DifferentiationCheck(t *testing.T) {
 		"DIFFERENTIATION: environment_setup (search-only lazy) must NOT appear in the manifest note")
 	// And serve_web must NOT be in worker's turn-1 defs (it still pays the
 	// discovery cost — previewed is a listing, not a grant of full defs).
-	workerDefs := al.buildCompressedToolDefs(workerTS, workerFiltered)
+	workerDefs := mustBuildCompressedToolDefs(t, al, workerTS, workerFiltered)
 	for _, d := range workerDefs {
 		assert.NotEqual(t, "serve_web", d.Function.Name,
 			"DIFFERENTIATION: serve_web (previewed lazy) must NOT be in defs on turn 1 without a load call")
@@ -2261,7 +2261,7 @@ func TestLoadTool_LiveToggle_CompressedDefsWork(t *testing.T) {
 
 	// ASSERTION 3: buildCompressedToolDefs includes ToolSearch in the sent defs.
 	ts := fakeTurnState(avaAgent, "sess-live-toggle-ava")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		defNames[d.Function.Name] = true

@@ -164,12 +164,16 @@ func policyLabel(policy string) string {
 // A Definition of Done that cannot be read is left out, with a warning: this
 // check acts only on what it can know, and the adjudication fails closed on
 // that same read if the run ever gets that far.
-func (te *TaskExecutor) preRunCannotFinishReason(t *task.Task, taskSessionID string) string {
+func (te *TaskExecutor) preRunCannotFinishReason(t *task.Task, taskSessionID string) (string, error) {
 	if t == nil || t.Scratchpad || te.agentLoop == nil {
-		return ""
+		return "", nil
+	}
+	rec, readErr := activeGoalForSession(taskSessionID)
+	if readErr != nil {
+		return "", fmt.Errorf("task pre-run goal lookup: %w", readErr)
 	}
 	var judged []task.AcceptanceCriterion
-	if rec := activeGoalForSession(taskSessionID); rec != nil && len(rec.Criteria) > 0 {
+	if rec != nil && len(rec.Criteria) > 0 {
 		judged = append(judged, rec.Criteria...)
 	} else {
 		judged = append(judged, t.Criteria...)
@@ -182,7 +186,7 @@ func (te *TaskExecutor) preRunCannotFinishReason(t *task.Task, taskSessionID str
 	} else {
 		judged = append(judged, dod...)
 	}
-	return te.agentLoop.TaskAssigneeCannotFinish(t.AgentID, judged)
+	return te.agentLoop.TaskAssigneeCannotFinish(t.AgentID, judged), nil
 }
 
 // endTaskAssigneeCannotFinish ends a task whose agent cannot finish it, before

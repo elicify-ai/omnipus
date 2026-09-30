@@ -67,7 +67,11 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 	// kept deferring after the goal had ended: the verdict was delivered, the
 	// goal record closed, and the child stayed `running` for ever — the exact
 	// #947 hang.
-	if activeGoalForSession(rec.SessionID) != nil && !session.IsTerminalLifecycleState(nextState) {
+	activeGoal, goalErr := activeGoalForSession(rec.SessionID)
+	if goalErr != nil {
+		return false, fmt.Errorf("steer: complete: cannot determine goal state: %w", goalErr)
+	}
+	if activeGoal != nil && !session.IsTerminalLifecycleState(nextState) {
 		return false, nil
 	}
 

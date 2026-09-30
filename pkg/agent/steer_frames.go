@@ -491,7 +491,11 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 	if deliverer == nil {
 		return
 	}
-	rec := activeGoalForSession(sessionID)
+	rec, readErr := activeGoalForSession(sessionID)
+	if readErr != nil {
+		al.reportGoalReadError(sessionID, "upward goal-verdict delivery", readErr)
+		return
+	}
 	if rec == nil {
 		logger.WarnCF("agent", "goal-status upward delivery skipped — no active goal record bound to this session",
 			map[string]any{"component": "goal", "session_id": sessionID, "verdict_round": verdict.Round})
