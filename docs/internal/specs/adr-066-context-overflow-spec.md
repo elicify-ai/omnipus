@@ -37,6 +37,35 @@ The A-CONTRACT commit (`36801b44`, ADR-067 T067-01) shipped the shared contract 
 - **Providers-catalog envelope naming:** the per-model `window_unknown` projection this spec relies on (X-08) lives on the `GET /providers/catalog` document; that envelope's origin marker is `served_from ∈ {embedded, pulled}` plus `stale` (the document's `source` is free text).
 - **oapi-codegen behaviour (all three specs):** `ContextWindowSource.yaml` is one `$ref` in the contract, but oapi-codegen emits a **per-parent copy** of the enum in Go — `ContextWindowSource`, `AgentContextWindowSource`, and one per further parent (e.g. `DefaultModel.window_source`) — each a distinct Go string type with the same values. Implementers convert at the boundary (`generated.AgentContextWindowSource(src)`) rather than adding a hand-written shared type; the TS side has a single type.
 
+## Amendment [2026-09-30] — #1081 context-window behavior
+
+**Status:** Documentation aligned to founder directions; implementation, executed acceptance and the feature gate are pending. Source: **Context overflow — the sliding window extended mid-turn, tool results emptied with a recall mark, and a per-result cap at the door**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/docs/internal/architecture/ADR-066-context-budget-and-tool-result-routing.md::§18.2–18.6` (MAJ-CW-001–011). The numbered FR-029/030/031/032/036 below are revised in place. This dated amendment wins over conflicting earlier overview, user-story, behavioral-contract, dataset, test-plan and success assertions, including the 2026-08-23 A-CONTRACT field list; unaffected requirements remain binding. No compaction, semantic summary, new archive or new context subsystem is introduced.
+
+| Earlier assertion / dependent requirement | Binding replacement | Acceptance |
+|---|---|---|
+| US-8, B-34–37, DS-5, historical tests 17/18/34/39/40: fixed share, no mid-turn Skip, immune newest text, local fatal guard | FR-029–032; legal completed-step slide coupled to the live request; structural floor; newest text can shrink; no size-only termination (MAJ-CW-001/002/004–007/010). | B-54–57; tests 59–62 |
+| FR-019/020, US-6: bare projection state / turn-start triple | Persist exact pressure caps and anchor identity; live/reload equality; abort restores actual turn-start Skip/count/anchor/projections, including no-new-line rollback (MAJ-CW-002/005). | B-58; test 63 |
+| US-7, FR-024–027: addressed-result recall only | Keep id paging and add `archive_range: {from, to}`: integer, zero-based inclusive `0 ≤ from ≤ to`, exclusive with `query`, `turn_range`, `time`, `tool_call_id`; optional rune `offset ≥ 0`, `length ≥ 1`, effective cap minus framing, total/next offset, visible out-of-range errors. Returned JSONL is literal quoted data in the current tool result, not revived historical calls/instructions (MAJ-CW-003). | B-58; test 63 |
+| FR-033: check → empty → assemble → call | Apply FR-032's relief order at admitted-result and final assembled-request checkpoints; no provider send with an unfinished group (MAJ-CW-004/005). | B-54/55/57; tests 59/60/62 |
+| US-9, FR-034, B-40/41 and A-CONTRACT: `context_unrecoverable` as a terminal code | Remove the local size-only producer and all four catalogue copies together, without an alias. Preserve genuine cancellation/deadline/unknown-window codes and real provider `context_too_long`; every genuine terminal outcome stays visible despite narration. Error-bubble replacement is scoped to `'error'`; `'interrupted'` stays untouched (MAJ-CW-010/011). | B-60; test 65 |
+| US-11, B-44, DS-8 and A-CONTRACT: `absolute_trigger_chars` | FR-036's `tool_result_share_fraction`, relative to W; percentage form, exact validation/reload; no upgrade conversion (MAJ-CW-007). | B-62; test 67 |
+| Q1 guidance / Q33 retry chatter treated as ordinary assistant content | Model-only request notice and separately classified Verbose-only diagnostic; no early done, normal bubble or lost retained progress narration (MAJ-CW-008/009). | B-59; test 64 |
+
+B-54–62 and planned tests 59–67 below continue the existing BDD (behavior scenarios) and TDD (test-plan) numbering; they are **not executed tests or existing-symbol claims**. Conflicting portions of historical tests/datasets are superseded, not acceptance evidence for this amendment. Combined landing also requires B-61's control-plane joint proof; root-turn sliding does not depend on finishing the entire control-plane redesign (MAJ-CW-006).
+
+### Reachability [2026-09-30]
+
+| New behavior | How a user or agent reaches it | Required proof / source |
+|---|---|---|
+| Actual mid-turn slide and newest-text relief | An existing agent turn reaches the admitted-result/final-request checkpoints automatically; the next provider request uses the committed slice, not merely stored Skip. | B-54–58; FR-029–032 |
+| Q1 agent-only notice | The model reads one bounded transient notice in its **own next request**, with archive range/result pointers. It is not a UI feature, persisted assistant message or new notification tool. | B-57/59; MAJ-CW-008 |
+| Evicted context recall | The existing assigned, policy-controlled `recall_conversation` tool exposes `archive_range` and addressed-id paging; breadcrumbs/notice contain usable addresses. Registration alone is not access. | B-58; MAJ-CW-003 and ADR §18.6 |
+| Q33 optional context diagnostic | **Settings → Chat → Verbose chat** reveals the retained classified `context_window_notice` live/REST/replay diagnostic; toggling off hides it without reload. Normal chat stays quiet. | B-59/62; FR-036 |
+| Relative tool-result share | Authenticated **GET/PUT `/api/v1/settings/context`** and **Settings → Models → Tool-result share limit** reach the same fraction; fresh default 0.5/50%, validation and save/reload feedback are observable. | B-62; FR-036; existing route at `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/pkg/gateway/rest.go::restAPIRegisterEndpoints.registerHandlers` and control at `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/src/components/settings/ContextSection.tsx::ContextSection` |
+| Genuine terminal outcomes | Ordinary chat shows the translated terminal outcome, including after disconnect/reconnect or reload and with Verbose off; the interrupted path keeps its existing semantics. | B-60; MAJ-CW-010/011; independent RC2/RC5/duplicate-definition streams |
+
+**User-facing documentation TODOs for the implementing leads (not fulfilled by this internal-doc change):** update `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/docs/settings.md::Where each setting lives` for relative share/percentage validation and Verbose diagnostics; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/docs/memory.md::How long conversations stay in view` for completed-step sliding, shortened newest text and full-archive range/id recall; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/docs/troubleshooting.md::The provider rejects your model requests` for genuine terminal failures and enabling optional diagnostics, without advice for the removed local size guard. `docs-verifier` audits these updates against delivered behavior before landing (ADR §18.6; root Definition of Done).
+
 ## 2. Available Reference Patterns
 
 `docs/reference/go-implementation/` does not exist in this repository. **N/A.** Internal patterns reused: the ADR-060 structured tool-failure family (`marshalWithinBudget`, single producer, inline asyncapi schema) for the argument refusal and the recall mark; ADR-028's archive-preserving `TruncateHistory`/`RollbackAppended`; ADR-051's `LLMError` classifier and generated copy catalogue; the `/settings/memory` + `MemorySettings.yaml` / `PerformanceSettingsUpdate.yaml` partial-update pattern for D9; the default-agent `TriggerReload` precedent for settings that must take effect live.
@@ -541,6 +570,28 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 **B-53c (EP)** `SetHistory` on a non-empty archive refused — US-15.AC5.
 **B-53d (HP)** append-only invariant with an attach step — US-15.AC6.
 
+### Feature: #1081 amended behavior [2026-09-30]
+
+These scenarios replace conflicting earlier expectations on the mapped points, not unaffected resolver/ingest/recall/hydration coverage. Source: ADR §18.4 and MAJ-CW-001–011.
+
+**B-54 (HP/EC, outline) — Relative bounds and tiny-window long-turn progress.** Given a tiny resolved W and many admitted results in one turn, force multiple legal mid-turn Skip advances; recorded next requests omit whole old steps, retain the original user/media anchor and newest structure, and continue. Cover total-only, share-only and both triggers, strict equality, target-unreachable-but-under-both and W changes through resolution. With default f=0.5, W=8,192 gives S=4,096 and W=32,768 gives S=16,384; changing output reserve/pinned overhead changes B, not S. Cover `max(1, floor(f × W))` for a positive fraction whose product is below one. Sources: FR-029/030, MAJ-CW-004/005/007.
+
+**B-55 (HP/EC) — Incomplete parallel group.** Given a two-call newest step, force pressure after the first result. Its text may shorten, but no cut crosses that assistant or removes its first result, and no request sends before the second result arrives. After completion, final serialization retains both ids, arguments, results and their order; only older completed steps may slide. Sources: FR-030/031, MAJ-CW-002/004/005.
+
+**B-56 (EC/EP) — Newest fallback without a size-only stop.** Given no legal old-step eviction, pressure shortens newest text with Unicode-safe head/tail and an addressed mark, down to mark-only where needed. Full filtered archive bytes remain; reload and admission-cap changes retain the exact pressure limit. Immutable overhead after maximal relief produces no local fatal guard: a structurally valid request proceeds, and a real provider rejection after bounded changed-request retries gets a visible terminal error, never an unchanged-request thrash loop. Sources: FR-031/032, MAJ-CW-001/002/004/010.
+
+**B-57 (HP/EP, outline) — Every adapter preserves the retained request.** Inspect final serialized OpenAI-compatible, Anthropic, Bedrock and Responses requests after pressure relief. Original pinned instructions, user/media anchor, complete retained call/result ids/arguments/order and model-only notice survive. A sanitizer that repairs by erasing a partial live group or a notice that replaces Responses instructions must fail the fixture; do not accept an intermediate-slice-only assertion. Sources: FR-030/031, MAJ-CW-005/008.
+
+**B-58 (HP/EP/EC, outline) — Repeated-slide archive, recall, reload and abort.** After multiple slides, compare archive bytes; breadcrumbs identify the real inclusive evicted line range even with no new user boundary. Both addressed-id and `archive_range` rune paging reach literal last bytes, with total/next offset, exclusive modes and visible out-of-range errors. Range data remains quoted in the current recall result; recall injection is neither lost nor doubled. Reload gives identical projected text and anchor, including pressure caps after settings changes. Abort restores actual turn-start Skip/count/anchor/projections, also with no appended line. Inject a metadata-write failure: no inconsistent in-memory view/provider send, and a genuine storage error is surfaced. Sources: FR-030/031, amended FR-019/020/024–027, MAJ-CW-002/003/005.
+
+**B-59 (HP/EC, outline) — Q1 model-only and Q33 Verbose-only visibility.** A recording provider sees one coalesced bounded model-only notice in the next actual request with usable archive pointers; include its cost in a tiny-window budget and prove no self-generated relief loop. No model-only text becomes a persisted assistant message, normal token/done or UI payload. Live, REST-loaded and replayed classified Q33 notices are hidden in normal foreground/background chat, but toggling Settings → Chat → Verbose chat reveals the exact retry sentence and toggling off hides it without reload. Hidden frames advance the cursor; replay/dedup retain entry identity. No early done or lost retained progress narration. Sources: FR-032/036, MAJ-CW-008/009.
+
+**B-60 (EP, outline) — Every genuine terminal outcome despite narration.** Precede provider/model/context error, timeout, explicit cancel, duplicate definitions, iteration cap, unknown-window refusal and genuine storage failure with narration where applicable. Require raw-cause diagnostics, one turn-end event, durable typed outcome and exactly one translated terminal sentence across live, disconnected/reconnected and reload paths with Verbose off. RC2 replaces bubble content whenever resolved status is `'error'`; interrupted/cancel acknowledgement content and status remain untouched. No local size-only `context_unrecoverable` producer/catalogue entry survives; Q33 diagnostics cannot masquerade as a terminal outcome. RC2/RC5/duplicate-definition streams share this oracle, without this docs change claiming their fixes are delivered. Sources: FR-032, amended FR-034, MAJ-CW-010/011.
+
+**B-61 (HP/EP/EC, joint) — Steering before the provider send boundary.** Inject a steering/control message, force a slide before its first provider send, and inspect the serialized request for its original control identity, sequence and exactly one copy. A failed-before-send retry preserves protection. Run restart/recovery against the control-plane squad's D4/D5 fixture without duplicate injection or a false consumption signal; do not invent receipt states or claim model compliance/a steer applied state. This joint proof gates combined landing, not independent root-turn work. Sources: FR-030, MAJ-CW-006.
+
+**B-62 (HP/EP/EC, outline) — Settings and classified-wire reachability.** Reach authenticated GET/PUT context settings and the real Settings → Models control. Fresh default is 0.5/50%; 12.5% round-trips as 0.125, f=1 is valid, omission is unchanged, save/reload changes S at the next applicable resolution/check without changing B's formula. Reject null, strings, booleans, zero, negative, >1, malformed/nonfinite input, unknown fields and retired `absolute_trigger_chars` at runtime and schema boundaries, with visible field/save errors. Generated `ContextWindowNotice`/frame validation enforces closed objects, required discriminants/payload/identities, enum, nonempty/length bounds, date-time and optional positive-int64 seq. Durable `Message` validation requires the same payload for its diagnostic type; live/REST/replay retain classification, ids/timestamps and dedup. Sources: FR-029/036, MAJ-CW-007/009.
+
 ---
 
 ## 7. TDD Plan
@@ -617,6 +668,15 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 56 | `TestAttach_EmptyArchiveHydratesStandaloneToolCalls` | Integration | B-53, B-53b | real transcript shape (standalone `tool_call` entries); one tool line per call, attached to the right assistant message |
 | 57 | `TestSetHistory_RefusesNonEmptyArchive` (pkg/memory) | Unit | B-53c | |
 | 58 | `TestArchive_AppendOnlyWithAttachStep` | Integration | B-53d | extends the ADR-028 invariant test |
+| 59 | `TestRunTurn_MidTurnSlide_RelativeBoundsAndTinyWindowProgress` (planned #1081) | Integration | B-54 | Multiple Skip advances and changed provider bytes; W-based fraction/equality/target/rounding cases, no fixed-share guard. |
+| 60 | `TestRunTurn_MidTurnSlide_IncompleteParallelGroup` (planned #1081) | Integration | B-55 | First-result pressure cannot cut/send an incomplete group; both ids/results survive completion. |
+| 61 | `TestRunTurn_NewestPressureProjection_NoSizeOnlyExit` (planned #1081) | Integration | B-56 | Exact Unicode-safe head/tail/mark-only pressure caps persist; immutable residue still calls provider, not local fatal guard. |
+| 62 | `TestProviders_ContextRelief_FinalSerializedRequest` (planned #1081) | Integration | B-57 | Real OpenAI-compatible/Anthropic/Bedrock/Responses serialization; instructions/anchors/ids/order/notice preserved. |
+| 63 | `TestRunTurn_RepeatedSlide_RecallReloadAbortAndWriteFailure` (planned #1081) | Integration | B-58 | Literal archive/id/range pages to last byte, exact reload, one recall injection, full snapshot rollback including no append; atomic-write failure oracle. |
+| 64 | `TestContextNotices_ModelOnlyAndVerboseOnlyReachability` (planned #1081) | Integration + UI | B-59 | Actual next request, classified live/REST/replay, Verbose toggles without reload, hidden cursor advance/dedup, no early done. |
+| 65 | `TestTerminalOutcomes_VisibleDespiteNarration_LiveReplayReload` (planned #1081) | Integration + UI | B-60 | Every genuine terminal code/artifact, exactly-once visibility with Verbose off; RC2 error replacement and interrupted-path non-regression. |
+| 66 | `TestContextControlPlane_SteerSurvivesPreSendSlide` (planned joint #1081) | Integration | B-61 | Inject/slide/send, failed-before-send retry, control-plane D4/D5 restart fixture; no new receipt state. |
+| 67 | `TestContextSettings_RelativeShareAndNoticeContractsReachable` (planned #1081) | Contract + Integration + UI | B-62 | Strict generated/runtime validation, fresh/partial/percentage/error/reload behavior through real API/control; diagnostic classification round-trip. |
 
 ### Test Datasets
 
@@ -811,10 +871,10 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 
 **D6 — one budget**
 - **FR-028**: `B = W − max_tokens − ceil(0.05·W) − pinnedCoreOverhead`; `isOverContextBudget` threshold = B; pre-turn, mid-turn (after every result), timeout-recovery and model-switch all use it.
-- **FR-029**: `over ⇔ total > B OR share > absoluteShare (160,000 default, = absolute_trigger_chars ÷ 2.5)`; target = 80 % of the fired condition; stop at target or when no eligible result remains.
-- **FR-030**: Mid-turn never advances `Skip`; only the pre-turn trim cuts; `parseTurnBoundaries` unchanged.
-- **FR-031**: Floor = every result of the most recent assistant message; satisfiable by FR-011.
-- **FR-032**: Guard fires only if a trigger condition is still exceeded after all eligible results are emptied → `context_unrecoverable`, one ERROR, no further provider call; unreachable without an injected fault.
+- **FR-029** [2026-09-30, MAJ-CW-007/004]: With `W` the D2/D3-resolved model window and default `f = 0.5`, `S = max(1, floor(f × W))` estimated tokens; `over ⇔ total > B OR share > S` (strict greater-than). The fraction is of **W, not B**; remove the old fixed share bound. Count the actual projected candidate, including tools, marks, media, recall, user/control anchors and transient notices, without double-counting pinned core. After each relief operation remeasure both conditions; target 80% of each bound that fired while ensuring neither trigger remains exceeded. If that target cannot be reached but both triggers are satisfied, continue; exhausting mutable text is not a size-only terminal stop (FR-032).
+- **FR-030** [2026-09-30, MAJ-CW-004/005/006]: Mid-turn **does advance `Skip`** by sliding the oldest legal completed assistant step and all its declared matching results together. Never cut through the newest step, an incomplete parallel group or an unconsumed steering/control message. Preserve one verbatim initiating user anchor with media and source archive identity; count it once. Stage `Skip`, anchor identity, exact projection records and the corresponding in-memory request slice as one candidate; persist metadata under the existing session lock before installing/sending that view. Failed persistence follows the genuine storage-error path and cannot send a mismatched slice. Preserve the actual turn-start Skip/count/anchor/projection snapshot for abort; relief never refreshes it. Pre-turn whole-turn trimming remains available. A control message remains protected until a request containing it actually crosses the provider send boundary; receipt-state changes remain the control-plane squad's responsibility.
+- **FR-031** [2026-09-30, MAJ-CW-001/002/005]: The newest-step floor is **structural**: preserve the assistant call, every declared call id/argument, result role/correlation and every available matching result slot; unfinished groups are not evictable and cannot be sent with missing results. Newest-step **text is shortenable** under pressure by Unicode-safe 50/50 head/tail plus the addressed recall mark, down to mark-only when necessary. Project from full filtered archived text and retain the exact applied character limit, including failure-surface information, so reload or cap-setting changes cannot re-inflate pressure-shortened results. Validate retained structure before sanitization and again in each adapter's final serialized request; initial admission caps do not guarantee fit.
+- **FR-032** [2026-09-30, MAJ-CW-004/010/011]: There is **no local size-only fatal guard** and no `context_unrecoverable` size exit. Relief removes an injected recall span first, slides legal completed steps, empties older retained text and then shortens newest text, rebuilding indexes/breadcrumbs and budgeting the model-only notice. When no mutable text remains, send a structurally valid request rather than terminate for estimated size. A real provider rejection after bounded relief/retry remains a visible typed `context_too_long` error; never loop on an unchanged request or promise arbitrary immutable content fits. Genuine provider/model/storage errors, deadline/cancel, duplicate definitions and iteration-limit outcomes still produce diagnostics, turn-end event, durable transcript and one visible translated terminal outcome in live/reload/replay, regardless of earlier narration or Verbose setting. The RC2 error bubble always replaces narration with the terminal sentence when resolved status is `'error'`; `'interrupted'` content/status stays untouched.
 - **FR-033**: Order: ingest bound → filter → cap/clamp + line bound → archive append + state → check → empty → assemble → call.
 
 **D7 — typed exits**
@@ -824,7 +884,13 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 - **FR-035**: No learning from provider error text; `contextOverflowSubstrings` classifies only.
 
 **D9 — settings**
-- **FR-036**: `GET/PUT /api/v1/settings/context` (`ContextSettings.yaml`, `ContextSettingsUpdate.yaml` partial) with exactly these wire fields (pinned by Amendment 2026-08-23 (A-CONTRACT)): `mcp_result_cap`, `builtin_success_cap`, `builtin_failure_cap`, `absolute_trigger_chars`, `ingest_bound_bytes`, `default_context_window`, `model_overrides[{provider, model, context_window}]`; validation per §5; every write → `TriggerReload`; `withAuth`.
+- **FR-036** [2026-09-30, MAJ-CW-007/009]: Authenticated `GET/PUT /api/v1/settings/context` uses `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/contracts/components/schemas/ContextSettings.yaml` and its all-optional `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/contracts/components/schemas/ContextSettingsUpdate.yaml` partial. Replace `absolute_trigger_chars` with `tool_result_share_fraction`; other fields remain `mcp_result_cap`, `builtin_success_cap`, `builtin_failure_cap`, `ingest_bound_bytes`, `default_context_window`, `model_overrides[{provider, model, context_window}]`. GET requires the finite JSON number `tool_result_share_fraction`, default/example `0.5`, valid interval `0 < f ≤ 1`; PUT makes it optional, with omission leaving it unchanged and numeric `1` allowed. Reject `null`, strings, booleans, zero, negatives, values greater than one, malformed/nonfinite JSON and the retired field with HTTP 400 `ErrorResponse`; field validation names the field and valid interval. Keep `additionalProperties: false`; no alias, migration or conversion of the retired character setting. Valid writes persist and invoke the existing `TriggerReload`. Settings → Models displays **Tool-result share limit** as a percentage (default **50%**) of the resolved model window; percentage ↔ fraction conversion retains fractional percentages without premature rounding and shows field/save errors.
+
+  **Q33 contract (copied from MAJ-CW-009, not the Q1 model-only notice):** Canonical payload `ContextWindowNotice` is a closed object, required `kind` (`provider_retry | mid_turn`) and `message` (nonempty string, at most 2,048 characters). `ContextWindowNoticeFrame` is a closed object with required `type` (const `context_window_notice`), nonempty `session_id`, `turn_id`, `agent_id`, `entry_id` (each at most 128 characters), `timestamp` (date-time), and `notice` (that payload); optional `seq` uses the existing session-hub positive-int64 cursor convention. Define the canonical schemas under `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/contracts/components/schemas/`, reference them from `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/contracts/asyncapi.yaml`, and add the frame to its message/discriminator catalogue before gateway/SPA code.
+
+  For durable classification, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-adr/contracts/components/schemas/Message.yaml` gains `type: context_window_notice` and an optional `context_window_notice` payload of the **same** schema, required by runtime validation on this entry type; id/timestamp/agent_id/turn_id retain their identities. This is a transcript diagnostic, **not** a model-history message. REST history consumers must retain the type. Replay emits the same classified `context_window_notice` frame with the original `entry_id`/timestamp, not `replay_message` with unclassified content. Hub/cursor and entry-id dedup prevent duplicates; hidden frames still advance the cursor. Backend production is not conditional on the browser's preference, because that preference is client-local. Store the classified diagnostic in client state and filter at rendering, so toggling Verbose on reveals it and toggling off hides it without reload.
+
+  The exact retry sentence “Context window exceeded. Compressing history and retrying...” belongs only to a `provider_retry` Q33 diagnostic shown through Settings → Chat → Verbose chat. A separate generated-discriminant context-notice predicate gates live/REST/replay in foreground/background sessions; no fake tool name, text matching or error-forces-visible exception. The bounded transient Q1 notice reaches only the model's next request; it is not this UI payload. Genuine terminal errors remain visible with Verbose off.
 - **FR-037**: `ContextWindowSource.yaml` (owned here) is `$ref`'d by `Agent.context_window_source` and S68's `DefaultModel.window_source`; `Agent.yaml` (S67's coordinated commit) exposes the three read-only fields as optional; `AgentUpdateRequest.yaml` accepts `context_window_override`; write → `TriggerReload`; S68's default-model GET calls `ResolveWindow(provider, model)`.
 
 **D10 — ingest**
@@ -848,19 +914,19 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 
 ### Success Criteria
 - **SC-001**: 2 MB MCP result → turn completes, every request ≤ B (§17.1).
-- **SC-002**: 50 calls at the cap on a 128,000 window → never over B; last step intact; older results marked; recall pages to the last byte (§17.2).
-- **SC-003**: Abort after ≥1 empty → turn-start triple (§17.2b).
+- **SC-002** [2026-09-30]: Tiny-window long turn forces multiple completed-step Skip advances; next serialized requests preserve user/media anchor and newest structure; archive unchanged and range/id recall reaches last bytes. Total/share/equality/model-resolution cases use FR-029's B/S; no general request-fit guarantee (B-54/55/57/58, ADR §18.4).
+- **SC-003** [2026-09-30]: Abort after multiple slides restores actual turn-start Skip/count/anchor/projections, also when no new archive line was appended (B-58, MAJ-CW-005).
 - **SC-004**: Catalog, `windowTrim`, pre-turn, mid-turn, timeout, model-switch → one window, one B (§17.3).
-- **SC-005**: 64,001-char user message on WS, SSE and a channel → 0 transcript entries, 0 turns, 0 error frames; 64,001-char arguments → refusal then a further LLM call; the guard is reached only under an injected fault and then produces `context_unrecoverable` with 0 further provider calls (§17.4).
-- **SC-006**: Each of the four silent returns → ≥1 log line, 1 turn-end event, 1 transcript entry; never `unknown` (§17.5).
+- **SC-005** [2026-09-30]: Existing 64,001-char user-message intake refusal and oversized-argument structured refusal remain. Exhausted mutable context causes no local size-only guard: a structurally valid request is sent; real provider failure after permitted relief/retry remains visible (B-17/19/56/60, FR-032).
+- **SC-006** [2026-09-30]: Every genuine terminal outcome has raw-cause diagnostics, one turn-end event, durable typed outcome and one visible translated sentence despite narration, including live/disconnect/reconnect/reload and Verbose off; no premature done for context diagnostics. Error replacement is scoped to `'error'`; `'interrupted'` remains unchanged (B-60, MAJ-CW-010/011).
 - **SC-007**: `locality: local` endpoint with no window → `context_window_unknown`, `window_unknown: true` in the projection, never 128,000; override write → reload → next turn runs (§17.6).
 - **SC-014**: After `recall_conversation(turn_range:"1-1")` of an evicted turn, the provider's second request contains the nonce and marker; with a too-small window it does not and the tool result states the non-fit (§17.8).
 - **SC-015**: Attaching a session twice leaves the archive byte-identical with `skip` unchanged; an empty archive hydrates once with tool results; `SetHistory` on a non-empty archive is refused (§17.9).
 - **SC-013**: `ResolveWindow(provider, model)` without an agent returns the rung-2–6 window + source; exempt → 0/no source (§17.7).
-- **SC-008**: On an 8,192-token model: a 200,000-char result enters ≤ 0.5 B; a 3-call step fits; no guard (§17.4b).
+- **SC-008** [2026-09-30]: On an 8,192-token model, retain initial half-B/parallel admission clamps but shorten newest text further if needed, down to mark-only; preserve every call/result slot and final adapter structure without a local size-only exit (B-11b/11c/55/56/57, FR-031/032).
 - **SC-009**: `grep -rn 'maxTokens \* 4\|contextWindow = 128000\|newContextWindow = 128000\|SummarizeTokenPercent\|refreshRestorePointFromSession\|restorePointHistory' pkg/agent pkg/config` → empty; exactly one `cloudWindowFloor`.
-- **SC-010**: Live bytes = reload bytes for an emptied message (§17.2c).
-- **SC-011**: Mid-turn, `Skip` never changes (§17.4c).
+- **SC-010** [2026-09-30]: Live and reload have identical pressure-projected result bytes and user anchor; admission-cap changes cannot re-inflate an exact pressure cap (B-56/58, MAJ-CW-002/005).
+- **SC-011** [2026-09-30]: Mid-turn Skip advances only across legal completed steps, atomically coupled to persisted anchor/projection metadata and the live slice; newest/incomplete groups and unconsumed controls survive (B-54/55/57/58/61, FR-030).
 - **SC-012**: `make verify-contracts`, `golangci-lint`, `gofmt -l | wc -l == 0`, `npm run typecheck`, `npx vitest run` exit 0.
 
 ### Traceability Matrix
@@ -886,24 +952,24 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | FR-016 | US-5 | B-19, B-20 | 12, 35 |
 | FR-017 | US-6, US-8 | B-21, B-21b, B-35 | 14, 17 |
 | FR-018 | US-6 | B-21 | 13 |
-| FR-019 | US-6 | B-22, B-27, B-29b | 14, 15, 32 |
-| FR-020 | US-6 | B-24 | 16, 33 |
+| FR-019 | US-6 (amended) | B-22, B-27, B-29b, B-56, B-58 | 14, 15, 32, 61, 63 |
+| FR-020 | US-6 (amended) | B-58 | 63 |
 | FR-021 | US-6 | B-25 | 18 |
 | FR-022 | US-6 | B-26 | 43, 44, 47 |
 | FR-023 | US-6 | B-27b | 31 |
-| FR-024 | US-7 | B-28, B-29, B-31b | 26, 27, 29 |
+| FR-024 | US-7 (amended) | B-28, B-29, B-31b, B-58 | 26, 27, 29, 63 |
 | FR-025 | US-7 | B-29b | 28 |
 | FR-026 | US-7 | B-30 | 29 |
 | FR-027 | US-7 | B-31 | 29 |
 | FR-028 | US-8 | B-33, B-38, B-06 | 19, 31 |
-| FR-029 | US-8 | B-34, B-36b | 18 |
-| FR-030 | US-8 | B-35 | 17, 39 |
-| FR-031 | US-8 | B-36 | 17, 40 |
-| FR-032 | US-8 | B-37 | 34 |
-| FR-033 | US-8 | B-39 | 30 |
-| FR-034 | US-9 | B-40, B-41 | 20, 36, 44, 48 |
+| FR-029 | US-8 (amended) | B-54, B-62 | 59, 67 |
+| FR-030 | US-8 (amended) | B-54, B-55, B-57, B-58, B-61 | 59, 60, 62, 63, 66 |
+| FR-031 | US-8 (amended) | B-55, B-56, B-57, B-58 | 60, 61, 62, 63 |
+| FR-032 | US-8, US-9 (amended) | B-56, B-59, B-60 | 61, 64, 65 |
+| FR-033 | US-8 (amended) | B-39, B-54, B-55, B-57 | 30, 59, 60, 62 |
+| FR-034 | US-9 (amended) | B-41, B-60 | 20, 44, 48, 65 |
 | FR-035 | US-1 (non-behaviour) | B-07 | 21 |
-| FR-036 | US-11 | B-44, B-14 | 41, 44, 46 |
+| FR-036 | US-11, US-9 (amended) | B-14, B-59, B-62 | 41, 44, 46, 64, 67 |
 | FR-037 | US-11 | B-45, B-04b | 42, 3c, 44 |
 | FR-038 | US-12 | B-46 | 23, 24, 25 |
 | FR-039 | US-13 | B-47 | 45 |
@@ -924,20 +990,34 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | §17 | FRs | BDD | Tests | SC |
 |---|---|---|---|---|
 | 1 | FR-009–012, FR-017, FR-028, FR-033, FR-038 | B-39 | 30 | SC-001 |
-| 2 | FR-017–019, FR-024–026, FR-028–031 | B-21, B-28, B-29, B-33, B-36 | 27, 31 | SC-002 |
-| 2b | FR-020 | B-24 | 16, 33 | SC-003 |
-| 2c | FR-019 | B-22 | 32 | SC-010 |
+| 2 (superseded points: §18.4) | FR-017–019, FR-024–026, FR-028–031 | B-54, B-55, B-57, B-58 | 59, 60, 62, 63 | SC-002 |
+| 2b (amended) | FR-020 | B-58 | 63 | SC-003 |
+| 2c (amended) | FR-019 | B-56, B-58 | 61, 63 | SC-010 |
 | 3 | FR-001, FR-004, FR-028 | B-06 | 6, 19 | SC-004 |
-| 4 | FR-015, FR-016, FR-032 | B-17, B-19, B-37 | 34, 35, 38 | SC-005 |
-| 4b | FR-011, FR-031 | B-11b, B-11c, B-36 | 40 | SC-008 |
-| 4c | FR-030 | B-35 | 39 | SC-011 |
-| 5 | FR-034 | B-40 | 20, 36 | SC-006 |
+| 4 (amended) | FR-015, FR-016, FR-032 | B-17, B-19, B-56, B-60 | 35, 38, 61, 65 | SC-005 |
+| 4b (amended) | FR-011, FR-031 | B-11b, B-11c, B-55, B-56, B-57 | 8, 60, 61, 62 | SC-008 |
+| 4c (amended) | FR-030 | B-54, B-55, B-57, B-58, B-61 | 59, 60, 62, 63, 66 | SC-011 |
+| 5 (amended) | FR-032, FR-034 | B-60 | 65 | SC-006 |
 | 6 | FR-007, FR-008 | B-09, B-10, B-10b | 4, 37 | SC-007 |
 | 7 | FR-001, FR-037 | B-04b | 3c | SC-013 |
 | 8 | FR-041–044 | B-48, B-49, B-51 | 49, 50, 54 | SC-014 |
 | 9 | FR-045–048 | B-52, B-53, B-53c | 55, 56, 57 | SC-015 |
 
 ---
+
+### Amendment exit-proof traceability [2026-09-30]
+
+| ADR §18.4 proof | Requirements / amendment | BDD | Planned tests |
+|---|---|---|---|
+| Tiny-window long turn | FR-029/030, MAJ-CW-004/005/007 | B-54 | 59 |
+| Incomplete parallel group | FR-030/031, MAJ-CW-002/005 | B-55 | 60 |
+| Newest fallback | FR-031/032, MAJ-CW-001/002/004 | B-56 | 61 |
+| All adapters | FR-030/031, MAJ-CW-005/008 | B-57 | 62 |
+| Repeated-slide recall/reload/abort | Amended FR-019/020/024–027, FR-030/031, MAJ-CW-002/003/005 | B-58 | 63 |
+| Q1/Q33 visibility | FR-032/036, MAJ-CW-008/009 | B-59 | 64 |
+| Every terminal outcome | FR-032, amended FR-034, MAJ-CW-010/011 | B-60 | 65 |
+| Steering seam | FR-030, MAJ-CW-006 | B-61 | 66 (joint) |
+| Settings reachability | FR-029/036, MAJ-CW-007/009 | B-62 | 67 |
 
 ## 9. Prerequisites, Setup, Stack, Runtime
 
