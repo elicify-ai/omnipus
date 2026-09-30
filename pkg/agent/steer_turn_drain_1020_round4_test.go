@@ -202,8 +202,8 @@ func TestSteeredTurnDrain1020Round4_PersistentDeliveryFailureIsBoundedAndLoud(t 
 	continueDrainBackoff = []time.Duration{0, 0, 0}
 	t.Cleanup(func() { continueDrainBackoff = originalBackoff })
 	logPath := filepath.Join(t.TempDir(), "round4-persistent-abandonment.jsonl")
-	if err := logger.EnableFileLogging(logPath); err != nil {
-		t.Fatalf("EnableFileLogging: %v", err)
+	if enableErr := logger.EnableFileLogging(logPath); enableErr != nil {
+		t.Fatalf("EnableFileLogging: %v", enableErr)
 	}
 	t.Cleanup(logger.DisableFileLogging)
 

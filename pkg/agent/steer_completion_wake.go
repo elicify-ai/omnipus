@@ -113,9 +113,9 @@ func (al *AgentLoop) replayPostFinishWake(sessionID, messageID string) error {
 		return fmt.Errorf("steer: post-finish wake %q: recipient %q was stopped; entry remains unacknowledged", messageID, sessionID)
 	}
 	if rec.Terminal() {
-		if _, err := al.steerCanceller().Revive(context.Background(), sessionID,
-			steer.Principal{Kind: steer.PrincipalKindAgent, ID: rec.AgentID}); err != nil {
-			return fmt.Errorf("steer: post-finish wake: revive recipient %q: %w", sessionID, err)
+		if _, reviveErr := al.steerCanceller().Revive(context.Background(), sessionID,
+			steer.Principal{Kind: steer.PrincipalKindAgent, ID: rec.AgentID}); reviveErr != nil {
+			return fmt.Errorf("steer: post-finish wake: revive recipient %q: %w", sessionID, reviveErr)
 		}
 		al.clearRevivalFailure(sessionID)
 		al.resetUnifiedMetaStatusActive(sessionID)
@@ -126,11 +126,11 @@ func (al *AgentLoop) replayPostFinishWake(sessionID, messageID string) error {
 	}
 	content := deliverySummary(*durable)
 	if ts := al.getActiveTurnState(sessionID); ts != nil && ts.IsAlive() {
-		if err := al.EnqueueSteeringWake(sessionID, rec.AgentID, sessionID, messageID,
-			providers.Message{Role: "user", Content: content}); err == nil {
+		if enqueueErr := al.EnqueueSteeringWake(sessionID, rec.AgentID, sessionID, messageID,
+			providers.Message{Role: "user", Content: content}); enqueueErr == nil {
 			return nil
-		} else if !errors.Is(err, errSteeringScopeClosed) {
-			return fmt.Errorf("steer: post-finish wake: enqueue live turn: %w", err)
+		} else if !errors.Is(enqueueErr, errSteeringScopeClosed) {
+			return fmt.Errorf("steer: post-finish wake: enqueue live turn: %w", enqueueErr)
 		}
 	}
 	message := bus.InboundMessage{
