@@ -55,6 +55,52 @@ func TestClient_AddressReturnsUsername(t *testing.T) {
 	}
 }
 
+// TestClient_AccountKey_DiffersByPort — RED for the real, independently
+// confirmed defect in AccountKey() (the mail-budget's per-account
+// singleflight/semaphore key, mail_budget.go): the derivation used to be
+// "host|username" with the port OMITTED. Two mailboxes on the SAME IMAP
+// host at DIFFERENT ports (a common setup: two accounts behind one
+// mail-server IP, distinguished only by port) collided onto one AccountKey
+// — sharing the 2-per-account concurrency cap and, worse, the coalescing
+// map: a listMailMessages flight for account X could be answered by an
+// in-flight result actually fetched from account Y's port. AccountKey must
+// include the port so same-host-same-username-different-port accounts
+// never collide.
+func TestClient_AccountKey_DiffersByPort(t *testing.T) {
+	clA, err := NewClient(Account{IMAPHost: "mail.example.test", IMAPPort: 993, SMTPHost: "s", Username: "same@x.com", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clB, err := NewClient(Account{IMAPHost: "mail.example.test", IMAPPort: 1993, SMTPHost: "s", Username: "same@x.com", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyA, keyB := clA.AccountKey(), clB.AccountKey()
+	if keyA == keyB {
+		t.Fatalf("AccountKey() must differ when only the port differs (same host, same username): "+
+			"both accounts produced %q — they would collide in the mail budget's 2-per-account "+
+			"semaphore and singleflight coalescing map", keyA)
+	}
+}
+
+// TestClient_AccountKey_SamePortSameAccountIsStable is the sibling
+// assertion: identical host+port+username must still derive the SAME key
+// (the fix must not over-widen into "always unique").
+func TestClient_AccountKey_SamePortSameAccountIsStable(t *testing.T) {
+	cl1, err := NewClient(Account{IMAPHost: "mail.example.test", IMAPPort: 993, SMTPHost: "s", Username: "same@x.com", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl2, err := NewClient(Account{IMAPHost: "mail.example.test", IMAPPort: 993, SMTPHost: "s", Username: "same@x.com", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cl1.AccountKey() != cl2.AccountKey() {
+		t.Fatalf("AccountKey() must be stable for identical host+port+username: got %q vs %q",
+			cl1.AccountKey(), cl2.AccountKey())
+	}
+}
+
 func TestBuildEmailBody_Headers(t *testing.T) {
 	body, err := buildEmailBody("from@x.com", "to@x.com", "Hello", "the body", "")
 	if err != nil {
