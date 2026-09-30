@@ -303,7 +303,12 @@ func TestStopRevive_OrderUnderLock(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, _, err := canceller.stampStop("child", time.Now().UTC(), steer.Principal{Kind: steer.PrincipalKindHuman, ID: "stop"})
+			// cause=stop: this call names "child" directly (not reached via
+			// cascade's process() sweep of a descendant list), matching
+			// steer_cancel.go::cascade's own split — direct target gets
+			// StopCauseStop, only a swept descendant gets StopCauseCascade
+			// (commit 57c1a20ba, steer_cancel.go stampStop/cascade).
+			_, _, err := canceller.stampStop("child", time.Now().UTC(), steer.Principal{Kind: steer.PrincipalKindHuman, ID: "stop"}, session.StopCauseStop)
 			errs <- err
 		}()
 		go func() {
