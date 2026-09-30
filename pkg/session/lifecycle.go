@@ -283,6 +283,36 @@ type LifecycleRecord struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// ExecutionID is the ADR sub-agent control-plane D2/D4 durable execution
+	// identity for this record's CURRENT generation's admission/run: "one
+	// admission/run, stored before admission and retained by its queue
+	// entry/live handle." Stamped atomically with the LifecycleQueued/
+	// LifecycleRunning admission write (pkg/agent/steer_launcher.go::
+	// commitSteeredDispatchStateWithPendingMessage) — never after — so no
+	// reader can ever observe an admitted (queued or running) record with no
+	// identity. nil before the first admission attempt for a generation, and
+	// retained (not reminted) across a later queued->running promotion of
+	// the SAME generation's admission.
+	//
+	// not-wire-format: internal disk-only identity (D4's "internal fields,
+	// not new receipt states"), no SPA consumer; contract-first definition
+	// required if this is ever exposed (Hard Constraint #8).
+	ExecutionID *ExecutionID `json:"execution_id,omitempty"`
+}
+
+// ExecutionID is the D2/D4 tuple that identifies exactly one admission/run
+// of a steered session's turn: {session_id, generation, boot_seq, run_id}.
+// See LifecycleRecord.ExecutionID's doc comment for when it is stamped.
+type ExecutionID struct {
+	SessionID  string `json:"session_id"`
+	Generation int    `json:"generation"`
+	// BootSeq names the process boot that admitted this run (D2 "the current
+	// boot identity"). Set from pkg/agent's process-lifetime boot sequence
+	// value — full boot-epoch persistence/reconciliation across restarts is
+	// SteerBootRecovery's own scope, not this admission-time stamp.
+	BootSeq int64  `json:"boot_seq"`
+	RunID   string `json:"run_id"`
 }
 
 // Terminal reports whether r's State is one of the four terminal states.

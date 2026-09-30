@@ -29,7 +29,24 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/oklog/ulid/v2"
 )
+
+// currentBootSeq is this process's ADR sub-agent control-plane D2 "current
+// boot identity" — the value execution_id.boot_seq names (D4). Computed
+// once per process start. Deliberately NOT persisted/reconciled across
+// restarts here: that belongs to SteerBootRecovery's own boot-order work
+// (ADR D2 "Boot order"), not to this admission-time stamp, whose only job is
+// to make every execution_id one process mints carry one identifiable,
+// non-null boot value.
+var currentBootSeq = time.Now().UnixNano()
+
+// newExecutionRunID mints the D4 execution_id.run_id — a fresh identity for
+// one admission/run. Mirrors newGoalID's ULID convention
+// (goal_loop_command.go) with this identity's own "run_" prefix.
+func newExecutionRunID() string {
+	return "run_" + ulid.Make().String()
+}
 
 // maxLaunchAncestorWalk bounds Launch's root-verification walk — mirrors
 // steer_classify.go's maxChainWalk (I-1: "RootSessionID ... verified by
@@ -850,6 +867,18 @@ func commitSteeredDispatchState(
 // flips the state to LifecycleQueued, so every queued wake reaches the next
 // promoted turn in arrival order. An empty pendingMessage is the same as the
 // plain commitSteeredDispatchState (no field written).
+//
+// Every caller of this function passes state LifecycleQueued or
+// LifecycleRunning — the two admission transitions (see the "only ever
+// passes Queued/Running" callers named on commitSteeredDispatchState's own
+// doc comment). ADR D2/D4's durable execution identity is stamped here, in
+// the SAME atomic Mutate write that commits the admission state, so no
+// reader can ever observe a durably queued or running record with no
+// identity (stronger than "before": atomic with). A generation already
+// carrying an identity keeps it — D4's "retained by its queue entry/live
+// handle" — so a later promotion from queued to running (the SAME
+// admission, a separate commitSteeredDispatchState call once the slot
+// frees) does not mint a second identity for one admission.
 func commitSteeredDispatchStateWithPendingMessage(
 	lifecycle *session.LifecycleStore, sessionID string, gen int, state session.LifecycleState, pendingMessage string,
 ) (*session.LifecycleRecord, error) {
@@ -867,6 +896,14 @@ func commitSteeredDispatchStateWithPendingMessage(
 		rec.State = state
 		if pendingMessage != "" {
 			rec.PendingUserMessages = append(rec.PendingUserMessages, pendingMessage)
+		}
+		if rec.ExecutionID == nil || rec.ExecutionID.Generation != gen {
+			rec.ExecutionID = &session.ExecutionID{
+				SessionID:  sessionID,
+				Generation: gen,
+				BootSeq:    currentBootSeq,
+				RunID:      newExecutionRunID(),
+			}
 		}
 		committed = rec
 		return nil
