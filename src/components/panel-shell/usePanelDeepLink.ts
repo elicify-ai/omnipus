@@ -119,14 +119,42 @@ function isAlreadyAdopted(
 /**
  * Adoption context per panel (§8.1: context carries what the panel needs).
  * Mail (SP-23): the URL's `agent` param is the mailbox directive — present,
- * land on that mailbox; absent, the link names `panel=mail` with NO mailbox,
- * an explicit choose-a-mailbox directive (null — the picker faces the user
- * and Mail starts nothing costly). Library needs only the workspace.
+ * land on that mailbox. Absent, TWO different situations both reach here
+ * and must NOT be conflated (the mailbox-config-query-refetch fix, 2026-09-30):
+ *
+ *   - A genuine fresh landing (no Mail panel of any kind was already open
+ *     for this or any workspace) — the deep link named `panel=mail` with NO
+ *     mailbox is an explicit choose-a-mailbox directive (null — the picker
+ *     faces the user and Mail starts nothing costly, MailPanelProps' own
+ *     `mailboxId` doc comment).
+ *   - Mail was ALREADY open (for a different workspace) and is merely
+ *     FOLLOWING the workspace switch (F3's "stays mounted" case — this
+ *     effect re-fires on every workspaceId change while `panel=mail` stays
+ *     in the URL, whether or not the navigation was a real deep link). This
+ *     is `undefined` = "no directive… the panel keeps its own posture" —
+ *     forcing `null` here overrides MailPanel's intent/auto-select fallback
+ *     every single time, which is the bug: a plain workspace-tab switch
+ *     (never carries an `agent` URL param) permanently masks a workspace's
+ *     own real, still-cached, configured mailbox behind "Choose a mailbox".
+ *
+ * `previousMailboxId` distinguishes the two: the caller passes the
+ * ALREADY-OPEN mail panel's own current `context.mailboxId` (itself
+ * `undefined`/`null`/a string) when this adoption is a same-panel-type
+ * re-adoption (isAlreadyAdopted said "no" purely because the workspace
+ * moved); the caller passes the literal `null` default for every other
+ * case (fresh open, or switching FROM a different panel type), which
+ * `context.mailboxId = ... : previousMailboxId` then reproduces unchanged.
+ * Library needs only the workspace.
  */
-function adoptionContext(id: WorkspacePanelId, workspaceId: string, search: SearchRecord): WorkspacePanelContext {
+function adoptionContext(
+  id: WorkspacePanelId,
+  workspaceId: string,
+  search: SearchRecord,
+  previousMailboxId: string | null | undefined,
+): WorkspacePanelContext {
   const context: WorkspacePanelContext = workspaceId ? { workspaceId } : {}
   if (id === 'mail') {
-    context.mailboxId = typeof search.agent === 'string' ? search.agent : null
+    context.mailboxId = typeof search.agent === 'string' ? search.agent : previousMailboxId
   }
   return context
 }
@@ -188,7 +216,17 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
       if (hasForeignKey(rawSearch)) replaceSearch(named)
       const { activePanel: current, openPanel } = useUiStore.getState()
       if (isAlreadyAdopted(current, named, workspaceId, rawSearch)) return
-      const context = adoptionContext(named, workspaceId, rawSearch)
+      // A same-panel-type re-adoption (current already `named` — the ONLY
+      // reason isAlreadyAdopted said "no" is the workspace moved, F3's
+      // case) carries the panel's own current mailboxId forward instead of
+      // the fresh-landing `null` default; every other case (no panel was
+      // open, or switching FROM a different panel type) passes `null`
+      // unchanged, preserving the original explicit-choose behavior.
+      const previousMailboxId: string | null | undefined =
+        current !== null && current.id === named
+          ? (current.context as WorkspacePanelContext).mailboxId
+          : null
+      const context = adoptionContext(named, workspaceId, rawSearch, previousMailboxId)
       if (current !== null) {
         leaveGateThen(current.id, () => {
           const { activePanel: still, openPanel: open } = useUiStore.getState()
