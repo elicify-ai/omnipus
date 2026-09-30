@@ -33,6 +33,7 @@ export type WsFrameType =
   | "replay_provider_fallback"
   | "rate_limit"
   | "provider_retry"
+  | "context_window_notice"
   | "provider_fallback"
   | "media"
   | "agent_switched"
@@ -439,6 +440,22 @@ export interface ProviderRetryFrame {
   attempt: number;
   max_attempts: number;
   error_code: string;
+  seq?: number;
+}
+
+export interface ContextWindowNoticeFrameNotice {
+  kind: "provider_retry" | "mid_turn";
+  message: string;
+}
+
+export interface ContextWindowNoticeFrame {
+  type: "context_window_notice";
+  session_id: string;
+  turn_id: string;
+  agent_id: string;
+  entry_id: string;
+  timestamp: string;
+  notice: ContextWindowNoticeFrameNotice;
   seq?: number;
 }
 
@@ -1142,6 +1159,7 @@ export type WsFrame =
   | ToolResultProjectionFrame
   | RateLimitFrame
   | ProviderRetryFrame
+  | ContextWindowNoticeFrame
   | ProviderFallbackFrame
   | ProviderFallbackNote
   | LibraryChangedFrame
@@ -1244,6 +1262,7 @@ export type ServerFrame =
   | ToolResultProjectionFrame
   | RateLimitFrame
   | ProviderRetryFrame
+  | ContextWindowNoticeFrame
   | ProviderFallbackFrame
   | ProviderFallbackNote
   | LibraryChangedFrame

@@ -15,7 +15,7 @@
 
 import { z } from "zod";
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created"]);
 
 export const AuthFrame = z
   .object({
@@ -453,6 +453,26 @@ export const ProviderRetryFrame = z
     attempt: z.number().int().min(2),
     max_attempts: z.number().int().min(1),
     error_code: z.string().max(64),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ContextWindowNoticeFrameNotice = z
+  .object({
+    kind: z.enum(["provider_retry", "mid_turn"]),
+    message: z.string().min(1).max(2048),
+  })
+  .strict();
+
+export const ContextWindowNoticeFrame = z
+  .object({
+    type: z.literal("context_window_notice"),
+    session_id: z.string().min(1).max(128),
+    turn_id: z.string().min(1).max(128),
+    agent_id: z.string().min(1).max(128),
+    entry_id: z.string().min(1).max(128),
+    timestamp: z.string(),
+    notice: ContextWindowNoticeFrameNotice,
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -1314,6 +1334,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   ToolResultProjectionFrame,
   RateLimitFrame,
   ProviderRetryFrame,
+  ContextWindowNoticeFrame,
   ProviderFallbackFrame,
   ProviderFallbackNote,
   LibraryChangedFrame,
