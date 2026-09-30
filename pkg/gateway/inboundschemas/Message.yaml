@@ -34,6 +34,7 @@ properties:
       - tool_call
       - turn_canceled
       - judge_verdict
+      - context_window_notice
     description: >
       Entry classification. Absent or empty means "message" (backwards compatible).
       "compaction" entries summarize pruned context; "system" entries are internal
@@ -42,8 +43,12 @@ properties:
       (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt
       or plan round — written alongside the worker's ADR-043 completion marker
       so the two cannot silently disagree, and mirrored live by the
-      `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType
-      constant set is the source of truth (`pkg/session/daypartition.go`).
+      `JudgeVerdictFrame` WS push (same `verdict` shape).
+      "context_window_notice" entries retain a classified Verbose-only diagnostic
+      (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires
+      their `context_window_notice` payload; live and replay carry the same
+      payload as ContextWindowNoticeFrame.notice with the original entry id,
+      timestamp, agent_id and turn_id.
     example: "message"
   role:
     type: string
@@ -125,8 +130,9 @@ properties:
   turn_id:
     type: string
     description: >
-      Turn identifier — present only on type="turn_canceled" entries (FR-15).
-      Identifies the turn that was canceled.
+      Turn identifier — present on type="turn_canceled" entries (FR-15) and
+      type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009).
+      Retains the original turn identity in REST history, live delivery and replay.
     example: "turn-T3"
   canceled_by_user:
     type: string
@@ -169,6 +175,8 @@ properties:
     example: "z-ai/glm-5.2"
   verdict:
     $ref: './JudgeVerdict.yaml'
+  context_window_notice:
+    $ref: './ContextWindowNotice.yaml'
   system_subtype:
     type: string
     enum:

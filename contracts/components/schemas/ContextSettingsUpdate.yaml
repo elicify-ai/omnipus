@@ -2,9 +2,12 @@ title: ContextSettingsUpdate
 description: >
   Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every
   field is optional; an omitted field is unchanged. Validation (400 naming
-  the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars
-  < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window
-  < 1. Set default_context_window to null to clear it. model_overrides, when
+  the field and the valid interval): any cap > 150,000 or < 1;
+  tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1
+  (null, strings, booleans, zero, negatives and values > 1 are invalid);
+  ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window
+  < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400.
+  Set default_context_window to null to clear it. model_overrides, when
   present, replaces the whole list.
 type: object
 additionalProperties: false
@@ -24,10 +27,17 @@ properties:
     minimum: 1
     maximum: 150000
     example: 10000
-  absolute_trigger_chars:
-    type: integer
-    minimum: 1
-    example: 400000
+  tool_result_share_fraction:
+    type: number
+    format: double
+    minimum: 0
+    exclusiveMinimum: true
+    maximum: 1
+    description: >
+      Finite fraction of the resolved model window W: 0 < f ≤ 1; numeric 1
+      is valid. Omitted means unchanged, not reset to the fresh default 0.5.
+      The wire carries a fraction, not a percentage (12.5% is 0.125).
+    example: 0.5
   ingest_bound_bytes:
     type: integer
     minimum: 1
