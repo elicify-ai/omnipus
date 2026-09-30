@@ -10,8 +10,8 @@
  * carrying the minted consent token. Nothing is sent on dismissal.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const addToast = vi.fn()
@@ -43,10 +43,13 @@ const LOCAL_APP_STATE = {
 
 const CATALOGUE = {
   search: [
-    { id: 'brave', kind: 'search', display_name: 'Brave Search', configured: false, requires_key: true, active: false },
+    { id: 'brave', kind: 'search', display_name: 'Brave Search', configured: false, requires_key: true, active: false, usable: false },
+    { id: 'duckduckgo', kind: 'search', display_name: 'DuckDuckGo', configured: true, requires_key: false, active: true, usable: true },
   ],
   voice: [],
-  active_search: '',
+  active_search: 'duckduckgo',
+  default_search: 'duckduckgo',
+  fallback_search: null,
 }
 
 function makeClient() {
@@ -60,6 +63,12 @@ function renderSection() {
     </QueryClientProvider>,
   )
 }
+
+beforeAll(() => {
+  Element.prototype.hasPointerCapture ??= () => false
+  Element.prototype.scrollIntoView ??= () => {}
+  globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -92,7 +101,9 @@ describe('IntegrationsSection — password mode (local edition)', () => {
     await waitFor(() => {
       expect(api.reAuth).toHaveBeenCalledWith('mypassword')
       expect(api.configureIntegrationProvider).toHaveBeenCalledTimes(1)
-      expect(vi.mocked(api.configureIntegrationProvider).mock.calls[0][2]).toBe('reauth_tok')
+      expect(api.configureIntegrationProvider).toHaveBeenCalledWith(
+        'brave', { kind: 'search', api_key: 'BSA-secret' }, 'reauth_tok',
+      )
     })
   })
 
@@ -112,5 +123,39 @@ describe('IntegrationsSection — password mode (local edition)', () => {
       expect(screen.queryByTestId('reauth-password-input')).not.toBeInTheDocument()
     })
     expect(api.configureIntegrationProvider).not.toHaveBeenCalled()
+  })
+
+  // #1055 retains the existing step-up gate for BOTH role selectors. A key-only
+  // save using the password gate cannot detect a role Change handler bypassing it.
+  it.each([
+    ['default', 'Default search', { kind: 'search', active: true }],
+    ['fallback', 'Fallback', { kind: 'search', fallback: true }],
+  ] as const)('password-gates a %s role Change before sending its exact PUT', async (role, label, body) => {
+    const catalogue = {
+      ...CATALOGUE,
+      search: [
+        ...CATALOGUE.search,
+        { id: 'tavily', kind: 'search', display_name: 'Tavily', configured: true, requires_key: true, active: false, usable: true },
+      ],
+    }
+    vi.mocked(api.fetchIntegrationProviders).mockResolvedValue(catalogue as never)
+    vi.mocked(api.configureIntegrationProvider).mockResolvedValue(catalogue as never)
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+
+    renderSection()
+    const card = await screen.findByTestId(`${role}-search-card`)
+    fireEvent.click(within(card).getByRole('button', { name: 'Change' }))
+    fireEvent.click(screen.getByRole('combobox', { name: label }))
+    fireEvent.click(screen.getByRole('option', { name: /^Tavily/i }))
+
+    expect(await screen.findByTestId('reauth-password-input')).toBeInTheDocument()
+    expect(api.configureIntegrationProvider).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    await waitFor(() => {
+      expect(api.reAuth).toHaveBeenCalledWith('mypassword')
+      expect(api.configureIntegrationProvider).toHaveBeenCalledTimes(1)
+      expect(api.configureIntegrationProvider).toHaveBeenCalledWith('tavily', body, 'reauth_tok')
+    })
   })
 })

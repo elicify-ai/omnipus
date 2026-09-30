@@ -23,8 +23,7 @@ import (
 )
 
 // ddgOnlyRoles is a live resolver whose only usable provider is DuckDuckGo,
-// so NewWebSearchTool builds the dynamic map without making Exa or SearXNG
-// the legacy winner.
+// so NewWebSearchTool builds the dynamic map without making Exa the legacy winner.
 func ddgOnlyRoles() func() *config.WebToolsConfig {
 	return func() *config.WebToolsConfig {
 		return &config.WebToolsConfig{
@@ -148,99 +147,9 @@ func TestFixS1_ExaSSRFBlocksPrivateBaseURLAndKey(t *testing.T) {
 	}
 }
 
-// TestFixS2_SearXNGClientProvenanceIsMakeSearchClient — S2 / AC-9 / spec test
-// 51. With no SSRF checker, SearXNG must still come from makeSearchClient
-// (proxy-aware), not from its own &http.Client{Timeout: 10s}.
-func TestFixS2_SearXNGClientProvenanceIsMakeSearchClient(t *testing.T) {
-	const proxy = "http://127.0.0.1:9"
-	want, err := makeSearchClient(nil, proxy, searchTimeout)
-	if err != nil {
-		t.Fatalf("makeSearchClient: %v", err)
-	}
-	wantTr, ok := want.Transport.(*http.Transport)
-	if !ok || wantTr.Proxy == nil {
-		t.Fatal("makeSearchClient without a checker did not return a proxy-aware transport")
-	}
-	tool, err := NewWebSearchTool(WebSearchToolOptions{
-		Proxy:             proxy,
-		SearXNGEnabled:    true,
-		SearXNGBaseURL:    "https://searx.example",
-		DuckDuckGoEnabled: true,
-		Roles:             ddgOnlyRoles(),
-	})
-	if err != nil {
-		t.Fatalf("NewWebSearchTool: %v", err)
-	}
-	sx, ok := tool.dynamic[config.SearchProviderSearXNG].(*SearXNGSearchProvider)
-	if !ok || sx.client == nil {
-		t.Fatalf("searxng provider = %T", tool.dynamic[config.SearchProviderSearXNG])
-	}
-	gotTr, ok := sx.client.Transport.(*http.Transport)
-	if !ok || gotTr == nil || gotTr.Proxy == nil || sx.client.Timeout != want.Timeout {
-		t.Fatalf("SearXNG client is a stock http.Client, not makeSearchClient (transport %T timeout=%s, want %s)",
-			sx.client.Transport, sx.client.Timeout, want.Timeout)
-	}
-}
-
-// TestFixS2_SearXNGOversizedBodyIsIngestBound — S2 / FR-020 / AC-9 / spec
-// test 51. A body longer than the ingest bound is refused by that bound, and
-// the refusal does not hop.
-func TestFixS2_SearXNGOversizedBodyIsIngestBound(t *testing.T) {
-	const bound = 64
-	prefix := []byte(`{"results":[]}`)
-	if len(prefix) >= bound {
-		t.Fatalf("prefix len %d, want < %d", len(prefix), bound)
-	}
-	body := append(append([]byte{}, prefix...), bytes.Repeat([]byte(" "), bound+1-len(prefix))...)
-	if len(body) != bound+1 {
-		t.Fatalf("fixture len %d, want %d", len(body), bound+1)
-	}
-
-	var sxHits, ddgHits atomic.Int32
-	sxSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		sxHits.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(body)
-	}))
-	t.Cleanup(sxSrv.Close)
-	ddgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		ddgHits.Add(1)
-		http.Error(w, "should not be called", http.StatusBadGateway)
-	}))
-	t.Cleanup(ddgSrv.Close)
-
-	cfg := &config.WebToolsConfig{
-		DefaultProvider:  config.SearchProviderSearXNG,
-		FallbackProvider: config.SearchProviderDuckDuckGo,
-		SearXNG:          config.SearXNGConfig{Enabled: true, BaseURL: sxSrv.URL},
-		DuckDuckGo:       config.DuckDuckGoConfig{Enabled: true},
-	}
-	tool, err := NewWebSearchTool(WebSearchToolOptions{
-		IngestBoundBytes:  bound,
-		SearXNGEnabled:    true,
-		SearXNGBaseURL:    sxSrv.URL,
-		DuckDuckGoEnabled: true,
-		DuckDuckGoBaseURL: ddgSrv.URL,
-		Roles:             func() *config.WebToolsConfig { return cfg },
-	})
-	if err != nil {
-		t.Fatalf("NewWebSearchTool: %v", err)
-	}
-	res := tool.Execute(context.Background(), map[string]any{"query": "golang"})
-	if res == nil || !res.IsError || !strings.Contains(res.ForLLM, "ingest bound") {
-		got := ""
-		if res != nil {
-			got = res.ForLLM
-		}
-		t.Fatalf("oversized SearXNG body was not refused by the ingest bound:\n%s", got)
-	}
-	if ddgHits.Load() != 0 {
-		t.Fatalf("duckduckgo hits = %d, want 0 (an ingest-bound failure must not hop)", ddgHits.Load())
-	}
-	if sxHits.Load() == 0 {
-		t.Fatal("searxng fixture was never called; the test did not exercise the body read")
-	}
-}
+// SearXNG-only client and ingest tests retired with the provider (#1056 F-2).
+// Exa retains client-provenance coverage above, and
+// TestFinal_IngestBound_NoHop covers the retained Tavily ingest boundary.
 
 // TestFixS3_IPLiteralRefusedBeforeRequest — S3 / FR-026. An IP literal is not
 // a hostname (validVideoEmbedHosts). include_domains and exclude_domains must
@@ -348,10 +257,9 @@ func TestFixS4_TavilyLiveBodyIncludeAnswerFalse(t *testing.T) {
 // agent is told "not usable: <reason>". It is not a network hop: the fallback
 // is not called.
 //
-// The bad proxy is what makes makeSearchClient fail. SearXNG is the legacy
-// winner so that, on today's code, NewWebSearchTool still returns a tool
-// (SearXNG does not use makeSearchClient) and the swallowed Tavily error is
-// what the call reports.
+// The bad proxy is what makes makeSearchClient fail for Tavily. With a live
+// Roles callback the constructor error is reported at call time, even if the
+// retained DuckDuckGo fallback is configured; it must not be used as a hop.
 func TestFixS5_ConstructorErrorIsNotUsableNotNetworkHop(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "search-construct.log")
 	if err := logger.EnableFileLogging(logPath); err != nil {
@@ -359,29 +267,28 @@ func TestFixS5_ConstructorErrorIsNotUsableNotNetworkHop(t *testing.T) {
 	}
 	t.Cleanup(logger.DisableFileLogging)
 
-	var sxHits atomic.Int32
-	sxSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		sxHits.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"results":[{"title":"SX","url":"https://example.com/sx","content":"c"}]}`))
+	var fallbackHits atomic.Int32
+	fallbackSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackHits.Add(1)
+		http.Error(w, "should not be called", http.StatusBadGateway)
 	}))
-	t.Cleanup(sxSrv.Close)
+	t.Cleanup(fallbackSrv.Close)
 
 	t.Setenv("S5_TAVILY_KEY", "s5-tavily-key")
 	cfg := &config.WebToolsConfig{
 		DefaultProvider:  config.SearchProviderTavily,
-		FallbackProvider: config.SearchProviderSearXNG,
+		FallbackProvider: config.SearchProviderDuckDuckGo,
 		Tavily:           config.TavilyConfig{Enabled: true, APIKeyRef: "S5_TAVILY_KEY"},
-		SearXNG:          config.SearXNGConfig{Enabled: true, BaseURL: sxSrv.URL},
+		DuckDuckGo:       config.DuckDuckGoConfig{Enabled: true},
 	}
 	tool, err := NewWebSearchTool(WebSearchToolOptions{
-		Proxy:          "ftp://127.0.0.1:9",
-		SearXNGEnabled: true,
-		SearXNGBaseURL: sxSrv.URL,
-		TavilyEnabled:  true,
-		TavilyAPIKeys:  []string{"s5-tavily-key"},
-		TavilyBaseURL:  "https://api.tavily.com/search",
-		Roles:          func() *config.WebToolsConfig { return cfg },
+		Proxy:             "ftp://127.0.0.1:9",
+		TavilyEnabled:     true,
+		TavilyAPIKeys:     []string{"s5-tavily-key"},
+		TavilyBaseURL:     "https://api.tavily.com/search",
+		DuckDuckGoEnabled: true,
+		DuckDuckGoBaseURL: fallbackSrv.URL,
+		Roles:             func() *config.WebToolsConfig { return cfg },
 	})
 	if err != nil {
 		t.Fatalf("constructor error aborted the tool instead of being reported at call time: %v", err)
@@ -400,8 +307,8 @@ func TestFixS5_ConstructorErrorIsNotUsableNotNetworkHop(t *testing.T) {
 	if strings.Contains(res.ForLLM, "provider not constructed") || strings.Contains(res.ForLLM, "network:") {
 		t.Fatalf("constructor failure reported as a network hop:\n%s", res.ForLLM)
 	}
-	if sxHits.Load() != 0 {
-		t.Fatalf("searxng hits = %d, want 0 (constructor failure must not hop)", sxHits.Load())
+	if fallbackHits.Load() != 0 {
+		t.Fatalf("duckduckgo hits = %d, want 0 (constructor failure must not hop)", fallbackHits.Load())
 	}
 
 	logger.DisableFileLogging()

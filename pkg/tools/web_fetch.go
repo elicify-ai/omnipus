@@ -25,36 +25,39 @@ func webFetchParseArgs(
 	args map[string]any,
 	defaultMaxChars int,
 	ssrf *security.SSRFChecker,
-) (urlStr string, maxChars int, errResult *ToolResult) {
+) (urlStr string, maxChars int, note string, errResult *ToolResult) {
 	urlStr, ok := args["url"].(string)
 	if !ok {
-		return "", 0, ErrorResult("url is required")
+		return "", 0, "", ErrorResult("url is required")
 	}
 
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
-		return "", 0, ErrorResult(fmt.Sprintf("invalid URL: %v", err))
+		return "", 0, "", ErrorResult(fmt.Sprintf("invalid URL: %v", err))
 	}
 
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return "", 0, ErrorResult("only http/https URLs are allowed")
+		return "", 0, "", ErrorResult("only http/https URLs are allowed")
 	}
 
 	if parsedURL.Host == "" {
-		return "", 0, ErrorResult("missing domain in URL")
+		return "", 0, "", ErrorResult("missing domain in URL")
 	}
 
 	if isObviousPrivateHost(parsedURL.Hostname(), ssrf) {
-		return "", 0, ErrorResult("fetching private or local network hosts is not allowed")
+		return "", 0, "", ErrorResult("fetching private or local network hosts is not allowed")
 	}
 
 	maxChars = defaultMaxChars
 	if mc, ok := args["maxChars"].(float64); ok {
-		if int(mc) >= 100 {
+		if int(mc) < 100 {
+			maxChars = 100
+			note = fmt.Sprintf("Requested maxChars %v is below the minimum of 100; clamped to 100.", mc)
+		} else {
 			maxChars = int(mc)
 		}
 	}
-	return urlStr, maxChars, nil
+	return urlStr, maxChars, note, nil
 }
 
 func (t *WebFetchTool) doFetch(ctx context.Context, urlStr, ua string) (*http.Response, []byte, error) {
@@ -96,14 +99,14 @@ func webFetchReadError(err error, fetchLimitBytes int64) *ToolResult {
 func (t *WebFetchTool) fetchURL(
 	ctx context.Context,
 	urlStr string,
-) (status int, contentType string, body []byte, errResult *ToolResult) {
+) (status int, finalURL, contentType string, body []byte, errResult *ToolResult) {
 	resp, body, err := t.doFetch(ctx, urlStr, userAgent)
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
 	}
 
 	if err != nil {
-		return 0, "", nil, webFetchReadError(err, t.fetchLimitBytes)
+		return 0, "", "", nil, webFetchReadError(err, t.fetchLimitBytes)
 	}
 
 	// Cloudflare (and similar WAFs) signal bot challenges with 403 + cf-mitigated: challenge.
@@ -122,11 +125,11 @@ func (t *WebFetchTool) fetchURL(
 		if err2 == nil {
 			resp, body = resp2, body2
 		} else {
-			return 0, "", nil, webFetchReadError(err2, t.fetchLimitBytes)
+			return 0, "", "", nil, webFetchReadError(err2, t.fetchLimitBytes)
 		}
 	}
 
-	return resp.StatusCode, resp.Header.Get("Content-Type"), body, nil
+	return resp.StatusCode, resp.Request.URL.String(), resp.Header.Get("Content-Type"), body, nil
 }
 
 func (t *WebFetchTool) decodeFetchedBody(
@@ -204,10 +207,11 @@ func (t *WebFetchTool) decodeFetchedBody(
 }
 
 func webFetchBuildResult(
-	urlStr string,
+	finalURL string,
 	status int,
 	text, extractor string,
 	maxChars int,
+	note string,
 	nonUTF8Charset bool,
 ) *ToolResult {
 	truncated := len(text) > maxChars
@@ -220,12 +224,15 @@ func webFetchBuildResult(
 	}
 
 	result := map[string]any{
-		"url":       urlStr,
+		"url":       finalURL,
 		"status":    status,
 		"extractor": extractor,
 		"truncated": truncated,
 		"length":    len(text),
 		"text":      text,
+	}
+	if note != "" {
+		result["note"] = note
 	}
 
 	resultJSON, marshalErr := json.MarshalIndent(result, "", "  ")
@@ -238,7 +245,7 @@ func webFetchBuildResult(
 		ForUser: fmt.Sprintf(
 			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
 			len(text),
-			urlStr,
+			finalURL,
 			extractor,
 			truncated,
 		),
