@@ -15,6 +15,8 @@ import { test, expect, type Browser, type Page } from '@playwright/test'
 import { GatewayProcess } from './fixtures/gateway-process'
 import { startFakeMail, type FakeMail } from './fixtures/fake-mail-server'
 import { getFreePort } from './setup.js'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 test.use({ storageState: { cookies: [], origins: [] } })
 
@@ -86,6 +88,26 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
       storageState: await gw.browserStorageState(),
       baseURL: gw.baseURL,
     })
+    // When a local binary predates this checkout, serve the freshly built SPA
+    // from disk but keep the isolated gateway for real Mail API traffic. CI
+    // leaves this unset and exercises the binary's embedded SPA as usual.
+    const spaDir = process.env.OMNIPUS_MAIL_E2E_SPA_DIR
+    if (spaDir) {
+      if (!existsSync(join(spaDir, 'index.html'))) {
+        throw new Error(`Mail E2E SPA build missing: ${join(spaDir, 'index.html')}`)
+      }
+      await context.route('**/*', async (route) => {
+        const url = new URL(route.request().url())
+        const pathname = url.pathname
+        if (url.origin !== gw.baseURL || (pathname !== '/' && pathname !== '/index.html' && !pathname.startsWith('/assets/'))) {
+          await route.continue()
+          return
+        }
+        const asset = join(spaDir, pathname === '/' ? 'index.html' : pathname.slice(1))
+        if (!existsSync(asset)) throw new Error(`Mail E2E SPA asset missing: ${asset}`)
+        await route.fulfill({ path: asset })
+      })
+    }
     return context.newPage()
   }
 
@@ -323,10 +345,15 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     })
 
     // 1. Compose a new message in workspace A, Send.
-    await page.goto(`/#/workspaces/${workspaceA}/chat`)
-    const mailToggle = page.getByTestId('workspace-tab-mail')
-    await mailToggle.click()
+    await page.goto(`/#/workspaces/${workspaceA}/chat?panel=mail&agent=mia`)
     await expect(page.getByTestId('mail-panel')).toBeVisible()
+    await expect(page.getByRole('combobox', { name: 'Mailbox' })).toContainText('Mia')
+    // The named A directive is essential: if A is opened via the tab strip,
+    // its auto-selected mailbox remains undefined in panel context, so the
+    // old inherit-on-bare-link defect cannot be exercised at B or C.
+    // Hash navigations below must keep this very same SPA document alive;
+    // a full reload would test a fresh landing rather than panel adoption.
+    await page.evaluate(() => { document.body.dataset.mailRoundTripDocument = 'original' })
     await page.getByRole('button', { name: /compose/i }).click()
     const compose1 = page.getByRole('dialog', { name: 'Compose message' })
     const recipient1 = compose1.getByRole('textbox', { name: 'To' })
@@ -348,16 +375,41 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     await expect(page.getByText('Draft saved', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: /^send$/i }).click()
 
-    // 3. Navigate to workspace B (no mailbox) — the empty state.
-    await page.goto(`/#/workspaces/${workspaceB}/chat`)
+    // 3. A fresh bare link to B (no mailbox), in the SAME document, must
+    // adopt Mail rather than reload into a new SPA instance.
+    await page.goto(`/#/workspaces/${workspaceB}/chat?panel=mail`)
+    await expect(page.locator('body')).toHaveAttribute('data-mail-round-trip-document', 'original')
     await expect(page.getByTestId('mail-choose-mailbox')).toBeVisible()
 
-    // 4. Navigate to workspace C (unreachable mailbox) — the connection-error state.
-    await page.goto(`/#/workspaces/${workspaceC}/chat`)
+    // 4. C has a configured but unreachable mailbox for the SAME agent as A.
+    // A new bare Mail link must request a chooser (SP-23) and must NOT carry
+    // A's mailbox into C or dial it. Then naming the agent explicitly must
+    // adopt that mailbox and surface its real connection failure.
+    const cFoldersRequests: string[] = []
+    page.on('request', (request) => {
+      const path = new URL(request.url()).pathname
+      if (request.method() === 'GET' && path.includes(`/workspaces/${workspaceC}/mail/mia/folders`)) {
+        cFoldersRequests.push(request.url())
+      }
+    })
+    await page.goto(`/#/workspaces/${workspaceC}/chat?panel=mail`)
+    await expect(page.locator('body')).toHaveAttribute('data-mail-round-trip-document', 'original')
+    await expect(page.getByTestId('workspace-top-bar')).toContainText('Mail regression C')
+    // Prove C's configured mailbox has loaded before checking the chooser:
+    // a stale B empty state would otherwise make the assertion pass instantly.
+    const cPicker = page.getByRole('combobox', { name: 'Mailbox' })
+    await cPicker.click()
+    await expect(page.getByRole('option', { name: /nobody@example\.test/ })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(cPicker).toContainText('Choose a mailbox')
+    await expect(page.getByTestId('mail-list-preview-layout')).toHaveCount(0)
+    expect(cFoldersRequests).toEqual([])
+    await page.goto(`/#/workspaces/${workspaceC}/chat?panel=mail&agent=mia`)
     await expect(page.getByTestId('mail-folders-error')).toBeVisible({ timeout: 15_000 })
 
-    // 5. Navigate back to A, open Mail again.
-    await page.goto(`/#/workspaces/${workspaceA}/chat`)
+    // 5. A named link to A reopens its mailbox and the original draft list.
+    await page.goto(`/#/workspaces/${workspaceA}/chat?panel=mail&agent=mia`)
+    await expect(page.locator('body')).toHaveAttribute('data-mail-round-trip-document', 'original')
     await expect(page.getByTestId('mail-panel')).toBeVisible()
 
     // 6. Open a compose dialog (unrelated check), Escape out.
