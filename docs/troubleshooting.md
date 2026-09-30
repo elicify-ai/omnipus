@@ -89,6 +89,10 @@ The `model` value reaches the provider exactly as written; on OpenRouter, IDs ca
 
 `api_key_ref` names an entry in the encrypted credential store. Set it without touching files with `omnipus credentials set openrouter_api_key sk-or-v1-...`, or use **Settings → Security → Credential Vault** in the web app.
 
+## Saving a search integration fails with "could not read the current configuration"
+
+Saving a default search provider can require another read of the current configuration to check the automatic DuckDuckGo fallback. If that read fails, the request returns HTTP 500 with this message before saving any key or configuration changes. Restore readable, valid configuration, then retry the save.
+
 ## Saving a secret fails with "credential store locked"
 
 The encrypted credential store needs a master key. The gateway looks for one in this order:
