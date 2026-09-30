@@ -171,6 +171,8 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     await page.getByRole('button', { name: /save/i }).click()
     await expect(page.getByText('Draft saved', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: /^send$/i }).click()
+    // The SMTP helper reads a snapshot; wait for the asynchronous send to finish.
+    await expect(page.getByText('Draft sent', { exact: true })).toBeVisible()
     const sent = await mail.smtpMessages()
     expect(sent.count).toBe(1)
     expect(sent.messages[0]).toContain('Updated')
@@ -246,8 +248,10 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     // Escape in the full-screen tab must close it and re-dock Mail in the
     // ORIGINAL tab — not just close the tab and leave nothing docked, and
     // not navigate the original tab away from workspace chat.
-    await pop.keyboard.press('Escape')
-    await pop.waitForEvent('close')
+    const closed = pop.waitForEvent('close')
+    // Escape closes on keydown; a keyup would target an already closed tab.
+    await pop.keyboard.down('Escape')
+    await closed
 
     await expect(page).toHaveURL(/\/workspaces\/[^/]+\/chat/)
     await expect(page.getByTestId('mail-panel')).toBeVisible()
