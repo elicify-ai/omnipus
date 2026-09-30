@@ -132,8 +132,8 @@ func TestGoalRecordLookupReadFailureIsVisibleToClaimingAgent(t *testing.T) {
 					t.Fatalf("readable active goal: goal_claim result = %+v, want the submitted claim", result)
 				}
 				var got map[string]string
-				if err := json.Unmarshal([]byte(result.ForLLM), &got); err != nil {
-					t.Fatalf("readable active goal: decode claim payload %q: %v", result.ForLLM, err)
+				if unmarshalErr := json.Unmarshal([]byte(result.ForLLM), &got); unmarshalErr != nil {
+					t.Fatalf("readable active goal: decode claim payload %q: %v", result.ForLLM, unmarshalErr)
 				}
 				want := map[string]string{"status": tools.GoalClaimStatusMet, "evidence": evidence, "goal_id": seeded.GoalID}
 				if !reflect.DeepEqual(got, want) {

@@ -86,12 +86,12 @@ func TestSteeredSession_TwoQueuedSystemWakesReachPromotedTurnExactlyOnceInOrder(
 				"steer_generation": strconv.Itoa(wokenGen),
 			},
 		}
-		if _, err := al.processSteeredSystemWake(context.Background(), msg); err != nil {
-			t.Fatalf("queue wake %d: %v", i+1, err)
+		if _, wakeErr := al.processSteeredSystemWake(context.Background(), msg); wakeErr != nil {
+			t.Fatalf("queue wake %d: %v", i+1, wakeErr)
 		}
-		queued, err := al.GetSessionLifecycleStore().Load(wokenID)
-		if err != nil {
-			t.Fatalf("Load(queued recipient): %v", err)
+		queued, loadErr := al.GetSessionLifecycleStore().Load(wokenID)
+		if loadErr != nil {
+			t.Fatalf("Load(queued recipient): %v", loadErr)
 		}
 		if queued.State != session.LifecycleQueued || !slices.Equal(queued.PendingUserMessages, wakes[:i+1]) {
 			t.Fatalf("after wake %d: state=%q pending=%q; want queued and %q", i+1, queued.State, queued.PendingUserMessages, wakes[:i+1])
@@ -123,7 +123,7 @@ func TestSteeredSession_TwoQueuedSystemWakesReachPromotedTurnExactlyOnceInOrder(
 	if len(requests) != 2 {
 		t.Fatalf("model requests = %d, want 2: one busy turn and one promoted turn", len(requests))
 	}
-	var promptParts []string
+	promptParts := make([]string, 0, len(requests[1]))
 	for _, message := range requests[1] {
 		promptParts = append(promptParts, message.Content)
 	}
