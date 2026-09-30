@@ -231,6 +231,9 @@ describe('workspace Chat route — ?panel=mail deep link (§8.2 Mail bullet, §1
     )
 
     await waitFor(() => expect(activePanelId()).toBe('mail'), { timeout: 10_000 })
+    // Wait for the lazy-loaded panel's real draft view before reading its
+    // effect-persisted intent; opening the panel store alone is not readiness.
+    const draft = await screen.findByRole('region', { name: 'Draft' }, { timeout: 10_000 })
     // The draft landed with its context: the intent carries the mailbox and
     // folder (email spec MC-31a). The consume-once messageRef is deliberately
     // NOT asserted here — once the panel mounts it lifts the ref and its
@@ -248,7 +251,6 @@ describe('workspace Chat route — ?panel=mail deep link (§8.2 Mail bullet, §1
 
     // Email spec B-20: the link shows the stored draft, not merely a Mail
     // store/URL state that can survive a detail-render error boundary.
-    const draft = await screen.findByRole('region', { name: 'Draft' }, { timeout: 10_000 })
     expect(within(draft).getByRole('heading', { name: /^Draft link preview$/ })).toBeVisible()
     expect(within(draft).getByText('To: recipient@example.test', { exact: true })).toBeVisible()
     expect(within(draft).getByText('Draft ready for review.', { exact: true })).toBeVisible()
