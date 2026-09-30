@@ -73,6 +73,28 @@ While a turn is running, the message box stays yours:
 | **Stop** or **Escape** | Asks the agent to halt. The button shows a stopping state, then the turn ends as cancelled. |
 | Activity pill | Below the message box: shows running background work. Select it to open the Activity panel with running and finished items, including any that failed. |
 
+### If the first message loses its connection
+
+Your first message stays visible in the open tab while Omnipus checks delivery. Reconnecting does not resend it automatically. **Retry** is available only while connected; it uses the original message and delivery ID, not the current agent, model, attachment or Auto-approve choices.
+
+| Message status | What it means and what you can do |
+|---|---|
+| **Sending…** | Waiting for confirmation that the first message was saved. |
+| **Delivery not confirmed · Retry** | The connection or acknowledgement was lost; Omnipus cannot yet say whether the message was saved. Select **Retry** after reconnecting. |
+| **Checking delivery…** | Your explicit Retry is in progress. Another Retry is not available at the same time. |
+| **Saved** | The message was saved. The answer may still be starting or running. |
+| **Checking chat…** | Omnipus found an already-saved message and is loading its chat to check whether an answer exists or is still running. |
+| **Could not check this chat · Retry** | Checking the saved chat failed. Your message stays visible; **Retry** checks the chat again. |
+| **Could not save message · Retry** | Omnipus reported that it could not save the message. You can retry delivery. |
+| **Message saved, but no answer started · Generate again** | The message was saved, but no answer began. **Generate again** deliberately starts a new answer in the saved chat. |
+| **Couldn't finish · Generate again** | Checking the recovered chat finished with your message still unanswered and no answer running. You can deliberately generate a new answer. |
+
+An unconfirmed message does not offer **Generate again**. That action is separate from delivery Retry: it sends a new request and may repeat work or tool actions. The saved chat's current Auto-approve setting applies, not a restored setting from the original send.
+
+Before `/new` abandons an unconfirmed first message, it shows **“Delivery not confirmed. Copy your message before starting a new chat.”** Choose **Keep this chat** to retain it, or **Start a new chat** to clear the local message and recovery request. Copy advice matters: the old bubble will no longer be visible in the new chat.
+
+**Limits:** recovery before a chat ID is known lives only in the open tab; a full browser reload can lose it. The gateway remembers delivery IDs only for its current process. If it crashes after saving the message but before acknowledging it, Retry after that restart can create a second chat and answer twice. Delivery Retry is not a guarantee of exactly-once answers or tool actions.
+
 ## Where settings and account live
 
 App-wide settings live behind **Settings** in the account menu, on tabs from providers and models to security, data, and chat behavior; [settings](settings.md) walks each one. Your **Profile** (preferences, password, and what agents should know about you) and **Usage** (token history) are separate entries in the same menu. Settings for one workspace live in that workspace, under its name.

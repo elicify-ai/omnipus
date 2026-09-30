@@ -7,6 +7,7 @@ import {
   registerChatResetForReplay,
   registerGetSessionCursor,
   registerChatClearPendingAutoApprove,
+  registerChatAbandonPendingFirstSend,
 } from '@/store/session'
 
 import { registerSyncChatForeground } from '@/store/session'
@@ -27,6 +28,7 @@ registerGetSessionCursor((sessionId) => useChatStore.getState().sessionsById[ses
 // ADR-092 UX fix: see session.ts's registerChatClearPendingAutoApprove doc
 // comment for why this is not folded into setReplaying/resetForReplay.
 registerChatClearPendingAutoApprove(() => useChatStore.getState().setPendingAutoApproveChoice(null))
+registerChatAbandonPendingFirstSend(() => useChatStore.getState().abandonPendingFirstSend())
 
 // ── Split modules (2026-09-16) ──────────────────────────────────────────────────
 //

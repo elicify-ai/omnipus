@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useOmnipusRuntime } from "@/lib/omnipus-runtime";
 import { useChatStore } from "@/store/chat";
+import { getPendingFirstSend } from "@/store/chat/first-send";
 import { useConnectionStore } from "@/store/connection";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
 import { useSessionStore, attachSessionCursorFields } from "@/store/session";
@@ -123,29 +124,25 @@ export function reattachActiveSession(
   if (!activeSessionId) {
     return false;
   }
-  // Kickoff pending-session hardening: '__pending' is the LOCAL
-  // sentinel for an outstanding sendWorkspaceSetupKickoff / sendMessage
-  // no-session turn — never a real, attachable session id. Sending
-  // `attach_session {session_id: '__pending'}` would be a protocol
-  // violation the gateway would reject, and resetChatBucketForReplay
-  // ('__pending') would wipe the bucket for a replay that can never arrive.
-  // A reconnect mid-kickoff means the connection that would have carried
-  // the kickoff's own ack is gone — there is no ack coming on this new one.
-  // Tear the pending state down directly instead of attaching:
-  // `abandonPendingKickoff` clears `pendingKickoff`, drops the orphaned
-  // '__pending' bucket, and marks the workspace's `kickoffAttemptStatus`
-  // 'failed' (idempotent if clearStreamingState's own disconnect-time
-  // call already ran this); resetting `activeSessionId` back to null here
-  // (deliberately does NOT do this on disconnect — see
-  // clearStreamingState's own comment) returns the composer to a fresh,
-  // unstuck state. Whether the kickoff needs to retry is decided by server
-  // truth: useWorkspaceSetupKickoff's invalidate-on-failure effect re-fires
-  // once the workspaces query refetches and still reports
-  // `setup_pending: true` — nothing here forces that refetch itself.
+  // '__pending' is a local sentinel, never an attachable session ID.
+  // An ordinary first send keeps its user bubble and waits for explicit
+  // delivery Retry. A synthetic setup kickoff retains its separate rollback:
+  // abandonPendingKickoff drops the placeholder and marks the attempt failed;
+  // server setup_pending truth decides whether the setup hook tries again.
   if (activeSessionId === "__pending") {
+    const chat = useChatStore.getState();
+    if (getPendingFirstSend(chat)) {
+      return false; // Keep the user's bubble; reconnect is not permission to resend.
+    }
     useChatStore.getState().abandonPendingKickoff();
     useSessionStore.getState().setActiveSession(null);
     return false;
+  }
+  const chat = useChatStore.getState();
+  if (getPendingFirstSend(chat)?.sessionId === activeSessionId) {
+    // A recovered acknowledgement has no cursor. Reconnect checks that chat;
+    // it never retransmits the first message or restores old permission choices.
+    return chat.reattachFirstSend(conn);
   }
   // Re-seed the header/composer agent from the authoritative last-active agent
   // BEFORE replay starts. After a handover (e.g. Mia → Jim) a full reload must
@@ -209,23 +206,11 @@ function WsLifecycle() {
         // bucket handling) lives in reattachActiveSession so it can be unit
         // tested directly.
         //
-        // Kickoff pending-session hardening: reattach BEFORE
-        // draining the outbound queue. `reattachActiveSession` settles
-        // `activeSessionId` first — either sends `attach_session` for a real
-        // session, or (the '__pending' guard) tears down a
-        // dead kickoff's placeholder and resets `activeSessionId` back to
-        // null. Draining first used to risk a race: `outboundQueue` can hold
-        // a message that collided with a kickoff's `pendingKickoff` slot
-        // (the collision guard in sendMessage) while `activeSessionId`
-        // is still the SAME dead '__pending' sentinel from BEFORE the
-        // disconnect — sending that queued message via sendMessage's own
-        // '__pending'-collapse guard would mint a BRAND NEW '__pending'
-        // bucket for it, and a reattach call running AFTER that send would
-        // then see activeSessionId === '__pending' and — unable to tell
-        // that fresh turn apart from the dead kickoff's — tear down the
-        // message that had JUST been sent. Running reattach first
-        // eliminates the ambiguity: by the time any queued message drains,
-        // `activeSessionId` is already resolved to null or a real session id.
+        // Reattach BEFORE draining: settle a dead kickoff before another send
+        // can reuse __pending, or attach a known session before sending into it.
+        // An unconfirmed ordinary first send deliberately remains __pending;
+        // its explicit record keeps that slot occupied and pauses queue draining.
+        // Reconnect alone never retransmits that first message.
         reattachActiveSession(conn, setConnectionError);
         // Drain any messages that were buffered while the connection was down.
         useChatStore.getState().drainOutboundQueue();

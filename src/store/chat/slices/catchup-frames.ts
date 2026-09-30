@@ -17,16 +17,18 @@ import type {
 import { applySnapshotHistoryWipe, cursorFromTerminalFrame } from '../cursor'
 import { replayErrorRetryAttempts, replayErrorRetryTimers } from '../runtime-state'
 import type { ChatMessage, ChatStore, SessionChatState } from '../types'
+import { finishRecoveredFirstSend } from './first-send-frames'
 
 type Frame = Parameters<ChatStore['handleFrame']>[0]
 interface CatchUpFrameContext {
   frame: Frame
   targetSid: string | null
   get: StoreApi<ChatStore>['getState']
+  set: StoreApi<ChatStore>['setState']
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
 }
 
-export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFrameContext): boolean {
+export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: CatchUpFrameContext): boolean {
   switch (frame.type) {
     // BE-DESIGN.md §4.5/§4.6/§6.2 — the server decided this connection's
     // cursor is not servable (first load, a stale/mismatched boot id, or a
@@ -191,6 +193,7 @@ export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFram
         }
         draft.snapshotWasBootMismatch = undefined
       }))
+      finishRecoveredFirstSend({ set, get, withBucket }, targetSid)
       return true
     }
 

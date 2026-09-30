@@ -52,11 +52,13 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
+import { findFirstSendMessage, getPendingFirstSend } from '@/store/chat/first-send'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
@@ -246,15 +248,17 @@ export function UserMessage() {
             </MessagePrimitive.Parts>
           </div>
         ))}
-        {storeMessage?.deliveryStatus && storeMessage.deliveryStatus !== 'sending' && (
+        {storeMessage?.deliveryStatus && (storeMessage.firstSendStatus || storeMessage.deliveryStatus !== 'sending') && (
           <UserMessageDeliveryStatus
             state={storeMessage.deliveryStatus}
+            firstSendStatus={storeMessage.firstSendStatus}
             agentName={agentName}
             latest
             onRetry={() => useChatStore.getState().resendMessage(storeMessage.id)}
+            onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(storeMessage.id)}
           />
         )}
-        <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />
+        {(!storeMessage?.firstSendStatus || storeMessage.firstSendStatus === 'saved') && <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />}
       </div>
     </MessagePrimitive.Root>
   )
@@ -1054,15 +1058,17 @@ export function VirtualUserMessageRow({
             ),
           )
         )}
-        {message.deliveryStatus && message.deliveryStatus !== 'sending' && (
+        {message.deliveryStatus && (message.firstSendStatus || message.deliveryStatus !== 'sending') && (
           <UserMessageDeliveryStatus
             state={message.deliveryStatus}
+            firstSendStatus={message.firstSendStatus}
             agentName={agentName}
             latest={latest}
             onRetry={() => useChatStore.getState().resendMessage(message.id)}
+            onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(message.id)}
           />
         )}
-        <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />
+        {(!message.firstSendStatus || message.firstSendStatus === 'saved') && <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />}
       </div>
     </div>
   )
@@ -2006,6 +2012,15 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const appendMessage = useChatStore((s) => s.appendMessage)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const startNewSession = useSessionStore((s) => s.startNewSession)
+  const [abandonFirstSend, setAbandonFirstSend] = useState<{ clientMessageId: string; workspaceId: string | null } | null>(null)
+  const requestNewSession = useCallback(() => {
+    const pending = getPendingFirstSend(useChatStore.getState())
+    if (pending && !pending.sessionId && useSessionStore.getState().activeSessionId === '__pending') {
+      setAbandonFirstSend({ clientMessageId: pending.clientMessageId, workspaceId: pending.workspaceId })
+    } else {
+      startNewSession()
+    }
+  }, [startNewSession])
   const composerRuntime = useComposerRuntime()
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
@@ -2104,7 +2119,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     inputEnabled,
     composerRuntime,
     appendMessage,
-    startNewSession,
+    startNewSession: requestNewSession,
     cancelIfStreaming: cancelState.cancelIfStreaming,
   })
 
@@ -3059,6 +3074,25 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       <div className="px-[var(--space-1)] pt-[var(--space-1)] empty:hidden">
         <ActivityBar />
       </div>
+
+      <ConfirmDialog
+        open={abandonFirstSend !== null}
+        onOpenChange={(open) => { if (!open) setAbandonFirstSend(null) }}
+        title="Start a new chat?"
+        description="Delivery not confirmed. Copy your message before starting a new chat."
+        cancelLabel="Keep this chat"
+        confirmLabel="Start a new chat"
+        emphasis="cancel"
+        onConfirm={() => {
+          const selected = useSessionStore.getState().activeSessionId
+          const bucket = selected ? useChatStore.getState().sessionsById[selected] : undefined
+          const stillSelected = abandonFirstSend
+            && (useWorkspacesStore.getState().activeWorkspaceId || null) === abandonFirstSend.workspaceId
+            && findFirstSendMessage(bucket, abandonFirstSend.clientMessageId)
+          setAbandonFirstSend(null)
+          if (stillSelected) startNewSession()
+        }}
+      />
 
       {/* Harmful-file upload double-confirm — replaces the native window.confirm pair.
           Stage 1 warns and lists the flagged files; stage 2 is the second

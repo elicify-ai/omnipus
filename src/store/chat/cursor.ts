@@ -187,7 +187,9 @@ export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatS
     .map((m) => m.turnId as string)
   const pendingTail = bucket.messageOrder
     .map((id) => bucket.messagesById[id])
-    .filter((m): m is ChatMessage => !!m && isPendingTailMessage(m))
+    .filter((m): m is ChatMessage => !!m && (isPendingTailMessage(m) ||
+      (m.role === 'user' && !!bucket.recoveredFirstSend &&
+        (m.clientMessageId ?? m.id) === bucket.recoveredFirstSend.clientMessageId)))
 
   const messagesById: Record<string, ChatMessage> = {}
   const messageOrder: string[] = []
@@ -221,6 +223,9 @@ export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatS
     cursor: bucket.cursor,
     wipedOpenTurnIds: wipedOpenTurnIds.length > 0 ? wipedOpenTurnIds : bucket.wipedOpenTurnIds,
     awaitingCatchUp: true,
+    // An explicitly recovered first send stays visible while history is rebuilt.
+    // Its received status keeps it in history order, not in the unsent tail.
+    recoveredFirstSend: bucket.recoveredFirstSend ? { ...bucket.recoveredFirstSend, reconciled: false } : undefined,
     // Item 3 follow-up (orchestrator, Lane A confirmed the gateway side is
     // correct): the client sets isReplaying:true BEFORE session_snapshot
     // ever arrives (attachToSession). Without preserving it here, this
