@@ -64,7 +64,7 @@ func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T
 	if err != nil {
 		t.Fatalf("load lifecycle record: %v", err)
 	}
-	if rec.State != session.LifecycleCancelled {
+	if rec.State != session.LifecycleStopped {
 		t.Errorf("lifecycle state = %q, want cancelled", rec.State)
 	}
 
@@ -104,7 +104,7 @@ func TestDelegateChildTransition_UnwiredUnifiedStore_StillTransitions(t *testing
 	if err != nil {
 		t.Fatalf("load lifecycle record: %v", err)
 	}
-	if rec.State != session.LifecycleCancelled {
+	if rec.State != session.LifecycleStopped {
 		t.Errorf("lifecycle state = %q, want cancelled (the unwired store must not block the transition)", rec.State)
 	}
 }

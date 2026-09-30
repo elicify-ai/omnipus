@@ -419,10 +419,10 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 		t.Fatal("expected the soft-cancel hook to be called immediately")
 	}
 
-	// The session never reaches terminal on its own in this test, so the
+	// The session never stops on its own in this test, so the
 	// hard backstop MUST fire after the grace window.
 	//
-	// Wait for the PERSISTED cancelled state, not for the hook flag. The flag
+	// Wait for the PERSISTED stopped state, not for the hook flag. The flag
 	// flips inside cancelHard, but that is not the backstop goroutine's last
 	// act -- pkg/tools/delegate_run.go's backstop calls transitionLifecycle
 	// AFTER cancelHard returns, and that WRITES to the lifecycle store rooted
@@ -442,14 +442,16 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 		sawHook = hardCalled
 		mu.Unlock()
 		if sawHook {
-			if rec, err := lc.Load("child-cancel"); err == nil && rec.State == session.LifecycleCancelled {
+			// ADR D7 line 397: a completed cancellation cascade lands non-terminal stopped, not terminal cancelled.
+			if rec, err := lc.Load("child-cancel"); err == nil && rec.State == session.LifecycleStopped {
 				return
 			}
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	// ADR D7 line 397: the backstop must persist stopped even though that state is non-terminal.
 	if sawHook {
-		t.Fatal("the hard-cancel backstop hook fired but the session was never persisted as cancelled")
+		t.Fatal("the hard-cancel backstop hook fired but the session was never persisted as stopped")
 	}
 	t.Fatal("expected the hard-cancel backstop to fire after the grace window elapsed")
 }
@@ -488,8 +490,9 @@ func TestDelegateTool_Cancel_Hard_SkipsGrace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if rec.State != session.LifecycleCancelled {
-		t.Errorf("state = %q, want %q", rec.State, session.LifecycleCancelled)
+	// ADR D7 line 397: hard cancellation lands non-terminal stopped, so no terminal-state assertion applies.
+	if rec.State != session.LifecycleStopped {
+		t.Errorf("state = %q, want %q", rec.State, session.LifecycleStopped)
 	}
 }
 
@@ -857,10 +860,9 @@ func TestDelegateTool_Respond_SelfOkQuestionAllowedWhenNotAcked(t *testing.T) {
 
 // TestDelegateTool_Respond_3P_OriginalNotLeftRunning proves Correctness-MAJOR-2:
 // for a 3P child, respond spawns a NEW corrective session (spawnCorrective-
-// FollowUp) and must NOT flip the ORIGINAL record to `running` (which would
-// leave a live-turn-less record the Phase-2 boot sweep re-classifies
-// failed(interrupted), corrupting the terminal record). The original is
-// instead marked terminal `cancelled` (superseded by corrective re-dispatch).
+// FollowUp) and must NOT flip the ORIGINAL record to `running` without a live
+// turn. The original is instead non-terminal `stopped`, superseded by the
+// corrective re-dispatch (ADR D2 line 207; D8 line 418 retains 3P successors).
 func TestDelegateTool_Respond_3P_OriginalNotLeftRunning(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
@@ -886,21 +888,18 @@ func TestDelegateTool_Respond_3P_OriginalNotLeftRunning(t *testing.T) {
 		t.Fatalf("3P respond failed: %s", result.ForLLM)
 	}
 
-	// The ORIGINAL session must NOT be at running. It must be terminal
-	// `cancelled` (superseded) — never a live-turn-less running record.
+	// The ORIGINAL session must be non-terminal stopped (superseded), never running without a live turn.
 	orig, err := lc.Load("child-3p-resp")
 	if err != nil {
 		t.Fatalf("Load original: %v", err)
 	}
+	// ADR D2 line 207 and D8 line 418: the original 3P session is stopped while its successor runs.
 	if orig.State == session.LifecycleRunning {
-		t.Fatalf("ORIGINAL 3P session left at running with no live turn — Phase-2 boot sweep would " +
-			"re-classify it failed(interrupted), corrupting the terminal record (Correctness-MAJOR-2)")
+		t.Fatal("ORIGINAL 3P session left at running with no live turn instead of stopped (Correctness-MAJOR-2)")
 	}
-	if orig.State != session.LifecycleCancelled {
-		t.Errorf("original state = %q, want %q (superseded by corrective re-dispatch)", orig.State, session.LifecycleCancelled)
-	}
-	if !orig.Terminal() {
-		t.Errorf("original state %q is not terminal — it must be terminal so it is never re-classified", orig.State)
+	// ADR Vocabulary line 133 and D2 line 207: stopped replaces cancelled and is non-terminal.
+	if orig.State != session.LifecycleStopped {
+		t.Errorf("original state = %q, want %q (superseded by corrective re-dispatch)", orig.State, session.LifecycleStopped)
 	}
 	if orig.FailedReason == "" {
 		t.Error("expected a non-empty FailedReason recording the supersession")

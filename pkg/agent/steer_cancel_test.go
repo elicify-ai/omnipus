@@ -380,7 +380,7 @@ func TestSteerGenerationCancel_NeverRanChildUnblocksParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(queued after stop): %v", err)
 	}
-	if after.State != session.LifecycleCancelled {
+	if after.State != session.LifecycleStopped {
 		t.Fatalf("state after stop = %q, want cancelled — a queued child that never ran must still be terminalised by its own Stop", after.State)
 	}
 
@@ -491,17 +491,30 @@ func TestReportSteeredSessionTerminalUpward_NoDelivererLeavesRecordRunnable(t *t
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	childID, childGen := launchSteeredChild(t, al, parentID, "call-no-deliverer", "work nobody will ever hear about")
 
+	// ADR Vocabulary line 133: capture the pre-report state because stopped is non-terminal too.
+	before, err := lifecycle.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child before report): %v", err)
+	}
+
 	// Deliberately NOT wiring an upward deliverer.
+	// ADR D2 line 207: stopped replaces cancelled without becoming terminal.
 	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
-		session.LifecycleCancelled, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
+		session.LifecycleStopped, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
 
 	rec, err := lifecycle.Load(childID)
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
-	if rec.Terminal() {
-		t.Fatalf("state = %q: the record was written TERMINAL with no upward deliverer wired — "+
-			"no inbox entry exists and the parent will wait for ever", rec.State)
+	// ADR Vocabulary line 133: !Terminal cannot detect an erroneous stopped write after an undelivered report.
+	if rec.State == session.LifecycleStopped {
+		t.Fatalf("state = %q: the record was written stopped with no upward deliverer wired — "+
+			"no inbox entry exists; want the pre-report state %q", rec.State, before.State)
+	}
+	// ADR Vocabulary line 133: preserve the exact runnable state, not just any non-terminal state.
+	if rec.State != before.State {
+		t.Fatalf("state changed with no upward deliverer wired: %q -> %q; want the pre-report state unchanged",
+			before.State, rec.State)
 	}
 }
 

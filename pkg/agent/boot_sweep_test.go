@@ -224,7 +224,7 @@ func TestBootSweep_AwaitingCorrectionOwnerExempt(t *testing.T) {
 	// The plan-owner session: paused, owner_scope=human (so owner_scope CANNOT
 	// identify the plan), but OwnsPlanID names the awaiting-correction plan.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID: "sess-owner", Generation: 1, State: session.LifecyclePaused,
+		SessionID: "sess-owner", Generation: 1, State: session.LifecycleStopped,
 		WorkspaceID: "ws", AgentID: "owner-agent",
 		OwnerScopeKind: session.OwnerScopeHuman, // human, not plan_id
 		OwnsPlanID:     "plan-1",                // the named linkage
@@ -256,7 +256,7 @@ func TestBootSweep_PausedOwnerNotAwaitingCorrection_Swept(t *testing.T) {
 	// awaiting-correction) and D3 doesn't apply either (not a standing
 	// root), so the record reaches the sweep for the reason this test names.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID: "sess-owner-2", Generation: 1, State: session.LifecyclePaused,
+		SessionID: "sess-owner-2", Generation: 1, State: session.LifecycleStopped,
 		WorkspaceID: "ws", AgentID: "owner-agent",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-2",
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate},
@@ -459,7 +459,7 @@ func TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart(t *testing.T) {
 		LastUnmetTerminalSignature: "persisted-sig",
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID: "owner-rs", Generation: 1, State: session.LifecyclePaused,
+		SessionID: "owner-rs", Generation: 1, State: session.LifecycleStopped,
 		WorkspaceID: "ws", AgentID: "owner",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-rs",
 	})
@@ -480,7 +480,7 @@ func TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart(t *testing.T) {
 		t.Fatalf("SweptToFailed = %v, want [stray] only (owner exempt)", res.SweptToFailed)
 	}
 	owner, _ := h.ls.Load("owner-rs")
-	if owner.State != session.LifecyclePaused {
+	if owner.State != session.LifecycleStopped {
 		t.Errorf("owner session swept to %q (must stay paused — exemption b)", owner.State)
 	}
 }

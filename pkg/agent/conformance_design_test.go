@@ -1531,7 +1531,7 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 		LastUnmetTerminalSignature: "sig-bs",
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID: "bs-owner", Generation: 1, State: session.LifecyclePaused,
+		SessionID: "bs-owner", Generation: 1, State: session.LifecycleStopped,
 		WorkspaceID: "ws", AgentID: "owner",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-bs",
 	})
@@ -1585,7 +1585,7 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 		t.Fatalf("(4) CRIT-1: PreservedAwaitingCorrection = %v, want [bs-owner] (no wedge)", res.PreservedAwaitingCorrection)
 	}
 	owner, _ := h.ls.Load("bs-owner")
-	if owner.State != session.LifecyclePaused {
+	if owner.State != session.LifecycleStopped {
 		t.Errorf("(4) CRIT-1: owner swept to %q (must stay paused — exemption b, no wedge)", owner.State)
 	}
 

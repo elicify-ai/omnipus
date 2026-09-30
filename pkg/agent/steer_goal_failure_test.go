@@ -148,6 +148,11 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 	}
 }
 
+func TestGoalDelegation_StopNoteCauseRequiredByControlPlane(t *testing.T) {
+	// ADR Vocabulary lines 133/137 and D2 line 209: landed stopped requires a separate persisted cause note.
+	t.Fatal("BLOCKED: separate persisted stop_note.cause not implemented — required by ADR-20260928-sub-agent-control-plane Vocabulary lines 133/137 and D2 line 209")
+}
+
 // TestGoalDelegation_DeadChildUnblocksTheWaitingParent is the consequence the
 // user actually feels: a parent that is only waiting on a goal-bearing
 // worker completes once that worker dies, instead of hanging until the
