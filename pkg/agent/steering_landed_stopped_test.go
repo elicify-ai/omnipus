@@ -49,8 +49,32 @@ func TestReviveStoppedSession_LandedAndClearedRecordRevives(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	steererID := newTestSteeringSession(t, al, adr093Workspace)
+	// The steerer needs its OWN root lifecycle record (SteeredBy nil) too:
+	// SteerRecordClassifier.chainValid (steer_classify.go) walks from the
+	// child's SteeredBy.SteeringSessionID and requires that ancestor's
+	// lifecycle record to resolve to a genuine root before it will class the
+	// child steer.ClassSteered (Runnable) rather than invalid_edge —
+	// newTestSteeringSession mints only UnifiedMeta, no lifecycle record.
+	adr093Persist(t, al, adr093Record(steererID, 1, session.LifecycleRunning))
 
-	childID := "steered-child-landed-stopped"
+	// A real chat session (backing UnifiedStore meta + transcript), not a bare
+	// lifecycle-only id: appendSteeredInstruction (called inside
+	// ReviveStoppedSession before the revive itself lands) needs somewhere to
+	// land the new instruction — exactly the "ghost" session
+	// TestReviveStoppedSession_RefusesWhenTheNewInstructionCannotLand (steering_test.go)
+	// deliberately tests as a REFUSAL case. newTestSteeringSession mints only
+	// UnifiedMeta/transcript, no lifecycle record, so overwriting its
+	// lifecycle record below with the landed-and-cleared stopped shape is
+	// safe.
+	childID := newTestSteeringSession(t, al, adr093Workspace)
+	// SteerRecordClassifier.Classify's R02 check requires meta.ParentSessionID
+	// to agree with the child's own SteeredBy.SteeringSessionID below —
+	// newTestSteeringSession does not set it (it mints a plain standalone
+	// session), so stamp it explicitly.
+	parentID := steererID
+	if err := al.GetSessionStore().SetMeta(childID, session.MetaPatch{ParentSessionID: &parentID}); err != nil {
+		t.Fatalf("SetMeta(child).ParentSessionID: %v", err)
+	}
 	childRec := &session.LifecycleRecord{
 		SessionID:      childID,
 		Generation:     1,

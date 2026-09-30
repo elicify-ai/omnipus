@@ -870,8 +870,8 @@ func sameStopMarker(before, after *session.Stop) bool {
 }
 
 // waitForLifecycleTerminalOrDeadline polls sessionID's lifecycle record until
-// it reaches a terminal state or timeout elapses, returning the LAST
-// successful read either way.
+// it reaches a terminal state, lands LifecycleStopped (rec.Stopped()), or
+// timeout elapses, returning the LAST successful read either way.
 //
 // Why this closes the race a bare Load cannot: a terminal read is a STABLE
 // baseline. lifecycle.go's write choke point (persistLocked) REJECTS any
@@ -887,14 +887,24 @@ func sameStopMarker(before, after *session.Stop) bool {
 // source. Waiting for Terminal() first removes the gap's only remaining
 // degree of freedom: once terminal, the two reads are guaranteed to agree.
 //
+// A record that has LANDED LifecycleStopped (rec.Stopped() true via
+// ADR-20260928-sub-agent-control-plane.md line ~636's widened predicate) is
+// the OTHER legal "settled" shape assertStopLandedOn documents — the
+// current-generation fence is already cleared by TransitionSession the
+// instant it lands, so there is no further in-flight unwind left to race
+// against on THIS generation either; polling past that point only spends the
+// budget for no benefit. This loop therefore also returns promptly on it,
+// rather than spinning to the deadline (the bug this file's own RED pack,
+// wait_for_lifecycle_terminal_landed_stopped_test.go, was written to catch).
+//
 // Bounded (matches this file's own 10s-deadline/10ms-poll convention, e.g.
 // e2eHarness.waitForTreeTurns): a session the cascade left in the OTHER legal
 // "outstanding" shape (assertStopLandedOn) — a current-generation marker with
-// no live turn left to ever unwind it — never reaches Terminal(), and this
-// loop falls through at the deadline with whatever it last read, no worse
-// than the unconditional single Load it replaces. The CI failure this fixes
-// ran in 0.09s end to end, so a real unwind is expected to land many orders
-// of magnitude inside this budget.
+// no live turn left to ever unwind it — never reaches Terminal() or lands
+// LifecycleStopped, and this loop falls through at the deadline with
+// whatever it last read, no worse than the unconditional single Load it
+// replaces. The CI failure this fixes ran in 0.09s end to end, so a real
+// unwind is expected to land many orders of magnitude inside this budget.
 func waitForLifecycleTerminalOrDeadline(t *testing.T, store *session.LifecycleStore, sessionID string, timeout time.Duration) *session.LifecycleRecord {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -903,7 +913,7 @@ func waitForLifecycleTerminalOrDeadline(t *testing.T, store *session.LifecycleSt
 		if err != nil {
 			t.Fatalf("load %s while waiting for a stable pre-Revive snapshot: %v", sessionID, err)
 		}
-		if rec.Terminal() || time.Now().After(deadline) {
+		if rec.Terminal() || rec.Stopped() || time.Now().After(deadline) {
 			return rec
 		}
 		time.Sleep(10 * time.Millisecond)
