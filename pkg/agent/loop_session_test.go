@@ -196,8 +196,12 @@ func TestListAllSessions_PartialErrors(t *testing.T) {
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+	t.Cleanup(al.Close)
 
 	// Wire a valid UnifiedStore for the "main" agent and create one session.
+	// al.Close() -> registry.Close() closes each agent's .Sessions, which
+	// covers both goodStore and brokenStore below once they are wired onto
+	// their AgentInstance — no separate Close() call needed for either.
 	goodStore, err := session.NewUnifiedStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewUnifiedStore(main): %v", err)

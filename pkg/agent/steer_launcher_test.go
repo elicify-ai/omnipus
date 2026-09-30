@@ -99,13 +99,19 @@ func (p *dispatchContextProvider) GetDefaultModel() string { return "dispatch-co
 // test's own cleanup was about to release anyway).
 func newSteerAL(t *testing.T) (*AgentLoop, func()) {
 	t.Helper()
-	al, cleanup := newAL(t)
+	// newAL(t)'s own cleanup now closes al directly (loop_test.go's
+	// newTestAgentLoop no longer returns a no-op) — discard it here rather
+	// than return it a second time, since the t.Cleanup below is what fixes
+	// this helper's LIFO ordering against a caller's own provider-release
+	// cleanup (see the doc comment above): a caller that also `defer
+	// cleanup()`s the returned func must not double-close al.
+	al, _ := newAL(t)
 	home := al.GetConfig().Agents.Defaults.Home
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
 	t.Cleanup(func() { al.Close() })
-	return al, cleanup
+	return al, func() {}
 }
 
 // newTestSteeringSession creates a real chat session (the target agent is
@@ -153,7 +159,7 @@ func newSteerALWithSkills(t *testing.T, home string, grantedSkills []string) (*A
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
-	return al, func() {}
+	return al, al.Close
 }
 
 func TestLaunch_TitleRequired(t *testing.T) {
