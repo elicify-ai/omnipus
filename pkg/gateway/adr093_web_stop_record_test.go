@@ -260,9 +260,10 @@ func (f *u2ScopeFixture) startRoot(t *testing.T) string {
 	}
 	t.Cleanup(join)
 	f.joinScheduled = append(f.joinScheduled, join)
+	contexts := f.contexts
 	select {
 	case providerCtx := <-f.provider.entered:
-		f.contexts[meta.ID] = providerCtx
+		contexts[meta.ID] = providerCtx
 	case <-done:
 		t.Fatalf("root fixture %s exited before entering the provider: %v", meta.ID, runErr)
 	case <-time.After(cancelTestTurnStartDeadline):
@@ -282,9 +283,10 @@ func (f *u2ScopeFixture) startHelper(t *testing.T, parent string) string {
 	dispatched, err := launcher.Dispatch(context.Background(), launched.SessionID, launched.Generation)
 	require.NoError(t, err)
 	require.Equal(t, steer.DispatchRunning, dispatched.State, "fixture helper must actually run, not queue")
+	contexts := f.contexts
 	select {
 	case providerCtx := <-f.provider.entered:
-		f.contexts[launched.SessionID] = providerCtx
+		contexts[launched.SessionID] = providerCtx
 	case <-time.After(cancelTestTurnStartDeadline):
 		t.Fatalf("helper fixture %s never entered the provider", launched.SessionID)
 	}
