@@ -214,8 +214,11 @@ func (p *BraveSearchProvider) Search(
 	count int,
 	rangeCode string,
 ) (string, error) {
-	searchURL := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d",
-		url.QueryEscape(query), count)
+	base := p.baseURL
+	if base == "" {
+		base = "https://api.search.brave.com/res/v1/web/search"
+	}
+	searchURL := fmt.Sprintf("%s?q=%s&count=%d", base, url.QueryEscape(query), count)
 	if freshness := mapBraveFreshness(rangeCode); freshness != "" {
 		searchURL += "&freshness=" + url.QueryEscape(freshness)
 	}
@@ -608,7 +611,10 @@ func (p *PerplexitySearchProvider) Search(
 	count int,
 	rangeCode string,
 ) (string, error) {
-	searchURL := "https://api.perplexity.ai/chat/completions"
+	searchURL := p.baseURL
+	if searchURL == "" {
+		searchURL = "https://api.perplexity.ai/chat/completions"
+	}
 
 	var lastErr error
 	iter := p.keyPool.NewIterator()
@@ -972,9 +978,9 @@ type WebSearchToolOptions struct {
 	ExaAPIKeyRef string
 	ExaEnabled   bool
 
-	// ADR-096 WS-TOOL: per-provider base URLs and capability defaults. The
-	// base-URL fields let tests pin provider wire traffic; at production
-	// wiring they are empty and the provider defaults apply.
+	// ADR-096 WS-TOOL: per-provider base URLs and capability defaults.
+	// Keyed-provider base URLs are optional operator configuration; empty
+	// selects each client's official endpoint.
 	BraveBaseURL          string
 	DuckDuckGoBaseURL     string
 	PerplexityBaseURL     string

@@ -338,8 +338,9 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 	}
 
 	var body gen.IntegrationProviderUpdateRequest
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "IntegrationProviderUpdateRequest", &body, validateEnabled) {
+	// Credential changes always enforce the closed contract, even when the
+	// optional general inbound validator is disabled.
+	if !decodeAndValidate(w, r, "IntegrationProviderUpdateRequest", &body, true) {
 		return
 	}
 	if string(body.Kind) != def.kind {
@@ -350,6 +351,11 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 
 	// Sensitive change → require the re-auth consent token (FR-12.2).
 	if !a.requireReAuth(w, r, user.Username) {
+		return
+	}
+
+	if body.ClearApiKey != nil && *body.ClearApiKey {
+		a.handleSearchKeyRemoval(w, r, def, body)
 		return
 	}
 
@@ -408,28 +414,8 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 // finishIntegrationProviderUpdate stores the credential, persists and audits the
 // role write, reloads it, then reports the post-reload role state.
 func (a *restAPI) finishIntegrationProviderUpdate(w http.ResponseWriter, r *http.Request, def integrationDef, id, apiKey string, write integrationRoleWrite) {
-	// Store the key (if supplied) in the encrypted credential store BEFORE
-	// writing the ref to config.json (SEC-23: no plaintext fallback).
 	write.keySet = apiKey != ""
-	if write.keySet {
-		if def.credRef == "" {
-			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("%s does not accept an API key", def.displayName))
-			return
-		}
-		if _, err := a.storeCredential(def.credRef, apiKey); err != nil {
-			slog.Error("integrations: credential store failed", "provider", def.id, "error", err)
-			jsonErr(w, http.StatusServiceUnavailable,
-				"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets")
-			return
-		}
-	}
-
-	// Persist the role/key writes through the raw-map patch.
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		return applyIntegrationRoles(m, def, write)
-	}); err != nil {
-		slog.Error("integrations: config update failed", "provider", def.id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to save integration config")
+	if !a.persistIntegrationProviderUpdate(w, def, apiKey, write) {
 		return
 	}
 
