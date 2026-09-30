@@ -54,4 +54,40 @@ describe('MailPanel — stale draft recovery errors', () => {
     expect(await screen.findByText('404: The requested resource was not found.')).toBeInTheDocument()
     expect(screen.queryByText('This draft was changed or deleted elsewhere. The list has been refreshed.')).not.toBeInTheDocument()
   })
+
+  it('does not resolve a missing Message-ID to an unrelated draft', async () => {
+    const rowWithoutMid = { ...staleRow, message_id: null }
+    fetchMailMessages.mockResolvedValueOnce({ ...stalePage, messages: [rowWithoutMid] })
+      .mockResolvedValueOnce({ ...stalePage, messages: [] })
+    renderDraft()
+    fireEvent.click(await screen.findByRole('button', { name: /F5 stale draft/ }))
+    expect(await screen.findByText('This draft was changed or deleted elsewhere. The list has been refreshed.')).toBeInTheDocument()
+    expect(fetchMailMessage).toHaveBeenCalledTimes(1)
+    expect(fetchMailMessage).toHaveBeenCalledWith('ws-1', 'mia', 'drafts', 'uid:3:1', { retry: false })
+    expect(fetchMailMessages).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not choose a different visible row with a duplicate Message-ID', async () => {
+    const otherRow = { ...staleRow, uid: 2, subject: 'Other draft' }
+    fetchMailMessages.mockResolvedValueOnce({ ...stalePage, messages: [staleRow, otherRow] })
+      .mockResolvedValueOnce({ ...stalePage, messages: [otherRow] })
+    renderDraft()
+    fireEvent.click(await screen.findByRole('button', { name: /F5 stale draft/ }))
+    expect(await screen.findByText('This draft was changed or deleted elsewhere. The list has been refreshed.')).toBeInTheDocument()
+    expect(fetchMailMessage).toHaveBeenCalledTimes(1)
+    expect(fetchMailMessage).toHaveBeenCalledWith('ws-1', 'mia', 'drafts', 'uid:3:1', { retry: false })
+    expect(screen.getByRole('button', { name: /Other draft/ })).toBeInTheDocument()
+  })
+
+  it('keeps an upstream 502 visible and does not claim the list was refreshed', async () => {
+    fetchMailMessage.mockRejectedValueOnce(new ApiError(404))
+      .mockRejectedValueOnce(new ApiError(502, undefined, { code: 'server_error' }))
+    renderDraft()
+    fireEvent.click(await screen.findByRole('button', { name: /F5 stale draft/ }))
+    expect(await screen.findByText('server_error')).toBeInTheDocument()
+    expect(fetchMailMessage).toHaveBeenCalledTimes(2)
+    expect(fetchMailMessage).toHaveBeenLastCalledWith('ws-1', 'mia', 'drafts', 'mid:<stale-draft@test.local>', { retry: false })
+    expect(fetchMailMessages).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('This draft was changed or deleted elsewhere. The list has been refreshed.')).not.toBeInTheDocument()
+  })
 })
