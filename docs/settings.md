@@ -47,6 +47,47 @@ The service list below the cards puts ready services first. Services needing a k
 
 If an integration save fails, its error message shows the server's reason when one is provided.
 
+### Remove a saved key
+
+For a service with a saved key, **Remove key** appears after **Edit key** and **Check connection**. DuckDuckGo needs no key, so it has neither removal nor connection-check actions.
+
+Click **Remove key** to review what will happen. For example, the Tavily confirmation says: "This deletes the saved key from Omnipus and switches off Tavily. It does not revoke the key with Tavily." If the service is your default or fallback, the confirmation also explains that it will keep that role and Omnipus will not choose a replacement.
+
+| Install | Confirmation |
+|---|---|
+| Local | Confirm **Remove key**, then re-type your password. |
+| Hosted or desktop | Confirm **Remove key** once; no local password is requested. |
+
+**Cancel** at either step changes nothing. While confirmation or removal is pending, conflicting actions are disabled. **Removing…** means the request is in progress; a successful removal reports, for example, "Tavily key removed." The key editor closes and the service's status is refreshed.
+
+Removal deletes Omnipus's saved key and switches off that service. It does **not** revoke the key with the service, recall a search already sent, or change your default or fallback choices. The selected default keeps its existing "key missing — searches will fail" warning; the selected fallback warns "key missing — the fallback will not run". **Fix** opens the key editor. An available fallback may still answer when the default is missing its key. **Add key** and **Save key** can restore the service without reassigning its role.
+
+Removal is refused without changes if search roles are still undecided, another connection shares the key, or the service uses a key reference set outside Settings. The message explains the fix: choose default and fallback services, give the other connections their own key, or remove the manually configured reference first. A later-stage failure can leave partial changes; its error says what happened, and the refreshed row shows the current state. Do not assume an error means the key or service was left unchanged.
+
+### Check a connection
+
+**Check connection** sits between **Edit key** and **Remove key**. It uses the saved key, not an unsaved edit. A key must be saved and loaded before the button is enabled; otherwise the row says "Add or save a key before checking."
+
+"Runs one small search with your saved key. Your service may charge for it." The check searches for **Omnipus**, not conversation content, through that one service. It has a 15-second total deadline, makes no fallback search, and does not automatically retry. A valid response with no results also counts as a working connection; search results are not shown or saved by this diagnostic. Checking does not require password confirmation.
+
+"Ready means the key is loaded. Check connection tests it with the service." The readiness badge and the connection result are separate. After every completed attempt, Omnipus refreshes the row from the server instead of turning a failed check into a disabled service.
+
+| What you see | What to do |
+|---|---|
+| **Checking connection…** | Wait for this service's result. Its conflicting actions are disabled while the check runs. Other services can still be checked. |
+| **Connection works.** | The service accepted this check. This is a temporary result, not a lasting health guarantee. |
+| **The service rejected your key. Edit it and try again.** | Use **Edit key**, save a replacement, then check again. |
+| **The service is limiting requests. Wait and try again.** | Wait for the cooldown or the service's longer retry delay, then check manually. |
+| **The service did not respond in time. Try again.** | Wait for the cooldown, then check manually. |
+| **Could not reach the service. Try again.** | Check network availability, then try again after the cooldown. |
+| **The service could not complete the check. Try again.** | Try again after the cooldown. |
+| **The service returned an unexpected response. Try again.** | Try again after the cooldown. |
+| **You can check again in {N} seconds.** | Another check was refused by the local limit. Wait for the displayed countdown; no check is scheduled automatically. |
+
+There can be only one check in progress for each service, with a 30-second cooldown per service on this Omnipus instance, including failed checks. A service may request a longer wait. After the cooldown, click **Check connection** for a fresh attempt; an old success is not reused as a new check.
+
+Connection results are temporary. Saving or removing a key clears the old result, and a late reply from an older configuration is not used for the new row. Checks do not change your roles, switch off a service, or change ordinary fallback or native-model search behaviour.
+
 SearXNG is no longer offered: on upgrade, Omnipus removes its old configuration, clears it as a saved default, and sets a saved SearXNG fallback to **None**.
 
 ## Where each setting lives
