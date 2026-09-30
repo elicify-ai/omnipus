@@ -841,6 +841,18 @@ func dispatchRefusalError(reason string) error {
 func commitSteeredDispatchState(
 	lifecycle *session.LifecycleStore, sessionID string, gen int, state session.LifecycleState,
 ) (*session.LifecycleRecord, error) {
+	return commitSteeredDispatchStateWithPendingMessage(lifecycle, sessionID, gen, state, "")
+}
+
+// commitSteeredDispatchStateWithPendingMessage is commitSteeredDispatchState
+// plus a pending wake payload stamp. The wake's content is appended in the
+// SAME atomic Mutate that
+// flips the state to LifecycleQueued, so every queued wake reaches the next
+// promoted turn in arrival order. An empty pendingMessage is the same as the
+// plain commitSteeredDispatchState (no field written).
+func commitSteeredDispatchStateWithPendingMessage(
+	lifecycle *session.LifecycleStore, sessionID string, gen int, state session.LifecycleState, pendingMessage string,
+) (*session.LifecycleRecord, error) {
 	var committed *session.LifecycleRecord
 	var refusal error
 	err := lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
@@ -853,6 +865,9 @@ func commitSteeredDispatchState(
 			return refusal
 		}
 		rec.State = state
+		if pendingMessage != "" {
+			rec.PendingUserMessages = append(rec.PendingUserMessages, pendingMessage)
+		}
 		committed = rec
 		return nil
 	})

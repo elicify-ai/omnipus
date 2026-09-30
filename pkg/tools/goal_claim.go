@@ -13,9 +13,9 @@
 // task_completion_signal.go's marker parser.
 //
 // This tool's own job stops at the call boundary: validating the scope
-// preconditions (FR-090) and the status/evidence shape (FR-087, FR-088) and
-// reporting the claim in its result. What the engine DOES with a recorded
-// claim — resolving tool-vs-marker precedence (FR-092), dispatching a
+// preconditions (FR-090), status/evidence shape (FR-087, FR-088), and direct
+// children before reporting the claim in its result. What the engine DOES
+// with a recorded claim — resolving tool-vs-marker precedence (FR-092), dispatching a
 // deferred adjudication after the reply is delivered (D13), refusing a
 // second claim while one is already in flight (FR-101), clearing the
 // bare-claim streak (FR-091) — is pkg/agent's job, reading this tool's
@@ -71,6 +71,14 @@ type GoalClaimAccess interface {
 	ReadClaimableGoal(sessionID string) (goalID, goalCondition string, err error)
 }
 
+// GoalClaimDirectChildrenAccess is a claim-only read of live direct children.
+// It stays separate from GoalRecordAccess so set_goal and its callers do not
+// gain a lifecycle-store requirement. The production goal access implements
+// it; older in-memory test doubles may omit it.
+type GoalClaimDirectChildrenAccess interface {
+	DirectNonTerminalChildren(sessionID string) ([]string, error)
+}
+
 // GoalClaimTool implements the goal_claim tool (ADR-084 revision 9 §O, D12).
 type GoalClaimTool struct {
 	BaseTool
@@ -112,10 +120,11 @@ func (t *GoalClaimTool) Category() ToolCategory { return CategoryTasks }
 // Description implements Tool.
 func (t *GoalClaimTool) Description() string {
 	return "Claim THIS session's active goal as done, blocked, or waiting on the operator (ADR-084). " +
-		"status:met means you believe the goal's acceptance criteria are satisfied: it starts an " +
-		"adjudication that runs AFTER your reply is delivered — the operator sees your response " +
-		"immediately, a verdict arrives later on its own, and it may disagree with your claim. A met " +
-		"claim requires a non-empty evidence argument (your own one-line statement of what you " +
+		"status:met means you believe the goal's acceptance criteria are satisfied. If any direct child " +
+		"sub-agent is queued or actively running, the met claim is rejected immediately; wait for them to finish " +
+		"or cancel them, then claim again. With no queued or actively running direct child, a valid met claim " +
+		"proceeds to adjudication after your reply is delivered; adjudication may disagree with your " +
+		"claim. A met claim requires a non-empty evidence argument (your own one-line statement of what you " +
 		"verified) or the call is refused before anything is recorded — no partial credit for trying. " +
 		"status:waiting_on_user and status:blocked both end the turn without any adjudication: " +
 		"waiting_on_user means you need an answer from the operator to continue; blocked means you " +
@@ -133,8 +142,10 @@ func (t *GoalClaimTool) Parameters() map[string]any {
 			"status": map[string]any{
 				"type": "string",
 				"enum": []string{GoalClaimStatusMet, GoalClaimStatusBlocked, GoalClaimStatusWaitingOnUser},
-				"description": "met: you believe the goal's acceptance criteria are satisfied — starts a " +
-					"background adjudication after your reply is delivered; requires evidence. blocked: you " +
+				"description": "met: you believe the goal's acceptance criteria are satisfied; requires evidence. " +
+					"If any direct child sub-agent is queued or actively running, the met claim is rejected immediately; " +
+					"wait for them to finish or cancel them, then claim again. With no such direct child, a valid " +
+					"met claim proceeds to adjudication after your reply is delivered. blocked: you " +
 					"cannot proceed and it is not a question the operator can answer — parks the goal, no " +
 					"adjudication. waiting_on_user: you need an answer from the operator to continue — parks " +
 					"the goal, no adjudication. Required — never omit this expecting a default.",
@@ -217,6 +228,20 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	if status == GoalClaimStatusMet && evidence == "" {
 		return ErrorResult("goal_claim(status:met) rejected: evidence is required and must be non-empty — " +
 			"state, in one line, what you verified (ADR-084 JUDGE-FR-088)")
+	}
+
+	if status == GoalClaimStatusMet {
+		if direct, ok := access.(GoalClaimDirectChildrenAccess); ok {
+			// A child launched at the same instant as this read may publish after
+			// the check. This claim/launch race is accepted; do not add a fence.
+			children, childErr := direct.DirectNonTerminalChildren(sessionID)
+			if childErr != nil {
+				return ErrorResult(fmt.Sprintf("goal_claim: could not check direct sub-agents: %v", childErr)).WithError(childErr)
+			}
+			if len(children) != 0 {
+				return ErrorResult(fmt.Sprintf("%d sub-agents are still running: %s. Wait for them to finish or cancel them, then claim again", len(children), strings.Join(children, ",")))
+			}
+		}
 	}
 
 	logger.InfoCF("goal", "goal_claim call",

@@ -265,6 +265,15 @@ type LifecycleRecord struct {
 	LastCheckpointRef     string   `json:"last_checkpoint_ref,omitempty"`
 	UndeliveredMessageIDs []string `json:"undelivered_message_ids,omitempty"`
 
+	// PendingUserMessages preserves every wake's content in arrival order when
+	// admission queues this session. A promoted turn consumes the whole list
+	// before it starts so no queued wake is overwritten or replayed. The
+	// upstream system wake is not guaranteed to have an inbox entry.
+	//
+	// not-wire-format: internal steered-session bookkeeping, omitted from the
+	// wire SessionLifecycleRecord (this is not session status).
+	PendingUserMessages []string `json:"pending_user_messages,omitempty"`
+
 	NeedsInput *NeedsInput `json:"needs_input,omitempty"`
 
 	// FailedReason is set only when State==LifecycleFailed. Left open

@@ -287,6 +287,13 @@ type goalTriggerState struct {
 	// comment for the one residual gap that leaves). Keyed by GOAL ID.
 	blocked map[string]bool
 
+	// steeredCompletionWrites marks a child while its completion tail is in
+	// progress, including the interval between upward delivery and the
+	// terminal lifecycle write. A running child can have no registered turn
+	// during this interval. This is a liveness signal, not a goal-claim phase
+	// or a launch fence; it is cleared when the completion call returns.
+	steeredCompletionWrites map[string]bool
+
 	// claimScanWatermarks is JUDGE-FR-092's own per-goal-id boundary: the
 	// transcript timestamp that separates "already resolved by an earlier
 	// checkGoalLoopAfterTurn pass" from "produced during the CURRENT turn".
@@ -356,16 +363,17 @@ var goalTriggersMu sync.RWMutex //nolint:gochecknoglobals // package-wide seam, 
 
 //nolint:gochecknoglobals // package-wide singleton; one AgentLoop per process.
 var goalTriggersSingleton = &goalTriggerState{
-	bareClaimStreak:     make(map[string]int),
-	waitingOnUser:       make(map[string]bool),
-	routing:             make(map[string]goalRoute),
-	idleSettling:        make(map[string]bool),
-	diffBoundaryHash:    make(map[string]string),
-	outputWatermarks:    make(map[string]time.Time),
-	blocked:             make(map[string]bool),
-	claimScanWatermarks: make(map[string]time.Time),
-	liveTurnWork:        make(map[string]goalLiveTurnWork),
-	keeperPausedByStop:  make(map[string]time.Time),
+	bareClaimStreak:         make(map[string]int),
+	waitingOnUser:           make(map[string]bool),
+	routing:                 make(map[string]goalRoute),
+	idleSettling:            make(map[string]bool),
+	diffBoundaryHash:        make(map[string]string),
+	outputWatermarks:        make(map[string]time.Time),
+	blocked:                 make(map[string]bool),
+	steeredCompletionWrites: make(map[string]bool),
+	claimScanWatermarks:     make(map[string]time.Time),
+	liveTurnWork:            make(map[string]goalLiveTurnWork),
+	keeperPausedByStop:      make(map[string]time.Time),
 }
 
 // goalLiveTurnWork is one observation of what a goal's live turn(s) were
@@ -402,6 +410,7 @@ func resetGoalTriggerStateForTest() {
 	s.diffBoundaryHash = make(map[string]string)
 	s.outputWatermarks = make(map[string]time.Time)
 	s.blocked = make(map[string]bool)
+	s.steeredCompletionWrites = make(map[string]bool)
 	s.claimScanWatermarks = make(map[string]time.Time)
 	s.liveTurnWork = make(map[string]goalLiveTurnWork)
 	s.keeperPausedByStop = make(map[string]time.Time)
