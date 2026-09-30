@@ -14746,6 +14746,8 @@ export const SessionStartedFrame = z
     type: z.literal("session_started"),
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
+    client_message_id: z.string().min(1).max(128).optional(),
+    recovered: z.boolean().optional(),
     seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
   })
@@ -14833,6 +14835,8 @@ export const ErrorFrame = z
     type: z.literal("error"),
     session_id: z.string().max(128).optional(),
     message: z.string().min(1).max(4096),
+    client_message_id: z.string().min(1).max(128).optional(),
+    first_message_error: z.enum(["not_saved", "delivery_unknown", "answer_not_started"]).optional(),
     payload: z
     .object({
       llm_error: LLMError,
