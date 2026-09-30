@@ -557,10 +557,12 @@ func (a *restAPI) validateSearchIntegrationRoleWrite(w http.ResponseWriter, id s
 			return true
 		}
 		if _, present := state.web["fallback_provider"]; !present {
-			ddgUsable := false
-			if fresh, err := config.LoadConfig(a.configPath()); err == nil {
-				ddgUsable = fresh.Tools.Web.UsableSearchProvider(config.SearchProviderDuckDuckGo)
+			fresh, err := config.LoadConfig(a.configPath())
+			if err != nil {
+				jsonErr(w, http.StatusInternalServerError, "could not read the current configuration")
+				return true
 			}
+			ddgUsable := fresh.Tools.Web.UsableSearchProvider(config.SearchProviderDuckDuckGo)
 			if id != config.SearchProviderDuckDuckGo && ddgUsable {
 				write.materializeFallback = true
 			}
