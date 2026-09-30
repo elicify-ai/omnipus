@@ -3033,9 +3033,25 @@ export const IntegrationProvidersResponse: z.ZodType<IntegrationProvidersRespons
 export const IntegrationProviderUpdateRequest = z.object({
   kind: z.enum(["search", "voice"]),
   api_key: z.string().optional(),
+  clear_api_key: z.boolean().optional(),
   active: z.boolean().optional(),
   fallback: z.boolean().optional(),
-});
+}).strict();
+export const SearchProviderCheckRequest = z.object({}).partial().strict();
+export const SearchProviderCheckResponse = z.object({
+  provider_id: z.enum(["brave", "tavily", "perplexity", "glm", "baidu", "exa"]),
+  status: z.enum([
+    "success",
+    "auth_error",
+    "rate_limited",
+    "timeout",
+    "network_error",
+    "provider_error",
+    "invalid_response",
+  ]),
+  checked_at: z.string().datetime({ offset: true }),
+  retry_after_seconds: z.number().int().gte(1).optional(),
+}).strict();
 export const TranscribeResponse = z.object({
   text: z.string(),
   language: z.string().optional(),
@@ -8730,7 +8746,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/integrations/providers/:id",
     alias: "updateIntegrationProvider",
-    description: `Stores an API key and/or assigns the provider its role (FR-12.1). ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none (&quot;No fallback&quot;), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 (&quot;needs an API key&quot;). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
+    description: `Stores an API key, removes a saved search key with clear_api_key:true, and/or assigns the provider its role (FR-12.1). Removal switches only that service off and preserves the raw default, fallback and migration marker. It rejects any api_key, active or fallback field, voice/keyless services, undecided roles and shared/custom credential references before writes; ownership conflicts return 409. Success requires deletion, runtime disabling, confirmed reload and audit recording. Partial failures return a non-success error describing what persisted. Removal does not revoke the upstream key. ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none (&quot;No fallback&quot;), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 (&quot;needs an API key&quot;). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
 `,
     requestFormat: "json",
     parameters: [
@@ -8763,8 +8779,81 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/integrations/providers/:id/check",
+    alias: "checkSearchProviderConnection",
+    description: `Runs one real, potentially chargeable search for &quot;Omnipus&quot; through the addressed keyed search client with its saved key, one result where supported, and the cheapest supported depth within the saved cap. Requires authenticated administrator access, but no password step-up: this neither reveals nor changes a secret. A saved key and runtime-usable service are required. No fallback, key rotation, retry, discovery, result fetch or cached success. A 15-second total context deadline cancels on disconnect and does not lengthen a shorter client deadline. Per instance and service, one check may be in flight and at most one check is admitted every 30 seconds, including failures. Local limiting returns 429 with Retry-After and performs no outbound call. Completed upstream outcomes, including valid empty results and upstream failures, return 200 with normalized categories and no upstream payload or key. Gateway/internal failures remain non-2xx. Configuration and roles are unchanged; clients refresh readiness separately and discard results for an older credential/configuration generation.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({}).partial().strict(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SearchProviderCheckResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
