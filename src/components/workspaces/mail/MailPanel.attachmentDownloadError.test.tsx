@@ -27,7 +27,7 @@ import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { ToastContainer } from '@/components/ui/toast-container'
+import { AppShell } from '@/components/layout/AppShell'
 import { useUiStore } from '@/store/ui'
 
 const {
@@ -39,6 +39,9 @@ const {
   fetchMailSummary,
   markMailSeen,
   fetchMailAttachment,
+  fetchAppState,
+  fetchNotifications,
+  fetchTasks,
 } = vi.hoisted(() => ({
   fetchAgents: vi.fn(),
   fetchMailboxes: vi.fn(),
@@ -48,12 +51,30 @@ const {
   fetchMailSummary: vi.fn(),
   markMailSeen: vi.fn(),
   fetchMailAttachment: vi.fn(),
+  fetchAppState: vi.fn(),
+  fetchNotifications: vi.fn(),
+  fetchTasks: vi.fn(),
 }))
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgents, fetchMailboxes }
+  return { ...actual, fetchAgents, fetchMailboxes, fetchAppState, fetchNotifications, fetchTasks }
 })
+
+// Mount the production shell so its real toast host renders the alert. Only
+// unrelated shell children (router, overlays, and panels) are stubbed; the
+// MailPanel, its API calls, the UI store, and the toast renderer stay real.
+vi.mock('@/components/layout/Sidebar', () => ({ Sidebar: () => null }))
+vi.mock('@/components/layout/NotificationPanel', () => ({ NotificationPanel: () => null }))
+vi.mock('@/components/agents/ToolApprovalModal', () => ({ ToolApprovalModal: () => null }))
+vi.mock('@/components/chat/MediaLightbox', () => ({ MediaLightbox: () => null }))
+vi.mock('@/components/search/SearchModal', () => ({ SearchModal: () => null }))
+vi.mock('@/components/layout/CrossWorkspaceApprovalBanner', () => ({ CrossWorkspaceApprovalBanner: () => null }))
+vi.mock('@/components/layout/GodModeIndicators', () => ({ GodModeCornerDot: () => null }))
+vi.mock('@/components/panel-shell/PanelTabPresenceBridge', () => ({ PanelTabPresenceBridge: () => null }))
+vi.mock('@/components/panel-shell/SidePanelShell', () => ({ SidePanelShell: () => null }))
+vi.mock('@/hooks/useVersionCheck', () => ({ useVersionCheck: () => undefined }))
+vi.mock('@/hooks/useMediaQuery', () => ({ useMediaQuery: () => false }))
 
 vi.mock('@/lib/api/mail', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/mail')>()
@@ -69,7 +90,7 @@ vi.mock('@/lib/api/mail', async (importOriginal) => {
 })
 
 async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>> {
-  const specifier = './' + 'MailPanel'
+  const specifier = './MailPanel'
   try {
     const mod = await import(/* @vite-ignore */ specifier) as { MailPanel?: React.ComponentType<{ workspaceId: string }> }
     if (typeof mod.MailPanel !== 'function') throw new Error('MailPanel is not a function export')
@@ -85,15 +106,13 @@ async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>
 
 function renderPanel(node: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  // ToastContainer alongside MailPanel, both reading the SAME real
-  // (unmocked) useUiStore — exactly the production wiring (ToastContainer is
-  // mounted once at AppShell root, MailPanel's addToast calls write into
-  // the same store): the only way to observe a toast that actually renders,
-  // not merely a mocked function call.
+  // The real AppShell mounts the real ToastContainer, both sharing MailPanel's
+  // unmocked useUiStore. The assertion below checks a rendered alert, not
+  // merely a mocked addToast call or an entry in the store.
   return render(
     <QueryClientProvider client={client}>
       {node}
-      <ToastContainer />
+      <AppShell />
     </QueryClientProvider>,
   )
 }
@@ -148,6 +167,12 @@ describe('MailPanel — attachment download error surfacing (silent-failure fix)
     fetchMailSummary.mockReset()
     markMailSeen.mockReset()
     fetchMailAttachment.mockReset()
+    fetchAppState.mockReset()
+    fetchNotifications.mockReset()
+    fetchTasks.mockReset()
+    fetchAppState.mockResolvedValue({ dev_mode_bypass: false })
+    fetchNotifications.mockResolvedValue({ notifications: [], unread_count: 0 })
+    fetchTasks.mockResolvedValue([])
     fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },

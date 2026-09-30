@@ -17,7 +17,7 @@ const BANNED = [
 ]
 
 async function loadFrame(): Promise<React.ComponentType<{ tokenUrl: string; onLoadImages: () => void }>> {
-  const specifier = './' + 'MailHtmlFrame'
+  const specifier = './MailHtmlFrame'
   try {
     const mod = await import(/* @vite-ignore */ specifier) as {
       MailHtmlFrame?: React.ComponentType<{ tokenUrl: string; onLoadImages: () => void }>

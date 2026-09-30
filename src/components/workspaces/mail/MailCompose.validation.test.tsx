@@ -16,7 +16,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 
 async function loadCompose(): Promise<React.ComponentType<Record<string, unknown>>> {
-  const specifier = './' + 'MailComposeDialog'
+  const specifier = './MailComposeDialog'
   try {
     const mod = await import(/* @vite-ignore */ specifier) as { MailComposeDialog?: React.ComponentType<Record<string, unknown>> }
     if (typeof mod.MailComposeDialog !== 'function') throw new Error('MailComposeDialog is not a function export')
