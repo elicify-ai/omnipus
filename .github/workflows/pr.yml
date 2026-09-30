@@ -716,7 +716,7 @@ jobs:
           # *.test.ts only, so the sibling *.spec.ts Playwright files are not
           # picked up by this pattern. It ran in NO shard until 2026-08-23.
           - group: lib-store
-            patterns: "src/lib/ src/store/ src/routes/ src/test/ src/design-system/ tests/e2e/fixtures/ tests/design-system/"
+            patterns: "src/main.test.tsx src/lib/ src/store/ src/routes/ src/test/ src/design-system/ tests/e2e/fixtures/ tests/design-system/"
           # Group B: chat components — heaviest component group
           - group: components-chat
             patterns: "src/components/chat/"
