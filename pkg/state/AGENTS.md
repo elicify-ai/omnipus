@@ -9,7 +9,7 @@ What it does not own: Full conversation transcripts or work/task records.
 
 ## Pitfalls here
 
-- State updates must use atomic writes so an interrupted save does not corrupt the stored record. `state_test.go::TestAtomicSave` tests the save path.
+- Keep atomic writes so interruptions do not corrupt stored state. `state_test.go::TestAtomicSave` checks a completed save and reload, not an interrupted write; its green result is not crash-safety evidence.
 
 ## Never bring back
 

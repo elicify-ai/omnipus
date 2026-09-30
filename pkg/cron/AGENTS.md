@@ -9,7 +9,7 @@ What it does not own: The Calendar editor; it must not expose raw cron input in 
 
 ## Pitfalls here
 
-- Changing next-fire calculation can skip or duplicate scheduled work. `service_test.go::TestCronService_ComputeNextRun` checks the scheduling path.
+- A wrong next-fire time can delay or skip scheduled work. `service_test.go::TestCronService_ComputeNextRun` checks only whether a next-fire value is present or absent, not its exact time; do not treat its green result as timing-accuracy evidence.
 
 ## Never bring back
 

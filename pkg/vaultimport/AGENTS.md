@@ -1,6 +1,6 @@
 # pkg/vaultimport — one-shot vault importer
 
-What it owns: Reading an existing vault's note metadata and translating its `.base` views into records.
+What it owns: Inferring record schemas from existing vault note metadata and translating `.base` files into saved views.
 What it does not own: A live query parser or an agent tool; imports are operator-initiated.
 
 ## Run its tests

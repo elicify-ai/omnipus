@@ -21,6 +21,7 @@ handbook under `docs/`.
 ## About links that still point at the old locations
 
 Decision records, dated plans and past test notes still cite the original paths. That is deliberate:
-those citations record what was true when they were written. Current guidance now points to code,
-ADRs and the handbook. If a historical citation to the original BRD or v0.3 concept no longer
-resolves, retrieve the old document through Git history; neither folder exists here now.
+those citations record what was true when they were written. For current guidance on the removed
+BRD and v0.3 concept, use the code, decision records and user handbook. If a historical citation
+to either source no longer resolves, retrieve the old document through Git history; neither
+folder exists here now.

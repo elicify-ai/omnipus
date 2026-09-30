@@ -5,11 +5,11 @@ What it does not own: Discovering or indexing notes; the knowledge and retrieval
 
 ## Run its tests
 
-`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestDecimal_NoBinaryFPGuardActuallyDetects$' -v -p 1 ./pkg/records/`
+`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestDecimal_NoBinaryFPTypesInThePackage$' -count=1 -v -p 1 ./pkg/records/`
 
 ## Pitfalls here
 
-- A decimal converted through binary floating point loses exact values. `decimal_no_float_test.go::TestDecimal_NoBinaryFPGuardActuallyDetects` probes the package-wide guard; preserve the original numeric spelling.
+- Binary floats can lose decimal precision. `decimal_no_float_test.go::TestDecimal_NoBinaryFPTypesInThePackage` scans real package files; `TestDecimal_NoBinaryFPGuardActuallyDetects` checks only synthetic examples. The guard cannot see runtime values arriving through `any`, so preserve numeric spelling at input.
 
 ## Never bring back
 

@@ -9,7 +9,7 @@ What it does not own: Microphone capture, chat UI or audio storage.
 
 ## Pitfalls here
 
-- Multipart requests and provider errors must retain the provider's expected shape. `groq_transcriber_test.go::TestGroqTranscribe` covers one adapter's request/response path.
+- Multipart fields and provider-error detail matter. `groq_transcriber_test.go::TestGroqTranscribe` checks endpoint/authentication, decoded success and error presence, but does not inspect upload fields or error details. Do not treat its green result as a request-shape check.
 
 ## Never bring back
 
