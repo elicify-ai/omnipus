@@ -154,8 +154,9 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 
 	// Mirror the REST PATCH-to-in_progress path (rest_tasks.go): transition
 	// to in_progress FIRST (so the board reflects the dispatch immediately),
-	// then dispatch; on dispatch failure, revert so the task is never
-	// stranded in in_progress with no agent actually running.
+	// then dispatch; on admission failure, revert so the task is never
+	// stranded in in_progress with no agent actually running. Preserve a Failed
+	// disposition the executor already persisted for the dispatch error.
 	priorStatus := existing.Status
 	inProgress := task.StatusInProgress
 	if _, uerr := t.store.Update(taskID, task.Patch{Status: &inProgress}); uerr != nil {
@@ -164,11 +165,25 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 
 	sessionID, startErr := t.startTaskNow(ctx, taskID)
 	if startErr != nil {
-		revert := priorStatus
-		emptyStarted := ""
-		if _, rErr := t.store.Update(taskID, task.Patch{Status: &revert, StartedAt: &emptyStarted}); rErr != nil {
-			slog.Error("run_task: could not revert task status after dispatch failure",
-				"task_id", taskID, "revert_to", revert, "error", rErr)
+		fresh, readErr := t.store.Get(taskID)
+		if readErr != nil {
+			return ErrorResult(fmt.Sprintf(
+				"run_task failed: could not dispatch task: %v; could not read task status before rollback: %v",
+				startErr, readErr))
+		}
+		// A successful executor failure write stores the same cause it returns.
+		// Do not erase that disposition, or mistake an unrelated failure for it.
+		failedDisposition := fresh.Status == task.StatusFailed && fresh.Result != "" && fresh.Result == startErr.Error()
+		if !failedDisposition {
+			revert := priorStatus
+			emptyStarted := ""
+			if _, rErr := t.store.Update(taskID, task.Patch{Status: &revert, StartedAt: &emptyStarted}); rErr != nil {
+				slog.Error("run_task: could not revert task status after dispatch failure",
+					"task_id", taskID, "revert_to", revert, "error", rErr)
+				return ErrorResult(fmt.Sprintf(
+					"run_task failed: could not dispatch task: %v; could not revert task status: %v",
+					startErr, rErr))
+			}
 		}
 		return ErrorResult(fmt.Sprintf("run_task failed: could not dispatch task: %v", startErr))
 	}
