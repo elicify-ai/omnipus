@@ -74,7 +74,7 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 	}
 	mp := &mockProvider{}
 	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), mp)
-	return al, cfg, func() {}
+	return al, cfg, al.Close
 }
 
 // --- decideSwitchCompressAction purity tests (unchanged logic) ---

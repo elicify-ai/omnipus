@@ -873,3 +873,81 @@ func TestAllowGatewayOrigin_ConcurrentWithCheckURL(t *testing.T) {
 	wg.Wait()
 	// Reaching here without the race detector firing means the RWMutex is sound.
 }
+
+// dnsFailResolver simulates a real net.Resolver's response to a hostname that
+// does not exist: LookupIPAddr returns a *net.DNSError with IsNotFound set,
+// no addresses, and no IP-policy question ever reached (there is nothing to
+// check an IP against). Injected via SSRFChecker.SetResolver so the test
+// exercises CheckHost's actual DNS-lookup-failure branch deterministically,
+// without depending on real network access or a specific unregistered
+// hostname staying unregistered.
+type dnsFailResolver struct{}
+
+func (dnsFailResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+// TestSSRFChecker_CheckHost_PlainDNSFailureNotLabelledSSRF: issue #1056
+// (carried forward from #1025) — "Plain DNS failure is labelled `SSRF:`... a
+// nonexistent host reads like a security block." A hostname that simply does
+// not resolve never reached the IP-policy question (SSRFChecker.CheckIP is
+// never called: there are no addresses to check), so the error must not
+// carry the "SSRF:" prefix pkg/sandbox/egress_proxy.go::isSSRFError and every
+// assertion in this file use to mean "blocked by IP policy". It must still
+// be a clear, plain error naming the failure as a DNS problem.
+//
+// Correction note (qa-lead RED pack): a repo-wide grep for a genuine
+// "host does not exist" DNS-failure assertion in this file (localhost,
+// 192.168.1.1 and every other existing CheckHost/SafeDialContext case are
+// real IP-policy blocks — localhost resolves to a loopback address, so
+// keeping "SSRF:" there is correct and those tests are left untouched) found
+// none: every existing `assert.Contains(t, err.Error(), "SSRF")` in this file
+// pins an actual private/loopback/metadata IP block. This is therefore a new
+// test proving the current mislabelling, not an edit of a pre-existing wrong
+// assertion — stated plainly rather than fabricating a pre-existing one.
+func TestSSRFChecker_CheckHost_PlainDNSFailureNotLabelledSSRF(t *testing.T) {
+	checker := security.NewSSRFChecker(nil)
+	checker.SetResolver(dnsFailResolver{})
+
+	_, err := checker.CheckHost(context.Background(), "this-host-does-not-exist.invalid")
+	require.Error(t, err, "a DNS lookup failure must still be reported as an error")
+	assert.False(t, hasSSRFPrefix(err.Error()),
+		"a plain DNS failure (host does not exist) must NOT be labelled \"SSRF:\" — "+
+			"only a real IP-policy block keeps that prefix (issue #1056), got: "+err.Error())
+	assert.Contains(t, lower(err.Error()), "dns",
+		"the error must plainly say this was a DNS failure, got: "+err.Error())
+}
+
+// TestSSRFChecker_CheckHost_AllowlistedHostDNSFailureNotLabelledSSRF covers
+// the sibling branch: a hostname present in the allowlist (checked BEFORE
+// resolution) whose DNS lookup itself then fails. The allowlist exists to
+// skip the IP-policy check by name — it does not manufacture an IP-policy
+// verdict out of an unrelated DNS failure, so this branch must not carry
+// "SSRF:" either.
+func TestSSRFChecker_CheckHost_AllowlistedHostDNSFailureNotLabelledSSRF(t *testing.T) {
+	checker := security.NewSSRFChecker([]string{"allowlisted.invalid"})
+	checker.SetResolver(dnsFailResolver{})
+
+	_, err := checker.CheckHost(context.Background(), "allowlisted.invalid")
+	require.Error(t, err, "a DNS lookup failure on an allowlisted host must still be reported as an error")
+	assert.False(t, hasSSRFPrefix(err.Error()),
+		"an allowlisted host's DNS failure must NOT be labelled \"SSRF:\" either, got: "+err.Error())
+	assert.Contains(t, lower(err.Error()), "dns",
+		"the error must plainly say this was a DNS failure, got: "+err.Error())
+}
+
+// hasSSRFPrefix and lower are tiny local helpers so this file does not need
+// to add a "strings" import solely for these two new tests.
+func hasSSRFPrefix(s string) bool {
+	return len(s) >= 5 && s[:5] == "SSRF:"
+}
+
+func lower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
+}

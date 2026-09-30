@@ -738,6 +738,11 @@ func newRecordResultTurnState(t *testing.T) (*turnState, *session.UnifiedStore, 
 	baseDir := filepath.Join(t.TempDir(), "sessions")
 	store, err := session.NewUnifiedStore(baseDir)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("UnifiedStore.Close: %v", closeErr)
+		}
+	})
 	// ADR-057 US-1/W3 fixture repair: AppendTranscript is now STRICT — it
 	// reads meta FIRST and fails loudly ("session ... does not exist")
 	// instead of silently creating an orphan directory (the old behavior
@@ -925,6 +930,11 @@ func TestExternalDispatch_SanitizesRunnerError(t *testing.T) {
 	// a real session must be minted first.
 	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("UnifiedStore.Close: %v", closeErr)
+		}
+	})
 	meta, err := store.NewSession(session.SessionTypeChat, "test", ts.agentID)
 	require.NoError(t, err)
 	sessionID := meta.ID
@@ -1028,6 +1038,11 @@ func TestExternalDispatch_ForLLM_NoProviderShapedLeak(t *testing.T) {
 
 	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("UnifiedStore.Close: %v", closeErr)
+		}
+	})
 	ts.transcriptStore = store
 	ts.transcriptSessionID = "session_ext_provider_leak"
 

@@ -37,8 +37,7 @@ type SearchProviderDef struct {
 	// credentials.InjectFromConfig.
 	Keyed bool
 	// RequiresBaseURL reports whether the provider is usable only with a
-	// non-empty base URL (SearXNG — the keyless-with-prerequisite row of
-	// ADR-096's Definitions table).
+	// non-empty base URL (for catalogue extensions with such a prerequisite).
 	RequiresBaseURL bool
 	// CredRef is the shipped credential-store entry name a Settings save
 	// writes (and the provider's api_key_ref then carries); empty for
@@ -50,11 +49,10 @@ type SearchProviderDef struct {
 	HonoursDepth       bool
 	HonoursSiteFilters bool
 	// PreADRChainPos is the provider's 1-based position in the PRE-ADR
-	// selection chain (Perplexity > Brave > SearXNG > Tavily > DuckDuckGo >
-	// Baidu > GLM) that the roles migration mirrors verbatim (D11); 0 for
-	// providers absent from that chain (Exa). The migration is a backward
-	// fix: it records who the OLD chain would have picked, so new providers
-	// correctly never enter it.
+	// selection chain. The removed SearXNG occupied position 3, which is
+	// intentionally vacant. A zero position excludes providers that were not
+	// in that chain (Exa). The migration considers retained entries only,
+	// never selecting a provider that has been removed.
 	PreADRChainPos int
 
 	// Accessors bind the def to its WebToolsConfig section. They are the
@@ -92,14 +90,6 @@ var SearchProviderCatalogue = []SearchProviderDef{
 		SetEnabled:     func(w *WebToolsConfig, on bool) { w.Brave.Enabled = on },
 		APIKeyRef:      func(w *WebToolsConfig) string { return w.Brave.APIKeyRef },
 		APIKey:         func(w *WebToolsConfig) string { return w.Brave.APIKey() },
-	},
-	{
-		ID: SearchProviderSearXNG, Section: "searxng", DisplayName: "SearXNG",
-		RequiresBaseURL: true,
-		PreADRChainPos:  3,
-		Enabled:         func(w *WebToolsConfig) bool { return w.SearXNG.Enabled },
-		SetEnabled:      func(w *WebToolsConfig, on bool) { w.SearXNG.Enabled = on },
-		BaseURL:         func(w *WebToolsConfig) string { return w.SearXNG.BaseURL },
 	},
 	{
 		ID: SearchProviderTavily, Section: "tavily", DisplayName: "Tavily",
