@@ -1,17 +1,18 @@
 # Archive
 
-Superseded internal material. Nothing here describes the product as it ships today. It is kept
-because it records what we intended at the time, which is sometimes the only explanation for why
-something is built the way it is.
+Superseded internal material. Nothing here describes the product as it ships today.
+The five rooms-era drafts remain for historical context; current behaviour lives in the code
+and the decision records.
 
-Archived 2026-09-16 by founder decision, after the handbook rewrite replaced what these documents
-were standing in for.
+The founder archived the historical material on 2026-09-16 after the handbook rewrite.
+On 2026-09-30 the founder directed removal of the BRD and v0.3 concept from the live tree;
+they remain retrievable through Git history, not from this directory.
 
-| Folder | What it was | Why it moved |
+| Material | What it was | Current location |
 |---|---|---|
-| `BRD/` | The original business requirements, main document plus appendices A to E and a competitive analysis | Superseded by the shipped product and by the decision records. Useful only as history. |
-| `preview-doc-v03-concept/` | The v0.3 Workspaces concept, 16 pages of HTML | It was the working direction for v0.3. The parts that shipped are now documented in the handbook; the rest is pre-decision thinking. |
-| `design-2026-05-rooms-era/` | Five design drafts from May 2026: sandbox, memory, tasks, projects interface, settings and notifications | They use the retired "Rooms" and five-teammate vocabulary. Read the decision records instead. |
+| Original BRD | Early business requirements and appendices | Git history only; superseded by the shipped product and decision records. |
+| v0.3 Workspaces concept | Pre-ADR HTML direction for Workspaces | Git history only; shipped decisions are in the ADRs and user handbook. |
+| `design-2026-05-rooms-era/` | Five design drafts from May 2026: sandbox, memory, tasks, projects interface, settings and notifications | Still here; retired "Rooms" and five-teammate vocabulary. Read the decision records instead. |
 
 **Do not write new material here, and do not cite anything here as current.** New reasoning goes in
 a decision record, new intent goes in a specification, and anything a user needs goes in the
@@ -19,8 +20,8 @@ handbook under `docs/`.
 
 ## About links that still point at the old locations
 
-Decision records, dated plans and past test notes still cite the original paths. That is deliberate.
-Those documents are a record of what was true when they were written, and rewriting their citations
-would make the record lie. Only the documents that are current authority were re-pointed here: the
-repository instructions, the roadmap, the internal index, the documentation map and the subagent
-definitions. If a link from a historical document lands nowhere, the file it wanted is in this folder.
+Decision records, dated plans and past test notes still cite the original paths. That is deliberate:
+those citations record what was true when they were written. For current guidance on the removed
+BRD and v0.3 concept, use the code, decision records and user handbook. If a historical citation
+to either source no longer resolves, retrieve the old document through Git history; neither
+folder exists here now.
