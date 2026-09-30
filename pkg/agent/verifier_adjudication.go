@@ -2245,7 +2245,7 @@ func (al *AgentLoop) notePlanJudgeRetrying(in JudgeCriteriaInput) {
 // has already ended (cleared, expired, met) is never repainted.
 func goalForJudgeRetryNotice(in JudgeCriteriaInput) (*goal.Goal, error) {
 	if in.Scope != task.VerdictScopeGoal || in.GoalSessionID == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // Non-goal scope or an empty session ID means no goal to look up, not a read failure.
 	}
 	return activeGoalForSession(in.GoalSessionID)
 }

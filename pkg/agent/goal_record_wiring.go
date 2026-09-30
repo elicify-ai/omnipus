@@ -150,7 +150,7 @@ func resolveGoalRecordStore() *goal.Store {
 // records.
 func activeGoalForSession(sessionID string) (*goal.Goal, error) {
 	if sessionID == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // An empty session ID means no goal to look up, not a read failure.
 	}
 	active, err := resolveGoalRecordStore().ListActive()
 	if err != nil {
