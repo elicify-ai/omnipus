@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatAgents } from '@/hooks/useChatAgents'
+import { useAgentsCrossTabRefresh } from '@/hooks/useAgentsCrossTabRefresh'
 import { isWorker } from '@/lib/api'
 import { cn, initialOf } from '@/lib/utils'
 
@@ -70,6 +71,15 @@ export function AgentPicker({
   const setAgentSelectorOpen = useUiStore((s) => s.setAgentSelectorOpen)
 
   const { agents, chatAgents, isError: agentsError, refetch } = useChatAgents()
+
+  // Agent-picker freshness fix, pull half (2026-09-28, GitHub issue #1009):
+  // this component is the sole mount point for the shared ['agents']
+  // query's consuming UI (see the class doc comment above — mounted
+  // exactly once per screen), so it is the same-shaped mount point
+  // useLibraryCrossTabRefresh uses in LibraryExplorer.tsx for the
+  // equivalent Library listing. Placed before the early returns below so
+  // hook order stays stable across renders, matching the two effects above.
+  useAgentsCrossTabRefresh()
 
   // A background-refetch failure (e.g. gateway restart + tab refocus) must
   // not tear down an already-usable cached picker — only treat this as a

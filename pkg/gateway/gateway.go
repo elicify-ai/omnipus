@@ -1343,6 +1343,21 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// exactly as long as REST's DELETE /api/v1/agents/{id} does before
 		// either call reports success.
 		WaitForReloadFunc: func() error { return waitForReload(rc.agentLoop) },
+		// WaitForPendingReloadFunc (agent-picker-freshness fix, #1009): the
+		// wait-only IsReloadPending poll for the create/update publish path
+		// (publishAgentActivation). NEVER calls TriggerReload / reloadTrigger
+		// — on the fast-path-success branch (UpsertAgentFastFunc updated the
+		// live registry inline, nothing queued) this returns immediately,
+		// where WaitForReloadFunc above would unconditionally kick off a
+		// fresh, unnecessary full reload cycle (channels/cron/plan-engine/
+		// scheduler restart cascade, the exact ~60s-under-load mechanism
+		// issue #571 exists to avoid). On the fallback-reload branch (the
+		// closure above fell back to rc.reloadTrigger()), beginReload has
+		// already marked the pending flag under its own mutex before this
+		// is reached, so the poll waits out the actually-queued reload. See
+		// systools.Deps.WaitForPendingReloadFunc's doc comment for the full
+		// safety argument and the round-3-vs-round-4 distinction.
+		WaitForPendingReloadFunc: func() error { return waitForPendingReload(rc.agentLoop) },
 		// UpsertAgentFastFunc (issue #571, sysagent half): mirrors rest.go's
 		// fastAgentUpsert so system.agent.create/update (an agent creating or
 		// updating another agent) gets the same fast-path publish REST
@@ -1386,6 +1401,19 @@ func (rc *runContextWithOptions) wireSystemTools() {
 				return rc.reloadTrigger()
 			}
 			return nil
+		},
+		// agent-picker-freshness fix (#1009): create_agent's own counterpart
+		// to the REST createAgent handler's emitAgentCreated call — see
+		// systools.Deps.NotifyAgentCreated's doc comment. restAPIRef is
+		// already populated by setupAndStartServices (rc.startServices,
+		// called above this method) by the time wireSystemTools runs;
+		// emitAgentCreated is itself nil-safe (agentCreatedBroadcast not
+		// yet wired), so the extra nil check here only guards a restAPIRef
+		// that a test harness constructed without going through boot at all.
+		NotifyAgentCreated: func(agentID string) {
+			if rc.runningServices != nil && rc.runningServices.restAPIRef != nil {
+				rc.runningServices.restAPIRef.emitAgentCreated(agentID)
+			}
 		},
 		SkillsLoader:    rc.sysSkillsLoader,
 		RegistryManager: rc.sysRegistryManager,

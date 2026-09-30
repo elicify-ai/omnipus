@@ -2338,6 +2338,15 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           scheduleLibraryChangedInvalidate(frame.workspace_id)
           break
 
+        // agent_created (issue #1009): new agent, any connected tab —
+        // coarse invalidate of ['agents'], matching library_changed's
+        // D-107 shape just above. Not debounced like library_changed:
+        // creates don't burst, so a direct invalidate matches the other
+        // single-shot cases here (task_status_changed/task_run_status).
+        case 'agent_created':
+          queryClient.invalidateQueries({ queryKey: ['agents'] })
+          break
+
         // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires
         // at run open AND close (not just terminal), so the calendar chip
         // flips to "In progress" immediately, not only on completion. Unlike

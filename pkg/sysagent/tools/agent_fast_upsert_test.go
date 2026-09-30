@@ -6,10 +6,12 @@ package systools_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -115,6 +117,49 @@ func newSysagentFastUpsertDeps(
 		},
 		SaveConfigLocked: func(*config.Config) error { return nil },
 		ReloadFunc:       reloadFunc,
+		// WaitForReloadFunc (round-4 re-review finding, code-reviewer,
+		// confidence 85): wired here — routed through the SAME reloadFunc
+		// that increments reloadCalls — specifically so this fixture is a
+		// real regression guard, not just a demonstration of round 4's own
+		// wiring. Without this field, publishAgentActivation's nil-check on
+		// WaitForReloadFunc would silently skip the call if a future edit
+		// reverted the caller back to it (e.g. a bad merge reintroducing a
+		// pre-round-4 hunk) — reloadCalls would stay 0, and
+		// DoesNotTriggerFullReload would pass even though production's real
+		// WaitForReloadFunc (pkg/gateway/gateway.go's wiring) would have
+		// fired a full reload on every fast-path success, exactly the
+		// round-3 bug. With this field present, that same revert now shows
+		// up as reloadCalls==1, and the assertion below catches it.
+		// AgentDeleteTool prefers WaitForReloadFunc over the bare ReloadFunc
+		// (see agent.go::agentDeleteToolExecute.reload) and calls only ONE
+		// of the two, so TestAgentDelete_StillUsesFullReload_Deliberately's
+		// expectation of exactly 1 reloadFunc call is unaffected by adding
+		// this field — delete's call still increments the counter exactly
+		// once, via whichever field it reads.
+		WaitForReloadFunc: func() error { return reloadFunc() },
+		// agent-picker-freshness fix (#1009, round 4): exercises the SAME
+		// publish-wait publishAgentActivation uses in production. NOT the
+		// trigger-and-wait WaitForReloadFunc above (whose production wiring
+		// calls TriggerReload as its first action and would unconditionally
+		// fire a full reload on every fast-path success — the bug the
+		// round-3 fix shipped). The wait-only shape mirrors the new
+		// pkg/gateway/rest_auth.go::waitForPendingReload exactly: poll the
+		// pending flag until it clears, return immediately if it is already
+		// clear (the fast-path-success branch — the property the
+		// DoesNotTriggerFullReload test guards). See
+		// agent_created_notify_test.go::
+		// TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands for the
+		// async-reload half of the same proof.
+		WaitForPendingReloadFunc: func() error {
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				if !al.IsReloadPending() {
+					return nil
+				}
+				time.Sleep(time.Millisecond)
+			}
+			return errors.New("test double: IsReloadPending did not clear within 2s")
+		},
 		UpsertAgentFastFunc: func(agentID string) error {
 			if al.IsReloadPending() {
 				return reloadFunc()

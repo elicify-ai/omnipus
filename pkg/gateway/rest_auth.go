@@ -1327,12 +1327,8 @@ func waitForReloadOutcome(agentLoop *agent.AgentLoop) (confirmed bool, err error
 			return false, err
 		}
 	}
-	deadline := time.Now().Add(reloadWaitTimeout)
-	for time.Now().Before(deadline) {
-		if !agentLoop.IsReloadPending() {
-			return true, nil
-		}
-		time.Sleep(50 * time.Millisecond)
+	if pollReloadPendingClear(agentLoop) {
+		return true, nil
 	}
 	// Reload may still be running — the exact ambiguity FIX 4 closes.
 	// confirmed=false with a nil error: callers that only check err keep
@@ -1341,6 +1337,57 @@ func waitForReloadOutcome(agentLoop *agent.AgentLoop) (confirmed bool, err error
 	// below is NOT one of those callers — it turns confirmed=false into a real
 	// error, per reloadWaitTimeout's own "MUST NOT be swallowed" contract.
 	return false, nil
+}
+
+// pollReloadPendingClear returns true when IsReloadPending() has cleared
+// (or was already clear), or false when reloadWaitTimeout elapses with the
+// flag still set. Shared between waitForReloadOutcome (trigger-and-wait) and
+// waitForPendingReload (wait-only) so both use the same polling interval and
+// deadline — the agent-picker-freshness fix (#1009) needs both shapes to be
+// deadlined identically because the slow-reload case (issue #571: ~60s under
+// load) hits them in the same way.
+func pollReloadPendingClear(agentLoop *agent.AgentLoop) bool {
+	deadline := time.Now().Add(reloadWaitTimeout)
+	for time.Now().Before(deadline) {
+		if !agentLoop.IsReloadPending() {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+// waitForPendingReload blocks until IsReloadPending() clears, or returns an
+// error after reloadWaitTimeout elapses. Unlike waitForReload it does NOT
+// call TriggerReload — it only polls the pending flag. Safe to call from the
+// sysagent create/update publish path (publishAgentActivation) when a reload
+// may already be queued by the closure that fell back to the async
+// reloadTrigger: by the time publishAgentActivation reaches this call, any
+// actually-queued reload is already visible as pending because
+// pkg/gateway/gateway_reload.go::beginReload marks the pending flag (under
+// its own mutex) BEFORE returning on either the "owns the cycle" or the
+// "request recorded, served by the owning cycle" branch.
+//
+// On the fast path (UpsertAgentFastFunc's closure succeeded inline, nothing
+// queued) the flag is already clear, so this returns IMMEDIATELY — a genuine
+// no-op, not just claimed to be one. waitForReload would NOT be safe here:
+// its first action is TriggerReload, so on the fast path it would
+// unconditionally kick off a fresh, full reload cycle (channels/cron/plan-
+// engine/scheduler restart cascade, the exact ~60s-under-load mechanism
+// issue #571 exists to avoid), just to then wait for it. AgentDeleteTool is
+// the only sysagent tool that genuinely needs that trigger-and-wait shape
+// (see its own doc comment for why delete has no fast path).
+func waitForPendingReload(agentLoop *agent.AgentLoop) error {
+	if pollReloadPendingClear(agentLoop) {
+		return nil
+	}
+	slog.Error("config reload pending flag did not clear within the wait deadline; "+
+		"the change is persisted on disk but is not yet live in memory",
+		"timeout", reloadWaitTimeout)
+	return fmt.Errorf(
+		"config reload did not complete within %s; the change is saved but not yet active",
+		reloadWaitTimeout,
+	)
 }
 
 // triggerReloadAndWait triggers a config reload and polls until

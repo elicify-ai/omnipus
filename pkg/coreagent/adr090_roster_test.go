@@ -93,6 +93,11 @@ func TestADR090_ExactRosterAndPolicyInventory(t *testing.T) {
 		}
 	}
 
+	assertADR090PolicyInventory(t, cfg)
+}
+
+func assertADR090PolicyInventory(t *testing.T, cfg *config.Config) {
+	t.Helper()
 	ordinary := map[string]bool{"mia": true, "jim": true, "ava": true, "admin": true, "planner": true, "researcher": true, "worker": true}
 	for _, got := range cfg.Agents.List {
 		if ordinary[got.ID] && len(got.Tools.Builtin.Policies) >= len(AllStaticToolNames()) {

@@ -632,60 +632,8 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	if flow, err2, handled := sr.dispatchPersistedSubagentStart(entry, emitFrame); handled {
 		return flow, err2
 	}
-	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentMessage {
-		if entry.SubagentMessage != nil {
-			// UAT defect 1: stamp SessionId from sr.sessionID (the
-			// transcript this entry was read FROM — persistSubagentEntry
-			// only ever writes these into the PARENT's own transcript)
-			// rather than trusting whatever the stored frame carries, the
-			// same self-healing choice this function already makes for
-			// browser_handover_notice/goal_outcome just above (both built
-			// fresh from sr.sessionID, never from a stored SessionId).
-			// This makes a reload correct even for an entry persisted
-			// BEFORE deliverSubagentMessage's fix (steer_frames.go), whose
-			// stored SessionId is the child's — no separate data migration
-			// needed.
-			frame := *entry.SubagentMessage
-			frame.SessionId = sr.sessionID
-			if err2 := emitFrame(frame); err2 != nil {
-				return streamReplayStateReturn, err2
-			}
-			return streamReplayStateContinue, nil
-		}
-		slog.Warn("replay: subagent_message transcript entry carries no frame — replaying it as a plain entry",
-			"session_id", sr.sessionID, "entry_id", entry.ID)
-	}
-	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentState {
-		if entry.SubagentState != nil {
-			// UAT defect 1: same self-healing stamp as subagent_message
-			// above.
-			frame := *entry.SubagentState
-			frame.SessionId = sr.sessionID
-			if err2 := emitFrame(frame); err2 != nil {
-				return streamReplayStateReturn, err2
-			}
-			return streamReplayStateContinue, nil
-		}
-		slog.Warn("replay: subagent_state transcript entry carries no frame — replaying it as a plain entry",
-			"session_id", sr.sessionID, "entry_id", entry.ID)
-	}
-	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentEnd {
-		if entry.SubagentEnd != nil {
-			// UAT defect 1: same self-healing stamp as subagent_message/
-			// subagent_state above — the entry was written into the
-			// PARENT's own transcript (steer_frames.go's
-			// persistSubagentEntry), so sr.sessionID (the transcript this
-			// entry was read FROM) is always correct regardless of
-			// whatever SessionId the stored frame happens to carry.
-			frame := replayedSubagentEnd(entry)
-			frame.SessionId = sr.sessionID
-			if err2 := emitFrame(frame); err2 != nil {
-				return streamReplayStateReturn, err2
-			}
-			return streamReplayStateContinue, nil
-		}
-		slog.Warn("replay: subagent_end transcript entry carries no frame — replaying it as a plain entry",
-			"session_id", sr.sessionID, "entry_id", entry.ID)
+	if flow, err2, handled := sr.dispatchPersistedSubagentFrames(entry, emitFrame); handled {
+		return flow, err2
 	}
 
 	// Update the running fallback agent ID.
@@ -725,6 +673,68 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	}
 
 	return streamReplayStateNext, nil
+}
+
+// dispatchPersistedSubagentFrames emits persisted message, state and end frames in
+// transcript order. Malformed entries fall through to ordinary replay.
+func (sr *streamReplayState) dispatchPersistedSubagentFrames(entry session.TranscriptEntry, emitFrame func(any) error) (streamReplayStateFlow, error, bool) {
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentMessage {
+		if entry.SubagentMessage != nil {
+			// UAT defect 1: stamp SessionId from sr.sessionID (the
+			// transcript this entry was read FROM — persistSubagentEntry
+			// only ever writes these into the PARENT's own transcript)
+			// rather than trusting whatever the stored frame carries, the
+			// same self-healing choice this function already makes for
+			// browser_handover_notice/goal_outcome just above (both built
+			// fresh from sr.sessionID, never from a stored SessionId).
+			// This makes a reload correct even for an entry persisted
+			// BEFORE deliverSubagentMessage's fix (steer_frames.go), whose
+			// stored SessionId is the child's — no separate data migration
+			// needed.
+			frame := *entry.SubagentMessage
+			frame.SessionId = sr.sessionID
+			if err2 := emitFrame(frame); err2 != nil {
+				return streamReplayStateReturn, err2, true
+			}
+			return streamReplayStateContinue, nil, true
+		}
+		slog.Warn("replay: subagent_message transcript entry carries no frame — replaying it as a plain entry",
+			"session_id", sr.sessionID, "entry_id", entry.ID)
+	}
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentState {
+		if entry.SubagentState != nil {
+			// UAT defect 1: same self-healing stamp as subagent_message
+			// above.
+			frame := *entry.SubagentState
+			frame.SessionId = sr.sessionID
+			if err2 := emitFrame(frame); err2 != nil {
+				return streamReplayStateReturn, err2, true
+			}
+			return streamReplayStateContinue, nil, true
+		}
+		slog.Warn("replay: subagent_state transcript entry carries no frame — replaying it as a plain entry",
+			"session_id", sr.sessionID, "entry_id", entry.ID)
+	}
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentEnd {
+		if entry.SubagentEnd != nil {
+			// UAT defect 1: same self-healing stamp as subagent_message/
+			// subagent_state above — the entry was written into the
+			// PARENT's own transcript (steer_frames.go's
+			// persistSubagentEntry), so sr.sessionID (the transcript this
+			// entry was read FROM) is always correct regardless of
+			// whatever SessionId the stored frame happens to carry.
+			frame := replayedSubagentEnd(entry)
+			frame.SessionId = sr.sessionID
+			if err2 := emitFrame(frame); err2 != nil {
+				return streamReplayStateReturn, err2, true
+			}
+			return streamReplayStateContinue, nil, true
+		}
+		slog.Warn("replay: subagent_end transcript entry carries no frame — replaying it as a plain entry",
+			"session_id", sr.sessionID, "entry_id", entry.ID)
+	}
+
+	return streamReplayStateNext, nil, false
 }
 
 // dispatchPersistedSubagentStart handles a persisted subagent_start system

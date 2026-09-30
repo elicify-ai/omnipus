@@ -541,6 +541,13 @@ func findBootMessage(messages []generated.SessionMessage, id string) (generated.
 func bootOutcome(envelope bootSessionMessageEnvelope) steer.Outcome {
 	switch envelope.Kind {
 	case "handback":
+		// A pause handback is not a completion (#1011): re-delivering it as
+		// OutcomeFinalAnswer stamped it <child>:<gen>:final, and the
+		// interrupted notice sharing that id was then lost as a duplicate.
+		// Mirrors message_parent.go::outcomeForKind.
+		if envelope.Mode != string(generated.SessionMessageHandbackModeFinal) {
+			return steer.OutcomeBlocker
+		}
 		return steer.OutcomeFinalAnswer
 	case "question":
 		return steer.OutcomeParkedQuestion
