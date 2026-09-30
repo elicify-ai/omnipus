@@ -828,9 +828,23 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		// structurally unreachable, issue #595). Nothing behavioural is
 		// lost: the turn already terminates unconditionally below.
 		//
+		// Synthetic context is not a user-facing outcome. Deliver the same
+		// classified notice live and durably, even after earlier narration.
+		llm := LLMError{Code: CodeUnknown, Message: UserMessageForCode(CodeUnknown)}
+		rq.ri.rf.rt.al.emitEvent(
+			EventKindError,
+			rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage: "tool_assembly", ChatID: rq.ri.rf.rt.ts.opts.ChatID,
+				Code: string(llm.Code), Message: llm.Message,
+				SessionID: string(rq.ri.rf.rt.ts.routingSessionID),
+			},
+		)
+		rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "tool_assembly", llm)
+
 		// Fail the LLM call for this iteration by returning an error turn result.
 		rq.ri.turnStatus = TurnEndStatusError
-		rq.ret0 = turnResult{status: TurnEndStatusError, finalContent: denyMsg}
+		rq.ret0 = turnResult{status: TurnEndStatusError, finalContent: llm.Message}
 		rq.ret1 = dedupErr
 		return agentLoopRunTurnRequestReturn
 	}
