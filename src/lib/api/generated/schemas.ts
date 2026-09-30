@@ -2691,6 +2691,7 @@ type DelegateActionRequest =
   | DelegateSteerAction
   | DelegateRespondAction
   | DelegateCancelAction
+  | DelegateClearGoalAction
   | DelegateFollowUpAction
   | DelegatePeekAction;
 type DelegateRunAction = {
@@ -2740,6 +2741,10 @@ type DelegateCancelAction = {
   action: "cancel";
   session_id: string;
   hard?: boolean | undefined;
+};
+type DelegateClearGoalAction = {
+  action: "clear_goal";
+  session_id: string;
 };
 type DelegateFollowUpAction = {
   action: "follow_up";
@@ -6877,6 +6882,8 @@ export const DelegateCancelAction = z.object({
   session_id: z.string().min(1),
   hard: z.boolean().optional(),
 }) satisfies z.ZodType<DelegateCancelAction>;
+export const DelegateClearGoalAction =
+  z.object({ action: z.literal("clear_goal"), session_id: z.string().min(1) }) satisfies z.ZodType<DelegateClearGoalAction>;
 export const DelegateFollowUpAction =
   z.object({
     action: z.literal("follow_up"),
@@ -6896,6 +6903,7 @@ export const DelegateActionRequest =
     DelegateSteerAction,
     DelegateRespondAction,
     DelegateCancelAction,
+    DelegateClearGoalAction,
     DelegateFollowUpAction,
     DelegatePeekAction,
   ]) satisfies z.ZodType<DelegateActionRequest>;
