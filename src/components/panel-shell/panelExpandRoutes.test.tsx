@@ -113,6 +113,8 @@ afterEach(() => {
 
 describe('SP-38 shell-owned full-screen routes', () => {
   it('round-trips every registered panel context through its search codec', () => {
+    expect(panels.map((definition) => definition.id), 'Every route expectation needs a registered panel')
+      .toEqual(expect.arrayContaining(Object.keys(routeExpectations)))
     for (const definition of panels) {
       const expected = routeExpectations[definition.id as keyof typeof routeExpectations]
       expect(expected, `${definition.id} needs a full-screen route expectation`).toBeDefined()

@@ -19,10 +19,11 @@ import { render, screen, act, fireEvent } from '@testing-library/react'
 
 // TanStack Router — provide location and navigation primitives
 let mockPathname = '/workspaces/ws-1/chat'
+let mockSearch: Record<string, unknown> = {}
 vi.mock('@tanstack/react-router', () => ({
   Outlet: () => <div data-testid="outlet" />,
   useNavigate: () => vi.fn(),
-  useLocation: () => ({ pathname: mockPathname }),
+  useLocation: () => ({ pathname: mockPathname, search: mockSearch }),
   Link: ({ children, to, params, role, 'aria-selected': ariaSelected, 'data-testid': testId }: {
     children: React.ReactNode
     to: string
@@ -140,6 +141,7 @@ vi.mock('@/hooks/useWorkspaceSetupKickoff', () => ({
 // ── Component under test ───────────────────────────────────────────────────────
 import { WorkspaceTabContainer } from './WorkspaceTabContainer'
 import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
+import { useUiStore } from '@/store/ui'
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -221,6 +223,40 @@ describe('WorkspaceTabContainer — layout', () => {
     fireEvent.click(hamburger)
 
     expect(mockToggle).toHaveBeenCalledOnce()
+  })
+})
+
+describe('WorkspaceTabContainer — incoming Mail deep links', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPathname = '/workspaces/ws-1/chat'
+    mockWorkspaceId = 'ws-1'
+    mockWorkspaceName = 'First Workspace'
+    mockWorkspacesError = false
+    mockSearch = { panel: 'mail', agent: 'mia' }
+    useUiStore.getState().closePanel()
+  })
+
+  it('leaves a fresh bare Mail link to the URL adoption hook rather than following Mia into another workspace', async () => {
+    const { rerender, unmount } = render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    await act(async () => { /* flush effects */ })
+    act(() => useUiStore.getState().openPanel('mail', { workspaceId: 'ws-1', mailboxId: 'mia' }))
+
+    mockSearch = { panel: 'mail' }
+    mockPathname = '/workspaces/ws-2/chat'
+    mockWorkspaceId = 'ws-2'
+    mockWorkspaceName = 'Second Workspace'
+    await act(async () => { rerender(<WorkspaceTabContainer workspaceId="ws-2" />) })
+
+    // The child URL-adoption hook is intentionally absent from this isolated
+    // container test. Until it runs, this shell must leave the old context
+    // untouched instead of moving Mia to ws-2, which would make adoption
+    // incorrectly conclude the bare link was already handled.
+    expect(useUiStore.getState().activePanel).toMatchObject({
+      id: 'mail', context: { workspaceId: 'ws-1', mailboxId: 'mia' },
+    })
+    unmount()
+    useUiStore.getState().closePanel()
   })
 })
 
