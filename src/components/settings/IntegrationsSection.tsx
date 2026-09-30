@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CheckCircle,
@@ -11,6 +11,8 @@ import {
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { ErrorState } from '@/components/ui/error-state'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -25,17 +27,27 @@ import {
 import { isApiError, parseServerErrorField } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { isReAuthCancelled } from './useReAuthGate'
-import { useStepUp } from './useStepUp'
+import { useStepUp, type StepUpDescribeChange } from './useStepUp'
+import { useSearchConnectionChecks } from './useSearchConnectionChecks'
 import { WebSearchGroup, orderSearchProviders, KEY_NOT_REACHING_SEARCH_LABEL } from './WebSearchGroup'
 
 export function IntegrationsSection() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const stepUp = useStepUp()
+  const connectionChecks = useSearchConnectionChecks()
 
   const [expanded, setExpanded] = useState<string | null>(null)
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
+  const [pendingChange, setPendingChange] = useState<{ id: string; removing: boolean } | null>(null)
+  const [removalConfirmation, setRemovalConfirmation] = useState<{
+    provider: IntegrationProvider
+    describe: StepUpDescribeChange
+  } | null>(null)
+  // A single step-up gate cannot hold two changes. Lock synchronously, before
+  // React commits the disabled controls, including the local pre-confirmation.
+  const changePhase = useRef<'confirm-removal' | 'step-up' | null>(null)
 
   const {
     data,
@@ -49,46 +61,100 @@ export function IntegrationsSection() {
   const { mutateAsync: applyChange, isPending: isSaving } = useMutation({
     mutationFn: ({ id, body, token }: { id: string; body: IntegrationProviderUpdateRequest; token?: string }) =>
       configureIntegrationProvider(id, body, token),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['integrations'] })
-      addToast({ message: 'Integration updated', variant: 'success' })
+    // A failed sensitive write can have persisted partial changes. Replaying
+    // the same single-use password consent must not retry that write.
+    retry: false,
+    onSuccess: async (_result, { id, body }) => {
+      await queryClient.invalidateQueries({ queryKey: ['integrations'] })
+      const name = data?.search.find((provider) => provider.id === id)?.display_name ?? id
+      addToast({
+        message: body.clear_api_key ? `${name} key removed.` : 'Integration updated',
+        variant: 'success',
+      })
       setExpanded(null)
       setApiKeys({})
     },
-    onError: (err: Error) => {
-      // A failed save can still have persisted state: the gateway stores the
-      // credential and writes config.json BEFORE the reload (or the
-      // post-reload usability judgment) fails — the persisted write stays
-      // (ADR-096 FR-033). Invalidate so the list reflects what the backend
-      // actually holds instead of the stale pre-save cache.
-      queryClient.invalidateQueries({ queryKey: ['integrations'] })
-      const serverReason = isApiError(err) ? parseServerErrorField(err.body) : undefined
-      addToast({
-        message: serverReason ?? getErrorMessage(err, 'Integration update failed'),
-        variant: 'error',
-      })
-    },
+    // A failed save/removal can still have persisted state (ADR-096 FR-033).
+    // Refresh on either outcome; performChange surfaces the actual error.
+    onError: () => queryClient.invalidateQueries({ queryKey: ['integrations'] }),
   })
 
-  // requestChange runs the edit through the step-up gate (ADR-0010 WP3):
-  // ReAuthDialog + a replayed consent token in local mode, ConfirmDialog with
-  // no token in platform mode. Either way the PUT only fires once the
-  // operator stands behind it.
+  const performChange = async (
+    id: string,
+    body: IntegrationProviderUpdateRequest,
+    describe: StepUpDescribeChange,
+  ) => {
+    try {
+      await stepUp.gate((token) => {
+        if (body.api_key !== undefined || body.clear_api_key) connectionChecks.clear(id)
+        return applyChange({ id, body, token })
+      }, describe)
+    } catch (err) {
+      if (!isReAuthCancelled(err)) {
+        const serverReason = isApiError(err) ? parseServerErrorField(err.body) : undefined
+        addToast({
+          message: serverReason ?? getErrorMessage(err, 'Integration update failed'),
+          variant: 'error',
+        })
+      }
+    } finally {
+      changePhase.current = null
+      setPendingChange(null)
+    }
+  }
+
+  // Every sensitive write still uses the existing edition-specific gate.
   const requestChange = (id: string, body: IntegrationProviderUpdateRequest) => {
-    void stepUp
-      .gate(
-        (token) => applyChange({ id, body, token }),
-        {
-          title: 'Update this integration?',
-          body: 'API keys are stored encrypted, and provider roles decide which provider Omnipus uses for this kind of work.',
-          confirmLabel: 'Update integration',
-        },
-      )
-      .catch((err) => {
-        // A dismissed dialog is a no-op, not a failure. A real save failure
-        // already surfaced its toast via the mutation's onError above.
-        if (isReAuthCancelled(err)) return
-      })
+    if (changePhase.current || connectionChecks.view(id).pending) return
+    changePhase.current = 'step-up'
+    setPendingChange({ id, removing: false })
+    void performChange(id, body, {
+      title: 'Update this integration?',
+      body: 'API keys are stored encrypted, and provider roles decide which provider Omnipus uses for this kind of work.',
+      confirmLabel: 'Update integration',
+    })
+  }
+
+  const requestRemoval = (provider: IntegrationProvider) => {
+    if (changePhase.current || connectionChecks.view(provider.id).pending) return
+    if (!provider.requires_key || !provider.configured) return
+    const role = data?.default_search === provider.id
+      ? 'default'
+      : data?.fallback_search === provider.id ? 'fallback' : undefined
+    const describe: StepUpDescribeChange = {
+      title: `Remove the ${provider.display_name} key?`,
+      body: `This deletes the saved key from Omnipus and switches off ${provider.display_name}. It does not revoke the key with ${provider.display_name}.` +
+        (role ? ` ${provider.display_name} will remain your ${role} search service. Omnipus will not choose a replacement. Add a key or change that choice to fix it.` : ''),
+      confirmLabel: 'Remove key',
+    }
+    setPendingChange({ id: provider.id, removing: true })
+    if (stepUp.mode === 'password') {
+      // Local removal explains the destructive outcome before the password
+      // gate. Platform mode uses that gate's own confirmation, never two.
+      changePhase.current = 'confirm-removal'
+      setRemovalConfirmation({ provider, describe })
+    } else {
+      changePhase.current = 'step-up'
+      void performChange(provider.id, { kind: 'search', clear_api_key: true }, describe)
+    }
+  }
+
+  const acceptLocalRemoval = () => {
+    if (changePhase.current !== 'confirm-removal' || !removalConfirmation) return
+    changePhase.current = 'step-up'
+    setRemovalConfirmation(null)
+    void performChange(
+      removalConfirmation.provider.id,
+      { kind: 'search', clear_api_key: true },
+      removalConfirmation.describe,
+    )
+  }
+
+  const cancelLocalRemoval = (open: boolean) => {
+    if (open || changePhase.current !== 'confirm-removal') return
+    changePhase.current = null
+    setRemovalConfirmation(null)
+    setPendingChange(null)
   }
 
   // Search rows: #1055 — ONE row per provider, status only; role assignment
@@ -120,6 +186,10 @@ export function IntegrationsSection() {
     const rolesOnWire = data?.default_search !== undefined
     const isDefaultRow = data?.default_search === p.id
     const isFallbackRow = data?.fallback_search === p.id
+    const check = connectionChecks.view(p.id)
+    const rowBusy = isSaving || pendingChange !== null || stepUp.open || check.pending
+    const removing = isSaving && pendingChange?.id === p.id && pendingChange.removing
+    const canCheck = p.configured && p.usable === true
 
     return (
       <Card
@@ -127,7 +197,7 @@ export function IntegrationsSection() {
         className="overflow-hidden"
         data-testid={`search-row-${p.id}`}
       >
-        <div className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]">
+        <div className="flex flex-col items-start sm:flex-row sm:items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-[var(--space-2)] flex-wrap">
               <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{p.display_name}</span>
@@ -179,22 +249,69 @@ export function IntegrationsSection() {
             </div>
           </div>
 
-          <div className="flex items-center gap-[var(--space-2)] shrink-0">
+          <div className="flex flex-wrap items-center gap-[var(--space-2)] shrink-0">
             {p.requires_key && (
-              <Button
-                size="sm"
-                variant="secondary"
-                className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
-                onClick={() => setExpanded(isExpanded ? null : p.id)}
-                data-testid={`addkey-${p.id}`}
-              >
-                {p.configured ? 'Edit key' : (
-                  <><Plus size={11} /> Add key</>
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
+                  onClick={() => setExpanded(isExpanded ? null : p.id)}
+                  disabled={rowBusy}
+                  data-testid={`addkey-${p.id}`}
+                >
+                  {p.configured ? 'Edit key' : (
+                    <><Plus size={11} /> Add key</>
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
+                  onClick={() => {
+                    if (!changePhase.current) void connectionChecks.run(p.id)
+                  }}
+                  disabled={rowBusy || !canCheck || check.cooldown}
+                  actionState={check.pending ? 'pending' : 'idle'}
+                  aria-describedby={!canCheck ? `check-help-${p.id}` : undefined}
+                >
+                  Check connection
+                </Button>
+                {p.configured && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
+                    onClick={() => requestRemoval(p)}
+                    disabled={rowBusy}
+                    actionState={removing ? 'pending' : 'idle'}
+                  >
+                    {removing ? 'Removing…' : 'Remove key'}
+                  </Button>
                 )}
-              </Button>
+              </>
             )}
           </div>
         </div>
+
+        {p.requires_key && (
+          <div className="px-[var(--space-3)] pb-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]">
+            {!canCheck && (
+              <p id={`check-help-${p.id}`} className="text-[var(--color-muted)]">
+                Add or save a key before checking.
+              </p>
+            )}
+            {check.pending ? (
+              <p role="status" className="text-[var(--color-secondary)]">Checking connection…</p>
+            ) : (
+              <>
+                {check.message && <p role="status" className="text-[var(--color-secondary)]">{check.message}</p>}
+                {check.error && <ErrorState message={check.error} className="items-start py-[var(--space-0)]" />}
+                {check.cooldownMessage && <p role="status" className="text-[var(--color-muted)]">{check.cooldownMessage}</p>}
+              </>
+            )}
+          </div>
+        )}
 
         {isExpanded && p.requires_key && (
           <div className="border-t border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)] bg-[var(--color-surface-2)]">
@@ -239,7 +356,7 @@ export function IntegrationsSection() {
                       : { kind: p.kind, api_key: keyVal.trim(), active: true },
                   )
                 }
-                disabled={!keyVal.trim() || isSaving}
+                disabled={!keyVal.trim() || rowBusy}
                 data-testid={`save-${p.id}`}
               >
                 {rolesOnWire ? 'Save key' : 'Save & activate'}
@@ -407,12 +524,18 @@ export function IntegrationsSection() {
                   fallbackSearch={data.fallback_search}
                   fallbackIgnoredReason={data.fallback_ignored_reason}
                   nativeSearchInEffect={data.native_search_in_effect}
-                  saving={isSaving}
+                  saving={isSaving || pendingChange !== null || stepUp.open || connectionChecks.anyPending}
                   onSetDefault={onSetDefault}
                   onSetFallback={onSetFallback}
                   onSetNoFallback={onSetNoFallback}
-                  onFixProvider={(id) => setExpanded(id)}
+                  onFixProvider={(id) => {
+                    if (!changePhase.current && !connectionChecks.view(id).pending) setExpanded(id)
+                  }}
                 />
+                <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] space-y-[var(--space-1)]">
+                  <p>Runs one small search with your saved key. Your service may charge for it.</p>
+                  <p>Ready means the key is loaded. Check connection tests it with the service.</p>
+                </div>
                 {orderSearchProviders(data.search).map(renderSearchRow)}
               </>
             )}
@@ -431,6 +554,15 @@ export function IntegrationsSection() {
         </>
       ) : null}
 
+      <ConfirmDialog
+        open={removalConfirmation !== null}
+        onOpenChange={cancelLocalRemoval}
+        title={removalConfirmation?.describe.title ?? ''}
+        description={removalConfirmation?.describe.body ?? ''}
+        confirmLabel="Remove key"
+        onConfirm={acceptLocalRemoval}
+        destructive
+      />
       {stepUp.dialogs}
     </div>
   )

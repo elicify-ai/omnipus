@@ -216,6 +216,7 @@ function SearchRoleCard({
   const selectable = providers.filter((p) => p.id !== excludeId)
 
   const handleSelect = (id: string | null) => {
+    if (saving) return
     setPopoverOpen(false)
     setSectionOpen(false)
     if (id === currentId) return // already the stored value — no gated save
@@ -271,7 +272,7 @@ function SearchRoleCard({
 
         <div className="flex items-center gap-[var(--space-2)] shrink-0">
           {current && unusable && (
-            <Button size="sm" onClick={() => onFix(current.id)}>
+            <Button size="sm" onClick={() => onFix(current.id)} disabled={saving}>
               Fix
             </Button>
           )}
@@ -309,7 +310,7 @@ function SearchRoleCard({
             <Command>
               <CommandList>
                 {allowNone && (
-                  <CommandItem value="none" onSelect={() => handleSelect(null)}>
+                  <CommandItem value="none" disabled={saving} onSelect={() => handleSelect(null)}>
                     <Check
                       size={14}
                       className="mr-[var(--space-2)] shrink-0"
@@ -324,7 +325,7 @@ function SearchRoleCard({
                     <CommandItem
                       key={p.id}
                       value={p.id}
-                      disabled={disabled}
+                      disabled={disabled || saving}
                       onSelect={() => handleSelect(p.id)}
                     >
                       <Check
