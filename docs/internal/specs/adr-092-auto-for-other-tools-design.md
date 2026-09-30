@@ -329,7 +329,8 @@ To state honestly in the ADR: non-bash tools run **inside the gateway process**.
 
 New event `tool.auto_approved`:
 - A typed constant in `pkg/audit`, added to the event set in `audit.go`.
-- Details: `{tool, agent_id, session_id, class, reason, paths, kernel_sandbox}`. `kernel_sandbox` *[added 2026-09-24, founder decision]* records `sandbox.TurnPolicyBaseInstalled()` at the moment of this call — since Auto no longer requires an enforcing kernel sandbox (§5.2), this is how an operator finds every auto-approval that ran unconfined by the kernel.
+- Agent and session are top-level `Entry.AgentID` / `Entry.SessionID` fields (`agent_id` / `session_id` on the wire), not members of `Details`.
+- Details always contains `{tool, class, kernel_sandbox}`; `reason` is included only when non-empty, and `paths` only when the resolved-path list is non-empty (`pkg/audit/tool_auto_approve_events.go::EmitToolAutoApproved`). `kernel_sandbox` *[added 2026-09-24, founder decision]* records `sandbox.TurnPolicyBaseInstalled()` at the moment of this call — since Auto no longer requires an enforcing kernel sandbox (§5.2), this is how an operator finds every auto-approval that ran unconfined by the kernel.
 - Emitted once for each call Auto ran without a prompt, through `audit.EmitEntry`, so a failed write shows up in the degraded count.
 - Calls that were prompted or denied keep their existing `tool.policy.ask.*` rows.
 

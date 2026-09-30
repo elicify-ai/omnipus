@@ -10,8 +10,10 @@ primary_region = "sin"
   # can route to us — a loopback bind returns 502.
   OMNIPUS_GATEWAY_HOST = "0.0.0.0"
   OMNIPUS_GATEWAY_PORT = "5000"
-  # The default container seccomp profile blocks syscalls the hardened-exec
-  # path needs; enforce would break `bash` with "permission denied".
+  # Fly's guest kernel has no Landlock support (ENOSYS), measured 2026-09-24
+  # on omnipus-uat-swimlane: backend=fallback, kernel_sandbox_active=false.
+  # Permissive mode reflects that lack of kernel sandbox enforcement; a
+  # container seccomp-profile failure was not established by this measurement.
   OMNIPUS_SANDBOX_MODE = "permissive"
   # NO trust_path_chrome override here — deliberately.
   #

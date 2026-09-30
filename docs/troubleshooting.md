@@ -127,6 +127,10 @@ On Windows, Omnipus has no lock between separate processes. If two Omnipus proce
 
 After the upgrade there is deliberately no fallback that reads an old entry: it would let a value be moved between names again. If one entry fails while the others still work, that entry was edited on disk or copied from another entry. The gateway names the entry at fault in its log. Re-enter it the same way.
 
+## The page shows "Something went wrong loading this page"
+
+A page could not load or render. This can happen when an open tab tries to load an old web-app file after an update. Press **Reload page** to try again. If the message keeps returning, open your browser's developer console and copy the error when reporting the problem. Look for `[router] route load/render failed:` or `[app] Uncaught render error:`.
+
 ## The web app looks outdated after a source build
 
 The Go binary embeds the web app from `pkg/gateway/spa/` — a copy of the frontend build output, not the output itself, so building without refreshing that copy serves an old interface. `make build` refreshes it and builds in one step. Confirm a change reached the binary by searching the bundled assets for a string only it contains:
