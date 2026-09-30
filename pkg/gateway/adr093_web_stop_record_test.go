@@ -306,11 +306,11 @@ func (f *u2ScopeFixture) cancelFrame(t *testing.T, scope *string) {
 
 func (f *u2ScopeFixture) requireStopped(t *testing.T, id string) {
 	t.Helper()
-	require.Equal(t, context.Canceled, f.contexts[id].Err(), "stop-all must cancel the real live turn for %s", id)
+	require.Equal(t, context.Canceled, f.contexts[id].Err(), "tree must cancel the real live turn for %s", id)
 	rec, err := f.lifecycle.Load(id)
 	require.NoError(t, err)
-	require.NotNil(t, rec.Stop, "stop-all must persist a Stop for %s", id)
-	assert.Equal(t, 1, rec.Stop.Generation, "stop-all stops the current generation (fixture generation 1): %s", id)
+	require.NotNil(t, rec.Stop, "tree must persist a Stop for %s", id)
+	assert.Equal(t, 1, rec.Stop.Generation, "tree stops the current generation (fixture generation 1): %s", id)
 	assert.Equal(t, session.PrincipalKindHuman, rec.Stop.By.Kind, "Stop must retain the human principal: %s", id)
 	assert.Equal(t, "u2-scope-user", rec.Stop.By.ID, "Stop must retain the requesting user: %s", id)
 }
@@ -324,8 +324,8 @@ func (f *u2ScopeFixture) assertUntouched(t *testing.T, id string) {
 }
 
 // Task U2 RED requirement 1 and CancelFrame.scope's default: these are
-// baseline guards ONLY if this-turn isolation already holds. Requirement 2
-// requires both direct children and a transitive grandchild under stop-all.
+// baseline guards ONLY if session isolation already holds. Requirement 2
+// requires both direct children and a transitive grandchild under tree.
 func TestU2CancelFrameScope(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -333,8 +333,8 @@ func TestU2CancelFrameScope(t *testing.T) {
 		stopAll bool
 	}{
 		{name: "omitted_defaults_to_this_turn"},
-		{name: "this_turn_leaves_descendants_running", scope: strPtr("this-turn")},
-		{name: "stop_all_stops_direct_and_transitive_descendants", scope: strPtr("stop-all"), stopAll: true},
+		{name: "this_turn_leaves_descendants_running", scope: strPtr("session")},
+		{name: "stop_all_stops_direct_and_transitive_descendants", scope: strPtr("tree"), stopAll: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newU2ScopeFixture(t)
@@ -354,7 +354,7 @@ func TestU2CancelFrameScope(t *testing.T) {
 		})
 	}
 
-	// Task U2 RED requirement 3, Q14=A: a stop-all ends turns, not goals.
+	// Task U2 RED requirement 3, Q14=A: a tree ends turns, not goals.
 	t.Run("stop_all_keeps_parent_and_every_helper_goal_unchanged", func(t *testing.T) {
 		f := newU2ScopeFixture(t)
 		gstore := goal.NewStore(config.OmnipusHomeDir())
@@ -363,9 +363,9 @@ func TestU2CancelFrameScope(t *testing.T) {
 		for _, id := range ids {
 			before[id] = f.seedActiveGoal(t, gstore, id)
 		}
-		f.cancelFrame(t, strPtr("stop-all"))
+		f.cancelFrame(t, strPtr("tree"))
 		for _, id := range ids {
-			require.Equal(t, context.Canceled, f.contexts[id].Err(), "stop-all must cancel the real turn before checking goal preservation: %s", id)
+			require.Equal(t, context.Canceled, f.contexts[id].Err(), "tree must cancel the real turn before checking goal preservation: %s", id)
 		}
 		f.assertUntouched(t, f.unrelated)
 
@@ -379,12 +379,12 @@ func TestU2CancelFrameScope(t *testing.T) {
 		for i, id := range ids {
 			t.Run(goalCases[i], func(t *testing.T) {
 				after, err := gstore.Get(before[id].GoalID)
-				require.NoError(t, err, "stop-all must not remove the goal for %s", id)
+				require.NoError(t, err, "tree must not remove the goal for %s", id)
 				assert.Equal(t, generated.GoalStateActive, after.State, "Q14=A: goal stays open for %s", id)
 				assert.Equal(t, before[id], after, "Q14=A: the entire active goal must be unchanged for %s", id)
 				rec, err := f.lifecycle.Load(id)
 				require.NoError(t, err)
-				assert.Equal(t, before[id].GoalID, rec.GoalRef, "stop-all must not unbind the goal for %s", id)
+				assert.Equal(t, before[id].GoalID, rec.GoalRef, "tree must not unbind the goal for %s", id)
 			})
 		}
 		// Keep all durable-stop assertions, but run them after the separate
