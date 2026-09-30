@@ -41,8 +41,9 @@ export function MailSignaturePreview({ html, placement = 'compose' }: { html?: s
         // before expiry so the review surface remains current until Send.
         refreshTimer = setTimeout(() => setRetry((previous) => previous + 1), expires_in_seconds * 500)
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (cancelled) return
+        console.error('[mail] signature preview token mint failed', err)
         setTokenUrl(null)
         setError(true)
       })
