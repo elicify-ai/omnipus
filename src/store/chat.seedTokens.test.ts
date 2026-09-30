@@ -14,6 +14,7 @@ vi.mock('@/store/session', () => ({
   registerChatSetReplaying: vi.fn(),
   registerChatResetForReplay: vi.fn(),
   registerChatClearPendingAutoApprove: vi.fn(),
+  registerChatAbandonPendingFirstSend: vi.fn(),
   registerSyncChatForeground: vi.fn(),
   // #823 catch-up redesign (BE-DESIGN.md §6.1) — chat.ts registers this at
   // module load; a mock missing it crashes the import (see registerGetSessionCursor's
