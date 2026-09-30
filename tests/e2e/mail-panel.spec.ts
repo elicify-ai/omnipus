@@ -14,6 +14,7 @@
 import { test, expect, type Browser, type Page } from '@playwright/test'
 import { GatewayProcess } from './fixtures/gateway-process'
 import { startFakeMail, type FakeMail } from './fixtures/fake-mail-server'
+import { getFreePort } from './setup.js'
 
 test.use({ storageState: { cookies: [], origins: [] } })
 
@@ -228,5 +229,155 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     await expect(page.getByTestId('mail-panel')).toBeVisible()
     await expect(inboxTab).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByText('The numbers are in.')).toBeVisible()
+  })
+
+  // f5f6-round2 Item 1 — CONFIRMED REGRESSION (squad-lead's own browser-check
+  // run on this candidate before today's fixes had this step passing).
+  // Opening Drafts a SECOND time, after a full compose/edit-draft/send cycle
+  // followed by a round trip through a no-mailbox workspace and an
+  // unreachable-mailbox workspace and back, must still show the real drafts
+  // — never MailMessageList's "No messages" (messages.length === 0) branch,
+  // which would make the Cc/Bcc/attachment controls (F5) and the docked
+  // 20/80 split (F6) unreachable/unobservable.
+  //
+  // Own workspaces (never the shared `workspaceId`/seeded draft above) so
+  // this assertion never depends on what the OTHER tests in this file have
+  // already consumed from the one seeded draft.
+  test('re-opening Drafts after a workspace round trip still shows the real drafts, not "No messages" (f5f6-round2 Item 1)', async ({ browser }) => {
+    const wsA = await gw.apiFetch<{ id: string }>('POST', '/api/v1/workspaces', {
+      name: `Mail regression A ${Date.now()}`,
+      core_team: ['mia'],
+    })
+    if (!wsA.ok) throw new Error(`create workspace A ${wsA.status}: ${wsA.raw}`)
+    const workspaceA = wsA.body.id
+    const savedA = await gw.apiFetch('PUT', `/api/v1/agents/mia/mailboxes/${workspaceA}`, {
+      enabled: true,
+      imap_host: mail.imapHost,
+      imap_port: mail.imapPort,
+      smtp_host: mail.smtpHost,
+      smtp_port: mail.smtpPort,
+      username: mail.user,
+      password: mail.password,
+    })
+    if (!savedA.ok) throw new Error(`configure mailbox A ${savedA.status}: ${savedA.raw}`)
+
+    const wsB = await gw.apiFetch<{ id: string }>('POST', '/api/v1/workspaces', {
+      name: `Mail regression B ${Date.now()}`,
+      core_team: ['mia'],
+    })
+    if (!wsB.ok) throw new Error(`create workspace B ${wsB.status}: ${wsB.raw}`)
+    const workspaceB = wsB.body.id
+    // Deliberately no mailbox configured for B (US-3 AS-3's empty state).
+
+    const wsC = await gw.apiFetch<{ id: string }>('POST', '/api/v1/workspaces', {
+      name: `Mail regression C ${Date.now()}`,
+      core_team: ['mia'],
+    })
+    if (!wsC.ok) throw new Error(`create workspace C ${wsC.status}: ${wsC.raw}`)
+    const workspaceC = wsC.body.id
+    const unreachablePort = await getFreePort()
+    const savedC = await gw.apiFetch('PUT', `/api/v1/agents/mia/mailboxes/${workspaceC}`, {
+      enabled: true,
+      imap_host: '127.0.0.1',
+      imap_port: unreachablePort,
+      smtp_host: '127.0.0.1',
+      smtp_port: unreachablePort,
+      username: 'nobody@example.test',
+      password: 'x',
+    })
+    if (!savedC.ok) throw new Error(`configure mailbox C ${savedC.status}: ${savedC.raw}`)
+
+    // 3 of THIS test's own drafts (same physical fake mailbox as the shared
+    // fixture, distinct Message-IDs/subjects) so the "still 3+" assertion
+    // never depends on other tests' consumption of the shared seeded draft.
+    const regressionDraft = (n: number) => [
+      'From: mailbox@test.local',
+      'To: ada@example.test',
+      `Subject: Regression draft ${n}`,
+      'Date: Mon, 02 Jan 2006 15:04:05 +0000',
+      `Message-ID: <regression-draft-${n}@example.test>`,
+      'X-Omnipus-Draft: 1',
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Please review.',
+      '',
+    ].join('\r\n')
+    await mail.append('Drafts', regressionDraft(1), ['\\Draft'])
+    await mail.append('Drafts', regressionDraft(2), ['\\Draft'])
+    await mail.append('Drafts', regressionDraft(3), ['\\Draft'])
+
+    const page = await mailPage(browser)
+
+    // Log every drafts-folder list fetch's real response body, so the
+    // eventual assertion is backed by evidence of whether the backend
+    // itself ever returned zero messages (a genuine data bug) or always
+    // returned the real list (a client-side display/cache bug) — brief's
+    // explicit ask, item 1.
+    const draftsListResponses: Array<{ status: number; body: string }> = []
+    page.on('response', (response) => {
+      const url = new URL(response.url())
+      if (response.request().method() === 'GET' && /\/folders\/drafts\/messages(\?|$)/.test(url.pathname)) {
+        response.text().then((body) => draftsListResponses.push({ status: response.status(), body })).catch(() => {})
+      }
+    })
+
+    // 1. Compose a new message in workspace A, Send.
+    await page.goto(`/#/workspaces/${workspaceA}/chat`)
+    const mailToggle = page.getByTestId('workspace-tab-mail')
+    await mailToggle.click()
+    await expect(page.getByTestId('mail-panel')).toBeVisible()
+    await page.getByRole('button', { name: /compose/i }).click()
+    const compose1 = page.getByRole('dialog', { name: 'Compose message' })
+    const recipient1 = compose1.getByRole('textbox', { name: 'To' })
+    await recipient1.fill('ada@example.test')
+    await recipient1.press('Enter')
+    await compose1.getByRole('textbox', { name: 'Subject' }).fill('Round trip test')
+    await compose1.getByRole('textbox', { name: 'Message' }).fill('Hello.')
+    await compose1.getByRole('button', { name: 'Send' }).click()
+    await expect(page.getByText('Message sent', { exact: true })).toBeVisible()
+
+    // 2. Open a Drafts item, Edit it, Save, Send.
+    const draftsTab = page.getByRole('tab', { name: 'Drafts' })
+    await draftsTab.click()
+    await expect(draftsTab).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('button', { name: /Regression draft 1/ }).click()
+    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByRole('textbox', { name: 'Message' }).fill('Please review. Updated.')
+    await page.getByRole('button', { name: /^save$/i }).click()
+    await expect(page.getByText('Draft saved', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: /^send$/i }).click()
+
+    // 3. Navigate to workspace B (no mailbox) — the empty state.
+    await page.goto(`/#/workspaces/${workspaceB}/chat`)
+    await expect(page.getByTestId('mail-choose-mailbox')).toBeVisible()
+
+    // 4. Navigate to workspace C (unreachable mailbox) — the connection-error state.
+    await page.goto(`/#/workspaces/${workspaceC}/chat`)
+    await expect(page.getByTestId('mail-folders-error')).toBeVisible({ timeout: 15_000 })
+
+    // 5. Navigate back to A, open Mail again.
+    await page.goto(`/#/workspaces/${workspaceA}/chat`)
+    await expect(page.getByTestId('mail-panel')).toBeVisible()
+
+    // 6. Open a compose dialog (unrelated check), Escape out.
+    await page.getByRole('button', { name: /compose/i }).click()
+    const compose2 = page.getByRole('dialog', { name: 'Compose message' })
+    await expect(compose2).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(compose2).toHaveCount(0)
+
+    // 7. Click Drafts — must show the real drafts, never "No messages".
+    await page.getByRole('tab', { name: 'Drafts' }).click()
+    await expect(page.getByText('No messages')).toHaveCount(0)
+    await expect(page.getByText(/Regression draft 2/)).toBeVisible()
+
+    // Evidence for the brief's "settle UI vs backend bug" ask: attach every
+    // observed drafts-list response so a human/report can see whether the
+    // backend itself ever served zero messages for this folder.
+    await test.info().attach('drafts-list-responses.json', {
+      body: JSON.stringify(draftsListResponses, null, 2),
+      contentType: 'application/json',
+    })
   })
 })
