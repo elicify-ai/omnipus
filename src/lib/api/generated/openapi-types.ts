@@ -15739,8 +15739,8 @@ export interface components {
              */
             resumed_from?: string | null;
         };
-        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment). */
-        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateCancelAction"] | components["schemas"]["DelegateFollowUpAction"] | components["schemas"]["DelegatePeekAction"];
+        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`clear_goal`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment). */
+        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateCancelAction"] | components["schemas"]["DelegateClearGoalAction"] | components["schemas"]["DelegateFollowUpAction"] | components["schemas"]["DelegatePeekAction"];
         /**
          * DelegateRunAction
          * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
@@ -15936,6 +15936,22 @@ export interface components {
              * @example false
              */
             hard?: boolean;
+        };
+        /**
+         * DelegateClearGoalAction
+         * @description `delegate` tool call, `action: clear_goal`. Clears the selected helper's goal without cascading to its descendants.
+         */
+        DelegateClearGoalAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "clear_goal";
+            /**
+             * @description The child session whose goal to clear.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
         };
         /**
          * DelegateFollowUpAction
@@ -24267,6 +24283,7 @@ export type DelegateInboxAckAction = components["schemas"]["DelegateInboxAckActi
 export type DelegateSteerAction = components["schemas"]["DelegateSteerAction"];
 export type DelegateRespondAction = components["schemas"]["DelegateRespondAction"];
 export type DelegateCancelAction = components["schemas"]["DelegateCancelAction"];
+export type DelegateClearGoalAction = components["schemas"]["DelegateClearGoalAction"];
 export type DelegateFollowUpAction = components["schemas"]["DelegateFollowUpAction"];
 export type DelegatePeekAction = components["schemas"]["DelegatePeekAction"];
 export type DelegateSessionResponse = components["schemas"]["DelegateSessionResponse"];

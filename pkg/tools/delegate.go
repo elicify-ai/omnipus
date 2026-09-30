@@ -432,7 +432,7 @@ func (t *DelegateTool) SetRequireParentAgentID(fn func() bool) {
 // guard and its action set have one source of truth.
 func isSessionMessagingAction(action string) bool {
 	switch action {
-	case "inbox", "inbox_ack", "steer", "respond", "cancel", "follow_up", "peek":
+	case "inbox", "inbox_ack", "steer", "respond", "cancel", "clear_goal", "follow_up", "peek":
 		return true
 	}
 	return false
@@ -637,6 +637,7 @@ func (t *DelegateTool) Description() string {
 		"always available for a delegation you started. " +
 		"action=\"cancel\" stops a child (cooperatively by default; hard=true bypasses " +
 		"the grace window). " +
+		delegateClearGoalDescription +
 		"action=\"follow_up\" warm-resumes a finished child with additional instructions. " +
 		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
 		"Optionally provide agent_id to target a specific agent from your delegation " +
@@ -710,16 +711,18 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"action": map[string]any{
 				"type": "string",
-				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "cancel", "follow_up", "peek"},
+				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "cancel", "clear_goal", "follow_up", "peek"},
 				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"inbox\" " +
 					"drains child->parent messages. \"inbox_ack\" acknowledges them. \"steer\" injects an " +
 					"instruction. \"respond\" answers an open question. \"cancel\" stops a child. " +
-					"\"follow_up\" warm-resumes a finished child. \"peek\" reads latest checkpoint/progress.",
+					"\"follow_up\" warm-resumes a finished child. \"peek\" reads latest checkpoint/progress." +
+					delegateClearGoalActionDescription,
 			},
 			"session_id": map[string]any{
 				"type": "string",
 				"description": "The durable child session to target — the only way to address a " +
-					"child. Required for status/inbox/inbox_ack/steer/respond/cancel/follow_up/peek.",
+					"child. Required for status/inbox/inbox_ack/steer/respond/cancel/follow_up/peek." +
+					delegateClearGoalSessionIDDescription,
 			},
 			"criteria": map[string]any{
 				"type":  "array",
@@ -856,13 +859,15 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any) *ToolRe
 		return t.executeRespond(ctx, args, nil)
 	case "cancel":
 		return t.executeCancel(ctx, args)
+	case "clear_goal":
+		return t.executeClearGoal(ctx, args)
 	case "follow_up":
 		return t.executeFollowUp(ctx, args, nil)
 	case "peek":
 		return t.executePeek(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf(
-			"invalid action %q: must be one of run, status, inbox, inbox_ack, steer, respond, cancel, follow_up, peek",
+			"invalid action %q: must be one of run, status, inbox, inbox_ack, steer, respond, cancel, clear_goal, follow_up, peek",
 			action,
 		))
 	}

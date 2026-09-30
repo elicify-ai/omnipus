@@ -2027,6 +2027,21 @@ func (e DelegateCancelActionAction) Valid() bool {
 	}
 }
 
+// Defines values for DelegateClearGoalActionAction.
+const (
+	DelegateClearGoalActionActionClearGoal DelegateClearGoalActionAction = "clear_goal"
+)
+
+// Valid indicates whether the value is a known member of the DelegateClearGoalActionAction enum.
+func (e DelegateClearGoalActionAction) Valid() bool {
+	switch e {
+	case DelegateClearGoalActionActionClearGoal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DelegateFollowUpActionAction.
 const (
 	DelegateFollowUpActionActionFollowUp DelegateFollowUpActionAction = "follow_up"
@@ -14518,7 +14533,7 @@ type DefaultModelUpdateRequest struct {
 	Provider string `json:"provider"`
 }
 
-// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment).
+// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`clear_goal`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment).
 type DelegateActionRequest struct {
 	union json.RawMessage
 }
@@ -14536,6 +14551,17 @@ type DelegateCancelAction struct {
 
 // DelegateCancelActionAction defines model for DelegateCancelAction.Action.
 type DelegateCancelActionAction string
+
+// DelegateClearGoalAction `delegate` tool call, `action: clear_goal`. Clears the selected helper's goal without cascading to its descendants.
+type DelegateClearGoalAction struct {
+	Action DelegateClearGoalActionAction `json:"action"`
+
+	// SessionId The child session whose goal to clear.
+	SessionId string `json:"session_id"`
+}
+
+// DelegateClearGoalActionAction defines model for DelegateClearGoalAction.Action.
+type DelegateClearGoalActionAction string
 
 // DelegateFollowUpAction `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm resume of the SAME session with retained context. 3P: cold — spawns a new session carrying the prior result. A terminal record is never mutated in place; this always mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
 type DelegateFollowUpAction struct {
@@ -27583,6 +27609,34 @@ func (t *DelegateActionRequest) MergeDelegateCancelAction(v DelegateCancelAction
 	return err
 }
 
+// AsDelegateClearGoalAction returns the union data inside the DelegateActionRequest as a DelegateClearGoalAction
+func (t DelegateActionRequest) AsDelegateClearGoalAction() (DelegateClearGoalAction, error) {
+	var body DelegateClearGoalAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateClearGoalAction overwrites any union data inside the DelegateActionRequest as the provided DelegateClearGoalAction
+func (t *DelegateActionRequest) FromDelegateClearGoalAction(v DelegateClearGoalAction) error {
+	v.Action = "clear_goal"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateClearGoalAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateClearGoalAction
+func (t *DelegateActionRequest) MergeDelegateClearGoalAction(v DelegateClearGoalAction) error {
+	v.Action = "clear_goal"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsDelegateFollowUpAction returns the union data inside the DelegateActionRequest as a DelegateFollowUpAction
 func (t DelegateActionRequest) AsDelegateFollowUpAction() (DelegateFollowUpAction, error) {
 	var body DelegateFollowUpAction
@@ -27655,6 +27709,8 @@ func (t DelegateActionRequest) ValueByDiscriminator() (interface{}, error) {
 	switch discriminator {
 	case "cancel":
 		return t.AsDelegateCancelAction()
+	case "clear_goal":
+		return t.AsDelegateClearGoalAction()
 	case "follow_up":
 		return t.AsDelegateFollowUpAction()
 	case "inbox":
