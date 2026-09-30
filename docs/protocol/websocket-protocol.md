@@ -67,11 +67,52 @@ Sends a user chat message to the agent for the given session.
 |-------|------|----------|-------------|
 | type | string | yes | Always `"message"` |
 | content | string | yes | The user's message text |
-| session_id | string | no | The session to send the message to. If omitted, uses the active session. |
+| session_id | string | no | Include to continue an existing session; omit to start a new session. |
 | agent_id | string | no | The agent to handle the message. If omitted, uses the active session's agent. |
+| auto_approve | boolean or null | no | Auto-approve choice for a **new** session only: `true` turns Auto on for that chat, even if the agent/global default is off; `false` turns it off; `null` or omission leaves it following the agent/global default. Ignored when `session_id` is present; use `session_mode_update` to change an existing session. |
 
+To start a new chat with Auto off from its first tool call, carry the choice on the first `message` and omit `session_id`:
+
+```json
+{
+  "type": "message",
+  "content": "Review the project before making changes.",
+  "agent_id": "agent_def456",
+  "auto_approve": false
+}
+```
+
+The gateway records this choice before dispatching the new session's first turn. Sending a separate `session_mode_update` only after the `session_started` acknowledgement can be too late for the first tool call. Auto is a separate setting for tools whose effective policy is `ask`; it does not change an `allow` or `deny` policy and does not require an enforcing kernel sandbox.
+
+**Schema**: `contracts/asyncapi.yaml::MessageFrame`
 **Producer**: Chat input component in `src/components/chat/`
-**Consumer**: Gateway WebSocket handler in `pkg/gateway/`
+**Consumer**: `pkg/gateway/websocket.go::dispatchFrame`, then `pkg/gateway/websocket_chat.go::applyMintTimeAutoApproveChoice` for a new session
+
+---
+
+### `session_mode_update`
+
+**Direction**: Client → server. Set or clear the Auto-approve choice for an existing session. This per-chat choice may turn Auto on even when the resolved agent/global default is off, because a human is making the choice in that chat. It does not change the global or per-agent configuration or the tool's `allow`/`ask`/`deny` policy.
+
+```json
+{
+  "type": "session_mode_update",
+  "session_id": "sess_abc123",
+  "auto_approve": false
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| type | string | yes | Always `"session_mode_update"` |
+| session_id | string | yes | Non-empty ID of an existing session known to the gateway |
+| auto_approve | boolean or null | yes | `true` turns Auto on for this chat; `false` turns it off; `null` clears the choice so the chat follows the current agent/global default and future changes to it. Omission is invalid. |
+
+A valid request receives `session_mode_updated` with the resolved per-session setting. A malformed request or unknown session receives an `error` frame instead. The per-chat choice is held in the session-mode store, not written to `config.json`, and does not survive a server restart.
+
+**Schema**: `contracts/asyncapi.yaml::SessionModeUpdateFrame`
+**Producer**: Chat store's `sendSessionModeUpdate` action in `src/store/chat/slices/outbound-responses.ts`
+**Consumer**: `pkg/gateway/ws_session_mode.go::handleSessionModeUpdateFrame`
 
 ---
 
@@ -141,6 +182,30 @@ Registers or clears THIS connection's interest in a channel's `whatsapp_pairing`
 ## Server to Client Frames
 
 These frames are sent by the backend to the frontend over the WebSocket connection.
+
+### `session_mode_updated`
+
+**Direction**: Server → client. Acknowledges a valid `session_mode_update` request with the resulting Auto-approve setting for that session, including when the request cleared the per-chat choice.
+
+```json
+{
+  "type": "session_mode_updated",
+  "session_id": "sess_abc123",
+  "auto_approve_effective": false
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| type | string | yes | Always `"session_mode_updated"` |
+| session_id | string | yes | Non-empty ID of the session whose setting was updated |
+| auto_approve_effective | boolean | yes | Resolved Auto-approve setting for **this session** after applying or clearing the choice. Unlike the gateway-wide default in `SandboxStatus.auto_approve_effective`, this value includes the agent and per-chat settings. It is not a kernel-enforcement signal; tool-specific Auto checks can still require a prompt. |
+
+**Schema**: `contracts/asyncapi.yaml::SessionModeUpdatedFrame`
+**Producer**: `pkg/gateway/ws_session_mode.go::handleSessionModeUpdateFrame`
+**Consumer**: Chat store's `session_mode_updated` case in `src/store/chat/slices/replay-and-status-frames.ts`, which updates the session's `autoApproveEffective` value
+
+---
 
 ### `token`
 
@@ -383,7 +448,8 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | Direction | Type | Description |
 |-----------|------|-------------|
 | C→S | `auth` | Authenticate the connection |
-| C→S | `message` | Send a user chat message |
+| C→S | `message` | Send a user chat message; optional `auto_approve` sets the initial choice when starting a new session |
+| C→S | `session_mode_update` | Set or clear an existing session's Auto-approve choice |
 | C→S | `cancel` | Cancel in-progress turn |
 | C→S | `ping` | Keep-alive |
 | C→S | `attach_session` | Attach to an existing session and replay its transcript (with optional `since` for incremental replay) |
@@ -391,6 +457,7 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | C→S | `session_close` | Explicit session close request (server replies with `session_close_ack`) |
 | C→S | `whatsapp_pairing_subscribe` | Start/stop receiving WhatsApp pairing frames on this connection (#283) |
 | S→C | `session_started` | New session ID minted by the server (response to a `message` without `session_id`) |
+| S→C | `session_mode_updated` | Acknowledge a per-chat mode change with the resolved Auto-approve setting |
 | S→C | `token` | LLM response token chunk |
 | S→C | `done` | Turn complete, with usage stats |
 | S→C | `error` | Unrecoverable error (does not terminate the connection) |
