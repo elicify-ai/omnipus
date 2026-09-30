@@ -87,7 +87,31 @@ vi.mock('@/lib/api/mail', async (importOriginal) => {
       ],
     })),
     fetchMailMessages: vi.fn(async () => ({ messages: [], truncated: false, next_before_uid: null })),
-    fetchMailMessage: vi.fn(async () => ({}) as never),
+    fetchMailMessage: vi.fn<typeof actual.fetchMailMessage>(async () => ({
+      message_id: '<draft-1@test>',
+      uid: 1,
+      uidvalidity: 7,
+      folder: 'drafts',
+      subject: 'Draft link preview',
+      from: 'mia@example.test',
+      from_name: 'Mia',
+      to: ['recipient@example.test'],
+      cc: [],
+      date: '2026-10-01T10:00:00Z',
+      seen: true,
+      is_draft: true,
+      is_omnipus_draft: true,
+      read_by_agent: false,
+      reply_to: null,
+      in_reply_to: null,
+      references: null,
+      body_text: 'Draft ready for review.',
+      has_html: false,
+      bcc: [],
+      attachments: [],
+      body_markdown: 'Draft ready for review.',
+      markdown_lossy: false,
+    })),
     fetchMailSummary: vi.fn(async () => ({ items: [] })),
     markMailSeen: vi.fn(async () => undefined),
     mintMailHtmlPreviewToken: vi.fn(async () => ({ token: 't'.repeat(43), expires_in_seconds: 900 })),
@@ -207,6 +231,9 @@ describe('workspace Chat route — ?panel=mail deep link (§8.2 Mail bullet, §1
     )
 
     await waitFor(() => expect(activePanelId()).toBe('mail'), { timeout: 10_000 })
+    // Wait for the lazy-loaded panel's real draft view before reading its
+    // effect-persisted intent; opening the panel store alone is not readiness.
+    const draft = await screen.findByRole('region', { name: 'Draft' }, { timeout: 10_000 })
     // The draft landed with its context: the intent carries the mailbox and
     // folder (email spec MC-31a). The consume-once messageRef is deliberately
     // NOT asserted here — once the panel mounts it lifts the ref and its
@@ -221,6 +248,13 @@ describe('workspace Chat route — ?panel=mail deep link (§8.2 Mail bullet, §1
     expect(router.state.location.pathname).toBe('/workspaces/ws-1/chat')
     const search = router.state.location.search as Record<string, unknown>
     expect(search.panel).toBe('mail')
+
+    // Email spec B-20: the link shows the stored draft, not merely a Mail
+    // store/URL state that can survive a detail-render error boundary.
+    expect(within(draft).getByRole('heading', { name: /^Draft link preview$/ })).toBeVisible()
+    expect(within(draft).getByText('To: recipient@example.test', { exact: true })).toBeVisible()
+    expect(within(draft).getByText('Draft ready for review.', { exact: true })).toBeVisible()
+    expect(screen.queryByText('Something went wrong', { exact: true })).not.toBeInTheDocument()
 
     client.clear()
   })
