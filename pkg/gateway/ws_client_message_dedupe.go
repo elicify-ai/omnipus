@@ -228,8 +228,9 @@ const acceptedClientMessagesPerSession = 256
 // acceptedClientMessage is one accepted message: its unsequenced
 // user_message echo and the last status the session was told about.
 type acceptedClientMessage struct {
-	echo  []byte
-	state string // received | working
+	echo      []byte
+	state     string // received | working
+	principal clientMessagePrincipal
 }
 
 // acceptedClientMessages is guarded by WSHandler.mu.
@@ -251,9 +252,15 @@ func (h *WSHandler) acceptedLocked(sessionID string) *acceptedClientMessages {
 }
 
 // rememberAcceptedMessage records a persisted message under its client id.
-func (h *WSHandler) rememberAcceptedMessage(sessionID, clientMessageID string, echo []byte) {
+// Chat intake supplies its originating principal. An unspecified origin is the
+// zero principal, not a wildcard for authenticated accounts or token kinds.
+func (h *WSHandler) rememberAcceptedMessage(sessionID, clientMessageID string, echo []byte, origin ...clientMessagePrincipal) {
 	if sessionID == "" || clientMessageID == "" {
 		return
+	}
+	var principal clientMessagePrincipal
+	if len(origin) > 0 {
+		principal = origin[0]
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -261,7 +268,7 @@ func (h *WSHandler) rememberAcceptedMessage(sessionID, clientMessageID string, e
 	if _, ok := a.byID[clientMessageID]; !ok {
 		a.order = append(a.order, clientMessageID)
 	}
-	a.byID[clientMessageID] = &acceptedClientMessage{echo: echo, state: "received"}
+	a.byID[clientMessageID] = &acceptedClientMessage{echo: echo, state: "received", principal: principal}
 	for len(a.order) > acceptedClientMessagesPerSession {
 		delete(a.byID, a.order[0])
 		a.order = a.order[1:]
@@ -309,16 +316,30 @@ func (hcm *wsHandlerHandleChatMessage) answerRetriedMessage() bool {
 	if hcm.sessionID == "" {
 		return false
 	}
+	principal, _ := hcm.wc.messageRetryPrincipal()
 	h := hcm.h
 	h.mu.Lock()
 	var echo []byte
 	var state string
+	wrongPrincipal := false
 	if a := h.acceptedClientMsgs[hcm.sessionID]; a != nil {
 		if m := a.byID[hcm.clientMessageID]; m != nil {
-			echo, state = m.echo, m.state
+			wrongPrincipal = m.principal != principal
+			if !wrongPrincipal {
+				echo, state = m.echo, m.state
+			}
 		}
 	}
 	h.mu.Unlock()
+	if wrongPrincipal {
+		cid := hcm.clientMessageID
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:            string(generated.WsFrameTypeError),
+			Message:         "Could not check this chat",
+			ClientMessageId: &cid,
+		})
+		return true
+	}
 	if state == "" {
 		return false
 	}

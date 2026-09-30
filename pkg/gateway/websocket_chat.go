@@ -542,7 +542,8 @@ func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.Transcri
 		logsafeError("ws: marshal user_message failed", "session_id", hcm.sessionID, "error", err)
 		return
 	}
-	hcm.h.rememberAcceptedMessage(hcm.sessionID, entry.ClientMessageID, data)
+	principal, _ := hcm.wc.messageRetryPrincipal()
+	hcm.h.rememberAcceptedMessage(hcm.sessionID, entry.ClientMessageID, data, principal)
 	hcm.h.hubPublishAndDeliverAlsoTo(hcm.sessionID, string(generated.WsFrameTypeUserMessage), data, hcm.wc)
 }
 
