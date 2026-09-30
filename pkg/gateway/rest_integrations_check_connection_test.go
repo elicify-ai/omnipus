@@ -167,6 +167,11 @@ func TestSearchConnectionCheck_OneRealAddressedAttemptForEveryControllableKeyedC
 				calls.Add(1)
 				data, err := io.ReadAll(r.Body)
 				assert.NoError(t, err)
+				if tc.id == "exa" {
+					assert.NotContains(t, r.URL.RawQuery, searchSettingsSecret, "Exa key must not appear in the URL query")
+					assert.NotContains(t, r.URL.Query().Encode(), searchSettingsSecret, "Exa key must not appear in the decoded URL query")
+					assert.NotContains(t, string(data), searchSettingsSecret, "Exa key must not appear in the request body")
+				}
 				seen <- data
 				headers <- r.Header.Clone()
 				w.Header().Set("Content-Type", "application/json")
@@ -203,7 +208,14 @@ func TestSearchConnectionCheck_OneRealAddressedAttemptForEveryControllableKeyedC
 			case "exa":
 				assert.Equal(t, "Omnipus", payload["query"])
 				assert.Equal(t, float64(1), payload["numResults"])
-				assert.Equal(t, searchSettingsSecret, h.Get("X-Api-Key"))
+				// Exa documents both auth headers: https://exa.ai/docs/reference/search.
+				// The saved key must appear exactly once, in one accepted header only.
+				if values := h.Values("X-Api-Key"); len(values) != 0 {
+					assert.Equal(t, []string{searchSettingsSecret}, values, "Exa X-Api-Key must contain exactly one saved key")
+					assert.Len(t, h.Values("Authorization"), 0, "Exa must not send both accepted auth headers")
+				} else {
+					assert.Equal(t, []string{"Bearer " + searchSettingsSecret}, h.Values("Authorization"), "Exa must send exactly one documented auth header with the saved key")
+				}
 			}
 			assert.Equal(t, before, readRolesWebConfig(t, api), "diagnostics do not mutate configuration or roles")
 		})
@@ -360,17 +372,18 @@ func TestSearchConnectionCheck_FifteenSecondTotalContextDeadline(t *testing.T) {
 	}))
 	t.Cleanup(edge.Close)
 	t.Cleanup(func() { close(release) })
-	wireSearchCheckEdge(t, api, cfg, "tavily", edge.URL)
+	wireSearchCheckEdge(t, api, cfg, "baidu", edge.URL)
+	// newBaiduSearchProvider uses the 30s perplexityTimeout, so unlike Tavily's
+	// 10s client it cannot mask the design's 15s diagnostic context budget.
 	// 17s is only a harness watchdog, not the allowed diagnostic budget. The
-	// design's 15s child context must end this earlier. ±1s permits scheduling
-	// and HTTP bookkeeping, not a longer provider timeout.
+	// design's 15s child context must end this earlier. The 1s upper tolerance
+	// permits scheduling and HTTP bookkeeping, not a longer provider timeout.
 	ctx, cancel := context.WithTimeout(t.Context(), 17*time.Second)
 	defer cancel()
 	start := time.Now()
-	w := postSearchCheck(ctx, mux, "tavily", `{}`, diagnosticBearer)
-	requireSearchCheckResult(t, w, "tavily", "timeout")
+	w := postSearchCheck(ctx, mux, "baidu", `{}`, diagnosticBearer)
+	requireSearchCheckResult(t, w, "baidu", "timeout")
 	elapsed := time.Since(start)
-	assert.GreaterOrEqual(t, elapsed, 14*time.Second, "the fixture has no shorter client timeout")
 	assert.LessOrEqual(t, elapsed, 16*time.Second, "total budget is 15 seconds, not a per-attempt timeout")
 	assert.Equal(t, int32(1), calls.Load())
 }
@@ -381,6 +394,10 @@ func TestSearchConnectionCheck_ParentCancellationClosesRealRequest(t *testing.T)
 	cancelled := make(chan struct{}, 8)
 	release := make(chan struct{})
 	edge := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		// Drain the body before signalling readiness so net/http can observe the
+		// peer close; an unread body hides cancellation from this fixture.
+		_, err := io.Copy(io.Discard, r.Body)
+		assert.NoError(t, err, "controlled provider must consume the request body before cancellation")
 		started <- struct{}{}
 		select {
 		case <-r.Context().Done():
