@@ -148,7 +148,7 @@ describe('#1104 Remove a saved web-search key', () => {
     await waitFor(() => expect(h.calls('GET', '/api/v1/integrations/providers')).toHaveLength(2))
     expect(screen.queryByTestId('key-input-tavily')).not.toBeInTheDocument()
     const card = screen.getByTestId('default-search-card')
-    expect(within(card).getByText('Tavily: key missing — this default cannot search.')).toBeInTheDocument()
+    expect(within(card).getByText('Tavily: key missing — searches will fail')).toBeInTheDocument()
     expect(screen.getByTestId('fallback-search-card')).toHaveTextContent('DuckDuckGo')
     expect(within(screen.getByTestId('search-row-tavily')).getByRole('button', { name: 'Add key' })).toBeEnabled()
     expect(within(screen.getByTestId('search-row-tavily')).queryByRole('button', { name: 'Remove key' })).not.toBeInTheDocument()
@@ -165,7 +165,7 @@ describe('#1104 Remove a saved web-search key', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove key' }))
     await waitFor(() => expect(h.calls('GET', '/api/v1/integrations/providers')).toHaveLength(2))
     const card = screen.getByTestId('fallback-search-card')
-    expect(within(card).getByText('Tavily: key missing — the fallback will not run.')).toBeInTheDocument()
+    expect(within(card).getByText('Tavily: key missing — the fallback will not run')).toBeInTheDocument()
     fireEvent.click(within(card).getByRole('button', { name: 'Fix' }))
     expect(screen.getByTestId('key-input-tavily')).toBeInTheDocument()
     expect(screen.getByTestId('default-search-card')).toHaveTextContent('DuckDuckGo')
@@ -181,7 +181,7 @@ describe('#1104 Remove a saved web-search key', () => {
     const dialog = await openRemoval(h)
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove key' }))
     await waitFor(() => expect(h.calls('GET', '/api/v1/integrations/providers')).toHaveLength(2))
-    expect(screen.getByTestId('default-search-card')).toHaveTextContent('Tavily: key missing — this default cannot search.')
+    expect(screen.getByTestId('default-search-card')).toHaveTextContent('Tavily: key missing — searches will fail')
     expect(useUiStore.getState().toasts.map(({ message, variant }) => ({ message, variant }))).toEqual([
       { message, variant: 'error' },
     ])
