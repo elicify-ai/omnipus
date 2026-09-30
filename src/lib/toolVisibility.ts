@@ -40,6 +40,8 @@
 //     getBoolArg(), whose zero value (missing/non-bool) is `false` — i.e.
 //     bash is foreground-by-default.
 
+import type { Message as WireMessage } from '@/lib/api/generated/openapi-types'
+
 /** Narrow an unknown params bag to a string field, honoring only real strings. */
 function paramString(params: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = params?.[key]
@@ -239,4 +241,12 @@ export function shouldRenderToolCall(
  */
 export function shouldRenderJudgeVerdictInThread(verboseChatEnabled: boolean): boolean {
   return verboseChatEnabled
+}
+
+/** Q33: retain classified diagnostics in state; hide them only at rendering. */
+export function shouldRenderContextWindowNoticeInThread(
+  messageType: WireMessage['type'],
+  verboseChatEnabled: boolean,
+): boolean {
+  return messageType !== 'context_window_notice' || verboseChatEnabled
 }
