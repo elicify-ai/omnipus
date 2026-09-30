@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -32,6 +33,7 @@ func TestDelegateClearGoal(t *testing.T) {
 	t.Run("injects_helper_decision_prompt", testDelegateClearGoalInjectsPrompt)
 	t.Run("allows_working_helper", testDelegateClearGoalWhileWorking)
 	t.Run("repeats_one_level_down", testDelegateClearGoalOneLevelDown)
+	t.Run("rejects_unauthorized_agent_without_side_effects", testDelegateClearGoalUnauthorizedAgent)
 }
 
 type delegateClearGoalHarness struct {
@@ -191,6 +193,7 @@ func assertDelegateGoalClearPromptInjected(t *testing.T, al *AgentLoop, sub Even
 	require.Len(t, requests, 2, "the scripted next tool boundary must reach a real second provider request")
 	require.Len(t, delegateGoalClearDecisionPrompts(requests[1]), 1,
 		"the helper's actual next-round input must tell it its goal was cleared and to decide about its own helpers")
+	assertDelegateGoalClearDecisionMeaning(t, delegateGoalClearDecisionPrompts(requests[1])[0].Content)
 }
 
 func testDelegateClearGoalInjectsPrompt(t *testing.T) {
@@ -244,4 +247,89 @@ func testDelegateClearGoalOneLevelDown(t *testing.T) {
 	require.Equal(t, leafBefore, mustGoalRecord(t, leaf.GoalRef),
 		"the later subhelper clear must not cascade into its own helper's goal either")
 	assertDelegateGoalClearPromptInjected(t, h.al, sub, subhelper.SessionID, provider, ts, release)
+}
+
+// F2 / Q20: match affirmative choice clauses, not isolated keywords. A notice
+// may explain that nothing happens "automatically", but must never command
+// unconditional action or negate the helper's independent decision. The oracle
+// comes from the brief; it neither imports nor copies the production constant.
+func assertDelegateGoalClearDecisionMeaning(t *testing.T, content string) {
+	t.Helper()
+	text := strings.ToLower(strings.Join(strings.Fields(content), " "))
+	require.NotRegexp(t,
+		`(?:^|[.!?;]\s+)(?:(?:you|that helper)\s+(?:must|shall)\s+)?(?:stop|clear)\b|\b(?:automatically|unconditionally)\s+(?:stop|clear)\b`,
+		text, "Q20: the notice must not order unconditional or automatic stop/clear actions")
+	require.NotRegexp(t,
+		`\b(?:do not|don't|never|must not)\s+(?:decide|choose)\b|\bwithout\s+(?:deciding|choosing)\b`,
+		text, "Q20: the notice must not forbid or bypass the helper's independent decision")
+	require.Regexp(t,
+		`(?:^|[.!?;]\s+)decide for yourself whether to stop your own helpers and clear their goals(?:[.!?;]|$)`,
+		text, "Q20: the addressed helper must affirmatively choose for itself whether to stop/clear its own helpers")
+	require.Regexp(t,
+		`\b(?:that|the) helper must decide for itself whether to stop its own helpers and clear their goals\b`,
+		text, "Q20: a helper cleared later must make its own independent stop/clear choice too")
+	require.Regexp(t, `\b(?:each|every) level\b`, text,
+		"Q20: independent choice must repeat at every subsequent level, not end after one helper")
+}
+
+// F1 / ADR-091 WP-C US-2/AS-3: the same agent profile does not grant a
+// sibling or unrelated session an ancestor's authority. Like the steer action's
+// authority-before-enqueue test, include an authorized control on the same tool.
+func testDelegateClearGoalUnauthorizedAgent(t *testing.T) {
+	for _, callerKind := range []string{"sibling", "unrelated_root"} {
+		t.Run(callerKind, func(t *testing.T) {
+			h := newDelegateClearGoalHarness(t)
+			subhelper := launchGoalBearingChild(t, h.al, h.helper.SessionID, "call-clear-goal-denied-subhelper")
+			leaf := launchGoalBearingChild(t, h.al, subhelper.SessionID, "call-clear-goal-denied-leaf")
+			callerID := ""
+			if callerKind == "sibling" {
+				callerID = launchGoalBearingChild(t, h.al, h.parentID, "call-clear-goal-denied-sibling").SessionID
+			} else {
+				callerID = newTestSteeringSession(t, h.al, "ws-clear-goal")
+			}
+			require.NotEqual(t, h.parentID, callerID, "SETUP: the caller must not be the delegating parent")
+			protected := []*session.LifecycleRecord{h.helper, subhelper, leaf}
+			before := make(map[string]*goal.Goal, len(protected))
+			for _, rec := range protected {
+				before[rec.GoalRef] = mustGoalRecord(t, rec.GoalRef)
+				require.Equal(t, generated.GoalStateActive, before[rec.GoalRef].State,
+					"SETUP: every protected session must have an open goal")
+				require.Nil(t, h.al.getActiveTurnState(rec.SessionID),
+					"SETUP: idle sessions cannot hide an enqueue by draining their queues")
+			}
+			require.NotNil(t, h.al.steering, "SETUP: inspect the real steering queue")
+			require.Zero(t, h.al.steering.len(), "SETUP: no pre-existing notices may hide the denied call's side effects")
+			// Use the same event buffer as the existing injection fixture; there
+			// are no live turns, and delivery is synchronous before Execute returns.
+			sub := h.al.SubscribeEvents(32)
+			defer h.al.UnsubscribeEvents(sub.ID)
+			require.NotEqual(t, uint64(0), sub.ID, "SETUP: the notice-event subscription must be live")
+			require.Zero(t, len(sub.C), "SETUP: observe only this call's events")
+
+			// Supply an AGENT session, never the authenticated-human exception.
+			ctx := tools.WithAgentID(
+				tools.WithTranscriptSessionID(context.Background(), callerID), testDefaultAgentID)
+			result := delegateToolFor(t, h.al).Execute(ctx, map[string]any{
+				"action": "clear_goal", "session_id": h.helper.SessionID,
+			})
+			require.NotNil(t, result, "F1: the unauthorized agent call must return a result")
+			assert.True(t, result.IsError, "F1: an unauthorized %s agent must be refused, got %q", callerKind, result.ForLLM)
+			assert.Error(t, result.Err, "F1: refusal must retain its underlying authority error")
+			for _, rec := range protected {
+				assert.Equal(t, before[rec.GoalRef], mustGoalRecord(t, rec.GoalRef),
+					"F1: denial must leave the ENTIRE goal record unchanged for session %s", rec.SessionID)
+			}
+			assert.Zero(t, h.al.steering.len(), "F1: denial must not queue a decision notice in ANY session")
+			assert.Zero(t, len(sub.C), "F1: denial must not emit an enqueue or delivery event")
+
+			// Demonstrate that the same goal, queue and event instruments can
+			// observe a legitimate ancestor clear, as in the steer authority test.
+			h.clear(t, h.parentID, h.helper.SessionID, "F1 authorized ancestor control")
+			assertDelegateGoalCleared(t, before[h.helper.GoalRef])
+			require.Equal(t, 1, h.al.steering.len(), "CONTROL: the authorized clear must queue exactly one notice")
+			require.Equal(t, 1, h.al.steering.lenScope(h.helper.SessionID),
+				"CONTROL: the notice must be queued under the addressed helper, not another session")
+			require.Positive(t, len(sub.C), "CONTROL: the same subscription must observe the authorized action")
+		})
+	}
 }
