@@ -56,7 +56,7 @@ General settings for fetching and processing webpage content.
 | `base_url`    | string | empty   | Optional API URL. Empty uses `https://api.search.brave.com/res/v1/web/search`. |
 | `max_results` | int    | 5       | Maximum number of results                                  |
 
-Brave and Perplexity accept an optional `base_url` in their `tools.web` configuration section. Leave it empty to use the official endpoint. Ordinary searches and manual connection checks use the same URL and HTTP client. When `sandbox.ssrf.enabled` is on, the shared protection against private/internal addresses still applies, including its configured exceptions. Use only a trusted API endpoint: Omnipus sends the provider's key there. Environment overrides are `OMNIPUS_TOOLS_WEB_BRAVE_BASE_URL` and `OMNIPUS_TOOLS_WEB_PERPLEXITY_BASE_URL`.
+Brave and Perplexity accept an optional `base_url` in their `tools.web` configuration section. Leave it empty to use the official endpoint. Ordinary searches and manual connection checks use the same configured endpoint and the same client setup for proxy and private-address protection. Each check creates a fresh HTTP client and does not follow redirects. When `sandbox.ssrf.enabled` is on, the shared protection against private/internal addresses still applies, including its configured exceptions. Use only a trusted API endpoint: Omnipus sends the provider's key there. Environment overrides are `OMNIPUS_TOOLS_WEB_BRAVE_BASE_URL` and `OMNIPUS_TOOLS_WEB_PERPLEXITY_BASE_URL`.
 
 ### DuckDuckGo
 
