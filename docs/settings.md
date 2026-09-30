@@ -45,6 +45,8 @@ Only usable services can be chosen. Unusable services shown in the picker are di
 
 The service list below the cards puts ready services first. Services needing a key have **Add key** or **Edit key**. With the cards present, enter the key and click **Save key**. On a local install, you must re-type your password; on a hosted or desktop install, you confirm the change instead. A successful key save switches that service on without changing your default or fallback choice.
 
+If an integration save fails, its error message shows the server's reason when one is provided.
+
 SearXNG is no longer offered: on upgrade, Omnipus removes its old configuration, clears it as a saved default, and sets a saved SearXNG fallback to **None**.
 
 ## Where each setting lives

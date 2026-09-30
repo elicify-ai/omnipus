@@ -22,6 +22,7 @@ import {
   type IntegrationProvider,
   type IntegrationProviderUpdateRequest,
 } from '@/lib/api'
+import { isApiError, parseServerErrorField } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
@@ -61,8 +62,9 @@ export function IntegrationsSection() {
       // (ADR-096 FR-033). Invalidate so the list reflects what the backend
       // actually holds instead of the stale pre-save cache.
       queryClient.invalidateQueries({ queryKey: ['integrations'] })
+      const serverReason = isApiError(err) ? parseServerErrorField(err.body) : undefined
       addToast({
-        message: getErrorMessage(err, 'Integration update failed'),
+        message: serverReason ?? getErrorMessage(err, 'Integration update failed'),
         variant: 'error',
       })
     },
