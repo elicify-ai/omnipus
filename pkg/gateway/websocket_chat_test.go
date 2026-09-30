@@ -88,8 +88,41 @@ func TestHandleChatMessage_PublishFailureMarksClientMessageFailed(t *testing.T) 
 		"", "", false, "client-message-failed", nil, wc,
 	)
 
-	frames := readMessageStatusFrames(t, wc, 2)
-	require.Equal(t, []string{"received", "failed"}, []string{frames[0].State, frames[1].State})
+	// T7 / B4, #1090 D5: this is a NEW session's ordinary first message.
+	// A durable save is still delivered when bus admission fails. It must keep
+	// received and report answer_not_started, never a misleading failed tick.
+	// Existing-session message failure semantics are deliberately unchanged.
+	frames := issue1090DrainQueuedFrames(t, wc)
+	sessionID := issue1090StartedSessionID(t, frames)
+	store := handler.agentLoop.GetSessionStore()
+	require.NotNil(t, store)
+	issue1090AssertSavedFirstEntry(t, store, sessionID, "hello", "client-message-failed")
+	require.ErrorIs(t, msgBus.PublishInbound(context.Background(), bus.InboundMessage{}), bus.ErrBusClosed,
+		"T7 instrument control: the real closed bus must reject turn admission")
+	t.Log("T7 instrument control: the first user entry is on disk and the real bus rejects admission")
+
+	states := []any{}
+	errors := []map[string]any{}
+	for _, frame := range frames {
+		switch frame["type"] {
+		case "message_status":
+			states = append(states, frame["state"])
+			assert.Equal(t, "client-message-failed", frame["client_message_id"], "T7: receipt must correlate the saved first message")
+			assert.Equal(t, sessionID, frame["session_id"], "T7: receipt must identify the saved session")
+		case "error":
+			errors = append(errors, frame)
+		}
+	}
+	assert.Equal(t, []any{"received"}, states, "T7: saved first message must remain received, never failed")
+	assert.Equal(t, []any{"session_started", "user_message", "message_status", "error"}, issue1090FrameTypes(frames),
+		"T7: saved-but-no-answer error must follow the received receipt with no failed tick")
+	require.Len(t, errors, 1, "T7: saved first message must report exactly one answer-admission error")
+	assert.Equal(t, "answer_not_started", errors[0]["first_message_error"], "T7: error must distinguish a saved message from failed delivery")
+	assert.Equal(t, "client-message-failed", errors[0]["client_message_id"], "T7: error must correlate the saved first message")
+	assert.Equal(t, sessionID, errors[0]["session_id"], "T7: error must identify the real saved session")
+	message, ok := errors[0]["message"].(string)
+	require.True(t, ok, "T7: error must include a human-readable string")
+	assert.NotEmpty(t, strings.TrimSpace(message), "T7: answer-not-started error must be visible to the user")
 }
 
 // --- moved from websocket.go tests 2026-09-15 ---
