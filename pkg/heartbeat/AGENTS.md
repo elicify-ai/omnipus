@@ -5,11 +5,11 @@ What it does not own: Task records, mailbox transport or Calendar recurrence ent
 
 ## Run its tests
 
-`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestTaskDrainService_DispatchesIndependentOfHeartbeat$' -v -p 1 ./pkg/heartbeat/`
+`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestTaskDrainService_DispatchesIndependentOfHeartbeat$' -count=1 -v -p 1 ./pkg/heartbeat/`
 
 ## Pitfalls here
 
-- Queued tasks must drain even if an agent heartbeat is disabled or distant. `task_drain_test.go::TestTaskDrainService_DispatchesIndependentOfHeartbeat` checks this separation.
+- Poll task drains independently of agent heartbeats. `task_drain_test.go::TestTaskDrainService_DispatchesIndependentOfHeartbeat` uses a counting checker and confirms it is called with no `HeartbeatService`; it creates no queued task and cannot prove delivery. Require a named `--- PASS` for the polling check.
 
 ## Never bring back
 

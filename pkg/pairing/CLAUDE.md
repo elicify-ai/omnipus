@@ -5,11 +5,11 @@ What it does not own: Device transports or the gateway's approval UI.
 
 ## Run its tests
 
-`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestApprove_NotFound_DoesNotResurrectRejected$' -v -p 1 ./pkg/pairing/`
+`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestApprove_NotFound_DoesNotResurrectRejected$' -count=1 -v -p 1 ./pkg/pairing/`
 
 ## Pitfalls here
 
-- Approval of a missing entry must not recreate a rejected device. `store_test.go::TestApprove_NotFound_DoesNotResurrectRejected` checks this state transition.
+- Approval after rejection must not recreate the device. `store_test.go::TestApprove_NotFound_DoesNotResurrectRejected` checks the missing-device error and empty returned value, but does not inspect the paired-device store after approval; an additional state assertion is needed to prove no resurrection. Require a named `--- PASS` for this narrower check.
 
 ## Never bring back
 
