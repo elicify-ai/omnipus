@@ -131,7 +131,9 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 
 ### Default and fallback search provider
 
-Omnipus tries one search provider first (the **default**) and, if that call fails, can try a second (the **fallback**). These are not settings you hand-edit in `config.json` — set them from **Settings > Integrations**, in the **Web Search** group: each provider's row has a **Default** and a **Fallback** radio, plus a **No fallback** choice if you don't want a second try. Under the hood this is `tools.web.default_provider` / `tools.web.fallback_provider`; an install upgrading from before these roles existed gets a one-time migration that keeps using whichever provider it was already using, so switching to this release does not change which provider answers your searches.
+Omnipus tries one search provider first (the default) and, if that call fails, can try a second (the fallback). In **Settings** → **Integrations**, use **Change** on the **Default search** or **Fallback** card to choose a service; **Fallback** also offers **None**. These choices are stored as `tools.web.default_provider` and `tools.web.fallback_provider` in `config.json`.
+
+Saving a web-search API key in **Settings** → **Integrations** sets that provider's `enabled: true`.
 
 ### `search_web` tool parameters
 
