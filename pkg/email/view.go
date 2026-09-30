@@ -41,6 +41,10 @@ var FolderSlugs = []string{FolderInbox, FolderSent, FolderDrafts}
 // handler's 400 class, distinct from a well-formed ref that names no message.
 var ErrMailRefInvalid = errors.New("invalid message ref")
 
+// ErrMessageNotFound marks a well-formed ref with no matching message in the
+// addressed folder. An upstream IMAP failure is never classified as absent.
+var ErrMessageNotFound = errors.New("message not found")
+
 // FolderStat is one folder's live STATUS.
 type FolderStat struct {
 	Slug        string
@@ -490,7 +494,7 @@ func (c *Client) ReadView(ctx context.Context, slug, ref string) (*MailView, err
 			return nil, err
 		}
 		if uid == 0 {
-			return nil, fmt.Errorf("email transport: no message %s in %s", ref, slug)
+			return nil, fmt.Errorf("email transport: %w: no message %s in %s", ErrMessageNotFound, ref, slug)
 		}
 	}
 
@@ -502,7 +506,7 @@ func (c *Client) ReadView(ctx context.Context, slug, ref string) (*MailView, err
 		return nil, fmt.Errorf("email transport: fetch view: %w", ferr)
 	}
 	if len(fetched) == 0 || fetched[0] == nil {
-		return nil, fmt.Errorf("email transport: message %s not found in %s", ref, slug)
+		return nil, fmt.Errorf("email transport: %w: message %s not found in %s", ErrMessageNotFound, ref, slug)
 	}
 	buf := fetched[0]
 	var raw []byte
