@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -589,15 +590,35 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryContextOverflow(retry
 				map[string]any{"agent_id": cr.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": cr.rr.rq.ri.rf.rt.iteration, "retry": retry})
 			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 		}
+		retryPayload := LLMRetryPayload{
+			Attempt:    retry + 1,
+			MaxRetries: cr.maxRetries,
+			Reason:     "context_limit",
+			Error:      cr.rr.rq.ri.rf.err.Error(),
+		}
+
+		// ADR-091 boundary 5 (FR-B-001): a steered
+		// session's retry notice is never the user's audience.
+		// audienceFor also calls steer.BoundaryObserver.Observe before this
+		// decision is acted on (FR-B-014).
+		overflowAudience := cr.rr.rq.ri.rf.rt.al.audienceFor(cr.rr.rq.ri.rf.rt.turnCtx, steer.BoundaryRetryNotice, cr.rr.rq.ri.rf.rt.ts.transcriptSessionID)
+		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) && overflowAudience == steer.AudienceUser {
+			frame, noticeErr := cr.rr.rq.ri.rf.rt.ts.recordContextWindowNotice(generated.ContextWindowNotice{
+				Kind:    generated.ContextWindowNoticeKindProviderRetry,
+				Message: "Context window exceeded. Compressing history and retrying...",
+			})
+			if noticeErr != nil {
+				// Preserve the provider failure and return the recording failure
+				// through the existing terminal error path, not a log-only loss.
+				cr.rr.rq.ri.rf.err = errors.Join(cr.rr.rq.ri.rf.err, noticeErr)
+				return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+			}
+			retryPayload.ContextWindowNotice = frame
+		}
 		cr.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindLLMRetry,
 			cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-			LLMRetryPayload{
-				Attempt:    retry + 1,
-				MaxRetries: cr.maxRetries,
-				Reason:     "context_limit",
-				Error:      cr.rr.rq.ri.rf.err.Error(),
-			},
+			retryPayload,
 		)
 		logger.WarnCF(
 			"agent",
@@ -607,22 +628,6 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryContextOverflow(retry
 				"retry": retry,
 			},
 		)
-
-		// ADR-091 boundary 5 (FR-B-001): a steered
-		// session's retry notice is never the user's audience.
-		// audienceFor also calls steer.BoundaryObserver.Observe before this
-		// decision is acted on (FR-B-014).
-		overflowAudience := cr.rr.rq.ri.rf.rt.al.audienceFor(cr.rr.rq.ri.rf.rt.turnCtx, steer.BoundaryRetryNotice, cr.rr.rq.ri.rf.rt.ts.transcriptSessionID)
-		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) && overflowAudience == steer.AudienceUser {
-			if notifyErr := cr.rr.rq.ri.rf.rt.al.bus.PublishOutbound(cr.rr.rq.ri.rf.rt.turnCtx, bus.OutboundMessage{
-				Channel: cr.rr.rq.ri.rf.rt.ts.channel,
-				ChatID:  cr.rr.rq.ri.rf.rt.ts.chatID,
-				Content: "Context window exceeded. Compressing history and retrying...",
-			}); notifyErr != nil {
-				logger.WarnCF("agent", "Failed to notify user of context compression",
-					map[string]any{"channel": cr.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
-			}
-		}
 
 		// force: the PROVIDER rejected this request with a context
 		// error, so our own estimate said it fit and was wrong.

@@ -506,6 +506,19 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 		return streamReplayStateContinue, nil
 	}
 
+	// Classified diagnostics replay as the same generated frame sent live,
+	// never as ordinary text, even if the entry also contains Content.
+	if entry.Type == session.EntryTypeContextWindowNotice {
+		frame, err := entry.ContextWindowNoticeFrame(sr.sessionID)
+		if err != nil {
+			return streamReplayStateReturn, err
+		}
+		if err := emitFrame(frame); err != nil {
+			return streamReplayStateReturn, err
+		}
+		return streamReplayStateContinue, nil
+	}
+
 	// provider-messages §7.1 item 2 / MAJ-010/C-17: a persisted fallback
 	// note replays as the SAME carrier the spec names (replay_provider_fallback)
 	// so the reloaded session renders the note — never a live-only orphan.

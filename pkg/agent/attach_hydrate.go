@@ -243,7 +243,7 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 			}
 			continue
 		}
-		switch e.Role {
+		switch transcriptModelHistoryRole(e) {
 		case "user":
 			if e.Content == "" {
 				continue

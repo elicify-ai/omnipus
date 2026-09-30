@@ -98,6 +98,9 @@ func (us *UnifiedStore) AppendTranscriptStrict(sessionID string, entry Transcrip
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
+	if err := validateContextWindowNotice(sessionID, entry); err != nil {
+		return fmt.Errorf("unified_store: append transcript strict: %w", err)
+	}
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now().UTC()
 	}

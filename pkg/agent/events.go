@@ -377,6 +377,10 @@ type LLMRetryPayload struct {
 	SentAt      time.Time
 	MaxAttempts int
 	SessionID   string
+
+	// ContextWindowNotice is the already-persisted context diagnostic. The hub
+	// publishes this generated frame once; no ordinary chat message is produced.
+	ContextWindowNotice *generated.ContextWindowNoticeFrame
 }
 
 // ContextCompressReason identifies why emergency compression ran.

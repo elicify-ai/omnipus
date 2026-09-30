@@ -297,6 +297,9 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
+	if err := validateContextWindowNotice(sessionID, entry); err != nil {
+		return fmt.Errorf("unified_store: append transcript: %w", err)
+	}
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now().UTC()
 	}
@@ -779,8 +782,14 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 		}
 		var entry TranscriptEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
+			if isContextWindowNoticeLine(line) {
+				return nil, fmt.Errorf("unified_store: read transcript: invalid context_window_notice: %w", err)
+			}
 			slog.Warn("unified_store: skipping malformed transcript line", "session_id", sessionID, "error", err)
 			continue
+		}
+		if err := validateContextWindowNotice(sessionID, entry); err != nil {
+			return nil, fmt.Errorf("unified_store: read transcript: %w", err)
 		}
 		entries = append(entries, entry)
 	}
