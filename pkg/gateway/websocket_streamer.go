@@ -656,6 +656,8 @@ type wsStreamerFinalize struct {
 	shadow                     bool
 	// accumulated is the streamer's own text, read once under statsMu.
 	accumulated string
+	// pendingFinalContent is a new terminal outcome, not the already-saved narration.
+	pendingFinalContent string
 }
 
 func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
@@ -747,10 +749,10 @@ func (wsf *wsStreamerFinalize) publishDone() {
 				hubFrameMeta{kind: hubKindDone, turnID: wsf.turnID}, data, nil)
 		}
 	}
-	// Only mark as streamed if we actually sent content. If the LLM failed
-	// before producing any tokens, let the outbound Send path deliver the
-	// error message — otherwise the user sees a stuck "thinking" spinner.
-	if wsf.s.channel != nil && wsf.accumulated != "" {
+	// Suppress Send only when streaming already covered the final outcome.
+	// Earlier narration must not suppress a separate terminal notice; nor
+	// should an empty stream suppress the outbound fallback.
+	if wsf.s.channel != nil && wsf.accumulated != "" && wsf.pendingFinalContent == "" {
 		wsf.s.channel.markStreamed(wsf.s.chatID)
 	}
 }
@@ -847,21 +849,27 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	wsf.shadow = wsf.s.isShadowStream
 	wsf.accumulated = wsf.s.accumulated.String()
 	wsf.s.statsMu.Unlock()
+
+	// The persisted marker covers this round's narration, not a different
+	// terminal outcome. Neither the current buffer nor a full continuation
+	// answer should be appended or sent twice.
+	if wsf.transcriptAlreadyPersisted && wsf.finalContent != "" &&
+		wsf.finalContent != wsf.accumulated &&
+		(!wsf.hasContinuation || wsf.finalContent != wsf.continuationContent) {
+		wsf.pendingFinalContent = wsf.finalContent
+	}
 }
 
-// persistTranscript records the completed assistant response when the round was not already persisted.
+// persistTranscript records the final response without duplicating saved narration.
 func (wsf *wsStreamerFinalize) persistTranscript() error {
-	// Record the full assistant response to the session transcript — unless the
-	// agent loop already persisted this round's narration via
-	// appendIntermediateAssistantTranscript (#416 gate fix). This happens when
-	// the turn exits via max_tool_iterations exhaustion: the last executed round
-	// is a tool-call round whose streamer (this one) becomes the lastStreamer.
-	// Writing here too would duplicate the assistant bubble on replay. We still
-	// sent the done frame, fan-out, and markStreamed above — only the append is
-	// suppressed.
-	if wsf.s.agentStore != nil && wsf.s.sessionID != "" && !wsf.transcriptAlreadyPersisted {
+	// A tool-call round may already have saved its narration. Keep that
+	// deduplication, but append a distinct terminal outcome after its tools.
+	if wsf.s.agentStore != nil && wsf.s.sessionID != "" &&
+		(!wsf.transcriptAlreadyPersisted || wsf.pendingFinalContent != "") {
 		content := wsf.accumulated
-		if wsf.hasContinuation {
+		if wsf.pendingFinalContent != "" {
+			content = wsf.pendingFinalContent
+		} else if wsf.hasContinuation {
 			// ADR-087 D6.1/§2.8: this streamer is per PROVIDER CALL, not per
 			// turn — its own `accumulated` buffer (and finalContent, which
 			// for a continuation's per-call streamer would also just be the
@@ -898,7 +906,8 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			// agent loop never stamped (a bare fixture, the Send fallback)
 			// keeps a fresh id.
 			entryID := wsf.messageID
-			if entryID == "" {
+			// A separate terminal notice must not reuse the saved narration's ID.
+			if entryID == "" || wsf.pendingFinalContent != "" {
 				entryID = uuid.New().String()
 			}
 			entry := session.TranscriptEntry{
