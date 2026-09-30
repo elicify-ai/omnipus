@@ -462,7 +462,7 @@ func TestGoalChildCompletion947_CancelEndsSessionOwnedGoal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(child after cancel): %v", err)
 	}
-	if got.State != session.LifecycleCancelled || !got.Terminal() {
+	if got.State != session.LifecycleStopped || !got.Terminal() {
 		t.Fatalf("child state after cancel = %q (terminal=%v), want cancelled — "+
 			"the cancel cascade itself is broken; this premise failure is NOT the #947 RED signal",
 			got.State, got.Terminal())

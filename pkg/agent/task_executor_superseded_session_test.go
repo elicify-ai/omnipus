@@ -26,7 +26,7 @@ import (
 //
 // Positive lower bound (Binding Rule 4): this does not merely assert
 // Status != StatusActive — it pins the EXACT terminal status
-// (StatusInterrupted, via LifecycleCancelled's canonical mirror in
+// (StatusInterrupted, via LifecycleStopped's canonical mirror in
 // lifecycle_bridge.go), and also confirms the redispatch actually happened
 // (non-empty redispatch id, AttemptCount incremented, Status == next) so the
 // test cannot pass vacuously against a branch that silently didn't run.
