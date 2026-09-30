@@ -1115,6 +1115,11 @@ func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (
 // pathological shape without ever throwing away a caller's accepted
 // instruction.
 func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.LifecycleRecord, gen int, result turnResult, runErr error) {
+	// Stop ends the turn, not the session or its goal. In particular, do not
+	// spend the durable marker or write a "session ended" goal outcome here.
+	if ts.stopRequested.Load() {
+		return
+	}
 	sessionID := rec.SessionID
 	if rec.GoalRef != "" {
 		al.finishSteeredGoalTurn(ts, rec, &result, runErr)

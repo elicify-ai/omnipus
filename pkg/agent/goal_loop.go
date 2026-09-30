@@ -685,7 +685,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) checkEligibility() bool {
 	if gl.opts.IsTaskRun {
 		return true
 	}
-	if gl.result == nil || gl.opts.TranscriptStore == nil || gl.opts.TranscriptSessionID == "" {
+	if gl.result == nil || gl.result.stopped || gl.opts.TranscriptStore == nil || gl.opts.TranscriptSessionID == "" {
 		return true
 	}
 	// askuserquestion-tool-spec §0.7 (M-R2-5): TurnEndStatusParked is NOT a

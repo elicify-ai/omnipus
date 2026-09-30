@@ -1302,7 +1302,8 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			})
 			return wsHandlerReadLoopContinue
 		}
-		wh.h.handleCancel(wh.wc, f.SessionId)
+		stopAll := f.Scope != nil && *f.Scope == "tree"
+		wh.h.handleCancelWithScope(wh.wc, f.SessionId, stopAll)
 	case string(generated.WsFrameTypeAttachSession):
 		var f generated.AttachSessionFrame
 		if err := json.Unmarshal(data, &f); err != nil {

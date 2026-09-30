@@ -420,8 +420,9 @@ type BrowserWebRTCStateFrame struct {
 
 // CancelFrame — Client → server cancel in-progress turn.
 type CancelFrame struct {
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
+	Scope     *string `json:"scope,omitempty"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
 }
 
 // CancelStageFrame — Server → client cancel progress notification (B3). stage MUST be one of three values — SPA validates via isValidFrame() and drops invalid stages. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
