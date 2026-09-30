@@ -11,7 +11,7 @@ separate-session squad leads. Loading is mandatory: preloaded at session start v
 not cite this skill is a review finding; the skills acknowledgement line (shared-skill
 rule 13) proves the load.
 
-Last reviewed: 2026-09-26
+Last reviewed: 2026-09-30
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (sections 5.6–5.9, 7.6, 7.7).
 
 ## Operating stance
@@ -44,7 +44,9 @@ Full procedure: `knowledge/parallel-planning.md`. The loop:
    Urgent is a queue priority (front of the queue), never a fourth size. Feature-size
    units run as squads — own feature branch, worktree(s), **their own squad-lead from
    the first dispatch** (the full rule: §2); small and standard run as direct dispatches
-   on a short-lived work branch cut from the integration branch.
+   on a short-lived work branch cut from the integration branch. For each UI or
+   behaviour-changing unit, plan a specific user-facing documentation TODO and its
+   `docs-verifier` audit; apply root `CLAUDE.md` ("Definition of Done").
 5. **Capacity check** — run the monitor (§3) before dispatching the wave, and again
    before widening an existing wave.
 6. **Name the integration branch** — the founder names it when commissioning; confirm at
