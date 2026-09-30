@@ -736,7 +736,7 @@ func (rc *agentLoopRequestCancel) interruptGracefully() {
 	// --- Transition BOTH stores via the single mediator (Defect #28 fix) ---
 	//
 	// The cancel must transition the durable LifecycleRecord to
-	// LifecycleCancelled AND mirror onto UnifiedMeta (interrupted) — the same
+	// LifecycleStopped AND mirror onto UnifiedMeta (interrupted) — the same
 	// paired transition every task/delegate terminal write performs. Before
 	// this fix, this block wrote ONLY UnifiedMeta (via the hook or the default
 	// branch), orphaning the parent session's LifecycleRecord: it stayed
@@ -750,7 +750,7 @@ func (rc *agentLoopRequestCancel) interruptGracefully() {
 	// sessions mint one), so the lifecycle half is a no-op for those and the
 	// UnifiedMeta mirror still proceeds inside the mediator.
 	lifecycleStore := rc.al.GetSessionLifecycleStore()
-	if err := session.TransitionSession(lifecycleStore, rc.store, rc.sessionID, session.LifecycleCancelled, ""); err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
+	if err := session.TransitionSession(lifecycleStore, rc.store, rc.sessionID, session.LifecycleStopped, ""); err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
 		slog.Warn("agent: RequestCancel: could not transition session to cancelled",
 			"session_id", rc.sessionID, "error", err)
 	}
@@ -1156,7 +1156,7 @@ func (al *AgentLoop) cancelDurableDescendantLifecycleRecords(rootSessionID strin
 	}
 	for _, id := range ids {
 		childStore := al.ResolveSessionStore(id)
-		err := session.TransitionSession(lifecycleStore, childStore, id, session.LifecycleCancelled, "")
+		err := session.TransitionSession(lifecycleStore, childStore, id, session.LifecycleStopped, "")
 		if err != nil && !errors.Is(err, session.ErrLifecycleNotFound) && !errors.Is(err, session.ErrLifecycleTerminalImmutable) {
 			slog.Warn("agent: cancelDurableDescendantLifecycleRecords: could not transition descendant to cancelled",
 				"session_id", id, "root_session_id", rootSessionID, "error", err)

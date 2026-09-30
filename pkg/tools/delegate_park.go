@@ -182,8 +182,8 @@ func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 	// original. Flipping the ORIGINAL to `running` would leave a record with
 	// no live runtime turn, which status would falsely report as `running`
 	// and the Phase-2 boot sweep would re-classify `failed(interrupted)`,
-	// corrupting the terminal record. Instead the original is marked terminal
-	// `cancelled` — recording via FailedReason that it was superseded by the
+	// corrupting the stopped record. Instead the original is marked non-terminal
+	// `stopped` — recording via FailedReason that it was superseded by the
 	// corrective re-dispatch. (FailedReason is the record's free-text "why
 	// this ended" field; using it for a cancelled-via-supersession is more
 	// informative than leaving the cancellation unexplained, and adding a
@@ -192,7 +192,7 @@ func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 	dt.nextState = session.LifecycleRunning
 
 	if dt.rec.Is3P {
-		dt.nextState = session.LifecycleCancelled
+		dt.nextState = session.LifecycleStopped
 		dt.failedReason = "superseded by corrective re-dispatch (3P respond)"
 	}
 
@@ -210,7 +210,7 @@ func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 			return dispatch, true
 		}
 		// The corrective successor is confirmed dispatched — only now mark
-		// the ORIGINAL terminal (superseded by the successor).
+		// the ORIGINAL stopped (superseded by the successor).
 		if merr := dt.t.lifecycle.Mutate(dt.sessionID, func(cur *session.LifecycleRecord) error {
 			if cur == nil {
 				return session.ErrLifecycleNotFound

@@ -134,11 +134,12 @@ func (al *AgentLoop) waitGoalRedriveBackoff(previousAttempt int) {
 	}
 }
 
-// goalEndingForTerminalState maps a terminal lifecycle state onto the goal
-// outcome's ending vocabulary (GoalOutcome.ending): a human Stop
-// (cancelled) reads as stopped_by_user; every other session death is `other`.
-func goalEndingForTerminalState(state session.LifecycleState) generated.GoalOutcomeEnding {
-	if state == session.LifecycleCancelled {
+// goalEndingForTerminalState maps a turn's final lifecycle state onto the
+// goal outcome's ending vocabulary (GoalOutcome.ending). The outcome keeps
+// cancellation distinct from timeout now that both use LifecycleStopped:
+// a human Stop reads as stopped_by_user; every other cause remains `other`.
+func goalEndingForTerminalState(state session.LifecycleState, outcome steer.Outcome) generated.GoalOutcomeEnding {
+	if state == session.LifecycleStopped && outcome != steer.OutcomeTimedOut {
 		return generated.GoalOutcomeEndingStoppedByUser
 	}
 	return generated.GoalOutcomeEndingOther
@@ -146,13 +147,14 @@ func goalEndingForTerminalState(state session.LifecycleState) generated.GoalOutc
 
 // goalSessionEndedReasonForState is the session-level "why" recorded as the
 // goal's TerminalReason when the pair ends together (FD1=A: the outcome
-// records why).
-func goalSessionEndedReasonForState(state session.LifecycleState) string {
+// records why). The outcome preserves the cause despite the merged state.
+func goalSessionEndedReasonForState(state session.LifecycleState, outcome steer.Outcome) string {
 	switch state {
-	case session.LifecycleCancelled:
+	case session.LifecycleStopped:
+		if outcome == steer.OutcomeTimedOut {
+			return "the session timed out"
+		}
 		return "the session was cancelled"
-	case session.LifecycleTimedOut:
-		return "the session timed out"
 	case session.LifecycleFailed:
 		return "the session failed"
 	default:

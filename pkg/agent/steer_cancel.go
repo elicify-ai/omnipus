@@ -220,7 +220,7 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 		// ends with its session, the failureReason (already a readable
 		// "interrupted: the session was cancelled" shape) naming the cause.
 		// Idempotent; never speaks for a task-owned goal.
-		al.endSessionOwnedGoalOnTerminal(sessionID, goalEndingForTerminalState(nextState), failureReason)
+		al.endSessionOwnedGoalOnTerminal(sessionID, goalEndingForTerminalState(nextState, outcome), failureReason)
 	case errors.Is(mutateErr, errTerminalReportStaleGeneration),
 		errors.Is(mutateErr, errTerminalReportAlreadyTerminal),
 		errors.Is(mutateErr, errTerminalReportStoppedDuringDelivery),
@@ -363,7 +363,7 @@ func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID stri
 		return
 	}
 	al.reportSteeredSessionTerminalUpward(ctx, sessionID, generation,
-		session.LifecycleCancelled, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
+		session.LifecycleStopped, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
 }
 
 // NewSteerCanceller builds the I-6 Canceller. cancelTurn is optional only so

@@ -663,7 +663,7 @@ func (t *DelegateTool) droppedQueuedResult(sessionID, warnings string) *ToolResu
 	if err != nil || rec == nil || rec.State != session.LifecycleQueued {
 		return nil
 	}
-	t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
+	t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user")
 	return NewToolResult(fmt.Sprintf(
 		"Session %s was still queued behind the concurrency limit and had not started; it has been dropped and will never run.",
 		sessionID,
@@ -817,7 +817,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		if dropped := t.droppedQueuedResult(sessionID, cancelBackgroundShellWarnings(killFailed, walkIncomplete)); dropped != nil {
 			return dropped
 		}
-		t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
+		t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user")
 		msg := fmt.Sprintf("Session %s hard-cancelled immediately.", sessionID)
 		msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
 		return NewToolResult(msg)
@@ -853,7 +853,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	// cancel(soft) = soft cooperative stop + a hard RequestCancel backstop
 	// after the grace window, mirroring Interrupt/InterruptSessionHard's
 	// existing two-phase escalation (steering.go, ScopeSelfOnly). The backstop only fires
-	// if the session has NOT already reached a terminal state within grace.
+	// if the session has NOT already stopped or reached a terminal state within grace.
 	// (Comments-MINOR-3: the prior `// FR-...` prefix was a placeholder —
 	// cancel is not a numbered FR; see ADR-053 R§Cancel/restart for the
 	// two-phase prose this implements.)
@@ -862,7 +862,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		go func() {
 			time.Sleep(grace)
 			if t.lifecycle != nil {
-				if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil && rec.Terminal() {
+				if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil && (rec.Terminal() || rec.State == session.LifecycleStopped) {
 					return // cooperative stop already landed — no backstop needed
 				}
 			}
@@ -871,7 +871,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			// between the terminal check and this hard-cancel call,
 			// cancelHard returns (nil, nil) and there is nothing left to
 			// transition — skip transitionLifecycle rather than stamping a
-			// redundant LifecycleCancelled onto an already-terminal record.
+			// redundant LifecycleStopped onto an already-stopped/terminal record.
 			backstopDescendants, cerr := t.cancelHard(sessionID, by, "delegate cancel(hard=false): grace elapsed")
 			if cerr != nil {
 				slog.Warn("delegate: cancel: hard-cancel backstop failed", "session_id", sessionID, "error", cerr)
@@ -880,7 +880,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			if len(backstopDescendants) == 0 {
 				return
 			}
-			t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
+			t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user")
 		}()
 	}
 

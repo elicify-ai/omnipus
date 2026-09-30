@@ -45,7 +45,7 @@ import (
 // durable S2 record too when that store IS wired, exactly like
 // completeTaskWithResult's own belt-and-suspenders dual write.
 //
-// session.StatusInterrupted (via LifecycleCancelled — mirrors to
+// session.StatusInterrupted (via LifecycleStopped — mirrors to
 // StatusInterrupted per lifecycle_bridge.go's canonical mapping) rather than
 // StatusArchived: this attempt didn't error out and the TASK itself has not
 // been judged failed (nextStatus is `next`, not `failed`) — the session's
@@ -66,7 +66,7 @@ func (te *TaskExecutor) supersedeTaskSession(agentID, taskSessionID string) {
 				map[string]any{"session_id": taskSessionID, "error": setErr.Error()})
 		}
 	}
-	te.transitionTaskLifecycle(taskSessionID, session.LifecycleCancelled, "")
+	te.transitionTaskLifecycle(taskSessionID, session.LifecycleStopped, "")
 }
 
 // buildSteeringText renders the feedback fed forward into the next attempt.

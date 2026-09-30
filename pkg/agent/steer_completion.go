@@ -65,7 +65,7 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 	// kept deferring after the goal had ended: the verdict was delivered, the
 	// goal record closed, and the child stayed `running` for ever — the exact
 	// #947 hang.
-	if activeGoalForSession(rec.SessionID) != nil && !session.IsTerminalLifecycleState(nextState) {
+	if activeGoalForSession(rec.SessionID) != nil && !session.IsTerminalLifecycleState(nextState) && nextState != session.LifecycleStopped {
 		return false, nil
 	}
 
@@ -216,7 +216,7 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		// with its session, the outcome recording why. Idempotent (no active
 		// goal, no action), and it never speaks for a task-owned goal.
 		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
-			goalEndingForTerminalState(nextState), goalSessionEndedReasonForState(nextState))
+			goalEndingForTerminalState(nextState, outcome), goalSessionEndedReasonForState(nextState, outcome))
 		return finalWoke, nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
@@ -540,9 +540,9 @@ func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, rec *session.Lifecycle
 func completionDisposition(result turnResult, runErr error, answer string) (steer.Outcome, session.LifecycleState, string) {
 	switch {
 	case errors.Is(runErr, context.DeadlineExceeded):
-		return steer.OutcomeTimedOut, session.LifecycleTimedOut, "timed_out: the session exceeded its lifetime limit"
+		return steer.OutcomeTimedOut, session.LifecycleStopped, "timed_out: the session exceeded its lifetime limit"
 	case errors.Is(runErr, context.Canceled), result.status == TurnEndStatusAborted:
-		return steer.OutcomeInterrupted, session.LifecycleCancelled, "interrupted: the session was cancelled"
+		return steer.OutcomeInterrupted, session.LifecycleStopped, "interrupted: the session was cancelled"
 	case runErr != nil:
 		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + runErr.Error()
 	case result.finalContent == toolLimitResponse:

@@ -497,7 +497,7 @@ type normalizedSubagent struct {
 // normalizeSubagent maps a durable lifecycle state onto the FR-006
 // vocabulary.
 //
-// `cancelled` maps to `failed` with intentionally_stopped=true rather than to
+// `stopped` maps to `failed` with intentionally_stopped=true rather than to
 // a sixth status value: an agent that stopped a delegation on purpose and then
 // lost context would otherwise see a bare `failed` and re-dispatch work the
 // user deliberately cancelled.
@@ -522,12 +522,6 @@ func normalizeSubagent(rec *session.LifecycleRecord) normalizedSubagent {
 			nativeStatus: string(session.LifecycleNeedsInput),
 			attention:    attentionCaller,
 		}
-	case session.LifecyclePaused:
-		return normalizedSubagent{
-			status:       jobStatusBlocked,
-			nativeStatus: string(session.LifecyclePaused),
-			attention:    attentionCaller,
-		}
 	case session.LifecycleCompleted:
 		return normalizedSubagent{
 			status:       jobStatusCompleted,
@@ -540,16 +534,10 @@ func normalizeSubagent(rec *session.LifecycleRecord) normalizedSubagent {
 			nativeStatus: withFailedReason(string(session.LifecycleFailed), rec.FailedReason),
 			attention:    attentionNone,
 		}
-	case session.LifecycleTimedOut:
+	case session.LifecycleStopped:
 		return normalizedSubagent{
 			status:       jobStatusFailed,
-			nativeStatus: withFailedReason(string(session.LifecycleTimedOut), rec.FailedReason),
-			attention:    attentionNone,
-		}
-	case session.LifecycleCancelled:
-		return normalizedSubagent{
-			status:       jobStatusFailed,
-			nativeStatus: withFailedReason(string(session.LifecycleCancelled), rec.FailedReason),
+			nativeStatus: withFailedReason(string(session.LifecycleStopped), rec.FailedReason),
 			attention:    attentionNone,
 			stopped:      true,
 		}
