@@ -459,7 +459,7 @@ The floor is unchanged: pinned instructions, the original user/media anchor, eve
 | §6.1/6.3 and §16a MAJ-017 bare projection/turn-start triple | MAJ-CW-002/005: exact pressure caps and anchor metadata, actual Skip, turn-start snapshot, never moved. |
 | §7 operation table/no Skip, fixed 160k share, local fatal guard; §16a MAJ-001/016 | MAJ-CW-004–007: real complete-step slide, coupled slice/metadata, structural/control floor, S = 0.5W by default. |
 | §8/§12 `context_unrecoverable`; §13 blanket request-fit guarantee | MAJ-CW-008–010: model-only information, typed Verbose diagnostic, real terminal outcomes, no guaranteed fit of arbitrary immutable bytes. |
-| §9 D9 fixed share setting | MAJ-CW-007 exact relative-field contract and percentage form. |
+| §10 D9 — Controls in Settings and the UI: fixed share setting | MAJ-CW-007 exact relative-field contract and percentage form. |
 | **Provider-Capability-Aware Media Handling and User-Facing Error Translation** (RD5–RD7), as implemented by the C8 narration-preserving error-content rule | MAJ-CW-011: always replace content with the translated terminal sentence for `'error'`; `'interrupted'` remains untouched. |
 | §14 item 6 blanket rejection of mid-turn cutting | Safe whole completed-step removal is adopted; half-group removal stays forbidden. No summarizer, provider compaction or second context system is adopted. #904 correction stands unchanged. |
 | §17 proofs 2, 4, 4b, 4c and their no-cut/newest-immunity/fatal-guard assertions | §18.4 replaces those assertions. Preserve the original resolver, archive, recall-injection, hydration, user-bound and argument-refusal proofs where not contradicted. |
