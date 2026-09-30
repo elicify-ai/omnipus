@@ -766,26 +766,7 @@ func (s *ApprovalGrantStore) InheritFrom(srcSessionID, srcAgentID, dstSessionID,
 			"source_miss_total", total)
 		return
 	}
-	// Identity: the destination set IS the source set. Ranging a map while
-	// writing the keys it already contains is safe, but short-circuiting says
-	// so explicitly instead of relying on that subtlety.
-	if srcKey != dstKey {
-		dstSet := s.grants[dstKey]
-		if dstSet == nil {
-			dstSet = make(map[string]map[string]struct{}, len(srcSet))
-			s.grants[dstKey] = dstSet
-		}
-		for tool, srcFPs := range srcSet {
-			dstFPs := dstSet[tool]
-			if dstFPs == nil {
-				dstFPs = make(map[string]struct{}, len(srcFPs))
-				dstSet[tool] = dstFPs
-			}
-			for fp := range srcFPs {
-				dstFPs[fp] = struct{}{}
-			}
-		}
-	}
+	s.inheritExactGrantFingerprints(srcKey, dstKey, srcSet)
 	// ADR-092: the three new grant kinds inherit on delegation exactly like
 	// the exact-fingerprint grant above — "a delegate inherits it via the
 	// same InheritFrom mechanism as command grants" (D7), "same session/
@@ -855,6 +836,30 @@ func (s *ApprovalGrantStore) InheritFrom(srcSessionID, srcAgentID, dstSessionID,
 		// rather than a "shows granted, silently 403s anyway" one.
 	}
 	s.mu.Unlock()
+}
+
+// inheritExactGrantFingerprints unions exact grants under the caller-held lock.
+func (s *ApprovalGrantStore) inheritExactGrantFingerprints(srcKey, dstKey grantKey, srcSet map[string]map[string]struct{}) {
+	// Identity: the destination set IS the source set. Ranging a map while
+	// writing the keys it already contains is safe, but short-circuiting says
+	// so explicitly instead of relying on that subtlety.
+	if srcKey != dstKey {
+		dstSet := s.grants[dstKey]
+		if dstSet == nil {
+			dstSet = make(map[string]map[string]struct{}, len(srcSet))
+			s.grants[dstKey] = dstSet
+		}
+		for tool, srcFPs := range srcSet {
+			dstFPs := dstSet[tool]
+			if dstFPs == nil {
+				dstFPs = make(map[string]struct{}, len(srcFPs))
+				dstSet[tool] = dstFPs
+			}
+			for fp := range srcFPs {
+				dstFPs[fp] = struct{}{}
+			}
+		}
+	}
 }
 
 // InheritSourceMissCount returns the number of InheritFrom calls that resolved

@@ -143,6 +143,8 @@ channels:
         $ref: '#/components/messages/GoalOutcomeFrame'
       LibraryChangedFrame:
         $ref: '#/components/messages/LibraryChangedFrame'
+      AgentCreatedFrame:
+        $ref: '#/components/messages/AgentCreatedFrame'
       SessionSnapshotFrame:
         $ref: '#/components/messages/SessionSnapshotFrame'
       CatchUpCompleteFrame:
@@ -547,6 +549,17 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/LibraryChangedFrame'
+  receiveAgentCreated:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'A new agent was durably persisted (REST POST /api/v1/agents, or the create_agent tool). Broadcast to every
+      connected client; the SPA invalidates its cached agent list so the Agent Picker shows the new agent without a reload.
+      This is the same cross-tab-freshness fix as receiveLibraryChanged, for the agent roster instead of the Library tree.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/AgentCreatedFrame'
   receiveToolApprovalRequired:
     action: receive
     channel:
@@ -1507,6 +1520,16 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/LibraryChangedFrame'
+    AgentCreatedFrame:
+      name: AgentCreatedFrame
+      title: agent_created
+      summary: 'A new agent was persisted (server → client). Broadcast so every connected tab can drop its stale agent
+        list and pick up the new agent without a reload.
+
+        '
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/AgentCreatedFrame'
     SessionSnapshotFrame:
       name: SessionSnapshotFrame
       title: session_snapshot
@@ -1609,6 +1632,7 @@ components:
       - session_snapshot
       - catch_up_complete
       - user_message
+      - agent_created
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -7073,3 +7097,30 @@ components:
           description: >-
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy.
+    AgentCreatedFrame:
+      title: AgentCreatedFrame
+      description: >
+        Server → client. Emitted after a new agent is durably persisted (REST
+        POST /api/v1/agents, or the create_agent tool). Scope is deliberately
+        coarse, mirroring LibraryChangedFrame: clients invalidate the whole
+        ['agents'] query and let it refetch. `agent_id` is informational
+        only, never a scoping instruction. Broadcast, not addressed — the
+        originating tab receives it too, where a redundant invalidate is a
+        no-op.
+      type: object
+      required:
+      - type
+      - agent_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: agent_created
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            The newly created agent's ID. Informational only — never a
+            scoping instruction. Clients invalidate the entire ['agents']
+            listing query regardless of which agent id triggered the frame.

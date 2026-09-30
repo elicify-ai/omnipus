@@ -83,6 +83,87 @@ func specRoles(dState, fState string, ddgUsable bool) (fb string, auto bool, ign
 	}
 }
 
+func checkFixK6RolesCrossProductCase(t *testing.T, dState, fState string, ddgOn bool, allIDs []string) {
+	t.Helper()
+	fx := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
+		switch dState {
+		case "unusable":
+			c.Tavily.APIKeyRef = envRefMissingTav
+		case "unknown":
+			c.DefaultProvider = "altavista"
+		case "absent":
+			c.DefaultProvider = ""
+		}
+		switch fState {
+		case "none":
+			c.FallbackProvider = config.SearchProviderNone
+		case "same":
+			c.FallbackProvider = c.DefaultProvider
+		case "other-usable":
+			c.FallbackProvider = config.SearchProviderPerplexity
+			c.Perplexity = config.PerplexityConfig{Enabled: true, APIKeyRef: envRefPerplexity}
+		case "other-unusable":
+			c.FallbackProvider = config.SearchProviderBrave
+			c.Brave = config.BraveConfig{Enabled: true, APIKeyRef: envRefMissingBrav}
+		case "unknown":
+			// A different unknown id than the unknown
+			// default's: the cross-product's "unknown
+			// fallback" state is a fallback id not in the
+			// catalogue, distinct from the default.
+			c.FallbackProvider = "lycos"
+		}
+		c.DuckDuckGo.Enabled = ddgOn
+	}, nil)
+
+	// 1. The resolver tuple equals the spec's tuple.
+	entries := resolveRoles(fx.cfg)
+	wantFb, wantAuto, wantIgnored, row := specRoles(dState, fState, ddgOn)
+	if entries.fallbackID != wantFb ||
+		entries.fallbackAuto != wantAuto ||
+		entries.ignoredSameAsDefault != wantIgnored {
+		t.Fatalf("row %s: resolver (fb=%q auto=%v ignored=%v), want (fb=%q auto=%v ignored=%v)",
+			row, entries.fallbackID, entries.fallbackAuto, entries.ignoredSameAsDefault,
+			wantFb, wantAuto, wantIgnored)
+	}
+
+	// 2. Runtime: the row decides who answers. R5's outcome
+	// column is "the configured default": with a usable
+	// default it runs; with a not-usable default R5 has
+	// resolved no fallback, so nobody runs.
+	res := fx.run(map[string]any{"query": "golang"})
+	wantServed := ""
+	wantErr := false
+	switch {
+	case row == "R6":
+		wantServed = "perplexity"
+	case row == "R7":
+		wantErr = true
+	case row == "R5" && dState != "usable":
+		wantErr = true
+	default:
+		wantServed = "tavily"
+	}
+	if wantErr && !res.IsError {
+		t.Fatalf("row %s: expected nobody to run (tool error), got success:\n%s", row, res.ForLLM)
+	}
+	if !wantErr && res.IsError {
+		t.Fatalf("row %s: expected %q to answer, got error:\n%s", row, wantServed, res.ForLLM)
+	}
+	for _, id := range allIDs {
+		want := 0
+		if id == wantServed {
+			want = 1
+		}
+		if got := fx.hitsOf(id); got != want {
+			t.Fatalf("row %s: %s hits = %d, want %d", row, id, got, want)
+		}
+	}
+	// R9: the error names the unknown default id.
+	if dState == "unknown" && wantErr && !strings.Contains(res.ForLLM, "altavista") {
+		t.Fatalf("row %s: R9 error must name the unknown default id, got:\n%s", row, res.ForLLM)
+	}
+}
+
 // TestFixK6_RolesCrossProduct walks the 48-combination cross product. For
 // each: the resolver tuple must equal the spec's tuple, and one runtime run
 // must serve from the row's provider (or fail with nobody called for R7/R5
@@ -101,83 +182,7 @@ func TestFixK6_RolesCrossProduct(t *testing.T) {
 					ddgLabel = "on"
 				}
 				t.Run(dState+"/"+fState+"/ddg="+ddgLabel, func(t *testing.T) {
-					fx := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
-						switch dState {
-						case "unusable":
-							c.Tavily.APIKeyRef = envRefMissingTav
-						case "unknown":
-							c.DefaultProvider = "altavista"
-						case "absent":
-							c.DefaultProvider = ""
-						}
-						switch fState {
-						case "none":
-							c.FallbackProvider = config.SearchProviderNone
-						case "same":
-							c.FallbackProvider = c.DefaultProvider
-						case "other-usable":
-							c.FallbackProvider = config.SearchProviderPerplexity
-							c.Perplexity = config.PerplexityConfig{Enabled: true, APIKeyRef: envRefPerplexity}
-						case "other-unusable":
-							c.FallbackProvider = config.SearchProviderBrave
-							c.Brave = config.BraveConfig{Enabled: true, APIKeyRef: envRefMissingBrav}
-						case "unknown":
-							// A different unknown id than the unknown
-							// default's: the cross-product's "unknown
-							// fallback" state is a fallback id not in the
-							// catalogue, distinct from the default.
-							c.FallbackProvider = "lycos"
-						}
-						c.DuckDuckGo.Enabled = ddgOn
-					}, nil)
-
-					// 1. The resolver tuple equals the spec's tuple.
-					entries := resolveRoles(fx.cfg)
-					wantFb, wantAuto, wantIgnored, row := specRoles(dState, fState, ddgOn)
-					if entries.fallbackID != wantFb ||
-						entries.fallbackAuto != wantAuto ||
-						entries.ignoredSameAsDefault != wantIgnored {
-						t.Fatalf("row %s: resolver (fb=%q auto=%v ignored=%v), want (fb=%q auto=%v ignored=%v)",
-							row, entries.fallbackID, entries.fallbackAuto, entries.ignoredSameAsDefault,
-							wantFb, wantAuto, wantIgnored)
-					}
-
-					// 2. Runtime: the row decides who answers. R5's outcome
-					// column is "the configured default": with a usable
-					// default it runs; with a not-usable default R5 has
-					// resolved no fallback, so nobody runs.
-					res := fx.run(map[string]any{"query": "golang"})
-					wantServed := ""
-					wantErr := false
-					switch {
-					case row == "R6":
-						wantServed = "perplexity"
-					case row == "R7":
-						wantErr = true
-					case row == "R5" && dState != "usable":
-						wantErr = true
-					default:
-						wantServed = "tavily"
-					}
-					if wantErr && !res.IsError {
-						t.Fatalf("row %s: expected nobody to run (tool error), got success:\n%s", row, res.ForLLM)
-					}
-					if !wantErr && res.IsError {
-						t.Fatalf("row %s: expected %q to answer, got error:\n%s", row, wantServed, res.ForLLM)
-					}
-					for _, id := range allIDs {
-						want := 0
-						if id == wantServed {
-							want = 1
-						}
-						if got := fx.hitsOf(id); got != want {
-							t.Fatalf("row %s: %s hits = %d, want %d", row, id, got, want)
-						}
-					}
-					// R9: the error names the unknown default id.
-					if dState == "unknown" && wantErr && !strings.Contains(res.ForLLM, "altavista") {
-						t.Fatalf("row %s: R9 error must name the unknown default id, got:\n%s", row, res.ForLLM)
-					}
+					checkFixK6RolesCrossProductCase(t, dState, fState, ddgOn, allIDs)
 				})
 			}
 		}

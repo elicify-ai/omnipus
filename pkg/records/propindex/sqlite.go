@@ -190,6 +190,12 @@ func Open(ctx context.Context, path string, opts Options) (Store, error) {
 //     cross-handle case the old comment described but did not address: a long
 //     reconcile overlapping a long query used to convert to SQLITE_BUSY after
 //     five seconds.
+//   - cache_size=-1024 — caps each connection's suggested page-cache maximum at
+//     1 MiB instead of modernc SQLite's compiled-in 2 MiB default. The index is
+//     streamed and derived, so keeping twice that much database-page data in
+//     every active connection spends process RSS without improving correctness;
+//     SQLite and the OS still cache pages normally, and the value does not alter
+//     the database file.
 //   - synchronous=NORMAL — was OFF. In WAL mode NORMAL is the documented safe
 //     setting: a crash can lose the most recent commits, and cannot corrupt the
 //     file. The index is derived, so losing recent commits costs a re-index of
@@ -214,6 +220,7 @@ func indexDSN(path string) (string, error) {
 	q := url.Values{}
 	for _, pragma := range []string{
 		"busy_timeout(5000)",
+		"cache_size(-1024)",
 		"journal_mode(WAL)",
 		"synchronous(NORMAL)",
 		"foreign_keys(OFF)",

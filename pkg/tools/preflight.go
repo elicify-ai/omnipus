@@ -127,23 +127,7 @@ func classifySegmentPathOperations(segment string) ([]PathOperation, bool) {
 
 	head, args := resolveShellHead(words)
 
-	var ops []PathOperation
-	redirectTargets := map[int]struct{}{}
-	for i := 0; i < len(args); i++ {
-		w := args[i]
-		switch {
-		case (w == ">" || w == ">>") && i+1 < len(args) && isAbsShellPath(args[i+1]):
-			ops = append(ops, PathOperation{Path: args[i+1], Access: fspolicy.PathGrantAccessWrite})
-			redirectTargets[i+1] = struct{}{}
-			i++
-		case strings.HasPrefix(w, ">>") && isAbsShellPath(w[2:]):
-			ops = append(ops, PathOperation{Path: w[2:], Access: fspolicy.PathGrantAccessWrite})
-			redirectTargets[i] = struct{}{}
-		case strings.HasPrefix(w, ">") && isAbsShellPath(w[1:]):
-			ops = append(ops, PathOperation{Path: w[1:], Access: fspolicy.PathGrantAccessWrite})
-			redirectTargets[i] = struct{}{}
-		}
-	}
+	ops, redirectTargets := classifySegmentRedirections(args)
 
 	switch strings.ToLower(head) {
 	case "cp", "ln", "install":
@@ -193,20 +177,7 @@ func classifySegmentPathOperations(segment string) ([]PathOperation, bool) {
 			ops = append(ops, PathOperation{Path: paths[len(paths)-1], Access: fspolicy.PathGrantAccessWrite})
 		}
 	case "sed":
-		hasInPlace := false
-		for _, a := range args {
-			if a == "-i" || strings.HasPrefix(a, "-i") {
-				hasInPlace = true
-				break
-			}
-		}
-		access := fspolicy.PathGrantAccessRead
-		if hasInPlace {
-			access = fspolicy.PathGrantAccessWrite
-		}
-		for _, p := range absShellPathArgs(args, redirectTargets) {
-			ops = append(ops, PathOperation{Path: p, Access: access})
-		}
+		ops = append(ops, classifySedPathOperations(args, redirectTargets)...)
 	case "rm", "tee", "touch", "mkdir", "chmod", "chown", "truncate":
 		for _, p := range absShellPathArgs(args, redirectTargets) {
 			ops = append(ops, PathOperation{Path: p, Access: fspolicy.PathGrantAccessWrite})
@@ -237,6 +208,49 @@ func classifySegmentPathOperations(segment string) ([]PathOperation, bool) {
 	}
 
 	return ops, true
+}
+
+// classifySegmentRedirections records write targets before command-specific paths.
+func classifySegmentRedirections(args []string) ([]PathOperation, map[int]struct{}) {
+	var ops []PathOperation
+	redirectTargets := map[int]struct{}{}
+	for i := 0; i < len(args); i++ {
+		w := args[i]
+		switch {
+		case (w == ">" || w == ">>") && i+1 < len(args) && isAbsShellPath(args[i+1]):
+			ops = append(ops, PathOperation{Path: args[i+1], Access: fspolicy.PathGrantAccessWrite})
+			redirectTargets[i+1] = struct{}{}
+			i++
+		case strings.HasPrefix(w, ">>") && isAbsShellPath(w[2:]):
+			ops = append(ops, PathOperation{Path: w[2:], Access: fspolicy.PathGrantAccessWrite})
+			redirectTargets[i] = struct{}{}
+		case strings.HasPrefix(w, ">") && isAbsShellPath(w[1:]):
+			ops = append(ops, PathOperation{Path: w[1:], Access: fspolicy.PathGrantAccessWrite})
+			redirectTargets[i] = struct{}{}
+		}
+	}
+	return ops, redirectTargets
+}
+
+// classifySedPathOperations applies sed's in-place flag to its absolute paths.
+func classifySedPathOperations(args []string, redirectTargets map[int]struct{}) []PathOperation {
+	hasInPlace := false
+	for _, a := range args {
+		if a == "-i" || strings.HasPrefix(a, "-i") {
+			hasInPlace = true
+			break
+		}
+	}
+	access := fspolicy.PathGrantAccessRead
+	if hasInPlace {
+		access = fspolicy.PathGrantAccessWrite
+	}
+	paths := absShellPathArgs(args, redirectTargets)
+	ops := make([]PathOperation, 0, len(paths))
+	for _, p := range paths {
+		ops = append(ops, PathOperation{Path: p, Access: access})
+	}
+	return ops
 }
 
 // writeOutputFlagOps extracts WRITE PathOperations for a network-fetch

@@ -225,36 +225,7 @@ func TestTranscript_ProviderMessageSubtypePersisted_MAJ104(t *testing.T) {
 	assembled := templateWith("quota_billing", "openrouter")
 
 	t.Run("provider-stage entry persists provider_message=true", func(t *testing.T) {
-		// Rewritten for gate finding F7: the flag no longer comes from the
-		// stage string; it is threaded from the caller's already-classified
-		// LLMError — exactly the shape loop_run_turn_response.go's LLM-failure
-		// write passes (TranslateTurnError sets ProviderMessage when identity
-		// was present and the Section-6 sentence was assembled).
-		ts.appendClassifiedError(EventKindError.String(), "provider", LLMError{
-			Code:            CodeQuotaBilling,
-			Message:         assembled,
-			ProviderMessage: true,
-		})
-
-		entries, err := store.ReadTranscript(meta.ID)
-		if err != nil {
-			t.Fatalf("ReadTranscript: %v", err)
-		}
-		found := false
-		for _, e := range entries {
-			if e.Type == session.EntryTypeSystem && e.Status == "error" && e.ErrorCode == string(CodeQuotaBilling) {
-				found = true
-				if e.Content != assembled {
-					t.Fatalf("content = %q, want %q (MAJ-001)", e.Content, assembled)
-				}
-				if !e.ProviderMessage {
-					t.Fatal("persisted provider_message = false, want true — the assembled-sentence marker must survive persistence (MAJ-104/C-14)")
-				}
-			}
-		}
-		if !found {
-			t.Fatal("no persisted quota_billing error entry found")
-		}
+		assertProviderStageEntryPersistsMAJ104(t, ts, store, meta.ID, assembled)
 	})
 
 	t.Run("own-limiter rate_limited row persists provider_message=false", func(t *testing.T) {
@@ -351,4 +322,38 @@ func TestTranscript_ProviderMessageSubtypePersisted_MAJ104(t *testing.T) {
 			t.Fatal("no persisted needs_provider entry found")
 		}
 	})
+}
+
+func assertProviderStageEntryPersistsMAJ104(t *testing.T, ts *turnState, store *session.UnifiedStore, sessionID, assembled string) {
+	t.Helper()
+	// Rewritten for gate finding F7: the flag no longer comes from the
+	// stage string; it is threaded from the caller's already-classified
+	// LLMError — exactly the shape loop_run_turn_response.go's LLM-failure
+	// write passes (TranslateTurnError sets ProviderMessage when identity
+	// was present and the Section-6 sentence was assembled).
+	ts.appendClassifiedError(EventKindError.String(), "provider", LLMError{
+		Code:            CodeQuotaBilling,
+		Message:         assembled,
+		ProviderMessage: true,
+	})
+
+	entries, err := store.ReadTranscript(sessionID)
+	if err != nil {
+		t.Fatalf("ReadTranscript: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Type == session.EntryTypeSystem && e.Status == "error" && e.ErrorCode == string(CodeQuotaBilling) {
+			found = true
+			if e.Content != assembled {
+				t.Fatalf("content = %q, want %q (MAJ-001)", e.Content, assembled)
+			}
+			if !e.ProviderMessage {
+				t.Fatal("persisted provider_message = false, want true — the assembled-sentence marker must survive persistence (MAJ-104/C-14)")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no persisted quota_billing error entry found")
+	}
 }
