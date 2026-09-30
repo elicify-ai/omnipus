@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -107,6 +108,9 @@ type wsHandlerHandleChatMessage struct {
 	// firstMessage is an ordinary, within-bound session-less user send.
 	// Oversized input keeps ADR-066's separate agent-side refusal path.
 	firstMessage bool
+	// firstRequestDigest captures original requested fields before intake mutates
+	// them, so a retry compares the request, not newly resolved server defaults.
+	firstRequestDigest firstClientMessageDigest
 }
 
 // pendingMessageStatus is one persisted user message still waiting for its
@@ -225,6 +229,15 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	autoApprove *bool,
 	wc *wsConn,
 ) {
+	// Schema validation is optional, but the client-id bound is not. Reject
+	// before resolution, persistence, or the deferred status/cache cleanup.
+	if utf8.RuneCountInString(clientMessageID) > maxClientMessageIDChars {
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "client_message_id must be at most 128 characters",
+		})
+		return
+	}
 	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, wc: wc}
 	hcm.firstMessage = frameSessionID == "" && !setupKickoff &&
 		agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound()
@@ -305,6 +318,7 @@ func (h *WSHandler) handleChatMessageWithClientID(
 // append/cache population, and is released before the caller's bus admission.
 func (hcm *wsHandlerHandleChatMessage) prepareMessage() bool {
 	if hcm.frameSessionID == "" && !hcm.setupKickoff && hcm.clientMessageID != "" {
+		hcm.firstRequestDigest = hcm.digestFirstMessageRequest()
 		// One intake mutex, never a principal-keyed claim/lock store. h.mu is
 		// free during disk I/O; a slow admission cannot block other new chats.
 		hcm.h.firstMessageMu.Lock()
@@ -528,7 +542,8 @@ func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.Transcri
 		logsafeError("ws: marshal user_message failed", "session_id", hcm.sessionID, "error", err)
 		return
 	}
-	hcm.h.rememberAcceptedMessage(hcm.sessionID, entry.ClientMessageID, data)
+	principal, _ := hcm.wc.messageRetryPrincipal()
+	hcm.h.rememberAcceptedMessage(hcm.sessionID, entry.ClientMessageID, data, principal)
 	hcm.h.hubPublishAndDeliverAlsoTo(hcm.sessionID, string(generated.WsFrameTypeUserMessage), data, hcm.wc)
 }
 

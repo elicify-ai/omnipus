@@ -204,6 +204,9 @@ type WSHandler struct {
 	// acceptedFirstClientMsgs extends the retry cache across connections before
 	// the client knows its session ID. Guarded by mu; lost on gateway restart.
 	acceptedFirstClientMsgs map[firstClientMessageKey]acceptedFirstClientMessage
+	// firstMessageAcceptanceOrder gives the bounded cache FIFO eviction order.
+	// Guarded by mu; retries do not advance it.
+	firstMessageAcceptanceOrder uint64
 
 	// approvalRegV2 is the Central Tool Registry approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway after construction.  Nil until then.

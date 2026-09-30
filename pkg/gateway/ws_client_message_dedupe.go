@@ -15,10 +15,14 @@
 // sends also retain their authenticated principal + client id in memory (#1090).
 // Their retries receive a recovered session_started and a received status, then
 // attach for replay. A restart loses this cache, including the save-before-ack
-// crash window; there is deliberately no on-disk first-send ledger.
+// crash window; there is deliberately no on-disk first-send ledger. First-send
+// entries are bounded per principal and globally, oldest accepted first. A retry
+// of an evicted first id can mint a second chat, just like a retry after restart.
 package gateway
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -38,12 +42,22 @@ type firstClientMessageKey struct {
 	clientMessageID string
 }
 
+const (
+	maxClientMessageIDChars                 = 128
+	acceptedFirstClientMessagesPerPrincipal = 256
+	acceptedFirstClientMessagesTotal        = 10_000
+)
+
+type firstClientMessageDigest [sha256.Size]byte
+
 // acceptedFirstClientMessage is recorded only after a successful durable
 // append. It is an extension of the in-memory dedupe, never a prepared claim.
 type acceptedFirstClientMessage struct {
-	sessionID string
-	agentID   string
-	store     *session.UnifiedStore
+	sessionID       string
+	agentID         string
+	store           *session.UnifiedStore
+	acceptanceOrder uint64
+	requestDigest   firstClientMessageDigest
 }
 
 func (wc *wsConn) messageRetryPrincipal() (clientMessagePrincipal, bool) {
@@ -60,6 +74,41 @@ func (wc *wsConn) messageRetryPrincipal() (clientMessagePrincipal, bool) {
 	return wc.retryPrincipal, wc.retryPrincipal.kind != ""
 }
 
+// digestFirstMessageRequest runs before any routing/default resolution or media
+// normalization. Length prefixes and a media count preserve field boundaries
+// and reference order; absent/false/true Auto choices have distinct bytes. Only
+// the SHA-256 result survives intake, never the raw request text in this cache.
+func (hcm *wsHandlerHandleChatMessage) digestFirstMessageRequest() firstClientMessageDigest {
+	digest := sha256.New()
+	writeString := func(value string) {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		// hash.Hash.Write is documented never to return an error.
+		_, _ = digest.Write(length[:])
+		_, _ = digest.Write([]byte(value))
+	}
+	for _, value := range []string{hcm.content, hcm.agentID, hcm.workspaceID, hcm.modelName} {
+		writeString(value)
+	}
+	var mediaCount [8]byte
+	binary.BigEndian.PutUint64(mediaCount[:], uint64(len(hcm.mediaRefs)))
+	_, _ = digest.Write(mediaCount[:])
+	for _, ref := range hcm.mediaRefs {
+		writeString(ref)
+	}
+	autoChoice := byte(0)
+	if hcm.autoApprove != nil {
+		autoChoice = 1
+		if *hcm.autoApprove {
+			autoChoice = 2
+		}
+	}
+	_, _ = digest.Write([]byte{autoChoice})
+	var result firstClientMessageDigest
+	copy(result[:], digest.Sum(nil))
+	return result
+}
+
 func (hcm *wsHandlerHandleChatMessage) rememberAcceptedFirstMessage() {
 	principal, authenticated := hcm.wc.messageRetryPrincipal()
 	if !authenticated || hcm.clientMessageID == "" {
@@ -68,13 +117,48 @@ func (hcm *wsHandlerHandleChatMessage) rememberAcceptedFirstMessage() {
 	key := firstClientMessageKey{principal: principal, clientMessageID: hcm.clientMessageID}
 	hcm.h.mu.Lock()
 	defer hcm.h.mu.Unlock()
-	if hcm.h.acceptedFirstClientMsgs == nil {
-		hcm.h.acceptedFirstClientMsgs = make(map[firstClientMessageKey]acceptedFirstClientMessage)
+	h := hcm.h
+	if h.acceptedFirstClientMsgs == nil {
+		h.acceptedFirstClientMsgs = make(map[firstClientMessageKey]acceptedFirstClientMessage)
 	}
-	hcm.h.acceptedFirstClientMsgs[key] = acceptedFirstClientMessage{
-		sessionID: hcm.sessionID,
-		agentID:   hcm.targetAgentID,
-		store:     hcm.store,
+	order := h.acceptedFirstClientMsgs[key].acceptanceOrder
+	if _, exists := h.acceptedFirstClientMsgs[key]; !exists {
+		h.evictAcceptedFirstMessageLocked(principal)
+		h.firstMessageAcceptanceOrder++
+		order = h.firstMessageAcceptanceOrder
+	}
+	h.acceptedFirstClientMsgs[key] = acceptedFirstClientMessage{
+		sessionID:       hcm.sessionID,
+		agentID:         hcm.targetAgentID,
+		store:           hcm.store,
+		acceptanceOrder: order,
+		requestDigest:   hcm.firstRequestDigest,
+	}
+}
+
+// evictAcceptedFirstMessageLocked makes room for a new accepted id. The scan
+// is bounded by the global entry limit; no principal counters outlive entries.
+// A principal at its limit loses its own oldest entry, otherwise the global
+// limit evicts the oldest entry across principals. Caller holds h.mu.
+func (h *WSHandler) evictAcceptedFirstMessageLocked(principal clientMessagePrincipal) {
+	var oldest, oldestForPrincipal firstClientMessageKey
+	var oldestOrder, oldestPrincipalOrder uint64
+	principalCount := 0
+	for key, accepted := range h.acceptedFirstClientMsgs {
+		if oldestOrder == 0 || accepted.acceptanceOrder < oldestOrder {
+			oldest, oldestOrder = key, accepted.acceptanceOrder
+		}
+		if key.principal == principal {
+			principalCount++
+			if oldestPrincipalOrder == 0 || accepted.acceptanceOrder < oldestPrincipalOrder {
+				oldestForPrincipal, oldestPrincipalOrder = key, accepted.acceptanceOrder
+			}
+		}
+	}
+	if principalCount >= acceptedFirstClientMessagesPerPrincipal {
+		delete(h.acceptedFirstClientMsgs, oldestForPrincipal)
+	} else if len(h.acceptedFirstClientMsgs) >= acceptedFirstClientMessagesTotal {
+		delete(h.acceptedFirstClientMsgs, oldest)
 	}
 }
 
@@ -89,6 +173,15 @@ func (hcm *wsHandlerHandleChatMessage) answerRetriedFirstMessage() bool {
 	hcm.h.mu.Unlock()
 	if !found {
 		return false
+	}
+	if accepted.requestDigest != hcm.firstRequestDigest {
+		cid := hcm.clientMessageID
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:            string(generated.WsFrameTypeError),
+			Message:         "client_message_id conflict: this ID was already used for a different request",
+			ClientMessageId: &cid,
+		})
+		return true
 	}
 
 	// The cache never authorizes disclosure after deletion or an owner change.
@@ -135,8 +228,9 @@ const acceptedClientMessagesPerSession = 256
 // acceptedClientMessage is one accepted message: its unsequenced
 // user_message echo and the last status the session was told about.
 type acceptedClientMessage struct {
-	echo  []byte
-	state string // received | working
+	echo      []byte
+	state     string // received | working
+	principal clientMessagePrincipal
 }
 
 // acceptedClientMessages is guarded by WSHandler.mu.
@@ -158,9 +252,15 @@ func (h *WSHandler) acceptedLocked(sessionID string) *acceptedClientMessages {
 }
 
 // rememberAcceptedMessage records a persisted message under its client id.
-func (h *WSHandler) rememberAcceptedMessage(sessionID, clientMessageID string, echo []byte) {
+// Chat intake supplies its originating principal. An unspecified origin is the
+// zero principal, not a wildcard for authenticated accounts or token kinds.
+func (h *WSHandler) rememberAcceptedMessage(sessionID, clientMessageID string, echo []byte, origin ...clientMessagePrincipal) {
 	if sessionID == "" || clientMessageID == "" {
 		return
+	}
+	var principal clientMessagePrincipal
+	if len(origin) > 0 {
+		principal = origin[0]
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -168,7 +268,7 @@ func (h *WSHandler) rememberAcceptedMessage(sessionID, clientMessageID string, e
 	if _, ok := a.byID[clientMessageID]; !ok {
 		a.order = append(a.order, clientMessageID)
 	}
-	a.byID[clientMessageID] = &acceptedClientMessage{echo: echo, state: "received"}
+	a.byID[clientMessageID] = &acceptedClientMessage{echo: echo, state: "received", principal: principal}
 	for len(a.order) > acceptedClientMessagesPerSession {
 		delete(a.byID, a.order[0])
 		a.order = a.order[1:]
@@ -216,16 +316,30 @@ func (hcm *wsHandlerHandleChatMessage) answerRetriedMessage() bool {
 	if hcm.sessionID == "" {
 		return false
 	}
+	principal, _ := hcm.wc.messageRetryPrincipal()
 	h := hcm.h
 	h.mu.Lock()
 	var echo []byte
 	var state string
+	wrongPrincipal := false
 	if a := h.acceptedClientMsgs[hcm.sessionID]; a != nil {
 		if m := a.byID[hcm.clientMessageID]; m != nil {
-			echo, state = m.echo, m.state
+			wrongPrincipal = m.principal != principal
+			if !wrongPrincipal {
+				echo, state = m.echo, m.state
+			}
 		}
 	}
 	h.mu.Unlock()
+	if wrongPrincipal {
+		cid := hcm.clientMessageID
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:            string(generated.WsFrameTypeError),
+			Message:         "Could not check this chat",
+			ClientMessageId: &cid,
+		})
+		return true
+	}
 	if state == "" {
 		return false
 	}
