@@ -432,10 +432,15 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
       expect(fresh.body.messages.find((message) => message.subject === subject)?.uid).toBe(saved.uid)
 
       const detailResponse = tabA.waitForResponse(isDraftDetail)
+      const refreshedList = tabA.waitForResponse((response) => response.request().method() === 'GET'
+        && /\/folders\/drafts\/messages$/.test(new URL(response.url()).pathname) && response.status() === 200)
       await tabA.getByRole('button', { name: new RegExp(`^${subject}`) }).click()
       const detail = await detailResponse
       console.log('F5 cross-tab detail:', JSON.stringify({ oldUid: original.uid, currentUid: saved.uid, url: detail.url(), status: detail.status() }))
       await expect(tabA.getByText('Updated in browser tab B.')).toBeVisible()
+      const refreshed = await (await refreshedList).json() as MailMessagePage
+      expect(refreshed.messages.find((message) => message.subject === subject)?.uid).toBe(saved.uid)
+      await expect(tabA.getByRole('button', { name: new RegExp(`^${subject}`) })).toHaveAttribute('aria-current', 'true')
       await expect(tabA.getByTestId('mail-reading-zone')).not.toContainText('404:')
     } finally {
       await tabA.context().close()
@@ -458,10 +463,15 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
       expect(fresh.ok).toBe(true)
       expect(fresh.body.messages.find((message) => message.subject === subject)?.uid).toBe(replacement.uid)
       const detailResponse = page.waitForResponse(isDraftDetail)
+      const refreshedList = page.waitForResponse((response) => response.request().method() === 'GET'
+        && /\/folders\/drafts\/messages$/.test(new URL(response.url()).pathname) && response.status() === 200)
       await page.getByRole('button', { name: new RegExp(`^${subject}`) }).click()
       const detail = await detailResponse
       console.log('F5 background detail:', JSON.stringify({ oldUid: original.uid, currentUid: replacement.uid, url: detail.url(), status: detail.status() }))
       await expect(page.getByText('Updated by the background actor.')).toBeVisible()
+      const refreshed = await (await refreshedList).json() as MailMessagePage
+      expect(refreshed.messages.find((message) => message.subject === subject)?.uid).toBe(replacement.uid)
+      await expect(page.getByRole('button', { name: new RegExp(`^${subject}`) })).toHaveAttribute('aria-current', 'true')
       await expect(page.getByTestId('mail-reading-zone')).not.toContainText('404:')
     } finally {
       await page.context().close()
