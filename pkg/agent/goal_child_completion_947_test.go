@@ -422,16 +422,16 @@ func TestGoalChildCompletion947_ParkedQuestionDeliveredToParent(t *testing.T) {
 	}
 }
 
-// TestGoalChildCompletion947_CancelEndsSessionOwnedGoal (founder decision
-// FD1=A): cancelling a goal-bearing steered child ends its session-owned
-// goal record — terminal, with the terminal reason recording the
-// cancellation. Today the cancel cascade stamps and terminalises the
-// session but never touches the goal record: the goal stays active for
-// ever.
-func TestGoalChildCompletion947_CancelEndsSessionOwnedGoal(t *testing.T) {
+// TestGoalChildCompletion947_CancelPreservesSessionOwnedGoal is a substantive
+// reversal of superseded FD1=A, not a lifecycle-constant rename. Corrected
+// sub-agent control-plane ADR D6/D7: Stop all leaves every session-owned goal
+// active, stops the child non-terminally in the same generation, and delivers
+// one independent notice to its direct parent (including owner-first advice).
+func TestGoalChildCompletion947_CancelPreservesSessionOwnedGoal(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	lifecycle := session.NewLifecycleStore(t.TempDir())
-	inbox := session.NewMessageInboxStore(t.TempDir())
+	lifecycleDir, inboxDir := t.TempDir(), t.TempDir()
+	lifecycle := session.NewLifecycleStore(lifecycleDir)
+	inbox := session.NewMessageInboxStore(inboxDir)
 	al.SetSessionMessagingStores(inbox, lifecycle)
 	wireSteerCompletionDeps(t, al)
 
@@ -439,50 +439,50 @@ func TestGoalChildCompletion947_CancelEndsSessionOwnedGoal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession(parent): %v", err)
 	}
+	wakeCount := observeU1ParentNoticeWakes(t, al, parentMeta.ID)
 	rec := launchGoalBearingChild947(t, al, parentMeta.ID, "call-947-cancel")
-
-	// Premise (holds today): the cancel cascade reaches the never-ran
-	// goal-bearing child and terminalises its record at `cancelled`.
-	report, err := al.steerCanceller().CancelSubtree(context.Background(), rec.SessionID, steer.Principal{
-		Kind: steer.PrincipalKindHuman, ID: "qa-red-947",
-	})
+	if g := goalRecordForSession(t, rec.SessionID); g.State != generated.GoalStateActive || g.GoalID != rec.GoalRef {
+		t.Fatalf("fixture goal id/state = %s/%q, want %s/active", g.GoalID, g.State, rec.GoalRef)
+	}
+	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "qa-red-947"}
+	report, err := al.steerCanceller().CancelSubtree(context.Background(), rec.SessionID, by)
 	if err != nil {
 		t.Fatalf("CancelSubtree: %v", err)
 	}
-	reached := false
-	for _, id := range report.Reached {
-		if id == rec.SessionID {
-			reached = true
-		}
-	}
-	if !reached {
-		t.Fatalf("cancel report reached = %v, want it to include the child %q", report.Reached, rec.SessionID)
-	}
-	got, err := lifecycle.Load(rec.SessionID)
-	if err != nil {
-		t.Fatalf("Load(child after cancel): %v", err)
-	}
-	if got.State != session.LifecycleStopped || !got.Terminal() {
-		t.Fatalf("child state after cancel = %q (terminal=%v), want cancelled — "+
-			"the cancel cascade itself is broken; this premise failure is NOT the #947 RED signal",
-			got.State, got.Terminal())
+	if len(report.Reached) != 1 || report.Reached[0] != rec.SessionID {
+		t.Fatalf("cancel report reached = %v, want only child %q (D7 cascades downward, not to its parent)", report.Reached, rec.SessionID)
 	}
 
-	// RED assertion (FD1=A): the session-owned goal record ends with its
-	// session. No terminal goal-state value named "cancelled" exists in the
-	// wire contract (generated.GoalState has none), so the oracle is the
-	// contract-level one: terminal, with the reason recording why.
-	g, gerr := resolveGoalRecordStore().Get(rec.GoalRef)
-	if gerr != nil {
-		t.Fatalf("Get(goal): %v", gerr)
+	assertGoalPreserved := func() {
+		t.Helper()
+		g, gerr := resolveGoalRecordStore().Get(rec.GoalRef)
+		if gerr != nil {
+			t.Fatalf("Get(goal after stop): %v", gerr)
+		}
+		if g.GoalID != rec.GoalRef || g.State != generated.GoalStateActive || g.ActiveSessionID != rec.SessionID {
+			t.Errorf("goal id/state/session after stop = %s/%q/%s, want %s/active/%s (D6/D7 supersede FD1=A)",
+				g.GoalID, g.State, g.ActiveSessionID, rec.GoalRef, rec.SessionID)
+		}
+		if g.TerminalReason != "" {
+			t.Errorf("active goal terminal reason = %q, want empty: stopping must not end the goal (D6/D7)", g.TerminalReason)
+		}
+		if active := activeGoalForSession(rec.SessionID); active == nil || active.GoalID != rec.GoalRef {
+			t.Errorf("session lost its original active goal binding %q after stop (D6/D7)", rec.GoalRef)
+		}
 	}
-	if !goal.IsTerminalState(g.State) {
-		t.Errorf("goal record state after session cancel = %q, want terminal — "+
-			"FD1=A: a session-owned goal ends with its session", g.State)
+	assertGoalPreserved()
+	noticeID, stopNote := assertU1StoppedChildNotice(t, al, parentMeta.ID, rec, "cascade", by.ID)
+	assertU1NoticeStable(t, al, parentMeta.ID, rec, "cascade", by.ID, noticeID, stopNote, wakeCount)
+
+	if _, err := al.steerCanceller().CancelSubtree(context.Background(), rec.SessionID, by); err != nil {
+		t.Fatalf("CancelSubtree(already stopped): %v", err)
 	}
-	if reason := strings.ToLower(g.TerminalReason); !strings.Contains(reason, "cancel") {
-		t.Errorf("goal TerminalReason = %q, want it to record the cancellation (FD1=A: the outcome records why)",
-			g.TerminalReason)
+	assertGoalPreserved()
+	assertU1NoticeStable(t, al, parentMeta.ID, rec, "cascade", by.ID, noticeID, stopNote, wakeCount)
+	for range 2 { // D6/T6: repeated boot must not duplicate the notice/wake.
+		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
+		assertU1NoticeStable(t, al, parentMeta.ID, rec, "cascade", by.ID, noticeID, stopNote, wakeCount)
+		assertGoalPreserved()
 	}
 }
 

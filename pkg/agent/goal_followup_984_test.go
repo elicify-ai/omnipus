@@ -307,15 +307,13 @@ func TestBoot984_SweepPairEndsSteeredGoal(t *testing.T) {
 	}
 }
 
-// TestGoal984_GoalEnderRoutesDeferredChildThroughTail pins architect finding
-// F4: /goal clear and the idle-expiry sweep end a goal whose steered child
-// sits deferred at the (a) completion gate (turn already exited, record still
-// non-terminal) — and the gate only re-runs on a turn exit or cancel, so the
-// child record stayed `running` until the next boot sweep repaired it. Both
-// goal enders now route such a child through the completion tail
-// (completeSteeredTurnIfDeferredAtGate): the parent is told (interrupted
-// handback), the record goes terminal (cancelled), and ordinary roots are
-// never touched (completeSteeredTurn refuses without a steered edge).
+// TestGoal984_GoalEnderRoutesDeferredChildThroughTail keeps the original F4
+// deferred-child fixtures, but uses corrected sub-agent control-plane ADR D6:
+// stopped is non-terminal and gets an independent direct-parent notice, not
+// a fatal terminal completion. The dispatcher explicitly ruled on these
+// already-exited turns; this is NOT permission to stop a live turn on clear.
+// A deliberate clear ends its goal. Idle goal expiry is separately authorized
+// by planning-goals-spec FR-064 and D6's explicit idle-policy exception.
 func TestGoal984_GoalEnderRoutesDeferredChildThroughTail(t *testing.T) {
 	t.Run("goal clear", testGoal984ClearDeferredChild)
 	t.Run("idle expiry sweep", testGoal984IdleExpiryDeferredChild)
@@ -324,8 +322,9 @@ func TestGoal984_GoalEnderRoutesDeferredChildThroughTail(t *testing.T) {
 func testGoal984ClearDeferredChild(t *testing.T) {
 	t.Helper()
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	lifecycle := session.NewLifecycleStore(t.TempDir())
-	inbox := session.NewMessageInboxStore(t.TempDir())
+	lifecycleDir, inboxDir := t.TempDir(), t.TempDir()
+	lifecycle := session.NewLifecycleStore(lifecycleDir)
+	inbox := session.NewMessageInboxStore(inboxDir)
 	al.SetSessionMessagingStores(inbox, lifecycle)
 	wireSteerCompletionDeps(t, al)
 
@@ -333,6 +332,7 @@ func testGoal984ClearDeferredChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession(parent): %v", err)
 	}
+	wakeCount := observeU1ParentNoticeWakes(t, al, parentMeta.ID)
 	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: parentMeta.ID,
 		TargetAgentID:     "native-agent",
@@ -354,52 +354,48 @@ func testGoal984ClearDeferredChild(t *testing.T) {
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
 		t.Fatalf("Persist(running): %v", persistErr)
 	}
+	if ts := al.getActiveTurnState(rec.SessionID); ts != nil && ts.IsAlive() {
+		t.Fatal("fixture must have no live turn: D6 says goal clear does not itself stop a live turn")
+	}
+	if g := goalRecordForSession(t, rec.SessionID); g.State != generated.GoalStateActive {
+		t.Fatalf("fixture goal state = %q, want active", g.State)
+	}
 
 	reply := al.clearGoalByUser(rec.SessionID, al.GetSessionStore(), "native-agent")
 	if reply == "" {
 		t.Fatal("clearGoalByUser returned an empty reply, want the Goal cleared line")
 	}
+	assertCleared := func() {
+		t.Helper()
+		g, gerr := resolveGoalRecordStore().Get(rec.GoalRef)
+		if gerr != nil {
+			t.Fatalf("Get(deliberately cleared goal): %v", gerr)
+		}
+		if g.GoalID != rec.GoalRef || g.State != generated.GoalStateCleared {
+			t.Errorf("deliberate clear goal id/state = %s/%q, want %s/cleared (D6 explicit-clear exception)", g.GoalID, g.State, rec.GoalRef)
+		}
+	}
+	assertCleared()
+	noticeID, stopNote := assertU1StoppedChildNotice(t, al, parentMeta.ID, rec, "", "")
+	assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
 
-	loaded, err := lifecycle.Load(rec.SessionID)
-	if err != nil {
-		t.Fatalf("Load(child) after clear: %v", err)
-	}
-	if !loaded.Terminal() {
-		t.Fatalf("child state after /goal clear = %q — F4: a deferred steered child must reach a terminal state the parent sees", loaded.State)
-	}
-	if loaded.State != session.LifecycleCancelled {
-		t.Fatalf("child state = %q, want cancelled (the operator ended the goal)", loaded.State)
-	}
-	entries, err := inbox.Entries(parentMeta.ID)
-	if err != nil {
-		t.Fatalf("inbox.Entries(parent): %v", err)
-	}
-	// The F4 tail's outcome for an operator-ended goal is interrupted →
-	// completionMessage encodes it as a FATAL ERROR message (not a
-	// handback — completionMessage only writes a handback for
-	// final_answer), deterministic <child>:<gen>:final id, wake-eligible
-	// (fatal errors wake). Count THAT.
-	var fatalErrs int
-	for _, entry := range entries {
-		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
-			continue
-		}
-		cls, cerr := session.ClassifySessionMessage(*entry.Message)
-		if cerr != nil || cls.Kind != "error" || !cls.Fatal {
-			continue
-		}
-		fatalErrs++
-	}
-	if fatalErrs != 1 {
-		t.Fatalf("parent fatal-error entries = %d, want exactly 1 (the interrupted report)", fatalErrs)
+	// A repeated clear is not another stopped transition. The direct-parent
+	// notice must also survive store reopening and repeated boot replay.
+	al.clearGoalByUser(rec.SessionID, al.GetSessionStore(), "native-agent")
+	assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
+	for range 2 { // D6/T6: repeated boot must not duplicate the notice/wake.
+		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
+		assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
+		assertCleared()
 	}
 }
 
 func testGoal984IdleExpiryDeferredChild(t *testing.T) {
 	t.Helper()
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	lifecycle := session.NewLifecycleStore(t.TempDir())
-	inbox := session.NewMessageInboxStore(t.TempDir())
+	lifecycleDir, inboxDir := t.TempDir(), t.TempDir()
+	lifecycle := session.NewLifecycleStore(lifecycleDir)
+	inbox := session.NewMessageInboxStore(inboxDir)
 	al.SetSessionMessagingStores(inbox, lifecycle)
 	wireSteerCompletionDeps(t, al)
 
@@ -407,6 +403,7 @@ func testGoal984IdleExpiryDeferredChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession(parent): %v", err)
 	}
+	wakeCount := observeU1ParentNoticeWakes(t, al, parentMeta.ID)
 	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: parentMeta.ID,
 		TargetAgentID:     "native-agent",
@@ -428,49 +425,48 @@ func testGoal984IdleExpiryDeferredChild(t *testing.T) {
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
 		t.Fatalf("Persist(running): %v", persistErr)
 	}
-	// Backdate the goal's last activity past the idle-expiry horizon.
+	if ts := al.getActiveTurnState(rec.SessionID); ts != nil && ts.IsAlive() {
+		t.Fatal("idle-expiry fixture must be deferred with no live turn")
+	}
+	if g := goalRecordForSession(t, rec.SessionID); g.State != generated.GoalStateActive {
+		t.Fatalf("fixture goal state = %q, want active", g.State)
+	}
+	// FR-064/FR-038 independently authorize the default seven-day calendar
+	// brake. This explicit aged-goal policy, not stopping, ends the goal.
+	now := time.Now()
 	gs := resolveGoalRecordStore()
 	if _, uerr := gs.Update(rec.GoalRef, func(cur *goal.Goal) error {
-		cur.LastActivityAt = time.Now().Add(-30 * 24 * time.Hour)
+		cur.LastActivityAt = now.Add(-7 * 24 * time.Hour)
 		return nil
 	}); uerr != nil {
 		t.Fatalf("backdate activity: %v", uerr)
 	}
 
-	al.goalIdleExpirySweep(config.PlanningConfig{}, time.Now())
+	al.goalIdleExpirySweep(config.PlanningConfig{}, now)
+	assertExpired := func() {
+		t.Helper()
+		g, gerr := gs.Get(rec.GoalRef)
+		if gerr != nil {
+			t.Fatalf("Get(idle-expired goal): %v", gerr)
+		}
+		if g.GoalID != rec.GoalRef || g.State != generated.GoalStateExpired {
+			t.Errorf("idle policy goal id/state = %s/%q, want %s/expired (FR-064, D6 independent goal policy)", g.GoalID, g.State, rec.GoalRef)
+		}
+		reason := strings.ToLower(g.TerminalReason)
+		if !strings.Contains(reason, "idle") || !strings.Contains(reason, "expir") {
+			t.Errorf("goal reason = %q, want independent idle expiry, not closure because the session stopped", g.TerminalReason)
+		}
+	}
+	assertExpired()
+	noticeID, stopNote := assertU1StoppedChildNotice(t, al, parentMeta.ID, rec, "", "")
+	assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
 
-	loaded, err := lifecycle.Load(rec.SessionID)
-	if err != nil {
-		t.Fatalf("Load(child) after sweep: %v", err)
-	}
-	if !loaded.Terminal() {
-		t.Fatalf("child state after idle-expiry sweep = %q — F4: the sweep must route the deferred child through the tail", loaded.State)
-	}
-	if loaded.State != session.LifecycleCancelled {
-		t.Fatalf("child state = %q, want cancelled", loaded.State)
-	}
-	entries, err := inbox.Entries(parentMeta.ID)
-	if err != nil {
-		t.Fatalf("inbox.Entries(parent): %v", err)
-	}
-	// The F4 tail's outcome for an operator-ended goal is interrupted →
-	// completionMessage encodes it as a FATAL ERROR message (not a
-	// handback — completionMessage only writes a handback for
-	// final_answer), deterministic <child>:<gen>:final id, wake-eligible
-	// (fatal errors wake). Count THAT.
-	var fatalErrs int
-	for _, entry := range entries {
-		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
-			continue
-		}
-		cls, cerr := session.ClassifySessionMessage(*entry.Message)
-		if cerr != nil || cls.Kind != "error" || !cls.Fatal {
-			continue
-		}
-		fatalErrs++
-	}
-	if fatalErrs != 1 {
-		t.Fatalf("parent fatal-error entries = %d, want exactly 1", fatalErrs)
+	al.goalIdleExpirySweep(config.PlanningConfig{}, now)
+	assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
+	for range 2 { // D6/T6: repeated boot must not duplicate the notice/wake.
+		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
+		assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
+		assertExpired()
 	}
 }
 
