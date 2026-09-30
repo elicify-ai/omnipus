@@ -110,7 +110,7 @@ func TestActivateTaskGoal_BindsDefiningRecordAndIsSessionReachable(t *testing.T)
 
 	// GOAL-FR-013: the SAME session-keyed predicate the keeper/claim
 	// machinery runs must find this task-owned goal.
-	found := activeGoalForSession(sid)
+	found := mustActiveGoalForSession(t, sid)
 	if found == nil {
 		t.Fatal("activeGoalForSession must find the task-owned goal bound to this session — " +
 			"the keeper/claim machinery has nothing to work with otherwise (GOAL-FR-013)")
@@ -164,7 +164,7 @@ func TestActivateTaskGoal_NoGoalRecord_MintsOneBoundToTheRun(t *testing.T) {
 		t.Fatal("createTaskSessionSync returned an empty session id")
 	}
 
-	found := activeGoalForSession(sid)
+	found := mustActiveGoalForSession(t, sid)
 	if found == nil {
 		t.Fatal("a legacy task must get a goal record bound to its run's session — its worker could never claim otherwise")
 	}

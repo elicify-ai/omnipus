@@ -75,7 +75,7 @@ func armGoalRecord(
 	gs := goal.NewStore(config.OmnipusHomeDir())
 
 	var gid string
-	if existing := activeGoalForSession(sid); existing != nil {
+	if existing := mustActiveGoalForSession(t, sid); existing != nil {
 		gid = existing.GoalID
 	} else {
 		g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.GoalSourceChatCompiled,
@@ -314,7 +314,7 @@ func TestClaim_AdjudicatesExactlyOnce_G1(t *testing.T) {
 	if cp.callCount() != 1 {
 		t.Fatalf("Judge invoked %d times after the deferred dispatch, want exactly 1 (G-1/INV-1)", cp.callCount())
 	}
-	if after := goalRecordForSessionOrNil(sid); after != nil {
+	if after := goalRecordForSessionOrNil(t, sid); after != nil {
 		t.Fatalf("met claim must clear the goal, still ACTIVE: %q", after.Prompt)
 	}
 }
@@ -346,7 +346,7 @@ func TestNoClaim_NoAdjudication_FR101(t *testing.T) {
 	if cp.callCount() != 0 {
 		t.Fatalf("Judge invoked %d times on a non-claim turn, want 0 (FR-101: never after every worker turn)", cp.callCount())
 	}
-	after := goalRecordForSessionOrNil(sid)
+	after := goalRecordForSessionOrNil(t, sid)
 	if after == nil {
 		t.Fatal("goal must remain active on a non-claim turn")
 	}
@@ -1064,7 +1064,7 @@ func TestTriggerStateKeyedByGoalID(t *testing.T) {
 			gs.mu.Lock()
 			delete(gs.routing, sid)
 			gs.mu.Unlock()
-			return goalTriggers().routeFor(sid)
+			return mustGoalRoute(t, goalTriggers(), sid)
 		}
 
 		// Reference side: a CHAT-owned goal's route rehydrates from its

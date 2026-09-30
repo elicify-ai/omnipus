@@ -201,7 +201,7 @@ func TestB6_ChatGoal_OverturnedGoalClaimMet_SteersWorkerAndNextClaimIsJudged(t *
 	}
 
 	// The overturn must not end the goal.
-	live := activeGoalForSession(sid)
+	live := mustActiveGoalForSession(t, sid)
 	if live == nil || live.GoalID != gid {
 		t.Fatalf("the goal is no longer active after an OVERTURNED claim (got %+v) — an unmet verdict under "+
 			"the round bound must resume work, not end the goal", live)

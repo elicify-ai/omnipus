@@ -727,7 +727,7 @@ func TestGoalStatusFrame_ActiveCarriesRecord(t *testing.T) {
 		recordJSON := `{"intent":"i","prompt":"p","definition":"Build a tetris clone",` +
 			`"criteria":[{"id":"c1","kind":"prose","judgment":"boolean","text":"it renders","author":{"kind":"agent","id":"tester"}}],` +
 			`"dod":[{"id":"d1","kind":"prose","judgment":"boolean","provenance":"floor","text":"no secrets","author":{"kind":"agent","id":"tester"}}]}`
-		al.afterGoalRecordWrite(sid, recordJSON, "no diff")
+		mustAfterGoalRecordWrite(t, al, sid, recordJSON, "no diff")
 
 		p := waitForGoalStatusPayload(t, collector, sid)
 		if p.State != goalPillActive {
@@ -755,7 +755,7 @@ func TestGoalStatusFrame_ActiveCarriesRecord(t *testing.T) {
 			`{"id":"c1","kind":"check","judgment":"boolean","text":"tests pass",` +
 			`"check":{"command":"go test ./...","expected_exit_code":0},` +
 			`"author":{"kind":"agent","id":"tester"}}]}`
-		al.afterGoalRecordWrite(sid, markerRecord, "no diff")
+		mustAfterGoalRecordWrite(t, al, sid, markerRecord, "no diff")
 
 		p := waitForGoalStatusPayload(t, collector, sid)
 		if p.State != goalPillActive {

@@ -115,7 +115,7 @@ func activateTestGoalRecord(t *testing.T, sid, intent string) string {
 //	meta.GoalQuestionRoundsUsed -> g.QuestionRoundsUsed
 func goalRecordForSession(t *testing.T, sid string) *goal.Goal {
 	t.Helper()
-	g := activeGoalForSession(sid)
+	g := mustActiveGoalForSession(t, sid)
 	if g == nil {
 		t.Fatalf("goalRecordForSession: no ACTIVE goal record is bound to session %q", sid)
 	}
@@ -126,7 +126,9 @@ func goalRecordForSession(t *testing.T, sid string) *goal.Goal {
 // the assertions that deliberately check a session carries NO active goal
 // (the old `meta.GoalCondition == ""` check). A nil return is the ADR-086
 // equivalent of that empty string.
-func goalRecordForSessionOrNil(sid string) *goal.Goal { return activeGoalForSession(sid) }
+func goalRecordForSessionOrNil(t *testing.T, sid string) *goal.Goal {
+	return mustActiveGoalForSession(t, sid)
+}
 
 // mustGoalRecord reads ONE goal record by id regardless of its state — the
 // reader for assertions about a goal that has reached a TERMINAL state,
@@ -180,7 +182,7 @@ func clearGoalRecordCriteria(t *testing.T, sid string) {
 // `/goal <intent>` call activated it in the SAME turn.
 func activatePendingGoal(t *testing.T, _ *AgentLoop, _ *AgentInstance, opts *processOptions) {
 	t.Helper()
-	if activeGoalForSession(opts.TranscriptSessionID) == nil {
+	if mustActiveGoalForSession(t, opts.TranscriptSessionID) == nil {
 		t.Fatal("activatePendingGoal: goal must already be ACTIVE (ADR-088 D1 instant activation)")
 	}
 }
@@ -380,7 +382,7 @@ func TestGoalCommand_StatusAndClear(t *testing.T) {
 		// restate that leaves the already-active goal in place; later
 		// iterations: a goalless fresh activation. Either way the goal is
 		// ACTIVE immediately after the single call above.
-		if goalRecordForSessionOrNil(sid) == nil {
+		if goalRecordForSessionOrNil(t, sid) == nil {
 			t.Fatalf("%s: setup — goal must be active before the clear", verb)
 		}
 		matched, handled, reply = al.applyGoalCommandPrompt(context.Background(),
@@ -391,7 +393,7 @@ func TestGoalCommand_StatusAndClear(t *testing.T) {
 		if !strings.Contains(reply, "cleared") {
 			t.Fatalf("%s reply = %q, want a cleared confirmation", verb, reply)
 		}
-		if after := goalRecordForSessionOrNil(sid); after != nil {
+		if after := goalRecordForSessionOrNil(t, sid); after != nil {
 			t.Fatalf("%s: goal is still ACTIVE: %q", verb, after.Prompt)
 		}
 	}
@@ -421,7 +423,7 @@ func TestGoalCommand_AdmissionRefusal(t *testing.T) {
 	if !strings.Contains(reply, "active loops") {
 		t.Fatalf("reply = %q, want a cap-reached message", reply)
 	}
-	if goalRecordForSessionOrNil(sid) != nil {
+	if goalRecordForSessionOrNil(t, sid) != nil {
 		t.Fatal("goal must not be set when admission is refused")
 	}
 }
@@ -571,7 +573,7 @@ func TestGoalLoop_MetVerdict_ClearsGoalAndWritesVerdict(t *testing.T) {
 	}
 	al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
 
-	if after := goalRecordForSessionOrNil(sid); after != nil {
+	if after := goalRecordForSessionOrNil(t, sid); after != nil {
 		t.Fatalf("goal should be cleared on a met verdict, still ACTIVE: %q", after.Prompt)
 	}
 	if len(result.followUps) != 0 {
@@ -636,7 +638,7 @@ func TestGoalLoop_UnmetVerdict_AdvancesRoundAndFeedsForward(t *testing.T) {
 	}
 	al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
 
-	after := goalRecordForSessionOrNil(sid)
+	after := goalRecordForSessionOrNil(t, sid)
 	if after == nil {
 		t.Fatal("goal must remain active after an unmet verdict under the round bound")
 	}
@@ -752,7 +754,7 @@ func TestGoalLoop_TaskRunTurn_IsLeftToTheTaskExecutor(t *testing.T) {
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store := al.GetAgentStore(tk.AgentID)
 
-	if activeGoalForSession(sid) == nil {
+	if mustActiveGoalForSession(t, sid) == nil {
 		t.Fatal("test setup: the task-owned goal must already be bound ACTIVE to this session")
 	}
 	// Push the activity clock into the past first, so "unchanged" below is a
@@ -1010,7 +1012,7 @@ func TestGoalLoop_RoundCap_StopsAndClearsWithHandover(t *testing.T) {
 		t.Fatal("round 1: a met+evidence claim must record deferred adjudication work")
 	}
 	al.dispatchDeferredGoalAdjudication(r1.goalDeferredAdjudication)
-	after1 := goalRecordForSessionOrNil(sid)
+	after1 := goalRecordForSessionOrNil(t, sid)
 	if after1 == nil || after1.Round != 1 {
 		t.Fatalf("round 1 (< bound=2): unexpected state %+v", after1)
 	}
@@ -1027,7 +1029,7 @@ func TestGoalLoop_RoundCap_StopsAndClearsWithHandover(t *testing.T) {
 		t.Fatal("round 2: a met+evidence claim must record deferred adjudication work")
 	}
 	al.dispatchDeferredGoalAdjudication(r2.goalDeferredAdjudication)
-	if after2 := goalRecordForSessionOrNil(sid); after2 != nil {
+	if after2 := goalRecordForSessionOrNil(t, sid); after2 != nil {
 		t.Fatal("round 2 (== bound=2): goal must be cleared (bound reached)")
 	}
 	select {
@@ -1077,7 +1079,7 @@ func TestGoalLoop_JudgeUnavailable_DoesNotConsumeRound(t *testing.T) {
 	result := &turnResult{finalContent: "still working on it"}
 	al.checkGoalLoopAfterTurn(ctx, agentInst, opts, result)
 
-	after := goalRecordForSessionOrNil(sid)
+	after := goalRecordForSessionOrNil(t, sid)
 	if after == nil {
 		t.Fatal("goal must remain active when the judge is unavailable")
 	}
@@ -1399,10 +1401,10 @@ func TestGoal_IdleExpiry_7d(t *testing.T) {
 
 	al.goalIdleExpirySweep(config.PlanningConfig{}, now)
 
-	if goalRecordForSessionOrNil(stillActiveSID) == nil {
+	if goalRecordForSessionOrNil(t, stillActiveSID) == nil {
 		t.Fatal("a goal idle for 6d23h must NOT be expired (under the 7-day bound)")
 	}
-	if goalRecordForSessionOrNil(expiredSID) != nil {
+	if goalRecordForSessionOrNil(t, expiredSID) != nil {
 		t.Fatal("a goal idle for exactly 7d must be idle-expired (cleared)")
 	}
 }
@@ -1679,7 +1681,7 @@ func TestGoalBudgets_ResetAcrossGenerations(t *testing.T) {
 	// replaced it — and the one that actually protects goal B — is that the
 	// counters are PER-RECORD, so assert both halves: A is terminal and has
 	// RETAINED its spend (non-erasure), and no goal is active any more.
-	if goalRecordForSessionOrNil(sid) != nil {
+	if goalRecordForSessionOrNil(t, sid) != nil {
 		t.Fatal("clear: no goal may remain ACTIVE on this session after /goal clear")
 	}
 	clearedA := mustGoalRecord(t, metaA.GoalID)

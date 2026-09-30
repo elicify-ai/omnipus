@@ -131,9 +131,9 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 }
 
 // clearGoalStatus is clearGoal's full result: the user-facing reply AND
-// whether the goal actually ended. ok is false ONLY when there was an active
-// goal and its durable terminal transition was refused by the store — the
-// deferral case clearGoal's own Fix-B.7 branch describes, where every
+// whether the goal actually ended. ok is false when the goal state could not
+// be read or an active goal's terminal transition was refused by the store —
+// the deferral case clearGoal's own Fix-B.7 branch describes, where every
 // terminal side effect is deliberately skipped and the next turn re-drives
 // the clear. It is true when the transition landed AND when there was no
 // active goal to clear in the first place (nothing is pending in that case,
@@ -156,7 +156,7 @@ type endedGoal struct {
 }
 
 // endActiveGoal is clearGoalStatus's body. It additionally returns the goal it
-// ended — nil when there was no active goal or the transition was refused — so
+// ended — nil on genuine absence, read failure or transition refusal — so
 // clearGoalWithOutcome (goal_outcome.go) can record the ending's outcome line
 // only once the ending itself is saved.
 func (al *AgentLoop) endActiveGoal(sessionID string, store *session.UnifiedStore, note string) (string, *endedGoal, bool) {
@@ -164,7 +164,10 @@ func (al *AgentLoop) endActiveGoal(sessionID string, store *session.UnifiedStore
 	// retires the pending-amendment/pending-compile states this check used to
 	// also cover (GoalPendingJSON/GoalClarificationJSON no longer exist) —
 	// hadGoal is now simply "is there an active goal record to clear".
-	rec := activeGoalForSession(sessionID)
+	rec, err := activeGoalForSession(sessionID)
+	if err != nil {
+		return al.reportGoalReadError(sessionID, "goal clear", err), nil, false
+	}
 	hadGoal := rec != nil
 
 	// ADR-088 D9/FR-028 (E7/S-41): a `/goal clear` must not leave an
@@ -513,7 +516,11 @@ func (al *AgentLoop) dispatchDeferredGoalAdjudication(work *goalDeferredAdjudica
 			map[string]any{"session_id": work.sessionID})
 		return
 	}
-	rec := activeGoalForSession(work.sessionID)
+	rec, err := activeGoalForSession(work.sessionID)
+	if err != nil {
+		al.reportGoalReadError(work.sessionID, "deferred adjudication", err)
+		return
+	}
 	if rec == nil {
 		// The goal cleared (or the session vanished) in the window between
 		// the claim and this dispatch — nothing left to adjudicate against.
@@ -714,7 +721,12 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) checkEligibility() bool {
 	// bound to this session — the direct replacement for the retired
 	// `rec.Prompt != ""` check, and the one lookup that serves a
 	// task-owned goal as well as a chat-owned one (GOAL-FR-013).
-	gl.rec = activeGoalForSession(gl.sessionID)
+	var err error
+	gl.rec, err = activeGoalForSession(gl.sessionID)
+	if err != nil {
+		gl.al.reportGoalReadError(gl.sessionID, "post-turn goal processing", err)
+		return true
+	}
 	if gl.rec == nil {
 		return true // no active goal — fast path
 	}

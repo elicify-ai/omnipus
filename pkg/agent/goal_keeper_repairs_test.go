@@ -346,7 +346,7 @@ func TestGoalRouting_PersistedAndRehydratedAfterRestart(t *testing.T) {
 
 	al.recordGoalRouting(sid, gid, "telegram", "chat-42", "sk-42", agentInst.ID)
 
-	route := goalTriggers().routeFor(sid)
+	route := mustGoalRoute(t, goalTriggers(), sid)
 	if route.channel != "telegram" || route.chatID != "chat-42" {
 		t.Fatalf("in-memory route = %+v, want channel=telegram chat_id=chat-42", route)
 	}
@@ -369,7 +369,7 @@ func TestGoalRouting_PersistedAndRehydratedAfterRestart(t *testing.T) {
 	// the routing map.
 	resetGoalTriggerStateForTest()
 
-	rehydrated := goalTriggers().routeFor(sid)
+	rehydrated := mustGoalRoute(t, goalTriggers(), sid)
 	if rehydrated.channel != "telegram" || rehydrated.chatID != "chat-42" {
 		t.Fatalf("FR-031/FR-034: rehydrated route = %+v, want channel=telegram chat_id=chat-42 — a restart must not silently disable routing", rehydrated)
 	}
@@ -398,7 +398,7 @@ func TestGoalRouting_MissingBothSides_WarnsAndSetsLatestReason(t *testing.T) {
 	// branch requires.
 	gid := activateTestGoalRecord(t, sid, "route test")
 
-	route := goalTriggers().routeFor(sid)
+	route := mustGoalRoute(t, goalTriggers(), sid)
 	if route.channel != "" || route.chatID != "" {
 		t.Fatalf("route = %+v, want the zero value (nothing was ever recorded)", route)
 	}

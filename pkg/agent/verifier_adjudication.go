@@ -2193,7 +2193,10 @@ func verifierHandleReleased(registry VerifierSessionPublisher, unitID, chatID st
 // noteGoalJudgeRetryWait paints the wait before a Judge retry.
 func (al *AgentLoop) noteGoalJudgeRetryWait(in JudgeCriteriaInput, attempt int, cause string) {
 	wait := judgeBackoffDuration(attempt)
-	if rec := goalForJudgeRetryNotice(in); rec != nil {
+	rec, err := goalForJudgeRetryNotice(in)
+	if err != nil {
+		al.reportGoalReadError(in.GoalSessionID, "judge-retry wait notice", err)
+	} else if rec != nil {
 		reason := fmt.Sprintf("The Judge could not finish checking this goal: %s. Trying again in %d s (try %d).",
 			cause, int(wait.Round(time.Second)/time.Second), attempt+2)
 		al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, reason, goalPillJudgeUnavailable)
@@ -2203,7 +2206,10 @@ func (al *AgentLoop) noteGoalJudgeRetryWait(in JudgeCriteriaInput, attempt int, 
 
 // noteGoalJudgeRetrying paints the Judge retry itself starting.
 func (al *AgentLoop) noteGoalJudgeRetrying(in JudgeCriteriaInput, attempt int) {
-	if rec := goalForJudgeRetryNotice(in); rec != nil {
+	rec, err := goalForJudgeRetryNotice(in)
+	if err != nil {
+		al.reportGoalReadError(in.GoalSessionID, "judge-retry notice", err)
+	} else if rec != nil {
 		al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
 			fmt.Sprintf("Checking this goal again (try %d).", attempt+1), goalPillJudging)
 	}
@@ -2235,11 +2241,11 @@ func (al *AgentLoop) notePlanJudgeRetrying(in JudgeCriteriaInput) {
 }
 
 // goalForJudgeRetryNotice returns the ACTIVE chat goal a retry notice belongs
-// to, or nil. A goal that has already ended (cleared, expired, met) is never
-// repainted.
-func goalForJudgeRetryNotice(in JudgeCriteriaInput) *goal.Goal {
+// to, or genuine absence. Read failures are returned separately; a goal that
+// has already ended (cleared, expired, met) is never repainted.
+func goalForJudgeRetryNotice(in JudgeCriteriaInput) (*goal.Goal, error) {
 	if in.Scope != task.VerdictScopeGoal || in.GoalSessionID == "" {
-		return nil
+		return nil, nil //nolint:nilnil // Non-goal scope or an empty session ID means no goal to look up, not a read failure.
 	}
 	return activeGoalForSession(in.GoalSessionID)
 }
