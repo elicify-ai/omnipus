@@ -67,6 +67,10 @@ If the agent reaches its tool-call limit before a final answer, chat keeps the n
 
 ## The provider rejects your model requests
 
+**"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus trims the request further and retries, even if its own estimate says the request fits. This is an internal retry notice, not a data-loss event: trimming changes what is sent to the model, not your saved conversation. If the provider keeps rejecting it, the real error is shown only when further trimming cannot reduce the request or the existing retry limit is reached.
+
+Turn on **Settings → Chat → Verbose chat** to see this notice and other internal-retry details; it does not appear in normal chat. Live chat, reopened history, and conversation replay all use the same Verbose chat setting to show or hide it.
+
 ### 404 "No endpoints found that support tool use"
 
 The model cannot call tools, and Omnipus sends its tool list with every request, so the request is rejected outright. Small open models often lack tool support. In the model picker, the **Recommended for chat** mark appears only on models that can call tools. Change the default in **Settings → Providers**, or edit `agents.defaults.default_model` in `config.json`.
