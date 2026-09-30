@@ -21,6 +21,7 @@ import type {
   ClearAllSessionsResponse,
   OperationResult,
   JudgeVerdict,
+  Message as WireMessage,
 } from '@/lib/api/generated/openapi-types'
 import { _recordApiSchemaError, request } from './http'
 
@@ -169,20 +170,12 @@ interface MessageBase { // not-wire-format
    * text — just don't show anything when the field is empty).
    */
   model?: string
-  /**
-   * ADR-049 D2/SD-A14/SD-C10: classification carried through from the wire
-   * `Message.type` (generated `openapi-types.ts`) for the one variant SPA
-   * rendering cares about — `'judge_verdict'` — so the chat store/renderers
-   * can recognise a persisted judge-verdict transcript entry (cold-load or
-   * WS replay) and route it through `shouldRenderJudgeVerdictInThread`
-   * (toolVisibility.ts) instead of the normal role-based rows. Other wire
-   * `type` values ('message'/'compaction'/'system'/'tool_call'/
-   * 'turn_canceled') are not modeled here — this SPA-internal `Message`
-   * union already has its own, richer per-role shape for those.
-   */
-  type?: 'judge_verdict'
+  /** Generated classifications whose thread visibility is gated by Verbose chat. */
+  type?: Extract<WireMessage['type'], 'judge_verdict' | 'context_window_notice'>
   /** The verdict payload when `type === 'judge_verdict'` (wire `Message.verdict`, same shape as the live `JudgeVerdictFrame` push minus the `type`/`session_id` discriminator fields). */
   verdict?: JudgeVerdict
+  /** Retained Q33 diagnostic, shared by REST history and live/replayed notice frames. */
+  contextWindowNotice?: WireMessage['context_window_notice']
   /**
    * Goal outcome line (founder decision 2026-09-14): set on a `role: 'system'`
    * message that records how a goal ENDED — from the persisted
@@ -350,7 +343,8 @@ interface RawToolCall { // not-wire-format: adapter alias over the generated Too
 
 interface RawMessage { // not-wire-format: adapter alias over the generated Message wire schema. Used only in rawToMessage() to delegate ToolCall transformation. The wire `status` enum values differ from the SPA's ('ok'|'error'|'interrupted' vs 'streaming'|'done'|'error'|'interrupted'). Never sent to or received as a standalone type from the gateway.
   id: string
-  type?: 'message' | 'compaction' | 'system' | 'judge_verdict'
+  type?: WireMessage['type']
+  context_window_notice?: WireMessage['context_window_notice']
   role?: 'user' | 'assistant' | 'system'
   content?: string
   summary?: string
@@ -442,6 +436,20 @@ function rawToToolCall(raw: RawToolCall): ToolCall {
 }
 
 function rawToMessage(raw: RawMessage): Message {
+  if (raw.type === 'context_window_notice') {
+    return {
+      id: raw.id,
+      session_id: undefined,
+      role: 'system',
+      type: raw.type,
+      content: raw.context_window_notice?.message ?? raw.content ?? raw.summary ?? '',
+      timestamp: raw.timestamp,
+      status: 'done',
+      agentId: raw.agent_id,
+      turnId: raw.turn_id,
+      contextWindowNotice: raw.context_window_notice,
+    } satisfies SystemMessage
+  }
   const role = raw.role ?? 'assistant'
   const baseStatus = raw.status === 'ok' ? ('done' as const) : raw.status
   // #3: construct the correct discriminated variant based on role.
@@ -811,11 +819,17 @@ function placeholderMessage(raw: unknown, index: number): SystemMessage {
 // throttled per key, so a burst of bad items in one response doesn't spam
 // the UI); production gets the existing _recordApiSchemaError telemetry.
 function parseWireMessageList(items: unknown[], endpoint: string): Message[] {
+  // The generic wire Message makes this payload optional; Q33 requires it
+  // on classified diagnostics. Preserve the existing visible-error path.
+  const messageSchema = WireMessageSchema.refine(
+    (message) => message.type !== 'context_window_notice' || message.context_window_notice !== undefined,
+    { message: 'Context window notice is missing its diagnostic payload.', path: ['context_window_notice'] },
+  )
   const messages: Message[] = []
   let dropped = 0
   let firstIssue: string | undefined
   items.forEach((item, index) => {
-    const result = WireMessageSchema.safeParse(item)
+    const result = messageSchema.safeParse(item)
     if (result.success) {
       messages.push(rawToMessage(result.data as RawMessage))
       return
