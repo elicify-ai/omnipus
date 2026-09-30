@@ -258,10 +258,9 @@ var voiceIntegrationDefs = []integrationDef{
 // DERIVED from the single provider catalogue (ADR-096 D15/FR-035): one
 // web-search row per catalogue def, then the voice rows. Requires-key and
 // cred-ref come straight from the catalogue, so a provider added there and
-// nothing else is listable with no edit here. Keyless providers (DuckDuckGo,
-// SearXNG, audio-model) have requiresKey=false and an empty credRef; SearXNG
-// additionally needs a base_url and audio-model needs a voice.model_name
-// (checked at activation time).
+// nothing else is listable with no edit here. Keyless providers (DuckDuckGo
+// and audio-model) have requiresKey=false and an empty credRef; audio-model
+// needs a voice.model_name (checked at activation time).
 func integrationCatalogue() []integrationDef {
 	defs := make([]integrationDef, 0, len(config.SearchProviderCatalogue)+len(voiceIntegrationDefs))
 	for _, def := range config.SearchProviderCatalogue {
@@ -305,7 +304,7 @@ func (a *restAPI) HandleIntegrationProviders(w http.ResponseWriter, r *http.Requ
 // integrationConfigured reports whether provider d is usable given cfg. Keyed
 // providers are configured when their credential ref resolves in the store.
 // Keyless providers have provider-specific prerequisites: DuckDuckGo is always
-// available; SearXNG needs a base_url; audio-model needs a voice.model_name.
+// available; audio-model needs a voice.model_name.
 func (a *restAPI) integrationConfigured(cfg *config.Config, d integrationDef) bool {
 	if d.requiresKey {
 		ok, err := a.credentialRefResolves(d.credRef)
@@ -320,8 +319,6 @@ func (a *restAPI) integrationConfigured(cfg *config.Config, d integrationDef) bo
 	switch d.id {
 	case "duckduckgo":
 		return true
-	case "searxng":
-		return strings.TrimSpace(cfg.Tools.Web.SearXNG.BaseURL) != ""
 	case "audio-model":
 		return strings.TrimSpace(cfg.Voice.ModelName) != ""
 	default:
@@ -331,15 +328,11 @@ func (a *restAPI) integrationConfigured(cfg *config.Config, d integrationDef) bo
 
 // integrationActivationReady reports whether the provider's prerequisites for
 // activation are met. Keyed providers need a key (checked elsewhere via
-// requiresKey); keyless providers with prerequisites (SearXNG base_url,
-// audio-model model_name) are checked here. Returns true when activation may
+// requiresKey); keyless providers with prerequisites (audio-model model_name)
+// are checked here. Returns true when activation may
 // proceed, plus a human-readable reason when not.
 func (a *restAPI) integrationActivationReady(cfg *config.Config, def integrationDef) (bool, string) {
 	switch def.id {
-	case "searxng":
-		if strings.TrimSpace(cfg.Tools.Web.SearXNG.BaseURL) == "" {
-			return false, "SearXNG requires a base URL (configure tools.web.searxng.base_url) before it can be activated"
-		}
 	case "audio-model":
 		if strings.TrimSpace(cfg.Voice.ModelName) == "" {
 			return false, "audio-model requires a voice model (configure voice.model_name under Providers) before it can be activated"
@@ -380,7 +373,7 @@ func (a *restAPI) handleIntegrationProvidersList(w http.ResponseWriter, r *http.
 // handleIntegrationProviderUpdate — moved to rest_integrations_roles.go
 // (ADR-096 gateway lane): the live, role-aware save. Voice rows keep
 // applyVoiceIntegration below; the old applySearchIntegration (which deleted
-// other providers' refs and force-toggled searxng.enabled) is gone with it.
+// other providers' refs) is gone with it.
 
 // searchRefSectionByID maps a search provider id to its config sub-object
 // key (the raw-map section that carries its api_key_ref and enabled flag),

@@ -10717,11 +10717,11 @@ export interface components {
         /** @description A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available. ADR-096: search rows additionally carry the provider's resolved web-search roles — default vs fallback — and its usability, and id is an enum derived from the single search-provider catalogue (FR-035). Voice rows keep today's shape: they report active only and leave the search-role fields unset. */
         IntegrationProvider: {
             /**
-             * @description Provider identifier, from the single integration catalogue — not free-form. The search ids (brave, tavily, perplexity, duckduckgo, searxng, glm, baidu, exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids (elevenlabs, groq, audio-model) are listed so voice rows stay valid under this shared schema. searxng appears as a default only on installs whose configuration already resolved to it (ADR-096 D10).
+             * @description Provider identifier, from the single integration catalogue — not free-form. The search ids (brave, tavily, perplexity, duckduckgo, glm, baidu, exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids (elevenlabs, groq, audio-model) are listed so voice rows stay valid under this shared schema.
              * @example brave
              * @enum {string}
              */
-            id: "brave" | "tavily" | "perplexity" | "duckduckgo" | "searxng" | "glm" | "baidu" | "exa" | "elevenlabs" | "groq" | "audio-model";
+            id: "brave" | "tavily" | "perplexity" | "duckduckgo" | "glm" | "baidu" | "exa" | "elevenlabs" | "groq" | "audio-model";
             /**
              * @description Whether this provider supplies web search or voice-input transcription.
              * @example search
@@ -10734,7 +10734,7 @@ export interface components {
              */
             display_name: string;
             /**
-             * @description Search rows: true when this provider's credential entry resolves in the credential store (the vault test, ADR-096 D13) — and, for the keyless rows, when their prerequisite holds (duckduckgo always; searxng when base_url is set). It says nothing about runtime usability: a configured provider can still be switched off or fail to have its key reach search. For whether search can use the provider right now, see usable. Voice rows: true when the provider's credential resolves; audio-model when voice.model_name is set.
+             * @description Search rows: true when this provider's credential entry resolves in the credential store (the vault test, ADR-096 D13) — and, for the keyless search row, when its prerequisite holds (duckduckgo always). It says nothing about runtime usability: a configured provider can still be switched off or fail to have its key reach search. For whether search can use the provider right now, see usable. Voice rows: true when the provider's credential resolves; audio-model when voice.model_name is set.
              * @example true
              */
             configured: boolean;
@@ -10744,12 +10744,17 @@ export interface components {
              */
             requires_key: boolean;
             /**
+             * @description Search rows only; omitted on providers without a depth setting and on voice rows. For Tavily, the effective operator-set search_depth ceiling (advanced when an existing install has no saved depth).
+             * @example basic
+             */
+            readonly search_depth_cap?: string;
+            /**
              * @description True when this provider is the one currently selected for its kind. Voice rows: unchanged — the active transcriber. Search rows: true only when this row is the web-search default (ADR-096 D13 — no longer "whoever the old priority list picked"); kept so an older client still has the field. The Default/Fallback badges are built from default_search, fallback_search and the row's own usable flag instead.
              * @example true
              */
             active?: boolean;
             /**
-             * @description Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on — or, for SearXNG, switched on with a non-empty base_url. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
+             * @description Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
              * @example true
              */
             usable?: boolean;

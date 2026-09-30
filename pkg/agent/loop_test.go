@@ -161,7 +161,15 @@ func newTestAgentLoop(
 	msgBus = bus.NewMessageBus()
 	provider = &mockProvider{}
 	al = mustNewAgentLoop(t, cfg, msgBus, provider)
-	return al, cfg, msgBus, provider, func() {}
+	// The returned cleanup used to be a no-op: every one of this package's
+	// ~80 newTestAgentLoop/newAL callers ran `defer cleanup()` believing it
+	// tore the loop down, but nothing ever called al.Close() — leaking each
+	// AgentLoop's HookManager dispatcher, shared UnifiedStore stats flusher,
+	// per-agent bleve/scorch goroutines and browser pool for the rest of the
+	// test binary's life. Across ~2700 sequential tests in this package that
+	// is the dominant source of the goroutine buildup that tipped the whole
+	// package past its 10-minute -short budget (PR #1074 macOS stall).
+	return al, cfg, msgBus, provider, al.Close
 }
 
 func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {

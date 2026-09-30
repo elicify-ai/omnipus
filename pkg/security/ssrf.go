@@ -470,7 +470,7 @@ func (sc *SSRFChecker) CheckHost(ctx context.Context, host string) ([]net.IPAddr
 	if sc.allowList[strings.ToLower(host)] {
 		addrs, err := sc.resolver.LookupIPAddr(ctx, host)
 		if err != nil {
-			return nil, fmt.Errorf("SSRF: DNS resolution failed for allowlisted host %s: %w", host, err)
+			return nil, fmt.Errorf("DNS resolution failed for allowlisted host %s: %w", host, err)
 		}
 		return addrs, nil
 	}
@@ -478,11 +478,11 @@ func (sc *SSRFChecker) CheckHost(ctx context.Context, host string) ([]net.IPAddr
 	// Resolve hostname
 	addrs, err := sc.resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		return nil, fmt.Errorf("SSRF: DNS resolution failed for %s: %w", host, err)
+		return nil, fmt.Errorf("DNS resolution failed for %s: %w", host, err)
 	}
 
 	if len(addrs) == 0 {
-		return nil, fmt.Errorf("SSRF: no addresses found for %s", host)
+		return nil, fmt.Errorf("DNS resolution failed for %s: no addresses found", host)
 	}
 
 	// Check ALL resolved IPs

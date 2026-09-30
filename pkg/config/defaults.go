@@ -871,11 +871,6 @@ func defaultToolsConfig() ToolsConfig {
 				Enabled:    false,
 				MaxResults: 5,
 			},
-			SearXNG: SearXNGConfig{
-				Enabled:    false,
-				BaseURL:    "",
-				MaxResults: 5,
-			},
 			GLMSearch: GLMSearchConfig{
 				Enabled: false,
 				BaseURL: "https://open.bigmodel.cn/api/paas/v4/web_search",

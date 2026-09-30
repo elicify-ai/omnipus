@@ -27,7 +27,6 @@ func TestIntegrationProviderEnumMatchesCatalogue(t *testing.T) {
 		gen.IntegrationProviderIdTavily:     true,
 		gen.IntegrationProviderIdPerplexity: true,
 		gen.IntegrationProviderIdDuckduckgo: true,
-		gen.IntegrationProviderIdSearxng:    true,
 		gen.IntegrationProviderIdGlm:        true,
 		gen.IntegrationProviderIdBaidu:      true,
 		gen.IntegrationProviderIdExa:        true,
@@ -48,6 +47,14 @@ func TestIntegrationProviderEnumMatchesCatalogue(t *testing.T) {
 		if !enumSet[gen.IntegrationProviderId(id)] {
 			t.Errorf("catalogue/voice id %q has no enum constant — regenerate contracts (make gen-contracts)", id)
 		}
+		if !gen.IntegrationProviderId(id).Valid() {
+			t.Errorf("catalogue/voice id %q is rejected by the generated contract enum", id)
+		}
+	}
+	// A hand-maintained list alone cannot catch an obsolete value that remains
+	// accepted by the generated enum after the catalogue drops it (ADR-096 D10).
+	if gen.IntegrationProviderId("searxng").Valid() {
+		t.Error("removed SearXNG is still valid in the generated contract enum")
 	}
 	if len(expected) != len(enumSet) {
 		t.Fatalf("enum has %d values, catalogue+voice has %d — drift between the contract enum and the catalogue",

@@ -4309,7 +4309,6 @@ const (
 	IntegrationProviderIdGlm        IntegrationProviderId = "glm"
 	IntegrationProviderIdGroq       IntegrationProviderId = "groq"
 	IntegrationProviderIdPerplexity IntegrationProviderId = "perplexity"
-	IntegrationProviderIdSearxng    IntegrationProviderId = "searxng"
 	IntegrationProviderIdTavily     IntegrationProviderId = "tavily"
 )
 
@@ -4333,8 +4332,6 @@ func (e IntegrationProviderId) Valid() bool {
 	case IntegrationProviderIdGroq:
 		return true
 	case IntegrationProviderIdPerplexity:
-		return true
-	case IntegrationProviderIdSearxng:
 		return true
 	case IntegrationProviderIdTavily:
 		return true
@@ -17152,7 +17149,7 @@ type IntegrationProvider struct {
 	// Active True when this provider is the one currently selected for its kind. Voice rows: unchanged — the active transcriber. Search rows: true only when this row is the web-search default (ADR-096 D13 — no longer "whoever the old priority list picked"); kept so an older client still has the field. The Default/Fallback badges are built from default_search, fallback_search and the row's own usable flag instead.
 	Active *bool `json:"active,omitempty"`
 
-	// Configured Search rows: true when this provider's credential entry resolves in the credential store (the vault test, ADR-096 D13) — and, for the keyless rows, when their prerequisite holds (duckduckgo always; searxng when base_url is set). It says nothing about runtime usability: a configured provider can still be switched off or fail to have its key reach search. For whether search can use the provider right now, see usable. Voice rows: true when the provider's credential resolves; audio-model when voice.model_name is set.
+	// Configured Search rows: true when this provider's credential entry resolves in the credential store (the vault test, ADR-096 D13) — and, for the keyless search row, when its prerequisite holds (duckduckgo always). It says nothing about runtime usability: a configured provider can still be switched off or fail to have its key reach search. For whether search can use the provider right now, see usable. Voice rows: true when the provider's credential resolves; audio-model when voice.model_name is set.
 	Configured bool `json:"configured"`
 
 	// DisplayName Human-readable provider name for UI presentation.
@@ -17164,7 +17161,7 @@ type IntegrationProvider struct {
 	// FallbackAutomatic Search rows only; unset on voice rows. True when this row is the fallback because the stored fallback value is absent and the automatic rule (R3) resolved it to DuckDuckGo — not because the operator picked the fallback radio. Set together with fallback: true.
 	FallbackAutomatic *bool `json:"fallback_automatic,omitempty"`
 
-	// Id Provider identifier, from the single integration catalogue — not free-form. The search ids (brave, tavily, perplexity, duckduckgo, searxng, glm, baidu, exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids (elevenlabs, groq, audio-model) are listed so voice rows stay valid under this shared schema. searxng appears as a default only on installs whose configuration already resolved to it (ADR-096 D10).
+	// Id Provider identifier, from the single integration catalogue — not free-form. The search ids (brave, tavily, perplexity, duckduckgo, glm, baidu, exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids (elevenlabs, groq, audio-model) are listed so voice rows stay valid under this shared schema.
 	Id IntegrationProviderId `json:"id"`
 
 	// Kind Whether this provider supplies web search or voice-input transcription.
@@ -17173,11 +17170,14 @@ type IntegrationProvider struct {
 	// RequiresKey Whether this provider needs an API key to function.
 	RequiresKey bool `json:"requires_key"`
 
-	// Usable Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on — or, for SearXNG, switched on with a non-empty base_url. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
+	// SearchDepthCap Search rows only; omitted on providers without a depth setting and on voice rows. For Tavily, the effective operator-set search_depth ceiling (advanced when an existing install has no saved depth).
+	SearchDepthCap *string `json:"search_depth_cap,omitempty"`
+
+	// Usable Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
 	Usable *bool `json:"usable,omitempty"`
 }
 
-// IntegrationProviderId Provider identifier, from the single integration catalogue — not free-form. The search ids (brave, tavily, perplexity, duckduckgo, searxng, glm, baidu, exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids (elevenlabs, groq, audio-model) are listed so voice rows stay valid under this shared schema. searxng appears as a default only on installs whose configuration already resolved to it (ADR-096 D10).
+// IntegrationProviderId Provider identifier, from the single integration catalogue — not free-form. The search ids (brave, tavily, perplexity, duckduckgo, glm, baidu, exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids (elevenlabs, groq, audio-model) are listed so voice rows stay valid under this shared schema.
 type IntegrationProviderId string
 
 // IntegrationProviderKind Whether this provider supplies web search or voice-input transcription.

@@ -172,9 +172,9 @@ func TestIntegrationProviders_List(t *testing.T) {
 }
 
 // TestIntegrationProviders_List_AllProviders verifies the expanded catalog
-// surfaces every implemented search (Brave/Tavily/Perplexity/DuckDuckGo/
-// SearXNG/GLM/Baidu) and voice (ElevenLabs/Groq/audio-model) provider
-// (FR-12.1). The keyed providers that have no key stored report configured=false.
+// surfaces exactly the seven retained search providers (including Exa, not
+// removed SearXNG) and the voice providers (FR-12.1 / #1056 F-2). Keyed
+// providers that have no key stored report configured=false.
 func TestIntegrationProviders_List_AllProviders(t *testing.T) {
 	api, user := newReAuthTestAPI(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/providers", nil)
@@ -191,7 +191,7 @@ func TestIntegrationProviders_List_AllProviders(t *testing.T) {
 
 	wantSearch := map[string]bool{
 		"brave": true, "tavily": true, "perplexity": true,
-		"duckduckgo": true, "searxng": true, "glm": true, "baidu": true,
+		"duckduckgo": true, "glm": true, "baidu": true, "exa": true,
 	}
 	gotSearch := map[string]bool{}
 	for _, p := range resp.Search {
@@ -199,9 +199,7 @@ func TestIntegrationProviders_List_AllProviders(t *testing.T) {
 		require.True(t, idOk, "search provider id must be a string")
 		gotSearch[id] = true
 	}
-	for id := range wantSearch {
-		assert.True(t, gotSearch[id], "search provider %q must be in the catalog", id)
-	}
+	assert.Equal(t, wantSearch, gotSearch, "Settings must offer exactly the retained search catalogue")
 
 	wantVoice := map[string]bool{
 		"elevenlabs": true, "groq": true, "audio-model": true,
@@ -216,14 +214,6 @@ func TestIntegrationProviders_List_AllProviders(t *testing.T) {
 		assert.True(t, gotVoice[id], "voice provider %q must be in the catalog", id)
 	}
 
-	// SearXNG is keyless but needs a base_url; with no base_url set it must
-	// report configured=false (distinct from DuckDuckGo, which is always on).
-	for _, p := range resp.Search {
-		if p["id"] == "searxng" {
-			assert.Equal(t, false, p["requires_key"])
-			assert.Equal(t, false, p["configured"], "searxng without base_url must be unconfigured")
-		}
-	}
 	// audio-model is keyless but needs voice.model_name; unconfigured by default.
 	for _, p := range resp.Voice {
 		if p["id"] == "audio-model" {
@@ -233,12 +223,12 @@ func TestIntegrationProviders_List_AllProviders(t *testing.T) {
 	}
 }
 
-// TestIntegrationProviderUpdate_SearXNGActivation_NeedsBaseURL verifies that
-// activating SearXNG without a base_url is rejected 400 (keyless but with a
-// prerequisite), and that a valid re-auth token is still required first.
-func TestIntegrationProviderUpdate_SearXNGActivation_NeedsBaseURL(t *testing.T) {
+// TestIntegrationProviderUpdate_RemovedSearXNGRejected verifies that the
+// removed provider cannot be activated even with a valid re-auth token. A
+// former prerequisite error (missing base_url) is no longer its contract.
+func TestIntegrationProviderUpdate_RemovedSearXNGRejected(t *testing.T) {
 	api, user := newReAuthTestAPI(t)
-	// Re-auth first so the ONLY rejection is the missing base_url.
+	// Re-auth first so the rejection can only be the removed provider id.
 	rw := doReAuth(api, user, reAuthTestPassword)
 	require.Equal(t, http.StatusOK, rw.Code)
 	var rresp map[string]any
@@ -248,7 +238,7 @@ func TestIntegrationProviderUpdate_SearXNGActivation_NeedsBaseURL(t *testing.T) 
 
 	w := putIntegration(api, user, "searxng", `{"kind":"search","active":true}`, token)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, strings.ToLower(w.Body.String()), "base url")
+	assert.Contains(t, strings.ToLower(w.Body.String()), "unknown integration provider")
 }
 
 // TestIntegrationProviderUpdate_RequiresReAuth verifies that a sensitive

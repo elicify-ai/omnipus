@@ -73,7 +73,7 @@ func searchProviderCatalogueIDs() []string {
 }
 
 // searchProviderKeyed reports whether an id needs an API key to be usable.
-// SearXNG needs a base URL instead, DuckDuckGo nothing at all. Derived from
+// Catalogue-defined base-URL providers need a URL; DuckDuckGo needs nothing. Derived from
 // the catalogue (D15).
 func searchProviderKeyed(id string) bool {
 	def, ok := config.SearchProviderDefByID(id)
@@ -83,8 +83,8 @@ func searchProviderKeyed(id string) bool {
 // unusableReason maps a not-currently-usable id onto the spec's fixed reason
 // vocabulary (spec 338–341): "no API key", "switched off", "unknown id".
 // Enabled-but-keyless is "no API key"; anything else not usable is "switched
-// off" (a SearXNG enabled with an empty base URL reports "switched off" too —
-// the vocabulary has no separate word for a missing base URL; flagged).
+// off" (a catalogue-defined base-URL provider with a missing URL also
+// reports "switched off"; there is no separate vocabulary for that).
 func unusableReason(cfg *config.WebToolsConfig, id string) string {
 	if !slices.Contains(searchProviderCatalogueIDs(), id) {
 		return "unknown id"
@@ -760,9 +760,22 @@ func (t *WebSearchTool) sanitizeProviderMessage(msg string) string {
 	return msg
 }
 
-// failureLine renders one "- id (role): class: msg" line with sanitization.
+// duckDuckGoRegionNote is an agent-facing hint for network failures only.
+// A transport error can mean regional blocking, but does not prove it.
+func duckDuckGoRegionNote(id, class string) string {
+	if id != config.SearchProviderDuckDuckGo || class != classNetwork {
+		return ""
+	}
+	return "\nNote: DuckDuckGo may be blocked in some countries: North Korea, Indonesia, and mainland China " +
+		"(Hong Kong and Macau remain accessible). If a different default or fallback is available, " +
+		"try omitting provider; otherwise configure or choose another provider."
+}
+
+// failureLine renders a sanitized provider failure and, for DuckDuckGo
+// network failures, an agent-facing regional-blocking note.
 func (t *WebSearchTool) failureLine(id, role, class, msg string) string {
-	return fmt.Sprintf("- %s (%s): %s: %s", id, role, class, t.sanitizeProviderMessage(msg))
+	return fmt.Sprintf("- %s (%s): %s: %s", id, role, class, t.sanitizeProviderMessage(msg)) +
+		duckDuckGoRegionNote(id, class)
 }
 
 // notCalledLine renders one "- id (role): not called: reason" line.
@@ -997,10 +1010,28 @@ func (t *WebSearchTool) executeChosen(
 				t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}, "\n"))
 		}
 	}
-	// Hard fail: capability use, no fallback, or final class.
-	tail := fmt.Sprintf("This call named %s, so the fallback was not tried. "+
-		"Omit provider to use the default and the fallback, or set provider to one of: %s.",
-		id, strings.Join(usableOthers(entries, id), ", "))
+	// Hard fail: name the actual reason instead of implying that naming a
+	// provider alone disabled a fallback (AC-5/D6 — the three honest reasons
+	// a named provider's hop does not happen).
+	var reason string
+	switch {
+	case usesCap:
+		reason = "This call used a provider-specific capability, so the fallback was not tried."
+	case entries.ignoredSameAsDefault:
+		reason = "The configured fallback is not eligible: same as default."
+	case entries.fallbackID == "" && strings.TrimSpace(cfg.FallbackProvider) != "" &&
+		strings.TrimSpace(cfg.FallbackProvider) != config.SearchProviderNone:
+		reason = "The configured fallback is not eligible: unknown provider id."
+	case entries.fallbackID == "":
+		reason = "No fallback is configured for this call."
+	case !entries.usable[entries.fallbackID]:
+		reason = fmt.Sprintf("The configured fallback (%s) is not eligible: %s.",
+			entries.fallbackID, entries.notCalledReason(cfg, entries.fallbackID))
+	default:
+		reason = fmt.Sprintf("This failure class (%s) does not allow a fallback.", spErr.class)
+	}
+	tail := reason + " Omit provider to use the default and the fallback, or set provider to one of: " +
+		strings.Join(usableOthers(entries, id), ", ") + "."
 	return ErrorResult(strings.Join([]string{
 		"search failed",
 		t.failureLine(id, "chosen", spErr.class, spErr.msg),
@@ -1841,19 +1872,6 @@ func (p *BraveSearchProvider) SearchWithCaps(ctx context.Context, req searchRequ
 		return strings.Join(lines, "\n"), nil
 	}
 	return "", fmt.Errorf("all api keys failed, last error: %w", lastErr)
-}
-
-// honoursDepth/honoursSiteFilters: SearXNG supports neither (matrix).
-func (p *SearXNGSearchProvider) honoursDepth() bool {
-	return catalogueHonoursDepth(config.SearchProviderSearXNG)
-}
-func (p *SearXNGSearchProvider) honoursSiteFilters() bool {
-	return catalogueHonoursSiteFilters(config.SearchProviderSearXNG)
-}
-
-// SearchWithCaps delegates to the legacy search (base-URL aware already).
-func (p *SearXNGSearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
-	return p.Search(ctx, req.query, req.count, req.rangeFilter)
 }
 
 // honoursDepth/honoursSiteFilters: Baidu supports neither (matrix).

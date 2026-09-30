@@ -121,6 +121,11 @@ func TestBootSweep_ReconcilesChildAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewUnifiedStore: %v", err)
 	}
+	t.Cleanup(func() {
+		if closeErr := us.Close(); closeErr != nil {
+			t.Errorf("UnifiedStore.Close: %v", closeErr)
+		}
+	})
 
 	// Snapshot the tree right after store construction, BEFORE the refused
 	// write attempt: NewUnifiedStore itself creates a store-internal
