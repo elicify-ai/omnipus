@@ -46,6 +46,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -505,60 +506,125 @@ func TestSteeredTurnDrain1020Round3_DescendantWakeDuringOwnTerminalDeliveryNever
 }
 
 // TestSteeredTurnDrain1020Round3_StopRaceDuringWakeDeliveryNeverStrandsAcceptedWake
-// covers S4: the exact pta round-2 finding. A Stop terminalises the child
-// through reportSteeredSessionTerminalUpward — which does NOT take the
-// steering-queue mutex — while an unrelated wake delivery is mid-flight,
-// inside the same non-committing "finishing" window S1/S3 use. The wake
-// must never be reported accepted with no live or durable consumer.
+// covers S4 with the real Stop cascade, durable descendant message and
+// completeSteeredTurn's production finishing-items callback. A successful
+// wake enqueue must end at a real consumer, not merely leave the main queue.
 func TestSteeredTurnDrain1020Round3_StopRaceDuringWakeDeliveryNeverStrandsAcceptedWake(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
 	child := launchRunningChild(t, al, rootID, "round3-s4-stop-race")
+	inbox := al.GetMessageInboxStore()
 
-	var enqueueErr error
-	// Deterministic, single-goroutine reproduction: runTerminalTransition
-	// installs the non-committing "finishing" mark before calling prepare,
-	// and only clears it after prepare/transition return — so anything run
-	// synchronously inside prepare() genuinely observes that open window.
-	// Outcome is asserted via the child record load and enqueueErr below,
-	// not runTerminalTransition's own return values — mirrors the
-	// codebase's own established pattern for this exact situation
-	// (turn_test.go::newAL's `//nolint:dogsled` on newTestAgentLoop).
-	_, _, _ = al.steering.runTerminalTransition(child.SessionID, //nolint:dogsled
-		func() error {
-			// Simulates a concurrent Stop cascade landing via the
-			// terminal-report path (steer_cancel.go), which writes the
-			// terminal state directly and never touches al.steering at
-			// all — the exact bypass the pta finding names.
-			al.reportSteeredSessionTerminalUpward(context.Background(), child.SessionID, child.Generation,
-				session.LifecycleCancelled, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
-			// Simulates the paused wake delivery resuming and enqueuing
-			// into the still-open (non-committing) transition.
-			enqueueErr = al.EnqueueSteeringWake(
-				child.SessionID, testDefaultAgentID, child.SessionID,
-				"round3-s4-wake", providers.Message{Role: "user", Content: "ROUND3-S4-WAKE"})
-			return nil
-		},
-		// Unreached in this exact interleaving: prepare's own enqueue
-		// leaves the queue non-empty, so runTerminalTransition's own
-		// recheck aborts before ever calling transition.
-		func() (bool, error) { return false, nil })
-
-	rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
-	if err != nil {
-		t.Fatalf("Load(child): %v", err)
+	const descendantID = "round3-s4-grandchild"
+	const wakeText = "ROUND3-S4-DURABLE-WAKE"
+	var message generated.SessionMessage
+	if err := message.FromSessionMessageHandback(generated.SessionMessageHandback{
+		MessageId:      descendantID + ":1:final",
+		SessionId:      descendantID,
+		CreatedAt:      time.Now().UTC(),
+		Depth:          2,
+		SenderIdentity: testDefaultAgentID,
+		Mode:           generated.SessionMessageHandbackModeFinal,
+		ResultSoFar:    wakeText,
+		Artifacts:      []string{},
+		OpenQuestions:  []string{},
+	}); err != nil {
+		t.Fatalf("FromSessionMessageHandback(descendant): %v", err)
 	}
-	if !rec.Terminal() {
-		t.Fatalf("SETUP: child did not become terminal via the simulated Stop cascade; state=%q", rec.State)
+	// The real upward writer appends before enqueuing its wake. A fabricated
+	// message ID would let an accepted wake vanish without a recoverable entry.
+	appended, err := inbox.Append(child.SessionID, message)
+	if err != nil {
+		t.Fatalf("Append(child inbox): %v", err)
+	}
+	unacked, _, _, err := inbox.Drain(child.SessionID, descendantID, "", 10)
+	if err != nil || len(unacked) != 1 || messageIDOf(unacked[0]) != appended.MessageID {
+		t.Fatalf("SETUP: durable unacknowledged descendant entry = %+v, err=%v; want the appended ID %q", unacked, err, appended.MessageID)
+	}
+
+	var hookMu sync.Mutex
+	var hookCalls int
+	var stopErr, stopReadErr, enqueueErr error
+	var stopState session.LifecycleState
+	var stopReport steer.CancelReport
+	completeStateWriteTestHook = func(sessionID string) {
+		hookMu.Lock()
+		hookCalls++
+		first := hookCalls == 1
+		hookMu.Unlock()
+		if !first {
+			return
+		}
+		// The finishing mark is installed: Stop lands via the real cascade
+		// while completion is between durable delivery and its terminal write.
+		stopReport, stopErr = al.steerCanceller().CancelSubtree(context.Background(), sessionID,
+			steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"})
+		stopped, readErr := al.GetSessionLifecycleStore().Load(sessionID)
+		stopReadErr = readErr
+		if readErr == nil {
+			stopState = stopped.State
+		}
+		// Resume the pending upward delivery while the finishing mark is open.
+		enqueueErr = al.EnqueueSteeringWake(sessionID, testDefaultAgentID, sessionID,
+			appended.MessageID, providers.Message{Role: "user", Content: wakeText})
+	}
+	t.Cleanup(func() { completeStateWriteTestHook = nil })
+
+	completionErr := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "before Stop"}, nil)
+	al.drainSteeredTurns(10 * time.Second)
+	hookMu.Lock()
+	calls := hookCalls
+	hookMu.Unlock()
+	if calls < 1 || stopErr != nil || stopReadErr != nil || stopState != session.LifecycleCancelled || len(stopReport.Unreachable) != 0 {
+		t.Fatalf("SETUP: real Stop must terminalise the child in the finishing window: calls=%d state=%q stopErr=%v readErr=%v unreachable=%+v completionErr=%v",
+			calls, stopState, stopErr, stopReadErr, stopReport.Unreachable, completionErr)
+	}
+	entries, err := inbox.Entries(child.SessionID)
+	if err != nil {
+		t.Fatalf("Entries(child inbox): %v", err)
+	}
+	found := 0
+	for _, entry := range entries {
+		if entry.Kind == session.InboxEntryMessage && entry.Message != nil && messageIDOf(*entry.Message) == appended.MessageID {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Fatalf("durable descendant entry count after Stop = %d, want exactly 1 for %q", found, appended.MessageID)
 	}
 	if enqueueErr != nil {
-		// A refusal is the safe outcome here — nothing further to check.
+		// Explicit refusal preserves the entry for recovery; it must not
+		// claim success or acknowledge a message nobody consumed.
+		if !errors.Is(enqueueErr, errSteeringScopeClosed) {
+			t.Fatalf("wake was refused for an unexpected reason: %v", enqueueErr)
+		}
+		pending, _, _, drainErr := inbox.Drain(child.SessionID, descendantID, "", 10)
+		if drainErr != nil || len(pending) != 1 || messageIDOf(pending[0]) != appended.MessageID {
+			t.Fatalf("refused wake must remain durably unacknowledged for recovery: entries=%+v err=%v, want %q", pending, drainErr, appended.MessageID)
+		}
 		return
 	}
-	if got := al.pendingSteeringCountForScope(child.SessionID); got != 0 {
-		t.Errorf("BLOCKED: round-3 spec item 2/S4 (a wake accepted while racing a Stop's terminal write must be delivered to a live consumer or durably stored for boot recovery — never a bare success report with no consumer) is not implemented — the wake was reported accepted (no error) on a now-terminal child, and %d item(s) remain queued in the in-memory steeringQueue, which is not persisted and cannot be recovered by a restart", got)
+
+	acked, err := deliverEntryIsAcked(inbox, child.SessionID, descendantID, appended.MessageID)
+	if err != nil {
+		t.Fatalf("deliverEntryIsAcked(descendant): %v", err)
+	}
+	transcript, err := al.ResolveSessionStore(child.SessionID).ReadTranscript(child.SessionID)
+	if err != nil {
+		t.Fatalf("ReadTranscript(child): %v", err)
+	}
+	consumed := 0
+	for _, entry := range transcript {
+		if entry.ID == "consumed-"+appended.MessageID && entry.Content == "consumed "+appended.MessageID {
+			consumed++
+		}
+	}
+	pending := al.pendingSteeringCountForScope(child.SessionID)
+	if !acked || consumed != 1 || pending != 0 {
+		t.Fatalf("accepted Stop-race wake %q was not delivered to a real consumer: durable=%d acked=%v consumed markers=%d pending=%d completionErr=%v; want one durable entry, ACK, one consumed marker and no stranded queue item (round-3 S4)",
+			appended.MessageID, found, acked, consumed, pending, completionErr)
 	}
 }
 
