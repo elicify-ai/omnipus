@@ -20,6 +20,6 @@ properties:
   scope:
     type: string
     enum:
-      - this-turn
-      - stop-all
-    default: this-turn
+      - session
+      - tree
+    default: session

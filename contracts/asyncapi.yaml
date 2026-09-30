@@ -1785,9 +1785,9 @@ components:
         scope:
           type: string
           enum:
-          - this-turn
-          - stop-all
-          default: this-turn
+          - session
+          - tree
+          default: session
     PingFrame:
       title: PingFrame
       description: Client → server heartbeat.
