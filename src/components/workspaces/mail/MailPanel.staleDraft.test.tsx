@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api-error'
 import type { MailMessagePage, MailMessageSummary } from '@/lib/api/generated/openapi-types'
@@ -77,6 +77,36 @@ describe('MailPanel — stale draft recovery errors', () => {
     expect(fetchMailMessage).toHaveBeenCalledTimes(1)
     expect(fetchMailMessage).toHaveBeenCalledWith('ws-1', 'mia', 'drafts', 'uid:3:1', { retry: false })
     expect(screen.getByRole('button', { name: /Other draft/ })).toBeInTheDocument()
+  })
+
+  it.each([
+    { status: 502, errorCode: 'server_error' },
+    { status: 503, errorCode: 'backoff' },
+  ])('keeps an initial $status ($errorCode) visible without draft recovery', async ({ status, errorCode }) => {
+    // I2 / email-mail-view-spec.md §2.3 + US-3 AS-4: upstream failure
+    // and backoff are not evidence that the selected draft disappeared.
+    // Only the INITIAL UID request gets this response. beforeEach's 404
+    // remains for any mistaken Message-ID fallback, so recovery is observable.
+    fetchMailMessage.mockRejectedValueOnce(new ApiError(status, undefined, { code: errorCode }))
+    renderDraft()
+
+    const draftRow = await screen.findByRole('button', { name: /F5 stale draft/ })
+    expect(fetchMailMessages.mock.calls).toEqual([
+      ['ws-1', 'mia', 'drafts', { retry: false }],
+    ])
+    fireEvent.click(draftRow)
+
+    const preview = within(screen.getByTestId('mail-reading-zone'))
+    expect(await preview.findByText(errorCode, { exact: true })).toBeVisible()
+    expect(preview.getByRole('button', { name: /^Retry$/ })).toBeEnabled()
+    expect(fetchMailMessage.mock.calls).toEqual([
+      ['ws-1', 'mia', 'drafts', 'uid:3:1', { retry: false }],
+    ])
+    expect(fetchMailMessages.mock.calls).toEqual([
+      ['ws-1', 'mia', 'drafts', { retry: false }],
+    ])
+    expect(screen.queryByText('This draft was changed or deleted elsewhere. The list has been refreshed.', { exact: true })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /F5 stale draft/ })).toBeVisible()
   })
 
   it('keeps an upstream 502 visible and does not claim the list was refreshed', async () => {

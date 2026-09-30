@@ -3,7 +3,7 @@
 // requires that workspace's configured mailbox (or its connection error), not
 // an empty state. The same-page hash transition keeps the React Query cache.
 import React from 'react'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createHashHistory, createRouter, RouterProvider } from '@tanstack/react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -76,6 +76,29 @@ function openHashLink(path: string) {
   window.location.hash = path
 }
 
+// jsdom supplies real asynchronous Back/Forward + popstate, but not the
+// preceding Navigation API event. Model only that missing platform event;
+// never turn a history traversal into openHashLink's fresh hash push.
+async function traverseHashHistory(direction: 'back' | 'forward', destinationPath: string) {
+  let restoredEntry: { hash: string; entry: unknown } | null = null
+  await act(async () => {
+    const popstate = new Promise<{ hash: string; entry: unknown }>((resolve) => {
+      // Capture both before the real hook's router replace, which owns and
+      // rewrites history.state as well as the projected panel URL.
+      window.addEventListener('popstate', (event) => resolve({
+        hash: window.location.hash, entry: event.state?.entry,
+      }), { once: true, capture: true })
+    })
+    window.navigation.dispatchEvent(Object.assign(new Event('navigate'), {
+      navigationType: 'traverse', hashChange: true,
+      destination: { url: new URL(`#${destinationPath}`, window.location.href).href, sameDocument: true },
+    }))
+    window.history[direction]()
+    restoredEntry = await popstate
+  })
+  return restoredEntry
+}
+
 beforeEach(() => {
   vi.stubGlobal('navigation', new EventTarget())
   window.history.replaceState(null, '', '/#/workspaces/ws-a/chat?panel=mail&agent=mia')
@@ -103,6 +126,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // The hook removes its Navigation API listener on unmount. Do that while
+  // the platform stand-in still exists, before vi.unstubAllGlobals below.
+  cleanup()
   client?.clear()
   client = null
   useUiStore.getState().closePanel()
@@ -115,6 +141,84 @@ afterEach(() => {
 })
 
 describe('Mail stays in the newly routed workspace on a same-page hash navigation', () => {
+  it('preserves Mail and its mailbox through stale Back/Forward entries, then adopts a fresh pushed Library link', async () => {
+    // I1 / side-panel-shell-spec.md §8.2, US-7 AS-7 (SP-22/MAJ-206):
+    // STORE wins on traversal; a subsequent fresh link still adopts its panel.
+    // Seed stale Library entries on BOTH sides of the initial Mail landing.
+    // The incidental agent key remains declared even for Library (§8.2).
+    const mailPath = '/workspaces/ws-a/chat?panel=mail&agent=mia'
+    const staleLibraryPath = '/workspaces/ws-a/chat?panel=library&agent=mia'
+    window.history.replaceState({ entry: 'older-library' }, '', `/#${staleLibraryPath}`)
+    window.history.pushState({ entry: 'mail' }, '', `/#${mailPath}`)
+    window.history.pushState({ entry: 'newer-library' }, '', `/#${staleLibraryPath}`)
+    expect(await traverseHashHistory('back', mailPath)).toEqual({
+      hash: `#${mailPath}`, entry: 'mail',
+    })
+    const historyLength = window.history.length
+
+    client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const router = createRouter({ routeTree, history: createHashHistory() })
+    render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>)
+
+    async function expectMailSurvives() {
+      await waitFor(() => {
+        expect(useUiStore.getState().activePanel).toEqual({
+          id: 'mail', context: { workspaceId: 'ws-a', mailboxId: 'mia' },
+        })
+        expect(router.state.location.pathname).toBe('/workspaces/ws-a/chat')
+        expect(router.state.location.search).toEqual({ panel: 'mail', agent: 'mia' })
+        expect(window.location.hash).toBe(`#${mailPath}`)
+        expect(router.state.status).toBe('idle')
+      })
+      expect(screen.getByRole('complementary', { name: 'Mail' })).toBeVisible()
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Mailbox' }))
+        .toHaveTextContent('Mia · mia-other@example.test'))
+      expect(screen.queryByRole('complementary', { name: 'Library' })).not.toBeInTheDocument()
+      expect(window.history.length).toBe(historyLength)
+    }
+    await expectMailSurvives()
+    // Initial route adoption owns/replaces history.state. Seed the current
+    // slot's test marker only AFTER it settles, preserving router metadata;
+    // the unvisited stale Library slots still carry their original markers.
+    await act(async () => {
+      window.history.replaceState({ ...window.history.state, entry: 'mail' }, '', window.location.href)
+    })
+
+    // Capture the REAL restored hash before the hook's replace: neither
+    // traversal may be faked by a push to the already-correct Mail URL.
+    expect(await traverseHashHistory('back', staleLibraryPath)).toEqual({
+      hash: `#${staleLibraryPath}`, entry: 'older-library',
+    })
+    await expectMailSurvives()
+    expect(await traverseHashHistory('forward', mailPath)).toEqual({
+      hash: `#${mailPath}`, entry: 'mail',
+    })
+    await expectMailSurvives()
+    expect(await traverseHashHistory('forward', staleLibraryPath)).toEqual({
+      hash: `#${staleLibraryPath}`, entry: 'newer-library',
+    })
+    await expectMailSurvives()
+
+    // Do not "fix" traversal by suppressing fresh adoption too (delta 3).
+    // openHashLink emits push and changes the real hash, with the same hook
+    // still mounted; the requested Library must replace Mail in workspace B.
+    const freshLibraryPath = '/workspaces/ws-b/chat?panel=library'
+    act(() => { openHashLink(freshLibraryPath) })
+    await waitFor(() => {
+      expect(useUiStore.getState().activePanel).toEqual({
+        id: 'library', context: { workspaceId: 'ws-b' },
+      })
+      expect(router.state.location.pathname).toBe('/workspaces/ws-b/chat')
+      expect(router.state.location.search).toEqual({ panel: 'library' })
+      expect(window.location.hash).toBe(`#${freshLibraryPath}`)
+      expect(router.state.status).toBe('idle')
+    })
+    expect(await screen.findByRole('complementary', { name: 'Library' })).toBeVisible()
+    expect(screen.queryByRole('combobox', { name: 'Mailbox' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('complementary', { name: 'Mail' })).not.toBeInTheDocument()
+    expect(window.history.length).toBe(historyLength + 1)
+  })
+
   it('shows B’s newly configured but unreachable mailbox, not A’s cached list or an empty state', async () => {
     client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
     const router = createRouter({ routeTree, history: createHashHistory() })
