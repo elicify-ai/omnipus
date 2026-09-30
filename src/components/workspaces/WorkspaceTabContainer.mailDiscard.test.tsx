@@ -49,7 +49,7 @@ let mockPathname = '/workspaces/ws-1/chat'
 vi.mock('@tanstack/react-router', () => ({
   Outlet: () => <div data-testid="outlet" />,
   useNavigate: () => vi.fn(),
-  useLocation: () => ({ pathname: mockPathname }),
+  useLocation: () => ({ pathname: mockPathname, search: {} }),
   Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a>,
 }))
 

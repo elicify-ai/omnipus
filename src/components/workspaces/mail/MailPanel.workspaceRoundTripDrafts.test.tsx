@@ -67,6 +67,7 @@ vi.mock('@/lib/api/mail', async (importOriginal) => {
   }
 })
 
+import { useUiStore } from '@/store/ui'
 import { MailPanel } from './MailPanel'
 
 const FOLDERS_OK = {
@@ -148,6 +149,7 @@ describe('MailPanel — Drafts survives a workspace round-trip (f5f6-round2 Item
     sendMailDraft.mockReset()
     sendMailMessage.mockReset()
     sessionStorage.clear()
+    useUiStore.setState({ toasts: [] })
 
     fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
     // ws-A and ws-C each have their own configured mailbox for 'mia'; ws-B
@@ -176,7 +178,10 @@ describe('MailPanel — Drafts survives a workspace round-trip (f5f6-round2 Item
     sendMailMessage.mockResolvedValue({ message_id: '<new@example.test>', sent_saved: true, save_warning: null, draft_cleanup_warning: null })
   })
 
-  afterEach(() => cleanup())
+  afterEach(() => {
+    cleanup()
+    useUiStore.setState({ toasts: [] })
+  })
 
   it('re-opening Drafts after A -> B -> C -> A round trip still shows the real drafts', async () => {
     // Mirrors the app's real singleton defaults (src/lib/queryClient.ts) —
@@ -204,6 +209,9 @@ describe('MailPanel — Drafts survives a workspace round-trip (f5f6-round2 Item
     const sendButton = await screen.findByRole('button', { name: /^Send$/ }, LONG)
     fireEvent.click(sendButton)
     await waitFor(() => expect(sendMailDraft).toHaveBeenCalled(), LONG)
+    await waitFor(() => expect(useUiStore.getState().toasts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ message: 'Draft sent', variant: 'success' }),
+    ])), LONG)
 
     // Navigate away: workspace B (no mailbox) then workspace C (unreachable
     // mailbox) — same MailPanel instance, new workspaceId prop each time
