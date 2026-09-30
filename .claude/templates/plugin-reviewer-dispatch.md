@@ -56,6 +56,10 @@ Canonical source: `.claude/templates/agent-discipline.md`.
 
 End the report with the evidence table — one row per claim: Claim | Evidence (the command plus its exit code plus the key output line, or the `file::symbol` read, or a commit SHA) | Certainty (Verified / Inferred / Unknown) — and a mandatory final **self-check** row: what you re-read and re-ran against this review's done-criteria, and its result.
 
+## User-facing documentation check (every reviewer)
+
+Apply root `CLAUDE.md` ("Definition of Done"): for a UI or behaviour change, compare the changed surface with the matching update to user-facing docs under `docs/` outside `docs/internal/`. Check the whole change before calling an update missing; if your scope cannot establish that, mark the claim UNVERIFIED rather than guessing. If the update is missing, report an **Important** finding with the changed behaviour, the missing or stale user instruction, and a concrete failure scenario. `docs-verifier` audits the accuracy of the implementing lead's draft; an internal design note alone is not a user-facing update. If the change has no user-visible effect, state why this check does not apply.
+
 ## Every reviewer except code-simplifier: read-only
 
 You review a still tree. Do not edit any file under review — a finding is reported, never fixed on the side. Only `code-simplifier` (below) is the exception.

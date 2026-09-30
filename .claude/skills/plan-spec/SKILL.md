@@ -77,6 +77,9 @@ seen and accepted, not for an unanswered question.
   RED/GREEN/CHECK gate this spec feeds.
 - User promises: `docs/security.md` and `docs/tools.md`, whenever the feature touches
   tool access, approval, or the shell-rule/Auto-approve surface.
+- For a UI or behaviour change, read the relevant user-facing pages under `docs/`
+  (outside `docs/internal/`) before planning their matching updates (root
+  `CLAUDE.md`, "Definition of Done").
 - Codebase understanding: GitNexus MCP tools — `query`, `context`, `impact`, `trace`,
   `explain`, `detect_changes` (exact names; there is no `gitnexus_query` or similar
   prefixed form). Fall back to Grep/Read when the graph does not cover a file or the
@@ -211,15 +214,19 @@ how a real user or agent will invoke this feature once built:
 - Test plan execution: name where in the flow (RED/GREEN/CHECK, §7.1) this gets executed,
   not merely written.
 
+**User-facing documentation** (mandatory; root `CLAUDE.md`, "Definition of Done") — for each UI or behaviour change, identify the existing or new user-facing page under `docs/` (outside `docs/internal/`) and a specific `DOC-xxx` TODO describing the matching update. Check the existing pages before naming a destination. The implementing lead drafts the update; `docs-verifier` audits it before landing. For a change with no user-visible effect, state why no update applies rather than leaving this section blank.
+
 **Functional Requirements** — `FR-001: System MUST/SHOULD/MAY [requirement].` Testable;
 if you cannot write a test for it, rewrite it.
 
 **Success Criteria** — `SC-001: [measurable, no subjective language].`
 
 **Traceability Matrix** — one row per FR-xxx, linking to its user story, its BDD
-scenario(s), and its test name(s) (test names are placeholders here — qa-lead names the
-real tests in RED). Every FR-xxx appears; every BDD scenario appears at least once. A gap
-here is an incomplete spec — fill it before finishing.
+scenario(s), its test name(s) (test names are placeholders here — qa-lead names the
+real tests in RED), and any matching DOC-xxx TODO. Every FR-xxx appears; every BDD
+scenario and UI/behaviour documentation TODO appears at least once. For a requirement
+with no user-visible effect, give the reason instead of leaving the docs cell blank.
+A gap here is an incomplete spec — fill it before finishing.
 
 ## Phase 7 — Assemble and hand off
 
@@ -257,6 +264,9 @@ here is an incomplete spec — fill it before finishing.
       all represented, not just happy path.
 - [ ] Reachability section names the actual tool-policy file(s) and the actual screen —
       not "TBD".
+- [ ] User-facing documentation section names specific pages and DOC-xxx TODOs for
+      each UI or behaviour change (or says why none applies); the Traceability
+      Matrix links the matching requirements to those TODOs.
 - [ ] Traceability Matrix has no gaps.
 - [ ] No implementation detail leaked into Phase 2/3 sections (phrasing table above).
 - [ ] Output path is exactly `docs/internal/specs/<name>-spec.md` — nowhere else.

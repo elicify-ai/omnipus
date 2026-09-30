@@ -24,6 +24,8 @@ The built-in groups you will meet in practice are below. For every current name 
 | Communication | `send_email`, `read_inbox`, `send_message` | Send email and chat messages |
 | Delegation | `delegate` | Hand work to another agent |
 
+When an agent calls `list_jobs`, completed and failed jobs are hidden by default, not erased. If any are hidden, `notes.terminal_suppressed` gives counts by job type and a `total`. The counts follow kind, label, and draft filtering but precede status filtering and the result limit: even a call for `status="running"` can count hidden completed jobs. If `notes.scan_truncated` or `notes.errors` appears, the count may be incomplete. Set `include_terminal=true` to make terminal rows eligible for results, or filter for `status="failed"` or `status="completed"`, which includes them automatically.
+
 **Where reading tools can look.** `read_file`, `list_directory` and `grep` follow one rule: they reach any file your account can read, except Omnipus's protected files (such as the master key, saved credentials and `config.json`) and other agents' and other workspaces' files. `grep` given no folder searches the workspace and its mounted folders. Given a folder, it searches there instead — a workspace-relative path, a mounted folder's name, or an absolute path such as `/var/log`; a path containing `..` works too. It skips the Linux system folders `/proc`, `/sys` and `/dev`. Writing tools stay inside the workspace and mounted folders. See [security](security.md#what-reading-searching-and-listing-can-reach) for the details.
 
 An agent sees common tools directly and searches the rest when a task calls for one. If it does not reach for a tool, name it in your request.

@@ -60,6 +60,8 @@ releases; v0.1.1 carries near the full scope once labelled v0.3).
 - Is there a screen or component that renders it? A backend with no UI and no tool registration is a library, not a feature.
 - Was the test plan **executed**, or only written? "Written, not executed" is not testing.
 
+**User-facing documentation (MANDATORY).** Any UI or behaviour change must include a matching update to user-facing documentation under `docs/` (outside `docs/internal/`) in the same change. At design time, name the affected pages and specific documentation TODOs; for small and standard work, include them in the work plan. The implementing lead drafts the update and `docs-verifier` audits it against the actual behaviour before landing. Reviewers check the changed UI/behaviour against the updated pages; a missing matching update is an **Important** finding with a concrete user-impact scenario. If a change has no user-visible effect, record why no user-facing documentation update is needed.
+
 State delivery in two lines that are never merged: *code correct and tested*, and *reachable by a user/agent*. **Why:** the vault-records work was reported six-of-six complete with CI 34/34 green while all six `vault_*` tools were registered in zero config files, the superseded `knowledge_*` tools were still the only ones wired, and no record UI existed.
 
 ## Reporting Results (MANDATORY)
