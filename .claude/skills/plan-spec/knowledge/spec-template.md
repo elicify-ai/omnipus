@@ -8,7 +8,8 @@ this header block itself from the final output.
 
 The section order below is fixed by `plan-spec/SKILL.md` and the S1 lane brief:
 contract changes first, then backend and frontend covered equally, BDD scenarios with
-oracles from this spec, a traceability table, and Reachability.
+oracles from this spec, Reachability, user-facing documentation TODOs, and a traceability
+table.
 
 ---
 
@@ -275,14 +276,25 @@ protected by: [existing tests covering the boundary, if any].
   justified because…"].
 - **Test plan execution**: [where in RED/GREEN/CHECK this gets run, not merely written].
 
+## User-facing documentation
+
+> Root `CLAUDE.md` ("Definition of Done"): name specific TODOs for every UI or
+> behaviour change, pointing to user-facing `docs/` pages outside `docs/internal/`.
+> If none applies, state the reason here.
+
+| TODO | UI / behaviour change | User-facing page | Matching update |
+|---|---|---|---|
+| DOC-001 | [what changes for users] | `docs/[existing-or-new-page].md` | [what the page must explain] |
+
 ## Traceability Matrix
 
-| Requirement | User Story | BDD Scenario(s)          | Test Name(s)            |
-|-------------|-----------|---------------------------|--------------------------|
-| FR-001      | US-1      | Scenario: [title]         | [test_name]              |
+| Requirement | User Story | BDD Scenario(s)          | Test Name(s)            | Documentation TODO(s) |
+|-------------|-----------|---------------------------|-------------------------|-----------------------|
+| FR-001      | US-1      | Scenario: [title]         | [test_name]             | DOC-001               |
 
 **Completeness check**: every FR-xxx has at least one BDD scenario and one test; every
-BDD scenario appears at least once.
+BDD scenario appears at least once; each UI/behaviour change traces to a DOC-xxx TODO
+(or an explicit reason no user-facing documentation update applies).
 
 ---
 
