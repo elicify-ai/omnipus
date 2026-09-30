@@ -425,8 +425,6 @@ func (c *SteerCanceller) cascade(
 	}
 
 	lock := c.cascadeLock(sessionID)
-	lock.Lock()
-	defer lock.Unlock()
 
 	stamped := make(map[string]int)
 	seen := make(map[string]struct{})
@@ -456,19 +454,30 @@ func (c *SteerCanceller) cascade(
 		}
 	}
 
+	// D7: the cascade lock serializes traversal/stamping only. It MUST be
+	// released before firing or awaiting a live effect (cancelling an actual
+	// in-flight turn) — a long-running cancel callback holding this lock
+	// would otherwise block every other cascade operation on this session,
+	// including an unrelated Stop/Revive racing in. Each enumeration+stamp
+	// pass below re-acquires the lock for its own serialized walk, then
+	// drops it before the corresponding fireLiveCancels call.
+	lock.Lock()
 	first, walkErr := CollectDescendantSessionIDs(c.Lifecycle, sessionID)
 	if walkErr != nil {
 		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: walkErr.Error()})
 	}
 	process(append([]string{sessionID}, first...))
+	lock.Unlock()
 	fireLiveCancels()
 
+	lock.Lock()
 	second, secondErr := CollectDescendantSessionIDs(c.Lifecycle, sessionID)
 	if secondErr != nil {
 		report.Unreachable = appendUniqueUnreachable(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: secondErr.Error()})
 	}
 	lateStart := len(stamped)
 	process(second)
+	lock.Unlock()
 	if len(stamped) > lateStart {
 		fireLiveCancels()
 	}
