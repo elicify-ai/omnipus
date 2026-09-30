@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -197,6 +198,13 @@ type WSHandler struct {
 	// second turn (ws_client_message_dedupe.go). Guarded by mu.
 	acceptedClientMsgs map[string]*acceptedClientMessages
 
+	// firstMessageMu serializes ID-bearing, session-less ordinary sends through
+	// persistence/cache population, never bus admission. It is not a keyed claim store.
+	firstMessageMu sync.Mutex
+	// acceptedFirstClientMsgs extends the retry cache across connections before
+	// the client knows its session ID. Guarded by mu; lost on gateway restart.
+	acceptedFirstClientMsgs map[firstClientMessageKey]acceptedFirstClientMessage
+
 	// approvalRegV2 is the Central Tool Registry approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
@@ -369,6 +377,11 @@ type wsConn struct {
 	// is tracked here instead for any WS-side logic that needs to tell a
 	// CLI caller apart from a human account.
 	isCLIToken bool
+
+	// retryPrincipal identifies successful legacy-token and dev-bypass auth,
+	// whose userID is empty. Unauthenticated bare connections have no principal.
+	// Named accounts and CLI callers use their resolved userID and isCLIToken.
+	retryPrincipal clientMessagePrincipal
 
 	// pairingSubs tracks which channels this connection wants whatsapp_pairing
 	// (QR/status) frames for, so the QR secret is delivered only to the operator
@@ -1067,6 +1080,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 			// bypass to the browser surface, which is the opposite of the
 			// decision taken. Removal of the branch entirely is the operator's
 			// call, not this code's.
+			wc.retryPrincipal = clientMessagePrincipal{kind: "dev_bypass"}
 			conn.SetReadDeadline(time.Now().Add(wsPongWait))
 			return true
 		}
@@ -1086,6 +1100,10 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 		writeCloseAuthFailedWithReason(conn, "authentication failed")
 		return false
 	}
+	// Remember only a digest of the successfully authenticated legacy token.
+	// An empty userID must never merge unrelated authentication principals.
+	digest := sha256.Sum256([]byte(rawToken))
+	wc.retryPrincipal = clientMessagePrincipal{kind: "legacy_token", identity: string(digest[:])}
 	conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	return true
 }

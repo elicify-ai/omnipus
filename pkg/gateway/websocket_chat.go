@@ -104,6 +104,9 @@ type wsHandlerHandleChatMessage struct {
 	msg                 bus.InboundMessage
 	transcriptPersisted bool
 	admitted            bool
+	// firstMessage is an ordinary, within-bound session-less user send.
+	// Oversized input keeps ADR-066's separate agent-side refusal path.
+	firstMessage bool
 }
 
 // pendingMessageStatus is one persisted user message still waiting for its
@@ -223,35 +226,16 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	wc *wsConn,
 ) {
 	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, wc: wc}
+	hcm.firstMessage = frameSessionID == "" && !setupKickoff &&
+		agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound()
 	defer func() {
-		if !hcm.admitted {
+		if !hcm.admitted && !hcm.firstMessage {
 			hcm.h.forgetAcceptedMessage(hcm.sessionID, hcm.clientMessageID)
 			hcm.sendMessageStatus("failed")
 		}
 	}()
 
-	if hcm.resolveTargetAgent() {
-		return
-	}
-
-	if hcm.validateFrameIDs() {
-		return
-	}
-
-	if hcm.resolveSessionStore() {
-		return
-	}
-
-	// #823 review item 6: a re-sent message this session already accepted is
-	// answered, never turned into a second user message and a second turn.
-	if hcm.answerRetriedMessage() {
-		hcm.admitted = true
-		return
-	}
-
-	hcm.collectAcceptedMedia()
-
-	if hcm.recordSessionAndTranscript() {
+	if hcm.prepareMessage() {
 		return
 	}
 	if hcm.transcriptPersisted {
@@ -265,6 +249,12 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	if err := hcm.h.msgBus.PublishInbound(pubCtx, hcm.msg); err != nil {
 		hcm.removeQueuedWorkingStatus()
 		logsafeWarn("ws: failed to publish message", "error", err)
+		if hcm.firstMessage && hcm.transcriptPersisted {
+			// Delivery is confirmed. Keep both retry indexes and never relabel
+			// this durable first user entry as failed or admit it again on Retry.
+			hcm.sendFirstMessageError("answer_not_started")
+			return
+		}
 		// Same compensation as the earlier session-mint/SetMeta failures — a
 		// successful kickoff consume must not be silently lost just because
 		// the bus publish that was supposed to drive Ava's turn failed. Also
@@ -308,6 +298,34 @@ func (h *WSHandler) handleChatMessageWithClientID(
 			}
 		}
 	}
+}
+
+// prepareMessage validates and durably records intake. True means rejected
+// or answered as a retry. Its first-send mutex protects the cache miss through
+// append/cache population, and is released before the caller's bus admission.
+func (hcm *wsHandlerHandleChatMessage) prepareMessage() bool {
+	if hcm.frameSessionID == "" && !hcm.setupKickoff && hcm.clientMessageID != "" {
+		// One intake mutex, never a principal-keyed claim/lock store. h.mu is
+		// free during disk I/O; a slow admission cannot block other new chats.
+		hcm.h.firstMessageMu.Lock()
+		defer hcm.h.firstMessageMu.Unlock()
+		// Saved retries retain the original agent/session if defaults changed.
+		if hcm.answerRetriedMessage() {
+			hcm.admitted = true
+			return true
+		}
+	}
+
+	if hcm.resolveTargetAgent() || hcm.validateFrameIDs() || hcm.resolveSessionStore() {
+		return true
+	}
+	// Existing-session retries retain #823's echo/current-status behavior.
+	if hcm.frameSessionID != "" && hcm.answerRetriedMessage() {
+		hcm.admitted = true
+		return true
+	}
+	hcm.collectAcceptedMedia()
+	return hcm.recordSessionAndTranscript()
 }
 
 func (hcm *wsHandlerHandleChatMessage) queueWorkingStatus() {
@@ -661,7 +679,7 @@ func (hcm *wsHandlerHandleChatMessage) validateFrameIDs() bool {
 	return false
 }
 
-// resolveSessionStore picks the store that owns the session (the existing session's owner store, else shared, else the agent store) and rejects a kickoff with no usable store.
+// resolveSessionStore picks the store that owns the session (the existing session's owner store, else shared, else the agent store) and rejects a first send or kickoff with no usable store.
 func (hcm *wsHandlerHandleChatMessage) resolveSessionStore() bool {
 	// Pick the right store for the operation:
 	//
@@ -702,6 +720,11 @@ func (hcm *wsHandlerHandleChatMessage) resolveSessionStore() bool {
 		if hcm.store == nil {
 			hcm.store = hcm.h.agentLoop.GetAgentStore(hcm.targetAgentID)
 		}
+	}
+
+	if hcm.firstMessage && hcm.store == nil {
+		hcm.sendFirstMessageError("not_saved")
+		return true
 	}
 
 	// A kickoff-flagged frame with no usable session store (a
@@ -856,19 +879,26 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 		} else if hcm.adoptExistingSession() {
 			return true
 		}
-		hcm.persistUserMessage()
+		if hcm.persistUserMessage() {
+			return true
+		}
 	}
 	return false
 }
 
-// mintSession creates the new session a message with no session_id starts,
-// binds the sending connection to it and acknowledges it with
-// session_started. Returns true when the message was rejected.
+// mintSession creates and stamps a session for a message with no session_id.
+// Ordinary first-message acknowledgement is deferred until its durable append.
+// Kickoffs and oversized-input refusals keep their existing acknowledgement path.
+// Returns true when the message was rejected.
 func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 	// No session_id in frame: mint a new session so all subsequent frames have one.
 	meta, err := hcm.store.NewSession(session.SessionTypeChat, "webchat", hcm.targetAgentID)
 	if err != nil {
 		logsafeError("ws: could not create session", "error", err)
+		if hcm.firstMessage {
+			hcm.sendFirstMessageError("not_saved")
+			return true
+		}
 		// A successful kickoff consume just cleared SetupPending —
 		// if minting the session then fails, the one-time interview would
 		// otherwise be silently lost. Best-effort restore.
@@ -882,14 +912,6 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 		return true
 	}
 	hcm.sessionID = meta.ID
-	// #823: bind the sender to the new session's hub right away, so
-	// every frame of its first turn — starting with its own
-	// user_message echo — reaches it through the hub; the hub's head
-	// at this moment is the connection's starting cursor.
-	hcm.h.mu.Lock()
-	hcm.h.sessionIDs[hcm.chatID] = meta.ID
-	startHead := hcm.h.bindConnToSessionHubLocked(hcm.wc, meta.ID)
-	hcm.h.mu.Unlock()
 	var title string
 	if hcm.setupKickoff {
 		// The kickoff instruction text must not leak into the sidebar
@@ -914,6 +936,11 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 		metaPatch.WorkspaceID = &wsCopy
 	}
 	if err := hcm.store.SetMeta(meta.ID, metaPatch); err != nil {
+		if hcm.firstMessage {
+			logsafeWarn("ws: could not stamp first-message session", "session_id", meta.ID, "error", err)
+			hcm.sendFirstMessageError("not_saved")
+			return true
+		}
 		if hcm.setupKickoff {
 			// A kickoff turn that fails to persist its title/owner/
 			// workspace stamp would run UNBOUND from the workspace
@@ -934,25 +961,9 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 		logsafeWarn("ws: could not set session title/owner", "session_id", meta.ID, "error", err)
 	}
 	hcm.applyMintTimeAutoApproveChoice(meta.ID)
-	// Ack the new session_id so the SPA can associate all subsequent frames.
-	startedFrame := generated.SessionStartedFrame{
-		Type:      string(generated.WsFrameTypeSessionStarted),
-		SessionId: meta.ID,
+	if !hcm.firstMessage {
+		hcm.acknowledgeNewSession()
 	}
-	// BE-DESIGN.md §3.4: seed the client's cursor for the new
-	// session, so a reconnect during its very first turn can already
-	// catch up incrementally.
-	if hcm.h.hubs != nil && startHead > 0 {
-		seq := int64(startHead)
-		bootID := hcm.h.hubs.bootID
-		startedFrame.Seq = &seq
-		startedFrame.BootId = &bootID
-	}
-	if hcm.targetAgentID != "" {
-		aid := hcm.targetAgentID
-		startedFrame.AgentId = &aid
-	}
-	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeSessionStarted), startedFrame)
 	return false
 }
 
@@ -1022,8 +1033,9 @@ func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
 
 // persistUserMessage records the user's message in the transcript (when the
 // session exists and the message is within the user-message bound) and, once
-// persisted, echoes it to every tab as a user_message frame.
-func (hcm *wsHandlerHandleChatMessage) persistUserMessage() {
+// persisted, echoes it to every tab as a user_message frame. A failed ordinary
+// first append rejects intake before its acknowledgement or turn admission.
+func (hcm *wsHandlerHandleChatMessage) persistUserMessage() bool {
 	// ADR-066 D4 / FR-015: this handler persists the user message BEFORE
 	// the bus publish, but processMessage is the enforcement point for
 	// the user-message bound and refuses an over-bound message with NO
@@ -1075,11 +1087,19 @@ func (hcm *wsHandlerHandleChatMessage) persistUserMessage() {
 		}
 		if err := hcm.store.AppendTranscript(hcm.sessionID, entry); err != nil {
 			logsafeWarn("ws: could not record user message", "session_id", hcm.sessionID, "error", err)
+			if hcm.firstMessage {
+				hcm.sendFirstMessageError(firstMessageAppendFailure(err))
+				return true
+			}
 		} else {
 			hcm.transcriptPersisted = true
 			// A kickoff trigger is a system-role pill, not a user
 			// message — it is never echoed as one.
 			if !hcm.setupKickoff {
+				if hcm.firstMessage {
+					hcm.rememberAcceptedFirstMessage()
+					hcm.acknowledgeNewSession()
+				}
 				hcm.publishUserMessage(entry)
 			}
 		}
@@ -1090,6 +1110,7 @@ func (hcm *wsHandlerHandleChatMessage) persistUserMessage() {
 		// record even on a failure that had just restored the flag and
 		// rolled back this very session.
 	}
+	return false
 }
 
 // buildInboundMessage assembles the bus.InboundMessage from the turn content (client content, or the server-built kickoff instruction), agent/model metadata, and the accepted media.
