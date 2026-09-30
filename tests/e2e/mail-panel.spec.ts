@@ -17,6 +17,7 @@ import { startFakeMail, type FakeMail } from './fixtures/fake-mail-server'
 import { getFreePort } from './setup.js'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { MailMessagePage as MailMessagePageSchema } from '../../src/lib/api/generated/schemas'
 
 test.use({ storageState: { cookies: [], origins: [] } })
 
@@ -331,16 +332,20 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
 
     const page = await mailPage(browser)
 
-    // Log every drafts-folder list fetch's real response body, so the
-    // eventual assertion is backed by evidence of whether the backend
-    // itself ever returned zero messages (a genuine data bug) or always
-    // returned the real list (a client-side display/cache bug) — brief's
-    // explicit ask, item 1.
-    const draftsListResponses: Array<{ status: number; body: string }> = []
+    // Keep every matching body-read promise, including failed reads, so the
+    // evidence cannot silently omit a backend response or an unreadable body.
+    const draftsListResponses: Array<Promise<
+      { url: string; status: number; body: string } |
+      { url: string; status: number; readError: unknown }
+    >> = []
     page.on('response', (response) => {
       const url = new URL(response.url())
       if (response.request().method() === 'GET' && /\/folders\/drafts\/messages(\?|$)/.test(url.pathname)) {
-        response.text().then((body) => draftsListResponses.push({ status: response.status(), body })).catch(() => {})
+        const source = { url: response.url(), status: response.status() }
+        draftsListResponses.push(response.text().then(
+          (body) => ({ ...source, body }),
+          (readError: unknown) => ({ ...source, readError }),
+        ))
       }
     })
 
@@ -424,11 +429,28 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     await expect(page.getByText('No messages')).toHaveCount(0)
     await expect(page.getByText(/Regression draft 2/)).toBeVisible()
 
-    // Evidence for the brief's "settle UI vs backend bug" ask: attach every
-    // observed drafts-list response so a human/report can see whether the
-    // backend itself ever served zero messages for this folder.
+    // Re-entry can reuse the cached list without a new request. Assert the
+    // captured server responses actually held both surviving drafts; a cache
+    // hit on re-entry alone is not evidence that the backend served them then.
+    const captured = (await Promise.all(draftsListResponses)).map((entry) => {
+      if ('readError' in entry) {
+        throw new Error(`Cannot read drafts response ${entry.url} (HTTP ${entry.status}): ${String(entry.readError)}`)
+      }
+      return entry
+    })
+    const draftsUrl = `/api/v1/workspaces/${workspaceA}/mail/mia/folders/drafts/messages`
+    const aResponses = captured.filter(({ url }) => new URL(url).pathname === draftsUrl)
+    expect(aResponses.length).toBeGreaterThan(0)
+    for (const response of aResponses) {
+      expect(response.status, `Drafts response ${response.url}`).toBe(200)
+      const subjects = MailMessagePageSchema.parse(JSON.parse(response.body)).messages
+        .map((message) => message.subject)
+      expect(subjects, `Drafts response ${response.url}`).toEqual(
+        expect.arrayContaining(['Regression draft 2', 'Regression draft 3']),
+      )
+    }
     await test.info().attach('drafts-list-responses.json', {
-      body: JSON.stringify(draftsListResponses, null, 2),
+      body: JSON.stringify(captured, null, 2),
       contentType: 'application/json',
     })
   })
