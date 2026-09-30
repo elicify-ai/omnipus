@@ -198,27 +198,6 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 	return false, nil
 }
 
-// runTerminalTransition runs prepare while a still-live enqueue can join the
-// scope, then atomically hands an empty scope to transition (issue #1020
-// round-3). Enqueues that arrive during prepare or transition land in the
-// transition's finishingItems buffer; the closing hand-off's onFinishing
-// callback is the ONE guaranteed consumer — every accepted post-finish item
-// either reaches the child (via revival) or stays in the main queue (via
-// same-generation continuation prepend); the buffer is never GC'd
-// silently. Round-4 correction: the previous round-3 sibling
-// (runTerminalTransitionWithFinishing) and the round-3 helpers
-// drainFinishingItems / takeFinishingItems / finishAndClearFinishing
-// were deleted because onFinishing is the only path that ever sees the
-// buffer, and it runs inline at the close of runTerminalTransition — no
-// separate accessor is needed.
-func (sq *steeringQueue) runTerminalTransition(
-	scope string,
-	prepare func() error,
-	transition func() (bool, error),
-) (started bool, terminal bool, err error) {
-	return sq.runTerminalTransitionWithFinishing(scope, prepare, transition, nil)
-}
-
 // runTerminalTransitionWithFinishing is runTerminalTransition's
 // round-3 sibling (issue #1020). onFinishing is invoked exactly once at
 // the close of runTerminalTransition (after prepare, after the durable
@@ -769,10 +748,10 @@ func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers
 //
 // Kept as a parallel method rather than changing EnqueueSteeringMessage's
 // signature so the DelegateSteeringSink interface (pkg/tools/delegate.go)
-// and every existing test fake stay unchanged. The delegate tool reaches
-// this method via a type assertion (see delegate_followup.go's
-// executeSteer for the assertion shape), mirroring steerReviver's own
-// parallel-capability pattern.
+// and every existing test fake stay unchanged. delegateSteeringSink converts
+// the named status to int for the delegate tool's optional-capability type
+// assertion (see delegate_followup.go's enqueueSteeringWithStatus), mirroring
+// steerReviver's parallel-capability pattern.
 func (al *AgentLoop) EnqueueSteeringMessageWithStatus(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
 	return al.enqueueSteeringMessage(scope, agentID, msg, correlationID)
 }

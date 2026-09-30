@@ -264,9 +264,9 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	))
 }
 
-// steerReviver is satisfied by *agent.AgentLoop (t.steering's concrete
-// production type, wired via SetSteeringSink) beyond DelegateSteeringSink's
-// own EnqueueSteeringMessage method. Declared here, not added to
+// steerReviver is satisfied by the production delegate steering sink through
+// its embedded *agent.AgentLoop beyond DelegateSteeringSink's own
+// EnqueueSteeringMessage method. Declared here, not added to
 // DelegateSteeringSink itself, so a narrower test fake standing in for the
 // steering sink is not forced to also implement revival — mirrors
 // appendFollowUpInstruction's own optional-capability type assertion on
@@ -275,8 +275,8 @@ type steerReviver interface {
 	ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error)
 }
 
-// steerSinkWithEnqueueStatus is satisfied by *agent.AgentLoop beyond
-// DelegateSteeringSink's own EnqueueSteeringMessage method. Declared here
+// steerSinkWithEnqueueStatus is satisfied by agent's delegateSteeringSink
+// adapter beyond DelegateSteeringSink's EnqueueSteeringMessage. Declared here
 // (not added to DelegateSteeringSink) for the same reason steerReviver
 // stays narrow: the round-4 status (issue #1020 round-4 correction) is
 // only meaningful to executeSteer's caller-facing text, and forcing
@@ -285,9 +285,9 @@ type steerReviver interface {
 // callers (a session_worker enqueue, for example, never lands in a
 // finishing-window buffer — every session_worker enqueue is for an
 // idle session). The status field is an int so pkg/tools does not
-// import pkg/agent's typed carrier; production treats 1 (PostFinish)
-// and any other value (Normal) as the binary signal executeSteer
-// reads. Test fakes that do not implement this interface fall back to
+// import pkg/agent, which already imports pkg/tools. The production adapter
+// explicitly converts the named EnqueueStatus to int; 1 means PostFinish
+// and any other value means Normal. Sinks without this capability fall back to
 // EnqueueSteeringMessage and never report the post-finish outcome.
 type steerSinkWithEnqueueStatus interface {
 	EnqueueSteeringMessageWithStatus(scope, agentID string, msg providers.Message, correlationID string) (string, int, error)
@@ -295,7 +295,7 @@ type steerSinkWithEnqueueStatus interface {
 
 // enqueueSteeringWithStatus is executeSteer's adapter: it forwards to the
 // rich return shape when the steering sink exposes it (the production
-// *agent.AgentLoop does), and falls back to the plain DelegateSteeringSink
+// delegateSteeringSink does), and falls back to the plain DelegateSteeringSink
 // contract for narrower test fakes that do not. postFinish is true when
 // the rich sink reports the item landed in a terminal-transition
 // finishingItems buffer rather than the main queue.
