@@ -171,6 +171,8 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     await page.getByRole('button', { name: /save/i }).click()
     await expect(page.getByText('Draft saved', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: /^send$/i }).click()
+    // The SMTP helper reads a snapshot; wait for the asynchronous send to finish.
+    await expect(page.getByText('Draft sent', { exact: true })).toBeVisible()
     const sent = await mail.smtpMessages()
     expect(sent.count).toBe(1)
     expect(sent.messages[0]).toContain('Updated')
