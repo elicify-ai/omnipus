@@ -15,7 +15,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 
 async function loadPane(): Promise<React.ComponentType<Record<string, unknown>>> {
-  const specifier = './' + 'MailPreviewPane'
+  const specifier = './MailPreviewPane'
   try {
     const mod = await import(/* @vite-ignore */ specifier) as { MailPreviewPane?: React.ComponentType<Record<string, unknown>> }
     if (typeof mod.MailPreviewPane !== 'function') throw new Error('MailPreviewPane is not a function export')

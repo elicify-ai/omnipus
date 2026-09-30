@@ -51,9 +51,9 @@ vi.mock('@/lib/api/mail', async (importOriginal) => {
 })
 
 async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>> {
-  // The specifier is built at runtime so a missing file fails the test
-  // (BLOCKED) instead of failing collection before any assertion runs.
-  const specifier = './' + 'MailPanel'
+  // The import remains runtime-only (@vite-ignore) so a missing file fails
+  // this test (BLOCKED) instead of failing collection before assertions run.
+  const specifier = './MailPanel'
   try {
     const mod = await import(/* @vite-ignore */ specifier) as { MailPanel?: React.ComponentType<{ workspaceId: string }> }
     if (typeof mod.MailPanel !== 'function') throw new Error('MailPanel is not a function export')

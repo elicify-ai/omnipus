@@ -72,7 +72,7 @@ vi.mock('@/lib/api/mail', async (importOriginal) => {
 })
 
 async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>> {
-  const specifier = './' + 'MailPanel'
+  const specifier = './MailPanel'
   try {
     const mod = await import(/* @vite-ignore */ specifier) as { MailPanel?: React.ComponentType<{ workspaceId: string }> }
     if (typeof mod.MailPanel !== 'function') throw new Error('MailPanel is not a function export')
