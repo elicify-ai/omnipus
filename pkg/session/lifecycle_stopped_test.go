@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // Task U1: stopped replaces the three superseded states without becoming
 // immutable. String inputs keep this regression runnable before the rename.
@@ -45,6 +48,12 @@ func TestLifecycleStopped_CanResumeSameGeneration(t *testing.T) {
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "workspace-1",
 		AgentID:        "agent-1",
+		// D2/CRIT-001: persistLocked now rejects any record landing
+		// LifecycleStopped with no StopNote. This fixture predates that
+		// invariant (backend-lead's stop_note commit 57c1a20ba) — cause
+		// "stop" because the session named IS the direct target, matching
+		// StopCauseStop's own doc comment.
+		StopNote: &StopNote{At: time.Now().UTC(), By: "human:qa-lead", Seq: 1, Cause: StopCauseStop},
 	}
 	if err := store.Persist(stopped); err != nil {
 		t.Fatalf("Persist(stopped) must succeed before continuation: %v", err)

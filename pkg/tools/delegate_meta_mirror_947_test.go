@@ -43,13 +43,21 @@ func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T
 
 	// Seed the stranded queued child the cancel backstop drops
 	// (delegate_run.go::droppedQueuedResult — a production
-	// transitionLifecycle caller).
+	// transitionLifecycle caller). In production this point is reached only
+	// after cancelHard/cancelSoft (al.cancelDelegatedSubtree) already ran
+	// steer_cancel.go::stampStop, which stamps StopNote onto the record in
+	// the SAME mutation that sets the Stop fence — while State is still
+	// queued/running, not yet stopped (D2/CRIT-001). Seed that StopNote here
+	// so this direct call to droppedQueuedResult (which itself passes
+	// note=nil and relies on an already-landed note, delegate_run.go:673-677)
+	// matches that real precondition instead of skipping it.
 	if perr := lc.Persist(&session.LifecycleRecord{
 		SessionID: childID, Generation: 1, State: session.LifecycleQueued,
 		OwnerScopeKind: session.OwnerScopeHuman,
 		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
 		AgentID:        "worker-1",
 		CreatedAt:      time.Now().UTC().Add(-time.Hour),
+		StopNote:       &session.StopNote{At: time.Now().UTC(), By: "human:qa-lead", Seq: 1, Cause: session.StopCauseStop},
 	}); perr != nil {
 		t.Fatalf("seed lifecycle record: %v", perr)
 	}
@@ -86,12 +94,16 @@ func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T
 // shape anymore.
 func TestDelegateChildTransition_UnwiredUnifiedStore_StillTransitions(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
+	// Same D2/CRIT-001 precondition as the sibling test above: production
+	// only reaches droppedQueuedResult after a prior stampStop already
+	// landed StopNote on this generation.
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-947-unwired", Generation: 1, State: session.LifecycleQueued,
 		OwnerScopeKind: session.OwnerScopeHuman,
 		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
 		AgentID:        "worker-1",
 		CreatedAt:      time.Now().UTC().Add(-time.Hour),
+		StopNote:       &session.StopNote{At: time.Now().UTC(), By: "human:qa-lead", Seq: 1, Cause: session.StopCauseStop},
 	}); err != nil {
 		t.Fatalf("seed lifecycle record: %v", err)
 	}

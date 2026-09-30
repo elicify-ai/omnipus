@@ -399,10 +399,29 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 			mu.Unlock()
 			return []string{"child-cancel"}, nil
 		},
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+		func(sessionID string, by steer.Principal, hint string) ([]string, error) {
 			mu.Lock()
 			hardCalled = true
 			mu.Unlock()
+			// D2/CRIT-001: this stub stands in for al.cancelDelegatedSubtree,
+			// whose real steer_cancel.go::stampStop lands StopNote (cause
+			// "stop" — the delegate cancel names sessionID directly) in the
+			// SAME mutation the Stop fence is set, BEFORE the caller's
+			// transitionLifecycle(note=nil) below retains it. Without this
+			// stamp the stub is unrealistic: transitionLifecycle correctly
+			// refuses to land LifecycleStopped with no note at all.
+			if merr := lc.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
+				if rec == nil {
+					return session.ErrLifecycleNotFound
+				}
+				rec.StopNote = &session.StopNote{
+					At: time.Now().UTC(), By: session.StopActorFromPrincipal(by),
+					Seq: uint64(rec.Generation), Cause: session.StopCauseStop,
+				}
+				return nil
+			}); merr != nil {
+				return nil, merr
+			}
 			return []string{"child-cancel"}, nil
 		},
 	)
@@ -473,8 +492,25 @@ func TestDelegateTool_Cancel_Hard_SkipsGrace(t *testing.T) {
 			t.Fatal("soft hook must not be called for hard=true")
 			return nil, nil
 		},
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+		func(sessionID string, by steer.Principal, hint string) ([]string, error) {
 			hardCalled = true
+			// D2/CRIT-001: see TestDelegateTool_Cancel_SoftThenHardBackstop's
+			// hard-cancel stub for the full rationale — this mirrors
+			// steer_cancel.go::stampStop's real StopNote stamp (cause "stop")
+			// so the stub matches the precondition
+			// transitionLifecycle(note=nil) actually relies on.
+			if merr := lc.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
+				if rec == nil {
+					return session.ErrLifecycleNotFound
+				}
+				rec.StopNote = &session.StopNote{
+					At: time.Now().UTC(), By: session.StopActorFromPrincipal(by),
+					Seq: uint64(rec.Generation), Cause: session.StopCauseStop,
+				}
+				return nil
+			}); merr != nil {
+				return nil, merr
+			}
 			return []string{"child-hard"}, nil
 		},
 	)

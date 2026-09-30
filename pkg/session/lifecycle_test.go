@@ -404,6 +404,11 @@ func TestLifecycleStore_Mutate_AppliesAndPersists(t *testing.T) {
 			t.Fatalf("expected to see running, got %s", rec.State)
 		}
 		rec.State = LifecycleStopped
+		// D2/CRIT-001: landing LifecycleStopped now requires a StopNote
+		// (persistLocked rejects the write otherwise). This mutation is a
+		// direct single-session stop, so cause "stop" per StopCauseStop's
+		// own doc comment.
+		rec.StopNote = &StopNote{At: time.Now().UTC(), By: "human:qa-lead", Seq: uint64(rec.Generation), Cause: StopCauseStop}
 		return nil
 	})
 	if err != nil {

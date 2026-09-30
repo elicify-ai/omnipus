@@ -228,6 +228,14 @@ func TestBootSweep_AwaitingCorrectionOwnerExempt(t *testing.T) {
 		WorkspaceID: "ws", AgentID: "owner-agent",
 		OwnerScopeKind: session.OwnerScopeHuman, // human, not plan_id
 		OwnsPlanID:     "plan-1",                // the named linkage
+		// D2/CRIT-001: persistLocked now requires a StopNote on any record
+		// landing LifecycleStopped. This fixture predates that invariant.
+		// cause redirect_pause: this durably-parked "awaiting correction"
+		// owner is the pre-rename `paused` state, D2/D6's closest match per
+		// delegate_park.go's own precedent comment (a fresh instruction
+		// superseding the current generation, not a stop/cascade/restart/
+		// timeout).
+		StopNote: &session.StopNote{At: time.Now().UTC(), By: session.StopActorSystem, Seq: 1, Cause: session.StopCauseRedirectPause},
 	})
 
 	res := h.pe.runBootSweep(context.Background())
@@ -261,6 +269,9 @@ func TestBootSweep_PausedOwnerNotAwaitingCorrection_Swept(t *testing.T) {
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-2",
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate},
 		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-2", RootSessionID: "parent-2"},
+		// D2/CRIT-001: see sess-owner above — same pre-rename `paused`
+		// owner fixture, same redirect_pause justification.
+		StopNote: &session.StopNote{At: time.Now().UTC(), By: session.StopActorSystem, Seq: 1, Cause: session.StopCauseRedirectPause},
 	})
 
 	res := h.pe.runBootSweep(context.Background())
@@ -462,6 +473,10 @@ func TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart(t *testing.T) {
 		SessionID: "owner-rs", Generation: 1, State: session.LifecycleStopped,
 		WorkspaceID: "ws", AgentID: "owner",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-rs",
+		// D2/CRIT-001: see TestBootSweep_AwaitingCorrectionOwnerExempt's
+		// sess-owner — same pre-rename `paused` owner fixture, same
+		// redirect_pause justification.
+		StopNote: &session.StopNote{At: time.Now().UTC(), By: session.StopActorSystem, Seq: 1, Cause: session.StopCauseRedirectPause},
 	})
 	// A stranded running session (no plan) that SHOULD be swept — stamped as
 	// a steered worker (ADR-093 D3: a standing root/no-SteeredBy record is
