@@ -467,36 +467,9 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	// diffed for newly added members — see the delegation-edge auto-seed
 	// block after the field-update section.
 	oldTeam := append([]string(nil), w.CoreTeam...)
-	coreTeamChanged := false
-
-	if v, ok := args["name"].(string); ok && v != "" {
-		if len(v) > 200 {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", "name exceeds 200 characters", ""))
-		}
-		w.Name = v
-	}
-	if v, ok := args["description"].(string); ok {
-		if len(v) > 2000 {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", "description exceeds 2000 characters", ""))
-		}
-		w.Description = v
-	}
-	if v, ok := args["status"].(string); ok {
-		if v != "active" && v != "archived" {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				fmt.Sprintf("invalid status %q: must be active or archived", v), ""))
-		}
-		w.Status = v
-	}
-	if v, ok := args["pinned"].(bool); ok {
-		w.Pinned = v
-	}
-	if v, ok := args["pin_order"].(float64); ok {
-		w.PinOrder = int(v)
-	}
-	if raw, ok := args["core_team"].([]any); ok {
-		w.CoreTeam = sanitizeCoreTeam(raw)
-		coreTeamChanged = true
+	coreTeamChanged, fieldError := updateWorkspaceFields(&w, args)
+	if fieldError != nil {
+		return fieldError
 	}
 	// ADR-090 FR-006 — reject INTRODUCING an excluded roster identity (Admin,
 	// hidden System Agents) before any write. Deliberately the DELTA rule the
@@ -660,6 +633,42 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 		resp["setup_completed"] = setupCompletedNote
 	}
 	return tools.NewToolResult(successJSON(resp))
+}
+
+// updateWorkspaceFields applies optional record fields in input order.
+func updateWorkspaceFields(w *workspacepkg.Workspace, args map[string]any) (bool, *tools.ToolResult) {
+	coreTeamChanged := false
+
+	if v, ok := args["name"].(string); ok && v != "" {
+		if len(v) > 200 {
+			return false, tools.ErrorResult(errorJSON("INVALID_INPUT", "name exceeds 200 characters", ""))
+		}
+		w.Name = v
+	}
+	if v, ok := args["description"].(string); ok {
+		if len(v) > 2000 {
+			return false, tools.ErrorResult(errorJSON("INVALID_INPUT", "description exceeds 2000 characters", ""))
+		}
+		w.Description = v
+	}
+	if v, ok := args["status"].(string); ok {
+		if v != "active" && v != "archived" {
+			return false, tools.ErrorResult(errorJSON("INVALID_INPUT",
+				fmt.Sprintf("invalid status %q: must be active or archived", v), ""))
+		}
+		w.Status = v
+	}
+	if v, ok := args["pinned"].(bool); ok {
+		w.Pinned = v
+	}
+	if v, ok := args["pin_order"].(float64); ok {
+		w.PinOrder = int(v)
+	}
+	if raw, ok := args["core_team"].([]any); ok {
+		w.CoreTeam = sanitizeCoreTeam(raw)
+		coreTeamChanged = true
+	}
+	return coreTeamChanged, nil
 }
 
 // teamDiffAdded returns the members present in newTeam but absent from

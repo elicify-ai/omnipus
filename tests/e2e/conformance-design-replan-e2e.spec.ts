@@ -142,6 +142,18 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // `bash: allow` is required for the `check` criteria below (see t2's
   // createMainAgent comment — a fresh custom agent is deny-by-default).
   const ownerId = await createMainAgent(page, `conformance-t3-owner-${Date.now()}`, { bash: 'allow' })
+  // m2's assignee: a stub external-CLI worker whose recorded result states a
+  // DIFFERENT verification number than the one its own task prompt assigns
+  // (see m2 in the members comment below for why this replaced a real LLM
+  // member) — deterministic, so the mismatch the plan's DoD checks for is a
+  // genuine fact every run, not a matter of real-LLM chance.
+  const m2WorkerId = await createStubCliWorkerAgent(page, `conformance-t3-m2-stub-${Date.now()}`, {
+    firstTry: [
+      '[goal:evidence] I confirmed the assigned verification number is 17.',
+      'TASK_STATUS: success',
+      'TASK_SUMMARY: Confirmed the verification number as instructed.',
+    ].join('\n'),
+  })
   // m3's assignee: a stub external-CLI worker that ends every run reporting a
   // transient failure (see m3 in the members comment below for why).
   const m3WorkerId = await createStubCliWorkerAgent(page, `conformance-t3-m3-stub-${Date.now()}`, {
@@ -152,7 +164,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   })
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t3',
-    core_team: [ownerId, m3WorkerId],
+    core_team: [ownerId, m2WorkerId, m3WorkerId],
   })
   if (!wsRes.ok) throw new Error(`t3: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
@@ -160,10 +172,18 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // Three independent (disjoint write_set, no blocked_by — they dispatch in
   // parallel) members:
   //   m1 — trivial filler, own check trivially passes.
-  //   m2 — the SUPERSEDE target: own check trivially passes (member ends
-  //        `done`), but the plan's DoD (below) explicitly says its recorded
-  //        outcome is wrong — "member finished but result incorrect" is
-  //        PlanSupervisor's own rubric language for SUPERSEDE.
+  //   m2 — the SUPERSEDE target: its own criterion is deliberately broad so
+  //        the member ends `done` regardless of content — but its recorded
+  //        result, via a deterministic stub worker (exactly like m3's below),
+  //        states a DIFFERENT verification number than the one its own task
+  //        prompt assigned. That mismatch is a genuine, checkable fact in the
+  //        member's own Result text — buildPlanClaimText
+  //        (pkg/agent/plan_engine_supervise.go) hands the Judge that text
+  //        verbatim — which is what the plan's DoD (below) asks the real
+  //        Judge to verify, not an unanchored assertion. See the DoD's own
+  //        comment for the 2026-09-29 redesign and the CI incident it fixes.
+  //        "Member finished but result incorrect" is still PlanSupervisor's
+  //        own rubric language for SUPERSEDE.
   //   m3 — the TARGETED-RETRY target. It must end `failed` promptly and the
   //        same way on every run. Its worker is the stub external CLI above,
   //        which ends every run with a failure marker naming a transient
@@ -188,6 +208,32 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   //        while dev_mode_bypass is on, and every CI e2e gateway runs with it
   //        on. A blocked claim is the documented way a run ends at once, and it
   //        keeps m3's failure deterministic with no LLM involved.
+  //
+  //        INVESTIGATED, NOT CHANGED (2026-09-29): m3's title/stub also frame
+  //        its failure as one "expected to succeed when retried" — checked
+  //        whether that carries the same no-evidentiary-anchor defect the
+  //        DoD's m2 half had. It does not, for a different reason: with no
+  //        `laterTry` configured, ANY fresh dispatch of m3 (an explicit
+  //        targeted_retry, or the free auto-reset a committed SUPERSEDE gives
+  //        every other live-round-failed member —
+  //        autoResetLiveRoundFailedMembers,
+  //        pkg/agent/plan_engine_correction.go) starts a brand-new run and
+  //        re-invokes the identical stub script with the same env vars, so it
+  //        always re-emits the same blockedMarker — m3 never actually reaches
+  //        `done`, retried or not (confirmed against task_run_loop.go's
+  //        "blocked claim: no attempt consumed, no restart" contract, and
+  //        RestartReset's status-only reset gate in
+  //        pkg/agent/plan_engine_correction.go). Unlike m2's claim, this is a
+  //        forward-looking prediction about an event that has not happened
+  //        yet in the round where the Judge decides — there is nothing in
+  //        round 1 to check it against, so it cannot be immediately falsified
+  //        the way m2's completed, readable Result text could be. The real
+  //        run quoted below already reasons correctly with this exact
+  //        framing, and this test's own assertions (SUPERSEDE against m2's
+  //        real id; the no-wedge check) never require m3 to reach `done` —
+  //        t3b (conformance-design-plan-e2e.spec.ts) is the isolated proof of
+  //        targeted_retry itself and carries its own, separately-tracked
+  //        flake. Left as-is here; not the same defect class as m2's.
   const { planId, memberIds } = await createPlanWithMembers(
     page,
     workspaceId,
@@ -201,13 +247,41 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
       // the Judge's per-criterion reasoning — which is the ONLY diagnostic
       // text PlanSupervisor's wake carries — can correctly attribute each
       // problem to the right member.
+      //
+      // REDESIGNED 2026-09-29 (release run 36477436582, job 109120266594):
+      // the PREVIOUS version of this DoD asserted m2's outcome was "factually
+      // WRONG" with no evidentiary anchor anywhere in the scenario — m2's
+      // prompt was 'reply with beta' and m2 (a real LLM) correctly replied
+      // "beta". buildPlanClaimText (pkg/agent/plan_engine_supervise.go) hands
+      // the Judge m2's own recorded Result text verbatim, so the real Judge
+      // (the configured E2E model, tests/e2e/e2e-model.json) read that reply, correctly noticed it
+      // matched the prompt exactly, concluded the DoD's premise was false,
+      // and ABANDONED the plan rather than superseding work that was, on the
+      // evidence actually in front of it, correct — the right call given a
+      // false premise, not a Judge/Supervisor defect (both rubrics —
+      // PlanSupervisorDefaultRubric, JudgeDefaultRubric in
+      // pkg/coreagent/seed_system.go — instruct judging against evidence,
+      // never trusting an unverified claim at face value).
+      //
+      // FIX: m2 is now a deterministic stub worker (see its creation above)
+      // whose recorded result states a DIFFERENT verification number than
+      // the one its own task prompt assigns (42 vs. 17) — a genuine,
+      // textual, objectively-checkable mismatch that exists independently of
+      // this prose, in the member's own Result text the Judge already reads.
+      // The DoD states the required number so the Judge has a concrete fact
+      // to verify, and explicitly tells it to check the member's actual
+      // recorded result rather than trust the "done" status alone.
       dod: [
         proseCriterion(
-          'Member "m2-supersede-target" completed (status done) but its recorded outcome is ' +
-            'factually WRONG and must be redone, not merely accepted as-is. Separately, member ' +
-            '"m3-retry-target" must have SUCCEEDED at its check — if it is currently `failed`, that ' +
-            'failure was for a transient, recoverable reason and the member should be retried, not ' +
-            'abandoned or replaced. The plan is only met once BOTH conditions hold.',
+          'Member "m2-supersede-target" was assigned the verification number 42 (see its own task ' +
+            'prompt) and reached status done, but read its ACTUAL recorded result text yourself: it ' +
+            'states a DIFFERENT number, not 42. Do not accept the "done" status as proof the work is ' +
+            'correct — compare the number the member actually recorded against the required number 42. ' +
+            'Because they do not match, that recorded outcome is factually WRONG and must be redone ' +
+            '(superseded), not merely accepted as-is. Separately, member "m3-retry-target" must have ' +
+            'SUCCEEDED at its check — if it is currently `failed`, that failure was for a transient, ' +
+            'recoverable reason and the member should be retried, not abandoned or replaced. The plan ' +
+            'is only met once BOTH conditions hold.',
         ),
       ],
       bounds: { plan_judge_max_rounds: 4 },
@@ -223,9 +297,20 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
       {
         label: 'm2',
         title: 'm2-supersede-target: work is done but its recorded result is wrong',
-        prompt: 'reply with beta',
+        // The exact number (42) is the fact the plan's DoD above asks the
+        // Judge to check the member's ACTUAL recorded result against — m2's
+        // stub worker (created above) deliberately records a different one
+        // (17), giving the DoD's "factually WRONG" claim a real anchor.
+        prompt: 'Reply confirming the assigned verification number, which is 42. State only that number.',
         write_set: ['out/t3/m2.txt'],
-        criteria: [checkCriterion('m2 own criterion trivially passes (member reaches done)', 'exit 0', 0)],
+        agent_id: m2WorkerId,
+        // Deliberately broad: ANY numeric confirmation satisfies this, so
+        // the member reaches `done` regardless of which number the stub
+        // actually recorded — preserving the original design intent
+        // ("member technically finishes, but got it wrong") without needing
+        // this member-level criterion to police correctness itself. The
+        // plan-level DoD above is what actually checks the number.
+        criteria: [proseCriterion('m2 replied confirming some verification number')],
       },
       {
         label: 'm3',

@@ -488,6 +488,12 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.publishSkillInstall(w, req, slug, skillsRoot, stageDir, result)
+}
+
+// publishSkillInstall retains the moderation check, publication and response
+// after the staging cleanup has been deferred by installSkill.
+func (a *restAPI) publishSkillInstall(w http.ResponseWriter, req gen.SkillInstallRequest, slug, skillsRoot, stageDir string, result *skills.InstallResult) {
 	// Surface a moderation block as a hard failure: do not leave a malware-flagged
 	// skill installed.
 	if result != nil && result.IsMalwareBlocked {

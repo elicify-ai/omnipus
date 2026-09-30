@@ -361,78 +361,8 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 
 	switch def.kind {
 	case "search":
-		// Contract (IntegrationProviderUpdateRequest.active): an explicit
-		// active:false is rejected — roles move by setting another provider
-		// active, they are not unset.
-		if body.Active != nil && !*body.Active {
-			jsonErr(w, http.StatusBadRequest,
-				"active:false is not valid — set another provider active to move the default")
+		if a.validateSearchIntegrationRoleWrite(w, id, def, body, &write) {
 			return
-		}
-		// Save rejection (scenario "Save rejects a fallback that is the same
-		// provider"): one request cannot make the provider both roles.
-		if body.Fallback != nil && *body.Fallback && body.Active != nil && *body.Active {
-			jsonErr(w, http.StatusBadRequest,
-				fmt.Sprintf("%s cannot be the default and the fallback in the same save", def.displayName))
-			return
-		}
-		if body.Fallback != nil {
-			write.fallbackSet = true
-			write.fallbackOn = *body.Fallback
-			if *body.Fallback {
-				// The other half of "a provider cannot fall back to itself":
-				// the fallback radio on the row that is already the stored
-				// default.
-				state := a.readIntegrationRolesFileState()
-				if state.rawDefault == id {
-					jsonErr(w, http.StatusBadRequest,
-						fmt.Sprintf("%s is the current default and cannot also be the fallback", def.displayName))
-					return
-				}
-				// Save rejection: the fallback target must already be enabled.
-				// Its key/prerequisite usability is intentionally checked only
-				// after this request stores its key and reloads (FR-033).
-				fresh, err := config.LoadConfig(a.configPath())
-				if err != nil {
-					jsonErr(w, http.StatusInternalServerError, "could not read the current configuration")
-					return
-				}
-				if !searchProviderEnabled(&fresh.Tools.Web, id) {
-					jsonErr(w, http.StatusBadRequest,
-						fmt.Sprintf("%s is not enabled and cannot serve as the fallback — switch it on first", def.displayName))
-					return
-				}
-			}
-		}
-		write.setActive = body.Active != nil && *body.Active
-		if write.setActive && body.Fallback == nil {
-			// A default-role save with no fallback field consults the file
-			// state once, for two rules:
-			//
-			//   - Save-rule "Same id as default and as fallback | Rejected",
-			//     across two requests: a provider may already hold the
-			//     fallback role from an earlier save, and active:true on it
-			//     would persist default==fallback. An explicit fallback:false
-			//     is allowed here because that request removes the old
-			//     fallback while assigning the default.
-			//   - Materialization: the file sits in the absent state and R3
-			//     would apply, so the save writes fallback_provider=
-			//     duckduckgo and the file leaves the absent state.
-			state := a.readIntegrationRolesFileState()
-			if state.rawFallback == id {
-				jsonErr(w, http.StatusBadRequest,
-					fmt.Sprintf("%s is the current fallback and cannot also be the default", def.displayName))
-				return
-			}
-			if _, present := state.web["fallback_provider"]; !present {
-				ddgUsable := false
-				if fresh, err := config.LoadConfig(a.configPath()); err == nil {
-					ddgUsable = fresh.Tools.Web.UsableSearchProvider(config.SearchProviderDuckDuckGo)
-				}
-				if id != config.SearchProviderDuckDuckGo && ddgUsable {
-					write.materializeFallback = true
-				}
-			}
 		}
 	case "voice":
 		// Voice rows keep today's shape plus the two new rejections the
@@ -472,6 +402,12 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 		}
 	}
 
+	a.finishIntegrationProviderUpdate(w, r, def, id, apiKey, write)
+}
+
+// finishIntegrationProviderUpdate stores the credential, persists and audits the
+// role write, reloads it, then reports the post-reload role state.
+func (a *restAPI) finishIntegrationProviderUpdate(w http.ResponseWriter, r *http.Request, def integrationDef, id, apiKey string, write integrationRoleWrite) {
 	// Store the key (if supplied) in the encrypted credential store BEFORE
 	// writing the ref to config.json (SEC-23: no plaintext fallback).
 	write.keySet = apiKey != ""
@@ -552,6 +488,85 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 	}
 
 	a.writeIntegrationResponse(w, postReloadCfg)
+}
+
+// validateSearchIntegrationRoleWrite preserves the search role save checks
+// and raw-file materialization decision before any key or config write.
+func (a *restAPI) validateSearchIntegrationRoleWrite(w http.ResponseWriter, id string, def integrationDef, body gen.IntegrationProviderUpdateRequest, write *integrationRoleWrite) bool {
+	// Contract (IntegrationProviderUpdateRequest.active): an explicit
+	// active:false is rejected — roles move by setting another provider
+	// active, they are not unset.
+	if body.Active != nil && !*body.Active {
+		jsonErr(w, http.StatusBadRequest,
+			"active:false is not valid — set another provider active to move the default")
+		return true
+	}
+	// Save rejection (scenario "Save rejects a fallback that is the same
+	// provider"): one request cannot make the provider both roles.
+	if body.Fallback != nil && *body.Fallback && body.Active != nil && *body.Active {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("%s cannot be the default and the fallback in the same save", def.displayName))
+		return true
+	}
+	if body.Fallback != nil {
+		write.fallbackSet = true
+		write.fallbackOn = *body.Fallback
+		if *body.Fallback {
+			// The other half of "a provider cannot fall back to itself":
+			// the fallback radio on the row that is already the stored
+			// default.
+			state := a.readIntegrationRolesFileState()
+			if state.rawDefault == id {
+				jsonErr(w, http.StatusBadRequest,
+					fmt.Sprintf("%s is the current default and cannot also be the fallback", def.displayName))
+				return true
+			}
+			// Save rejection: the fallback target must already be enabled.
+			// Its key/prerequisite usability is intentionally checked only
+			// after this request stores its key and reloads (FR-033).
+			fresh, err := config.LoadConfig(a.configPath())
+			if err != nil {
+				jsonErr(w, http.StatusInternalServerError, "could not read the current configuration")
+				return true
+			}
+			if !searchProviderEnabled(&fresh.Tools.Web, id) {
+				jsonErr(w, http.StatusBadRequest,
+					fmt.Sprintf("%s is not enabled and cannot serve as the fallback — switch it on first", def.displayName))
+				return true
+			}
+		}
+	}
+	write.setActive = body.Active != nil && *body.Active
+	if write.setActive && body.Fallback == nil {
+		// A default-role save with no fallback field consults the file
+		// state once, for two rules:
+		//
+		//   - Save-rule "Same id as default and as fallback | Rejected",
+		//     across two requests: a provider may already hold the
+		//     fallback role from an earlier save, and active:true on it
+		//     would persist default==fallback. An explicit fallback:false
+		//     is allowed here because that request removes the old
+		//     fallback while assigning the default.
+		//   - Materialization: the file sits in the absent state and R3
+		//     would apply, so the save writes fallback_provider=
+		//     duckduckgo and the file leaves the absent state.
+		state := a.readIntegrationRolesFileState()
+		if state.rawFallback == id {
+			jsonErr(w, http.StatusBadRequest,
+				fmt.Sprintf("%s is the current fallback and cannot also be the default", def.displayName))
+			return true
+		}
+		if _, present := state.web["fallback_provider"]; !present {
+			ddgUsable := false
+			if fresh, err := config.LoadConfig(a.configPath()); err == nil {
+				ddgUsable = fresh.Tools.Web.UsableSearchProvider(config.SearchProviderDuckDuckGo)
+			}
+			if id != config.SearchProviderDuckDuckGo && ddgUsable {
+				write.materializeFallback = true
+			}
+		}
+	}
+	return false
 }
 
 // applyIntegrationRoles dispatches the raw-map mutation by kind: search rows

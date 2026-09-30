@@ -9,6 +9,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -251,11 +252,50 @@ func (f *rolesSearchFixture) runCtx(ctx context.Context, args map[string]any) *T
 	return f.tool.Execute(ctx, args)
 }
 
-// deadServerURL returns the URL of a closed server: connecting to it fails
-// fast with a connection error — the deterministic network-class failure.
+// deadServerURL returns the URL of a listener that accepts every connection
+// and closes it immediately without writing a response — a deterministic
+// network-class failure for any HTTP client that dials it.
+//
+// It does NOT use httptest.NewServer-then-Close: that pattern frees the OS
+// port back into the machine-wide ephemeral pool while the test keeps using
+// the URL. `go test ./...` runs many package test binaries as separate OS
+// processes concurrently, and any of those other processes' own listeners
+// (an httptest server in a different package, or anything else on the
+// machine) can be handed that exact freed port before this test's own
+// request lands, turning "network failure" into "200 from a stranger's
+// server" (observed in CI: PR #1000 race run 36462420598, job
+// 109064538871 — TestR8_NoFallbackInvented_WhenDDGDisabled saw a live tavily
+// response instead of the expected network error). Holding our own listener
+// open for the test's lifetime (closed only in t.Cleanup) makes that
+// rebinding impossible: nothing else can bind this port while we hold it.
+//
+// Every caller's assertion in this package matches on the "network:" class
+// text (pkg/tools/web_search.go's classifySearchFailure wraps any
+// client.Do/body-read error — connection refused, reset, or a response with
+// no bytes — into "request failed"/"failed to read response", both
+// classNetwork), not on a specific underlying error string, so an
+// accept-then-close failure satisfies the same oracle a connection-refused
+// failure did.
 func deadServerURL(t *testing.T) string {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
-	srv.Close()
-	return srv.URL
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("deadServerURL: listen: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		<-done
+	})
+	return "http://" + ln.Addr().String()
 }

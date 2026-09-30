@@ -454,16 +454,83 @@ func writeDefaultSingleton(deps *Deps, id string, want bool) error {
 	})
 }
 
+// publishAgentActivation publishes id into the live, in-memory config/registry
+// that pkg/gateway/rest_agents.go::listAgents reads, and returns the resulting
+// activation status. It must NEVER report ActivationActive while the agent
+// might still be missing from that live list — see publishAndRespond's gate for
+// the caller-side enforcement; this function's job is to block until publication
+// has actually landed so that gate has a real, observable signal to trust.
+//
+// The fast path (UpsertAgentFastFunc, issue #571 sysagent half) is what
+// AgentCreateTool/AgentUpdateTool prefer, but the production wired
+// implementation (pkg/gateway/gateway.go's closure) DOES NOT promise a
+// synchronous live-list update on its nil return: it re-derives
+// cfg.Agents.List via MutateConfig first, then calls
+// agentLoop.UpsertAgentFast — and on any step's failure (IsReloadPending at
+// entry, MutateConfig error, or UpsertAgentFast error) it falls back to
+// rc.reloadTrigger(), which is ASYNCHRONOUS (it only enqueues onto
+// manualReloadChan / claims the coalescing slot and returns nil — the actual
+// registry rebuild happens on a separate goroutine, see
+// pkg/gateway/gateway_reload.go::newReloadTrigger). A nil return from
+// UpsertAgentFastFunc therefore means "publication was accepted, but may still
+// be in flight on the reload goroutine" — NOT "the agent is already live in
+// the registry". The fallback ReloadFunc below is also fire-and-forget for the
+// same reason.
+//
+// Closing that race: after the publish hook returns nil, call
+// deps.WaitForPendingReloadFunc when wired — the wait-only IsReloadPending
+// poll (pkg/gateway/rest_auth.go::waitForPendingReload), which NEVER calls
+// TriggerReload / reloadTrigger. This blocks until any reload already queued
+// by the fallback path has rebuilt the live registry the gate consults, so a
+// nil return from THIS function is now a genuine "agent is live and listable"
+// — not just "agent was queued for publication". On the fast-path-success
+// branch (UpsertAgentFastFunc updated the live registry inline, nothing
+// queued) the pending flag is already clear so this returns IMMEDIATELY — a
+// genuine no-op, exactly what the agent-picker-freshness fix (#1009) needs.
+//
+// WHY WaitForPendingReloadFunc AND NOT WaitForReloadFunc: WaitForReloadFunc's
+// production implementation (pkg/gateway/rest_auth.go::waitForReload, which
+// delegates to that same file's waitForReloadOutcome) calls
+// agentLoop.TriggerReload as its FIRST statement, unconditionally — it does
+// NOT check IsReloadPending before triggering. That shape is correct for
+// delete_agent (AgentDeleteTool.reload, no fast path available, reload must
+// happen) but is WRONG here: on the fast-path-success branch the live
+// in-memory registry is already up-to-date and NOTHING is pending, so calling
+// WaitForReloadFunc would kick off a brand-new, unnecessary full reload cycle
+// (channels/cron/plan-engine/schedulers all restart — up to ~60s under load,
+// the exact mechanism issue #571 exists to avoid) just to wait for it. The
+// round-3 version of this comment (commit 500beb747) claimed the wait "is a
+// no-op in that case but a real block in the queued-reload case" — that
+// claim was FALSE for WaitForReloadFunc (it always triggers) and is TRUE for
+// the new WaitForPendingReloadFunc this function now uses.
+//
+// WaitForPendingReloadFunc is nil in tests / degraded wiring where there is no
+// real reload to wait on (those tests either stub the fast path itself to
+// update the registry inline, or use a synchronous ReloadFunc stand-in).
+// When it is nil, fall back to the old behaviour: the publish hook's nil
+// return is taken at face value — adequate for the test wiring, and
+// explicitly NOT claimed as safe in production (the production gateway
+// always wires both).
 func publishAgentActivation(deps *Deps, id string) (agentstore.ActivationStatus, string) {
 	if deps != nil && deps.UpsertAgentFastFunc != nil {
 		if err := deps.UpsertAgentFastFunc(id); err != nil {
 			return agentstore.ActivationFailed, err.Error()
+		}
+		if deps.WaitForPendingReloadFunc != nil {
+			if err := deps.WaitForPendingReloadFunc(); err != nil {
+				return agentstore.ActivationFailed, err.Error()
+			}
 		}
 		return agentstore.ActivationActive, ""
 	}
 	if deps != nil && deps.ReloadFunc != nil {
 		if err := deps.ReloadFunc(); err != nil {
 			return agentstore.ActivationFailed, err.Error()
+		}
+		if deps.WaitForPendingReloadFunc != nil {
+			if err := deps.WaitForPendingReloadFunc(); err != nil {
+				return agentstore.ActivationFailed, err.Error()
+			}
 		}
 		return agentstore.ActivationActive, ""
 	}
