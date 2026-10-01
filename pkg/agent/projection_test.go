@@ -92,15 +92,19 @@ func TestProjection_PureFunction(t *testing.T) {
 	})
 
 	t.Run("emptied view == the live emptying pass, byte for byte (B-22)", func(t *testing.T) {
+		// D5's own standalone eligibility/empty pass (eligibleToolResults /
+		// emptyOldestFirst) was retired after the R1 GREEN refactor moved
+		// emptying behind a new call site; only c1 was ever eligible here (c2
+		// and c3 are the last assistant step's results, the floor set), and
+		// the mark it produced is built with the exact same primitive
+		// projectMessagesChecked -> projectSource uses on reload
+		// (buildRecallMark with identical state/tool/id/line/content/turn —
+		// projection_checked.go::retainedSourceRunes, source_projection.go).
 		live := append([]providers.Message(nil), history...)
-		emptied := emptyOldestFirst(live, eligibleToolResults(live, lineOf, nil), lineOf, archive,
-			func([]providers.Message) bool { return false })
-		require.Len(t, emptied, 1, "only c1 is eligible: c2 and c3 are the last assistant step's results (the floor set)")
-		assert.Equal(t, "c1", emptied[0].ToolCallID)
-		set := memory.ProjectionSet{}
-		for _, e := range emptied {
-			set[memory.ProjectionKey{ToolCallID: e.ToolCallID, ArchiveLine: e.ArchiveLine}] = memory.ProjectionEmptied
-		}
+		mark, err := buildRecallMark("emptied", "read_file", "c1", 2, big, turnNumberForArchiveLine(archive, 2))
+		require.NoError(t, err)
+		live[2].Content = mark
+		set := memory.ProjectionSet{{ToolCallID: "c1", ArchiveLine: 2}: memory.ProjectionEmptied}
 		out := projectMessages(history, lineOf, set, pc)
 		assert.Equal(t, live, out, "one function, both views: the reload assembly equals what the provider saw")
 	})

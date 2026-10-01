@@ -69,121 +69,6 @@ func msgsByToolCallID(msgs []providers.Message) map[string]providers.Message {
 	return out
 }
 
-// --- unit: eligibility and the pass itself -------------------------------
-
-// TestEmptyInPlace_EligibilityAndOrder pins FR-017: oldest first, the floor
-// set (every result of the LAST assistant step) is never eligible, results
-// of an EARLIER turn still in the slice ARE eligible (B-21b), an orphaned
-// result (call not in the slice) is skipped, an already-emptied entry is
-// skipped, and a message off the archive (lineOf < 0) is skipped.
-func TestEmptyInPlace_EligibilityAndOrder(t *testing.T) {
-	big := strings.Repeat("b", 2000)
-	msgs := []providers.Message{
-		{Role: "user", Content: "turn one"},
-		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("c1", "one")}},
-		{Role: "tool", ToolCallID: "c1", Content: big},
-		{Role: "user", Content: "turn two"},
-		{Role: "tool", ToolCallID: "orphan", Content: big}, // no call in the slice
-		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("c2", "two")}},
-		{Role: "tool", ToolCallID: "c2", Content: big},
-		{Role: "tool", ToolCallID: "spliced", Content: big}, // off-archive (recall span)
-		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("c3", "three"), toolCallFor("c4", "four")}},
-		{Role: "tool", ToolCallID: "c3", Content: big},
-		{Role: "tool", ToolCallID: "c4", Content: big},
-	}
-	archive := make([]memory.ArchivedMessage, len(msgs))
-	for i, m := range msgs {
-		archive[i] = memory.ArchivedMessage{Message: m}
-	}
-	lineOf := func(i int) int {
-		if msgs[i].ToolCallID == "spliced" {
-			return -1
-		}
-		return i
-	}
-
-	got := eligibleToolResults(msgs, lineOf, nil)
-	assert.Equal(t, []int{2, 6}, got,
-		"oldest-first; floor set {c3,c4} excluded; orphan and off-archive excluded; earlier turn's c1 eligible")
-
-	already := memory.ProjectionSet{{ToolCallID: "c1", ArchiveLine: 2}: memory.ProjectionEmptied}
-	assert.Equal(t, []int{6}, eligibleToolResults(msgs, lineOf, already), "an emptied entry is not re-emptied")
-
-	// The pass stops as soon as the predicate holds (FR-021): with a target
-	// satisfied after one empty, only c1 goes.
-	work := append([]providers.Message(nil), msgs...)
-	calls := 0
-	emptied := emptyOldestFirst(work, got, lineOf, archive, func(m []providers.Message) bool {
-		calls++
-		return m[2].Content != big // "fits" once c1 is a mark
-	})
-	require.Len(t, emptied, 1)
-	assert.Equal(t, "c1", emptied[0].ToolCallID)
-	assert.Equal(t, 2, emptied[0].ArchiveLine)
-	assert.Equal(t, "big_tool", emptied[0].Tool)
-	assert.Equal(t, 2000, emptied[0].SizeChars)
-	assert.Contains(t, work[2].Content, `"content_state":"emptied"`)
-	assert.Equal(t, "c1", work[2].ToolCallID, "role, id and slot unchanged")
-	assert.Equal(t, "tool", work[2].Role)
-	assert.Equal(t, big, work[6].Content, "c2 untouched: the pass stopped at the target")
-	assert.Equal(t, big, msgs[6].Content)
-
-	// Never fits → every candidate goes, the floor set never does.
-	work = append([]providers.Message(nil), msgs...)
-	emptied = emptyOldestFirst(work, got, lineOf, archive, func([]providers.Message) bool { return false })
-	require.Len(t, emptied, 2)
-	assert.Equal(t, big, work[9].Content, "floor set intact")
-	assert.Equal(t, big, work[10].Content, "floor set intact")
-	assert.Equal(t, big, work[4].Content, "orphan intact")
-	assert.Equal(t, big, work[7].Content, "off-archive intact")
-
-	// Already fits → nothing happens, no mark is built.
-	work = append([]providers.Message(nil), msgs...)
-	assert.Empty(t, emptyOldestFirst(work, got, lineOf, archive, func([]providers.Message) bool { return true }))
-	assert.Equal(t, msgs, work)
-}
-
-// TestEmptyInPlace_MarkSizeFromArchiveLine pins the B-22 invariant at the
-// unit level: when the pass is handed the CAPPED in-memory copy of a result
-// (the mid-turn slice, T066-13), the mark still names the FULL size from
-// the archive line and is byte-identical to what projection.go produces on
-// reload for the same state.
-func TestEmptyInPlace_MarkSizeFromArchiveLine(t *testing.T) {
-	full := strings.Repeat("f", 50_000)
-	archive := []memory.ArchivedMessage{
-		{Message: providers.Message{Role: "user", Content: "q"}},
-		{Message: providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("c1", "a")}}},
-		{Message: providers.Message{Role: "tool", ToolCallID: "c1", Content: full}},
-		{Message: providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("c2", "b")}}},
-		{Message: providers.Message{Role: "tool", ToolCallID: "c2", Content: "small"}},
-	}
-	live := []providers.Message{
-		archive[0].Message, archive[1].Message,
-		{Role: "tool", ToolCallID: "c1", Content: "CAPPED FORM (much shorter)"},
-		archive[3].Message, archive[4].Message,
-	}
-	lineOf := midTurnLineResolver(archive, live)
-	assert.Equal(t, 2, lineOf(2))
-	assert.Equal(t, 4, lineOf(4))
-	assert.Equal(t, -1, lineOf(1), "an assistant message has no result line")
-
-	emptied := emptyOldestFirst(live, eligibleToolResults(live, lineOf, nil), lineOf, archive,
-		func([]providers.Message) bool { return false })
-	require.Len(t, emptied, 1)
-	assert.Equal(t, 50_000, emptied[0].SizeChars)
-	assert.Contains(t, live[2].Content, `"size_chars":50000`)
-
-	reload := make([]providers.Message, len(archive))
-	for i := range archive {
-		reload[i] = archive[i].Message
-	}
-	set := memory.ProjectionSet{{ToolCallID: "c1", ArchiveLine: 2}: memory.ProjectionEmptied}
-	projected := projectMessages(reload, func(i int) int { return i }, set, projectionContext{
-		policy: capPolicyFor(config.DefaultContextSettings(), 100_000), archive: archive,
-	})
-	assert.Equal(t, live[2].Content, projected[2].Content, "live bytes == reload bytes")
-}
-
 // --- integration: the real loop, the real JSONL store ---------------------
 
 // liveReloadHarness runs one scripted turn of four big_tool calls against a
@@ -513,48 +398,25 @@ func TestRunTurn_AbortRestoresTurnStartTriple(t *testing.T) {
 
 // --- reused tool_call_ids (B-29b) ----------------------------------------
 
-// TestEligibleToolResults_FloorIsIndexKeyedNotIDKeyed pins FR-031's floor as
-// "the results of the LAST assistant step", addressed by slice INDEX.
-//
-// The regression: the floor was a set of bare tool_call_id strings. Providers
-// reuse ids — memory.ProjectionKey is composite precisely because "providers
-// reuse ids such as call_0 on every turn" (B-29b) — so with a provider that
-// numbers calls per message, `floor = {call_0}` excluded EVERY older call_0
-// result in the window. Nothing was eligible, emptyInPlace emptied nothing,
-// and D6's thrash guard ended the turn with ErrContextUnrecoverable while
-// large, evictable results sat right there in the window.
-func TestEligibleToolResults_FloorIsIndexKeyedNotIDKeyed(t *testing.T) {
-	big := strings.Repeat("b", 2000)
-	// A provider that restarts its numbering on every assistant message.
-	msgs := []providers.Message{
-		{Role: "user", Content: "turn one"},
-		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("call_0", "one")}},
-		{Role: "tool", ToolCallID: "call_0", Content: big},
-		{Role: "user", Content: "turn two"},
-		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("call_0", "two")}},
-		{Role: "tool", ToolCallID: "call_0", Content: big},
-		{Role: "user", Content: "turn three"},
-		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("call_0", "three")}},
-		{Role: "tool", ToolCallID: "call_0", Content: big},
-	}
-	lineOf := func(i int) int { return i }
-
-	got := eligibleToolResults(msgs, lineOf, nil)
-	assert.Equal(t, []int{2, 5}, got,
-		"only the LAST step's result (index 8) is floor; the two older call_0 results are eligible")
-}
-
 // TestMidTurnLineResolver_ReusedIDsResolvePositionally pins the composite
 // address D5 persists under.
 //
 // The regression: the resolver returned the MOST RECENT archive line
 // carrying a message's tool_call_id, so two window messages sharing an id
-// both resolved to the newer line. Emptying the OLDER one then (a) built its
-// mark from the newer line — wrong size, wrong content behind the recall
-// key — and (b) persisted (id, newerLine) → emptied, so the reload
-// projection (archiveLineResolver, index-exact) blanked the NEWER result
-// while the older one came back at full content. Live and reload disagreed,
-// breaking B-22, and the wrong result was destroyed.
+// both resolved to the newer line. Emptying the OLDER one then (a) would have
+// built its mark from the newer line — wrong size, wrong content behind the
+// recall key — and (b) would have persisted (id, newerLine) → emptied, so the
+// reload projection (archiveLineResolver, index-exact) would have blanked the
+// NEWER result while the older one came back at full content. Live and
+// reload would have disagreed, breaking B-22, and the wrong result would have
+// been destroyed.
+//
+// D5's own standalone end-to-end empty pass (eligibleToolResults /
+// emptyOldestFirst) that used to demonstrate this positionally was retired
+// after the R1 GREEN refactor moved emptying behind a new call site; this
+// test now pins the regression at the resolver level only — midTurnLineResolver
+// and archiveLineResolver (both still live) must each address a reused-id
+// result by its OWN archive line, not the most recent line sharing that id.
 func TestMidTurnLineResolver_ReusedIDsResolvePositionally(t *testing.T) {
 	turn1 := strings.Repeat("1", 100)
 	turn2 := strings.Repeat("2", 200)
@@ -587,16 +449,6 @@ func TestMidTurnLineResolver_ReusedIDsResolvePositionally(t *testing.T) {
 		assert.Equal(t, reloadLineOf(i), lineOf(i),
 			"the mid-turn and reload resolvers must address the same line for message %d", i)
 	}
-
-	// End to end: emptying the OLDEST eligible result must mark line 2 with
-	// turn 1's size, not line 5 with turn 2's.
-	work := append([]providers.Message(nil), live...)
-	emptied := emptyOldestFirst(work, eligibleToolResults(work, lineOf, nil), lineOf, archive,
-		func(m []providers.Message) bool { return m[2].Content != turn1 })
-	require.Len(t, emptied, 1)
-	assert.Equal(t, 2, emptied[0].ArchiveLine, "the persisted key must cite the message's OWN archive line")
-	assert.Equal(t, len(turn1), emptied[0].SizeChars, "the mark must describe the content that was actually lost")
-	assert.Equal(t, turn2, work[5].Content, "turn 2's newer result must be untouched")
 }
 
 // TestMidTurnLineResolver_OffArchiveMessageConsumesNoLine — a spliced recall

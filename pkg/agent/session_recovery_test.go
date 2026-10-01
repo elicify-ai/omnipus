@@ -129,18 +129,28 @@ func TestProjection_NeverOrphans(t *testing.T) {
 	lineOf := func(i int) int { return i }
 	require.Empty(t, findOrphanedToolCalls(history), "precondition: clean history")
 
-	// Live pass: everything eligible goes (p3 is the floor set).
+	// Live pass: p1 and p2 (not the floor set, p3) end up emptied. D5's own
+	// standalone eligibility/empty pass (eligibleToolResults/emptyOldestFirst)
+	// was retired after the R1 GREEN refactor moved emptying behind a new
+	// call site, so the "live" emptied state is built directly here with the
+	// same buildRecallMark primitive both the (new) live path and the reload
+	// projection below share (empty_in_place.go's own doc comment: "the mark
+	// is the same byte string projection.go produces for the persisted
+	// state, by construction").
 	live := append([]providers.Message(nil), history...)
-	emptied := emptyOldestFirst(live, eligibleToolResults(live, lineOf, nil), lineOf, archive,
-		func([]providers.Message) bool { return false })
-	require.Len(t, emptied, 2)
+	p1Mark, err := buildRecallMark("emptied", "exec", "p1", 2, big, turnNumberForArchiveLine(archive, 2))
+	require.NoError(t, err)
+	p2Mark, err := buildRecallMark("emptied", "exec", "p2", 3, big, turnNumberForArchiveLine(archive, 3))
+	require.NoError(t, err)
+	live[2].Content = p1Mark
+	live[3].Content = p2Mark
 	assert.Empty(t, findOrphanedToolCalls(live), "an emptied result still answers its call")
 	assert.Len(t, live, len(history), "no slot removed")
 
 	// Reload projection of the persisted state: same shape, same verdict.
-	set := memory.ProjectionSet{}
-	for _, e := range emptied {
-		set[memory.ProjectionKey{ToolCallID: e.ToolCallID, ArchiveLine: e.ArchiveLine}] = memory.ProjectionEmptied
+	set := memory.ProjectionSet{
+		{ToolCallID: "p1", ArchiveLine: 2}: memory.ProjectionEmptied,
+		{ToolCallID: "p2", ArchiveLine: 3}: memory.ProjectionEmptied,
 	}
 	projected := projectMessages(history, lineOf, set, projectionContext{
 		policy: capPolicyFor(config.DefaultContextSettings(), 100_000), archive: archive,
@@ -152,10 +162,13 @@ func TestProjection_NeverOrphans(t *testing.T) {
 		assert.Equal(t, history[i].ToolCalls, projected[i].ToolCalls)
 	}
 
-	// A genuine orphan (call missing) is not D5's business: not eligible.
+	// A genuine orphan (call missing) is not D5's business: recovery still
+	// owns it (the dead eligibility pass's own exclusion of orphans was
+	// pinned only by the now-deleted TestEmptyInPlace_EligibilityAndOrder /
+	// TestEligibleToolResults_FloorIsIndexKeyedNotIDKeyed; both of those
+	// functions were retired with D5's old standalone pass).
 	orphaned := buildOrphanedHistory("tc-orphan", "exec")
 	orphaned = append(orphaned, providers.Message{Role: "tool", ToolCallID: "stray", Content: big})
-	assert.Empty(t, eligibleToolResults(orphaned, func(i int) int { return i }, nil))
 	assert.Len(t, findOrphanedToolCalls(orphaned), 1, "recovery still sees the orphaned call")
 }
 
