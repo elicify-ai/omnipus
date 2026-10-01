@@ -58,23 +58,32 @@ Delegated sub-task sessions never get a recap — only real conversations do.
 
 ## How long conversations stay in view
 
-The live window holds the recent turns of a conversation. When it fills, the oldest whole turns drop out of view until the conversation fits again. Three things are worth knowing:
+The live window is the part of the conversation sent to the model. Omnipus can shorten it between your messages **and during one long turn**, after each tool result and just before the next model request. It checks the assembled request, including tool definitions, notes and media, rather than treating a result's initial size limit as proof that everything fits.
 
-- Trimming makes no extra model call. It is arithmetic on message sizes, not a summary.
-- Nothing is deleted from disk. The transcript file keeps everything; only the live view shrinks.
-- The agent is told which turns scrolled away, and it can read them back with `recall_conversation`.
+| What changes under pressure | What stays |
+|---|---|
+| An injected block of recalled conversation can leave first. | Its source remains in the conversation archive. |
+| Old whole turns, or older complete assistant steps within the current turn, can leave the live view. A step includes the assistant's calls and all their matching results. | The newest and incomplete call/result groups stay together. |
+| Retained tool-result text can shrink to its beginning and end, with an addressed recall mark between them. Even newest results can eventually become mark-only. | The call, its arguments, the result slot and its correlation identity remain. Full admitted, filtered result text stays in the archive. |
+| The model receives a short notice identifying what left or was shortened. | The original message that started the turn, including media, instructions and not-yet-consumed steering messages remain. The relief notice is model context, not a new chat message. |
+
+This is literal removal and text projection, not a summary, and it makes no extra model call. The same saved projection is applied when the live window is loaded again. `recall_conversation` can retrieve addressed earlier results; shortened text is not presented as a complete result.
+
+By default, combined tool results trigger relief above an estimated **50% of the model's context window**. The separate total-request budget also reserves space for the reply, safety margin and core instructions. These are estimates, not a promise that the provider will accept the request. See [settings](settings.md) for the tool-result share setting and [troubleshooting](troubleshooting.md#the-provider-rejects-your-model-requests) for provider rejections.
+
+Relief deletes no admitted archive bytes. If the turn is aborted, its archive appends and window metadata are rolled back to the actual turn-start snapshot; do not assume an aborted turn's results remain available for recall.
 
 ```mermaid
 flowchart LR
   You[You] -->|chat with| Agent[Agent]
   Agent -->|turns accumulate| Window[Live window]
-  Window -->|fills up| Trim[Drop oldest turns]
-  Trim -->|keeps everything| Disk[Transcript on disk]
+  Window -->|fills up, even mid-turn| Trim[Remove complete old steps or shorten result text]
+  Trim -->|leaves admitted source unchanged| Disk[Conversation archive on disk]
   Agent -->|recall_conversation| Disk
   Disk -->|earlier turns back| Agent
 ```
 
-When the window fills, the oldest turns leave the live view but stay on disk, ready to be read back on demand.
+When the window fills, older turns or complete steps can leave the live view while their admitted source text stays available for recall. Aborted-turn rollback and session retention still apply.
 
 ## Limits and things to watch
 

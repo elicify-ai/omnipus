@@ -2288,8 +2288,6 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	switch code {
 	case CodeTurnTimedOut:
 		sentinel, status = ErrTurnTimedOut, TurnEndStatusError
-	case CodeContextUnrecoverable:
-		sentinel, status, level = ErrContextUnrecoverable, TurnEndStatusError, logger.ErrorCF
 	}
 	llm := typedExitError(code, cause)
 

@@ -28,9 +28,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"time"
-
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // AppendTranscriptStrict appends entry to sessionID's transcript.jsonl,
@@ -95,52 +92,8 @@ import (
 // FlushAndEvictSessionMeta), exactly like every other u6MarkStatsDirtyLocked
 // caller in this store.
 func (us *UnifiedStore) AppendTranscriptStrict(sessionID string, entry TranscriptEntry) error {
-	if err := validateSessionID(sessionID); err != nil {
-		return err
-	}
-	if err := validateContextWindowNotice(sessionID, entry); err != nil {
-		return fmt.Errorf("unified_store: append transcript strict: %w", err)
-	}
-	if entry.Timestamp.IsZero() {
-		entry.Timestamp = time.Now().UTC()
-	}
-
-	h := us.lockSession(sessionID)
-	defer h.Unlock()
-
-	// The strict existence check MUST run before any filesystem write:
-	// fileutil.AppendJSONL below begins with os.MkdirAll, which would
-	// otherwise silently mint the orphan directory this method exists to
-	// refuse (BDD-01; dataset rows 2, 4, 7 — missing session, corrupted
-	// session directory with no meta.json, and a session deleted between
-	// resolve and append all resolve to the SAME non-nil-error path here,
-	// since DeleteSession also takes sessionID's own shard and therefore
-	// cannot interleave mid-call).
-	meta, err := us.readMetaLocked(sessionID)
-	if err != nil {
-		return fmt.Errorf("unified_store: append transcript strict: session %q does not exist: %w", sessionID, err)
-	}
-
-	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
-	if err := fileutil.AppendJSONL(transcriptPath, entry); err != nil {
-		return fmt.Errorf("unified_store: append transcript: %w", err)
-	}
-
-	// Stats + UpdatedAt bookkeeping — calls the same accumulateEntryStats
-	// helper AppendTranscript uses (entry_stats.go); see this method's doc
-	// comment above for the extraction history.
-	accumulateEntryStats(&meta.Stats, entry)
-	meta.UpdatedAt = entry.Timestamp
-
-	// FR-061 throttle (see this method's doc comment for the convergence
-	// history): mutate ONLY the cached entry and mark the session dirty for
-	// the periodic flusher (or the next forced-flush point) to persist —
-	// the SAME call AppendTranscript's own hot path already makes, never a
-	// second stats-writing mechanism. What remains STRICT about this method
-	// is unchanged: the pre-flight existence check above, and the
-	// transcript.jsonl append error propagated earlier in this function.
-	us.u6MarkStatsDirtyLocked(sessionID, meta)
-	return nil
+	_, err := us.appendTranscript(sessionID, entry, false, "append transcript strict")
+	return err
 }
 
 // CreateSessionWithID mints a session under the EXACT id supplied — never a
