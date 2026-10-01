@@ -931,6 +931,13 @@ type RateLimitFrame struct {
 	Type      string  `json:"type"`
 }
 
+// RedirectFrame — Client → server redirect one session: stop its in-progress turn, then resume it on the same generation with the instruction (D2/D9). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.
+type RedirectFrame struct {
+	Instruction string `json:"instruction"`
+	SessionId   string `json:"session_id"`
+	Type        string `json:"type"`
+}
+
 // ReplayErrorFrame — Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path when the server encounters a TranscriptEntry with Type=system AND Status="error" — produced by appendErrorTranscript for rate-limit denials (kind=rate_limit) and provider LLM call failures (kind=error). The SPA uses this frame's `kind` discriminant to render the rate-limit-denial component or the generic error component instead of falling back to the default "assistant" bubble render path. Without this typed frame, replay treats the entry as a normal assistant message (the previous bug — empty Role falls back to "assistant" via ReplayMessageFrame.Role, so the SPA renders rate-limit text as a regular assistant message).
 type ReplayErrorFrame struct {
 	// Agent that was active when the error fired.

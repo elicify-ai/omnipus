@@ -15826,6 +15826,14 @@ export const CancelFrame = z
   })
   .strict();
 
+export const RedirectFrame = z
+  .object({
+    type: z.literal("redirect"),
+    session_id: z.string().min(1).max(128),
+    instruction: z.string().min(1).max(16384).regex(/\S/),
+  })
+  .strict();
+
 export const PingFrame = z
   .object({
     type: z.literal("ping"),
@@ -17077,6 +17085,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   AuthFrame,
   MessageFrameBase,
   CancelFrame,
+  RedirectFrame,
   PingFrame,
   PongFrame,
   AttachSessionFrame,
