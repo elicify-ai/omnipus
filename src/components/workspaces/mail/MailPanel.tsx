@@ -289,6 +289,10 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
       return fetchMailFolders(workspaceId, agentId as string, { retry })
     },
     enabled: agentId !== null,
+    // No silent query-client retries: each failed attempt can take up to the
+    // backend's 45s bound, so the default 3 retries kept the list skeleton up
+    // for minutes. The first failure shows the error class + Retry button.
+    retry: false,
     refetchInterval: FOLDERS_REFETCH_MS,
     refetchIntervalInBackground: false,
   })
