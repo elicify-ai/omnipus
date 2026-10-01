@@ -26,7 +26,7 @@ import {
 } from '@/lib/llm-error'
 import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
-import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SessionCursor, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
@@ -158,6 +158,21 @@ function scheduleGapReattachRetry(sid: string, cursor: SessionCursor): void {
     if (!inFlightReattachSids.has(sid)) return // resolved while this timer was pending
     console.warn('[chat] sequence gap re-attach retry — no response yet', { sessionId: sid, attempt, have: cursor.seq })
     logDiagnostic('chatSeqGapReattachRetry', { sessionId: sid, attempt, have: cursor.seq })
+    // Same silent-failure rule as the unknown-frame default case below: a
+    // retry loop the user cannot see is a session that silently stops
+    // updating. Unlike that counter, this one is NOT reset to 0 after
+    // toasting — it drives the exponential backoff — so "exactly once per
+    // stuck episode" comes from equality instead: the attempt count is
+    // strictly monotonic within an episode (armed once per gap, only ever
+    // self-rescheduled) and clearGapReattachRetry deletes it the moment the
+    // gap resolves, so the threshold value is reached exactly once; a later,
+    // unrelated stuck episode starts counting from 1 again.
+    if (attempt === GAP_REATTACH_TOAST_THRESHOLD) {
+      useUiStore.getState().addToast({
+        message: 'This conversation may be out of sync — reconnecting keeps failing. Refresh to reload it.',
+        variant: 'warning',
+      })
+    }
     useConnectionStore.getState().connection?.send({
       type: 'attach_session',
       session_id: sid,

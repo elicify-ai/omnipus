@@ -77,6 +77,15 @@ export const gapReattachRetryAttempts: Record<string, number> = {}
 export const gapReattachRetryTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 export const GAP_REATTACH_BASE_DELAY_MS = 1_000
 export const GAP_REATTACH_MAX_DELAY_MS = 30_000
+// Silent-failure fix (8-reviewer gate finding): an unanswered gap re-attach
+// used to retry forever with no user-facing signal. After this many attempts
+// the user is told once per stuck episode that the session may be out of
+// sync. Own constant, not UNKNOWN_FRAME_TOAST_THRESHOLD — the two thresholds
+// govern unrelated failure modes. Value 5 against this retry's own backoff
+// curve (1+2+4+8+16s) warns at ~31s of a stuck session: late enough to ride
+// out every transient hiccup (a healthy re-attach resolves within the first
+// 1-2 retries), early enough to matter when the failure never self-heals.
+export const GAP_REATTACH_TOAST_THRESHOLD = 5
 
 export const EMPTY_BUCKET = emptySessionState()
 

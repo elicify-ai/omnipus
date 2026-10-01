@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
+import { useUiStore } from '@/store/ui'
 import { emptySessionState } from './session'
 import { gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, replayErrorRetryAttempts, replayErrorRetryTimers } from './runtime-state'
 import type { ChatMessage } from './types'
@@ -414,6 +415,73 @@ describe('safety hardening (subagent-control-plane stream) — gap re-attach ret
     // The pending retry must not fire now that the gap is resolved.
     vi.advanceTimersByTime(60_000)
     expect(sent).toHaveLength(1)
+  })
+
+  // Silent-failure fix (8-reviewer gate finding): a stuck session used to
+  // retry forever with NO user-facing signal — only console.warn and a
+  // diagnostic no ordinary user sees. The toast fires ONCE per stuck
+  // episode, at the 5th unanswered attempt (~31s of backoff: 1+2+4+8+16s),
+  // and retries themselves continue.
+  it('toasts the user exactly once per stuck episode once the re-attach keeps failing, while retries continue', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (f: unknown) => { sent.push(f); return true } },
+    } as never)
+    // Replace the toast action in the real ui store (zustand actions are
+    // state properties) rather than vi.mock-ing the module — this test
+    // deliberately drives the real chat store, and a property swap survives
+    // the store's internal set() replacing the state object identity.
+    const addToast = vi.fn()
+    const originalAddToast = useUiStore.getState().addToast
+    useUiStore.setState({ addToast } as never)
+
+    try {
+      // Establish a cursor at seq 5, then a genuine gap at seq 9 — mirrors D8.
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
+      } as WsReceiveFrame)
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
+      } as WsReceiveFrame)
+      expect(sent).toHaveLength(1)
+
+      // Attempts 1-4 fire at 1s/2s/4s/8s (cumulative 15s) — ordinary backoff
+      // territory for a re-attach that may still land; NO warning yet.
+      vi.advanceTimersByTime(15_000)
+      expect(sent).toHaveLength(5)
+      expect(addToast).not.toHaveBeenCalled()
+
+      // Attempt 5 fires at cumulative ~31s — the gap has now survived every
+      // retry, so the user is told the session may be out of sync and to
+      // refresh. Exactly ONE toast, still 'warning' like the unknown-frame one.
+      vi.advanceTimersByTime(16_000)
+      expect(sent).toHaveLength(6)
+      expect(addToast).toHaveBeenCalledTimes(1)
+      expect(addToast.mock.calls[0][0]).toMatchObject({ variant: 'warning' })
+      expect(String((addToast.mock.calls[0][0] as { message?: string }).message)).toMatch(/refresh/i)
+
+      // Retries CONTINUE after the toast (30s-capped backoff: attempts 6 and
+      // 7 land by t=91s) — this fix added visibility, not a retry cap —
+      // and the toast is NOT repeated on those later attempts.
+      vi.advanceTimersByTime(60_000)
+      expect(sent).toHaveLength(8)
+      expect(addToast).toHaveBeenCalledTimes(1)
+
+      // Once per EPISODE, not once ever: resolving the gap resets the
+      // attempt counter, so a LATER stuck episode warns the user again.
+      useChatStore.getState().handleFrame({
+        type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-gap', mode: 'incremental',
+      } as WsReceiveFrame)
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: 'GAP2', turn_id: 't1', message_id: 'm3', seq: 20,
+      } as WsReceiveFrame)
+      expect(sent).toHaveLength(9) // the fresh episode's first re-attach
+      vi.advanceTimersByTime(31_000) // episode 2's attempts 1-5
+      expect(sent).toHaveLength(14)
+      expect(addToast).toHaveBeenCalledTimes(2)
+    } finally {
+      useUiStore.setState({ addToast: originalAddToast } as never)
+    }
   })
 })
 
