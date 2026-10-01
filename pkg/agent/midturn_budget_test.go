@@ -473,9 +473,16 @@ func TestMidTurnBudget_NewestSharePressureShortensAndSends(t *testing.T) {
 // test now drives checkpointRequest the same way loop_run_turn.go's
 // prepareLLMRequest does: build the candidate exactly as prepareCallMessages
 // does for the workspace-instructions note (injectWorkspaceInstructions +
-// buildWorkspaceInstructionsNote), then call checkpointRequest() on the same
-// minimal agentLoopRunTurnRequest chain cwR1Flow (cw_slide_r1_transport_test.go)
-// builds for the full-turn harness.
+// buildWorkspaceInstructionsNote), then call checkpointRequest(true) on the
+// same minimal agentLoopRunTurnRequest chain cwR1Flow
+// (cw_slide_r1_transport_test.go) builds for the full-turn harness — true
+// because this test exercises the counting discriminator itself (both the
+// positive and negative-control subtests), not loop_run_turn.go's real
+// prepare-side telemetry call, which always passes false
+// (gap-5 fix, 2026-10-01: checkpointRequest gates the relocated
+// contextResidueOverflowsTotal increment behind a countOverflow bool —
+// the retry-closure in callLLMWithRetries is the sole production caller
+// that passes true).
 func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
 	al, agent := midTurnFixture(t, 40_000, 0)
 	budget := agentContextBudget(agent)
@@ -524,7 +531,7 @@ func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
 		rq := &agentLoopRunTurnRequest{ri: ri}
 
 		before := ContextResidueOverflowsTotal()
-		err := rq.checkpointRequest()
+		err := rq.checkpointRequest(true)
 		require.NoError(t, err, "FR-032 amendment: a note-only overflow (nothing eligible to empty, "+
 			"window fits without the notes) must not end the turn — the provider's own context error "+
 			"is the backstop, not this guard")
@@ -561,7 +568,7 @@ func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
 		rq := &agentLoopRunTurnRequest{ri: ri}
 
 		before := ContextResidueOverflowsTotal()
-		err := rq.checkpointRequest()
+		err := rq.checkpointRequest(true)
 		require.NoError(t, err, "irreducible overflow is still not a local size-only failure (MAJ-CW-004/010)")
 		assert.Equal(t, before, ContextResidueOverflowsTotal(),
 			"the relocated counter must not fire here: the live window is ALSO over budget without "+
@@ -699,7 +706,7 @@ func TestMidTurnBudget_ResidueRegression_NotesAloneDoNotEndTurn(t *testing.T) {
 	rq := &agentLoopRunTurnRequest{ri: ri}
 
 	before := ContextResidueOverflowsTotal()
-	err := rq.checkpointRequest()
+	err := rq.checkpointRequest(true)
 	require.NoError(t, err,
 		"REGRESSION: FR-032's fatal exit is reserved for an injected fault (a non-tool message itself "+
 			"oversized), never for a configuration-size condition like an oversized AGENT.md — the un-emptiable "+
