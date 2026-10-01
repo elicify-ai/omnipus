@@ -15351,7 +15351,7 @@ export interface components {
         };
         /**
          * SessionLifecycleRecord
-         * @description The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+         * @description The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/interrupted — the older chat-transcript- metadata status) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
          */
         SessionLifecycleRecord: {
             /**
@@ -15376,7 +15376,7 @@ export interface components {
              */
             state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
             /**
-             * @description Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+             * @description Server-derived: true iff `state` is one of `completed`/`failed`.
              * @example false
              */
             readonly terminal: boolean;
