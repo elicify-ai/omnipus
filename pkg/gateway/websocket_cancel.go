@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -429,6 +430,34 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 			})
 		},
 	}
+}
+
+// handleCancelFrame is the frame dispatcher's entry point for a `cancel`
+// frame: parse, validate session_id, resolve the session/tree scope, and
+// route to handleCancelWithScope. Kept out of dispatchFrame's own body —
+// same reasoning as stringPtrOrEmpty and handleSessionCloseFrame /
+// handleSessionModeUpdateFrame elsewhere in that switch — so dispatchFrame's
+// grandfathered gocyclo budget (scripts/budgets/gocyclo.txt) doesn't grow;
+// the session-vs-tree scope check (stopAll) was the one that pushed it over.
+func (wh *wsHandlerReadLoop) handleCancelFrame(data []byte) wsHandlerReadLoopFlow {
+	var f generated.CancelFrame
+	if err := json.Unmarshal(data, &f); err != nil {
+		slog.Warn("ws: malformed cancel frame", "error", err)
+		return wsHandlerReadLoopContinue
+	}
+	if f.SessionId == "" {
+		wh.wc.inboundDropped.Add(1)
+		slog.Warn("ws: cancel frame missing required session_id — dropping",
+			"chat_id", wh.chatID)
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "cancel requires session_id",
+		})
+		return wsHandlerReadLoopContinue
+	}
+	stopAll := f.Scope != nil && *f.Scope == "tree"
+	wh.h.handleCancelWithScope(wh.wc, f.SessionId, stopAll)
+	return wsHandlerReadLoopNext
 }
 
 // handleCancel delegates to agentLoop.RequestCancel — the canonical cancel
