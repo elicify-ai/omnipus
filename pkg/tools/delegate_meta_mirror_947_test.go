@@ -33,8 +33,27 @@ import (
 // now leave meta.json at active. The assertion below still pins the correct
 // CURRENT behavior (status stays active), but the original defect-947
 // regression coverage this test existed for is weakened for this specific
-// fixture — flagged for qa-lead to retarget at a still-mirrored terminal
-// state (e.g. LifecycleFailed/LifecycleCompleted) in a follow-up.
+// fixture.
+//
+// qa-lead follow-up (issue #1161): traced lifecycleToUnifiedStatus
+// (pkg/session/lifecycle_bridge.go) — for LifecycleStopped it returns
+// (_, ok=false) and short-circuits BEFORE any SetMeta call, so there is
+// genuinely zero observable side effect from step 2 alone for this target
+// state; retargeting this specific fixture at LifecycleFailed/Completed (as
+// originally proposed here) would test a different production call site
+// (droppedQueuedResult always lands Stopped — see its own doc comment), not
+// strengthen THIS test, so that proposal is withdrawn. What DOES close the
+// gap for THIS test: pairing the "Mirror half" assertion below with the
+// "Lifecycle half" rec.State assertion immediately above it. Both are driven
+// by the SAME transitionLifecycle -> session.TransitionSession call
+// (delegate_run.go::droppedQueuedResult), so deleting that call, or the
+// delegate's whole transitionLifecycle wiring, fails THIS test via rec.State staying
+// LifecycleQueued — not via the Mirror-half assertion, which (same as
+// TestRequestCancel_TransitionsLifecycleRecordToCancelled in
+// pkg/agent/cancel_lifecycle_bridge_test.go) cannot see that deletion in
+// isolation. The two together are the proof the mediator ran; the
+// Mirror-half line still independently catches lifecycleToUnifiedStatus
+// mis-mapping Stopped to the wrong status.
 func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	us, err := session.NewUnifiedStore(t.TempDir())

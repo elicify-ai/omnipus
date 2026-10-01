@@ -203,6 +203,26 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 	sessionID := started.SessionID
 	require.NotEmpty(t, sessionID)
 
+	// qa-lead strengthening (issue #1161): a freshly-created session already
+	// starts at StatusActive (pkg/session/unified.go::createSessionLocked),
+	// so asserting StatusActive after cancel would be vacuous on its own —
+	// it would pass identically whether the cancel path's status-mirror ran
+	// or was deleted outright. Seed a DIFFERENT starting status here so the
+	// post-cancel StatusActive assertion below is only true if something in
+	// the cancel path actually wrote it back. This is sound specifically
+	// because the WS cancel path's SetSessionInterrupted hook
+	// (pkg/gateway/websocket_cancel.go::buildCancelHooksWithReport) does an
+	// UNCONDITIONAL explicit write — `status := session.StatusActive;
+	// store.SetMeta(sid, session.MetaPatch{Status: &status})` — not a
+	// skip-if-already-right no-op, so it converges any starting value back
+	// to active; deleting that hook/write would leave the session at the
+	// seeded non-active value instead.
+	preStore := al.ResolveSessionStore(sessionID)
+	require.NotNil(t, preStore, "session store must resolve for a session that just reported session_started")
+	seedStatus := session.StatusFailed
+	require.NoError(t, preStore.SetMeta(sessionID, session.MetaPatch{Status: &seedStatus}),
+		"seed the session to a non-active status before cancel")
+
 	// Wait until the stubborn provider is inside Chat.
 	select {
 	case <-sp.ready:
@@ -248,15 +268,22 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 		assert.Less(t, hi, di, "'hard' must precede 'detached'")
 	}
 
-	// ASSERT: session status stays coarse-active after cancel (sub-agent
-	// control plane ADR D4/MAJ-009 — a cancel is a stop, not a failure; the
-	// retired StatusInterrupted is never written).
+	// ASSERT: session status CONVERGES to coarse-active after cancel
+	// (sub-agent control plane ADR D4/MAJ-009 — a cancel is a stop, not a
+	// failure; the retired StatusInterrupted is never written). The session
+	// was seeded to StatusFailed above, so this is only true if the cancel
+	// path's SetSessionInterrupted hook actually ran its explicit
+	// write-back — see the seeding comment above for why that write (not a
+	// no-op) makes this a real, non-vacuous proof instead of just observing
+	// an untouched freshly-created default.
 	store := al.ResolveSessionStore(sessionID)
 	if store != nil {
 		meta, err := store.GetMeta(sessionID)
 		if err == nil {
 			assert.Equal(t, session.StatusActive, meta.Status,
-				"session status must stay 'active' after cancel (ADR D4)")
+				"session status must converge to 'active' after cancel (ADR D4) — "+
+					"it was seeded to 'failed' before the cancel fired, so this only "+
+					"passes if the cancel path's status write-back actually ran")
 		}
 	}
 

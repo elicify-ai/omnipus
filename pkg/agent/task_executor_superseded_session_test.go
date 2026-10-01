@@ -33,8 +33,19 @@ import (
 // it can no longer prove supersedeTaskSession actually ran (vs. silently not
 // running). The task-level assertions above (non-empty redispatch id,
 // AttemptCount incremented, Status == next) remain the load-bearing proof
-// that the redispatch branch fired; flagged for qa-lead to add a positive
-// signal for the session-meta half specifically in a follow-up.
+// that the redispatch branch fired.
+//
+// qa-lead follow-up (issue #1161): closed the session-meta gap directly.
+// Unlike the LifecycleStopped-mirror no-op in pkg/session/lifecycle_bridge.go
+// (zero observable write for that target state — see the sibling note in
+// pkg/agent/cancel_lifecycle_bridge_test.go), supersedeTaskSession itself
+// does an EXPLICIT, unconditional
+// `sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusActive})`
+// BEFORE it calls transitionTaskLifecycle — a genuine converge-write, not a
+// skip-if-already-right no-op. The test now seeds the session to a
+// different status right before calling consumeTaskAttempt, so the final
+// StatusActive assertion is only true if that explicit write actually ran;
+// deleting it would leave the session at the seeded non-active value.
 func TestConsumeTaskAttempt_SupersededSessionStaysActive(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 
@@ -72,6 +83,17 @@ func TestConsumeTaskAttempt_SupersededSessionStaysActive(t *testing.T) {
 			before.Status, session.StatusActive)
 	}
 
+	// Seed a DIFFERENT status before the act, so the post-action StatusActive
+	// assertion below is only true if supersedeTaskSession's explicit
+	// write-back actually ran (not simply because a freshly-created session
+	// already started Active and nothing touched it). See the qa-lead
+	// follow-up note above this test for why this is sound for THIS
+	// production call specifically.
+	seedStatus := session.StatusFailed
+	if err := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &seedStatus}); err != nil {
+		t.Fatalf("seed session to a non-active status: %v", err)
+	}
+
 	redispatch := al.taskExecutor.consumeTaskAttempt(context.Background(), tk, taskSessionID,
 		"the run ended without a met verdict", nil)
 
@@ -103,7 +125,8 @@ func TestConsumeTaskAttempt_SupersededSessionStaysActive(t *testing.T) {
 	if after.Status != session.StatusActive {
 		t.Errorf("superseded attempt's session status = %q, want %q — M6: a superseded, stopped "+
 			"session stays coarse-active (ADR D4/MAJ-009); supersedeTaskSession's explicit write "+
-			"still runs so a session whose status drifted away from active for any other reason converges",
-			after.Status, session.StatusActive)
+			"still runs so a session seeded to %q above (simulating drift away from active for any "+
+			"other reason) converges back to active",
+			after.Status, session.StatusActive, seedStatus)
 	}
 }
