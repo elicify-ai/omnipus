@@ -185,7 +185,15 @@ The staleness risk is deliberate and visible: for example, a message deleted in 
 
 ## Alternatives considered
 
-Pending comparison of A–E.
+| Option | Benefit | Concrete drawback | Decision |
+|---|---|---|---|
+| **A — Per-request IMAP connections** (today) | Simple isolation; every close naturally retires selected-folder/command state. | Every folders/list/read request repeats TLS/login/select; the supplied 13-mailbox timings remain poor. | Reject as the foreground default; retain request-scoped release when no panel observer exists. Verified baseline: **E-Transport**, `Client` and `dialIMAP` (final evidence table). |
+| **B — Pooled IMAP connections** | Removes repeated setup on healthy reuse while retaining live server reads. | Does not remove first-dial latency, absent-folder assumptions, or repeated envelope fetches. Requires exclusive leasing and shutdown correctness. | Adopt as the Phase 1 foundation, but not sufficient alone. Founder pooling decision. |
+| **C — Pooling plus bounded header/folder cache** | Immediate labelled warm display; fewer repeated reads; server still owns mail. | Stale rows and sensitive metadata require visible age, invalidation and strict bounds. Disk headers change D6. | **Chosen**: memory headers/encrypted disk folder metadata in Phase 1; encrypted bounded disk headers only in Phase 2. Founder cache direction. |
+| **D — Full local mailbox store** | Can support offline bodies and a local full-text index. | Duplicates sensitive mail/attachments, needs unbounded sync/reconciliation and storage, and violates the brief's request-only bodies and D6 boundary. | Reject. No SQLite/mail mirror, offline bodies or background whole-mailbox importer. |
+| **E — JMAP** | Can batch metadata operations and expose explicit change state on compatible accounts. | Availability, same-credential support and endpoint trust are not guaranteed; selection adds protocol/reference/security work and confounds Phase 1 measurement. | Add conditionally in Phase 2, never prerequisite to improving plain IMAP. Founder phase order; RFC 8620 session/state rules. |
+
+These are architectural comparisons (**Inferred**), not measured speedups or a claim that every provider supports discovery/JMAP. No option creates an email conversational channel or changes per-pair ownership. Sources: founder brief; **Per-(Agent, Workspace) Email Mailboxes** and **Credential Boot Contract** (absolute paths in Context); [RFC 8620](https://www.rfc-editor.org/rfc/rfc8620.html).
 
 ## Failure behaviour
 
