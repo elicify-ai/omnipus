@@ -557,6 +557,7 @@ func (al *AgentLoop) reviveSameGeneration(sessionID string) (int, error) {
 		}
 		rec.State = session.LifecycleQueued
 		rec.Stop = nil
+		rec.StopNote = nil
 		rec.ExecutionID = nil
 		rec.FailedReason = ""
 		rec.NeedsInput = nil
