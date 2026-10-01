@@ -1,5 +1,5 @@
 import { redirect } from '@tanstack/react-router'
-import { fetchAppState, validateToken, type AppState } from '@/lib/api'
+import type { AppState } from '@/lib/api/generated/openapi-types'
 import { forceLogout } from '@/lib/authLogout'
 import { hasStoredSession } from '@/store/auth'
 import { checkTokenValidity } from './authValidation'
@@ -11,6 +11,8 @@ type AuthenticatedRouteContext = {
 
 /** Shared sign-in/onboarding gate for every authenticated chrome layout. */
 export async function authenticatedBeforeLoad(routeContext: AuthenticatedRouteContext): Promise<void> {
+  // Module-load failures belong to the router error UI, not the state-fetch fallback.
+  const { fetchAppState, validateToken } = await import('@/lib/api')
   const rememberCurrentLocation = () => captureLoginReturn(routeContext.location?.href)
   let state: AppState | undefined
   try {
