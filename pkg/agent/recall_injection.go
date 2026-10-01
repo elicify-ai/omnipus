@@ -158,7 +158,8 @@ func (al *AgentLoop) decideRecallInjection(
 		if cfg := al.GetConfig(); cfg != nil {
 			cs = cfg.Context
 		}
-		absShare = absoluteShareTokens(cs)
+		window, _, _ := ts.agent.windowSnapshot()
+		absShare = toolResultShareLimit(cs, window)
 		windowShareTokens = toolResultShareTokens(tail) + resultTokens
 		spanShareTokens = toolResultShareTokens(span.Msgs)
 

@@ -60,6 +60,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -91,18 +92,14 @@ var contextResidueOverflowsTotal atomic.Int64
 // ContextResidueOverflowsTotal returns the count above.
 func ContextResidueOverflowsTotal() int64 { return contextResidueOverflowsTotal.Load() }
 
-// absoluteShareTokens converts the operator's absolute_trigger_chars into
-// the estimator-token threshold of FR-029's share condition
-// (absoluteShare = absolute_trigger_chars ÷ 2.5, i.e. chars × 2/5 — the same
-// heuristic estimateMessageTokens uses, so the two cannot drift). A
-// non-positive setting falls back to the seeded default (400,000 chars →
-// 160,000 tokens).
-func absoluteShareTokens(cs config.ContextSettings) int {
-	chars := cs.AbsoluteTriggerChars
-	if chars <= 0 {
-		chars = config.DefaultAbsoluteTriggerChars
+// toolResultShareLimit measures the combined result allowance against the
+// resolved model window W, not the smaller request budget B (MAJ-CW-007).
+func toolResultShareLimit(cs config.ContextSettings, window int) int {
+	f := cs.ToolResultShareFraction
+	if math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 || f > 1 {
+		f = config.DefaultToolResultShareFraction
 	}
-	return chars * 2 / 5
+	return max(1, int(math.Floor(f*float64(window))))
 }
 
 type midTurnBounds uint8
@@ -271,7 +268,8 @@ func (al *AgentLoop) midTurnWindowCheck(
 	if cfg != nil {
 		cs = cfg.Context
 	}
-	absShare := absoluteShareTokens(cs)
+	window, _, _ := ts.agent.windowSnapshot()
+	absShare := toolResultShareLimit(cs, window)
 
 	// C1: `total` must measure the request that is ACTUALLY sent — the
 	// pinned core + window + injected ephemeral notes (scratchpad, workspace

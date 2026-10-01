@@ -32,8 +32,8 @@ import (
 )
 
 // midTurnFixture boots an AgentLoop with one default agent whose window is
-// cw; absTriggerChars overrides absolute_trigger_chars when > 0.
-func midTurnFixture(t *testing.T, cw, absTriggerChars int) (*AgentLoop, *AgentInstance) {
+// cw; shareFraction overrides tool_result_share_fraction when > 0.
+func midTurnFixture(t *testing.T, cw int, shareFraction float64) (*AgentLoop, *AgentInstance) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
@@ -43,8 +43,8 @@ func midTurnFixture(t *testing.T, cw, absTriggerChars int) (*AgentLoop, *AgentIn
 	cfg.Agents.Defaults.MaxTokens = 2000
 	cfg.Agents.Defaults.MaxToolIterations = 10
 	cfg.Context = config.DefaultContextSettings()
-	if absTriggerChars > 0 {
-		cfg.Context.AbsoluteTriggerChars = absTriggerChars
+	if shareFraction > 0 {
+		cfg.Context.ToolResultShareFraction = shareFraction
 	}
 	cfg.Context.DefaultContextWindow = intPtr(cw)
 
@@ -170,11 +170,12 @@ func TestMidTurnBudget_OperationBySiteAndPosition(t *testing.T) {
 // exceeded after every eligible result went.
 func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 	t.Run("share fires: emptied to 80% of absoluteShare, oldest first, one pass, no re-fire (B-34, B-25)", func(t *testing.T) {
-		// Big window so total can never fire; absolute_trigger_chars 10,000
-		// → absoluteShare 4,000 estimator tokens, target 3,200.
-		al, agent := midTurnFixture(t, 400_000, 10_000)
+		// Big window so total can never fire; fraction 0.03125 × resolved
+		// window 128,000 → share limit 4,000 tokens, 80% target 3,200.
+		al, agent := midTurnFixture(t, 128_000, 0.03125)
 		key := "midturn-share"
-		absShare := absoluteShareTokens(config.ContextSettings{AbsoluteTriggerChars: 10_000})
+		resolvedWindow, _, _ := agent.windowSnapshot()
+		absShare := toolResultShareLimit(config.ContextSettings{ToolResultShareFraction: 0.03125}, resolvedWindow)
 		require.Equal(t, 4_000, absShare)
 		each := proseOfTokens(1_100)
 		msgs := make([]providers.Message, 0, 13)
@@ -332,13 +333,15 @@ func TestMidTurnBudget_UnemptiableShareErrorNamesAbsoluteShareBound(t *testing.T
 	agent.mu.Unlock()
 	key := "midturn-unemptiable-share-bound"
 	budget := agentContextBudget(agent)
-	absShare := absoluteShareTokens(config.DefaultContextSettings())
-	require.Equal(t, 160_000, absShare)
+	resolvedWindow, _, _ := agent.windowSnapshot()
+	absShare := toolResultShareLimit(config.DefaultContextSettings(), resolvedWindow)
+	// Default fraction 0.5 × resolved window 770,000 → 385,000 tokens.
+	require.Equal(t, 385_000, absShare)
 
 	window, ts := seedMidTurn(t, agent, key, []providers.Message{
 		{Role: "user", Content: proseOfTokens(100_000)},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("floor", "latest-step")}},
-		{Role: "tool", ToolCallID: "floor", Content: proseOfTokens(162_500)},
+		{Role: "tool", ToolCallID: "floor", Content: proseOfTokens(387_500)}, // share limit + 2,500
 	})
 	total := requestTokens(window, nil)
 	share := toolResultShareTokens(window)
