@@ -81,3 +81,100 @@ func TestLifecycleStopped_CanResumeSameGeneration(t *testing.T) {
 		t.Fatalf("resumed state=%q terminal=%v, want running and non-terminal", resumed.State, resumed.Terminal())
 	}
 }
+
+// TestLifecycleStore_Persist_RejectsInvalidStoppedRecords pins the three
+// D2/CRIT-001 rejection paths persistLocked enforces on every record landing
+// LifecycleStopped ("a loud failure instead of a silently wrong or missing
+// cause"): no StopNote at all, a StopNote whose cause is outside the closed
+// five-value vocabulary, and a record that claims BOTH "stopped" (landed) and
+// "still fenced by an in-flight Stop on this generation". Each case passes
+// every EARLIER check in validateLifecycleRecordForPersist so the assertion
+// pins the one rejection path it names; expected errors are the production
+// strings, compared exactly — strings.Contains would not distinguish the
+// stopped-specific fence message from the near-identical terminal-record one
+// (that variant has its own test in lifecycle_edge_test.go).
+//
+// Stopped is deliberately NON-terminal, so none of these shapes can be caught
+// by the earlier Terminal()+fence guard; a refactor dropping any of the three
+// checks would let the bad record persist silently, which is exactly what the
+// Exists assertions here refuse.
+func TestLifecycleStore_Persist_RejectsInvalidStoppedRecords(t *testing.T) {
+	cases := []struct {
+		name string
+		rec  func(sessionID string) *LifecycleRecord
+		want string
+	}{
+		{
+			name: "stopped_without_stop_note",
+			rec: func(sessionID string) *LifecycleRecord {
+				return &LifecycleRecord{
+					SessionID:      sessionID,
+					Generation:     1,
+					State:          LifecycleStopped,
+					OwnerScopeKind: OwnerScopeHuman,
+					WorkspaceID:    "ws-1",
+					AgentID:        "agent-1",
+					// No StopNote, no Stop: the bare landed-stopped shape.
+				}
+			},
+			want: "session: lifecycle: state stopped requires stop_note",
+		},
+		{
+			name: "stopped_with_current_generation_stop_fence",
+			rec: func(sessionID string) *LifecycleRecord {
+				return &LifecycleRecord{
+					SessionID:      sessionID,
+					Generation:     1,
+					State:          LifecycleStopped,
+					OwnerScopeKind: OwnerScopeHuman,
+					WorkspaceID:    "ws-1",
+					AgentID:        "agent-1",
+					// StopNote present with a VALID cause so this shape is
+					// rejected by the fence check and nothing earlier; Stop
+					// fences THIS generation (== Generation: the ahead-of-
+					// record check passes, and stopped being non-terminal
+					// leaves the terminal guard out of the way).
+					StopNote: &StopNote{At: time.Now().UTC(), By: "human:qa-lead", Seq: 1, Cause: StopCauseStop},
+					Stop:     &Stop{At: time.Now().UTC(), Generation: 1, By: Principal{Kind: PrincipalKindHuman, ID: "dan"}},
+				}
+			},
+			want: "session: lifecycle: state stopped cannot carry a current-generation stop marker",
+		},
+		{
+			name: "stop_note_with_invalid_cause",
+			rec: func(sessionID string) *LifecycleRecord {
+				return &LifecycleRecord{
+					SessionID:      sessionID,
+					Generation:     1,
+					State:          LifecycleStopped,
+					OwnerScopeKind: OwnerScopeHuman,
+					WorkspaceID:    "ws-1",
+					AgentID:        "agent-1",
+					// StopNote present (so the missing-note check passes),
+					// no Stop fence (so the fence check passes), cause
+					// outside {stop, redirect_pause, cascade, restart,
+					// timeout} — the ONLY five legal values per the
+					// StopCause vocabulary.
+					StopNote: &StopNote{At: time.Now().UTC(), By: "human:qa-lead", Seq: 1, Cause: "bogus"},
+				}
+			},
+			want: `session: lifecycle: invalid stop_note.cause "bogus"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestLifecycleStore(t)
+			rec := tc.rec("stopped-reject-" + tc.name)
+			err := s.Persist(rec)
+			if err == nil {
+				t.Fatalf("Persist(%s) succeeded, want rejection with %q", tc.name, tc.want)
+			}
+			if err.Error() != tc.want {
+				t.Errorf("Persist(%s) error = %q, want exactly %q", tc.name, err.Error(), tc.want)
+			}
+			if s.Exists(rec.SessionID) {
+				t.Errorf("a rejected %s record must not land on disk", tc.name)
+			}
+		})
+	}
+}
