@@ -409,13 +409,13 @@ describe('a live error on a second tab does not rewrite the last healthy reply',
 })
 
 // #1081 RC2: the terminal sentence must replace already-streamed narration.
-// Oracle: contracts/asyncapi.yaml, LLMError.x-user-messages.context_unrecoverable;
+// Oracle: contracts/asyncapi.yaml, LLMError.x-user-messages.turn_timed_out;
 // use the contract literal, not the reducer's output or its translation helper.
 // This is a real-store reproduction, NOT a live-browser/delivery capture.
 // GREEN and implementation mutation checks are deferred to independent CHECK.
 describe('#1081 RC2 — narration cannot hide a terminal error', () => {
   const CONTEXT_ERROR_COPY =
-    'We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details.'
+    'The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details.'
   const NARRATION = 'Let me check the task list before continuing.'
   const DETAIL = 'un-emptiable tool-result residue exceeds the absolute tool-result-share bound'
 
@@ -459,7 +459,7 @@ describe('#1081 RC2 — narration cannot hide a terminal error', () => {
         message: CONTEXT_ERROR_COPY,
         payload: {
           llm_error: {
-            code: 'context_unrecoverable',
+            code: 'turn_timed_out',
             message: CONTEXT_ERROR_COPY,
             retryable: false,
             detail: DETAIL,
@@ -486,7 +486,7 @@ describe('#1081 RC2 — narration cannot hide a terminal error', () => {
     expect(bubble.turnId).toBe(turnId)
     expect(bubble.role).toBe('assistant')
     expect(bubble.status).toBe('error')
-    expect(bubble.errorCode).toBe('context_unrecoverable')
+    expect(bubble.errorCode).toBe('turn_timed_out')
     expect(bubble.isStreaming).toBe(false)
     expect(useChatStore.getState().sessionsById[SID]?.isStreaming).toBe(false)
     expect(useChatStore.getState().isStreaming).toBe(false)
