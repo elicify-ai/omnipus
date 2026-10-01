@@ -176,3 +176,63 @@ No production code was edited in this round (qa-lead owns tests only); the one
 genuine production gap found (`steeredDrainRecord` above) is reported, not
 patched, here.
 
+## Defer-to-revival correction round — 2026-10-01 (team-lead ruling, `Stopped()` widening now landed on `24f703280`)
+
+`pkg/session/lifecycle_edge.go::Stopped()` was widened (HEAD `24f703280`,
+"merge: Stopped() recognizes landed-and-cleared stopped records") to close
+the production gap flagged in the row above: `Stopped()` now returns true
+whenever `r.State == LifecycleStopped`, independent of whether the in-flight
+`r.Stop` fence has since been cleared. That fix makes
+`pkg/agent/steer_turn_drain.go::drainSteeredTurn`'s own documented rule fire
+correctly for the first time in this test: "A Stop may have landed while a
+tool-capable continuation was unwinding. Its restored queue belongs to a
+future revival and must not be abandoned as an ordinary continuation
+failure." Verified by reading (not assumed): `drainSteeredTurn` calls
+`al.steeredDrainRecord` at its own top (before the drain loop even starts);
+on the third `disposeSteeredTurnResult` outer-loop iteration, the concurrent
+Stop write lands (via the test's own fixture) during the PRECEDING
+`completeSteeredTurn`/deliverer attempt, so by the time `drainSteeredTurn` is
+re-entered, this top-level `errSteeredDrainStopped` check fires immediately
+— before the per-iteration drain loop, before `continueSteeredTurn`'s own
+pre-check, and before the in-loop documented-comment recheck ever run — so
+`abandonSteeredQueuedSteering` is never reached and the queue is left
+untouched. Team-lead's ruling (verbatim): "defer-to-revival wins, the test is
+wrong, fix the test... The landed state is what governs behavior — a
+near-miss on a different path doesn't get to retroactively change the
+semantics of the state that actually stuck." The test's own hand-construction
+already confirmed Stop genuinely lands as `LifecycleStopped` in this exact
+scenario (not a near-miss, not ambiguous), so the ruling applies cleanly.
+
+| file::test | old assertion | new assertion | justification |
+|---|---|---|---|
+| `pkg/agent/steer_turn_drain_1020_round4c_test.go::TestSteeredTurnDrain1020Round4_OuterExhaustionReportsEachQueuedSteerToParent` (renamed `TestSteeredTurnDrain1020Round4_OuterExhaustionDefersQueuedSteersToFutureRevival`) | `if pending := al.pendingSteeringCountForScope(childID); pending != 0 { t.Errorf("outer exhaustion left %d queued steers, want 0: both must be reported, not stranded", pending) }` | `if pending := al.pendingSteeringCountForScope(childID); pending != 2 { t.Fatalf(...) }` plus a direct peek of `al.steering.queues[childID]` (precedent: `steer_turn_drain_round2_1020_test.go:229`, `steering_wake_coalescing_1000_test.go`) asserting the exact two remaining items' `correlationID`s equal `tailPrefix+"1"`, `tailPrefix+"2"`, in push order, untouched | `drainSteeredTurn`'s own documented rule (quoted above) plus team-lead's ruling: the two tail steers enqueued during the failing delivery attempt are never dequeued once the Stop lands first — they must still be sitting in the scope's queue for a future revival, not abandoned. Derived from reading the actual queueing mechanism (`steeringQueue.queues` map, `pendingSteeringCountForScope` -> `lenScope`), not guessed: `round4c-continue-1` and `round4c-continue-2` (the first two deliveries' single items) are fully consumed/processed by the time delivery 3 fires (confirmed by the unperturbed `provider.Requests() == continueDrainMaxRetries-1 == 2` assertion two lines above, left untouched), so the only items left in the queue when the Stop lands are the two just-pushed tail items. |
+| same test | `childErrors := 0; for _, entry := range childEntries { if entry.Status == "error" && strings.Contains(entry.Content, "queued follow-up message could not be processed") { childErrors++ } }; if childErrors != 2 { t.Errorf(...) }` | same loop, `if childErrors != 0 { t.Errorf("child abandonment error entries = %d, want 0: a deferred (not abandoned) queue must not report either tail steer as failed", childErrors) }` | `abandonSteeredQueuedSteering` (the only writer of this exact notice, `steer_turn_drain.go::abandonSteeredQueuedSteering`) is never called once the top-level landed-Stop guard fires first — no child transcript error entries can exist. |
+| same test | `counts := map[string]int{...}; parentErrors := 0; ...; if parentErrors != 2 \|\| counts[...] != 1 \|\| counts[...] != 1 { t.Errorf(...) }` | `parentErrors := 0; for _, entry := range parentEntries { ...; parentErrors++; t.Logf(...) }; if parentErrors != 0 { t.Errorf("parent error frames for the deferred child = %d, want 0: the parent must not be told a queue that was deferred, not abandoned, failed", parentErrors) }` | Same root cause: `abandonSteeredQueuedSteering`'s `al.deliverSubagentMessage(parentID, childRec, "error", ...)` call per abandoned item is the only producer of these parent error frames; with abandonment never reached, none exist. |
+| same test (doc/name) | `TestSteeredTurnDrain1020Round4_OuterExhaustionReportsEachQueuedSteerToParent` + doc comment describing per-item parent error reporting | `TestSteeredTurnDrain1020Round4_OuterExhaustionDefersQueuedSteersToFutureRevival` + doc comment quoting `drainSteeredTurn`'s own rule and naming the top-level guard that fires | The old name described reporting-to-parent behavior that the corrected production code no longer performs in this landed-Stop scenario; the new name states the actual (and now verified-correct) defer-to-revival outcome. Grepped (`OuterExhaustionReportsEachQueuedSteerToParent`) for other references before renaming: only this test's own prior row above in this file and the test's own two self-references — no other test file, skill, or doc cites the old name. |
+
+**Mutation proof (scratch-reverted, never committed):** three redundant
+landed-Stop guards exist in `steer_turn_drain.go::drainSteeredTurn` for this
+exact race (the top-of-function pre-loop check, the in-loop first-switch
+case, and the in-loop documented-comment recheck) plus one more inside
+`continueSteeredTurn`'s own pre-check — defense in depth, confirmed by
+instrumented tracing (temporary `fmt.Printf` probes, reverted) showing the
+top-level check alone is what fires for this test's specific timing. All
+three `drainSteeredTurn`-local guards were neutralized at once
+(`case false && errors.Is(...)`) to reach `abandonSteeredQueuedSteering`
+unconditionally; re-run (temporarily softening the first two assertions from
+`t.Fatalf` to `t.Errorf`/`t.Logf` so execution continued past them, also
+reverted) showed all four new assertions fail exactly as designed: pending
+count wrong (0 not 2), remaining-items empty, child abandonment error
+entries = 2 (not 0), parent error frames = 2 (not 0) — with the operator log
+itself confirming `abandonSteeredQueuedSteering` fired
+(`queue_depth=2`, `error="steer: post-turn drain: session stopped"`). Both
+the production mutation and the temporary test-assertion softening were
+reverted immediately after (`git diff pkg/agent/steer_turn_drain.go` empty);
+the real (unmutated) test was then re-run fresh (`-count=1`, non-cached) and
+passed. A 25-test regression sweep across every `TestSteeredTurnDrain1020*`
+sibling in `pkg/agent/` (same package, same file family) ran green
+afterward, confirming the rename and assertion changes broke nothing else.
+
+No production code was left edited by this round (qa-lead owns tests only);
+`git diff pkg/agent/steer_turn_drain.go` against HEAD is empty.
+
