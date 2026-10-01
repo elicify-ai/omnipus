@@ -952,6 +952,8 @@ export interface ChatStore {
   pendingDrainQueue: OutboundQueueItem[]
   /** Ordinary first message, distinct from the synthetic workspace kickoff. */
   pendingFirstSend: PendingFirstSend | null
+  /** IDs abandoned in this tab, so late replies cannot affect a newer chat. */
+  abandonedFirstSendIds: string[]
   firstSendGeneration: number
   retryFirstSend: () => void
   reattachFirstSend: (connection: Pick<WsConnection, 'send'>) => boolean

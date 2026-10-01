@@ -289,6 +289,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     outboundQueue: [],
     pendingDrainQueue: [],
     pendingFirstSend: null,
+    abandonedFirstSendIds: [],
     firstSendGeneration: 0,
     ...createFirstSendActions({ set, get, withBucket }),
 
