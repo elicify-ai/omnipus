@@ -684,7 +684,14 @@ func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoop
 
 // dispatchToolCalls records and dispatches the iteration's tool calls.
 func (cn *agentLoopRunTurnConductorRunIterations) dispatchToolCalls() agentLoopRunTurnConductorRunIterationsFlow {
-	cn.rc.rx.rr.recordToolCalls()
+	if err := cn.rc.rx.rr.recordToolCalls(); err != nil {
+		rt := cn.rc.rx.rr.rq.ri.rf.rt
+		var status TurnEndStatus
+		cn.rc.ret0, status, cn.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
+		cn.rc.rx.rr.rq.ri.turnStatus = status
+		cn.ret0 = agentLoopRunTurnConductorReturn
+		return agentLoopRunTurnConductorRunIterationsReturn
+	}
 
 	// setGoalSucceededThisRound tracks whether a set_goal call in THIS
 	// model response already registered (or updated) the goal record — the

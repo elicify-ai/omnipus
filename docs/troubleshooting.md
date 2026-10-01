@@ -67,9 +67,17 @@ If the agent reaches its tool-call limit before a final answer, chat keeps the n
 
 ## The provider rejects your model requests
 
-**"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus trims the request further and retries, even if its own estimate says the request fits. This is an internal retry notice, not a data-loss event: trimming changes what is sent to the model, not your saved conversation. If the provider keeps rejecting it, the real error is shown only when further trimming cannot reduce the request or the existing retry limit is reached.
+**"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then an eligible complete old step; if neither can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.
+
+This is an internal retry notice, not a data-loss event: relief changes the model's view, not the admitted archive text. It keeps the original user message and media, instructions, call/result structure and unconsumed steering. If those required parts still do not fit, Omnipus returns the last real provider rejection when no further reduction is possible or the retry limit is reached. It does not stop merely because a local size estimate says the immutable remainder is too large.
+
+A storage or projection error is different. If Omnipus cannot save the window change, it stops with that genuine error instead of sending a request that disagrees with the saved state. See [memory](memory.md#how-long-conversations-stay-in-view) for what can leave the live window and what an aborted turn rolls back.
 
 Turn on **Settings → Chat → Verbose chat** to see this notice and other internal-retry details; it does not appear in normal chat. Live chat, reopened history, and conversation replay all use the same Verbose chat setting to show or hide it.
+
+### "This endpoint did not report a context length for this model"
+
+A local or self-hosted model's endpoint did not report how much it can read at once, and no operator override exists. Omnipus refuses to run on a guessed window rather than risk silent overflow. Set the context length explicitly at **Settings → Models → Model overrides → Context length**, then retry.
 
 ### 404 "No endpoints found that support tool use"
 

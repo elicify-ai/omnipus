@@ -26,6 +26,8 @@
 package agent
 
 import (
+	"context"
+	"fmt"
 	"sync/atomic"
 	"unicode/utf8"
 
@@ -313,7 +315,10 @@ func (al *AgentLoop) emptyInPlace(
 	contextEmptiesTotal.Add(int64(len(emptied)))
 
 	if ts != nil {
-		al.recordEmptiedOnTranscript(ts, emptied)
+		if err := al.recordEmptiedOnTranscript(ts, emptied); err != nil {
+			ts.setContextWindowError(err)
+			return emptied
+		}
 		al.emitProjectionEvents(ts, emptied)
 	}
 
@@ -335,28 +340,42 @@ func (al *AgentLoop) emptyInPlace(
 // sees (FR-022: "the transcript result is the PROJECTED content") — and keeps
 // the previous rows on ts so restoreSession can put them back if the turn
 // aborts (the window's projection set rolls back to turn start; the
-// transcript must follow). Best-effort, like every transcript write.
-func (al *AgentLoop) recordEmptiedOnTranscript(ts *turnState, emptied []emptiedToolResult) {
+// transcript must follow). An addressed rewrite failure remains a visible error.
+func (al *AgentLoop) recordEmptiedOnTranscript(ts *turnState, emptied []emptiedToolResult) error {
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
-		return
+		return nil
+	}
+	store, ok := ts.agent.Sessions.(session.ContextWindowStore)
+	if !ok {
+		return fmt.Errorf("context transcript: session store does not support atomic context checkpoints")
+	}
+	snap, err := store.SnapshotWindow(context.Background(), ts.sessionKey)
+	if err != nil {
+		return err
 	}
 	updates := make([]session.ToolCallProjectionUpdate, 0, len(emptied))
 	for _, e := range emptied {
+		key := memory.ProjectionKey{ToolCallID: e.ToolCallID, ArchiveLine: e.ArchiveLine}
+		var at *int
+		if line, known := snap.State.Projection.TranscriptLine[key]; known {
+			at = &line
+		} else if e.ArchiveLine >= 0 {
+			continue // No transcript was recorded for this archive identity.
+		}
+		text := e.Mark
 		updates = append(updates, session.ToolCallProjectionUpdate{
-			ToolCallID:   session.ToolCallID(e.ToolCallID),
-			ContentState: string(memory.ProjectionEmptied),
-			Result:       map[string]any{"text": e.Mark},
+			ToolCallID: session.ToolCallID(e.ToolCallID), TranscriptLine: at,
+			ContentState: string(memory.ProjectionEmptied), Text: &text,
 		})
 	}
 	prev, err := ts.transcriptStore.UpdateToolCallProjections(ts.transcriptSessionID, updates)
 	if err != nil {
-		logger.WarnCF("agent", "emptying: transcript content_state update failed",
-			map[string]any{"session_id": ts.transcriptSessionID, "count": len(updates), "error": err.Error()})
-		return
+		return fmt.Errorf("context transcript: empty addressed results: %w", err)
 	}
 	ts.mu.Lock()
 	ts.emptiedTranscriptPrev = append(ts.emptiedTranscriptPrev, prev...)
 	ts.mu.Unlock()
+	return nil
 }
 
 // emitProjectionEvents emits one EventKindToolResultProjection per emptied

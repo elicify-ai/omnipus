@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -77,51 +78,68 @@ func (ts *turnState) warnAbandonedTranscriptWrite(writer string) {
 // (via activeAgentResolver) rather than the turn's starting agent. This ensures
 // that tool_call entries produced after a handoff carry the correct agent_id —
 // the new active agent — instead of the one that initiated the turn.
-func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
+func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine ...int) (err error) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		ts.warnAbandonedTranscriptWrite("appendToolCallTranscript")
-		return
+		if len(archiveLine) > 0 {
+			return fmt.Errorf("context transcript: admitted result cannot be recorded by an abandoned turn")
+		}
+		return nil
 	}
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
-		return
+		return nil
 	}
-
-	// Approval-gate settle (approval_transcript.go): when this call previously
-	// wrote a "pending" placeholder because it blocked on human approval,
-	// REPLACE that entry rather than appending a second one with the same ID.
-	// Only ever true for ask-policy calls that actually reached the approver,
-	// so every other tool call skips straight to the append below.
-	//
-	// The placeholder itself arrives here with Status "pending" and must not
-	// try to replace itself, hence the status guard. A failed replacement falls
-	// through to the append — a duplicate entry is a far better outcome than a
-	// lost record of what the tool did.
-	if tc.Status != toolCallStatusPending {
-		if _, hadPending := ts.askPendingToolCalls.LoadAndDelete(tc.ID); hadPending {
-			if replaceToolCallInTranscript(ts, tc.ID, toolCallStatusPending, tc) {
-				return
-			}
+	defer func() {
+		if err != nil {
+			transcriptWriteFailures.Add(1)
+			logger.WarnCF("agent", "could not record tool call to transcript",
+				map[string]any{"session_id": ts.transcriptSessionID, "tool": tc.Tool, "error": err.Error()})
+		}
+	}()
+	var recordLine func(int) error
+	if len(archiveLine) > 0 {
+		store, snap, snapshotErr := ts.resultTranscriptSnapshot(tc, archiveLine[0])
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		recordLine = func(line int) error {
+			return ts.persistResultTranscriptLine(store, snap, tc, archiveLine[0], line)
 		}
 	}
-
-	agentID := ts.resolveActiveAgentID()
+	// An admitted result uses the shard-locked indexed settle so its archive
+	// mapping records the actual placeholder row, not a subsequent bare-id guess.
+	if tc.Status != toolCallStatusPending {
+		if _, hadPending := ts.askPendingToolCalls.Load(tc.ID); hadPending {
+			if recordLine != nil {
+				line, found, settleErr := ts.transcriptStore.ReplacePendingToolCallIndexed(ts.transcriptSessionID, ts.turnID, tc.ID, toolCallStatusPending, tc)
+				if settleErr != nil {
+					return settleErr
+				}
+				if found {
+					ts.askPendingToolCalls.Delete(tc.ID)
+					return recordLine(line)
+				}
+			} else if replaceToolCallInTranscript(ts, tc.ID, toolCallStatusPending, tc) {
+				ts.askPendingToolCalls.Delete(tc.ID)
+				return nil
+			}
+			ts.askPendingToolCalls.Delete(tc.ID)
+		}
+	}
 	entry := session.TranscriptEntry{
-		ID:        string(tc.ID),
-		Type:      session.EntryTypeToolCall,
-		AgentID:   agentID,
-		Timestamp: time.Now().UTC(),
-		ToolCalls: []session.ToolCall{tc},
-		// ADR-066 FR-046: hydration attaches a standalone tool_call entry to
-		// the preceding assistant message of the SAME turn; the turn id makes
-		// that match exact instead of inferred from the last user boundary.
-		TurnID: ts.turnID,
+		ID: string(tc.ID), Type: session.EntryTypeToolCall,
+		AgentID: ts.resolveActiveAgentID(), Timestamp: time.Now().UTC(),
+		ToolCalls: []session.ToolCall{tc}, TurnID: ts.turnID,
 	}
-	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
-		transcriptWriteFailures.Add(1)
-		logger.WarnCF("agent", "could not record tool call to transcript",
-			map[string]any{"session_id": ts.transcriptSessionID, "tool": tc.Tool, "error": err.Error()})
+	if recordLine == nil {
+		return ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry)
 	}
+	line, appendErr := ts.transcriptStore.AppendTranscriptIndexed(ts.transcriptSessionID, entry)
+	if appendErr != nil {
+		return appendErr
+	}
+	return recordLine(line)
 }
 
 // appendIntermediateAssistantTranscript persists an assistant text segment that
