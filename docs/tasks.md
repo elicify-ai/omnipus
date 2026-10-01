@@ -30,6 +30,17 @@ On the Board, the **Agent** and **Tags** filters narrow further. The List filter
 
 To start a saved task later, press **Run** on its card (a play symbol), drag it into **In Progress**, or press **Start Task** in the panel. The engine then drives it: the agent works toward the goal, each run is judged against your criteria, and the card's status follows.
 
+### If the task conversation cannot be created
+
+A queued dispatch, or a new manual start that uses the assigned agent's conversation store, must create its task conversation before handing work to the agent. If that store is unavailable, or creating the conversation returns an error, the start is refused instead of running without a conversation. This applies to both native agents and external command-line agents on those start paths. The refused start consumes no execution attempt, creates no run-history entry, and starts no model request, tool call, or external command.
+
+| Start path | What happens after conversation creation is refused |
+|---|---|
+| Queued dispatch | Omnipus tries to save **Failed** with the creation error, then reads the saved task to verify that status. If it cannot confirm **Failed**, the returned error also says so. |
+| New manual start through the web app or `run_task`, using the assigned agent's conversation store | The start returns an error; its caller tries to restore the task's previous status. It does not return a new conversation ID. |
+
+If the task store also cannot save the failure or restore the previous status, the card may still say **In Progress** even though no work began. Fix the reported storage or agent-store problem before retrying; see [troubleshooting](troubleshooting.md#a-task-is-refused-before-work-starts).
+
 ## The task form
 
 The fields on the New Task form, in order.
@@ -61,7 +72,7 @@ The Board has one column per status; the List has a Status column.
 | In Progress | A run is working on it | You start it, or a plan reaches it |
 | Blocked | A dependency is unmet | Set and cleared automatically |
 | Done | The last run passed | Final — a passing run or you set it |
-| Failed | The last run failed, or was stopped | Retry opens a fresh run |
+| Failed | The last run failed, was stopped, or a queued start was refused | Retry opens a fresh run |
 
 A task you stop shows as orange **Cancelled** rather than red **Failed**, inside the same Failed column.
 
