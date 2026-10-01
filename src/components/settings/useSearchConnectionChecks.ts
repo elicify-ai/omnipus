@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { checkSearchProviderConnection } from '@/lib/api/providers'
-import { isApiError } from '@/lib/api-error'
+import { isApiError, parseServerErrorField } from '@/lib/api-error'
 import type {
   IntegrationProvidersResponse,
   SearchProviderCheckResponse,
@@ -25,7 +25,7 @@ interface ConnectionCheckState { // not-wire-format: temporary UI state, never s
   error?: string
   cooldownUntil: number
   localCooldown?: boolean
-  catalogueGeneration: number
+  catalogueState?: string
 }
 
 /** Manual diagnostics only: a cooldown never schedules another request. */
@@ -35,17 +35,35 @@ export function useSearchConnectionChecks() {
   const [now, setNow] = useState(() => Date.now())
   const inFlight = useRef(new Map<string, AbortController>())
 
-  // Keys are never returned, so a replacement can leave the visible catalogue
-  // identical. Observe every successful refresh, not just changed row fields.
-  const catalogueGeneration = useCallback(() =>
-    queryClient.getQueryState(['integrations'])?.dataUpdateCount ?? 0,
+  // Readiness refreshes are not key changes. Compare each service's public
+  // row; local key writes clear that service explicitly, and the server rejects
+  // a key changed during a check with HTTP 409 (keys have no wire identity).
+  const getCatalogue = useCallback(() =>
+    queryClient.getQueryData<IntegrationProvidersResponse>(['integrations']),
   [queryClient])
   const subscribe = useCallback((notify: () => void) =>
     queryClient.getQueryCache().subscribe((event) => {
       if (event.query.queryKey[0] === 'integrations') notify()
     }),
   [queryClient])
-  const currentGeneration = useSyncExternalStore(subscribe, catalogueGeneration)
+  const catalogue = useSyncExternalStore(subscribe, getCatalogue)
+
+  useEffect(() => {
+    setChecks((previous) => {
+      let next = previous
+      for (const [id, check] of Object.entries(previous)) {
+        const current = catalogue?.search.find((row) => row.id === id)
+        if (!check.pending && check.catalogueState !== JSON.stringify(current) &&
+            (check.message || check.error || check.localCooldown)) {
+          next = {
+            ...next,
+            [id]: { ...check, message: undefined, error: undefined, localCooldown: false },
+          }
+        }
+      }
+      return next
+    })
+  }, [catalogue])
 
   const hasCooldown = Object.values(checks).some((check) => check.cooldownUntil > now)
   useEffect(() => {
@@ -74,19 +92,19 @@ export function useSearchConnectionChecks() {
   }
 
   const run = async (id: string) => {
-    const provider = queryClient.getQueryData<IntegrationProvidersResponse>(['integrations'])
-      ?.search.find((row) => row.id === id)
+    const provider = getCatalogue()?.search.find((row) => row.id === id)
     const startedAt = Date.now()
     if (!provider?.requires_key || !provider.configured || provider.usable !== true) return
     if (inFlight.current.has(id) || (checks[id]?.cooldownUntil ?? 0) > startedAt) return
 
     const controller = new AbortController()
     inFlight.current.set(id, controller)
-    const generation = catalogueGeneration()
+    const startedState = JSON.stringify(provider)
+    let requestError: string | undefined
     let state: ConnectionCheckState = {
       pending: true,
       cooldownUntil: startedAt + CHECK_COOLDOWN_MS,
-      catalogueGeneration: generation,
+      catalogueState: startedState,
     }
     setNow(startedAt)
     setChecks((previous) => ({ ...previous, [id]: state }))
@@ -115,32 +133,32 @@ export function useSearchConnectionChecks() {
         }
       } else {
         // Non-2xx and malformed gateway responses are not upstream diagnostic
-        // outcomes. Never render a raw response body or exception here.
-        state = {
-          ...state,
-          error: isApiError(err)
-            ? err.userMessage
-            : 'Could not verify the connection check. Try again.',
-        }
+        // outcomes. Preserve the gateway's recovery guidance, not its raw body
+        // or an exception. A 409 is a rejected check, never an old-key result.
+        requestError = isApiError(err)
+          ? parseServerErrorField(err.body) ?? err.userMessage
+          : 'Could not verify the connection check. Try again.'
+        state = { ...state, error: requestError }
       }
     } finally {
-      const superseded = generation !== catalogueGeneration()
+      const superseded = startedState !== JSON.stringify(getCatalogue()?.search.find((row) => row.id === id))
       // Even failed attempts may discover a changed readiness state. Only the
-      // catalogue, never the diagnostic result, owns the Ready badge.
+      // catalogue, never the diagnostic result, owns the Ready badge. Bind the
+      // outcome to this service after its own readiness refresh; identical-looking
+      // key changes after the check response remain the accepted wire-identity gap.
       await queryClient.invalidateQueries({ queryKey: ['integrations'] })
       inFlight.current.delete(id)
       if (!controller.signal.aborted) {
-        const current = queryClient.getQueryData<IntegrationProvidersResponse>(['integrations'])
-          ?.search.find((row) => row.id === id)
+        const current = getCatalogue()?.search.find((row) => row.id === id)
         setNow(Date.now())
         setChecks((previous) => ({
           ...previous,
           [id]: {
             ...state,
             pending: false,
-            catalogueGeneration: catalogueGeneration(),
+            catalogueState: JSON.stringify(current),
             ...(!current?.configured || superseded
-              ? { message: undefined, error: undefined, localCooldown: false }
+              ? { message: undefined, error: requestError, localCooldown: false }
               : {}),
           },
         }))
@@ -151,7 +169,7 @@ export function useSearchConnectionChecks() {
   const view = (id: string) => {
     const check = checks[id]
     const seconds = Math.max(0, Math.ceil(((check?.cooldownUntil ?? 0) - now) / 1000))
-    const current = check?.catalogueGeneration === currentGeneration
+    const current = check?.catalogueState === JSON.stringify(catalogue?.search.find((row) => row.id === id))
     return {
       pending: check?.pending === true,
       cooldown: seconds > 0,
