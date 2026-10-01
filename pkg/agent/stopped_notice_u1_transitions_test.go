@@ -18,8 +18,12 @@ package agent
 //
 // Oracles are the ADR rows only (D6/D8/D2, F0929-6/7, MIN-001/MIN-005);
 // helpers live in stopped_child_notice_u1_test.go. The plan-stop transition
-// is deliberately absent: a plan member's direct-parent edge is an open
-// question for the architect (see the U1 report), not a behaviour to invent.
+// leg lives in plan_member_stop_u1_test.go — the coordinator adjudicated it
+// in scope on 2026-10-02 (an earlier revision of this comment called the
+// plan member's direct-parent edge an open question; the architect's §3.3
+// assessment corrected that premise: D6 names plan stop, D8.10 assigns
+// each direct parent the notice, and the edge already exists in SteeredBy
+// via StartTaskNow).
 
 import (
 	"context"
