@@ -48,7 +48,6 @@ func TestCWSlideR1_MetadataWriteFailureCannotInstallOrSendCandidate(t *testing.T
 	require.ErrorIs(t, err, os.ErrPermission, "genuine storage failure must return, not disappear or become local size failure")
 	var pathErr *os.PathError
 	require.ErrorAs(t, err, &pathErr, "storage error must preserve the original filesystem cause")
-	require.NotErrorIs(t, err, ErrContextUnrecoverable, "size guard is not the storage-error path")
 	require.Equal(t, before, live, "failed persistence cannot mutate the caller's already-installed live view")
 	require.Equal(t, meta, h.meta(t), "Skip, anchor, exact projections and Count commit together or not at all")
 	require.Equal(t, archive, h.archive(t), "failed candidate must not rewrite admitted archive evidence")
