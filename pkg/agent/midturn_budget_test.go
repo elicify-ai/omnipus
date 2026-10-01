@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // midTurnFixture boots an AgentLoop with one default agent whose window is
@@ -575,15 +576,14 @@ func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
 	})
 }
 
-// TestMidTurnBudget_C1_NotesStillTriggerEmptying — companion to the C1 test
-// above: proves noteTokens are still wired into the TRIGGER and the 80%
-// TARGET (the FR-032 amendment excludes them only from the thrash-guard's
-// fatal predicate, never from `total`/`fits`). An agent whose bare
-// `messages` comfortably fit B, but whose real request (messages + the
-// injected AGENT.md note) does not, must still empty the one ELIGIBLE tool
-// result it can reach — if noteTokens had been dropped from the trigger
-// instead of just the guard, `messages` alone already fits B and the check
-// would return at its very first comparison, emptying nothing.
+// TestMidTurnBudget_C1_NotesStillTriggerEmptying preserves C1's note-driven
+// TRIGGER and 80% TARGET at the actual assembled-request checkpoint. R1
+// moved request-only note accounting from midTurnWindowCheck to
+// checkpointRequest. FR-030/032's 2026-09-30 amendment also tries a legal
+// whole-step slide before emptying: here the older e1 step slides, while the
+// initiating user anchor and newest f1 step survive exactly. The historical
+// test name is retained; asserting an in-place empty would now pin the wrong
+// relief operation. The same request without the note must be a no-op.
 func TestMidTurnBudget_C1_NotesStillTriggerEmptying(t *testing.T) {
 	al, agent := midTurnFixture(t, 40_000, 0)
 	budget := agentContextBudget(agent)
@@ -610,25 +610,64 @@ func TestMidTurnBudget_C1_NotesStillTriggerEmptying(t *testing.T) {
 		{Role: "tool", ToolCallID: "f1", Content: "tiny floor"},
 	})
 	ts.opts.WorkspaceID = wsID
+	ts.userMessage = window[0].Content // the real current turn's initiating user anchor
 
-	windowOnly := requestTokens(window, nil)
-	require.LessOrEqual(t, windowOnly, budget,
+	require.LessOrEqual(t, requestTokens(window, nil), budget,
 		"precondition: the bare messages slice alone fits B — the C1 bug is invisible without this")
-	noteTokens := al.ephemeralSystemNoteTokens(ts)
-	require.Positive(t, noteTokens)
-	require.Greater(t, windowOnly+noteTokens, budget,
-		"precondition: total (window + the un-emptiable note) exceeds B — the trigger fires (C1)")
+	resolvedWindow, _, _ := agent.windowSnapshot()
+	require.LessOrEqual(t, toolResultShareTokens(window), toolResultShareLimit(al.GetConfig().Context, resolvedWindow),
+		"precondition: share alone does not fire — only the assembled note can cause relief")
+
+	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
+	require.True(t, supportsWindow)
+	start, err := store.SnapshotWindow(context.Background(), key)
+	require.NoError(t, err)
+	require.Zero(t, start.State.Skip, "instrument: both complete steps start in the live window")
+
+	// Match prepareCallMessages: pinned system instructions first, with the
+	// real workspace note injected separately, never persisted as history.
+	core := providers.Message{Role: "system", Content: "pinned test instructions"}
+	bareRequest := append([]providers.Message{core}, window...)
+	require.LessOrEqual(t, requestTokens(bareRequest, nil), budget)
+	rt := &agentLoopRunTurn{al: al, ts: ts, turnCtx: context.Background()}
+	rf := &agentLoopRunTurnFallbacks{rt: rt, callMessages: bareRequest}
+	ri := &agentLoopRunTurnIteration{rf: rf, messages: window}
+	rq := &agentLoopRunTurnRequest{ri: ri}
 
 	before := ContextEmptiesTotal()
-	out, err := al.midTurnWindowCheck(ts, window, nil)
-	require.NoError(t, err, "the window (after emptying the one eligible result) fits B on its own; "+
-		"only the un-emptiable note pushes total over — not fatal per the FR-032 amendment")
-	assert.Greater(t, ContextEmptiesTotal(), before,
-		"C1 not regressed: the check must still have measured the note-inflated total and emptied "+
-			"the eligible result — proof that noteTokens still drive the trigger and target, not just "+
-			"logging")
-	assert.Contains(t, out[2].Content, `"content_state":"emptied"`, "the one eligible result was emptied")
-	assert.Equal(t, "tiny floor", out[4].Content, "the floor set is never touched")
+	require.NoError(t, rq.checkpointRequest(false))
+	assert.Equal(t, window, ri.messages, "negative control: the same history without notes needs no relief")
+	assert.Equal(t, bareRequest, rf.callMessages, "negative control: no request content changed")
+	unrelieved, err := store.SnapshotWindow(context.Background(), key)
+	require.NoError(t, err)
+	assert.Equal(t, start, unrelieved, "negative control: no window/archive state changed")
+
+	note := buildWorkspaceInstructionsNote(wsID)
+	require.NotEmpty(t, note)
+	rf.callMessages = injectWorkspaceInstructions(bareRequest, note)
+	require.Greater(t, requestTokens(rf.callMessages, nil), budget,
+		"precondition: the actual assembled request exceeds B only because the workspace note is present")
+	require.NoError(t, rq.checkpointRequest(false), "C1: note-driven relief must not end the turn")
+
+	// FR-030/032: e1 is a complete older step, so slide it before emptying.
+	// Skip crosses the first three archive lines; the user at line 0 remains
+	// anchored, alongside f1's exact assistant call and tiny result.
+	wantLive := []providers.Message{window[0], window[3], window[4]}
+	assert.Equal(t, wantLive, ri.messages, "the assembled note must cause real whole-step relief")
+	assert.Equal(t, wantLive, agent.Sessions.GetHistory(key), "the committed live view matches the request")
+	assert.NotContains(t, msgsByToolCallID(rf.callMessages), "e1", "the older result is slid out, not retained or emptied")
+	assert.Equal(t, window[4], msgsByToolCallID(rf.callMessages)["f1"], "the newest result survives exactly")
+	assert.Contains(t, rf.callMessages, providers.Message{Role: "system", Content: note}, "the full workspace note survives relief")
+	assert.True(t, strings.HasPrefix(rf.callMessages[0].Content, core.Content), "pinned instructions survive breadcrumb rebuilding")
+	assert.LessOrEqual(t, requestTokens(rf.callMessages, nil), budget*4/5, "the actual assembled request reaches the 80% target")
+	assert.Equal(t, before, ContextEmptiesTotal(), "a whole-step slide is not an in-place empty")
+
+	relieved, err := store.SnapshotWindow(context.Background(), key)
+	require.NoError(t, err)
+	assert.Equal(t, 3, relieved.State.Skip, "the older complete prefix occupies exactly three archive lines")
+	require.NotNil(t, relieved.State.AnchorLine, "the initiating user remains anchored after Skip passes it")
+	assert.Zero(t, *relieved.State.AnchorLine, "the anchor keeps its original archive identity")
+	assert.Equal(t, start.Archive, relieved.Archive, "all full archived messages remain unchanged")
 }
 
 // TestMidTurnBudget_ResidueRegression_NotesAloneDoNotEndTurn — direct
