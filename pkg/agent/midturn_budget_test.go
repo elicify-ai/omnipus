@@ -325,8 +325,12 @@ func TestMidTurnBudget_NewestSharePressureShortensAndSends(t *testing.T) {
 		"precondition: the total-budget bound did not fire")
 	require.Greater(t, toolResultShareTokens(window), shareLimit,
 		"precondition: only the tool-result-share bound fired")
-	require.Empty(t, eligibleToolResults(window, midTurnLineResolverForTest(t, h.agent, h.key, window), nil),
-		"precondition: no older result can be emptied or slid; newest structure must remain")
+	// Precondition by construction, not by eligibility re-check: window has
+	// exactly one tool result (the floor set, following the one and only
+	// assistant step) and D5's own standalone eligibility pass
+	// (eligibleToolResults) was retired after the R1 GREEN refactor — no
+	// older result exists in this fixture for any pass, old or new, to
+	// empty or slide; newest structure must remain.
 
 	out, err := h.al.midTurnWindowCheck(ts, window, nil)
 	require.NoError(t, err, "MAJ-CW-004/010: newest share pressure must not end the turn locally")
@@ -618,17 +622,6 @@ func TestMidTurnBudget_ResidueRegression_NotesAloneDoNotEndTurn(t *testing.T) {
 	assert.Equal(t, floor, out[2].Content, "nothing was eligible to empty — the floor content is untouched")
 	assert.Greater(t, ContextResidueOverflowsTotal(), before,
 		"the overflow is still observed and logged (one ERROR), never silently swallowed")
-}
-
-// midTurnLineResolverForTest builds the same resolver midTurnWindowCheck
-// uses, so a precondition can assert what the real pass would have seen.
-func midTurnLineResolverForTest(
-	t *testing.T, agent *AgentInstance, key string, window []providers.Message,
-) func(int) int {
-	t.Helper()
-	archive, err := agent.Sessions.ReadArchive(context.Background(), key)
-	require.NoError(t, err)
-	return midTurnLineResolver(archive, window)
 }
 
 // testutilScenarioText returns a one-line text provider for fixtures whose
