@@ -463,18 +463,22 @@ describe('ActivityPanel — lifecycle state drives the row dot, not span status 
     expect(dot?.getAttribute('class')).toContain('bg-[var(--color-warning)]')
   })
 
-  it('paused renders a distinct warning dot and label, not "running"', () => {
+  // Consolidates the former 'paused' / 'cancelled' / 'timed_out' coverage:
+  // 'stopped' is the one non-terminal state that replaced all three (founder
+  // ruling — "'stopped' replaces 'cancelled' and 'paused'... timed out =
+  // stopped"), so a single assertion now covers what three used to.
+  it('stopped renders a distinct warning dot and label, not "running"', () => {
     render(
       <ActivityPanel
         open
         onOpenChange={() => {}}
-        running={[makeAgentItem({ status: 'running', lifecycleState: 'paused' })]}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'stopped' })]}
         recentlyFinished={[]}
       />,
     )
-    expect(screen.getByText('paused')).toBeInTheDocument()
+    expect(screen.getByText('stopped')).toBeInTheDocument()
     expect(screen.queryByText('running')).not.toBeInTheDocument()
-    const dot = screen.getByText('paused').previousElementSibling
+    const dot = screen.getByText('stopped').previousElementSibling
     expect(dot?.getAttribute('class')).toContain('bg-[var(--color-warning)]')
   })
 
@@ -506,36 +510,6 @@ describe('ActivityPanel — lifecycle state drives the row dot, not span status 
     expect(screen.queryByText('running')).not.toBeInTheDocument()
     const dot = screen.getByText('failed').previousElementSibling
     expect(dot?.getAttribute('class')).toContain('bg-[var(--color-error)]')
-  })
-
-  it('cancelled renders a cancelled dot and label even while the span itself is still status: running', () => {
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[makeAgentItem({ status: 'running', lifecycleState: 'cancelled' })]}
-        recentlyFinished={[]}
-      />,
-    )
-    expect(screen.getByText('cancelled')).toBeInTheDocument()
-    expect(screen.queryByText('running')).not.toBeInTheDocument()
-    const dot = screen.getByText('cancelled').previousElementSibling
-    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-cancelled)]')
-  })
-
-  it('timed_out renders a muted dot and "timed out" label even while the span itself is still status: running', () => {
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[makeAgentItem({ status: 'running', lifecycleState: 'timed_out' })]}
-        recentlyFinished={[]}
-      />,
-    )
-    expect(screen.getByText('timed out')).toBeInTheDocument()
-    expect(screen.queryByText('running')).not.toBeInTheDocument()
-    const dot = screen.getByText('timed out').previousElementSibling
-    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
   })
 
   it('queued renders a distinct (non-spinning) dot, not the running spinner — the label override alone was the old, incomplete fix', () => {
