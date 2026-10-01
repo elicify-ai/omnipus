@@ -1,0 +1,39 @@
+title: MailAttachment
+description: >
+  Attachment descriptor on MailMessage (D28 — inbound messages, drafts and
+  sent copies). The gateway never returns raw MIME names: filename is
+  sanitized for download (no path separators, edge case 21) and the same
+  sanitized name is what the download endpoint serves.
+type: object
+additionalProperties: false
+required:
+  - part_index
+  - filename
+  - content_type
+  - size_bytes
+properties:
+  part_index:
+    type: integer
+    description: >
+      Index of the MIME part within the message — the {partIndex} path
+      parameter of the download endpoint
+      (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
+    example: 2
+  filename:
+    type: string
+    description: >
+      Sanitized attachment filename — no path separators, never trusted raw
+      from the MIME part (MC-32; the same sanitized form is served on the
+      download's Content-Disposition per MC-42).
+    example: "report-q3.pdf"
+  content_type:
+    type: string
+    description: >
+      The MIME part's declared content type, as listed. (The download
+      endpoint serves with an extension-derived content type instead —
+      MC-42.)
+    example: "application/pdf"
+  size_bytes:
+    type: integer
+    description: Decoded attachment size in bytes.
+    example: 1048576

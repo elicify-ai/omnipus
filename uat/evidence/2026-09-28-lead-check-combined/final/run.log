@@ -1,0 +1,12 @@
+onboard 200
+login 200
+workspace 201 01M3M5ANJ5CHXKT6HBWMS22WBZ
+mailbox 200 {"agent_id":"mia","configured":true,"enabled":true,"imap_host":"127.0.0.1","imap_port":2143,"signature_html":"\u003cp\u0
+inject 200 {"uid":1}
+
+R2 selector label: "Mia · agent@test.local"
+R8 open OK; R9 stacked (preview below list): true 88 495
+R10 expand url: http://localhost:8931/#/workspaces/01M3M5ANJ5CHXKT6HBWMS22WBZ/mail?view=full&mailbox=mia&folder=inbox&message=uid%3A1%3A1 side-by-side: true chat composer count: 0
+B-27 inbox row after opening message: "INBOX0"
+smtp count 1 has bold <strong>: true has signature: true to alice: true
+ERRORS 0

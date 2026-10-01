@@ -195,7 +195,7 @@ func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID, workspaceID st
 	if strings.TrimSpace(mb.PasswordRef) != "" {
 		ok, err := a.credentialRefResolves(mb.PasswordRef)
 		if err != nil {
-			slog.Error("rest: mailbox credential check", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+			logsafeError("rest: mailbox credential check", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 			jsonErr(w, http.StatusInternalServerError,
 				"credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry")
 			return
@@ -208,16 +208,18 @@ func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID, workspaceID st
 
 // restAPISetAgentMailbox carries the shared state of setAgentMailbox across its stages.
 type restAPISetAgentMailbox struct {
-	a                *restAPI
-	w                http.ResponseWriter
-	r                *http.Request
-	agentID          string
-	workspaceID      string
-	req              gen.MailboxConfigureRequest
-	refName          string
-	passwordProvided bool
-	clearPassword    bool
-	persistedRef     string
+	a                  *restAPI
+	w                  http.ResponseWriter
+	r                  *http.Request
+	agentID            string
+	workspaceID        string
+	req                gen.MailboxConfigureRequest
+	refName            string
+	passwordProvided   bool
+	clearPassword      bool
+	persistedRef       string
+	signatureProvided  bool
+	sanitizedSignature string
 }
 
 // setAgentMailbox handles PUT /api/v1/agents/{id}/mailboxes/{workspaceId}.
@@ -310,8 +312,20 @@ func (sm *restAPISetAgentMailbox) validateAccessAndRequest() bool {
 		return true
 	}
 
+	// signature_html (MC-1): sanitized AT THE SETTER. Raw input over 16,384
+	// chars is HTTP 400 (the contract), pre-sanitize; what persistConfig writes
+	// is the sanitized allowlisted HTML, never raw operator input.
+	sm.signatureProvided = sm.req.SignatureHtml != nil
+	if sm.signatureProvided {
+		san, serr := email.SanitizeSignatureHTML(*sm.req.SignatureHtml)
+		if serr != nil {
+			jsonErr(sm.w, http.StatusBadRequest, serr.Error())
+			return true
+		}
+		sm.sanitizedSignature = san
+	}
+
 	// NOTE: the 0.1.0 cap-1-per-workspace rule was removed 2026-07-03
-	// (operator-approved): every agent may own a mailbox, several per workspace.
 	// Pair-addressing (same day) further lifted "one mailbox per agent" — an
 	// agent may hold a distinct mailbox in each workspace it belongs to.
 
@@ -327,7 +341,7 @@ func (sm *restAPISetAgentMailbox) storePassword() bool {
 	// stored mailbox can authenticate the moment its ref is persisted.
 	if sm.passwordProvided && !sm.clearPassword {
 		if _, err := sm.a.storeCredential(sm.refName, *sm.req.Password); err != nil {
-			slog.Error("rest: store mailbox credential", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
+			logsafeError("rest: store mailbox credential", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
 			jsonErr(sm.w, http.StatusInternalServerError, fmt.Sprintf("could not store mailbox password: %v", err))
 			return true
 		}
@@ -377,6 +391,33 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 			existing["smtp_port"] = *sm.req.SmtpPort
 		}
 
+		// signature_html and the folder-name overrides: present in the request
+		// → replace; omitted → keep what is stored (the imap_port precedent).
+		// The signature arrived sanitized (validateAccessAndRequest, MC-1);
+		// an empty sanitized value clears the stored one. Folder overrides are
+		// trimmed; empty clears the override so the standard name resumes.
+		if sm.signatureProvided {
+			if sm.sanitizedSignature != "" {
+				existing["signature_html"] = sm.sanitizedSignature
+			} else {
+				delete(existing, "signature_html")
+			}
+		}
+		if sm.req.SentFolderName != nil {
+			if name := strings.TrimSpace(*sm.req.SentFolderName); name != "" {
+				existing["sent_folder_name"] = name
+			} else {
+				delete(existing, "sent_folder_name")
+			}
+		}
+		if sm.req.DraftsFolderName != nil {
+			if name := strings.TrimSpace(*sm.req.DraftsFolderName); name != "" {
+				existing["drafts_folder_name"] = name
+			} else {
+				delete(existing, "drafts_folder_name")
+			}
+		}
+
 		// Password handling: stored → set ref; cleared → drop ref; omitted → keep.
 		switch {
 		case sm.clearPassword:
@@ -393,19 +434,14 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 		byWorkspace[sm.workspaceID] = existing
 		mailboxes[sm.agentID] = byWorkspace
 
-		// Tool-policy grant: enabling a mailbox is the operator's explicit
+		// Tool-policy fill: enabling a mailbox is the operator's explicit
 		// opt-in to the email tools for this agent (the wire contract's
-		// `enabled` literally means "register the email tools"). Agents with a
-		// deny-by-default builtin allowlist that predates the mailbox (every
-		// agent except the Assistant seed) would otherwise get the tools
-		// registered but policy-hidden — a silently dead mailbox. Fill in any
-		// email tool that is missing or explicitly "deny" (the ubiquitous,
-		// non-deliberate baseline every such agent inherits from the seed
-		// under the mandatory-coverage model — CLAUDE.md hard constraint 6,
-		// there is no default_policy field to distinguish "unset" from "seed
-		// default" any more); an entry already "allow" or "ask" is left
-		// untouched (see grantEmailToolAllows's doc comment for why "ask" is
-		// the one value that can only reflect genuine operator intent).
+		// `enabled` literally means "register the email tools"). The D19
+		// fill (MC-26, §2.7 point 2) writes send_email/reply "ask" and the
+		// read tools + create_email_draft "allow" ONLY where the agent's
+		// map has no such key; an explicit allow, ask or deny — including
+		// the denies a deny-by-default custom-agent seed enumerates — is
+		// intent and is never rewritten.
 		//
 		// Gated on the ACTUAL disabled→enabled transition (req.Enabled &&
 		// !wasEnabled), not merely "the saved value is enabled": this handler
@@ -427,7 +463,7 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 	}); err != nil {
 		if errors.Is(err, errMailboxEntryMalformed) {
 			msg := fmt.Sprintf("mailboxes entry for agent %q is malformed (mixed legacy/nested shape)", sm.agentID)
-			slog.Error(
+			logsafeError(
 				"rest: configure mailbox: malformed entry",
 				"agent_id",
 				sm.agentID,
@@ -439,7 +475,7 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 			jsonErr(sm.w, http.StatusInternalServerError, msg)
 			return true
 		}
-		slog.Error("rest: configure mailbox", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
+		logsafeError("rest: configure mailbox", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
 		jsonErr(sm.w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return true
 	}
@@ -461,7 +497,7 @@ func (sm *restAPISetAgentMailbox) reloadAndPrepareResponse() {
 	// no-op path in unit tests without the full reload pipeline wired)
 	// internally, so a non-nil error here is always a genuine reload failure.
 	if confirmed, err := sm.a.triggerReloadAndWaitOutcome(); err != nil {
-		slog.Error(
+		logsafeError(
 			"rest: mailbox configure reload failed",
 			"agent_id",
 			sm.agentID,
@@ -474,7 +510,7 @@ func (sm *restAPISetAgentMailbox) reloadAndPrepareResponse() {
 			"config saved but in-memory reload failed; restart the gateway or retry")
 		return
 	} else if !confirmed {
-		slog.Warn(
+		logsafeWarn(
 			"rest: mailbox configure reload did not confirm within the poll window; "+
 				"email tools may not yet reflect the new mailbox state",
 			"agent_id", sm.agentID,
@@ -503,6 +539,15 @@ func (sm *restAPISetAgentMailbox) reloadAndPrepareResponse() {
 	}
 	if sm.req.SmtpPort != nil {
 		out.SMTPPort = *sm.req.SmtpPort
+	}
+	if sm.signatureProvided && sm.sanitizedSignature != "" {
+		out.SignatureHTML = sm.sanitizedSignature
+	}
+	if sm.req.SentFolderName != nil {
+		out.SentFolderName = strings.TrimSpace(*sm.req.SentFolderName)
+	}
+	if sm.req.DraftsFolderName != nil {
+		out.DraftsFolderName = strings.TrimSpace(*sm.req.DraftsFolderName)
 	}
 	jsonOK(sm.w, mailboxToWire(sm.agentID, sm.workspaceID, out, configured))
 }
@@ -547,7 +592,7 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 	}); err != nil {
 		if errors.Is(err, errMailboxEntryMalformed) {
 			msg := fmt.Sprintf("mailboxes entry for agent %q is malformed (mixed legacy/nested shape)", agentID)
-			slog.Error(
+			logsafeError(
 				"rest: delete mailbox: malformed entry",
 				"agent_id",
 				agentID,
@@ -559,7 +604,7 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 			jsonErr(w, http.StatusInternalServerError, msg)
 			return
 		}
-		slog.Error("rest: delete mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+		logsafeError("rest: delete mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
@@ -570,10 +615,10 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 	// use) and the legacy per-agent key, so installs migrated from the
 	// pre-pair-addressing flat shape don't orphan their blob either.
 	if err := a.removeStoredCredential(mailboxCredKey(agentID, workspaceID)); err != nil {
-		slog.Error("rest: delete mailbox credential", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+		logsafeError("rest: delete mailbox credential", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 	}
 	if err := a.removeStoredCredential(legacyMailboxCredKey(agentID)); err != nil {
-		slog.Error("rest: delete legacy mailbox credential", "agent_id", agentID, "error", err)
+		logsafeError("rest: delete legacy mailbox credential", "agent_id", agentID, "error", err)
 	}
 
 	// triggerReloadAndWait (not a bare TriggerReload) — see setAgentMailbox's
@@ -584,7 +629,7 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 	// already durably persisted, so a genuine reload failure is logged, not
 	// surfaced as an error response (mirrors deleteAgent).
 	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
-		slog.Error(
+		logsafeError(
 			"rest: mailbox delete reload failed",
 			"agent_id",
 			agentID,
@@ -594,7 +639,7 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 			err,
 		)
 	} else if !confirmed {
-		slog.Warn(
+		logsafeWarn(
 			"rest: mailbox delete reload did not confirm within the poll window; "+
 				"deleted mailbox's email tools may still be live on the running instance",
 			"agent_id", agentID,
@@ -642,7 +687,7 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(mb.PasswordRef) != "" {
 				ok, err := a.credentialRefResolves(mb.PasswordRef)
 				if err != nil {
-					slog.Error(
+					logsafeError(
 						"rest: mailbox credential check",
 						"agent_id",
 						agentID,
@@ -677,48 +722,34 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, out)
 }
 
-// emailToolNames are the five M11 email tools gated by mailbox ownership.
-var emailToolNames = []string{"read_inbox", "search_email", "read_message", "send_email", "reply"}
+// emailToolNames are the six email tools gated by mailbox ownership: the
+// five M11 tools plus create_email_draft (email-mail-view-spec §2.7 point 6).
+var emailToolNames = []string{"read_inbox", "search_email", "read_message", "send_email", "reply", "create_email_draft"}
 
-// grantEmailToolAllows fills in "allow" for the email tools in the agent's
-// builtin tool policy when a mailbox is enabled, treating a missing entry or
-// an explicit "deny" as fill-eligible, but never touching a tool already
-// "allow" or "ask". ADR-054 D2/§11 checklist item 5: agents are per-entity
-// records under entities/agents/<id>.json, not config.json's agents.list —
-// this grants via the agent store instead of splicing the raw config map
-// that setAgentMailbox's safeUpdateConfigJSON closure operates on (that
-// closure's `m` is the MAILBOX config, a setting per ADR-054 R2 — this
-// function no longer touches it at all).
-//
-// Historical context: before the DefaultPolicy/default_policy fallback was
-// removed (CLAUDE.md hard constraint 6), an agent's builtin.policies map was
-// typically SPARSE — a missing entry meant "fall back to the agent's
-// default_policy field," so a deny-by-default agent's email tools were
-// implicitly denied simply by being absent from the map. This function used
-// to check that default_policy field and only fill genuinely-missing
-// entries. Now every agent's policies map is fully enumerated (seeded
-// explicitly allow/deny per tool via coreagent.denyAllThenOverride; the
-// two-layer model under ADR-077 lets an unmentioned tool ride the reconciled
-// global ceiling instead of a per-agent deny backfill) —
-// there is no default_policy field any more, so a deny-by-default agent's
-// email tools are no longer "missing," they carry an EXPLICIT "deny" entry
-// inherited from the seed. Checking builtin["default_policy"] (as this
-// function used to) is therefore always empty/absent, always compares
-// unequal to "deny", and the function ALWAYS silently no-op'd — meaning
-// enabling a mailbox for any agent whose email tools are seed-deny (every
-// agent except Mia) left those tools permanently denied with zero
-// operator-visible signal (found live, three independent reviewers,
-// 2026-07-06).
-//
-// Fixed to operate directly on the real builtin["policies"] map: an entry
-// currently "deny" (the ubiquitous, non-deliberate baseline inherited from
-// the seed) is functionally equivalent to the old "missing" case and is
-// fill-eligible. An entry already "allow" needs no change. An entry "ask" is
-// preserved untouched: no core-agent seed (pkg/coreagent/core.go) ever
-// assigns "ask" to an email tool — only "allow" (Mia) or the
-// denyAllThenOverride baseline "deny" — so a persisted "ask" can only have
-// come from a deliberate operator action via the Tool Policies UI/API, which
-// this function must never override.
+// emailToolFillPolicies is the D19 fill (email-mail-view-spec §2.7 point 2,
+// MC-26): the policy a mailbox-enabled agent gets for each email tool whose
+// key is ABSENT from its map. Send tools ask (a human approves sending);
+// the read tools and the Drafts-only compose tool allow. An explicit
+// allow, ask or deny is never rewritten — an absent key is the only fill
+// target.
+var emailToolFillPolicies = map[string]config.ToolPolicy{
+	"send_email":         config.ToolPolicyAsk,
+	"reply":              config.ToolPolicyAsk,
+	"read_inbox":         config.ToolPolicyAllow,
+	"search_email":       config.ToolPolicyAllow,
+	"read_message":       config.ToolPolicyAllow,
+	"create_email_draft": config.ToolPolicyAllow,
+}
+
+// grantEmailToolAllows applies the D19 configure-time fill (MC-26,
+// email-mail-view-spec §2.7 point 2): for each email tool whose key is
+// ABSENT from the agent's builtin policy map, it writes the fill value
+// (send_email/reply ask, the read tools and create_email_draft allow).
+// Any entry already present — allow, ask, or deny — is operator or seed
+// intent and is never rewritten, so an inherited deny survives a mailbox
+// enable untouched. Under the two-layer model (ADR-077) a sparse map is the
+// normal state — an agent with no explicit entry rides the reconciled
+// global ceiling — which is exactly why the fill targets absent keys only.
 func grantEmailToolAllows(homePath, agentID string) {
 	var granted []string
 	_, err := agentstore.New(homePath).Update(agentID, func(ag *config.AgentConfig) error {
@@ -729,11 +760,12 @@ func grantEmailToolAllows(homePath, agentID string) {
 			ag.Tools.Builtin.Policies = map[string]config.ToolPolicy{}
 		}
 		for _, name := range emailToolNames {
-			current := ag.Tools.Builtin.Policies[name]
-			if current == config.ToolPolicyAsk || current == config.ToolPolicyAllow {
-				continue // already permits, or a deliberate operator choice — leave it
+			if _, exists := ag.Tools.Builtin.Policies[name]; exists {
+				// Any explicit value — allow, ask or deny — is operator or
+				// seed intent (MC-26). Never rewritten.
+				continue
 			}
-			ag.Tools.Builtin.Policies[name] = config.ToolPolicyAllow
+			ag.Tools.Builtin.Policies[name] = emailToolFillPolicies[name]
 			granted = append(granted, name)
 		}
 		return nil
@@ -746,17 +778,17 @@ func grantEmailToolAllows(homePath, agentID string) {
 			// mailbox will be saved Active but the email tools stay
 			// policy-hidden with no operator-visible signal, so this is an
 			// error, not a benign no-op.
-			slog.Error(
+			logsafeError(
 				"mailbox: agent not found in agent store — cannot grant email tool allows (mailbox will save Active but tools stay policy-hidden)",
 				"agent_id", agentID,
 			)
 			return
 		}
-		slog.Error("mailbox: could not grant email tool allows", "agent_id", agentID, "error", err)
+		logsafeError("mailbox: could not grant email tool allows", "agent_id", agentID, "error", err)
 		return
 	}
 	if len(granted) > 0 {
-		slog.Info("mailbox: granted email tool allows (deny/missing email-tool policy, mailbox enabled)",
+		logsafeInfo("mailbox: granted email tool allows (absent email-tool policy filled, mailbox enabled)",
 			"agent_id", agentID, "tools", strings.Join(granted, ","))
 	}
 }
@@ -798,6 +830,21 @@ func mailboxToWire(agentID, workspaceID string, mb config.MailboxConfig, configu
 	if mb.Username != "" {
 		v := mb.Username
 		out.Username = &v
+	}
+	// The signature and folder overrides are operator-set config, echoed to the
+	// authenticated panel exactly like the hosts/ports (the password is the
+	// only field that is never returned).
+	if mb.SignatureHTML != "" {
+		v := mb.SignatureHTML
+		out.SignatureHtml = &v
+	}
+	if mb.SentFolderName != "" {
+		v := mb.SentFolderName
+		out.SentFolderName = &v
+	}
+	if mb.DraftsFolderName != "" {
+		v := mb.DraftsFolderName
+		out.DraftsFolderName = &v
 	}
 	return out
 }

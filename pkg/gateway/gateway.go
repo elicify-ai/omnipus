@@ -51,6 +51,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/health"
 	"github.com/elicify-ai/omnipus/pkg/heartbeat"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -166,12 +167,12 @@ type services struct {
 	// which meant `next` tasks never dispatched on those installs; TaskDrain is
 	// decoupled from that path so `next` tasks always dispatch.
 	TaskDrain *heartbeat.TaskDrainService
-	// MailboxDrain owns the M11 unhandled-mail → Board-task poll. Like TaskDrain
+	// MailWatch owns the new-mail watcher poll (badge state only). Like TaskDrain
 	// it is decoupled from the HEARTBEAT.md path so email work surfaces on the
 	// Board regardless of which heartbeat path is active. Nil when no mailbox is
 	// configured (the scanner is a no-op).
-	MailboxDrain *heartbeat.MailboxDrainService
-	MediaStore   media.MediaStore
+	MailWatch  *heartbeat.MailWatchService
+	MediaStore media.MediaStore
 	// PlanEngine is the single hybrid plan-coordinator instance (ADR-049 D4,
 	// Wave 2-B). Constructed once at boot alongside planStore (both are
 	// process-lifetime singletons — a hot reload Stop()s/Start()s the SAME
@@ -778,6 +779,13 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 		catalogLogAdapter{},
 	)
 	agent.SetWindowCatalog(rc.providerCatalog)
+	// A8 mail-operation budget: install the shared per-account gate BEFORE
+	// NewAgentLoop builds every agent instance and its registerSharedTools
+	// registers the email tools — the tools capture it at registration, the
+	// same "must run before NewAgentLoop" ordering rule as SetWindowCatalog
+	// above. Keyed by the data dir, so this is the SAME instance the watcher
+	// set (gateway_boot/reload) and the REST handlers resolve.
+	agent.SetSharedMailBudget(email.SharedMailBudget(rc.homePath))
 	// ADR-067 FR-012: the provider FACTORY dispatches on the protocol this
 	// same document carries, so it must read the same instance — otherwise
 	// the gateway would resolve windows from the pulled document while
@@ -1778,8 +1786,8 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.TaskDrain != nil {
 		runningServices.TaskDrain.Stop()
 	}
-	if runningServices.MailboxDrain != nil {
-		runningServices.MailboxDrain.Stop()
+	if runningServices.MailWatch != nil {
+		runningServices.MailWatch.Stop()
 	}
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()

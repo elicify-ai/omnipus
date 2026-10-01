@@ -2,3 +2,4 @@
 
 /* Story fixtures may use layout utilities that are deliberately absent from the public CSS scan. */
 @source '../src/**/*.stories.*';
+@source '../src/components/panel-shell/demo';

@@ -27,6 +27,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
+import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents, logout } from '@/lib/api'
@@ -45,7 +46,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
-import { cn } from '@/lib/utils'
+import { cn, isEditableEventTarget } from '@/lib/utils'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { GodModeSidebarPill } from './GodModeIndicators'
 
@@ -267,10 +268,16 @@ export function Sidebar() {
     ...visibleUnpinned,
   ]
 
-  // US-5: Cmd+B / Ctrl+B keyboard shortcut + Escape to close
+  // US-5: Cmd+B / Ctrl+B keyboard shortcut + Escape to close. The Mod-b toggle
+  // belongs to the global sidebar gesture only outside editor surfaces — a
+  // rich-text editor (Tiptap in the Mail draft editor + Mail compose dialog,
+  // AssistantUI's composer, etc.) owns its own keymap (Mod-b = bold,
+  // Mod-i = italic, Mod-k = link, ...) and must not lose keystrokes to a
+  // sidebar toggle. Only the Mod+B branch checks editable targets; Escape
+  // still closes the sidebar from a focused editor or any other control.
   const handleKeydown = useCallback(
     (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b' && !isEditableEventTarget(e.target)) {
         e.preventDefault()
         toggle()
       }
@@ -736,13 +743,19 @@ export function Sidebar() {
         {/* Library — NOT a route Link like the items above: it opens the
             docked LibraryPanel (mounted once in AppShell) at the virtual
             root, same as clicking a workspace opens it scoped (D-3). The
-            /_app/library ROUTE exists only for the panel's pop-out button. */}
+            /_app/library route remains available for standalone links. */}
         <Button
           variant="ghost"
           data-testid="sidebar-library-button"
+          data-panel-trigger="library"
           aria-label="Library"
           onClick={() => {
-            useUiStore.getState().openLibraryPanel()
+            // CRIT-001: opening Library REPLACES whatever panel is open
+            // (SP-7), so the outgoing panel's leave gate runs first. Virtual
+            // root scope (no workspaceId → the `app` width/identity bucket).
+            leaveGateThen(useUiStore.getState().activePanel?.id ?? null, () => {
+              useUiStore.getState().openPanel('library', {})
+            })
             if (!effectivelyPinned) close()
           }}
           className="h-auto justify-start gap-[var(--space-2-5)] w-[calc(100%-16px)] px-[var(--space-3)] py-[var(--space-2)] mx-[var(--space-2)] rounded-lg font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"

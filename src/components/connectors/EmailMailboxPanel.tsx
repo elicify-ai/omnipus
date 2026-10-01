@@ -60,6 +60,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { SmartSelect } from '@/components/ui/smart-select'
 import {
@@ -70,7 +71,9 @@ import {
   fetchWorkspaces,
   isWorker,
   isApiError,
+  ApiError,
 } from '@/lib/api'
+import { mintMailSignaturePreviewToken } from '@/lib/api/mail'
 import type { Mailbox, MailboxConfigureRequest } from '@/lib/api'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
@@ -108,6 +111,9 @@ interface MailboxFormState {
   smtp_port: string
   agent_id: string
   workspace_id: string
+  /** US-1/MC-1: operator HTML, sanitized server-side on save; the panel
+   * enforces the 16,384-char bound client-side and shows a live preview. */
+  signature_html: string
 }
 
 const EMPTY_FORM: MailboxFormState = {
@@ -119,6 +125,7 @@ const EMPTY_FORM: MailboxFormState = {
   smtp_port: '',
   agent_id: '',
   workspace_id: '',
+  signature_html: '',
 }
 
 // not-wire-format: client-side validation errors for the mailbox form
@@ -129,6 +136,7 @@ interface FieldErrors {
   smtp_host?: string
   agent_id?: string
   workspace_id?: string
+  signature_html?: string
 }
 
 function PasswordField({
@@ -249,6 +257,13 @@ function validate(
   if (!form.imap_host.trim()) errors.imap_host = 'IMAP server hostname is required'
   if (!form.smtp_host.trim()) errors.smtp_host = 'SMTP server hostname is required'
 
+  // MC-1: 16,384 characters is the maximum. One past that is blocked in the
+  // panel (and never sent) — a hard block at save, not a silent truncate.
+  const SIGNATURE_MAX_CHARS = 16_384
+  if (form.signature_html.length > SIGNATURE_MAX_CHARS) {
+    errors.signature_html = `Signature is over the 16,384 character limit (currently ${form.signature_html.length.toLocaleString()}).`
+  }
+
   // Credentials are keyed per (agent, workspace) pair server-side — a move
   // can never carry the old password over, so re-entering it is mandatory.
   if (isMoveTarget(form, mailbox) && !form.password.trim()) {
@@ -286,6 +301,7 @@ const FIELD_ROW_ID: Record<keyof FieldErrors, string> = {
   password: 'mailbox-password',
   imap_host: 'mailbox-imap-host',
   smtp_host: 'mailbox-smtp-host',
+  signature_html: 'mailbox-signature',
 }
 const FIELD_VISUAL_ORDER: (keyof FieldErrors)[] = [
   'workspace_id',
@@ -294,6 +310,7 @@ const FIELD_VISUAL_ORDER: (keyof FieldErrors)[] = [
   'password',
   'imap_host',
   'smtp_host',
+  'signature_html',
 ]
 
 function focusFirstInvalidField(errors: FieldErrors) {
@@ -303,6 +320,103 @@ function focusFirstInvalidField(errors: FieldErrors) {
     const container = document.getElementById(`fieldrow-${FIELD_ROW_ID[firstKey]}`)
     container?.querySelector<HTMLElement>('input, button, textarea, select')?.focus()
   })
+}
+
+/**
+ * SignaturePreviewFrame — the US-1 live preview, in a sandboxed mini-frame
+ * with the MC-10 posture (spec §16): sandbox WITHOUT allow-scripts /
+ * allow-same-origin / allow-forms (the frame's content — operator HTML
+ * today, potentially anything after a bad save — gets no code execution, no
+ * same-origin powers, no forms), referrerPolicy no-referrer, an empty
+ * permissions `allow`, and NO srcdoc (srcdoc documents inherit the parent
+ * origin's URL; a served document gets the opaque-origin sandbox).
+ *
+ * The frame never renders raw editor HTML: the editor's current HTML is
+ * POSTed to the signature mint (POST /api/v1/mail/signature-preview-token,
+ * debounced ~500 ms per edit — architect decision 2026-09-28, option B) and
+ * the returned token builds a same-origin `/mail-preview/html/<token>` src.
+ * NEVER blob: — the gateway SPA CSP (frame-src 'self') blanks blob: frames
+ * in production (measured, session experiment 2026-09-28) — never data:,
+ * never srcdoc.
+ *
+ * MC-44: a 429 from the mint is an EXPLICIT state — a visible "preview is
+ * out of date" notice with Retry; never a silent stale frame. A 400 (over
+ * the MC-1 16,384 bound) needs no preview-side state: the field's
+ * validation error already names the bound. Any other failure keeps the
+ * last good frame — never a blank panel.
+ */
+const SIGNATURE_PREVIEW_DEBOUNCE_MS = 500
+
+function SignaturePreviewFrame({ html }: { html: string }) {
+  const [src, setSrc] = useState<string | null>(null)
+  const [stale, setStale] = useState(false)
+  // Retry bumps this to re-run the mint effect (fresh debounce → mint).
+  const [retryTick, setRetryTick] = useState(0)
+
+  useEffect(() => {
+    // The mint bounds signature_html at 1..16384 characters: an empty
+    // signature has nothing to preview and would mint a guaranteed 400.
+    if (html.trim().length === 0) {
+      setSrc(null)
+      setStale(false)
+      return undefined
+    }
+    let cancelled = false
+    const timer = setTimeout(() => {
+      mintMailSignaturePreviewToken({ signature_html: html })
+        .then((res) => {
+          if (cancelled) return
+          setSrc(`/mail-preview/html/${res.token}`)
+          setStale(false)
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return
+          if (err instanceof ApiError && err.status === 429) {
+            // MC-44: explicit stale state — never a silent stale frame.
+            setStale(true)
+          } else if (!(err instanceof ApiError && err.status === 400)) {
+            // 400 (over the MC-1 bound) is the field error's job — the
+            // panel's validation already names the bound. Anything else
+            // (transport, 5xx) keeps the last good frame — never a blank
+            // panel — but must not vanish without telemetry.
+            logError({
+              event: 'mailboxSignaturePreviewMintFailed',
+              status: err instanceof ApiError ? err.status : 0,
+              message: err instanceof Error ? err.message : String(err),
+            })
+          }
+        })
+    }, SIGNATURE_PREVIEW_DEBOUNCE_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [html, retryTick])
+
+  return (
+    <>
+      <iframe
+        title="Signature preview"
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
+        referrerPolicy="no-referrer"
+        allow=""
+        src={src ?? undefined}
+        className="h-40 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-primary)]"
+      />
+      {stale && (
+        <p
+          data-testid="signature-preview-stale"
+          className="mt-[var(--space-1)] flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+        >
+          <Warning size={14} className="shrink-0" />
+          Signature preview is out of date.
+          <Button variant="link" onClick={() => setRetryTick((t) => t + 1)}>
+            Retry
+          </Button>
+        </p>
+      )}
+    </>
+  )
 }
 
 export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] }: EmailMailboxPanelProps) {
@@ -354,6 +468,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
       smtp_port: mailbox.smtp_port != null ? String(mailbox.smtp_port) : '',
       agent_id: mailbox.agent_id,
       workspace_id: mailbox.workspace_id,
+      signature_html: mailbox.signature_html ?? '',
     })
   }, [open, mailbox])
 
@@ -405,6 +520,10 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
       if (form.imap_port !== '') req.imap_port = Number(form.imap_port)
       if (form.smtp_port !== '') req.smtp_port = Number(form.smtp_port)
       if (form.password !== '') req.password = form.password
+      // The panel owns the signature: sending the (possibly empty) value
+      // makes clearing it a real save, not a no-op (US-1 AS-3 — an edited
+      // or cleared signature applies to the NEXT message, no stale copy).
+      req.signature_html = form.signature_html
 
       // The mailbox endpoint is keyed by the (agent, workspace) PAIR
       // (PUT /agents/{id}/mailboxes/{workspaceId}) — there is no rename.
@@ -742,11 +861,52 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
             </div>
           </AdvancedDisclosure>
 
+          {/* US-1 signature editor (spec §16): the D27 rule is that NO
+              mail-trigger switch may exist here — the section deliberately
+              ships only the signature field + preview, nothing that could
+              read as "let the agent handle new mail". */}
+          <FieldRow
+            id="mailbox-signature"
+            label="Signature"
+            helpId="mailbox-signature-help"
+            helpText="HTML signature appended to every message sent from this mailbox. Sanitized on save."
+            error={fieldErrors.signature_html}
+          >
+            <Textarea
+              id="mailbox-signature"
+              data-testid="mailbox-signature"
+              value={form.signature_html}
+              onChange={(e) => setField('signature_html', e.target.value)}
+              rows={5}
+              className="font-mono text-[length:var(--type-utility-xs-size)]"
+              aria-describedby={describedByFor('mailbox-signature', 'mailbox-signature-help', fieldErrors.signature_html)}
+              aria-invalid={fieldErrors.signature_html ? true : undefined}
+            />
+            <p className="mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+              {form.signature_html.length.toLocaleString()} characters used
+            </p>
+            <div className="mt-[var(--space-2)]">
+              <SignaturePreviewFrame html={form.signature_html} />
+            </div>
+          </FieldRow>
+
           {/* Actions */}
           <div className="flex flex-col gap-[var(--space-2)] pt-[var(--space-2)] border-t border-[var(--color-border)]">
             <Button
               className="w-full gap-[var(--space-1)]"
-              onClick={() => doSave()}
+              onClick={() => {
+                // MC-1 blocks SYNCHRONOUSLY at click — before the mutation is
+                // enqueued — so the limit error renders in the same act() the
+                // click runs in (an async-only block would land one microtask
+                // too late for an immediate assertion).
+                const errors = validate(form, mailbox, mailboxes)
+                if (Object.keys(errors).length > 0) {
+                  setFieldErrors(errors)
+                  focusFirstInvalidField(errors)
+                  return
+                }
+                doSave()
+              }}
               disabled={saving || deleting}
             >
               <FloppyDisk size={13} />

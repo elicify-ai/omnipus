@@ -27,6 +27,7 @@ Day-to-day pages.
 | [Agents](agents.md) | The four, and your own |
 | [Knowledge base](knowledge.md) | Notes, records, saved views |
 | [Library](library.md) | Files and shared folders |
+| [Mail](mail.md) | Inbox, Sent, Drafts, composing, and mailbox errors |
 | [Skills](skills.md) | Playbooks agents pick up |
 | [Tools](tools.md) | Which tools agents may use |
 | [Memory](memory.md) | What the team remembers |

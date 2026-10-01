@@ -129,7 +129,7 @@ After the upgrade there is deliberately no fallback that reads an old entry: it 
 
 ## The page shows "Something went wrong loading this page"
 
-A page could not load or render. This can happen when an open tab tries to load an old web-app file after an update. Press **Reload page** to try again. If the message keeps returning, open your browser's developer console and copy the error when reporting the problem. Look for `[router] route load/render failed:` or `[app] Uncaught render error:`.
+A page, panel, or the onboarding wizard could not load or render — for example when a tab still references JavaScript files from an earlier deployment. This is not a sign-in failure and not a reason to restart setup. Press **Reload page** to fetch the current files and try again. If the message keeps returning, open your browser's developer console and copy the error when reporting the problem. Look for `[router] route load/render failed:` or `[app] Uncaught render error:`.
 
 ## The web app looks outdated after a source build
 

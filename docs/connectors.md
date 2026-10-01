@@ -67,13 +67,17 @@ Each guide explains the credentials and platform-specific setup.
 
 ## How to add an email mailbox
 
-1. Open **Connectors** and find **Email Mailbox**.
-2. Select **Add mailbox**. The **Email Mailbox Account** panel opens.
-3. Choose the **Workspace**, then choose the **Owning agent**.
-4. Enter the email address, password, Internet Message Access Protocol (IMAP) server, and Simple Mail Transfer Protocol (SMTP) server.
-5. Select **Save Mailbox**. The mailbox appears with an **Active** status when it is enabled and configured.
+1. Open **Connectors** and find the **Email** section. Select **Add mailbox** to open **Email Mailbox Account**.
+2. Choose a **Workspace**, then an **Owning agent** from that workspace's team. Each agent can have a separate mailbox in each workspace; you cannot add a second mailbox for the same agent in the same workspace.
+3. Enter **Email Address**, **Password** (your mail provider's IMAP/SMTP app password), **IMAP Host** for incoming mail, and **SMTP Host** for outgoing mail. Internet Message Access Protocol (IMAP) and Simple Mail Transfer Protocol (SMTP) are the two server connections. Open **Advanced** to change **IMAP Port** or **SMTP Port** if your provider needs nonstandard ports. The form shows 993 as the IMAP default and 587 as the SMTP default; its help text also lists 465 for SMTP.
+4. Optionally enter an HTML **Signature** and check its preview. The form rejects signatures over 16,384 characters. The saved signature is appended to messages sent from this mailbox.
+5. Select **Save Mailbox**. On success, you see **Mailbox account saved** and a row showing the agent, email address, workspace, and either **Active** or **Not configured**. Required-field problems appear beside the fields; other save failures show an error notification and leave the form open.
 
-Use **Configure** to change a mailbox. **Remove Mailbox** deletes it and its stored credentials after confirmation.
+**Active** means that the mailbox is enabled and its stored password is available to Omnipus. Saving does **not** test whether the mail server accepts the password or can be reached. **Not configured** means the row is disabled or lacks an available stored password; it does not show a live connection result. Open [Mail](mail.md#if-something-goes-wrong) for connection errors and retry controls.
+
+Use **Configure** on a row to change its settings. The stored password is never shown; leave **Password** blank to keep it while editing the *same* agent and workspace. If you change either the owning agent or workspace, you must enter the password again because credentials do not transfer. A successful move can show **Mailbox saved, but the old mailbox could not be removed — delete it manually from the list.** if removal of the old row fails. **Remove Mailbox** asks for confirmation before deleting the saved configuration and credentials; a failed removal keeps the confirmation open and shows the error.
+
+Back in the workspace, select **Mail** to open the [mailbox panel](mail.md#set-up-and-open-mail) and choose the agent's address. Email is not set up through the chat-connector **Configure** flow above.
 
 ## Limits and things to watch
 
@@ -91,3 +95,4 @@ Use **Configure** to change a mailbox. **Remove Mailbox** deletes it and its sto
 - [Workspaces](workspaces.md) — manage the team available to a workspace-bound connector.
 - [Security](security.md) — understand how Omnipus protects connector credentials.
 - [Tools](tools.md) — learn about the email tools agents use.
+- [Mail](mail.md) — read, send, and manage drafts in the workspace Mail panel.
