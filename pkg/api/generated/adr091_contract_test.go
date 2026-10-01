@@ -78,11 +78,13 @@ func TestContract_ADR091_SessionLifecycleRecordStop(t *testing.T) {
 	// SessionLifecycleRecord.stop must be accepted (ADR-091 I-6).
 	// state uses "stopped" (not the retired "cancelled") per the six-state
 	// consolidation (F0929-2): "stopped" replaces cancelled/paused/timed_out.
+	// terminal is false: true iff state is completed/failed — stopped is
+	// explicitly non-terminal (SessionLifecycleRecord.yaml's terminal field).
 	jsonData := []byte(`{
 		"session_id": "sid-stopped",
 		"generation": 1,
 		"state": "stopped",
-		"terminal": true,
+		"terminal": false,
 		"owner_scope_kind": "human",
 		"workspace_id": "ws-123",
 		"agent_id": "agent-1",

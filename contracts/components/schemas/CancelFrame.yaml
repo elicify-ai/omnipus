@@ -23,3 +23,9 @@ properties:
       - session
       - tree
     default: session
+    description: >
+      How far the cancellation reaches. `session` — stop the named
+      session's in-progress turn only. `tree` — also cascade-stop the
+      named session's reachable non-terminal descendant subtree (each
+      live turn cancelled with its own stamped generation). Both scopes
+      end turns, never goals.

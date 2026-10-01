@@ -15400,7 +15400,7 @@ export interface components {
              */
             owner_scope_id?: string;
             /**
-             * @description Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+             * @description Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `stopped` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
              * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
              */
             owns_plan_id?: string;
