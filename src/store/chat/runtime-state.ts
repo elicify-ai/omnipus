@@ -55,6 +55,29 @@ export const replayErrorRetryTimers: Record<string, ReturnType<typeof setTimeout
 export const REPLAY_ERROR_BASE_DELAY_MS = 1_000
 export const REPLAY_ERROR_MAX_DELAY_MS = 30_000
 
+// Safety hardening (frontend-lead dispatch, subagent-control-plane stream):
+// applySeqGate's gap branch (frames.ts) sends a single, fire-once
+// `attach_session{since_seq, boot_id}` to recover from a sequence gap. If
+// that frame's response is lost — e.g. raced against a concurrent
+// attach_session for a DIFFERENT session sharing the same connection — the
+// session was left permanently stuck: inFlightReattachSids blocks a second
+// send, and nothing ever retries. Mirrors replayErrorRetryAttempts/Timers'
+// own pattern immediately above (same backoff shape, same per-session
+// keying), but — unlike the replay_error retry, whose re-schedule trigger is
+// an external "it failed again" `done` frame — this one has no external
+// retrigger signal (a lost ack is lost silently), so scheduleGapReattachRetry
+// (frames.ts) re-schedules ITSELF on each firing rather than waiting for a
+// caller to invoke it again. Cleared the same way replayErrorRetryAttempts/
+// Timers are: the timer on disconnect (clearCatchUpSideChannelsOnDisconnect,
+// outbound-lifecycle.ts — a stale timer would resend over a dead
+// connection), both timer and attempt count once the gap genuinely resolves
+// (inFlightReattachSids.delete, applySeqGate's own 'apply'/cursor-minting
+// branches).
+export const gapReattachRetryAttempts: Record<string, number> = {}
+export const gapReattachRetryTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+export const GAP_REATTACH_BASE_DELAY_MS = 1_000
+export const GAP_REATTACH_MAX_DELAY_MS = 30_000
+
 export const EMPTY_BUCKET = emptySessionState()
 
 // F-S1: all server→client frames that must carry session_id.

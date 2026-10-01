@@ -15,7 +15,7 @@ import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/ws-schem
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
-import { EMPTY_BUCKET, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
+import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
 
@@ -191,11 +191,22 @@ interface OutboundLifecycleContext {
 //   - N4: any replay_error retry timer scheduled for a PREVIOUS connection
 //     would send its eventual attach_session over a connection that no
 //     longer exists — same "reconnect goes through the normal path" reasoning.
+//   - Safety hardening (subagent-control-plane stream): the gap-reattach
+//     retry timer (scheduleGapReattachRetry, frames.ts) is the same
+//     shape of hazard as the replay_error timer just above — cancel it too,
+//     for the same reason. gapReattachRetryAttempts is intentionally left
+//     alone (same as replayErrorRetryAttempts): the backoff count should
+//     keep escalating across a flapping connection, not reset on every
+//     disconnect.
 function clearCatchUpSideChannelsOnDisconnect(): void {
   inFlightReattachSids.clear()
   for (const sid of Object.keys(replayErrorRetryTimers)) {
     clearTimeout(replayErrorRetryTimers[sid])
     delete replayErrorRetryTimers[sid]
+  }
+  for (const sid of Object.keys(gapReattachRetryTimers)) {
+    clearTimeout(gapReattachRetryTimers[sid])
+    delete gapReattachRetryTimers[sid]
   }
 }
 
