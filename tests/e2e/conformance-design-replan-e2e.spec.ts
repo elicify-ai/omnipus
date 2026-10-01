@@ -22,6 +22,7 @@
 // makes splitting the suite across shards sound.
 
 import { expect } from '@playwright/test'
+import type { components } from '../../src/lib/api/generated/openapi-types'
 import { test } from './fixtures/plan-cleanup'
 import {
   apiFetch,
@@ -147,9 +148,10 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // (see m2 in the members comment below for why this replaced a real LLM
   // member) — deterministic, so the mismatch the plan's DoD checks for is a
   // genuine fact every run, not a matter of real-LLM chance.
+  const m2WrongNumberEvidence = 'I confirmed the assigned verification number is 17.'
   const m2WorkerId = await createStubCliWorkerAgent(page, `conformance-t3-m2-stub-${Date.now()}`, {
     firstTry: [
-      '[goal:evidence] I confirmed the assigned verification number is 17.',
+      `[goal:evidence] ${m2WrongNumberEvidence}`,
       'TASK_STATUS: success',
       'TASK_SUMMARY: Confirmed the verification number as instructed.',
     ].join('\n'),
@@ -173,8 +175,9 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // parallel) members:
   //   m1 — trivial filler, own check trivially passes.
   //   m2 — the SUPERSEDE target: its own criterion is deliberately broad so
-  //        the member ends `done` regardless of content — but its recorded
-  //        result, via a deterministic stub worker (exactly like m3's below),
+  //        a wrong number can satisfy it. The real Judge still has to mark
+  //        the member `done`; Step 1 verifies this precondition explicitly.
+  //        Its recorded result, via a deterministic stub worker (like m3's below),
   //        states a DIFFERENT verification number than the one its own task
   //        prompt assigned. That mismatch is a genuine, checkable fact in the
   //        member's own Result text — buildPlanClaimText
@@ -304,12 +307,12 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
         prompt: 'Reply confirming the assigned verification number, which is 42. State only that number.',
         write_set: ['out/t3/m2.txt'],
         agent_id: m2WorkerId,
-        // Deliberately broad: ANY numeric confirmation satisfies this, so
-        // the member reaches `done` regardless of which number the stub
-        // actually recorded — preserving the original design intent
-        // ("member technically finishes, but got it wrong") without needing
-        // this member-level criterion to police correctness itself. The
-        // plan-level DoD above is what actually checks the number.
+        // Deliberately broad: ANY numeric confirmation satisfies this;
+        // correctness of the number belongs to the plan-level DoD. This does
+        // not guarantee `done`: the real member Judge also checks the default
+        // prose DoD and can fail (e.g. a truncated verdict). Step 1 must prove
+        // "member technically finishes, but got it wrong" before evaluating
+        // the supervisor.
         criteria: [proseCriterion('m2 replied confirming some verification number')],
       },
       {
@@ -333,10 +336,14 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   const HOLD_PHASE = 'awaiting_supervision'
 
   // --- Step 1: MANDATORY — reach the hold at least once -------------------
-  // Not conditional (the original escape hatch this section replaces): with
-  // m2 done-but-DoD-wrong and m3 ending Failed "Blocked: <transient cause>" on
-  // its first try, a round-1 unmet verdict (and the awaiting_supervision hold
-  // it triggers) is expected reliably, not merely hoped for.
+  // First prove m2 is done-but-wrong, not merely that its stub printed a
+  // wrong number. A truncated member-Judge verdict can leave m2 failed;
+  // supersede is then illegal, so that is a precondition failure, not evidence
+  // of a supervisor defect. Sample m2 inside the existing first-hold budget
+  // and stop on failure or the first observed hold — never wait for a later
+  // correction to reset a failed m2 and manufacture the required state.
+  // With that precondition met and m3 ending Failed "Blocked: <transient
+  // cause>", the round-1 unmet verdict must reach awaiting_supervision.
   //
   // BUDGET, widened from 120s to 300s (investigation, 2026-07-29, plan
   // 01KYQ6T9HAMNWNG507Y94G4GHS on the ee7ecc47 CI shard): 120s was a TIMING
@@ -381,15 +388,43 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // atomically after an UNMET verdict.
   const firstHoldBudgetMs = 600_000
   const firstHoldDeadline = Date.now() + firstHoldBudgetMs
+  let observedM2: components['schemas']['Task'] | undefined
+  let observedPlan: components['schemas']['Plan'] | undefined
   while (Date.now() < firstHoldDeadline) {
-    const poll = await apiFetch<{ plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
+    const poll = await apiFetch<components['schemas']['Plan']>(page, 'GET', `/api/v1/plans/${planId}`)
     if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
+    observedPlan = poll.body
+    // Read m2 AFTER the plan snapshot: if that snapshot is at the hold, the
+    // member should already be terminal, not a stale in-progress sample.
+    const m2Poll = await apiFetch<components['schemas']['Task']>(page, 'GET', `/api/v1/tasks/${memberIds.m2}`)
+    if (!m2Poll.ok) {
+      throw new Error(
+        `t3: precondition not met: m2 (${memberIds.m2}) could not be read; ` +
+          `GET /tasks/{id} returned ${m2Poll.status}: ${m2Poll.raw}`,
+      )
+    }
+    observedM2 = m2Poll.body
     if (poll.body.plan_phase === HOLD_PHASE) {
       reachedHoldOnce = true
       break
     }
+    if (observedM2?.status === 'failed') break
     await page.waitForTimeout(1_500)
   }
+  const preconditionDiagnostic =
+    `t3: precondition not met: m2 (${memberIds.m2}) status="${observedM2?.status ?? '(not observed)'}" ` +
+    `result=${JSON.stringify(observedM2?.result ?? null)}; plan ${planId} ` +
+    `state="${observedPlan?.state ?? '(not observed)'}" phase="${observedPlan?.plan_phase ?? ''}" ` +
+    `judge_rounds=${observedPlan?.judge_rounds ?? 0}`
+  expect(
+    observedM2?.status,
+    `${preconditionDiagnostic}; missing status="done" — supersede requires a done member.`,
+  ).toBe('done')
+  expect(
+    observedM2?.result,
+    `${preconditionDiagnostic}; missing recorded wrong-number evidence ${JSON.stringify(m2WrongNumberEvidence)} ` +
+      '(the task assigned 42).',
+  ).toContain(m2WrongNumberEvidence)
   expect(
     reachedHoldOnce,
     `t3: plan ${planId} must reach plan_phase=awaiting_supervision within ${firstHoldBudgetMs / 1000}s of approval — m2 (done, ` +
