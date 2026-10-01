@@ -7206,6 +7206,10 @@
       "lane": 8
     },
     {
+      "source": "src/components/panel-shell/panelEscape.ts",
+      "lane": 8
+    },
+    {
       "source": "src/components/panel-shell/panelFocus.ts",
       "lane": 8
     },
