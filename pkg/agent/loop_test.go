@@ -2313,93 +2313,7 @@ func (m *failFirstMockProvider) GetDefaultModel() string {
 
 // TestAgentLoop_ContextExhaustionRetry verify that the agent retries on context errors
 func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
-	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDirOuter)
-	// Nested one level below the freshly-made outer container so
-	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
-	// session/task store at) is THIS test's own private tmpDirOuter,
-	// never the shared OS temp root — see loop_test.go's
-	// newTestAgentLoop doc comment for the leak this closes.
-	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
-		t.Fatalf("Failed to create nested home dir: %v", err)
-	}
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-
-	// Create a provider that fails once with a context error
-	contextErr := fmt.Errorf("InvalidParameter: Total tokens of image and text exceed max message tokens")
-	provider := &failFirstMockProvider{
-		failures:    1,
-		failError:   contextErr,
-		successResp: "Recovered from context error",
-	}
-
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-
-	// Inject some history to simulate a full context.
-	// Session history only stores user/assistant/tool messages — the system
-	// prompt is built dynamically by BuildMessages and is NOT stored here.
-	sessionKey := "test-session-context"
-	history := []providers.Message{
-		{Role: "user", Content: "Old message 1"},
-		{Role: "assistant", Content: "Old response 1"},
-		{Role: "user", Content: "Old message 2"},
-		{Role: "assistant", Content: "Old response 2"},
-		{Role: "user", Content: "Trigger message"},
-	}
-	defaultAgent := al.registry.GetDefaultAgent()
-	if defaultAgent == nil {
-		t.Fatal("No default agent found")
-	}
-	defaultAgent.Sessions.SetHistory(sessionKey, history)
-
-	// Call ProcessDirectWithChannel
-	// Note: ProcessDirectWithChannel calls processMessage which will execute runLLMIteration
-	response, err := al.ProcessDirectWithChannel(
-		context.Background(),
-		"Trigger message",
-		sessionKey,
-		"test",
-		"test-chat",
-	)
-	if err != nil {
-		t.Fatalf("Expected success after retry, got error: %v", err)
-	}
-
-	if response != "Recovered from context error" {
-		t.Errorf("Expected 'Recovered from context error', got '%s'", response)
-	}
-
-	// We expect 2 calls: 1st failed, 2nd succeeded
-	if provider.currentCall != 2 {
-		t.Errorf("Expected 2 calls (1 fail + 1 success), got %d", provider.currentCall)
-	}
-
-	// Check final history length
-	finalHistory := defaultAgent.Sessions.GetHistory(sessionKey)
-	// We verify that the history has been modified (compressed)
-	// Original length: 5
-	// Expected behavior: compression drops ~50% of Turns
-	// Without compression: 5 + 1 (new user msg) + 1 (assistant msg) = 7
-	if len(finalHistory) >= 7 {
-		t.Errorf("Expected history to be compressed (len < 7), got %d", len(finalHistory))
-	}
+	runPlainHistoryEntryRecovery(t, true)
 }
 
 func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
@@ -3491,82 +3405,13 @@ func (p *overflowProvider) GetDefaultModel() string {
 }
 
 func TestProcessMessage_ContextOverflowRecovery(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	_ = cfg
-
-	provider := &overflowProvider{}
-	al.registry = NewAgentRegistry(al.cfg, provider)
-
-	sessionKey := "agent:main:test-session"
-	agent := al.GetRegistry().GetDefaultAgent()
-
-	for i := 0; i < 5; i++ {
-		agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "heavy message"})
-		agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "response"})
-	}
-
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel: "test",
-		ChatID:  "chat1",
-		Sender: bus.SenderInfo{
-			CanonicalID: "user1",
-		},
-		SessionKey: "test-session",
-		Content:    "trigger recovery",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "Recovered from overflow" {
-		t.Fatalf("response = %q, want %q", response, "Recovered from overflow")
-	}
-
-	if provider.calls != 2 {
-		t.Fatalf("expected 2 calls, got %d", provider.calls)
-	}
+	runPlainHistoryEntryRecovery(t, false)
 }
 
 func TestProcessMessage_ContextOverflow_AnthropicStyle(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	_ = cfg
-
-	provider := &overflowProvider{}
-	al.registry = NewAgentRegistry(al.cfg, provider)
-
-	recoveryMsg := "error: status 400: context_window_exceeded"
-
-	provider.chatFunc = func(
-		ctx context.Context,
-		messages []providers.Message,
-		tools []providers.ToolDefinition,
-		model string,
-		opts map[string]any,
-	) (*providers.LLMResponse, error) {
-		if provider.calls == 1 {
-			return nil, errors.New(recoveryMsg)
-		}
-		return &providers.LLMResponse{Content: "Anthropic recovery success"}, nil
-	}
-
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel: "test",
-		ChatID:  "chat1",
-		Sender: bus.SenderInfo{
-			CanonicalID: "user1",
-		},
-		Content: "hello",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if !strings.Contains(response, "Anthropic recovery success") {
-		t.Fatalf("response = %q, want success message", response)
-	}
-	if provider.calls != 2 {
-		t.Fatalf("expected 2 calls for retry, got %d", provider.calls)
-	}
+	// Ruling §3: fresh history has no legal relief; the error spelling
+	// must not grant an unchanged second attempt.
+	runPlainHistoryNoProgress(t, nil, errors.New("error: status 400: context_window_exceeded"))
 }
 
 // TestIsMessagingChannel verifies the unexported isMessagingChannel predicate
