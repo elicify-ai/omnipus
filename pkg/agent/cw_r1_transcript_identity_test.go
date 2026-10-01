@@ -26,9 +26,9 @@ func TestCWIdentity_ReusedIDProjectsOlderTranscriptRow(t *testing.T) {
 			h.record(t, h.turn("newer"), cwIdentityCall(tc.newerID, "newer"), strings.Repeat("n", 513), nil, nil)
 			before, archived := h.transcript(t), h.archive(t)
 
-			h.project(t, h.turn("projection"), older, "older occurrence emptied")
+			mark := h.projectOK(t, h.turn("projection"), older)
 
-			require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", "older occurrence emptied"), h.transcript(t),
+			require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", mark), h.transcript(t),
 				"the older composite key must change only the older row; the newest same-ID row must remain intact")
 			assert.Equal(t, archived, h.archive(t), "projection must never rewrite the full archive")
 		})
@@ -42,8 +42,18 @@ func TestCWIdentity_FullResultRemainsAddressableForLaterProjection(t *testing.T)
 		t.Run(mode, func(t *testing.T) {
 			h := newCWIdentityHarness(t)
 			h.prefix(t)
-			older := h.record(t, h.turn("full-older"), cwIdentityCall("call_0", "full older"), "full older bytes", nil, nil)
-			newer := h.record(t, h.turn("full-newer"), cwIdentityCall("call_0", "full newer"), "full newer bytes", nil, nil)
+			// fullResultContent (400 runes) stays under the fixture's 512-rune
+			// admission cap (so Capped stays false, as this scenario requires)
+			// while staying comfortably over the real recall mark's fixed
+			// ~285-rune size (buildRecallMark, measured directly) — long enough
+			// that the real D5 pass this scenario later drives (h.projectOK)
+			// genuinely shrinks the window instead of growing it. The literal
+			// "full older bytes"/"full newer bytes" strings the dead-path test
+			// used (17 runes) could never do that: no budget could ever make
+			// a real empty of 17 runes relieve real pressure.
+			const fullResultContent = 400
+			older := h.record(t, h.turn("full-older"), cwIdentityCall("call_0", "full older"), strings.Repeat("o", fullResultContent), nil, nil)
+			newer := h.record(t, h.turn("full-newer"), cwIdentityCall("call_0", "full newer"), strings.Repeat("n", fullResultContent), nil, nil)
 			require.False(t, older.admitted.Capped, "this case must start with an unprojected result")
 			require.False(t, newer.admitted.Capped, "the newer duplicate also starts full")
 			assert.Equal(t, older.key.ArchiveLine, older.admitted.ArchiveLine,
@@ -69,14 +79,14 @@ func TestCWIdentity_FullResultRemainsAddressableForLaterProjection(t *testing.T)
 				cwIdentityAssertUndoAddress(t, previous, older.line)
 			}
 
-			h.project(t, h.turn("late-projection"), older, "formerly full occurrence emptied")
-			require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", "formerly full occurrence emptied"), h.transcript(t),
+			mark := h.projectOK(t, h.turn("late-projection"), older)
+			require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", mark), h.transcript(t),
 				"later emptying must still address the same formerly full occurrence")
 			require.Equal(t, archived, h.archive(t), "both projection kinds leave the full archive unchanged")
 			h.assertLines(t, older, newer)
 			h.reopen(t)
 			h.assertLines(t, older, newer)
-			require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", "formerly full occurrence emptied"), h.transcript(t),
+			require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", mark), h.transcript(t),
 				"reopening must preserve the addressed projection")
 		})
 	}
@@ -100,8 +110,8 @@ func TestCWIdentity_PendingReplacementKeepsActualTranscriptIndex(t *testing.T) {
 	t.Run("later_projection_reaches_replaced_row", func(t *testing.T) {
 		h, older, _ := cwIdentityPendingFixture(t)
 		before, archived := h.transcript(t), h.archive(t)
-		h.project(t, h.turn("after-approval"), older, "approved occurrence emptied")
-		require.Equal(t, cwIdentityProjectedTranscript(before, 1, "emptied", "approved occurrence emptied"), h.transcript(t),
+		mark := h.projectOK(t, h.turn("after-approval"), older)
+		require.Equal(t, cwIdentityProjectedTranscript(before, 1, "emptied", mark), h.transcript(t),
 			"the original pending row, not an appended index or the newest duplicate, owns the completed result")
 		assert.Equal(t, archived, h.archive(t), "approval projection leaves the admitted full result recoverable")
 	})
@@ -146,14 +156,33 @@ func TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress(t *testing.T) {
 			require.Equal(t, h.archiveLines, ts.initialArchiveLen, "rollback snapshots the actual turn-start archive")
 			require.Equal(t, initialSet, ts.initialEmptiedSet, "rollback snapshots the actual turn-start projection set")
 
-			h.store.SetProjectionState(h.key, older.key, memory.ProjectionEmptied)
-			h.project(t, ts, older, "first projection")
-			assert.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", "first projection"), h.transcript(t),
-				"first write must reach the addressed older occurrence")
-			h.project(t, ts, older, "second projection")
-			assert.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", "second projection"), h.transcript(t),
-				"second write to the same key must reach that same row")
-			require.Len(t, ts.emptiedTranscriptPrev, 2, "both writes must retain undo records")
+			// First real pass: genuine D5 budget pressure empties `older` in
+			// place. The dead path's "first projection"/"second projection"
+			// synthetic marks (two arbitrary strings the caller supplied for
+			// the SAME key) have no real-mechanism equivalent: the real mark
+			// is a pure function of the archived content/line/tool/id/turn
+			// (pkg/agent/recall_mark.go::buildRecallMark), and
+			// retainedSourceRunes short-circuits an already-Emptied key to 0
+			// (projection_checked.go) — a second real pass on the SAME key
+			// can only ever be a genuine no-op, never a second distinct
+			// write. That idempotency is itself a real, previously-
+			// unverifiable claim the dead path had no mechanism to prove (it
+			// wrote the transcript directly, with no concept of "already
+			// projected"); this test proves it instead of fabricating a
+			// second distinct mark.
+			mark, ok := h.project(t, ts, older)
+			require.True(t, ok, "the first real D5 pressure check must actually commit a projection change")
+			assert.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", mark), h.transcript(t),
+				"the first real write must reach the addressed older occurrence")
+			require.Len(t, ts.emptiedTranscriptPrev, 1, "the first real write must retain its undo record")
+
+			mark2, ok2 := h.project(t, ts, older)
+			require.False(t, ok2, "a second real pressure check on an already-emptied key must be a genuine no-op")
+			assert.Equal(t, mark, mark2, "the mark is a pure function of the archived content/line/tool/id/turn — identical on repeat")
+			assert.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", mark), h.transcript(t),
+				"the no-op second check must leave that same row exactly as the first write left it")
+			require.Len(t, ts.emptiedTranscriptPrev, 1, "a no-op pressure check retains no further undo record")
+
 			undo := append([]session.ToolCallProjectionUpdate(nil), ts.emptiedTranscriptPrev...)
 			h.addArchive(t, providers.Message{Role: "user", Content: "discard this aborted tail"})
 
@@ -167,8 +196,8 @@ func TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress(t *testing.T) {
 			require.NoError(t, ts.restoreSession(h.agent), "a repeated restore must leave the original state intact")
 			require.Equal(t, before, h.transcript(t))
 
-			h.project(t, h.turn("after-abort"), older, "address still usable")
-			require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", "address still usable"), h.transcript(t),
+			mark3 := h.projectOK(t, h.turn("after-abort"), older)
+			require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", mark3), h.transcript(t),
 				"restoring projections must not erase the surviving occurrence's transcript address")
 			if tc.name == "reused_id" {
 				for _, record := range undo {
@@ -217,8 +246,8 @@ func TestCWIdentity_MediaAndFailureUseSameCompositeAddress(t *testing.T) {
 					require.Equal(t, call.Result, before[older.line].ToolCalls[0].Result, "the recorded result really carries media")
 				}
 
-				h.project(t, h.turn("project-"+kind), older, "older "+kind+" emptied")
-				require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", "older "+kind+" emptied"), h.transcript(t),
+				mark := h.projectOK(t, h.turn("project-"+kind), older)
+				require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", mark), h.transcript(t),
 					"media/failure addressing must change only the older text, preserving its shape, non-text metadata, status, parameters and the newer row")
 				assert.Equal(t, archived, h.archive(t), "media and failure source content must stay recoverable")
 			})

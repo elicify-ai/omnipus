@@ -21,6 +21,18 @@ import (
 // unknown, while &0 addresses the first transcript row. No wire field is added.
 // Real admission, transcript rewrites, JSONL persistence and rollback stay real.
 // GREEN and implementation mutations are deferred to an independent CHECK.
+//
+// stream-C R1 migration (architect-ruled, 2026-10-01): project() no longer
+// drives pkg/agent/empty_in_place.go::recordEmptiedOnTranscript — that path
+// has zero production callers (emptyInPlace, its only caller, is itself
+// uncalled) and is scheduled for deletion on a separate branch. project()
+// now drives the real, live mechanism — window_trim_checked.go::
+// trimWindowChecked -> window_projection_effects.go::commitWindowProjections
+// — under genuine budget pressure; see project's own doc comment below for
+// the full account, including why trimWindowChecked (not checkpointWindow)
+// and the one load-bearing constraint it forced on the fixtures (every
+// result the pack projects must be long enough that the real recall mark
+// shrinks it, not grows it).
 type cwIdentityHarness struct {
 	al              *AgentLoop
 	agent           *AgentInstance
@@ -213,11 +225,132 @@ func cwIdentityProjectedTranscript(
 	return want
 }
 
-func (h *cwIdentityHarness) project(t *testing.T, ts *turnState, rec cwIdentityRecorded, mark string) {
+// identityProjectionTool is the one tool name every scenario's fixture uses
+// (cwIdentityCall sets session.ToolCall.Tool, archived as
+// providers.ToolCall.Function.Name) — hardcoding it here rather than
+// re-deriving it via owningToolCall on every call is safe for exactly that
+// reason, confirmed directly against owningToolCall's own resolution
+// (projection.go::owningToolCall reads tc.Name, falling back to
+// tc.Function.Name, which cwIdentityCall sets to "identity_tool").
+const identityProjectionTool = "identity_tool"
+
+// project drives the REAL D5 "empty tool result in place" mechanism —
+// pkg/agent/window_trim_checked.go::trimWindowChecked, the live pre-turn /
+// forced-recovery entry point the architect's R1 ruling named, confirmed to
+// call commitWindowProjections directly (window_trim_checked.go:105) —
+// under genuine budget pressure computed from rec's own ALREADY-ARCHIVED
+// content and the real recall-mark builder (buildRecallMark), never a
+// hand-built emptiedToolResult.
+//
+// trimWindowChecked is used for all five scenarios rather than
+// checkpointWindow (the other live entry point commitWindowProjections has,
+// window_checkpoint.go:192): checkpointWindow's slideOldest step
+// (window_relief.go::slideOldest) EVICTS an entire older turn wholesale —
+// advances Skip past it, deletes its projection/transcript-line entries —
+// the instant a second complete tool-call step exists in the window, which
+// is the wrong semantic for a composite-identity test: it removes the row
+// instead of emptying it in place, and it never reaches
+// commitWindowProjections for what it evicted, so the transcript is never
+// rewritten. trimWindowChecked never calls slideOldest. Its whole-turn cut
+// (trimWholeTurns) is a guaranteed no-op here because every fixture has
+// exactly one leading role:user archive line (h.prefix) and no later one:
+// parseTurnBoundaries' only candidate (index 0) fails its own `end>0` guard.
+//
+// ts is registered as the session's active turn state (al.activeTurnStates)
+// for the call's duration so commitWindowProjections' recordWindowProjections
+// — which no-ops when ts.transcriptStore/ts.transcriptSessionID are unset —
+// actually rewrites the transcript; trimWindowChecked looks the active ts up
+// by session key exactly as the real pre-turn and timeout-recovery call
+// sites do (al.getActiveTurnState, window_trim_checked.go:29).
+//
+// Returns the real recall mark buildRecallMark produces for rec — the exact
+// mark commitWindowProjections writes, since both call the same producer
+// with the same inputs (recall_mark.go's documented FR-019 byte-identity
+// contract) — computed from rec's own known archived content BEFORE the
+// real call runs, so the assertion's oracle is the mark's documented
+// contract, never this call's own observed output. ok reports whether a
+// real projection change actually committed: false means the window
+// already fit (used to prove the mechanism's per-key idempotency for real,
+// rather than asserting it synthetically — see
+// TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress).
+func (h *cwIdentityHarness) project(t *testing.T, ts *turnState, rec cwIdentityRecorded) (mark string, ok bool) {
 	t.Helper()
-	h.al.recordEmptiedOnTranscript(ts, []emptiedToolResult{{
-		ToolCallID: rec.key.ToolCallID, ArchiveLine: rec.key.ArchiveLine, Mark: mark,
-	}})
+	h.al.activeTurnStates.Store(h.key, ts)
+	defer h.al.activeTurnStates.Delete(h.key)
+
+	snap, err := h.store.SnapshotWindow(context.Background(), h.key)
+	require.NoError(t, err)
+	msgs, lines := memory.WindowHistory(snap)
+	idx := -1
+	for i, line := range lines {
+		if line == rec.key.ArchiveLine {
+			idx = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, idx, 0, "project target must be mapped into the current window")
+
+	full := snap.Archive[rec.key.ArchiveLine].Content
+	turn := turnNumberForArchiveLine(snap.Archive, rec.key.ArchiveLine)
+	computedMark, err := buildRecallMark("emptied", identityProjectionTool, rec.key.ToolCallID, rec.key.ArchiveLine, full, turn)
+	require.NoError(t, err)
+
+	// projected is what trimWindowChecked's own p.messages equals BEFORE any
+	// shortening this call might do — the window's CURRENT persisted view,
+	// which already differs from the raw archive content whenever an earlier
+	// real admission (tool_result_window.go::admitResultWindow) capped this
+	// same result at the door. policy is left zero-value: retainedSourceRunes
+	// only consults it when a capped/capped_failure key has no persisted
+	// exact SourceRunes entry, which never happens here — every capped
+	// admission in this pack persists its exact kept amount at admission
+	// time (admitResultWindow sets after.Projection.SourceRunes[key]).
+	pc := projectionContext{archive: snap.Archive, sourceRunes: snap.State.Projection.SourceRunes}
+	projected, err := projectMessagesChecked(msgs, func(i int) int { return lines[i] }, snap.State.Projection.Entries, pc)
+	require.NoError(t, err)
+
+	before := sumMessageTokens(projected)
+	curTok := estimateMessageTokens(providers.Message{Role: "tool", ToolCallID: rec.key.ToolCallID, Content: projected[idx].Content})
+	markTok := estimateMessageTokens(providers.Message{Role: "tool", ToolCallID: rec.key.ToolCallID, Content: computedMark})
+	after := before - curTok + markTok
+	// If the window already carries the mark (a repeat call against an
+	// already-Emptied key — see the idempotency check in
+	// TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress), curTok
+	// and markTok are identical and after==before by construction: that is
+	// the correct, expected outcome of this call, not a fixture problem.
+	// Only a genuinely NOT-yet-minimal result that still fails to shrink is
+	// a fixture-sizing defect.
+	alreadyMark := projected[idx].Content == computedMark
+	if !alreadyMark {
+		require.Less(t, after, before,
+			"fixture content must be long enough that the real mark genuinely shrinks the window "+
+				"(buildRecallMark has ~285 chars of fixed overhead, measured directly against the "+
+				"real function) — otherwise no budget could ever make trimWindowChecked settle "+
+				"after exactly one real empty of this result; this is the live mechanism's own "+
+				"constraint, not a test artifact")
+	}
+
+	// Fix a large window and solve MaxTokens so agentContextBudget() == after
+	// exactly (B = W - MaxTokens - ceil(0.05W) - pinnedCoreOverheadTokens —
+	// context_budget.go::contextBudget): budget==after means fits() is
+	// satisfied the instant — and only once — rec's own result is fully
+	// emptied. Before that, before>after forces the real trim loop to run;
+	// a second call against an already-projected window starts with
+	// before<=after and short-circuits with NothingToTrim (ok=false).
+	h.agent.ContextWindow = 200000
+	headroom := (h.agent.ContextWindow + 19) / 20
+	h.agent.MaxTokens = h.agent.ContextWindow - headroom - pinnedCoreOverheadTokens(h.agent) - after
+
+	_, ok = h.al.trimWindowChecked(context.Background(), h.agent, "", h.key, false)
+	return computedMark, ok
+}
+
+// projectOK is project for the common case: the caller requires the real
+// pressure to actually commit (ok=true) and only needs the mark back.
+func (h *cwIdentityHarness) projectOK(t *testing.T, ts *turnState, rec cwIdentityRecorded) string {
+	t.Helper()
+	mark, ok := h.project(t, ts, rec)
+	require.True(t, ok, "real D5 budget pressure must actually empty the addressed result")
+	return mark
 }
 
 func cwIdentityTranscriptLines(t *testing.T, pm memory.ProjectionMeta) map[memory.ProjectionKey]int {
