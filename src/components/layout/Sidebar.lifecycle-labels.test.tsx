@@ -30,7 +30,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
-import { fetchWorkspaces, fetchSessions } from '@/lib/api'
+import { fetchWorkspaces, fetchSessions, type Session } from '@/lib/api'
+import type { Session as WireSession } from '@/lib/api/generated/openapi-types'
 
 // JSDOM does not implement window.matchMedia — Sidebar uses it for pin breakpoint detection.
 // Return matches: true so canPin=true and the pin toggle button renders in tests.
@@ -220,30 +221,35 @@ const lcWorkspace = {
 
 let lcRowCounter = 0
 
+// A session row as the sidebar consumes it once GREEN lands: the SPA Session
+// (what fetchSessions resolves today) plus the lifecycle_state/stop_note wire
+// fields, whose TYPES are lifted from the generated wire schema
+// (src/lib/api/generated/openapi-types.ts::Session) — nothing hand-written.
+// The SPA Session gains those fields as part of GREEN (rawToSession
+// pass-through of the generated schema); the mock feeds the row directly.
+type LifecycleSessionRow = Session & Pick<WireSession, 'lifecycle_state' | 'stop_note'>
+
 // One session fixture per test; overrides carry the wire fields under test.
-// Cast through `as never` like Sidebar.test.tsx does: the SPA Session type
-// gains lifecycle_state/stop_note as part of GREEN (rawToSession pass-through
-// of the generated wire schema), and the mock feeds the row directly.
-function lcSession(overrides: Record<string, unknown>) {
+function lcSession(overrides: Partial<LifecycleSessionRow>): LifecycleSessionRow {
   lcRowCounter += 1
   return {
     id: `sess-lc-${lcRowCounter}`,
     agent_id: 'agent-1',
     active_agent_id: 'agent-1',
     title: `Session Row ${lcRowCounter}`,
-    type: 'chat' as const,
+    type: 'chat',
     workspace_id: lcWorkspace.id,
     channel: 'webchat',
     created_at: '2026-04-01T00:00:00Z',
     updated_at: '2026-04-01T02:00:00Z',
     message_count: 1,
     ...overrides,
-  } as never
+  }
 }
 
 // Renders the sidebar with one workspace expanded and `session` as its only
 // session row; resolves once the row's title is visible.
-async function renderRowFor(session: Record<string, unknown>) {
+async function renderRowFor(session: LifecycleSessionRow) {
   vi.mocked(fetchWorkspaces).mockResolvedValue([lcWorkspace] as never)
   vi.mocked(fetchSessions).mockResolvedValue([session])
   act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
@@ -252,8 +258,7 @@ async function renderRowFor(session: Record<string, unknown>) {
   const expandButton = await screen.findByLabelText('Expand Lifecycle Workspace sessions')
   act(() => { fireEvent.click(expandButton) })
 
-  const title = (session as { title: string }).title
-  return await screen.findByText(title)
+  return await screen.findByText(session.title)
 }
 
 // The five label words, pinned case-insensitively (vocabulary is the
