@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -158,6 +159,17 @@ func recallInjectionFixture(
 
 const recallInjectionSessionKey = "recall-injection-session"
 
+func newRecallInjectionTaskSession(t *testing.T, al *AgentLoop, agent *AgentInstance) string {
+	t.Helper()
+	sessionStore := al.GetAgentStore(agent.ID)
+	require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
+	meta, err := sessionStore.NewSession(session.SessionTypeTask, "system", agent.ID)
+	require.NoError(t, err)
+	require.NotNil(t, meta)
+	require.NotEmpty(t, meta.ID)
+	return meta.ID
+}
+
 // countMarkers returns how many messages in req carry the recall marker.
 func countMarkers(req []providers.Message) int {
 	n := 0
@@ -203,6 +215,7 @@ func TestRunTurn_RecallInjected_NonceInSecondRequest(t *testing.T) {
 	}
 	provider := &recallInjectionProvider{first: map[string]any{"turn_range": "1-1"}}
 	al, agent := recallInjectionFixture(t, provider, 200000, 1000, turns)
+	taskSessionID := newRecallInjectionTaskSession(t, al, agent)
 
 	// Evict turn 1 from the live window by advancing Skip (archive keeps it).
 	// The nonce sits AFTER the filler so the breadcrumb's 80-char snippet of
@@ -213,7 +226,7 @@ func TestRunTurn_RecallInjected_NonceInSecondRequest(t *testing.T) {
 		require.NotContains(t, m.Content, nonce, "test setup: the nonce must be evicted from the live window")
 	}
 
-	_, err := al.processTaskDirect(context.Background(), agent.ID, "what was the nonce?", recallInjectionSessionKey, "chat-recall-1")
+	_, err := al.processTaskDirect(context.Background(), agent.ID, "what was the nonce?", recallInjectionSessionKey, taskSessionID)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, provider.calls(), 2, "the provider must be called again after the recall tool ran")
 
@@ -254,9 +267,10 @@ func TestRunTurn_RecallNonFit_ToolResultStatesIt(t *testing.T) {
 	}
 	provider := &recallInjectionProvider{first: map[string]any{"turn_range": "1-1"}}
 	al, agent := recallInjectionFixture(t, provider, 12000, 1000, turns)
+	taskSessionID := newRecallInjectionTaskSession(t, al, agent)
 	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-2)
 
-	_, err := al.processTaskDirect(context.Background(), agent.ID, "what was the nonce?", recallInjectionSessionKey, "chat-recall-2")
+	_, err := al.processTaskDirect(context.Background(), agent.ID, "what was the nonce?", recallInjectionSessionKey, taskSessionID)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, provider.calls(), 2)
 
@@ -291,9 +305,10 @@ func TestRunTurn_RecallNotDoubledOnReassembly(t *testing.T) {
 		},
 	}
 	al, agent := recallInjectionFixture(t, provider, 200000, 1000, turns)
+	taskSessionID := newRecallInjectionTaskSession(t, al, agent)
 	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-2)
 
-	_, err := al.processTaskDirect(context.Background(), agent.ID, "what was the nonce?", recallInjectionSessionKey, "chat-recall-3")
+	_, err := al.processTaskDirect(context.Background(), agent.ID, "what was the nonce?", recallInjectionSessionKey, taskSessionID)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, provider.calls(), 3, "call 2 overflowed; call 3 is the post-reassembly retry")
 
@@ -330,10 +345,11 @@ func TestRunTurn_RecallReplacedInSameTurn_OneMarker(t *testing.T) {
 		},
 	}
 	al, agent := recallInjectionFixture(t, provider, 200000, 1000, turns)
+	taskSessionID := newRecallInjectionTaskSession(t, al, agent)
 	// Evict turns 1 and 2.
 	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-4)
 
-	_, err := al.processTaskDirect(context.Background(), agent.ID, "recall twice", recallInjectionSessionKey, "chat-recall-4")
+	_, err := al.processTaskDirect(context.Background(), agent.ID, "recall twice", recallInjectionSessionKey, taskSessionID)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, provider.calls(), 3)
 
@@ -443,6 +459,7 @@ func TestRunTurn_RecallByIdPageInjected(t *testing.T) {
 		},
 	}
 	al, agent := recallInjectionFixture(t, provider, 200000, 1000, turns)
+	taskSessionID := newRecallInjectionTaskSession(t, al, agent)
 
 	total := 0
 	for _, tr := range turns {
@@ -454,7 +471,7 @@ func TestRunTurn_RecallByIdPageInjected(t *testing.T) {
 		require.NotContains(t, m.Content, nonce2, "test setup: the result must be evicted from the window")
 	}
 
-	_, err := al.processTaskDirect(context.Background(), agent.ID, "what did the search return?", recallInjectionSessionKey, "chat-recall-page")
+	_, err := al.processTaskDirect(context.Background(), agent.ID, "what did the search return?", recallInjectionSessionKey, taskSessionID)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, provider.calls(), 3, "two recalls means three provider calls")
 

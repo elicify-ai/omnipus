@@ -45,6 +45,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
@@ -191,6 +192,12 @@ func TestProcessTaskDirect_UnattendedAllowedTool_StillRuns(t *testing.T) {
 		WithToolCall("dangerous_tool", `{}`).
 		WithText("wrote the report")
 	mia := registerAgent(t, al, home, "mia", prov, false)
+	sessionStore := al.GetAgentStore(mia.ID)
+	require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
+	taskSession, err := sessionStore.NewSession(session.SessionTypeTask, "system", mia.ID)
+	require.NoError(t, err)
+	require.NotNil(t, taskSession)
+	require.NotEmpty(t, taskSession.ID)
 
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)
@@ -199,7 +206,7 @@ func TestProcessTaskDirect_UnattendedAllowedTool_StillRuns(t *testing.T) {
 	})
 
 	ctx := tools.WithAutoDenyAsk(context.Background(), true)
-	reply, err := al.processTaskDirect(ctx, "mia", "please use dangerous_tool", "task-sess-d08-2", "task:d08-2")
+	reply, err := al.processTaskDirect(ctx, "mia", "please use dangerous_tool", "task-sess-d08-2", taskSession.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "wrote the report", reply)
 	assert.True(t, stub.wasCalled.Load(),
