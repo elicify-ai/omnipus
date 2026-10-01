@@ -1,32 +1,75 @@
 package agent
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
-// slideOldest advances only over an entire complete prefix. Newest/incomplete
-// assistant structure, unarchived messages and unconsumed controls block a cut.
-func (p *windowCheckpoint) slideOldest() bool {
-	steps := windowSteps(p.messages)
+// evictionEndpoint is one oldest-first eviction cut candidate: the removable
+// prefix ends at end (exclusive); at is the owning assistant's index.
+type evictionEndpoint struct {
+	at  int
+	end int
+}
+
+// evictionEndpoints merges the two evictable endpoint kinds into one
+// oldest-first candidate list: complete tool-result groups (ending after
+// exactly all declared matching results) and older completed plain assistants
+// (ending right after themselves). Trailing completed plain narration may
+// stay attached to either endpoint, never the newest assistant — the newest
+// assistant is the floor even when it is plain text. windowSteps itself stays
+// tool-only for validation, pre-turn whole-turn cuts and result shortening;
+// this enumeration only widens what may leave a window (plain-history ruling
+// 2026-10-01 §1).
+func (p *windowCheckpoint) evictionEndpoints() []evictionEndpoint {
 	newest := -1
 	for i, m := range p.messages {
 		if m.Role == "assistant" {
 			newest = i
 		}
 	}
-	for _, step := range steps {
-		if !step.complete || step.start == newest {
-			return false
-		}
-		end := step.end
-		for end < len(p.messages) && p.messages[end].Role == "assistant" && len(p.messages[end].ToolCalls) == 0 && end != newest {
+	attach := func(end int) int {
+		for end < len(p.messages) && p.messages[end].Role == "assistant" &&
+			len(p.messages[end].ToolCalls) == 0 && end != newest {
 			end++
 		}
+		return end
+	}
+	var out []evictionEndpoint
+	for _, step := range windowSteps(p.messages) {
+		if step.complete && step.start != newest {
+			out = append(out, evictionEndpoint{at: step.start, end: attach(step.end)})
+		}
+	}
+	for i, m := range p.messages {
+		if m.Role == "assistant" && len(m.ToolCalls) == 0 && i != newest {
+			out = append(out, evictionEndpoint{at: i, end: attach(i + 1)})
+		}
+	}
+	sort.SliceStable(out, func(a, b int) bool { return out[a].at < out[b].at })
+	return out
+}
+
+// slideOldest advances only over an entire complete prefix, choosing the
+// oldest merged eviction endpoint (complete tool group or older completed
+// plain assistant). Newest/incomplete assistant structure, unarchived
+// messages and unconsumed controls block a cut; an incomplete or floor group
+// is never crossed, and a plain cut never hides it.
+func (p *windowCheckpoint) slideOldest() bool {
+	newest := -1
+	for i, m := range p.messages {
+		if m.Role == "assistant" {
+			newest = i
+		}
+	}
+	steps := windowSteps(p.messages)
+	for _, endpoint := range p.evictionEndpoints() {
+		end := endpoint.end
 		cut := p.state.Skip
-		for i := step.start; i < end; i++ {
+		for i := endpoint.at; i < end; i++ {
 			if p.lines[i] < 0 {
 				return false
 			}

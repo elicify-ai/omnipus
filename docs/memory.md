@@ -63,7 +63,7 @@ The live window is the part of the conversation sent to the model. Omnipus can s
 | What changes under pressure | What stays |
 |---|---|
 | An injected block of recalled conversation can leave first. | Its source remains in the conversation archive. |
-| Old whole turns, or older complete assistant steps within the current turn, can leave the live view. A step includes the assistant's calls and all their matching results. | The newest and incomplete call/result groups stay together. |
+| Old whole turns, or older complete assistant steps within the current turn, can leave the live view. A step includes the assistant's calls and all their matching results. An older assistant reply that made no tool calls can leave the same way — Omnipus always removes the oldest of the two first, and the user message that started that part of the conversation leaves with it. | The newest and incomplete call/result groups stay together. The newest assistant reply stays even when it is plain text. |
 | Retained tool-result text can shrink to its beginning and end, with an addressed recall mark between them. Even newest results can eventually become mark-only. | The call, its arguments, the result slot and its correlation identity remain. Full admitted, filtered result text stays in the archive. |
 | The model receives a short notice identifying what left or was shortened. | The original message that started the turn, including media, instructions and not-yet-consumed steering messages remain. The relief notice is model context, not a new chat message. |
 
