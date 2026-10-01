@@ -925,9 +925,18 @@ func (al *AgentLoop) steeredCompletionWriteActive(sessionID string) bool {
 
 // hasRunningOrQueuedDescendant reports whether parentID has any descendant
 // that is genuinely still working — a `queued` child (admitted or not, it
-// WILL run), or a `running` child that is actually executing: a live turn
-// registered under its own SessionID, or (task-origin only) a task run the
-// executor is still holding.
+// WILL run), a `needs_input` child (D6b: a child waiting for an answer
+// holds back its parent's done), or a `running` child that is actually
+// executing: a live turn registered under its own SessionID, or
+// (task-origin only) a task run the executor is still holding.
+//
+// Completion-frontier semantics (sub-agent control-plane ADR, D6 Q2=B /
+// D6b): a `stopped` descendant neither blocks nor is it enqueued — it CUTS
+// the traversal, so a working or waiting descendant BEYOND a stopped node is
+// invisible to this frontier. The stopped node's direct parent is told by
+// the stop notice and decides about the branch; when that parent explicitly
+// resumes, the record's state (queued/running/needs_input) blocks again —
+// the cut follows the record's state, never its identity.
 //
 // ADR-091 fix lane RX-HANG: a `running` child is deliberately NOT enough on
 // its own. completionDisposition's steer.OutcomeLifecycleNotice case keeps
@@ -1011,6 +1020,19 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 			switch child.State {
 			case session.LifecycleQueued:
 				return true, nil
+			case session.LifecycleNeedsInput:
+				// D6b: a descendant waiting for an answer holds back the
+				// parent's completion until the question is answered or its
+				// 24-hour limit lands a visible failure. Unconditional — a
+				// parked session has no live turn by definition.
+				return true, nil
+			case session.LifecycleStopped:
+				// D6 Q2=B / D8.6: a stopped descendant does not block, and it
+				// CUTS the traversal — its subtree is invisible to this
+				// frontier. The direct parent was told by the stop notice and
+				// decides; a resumed record blocks again by state, not
+				// identity.
+				continue
 			case session.LifecycleRunning:
 				if al.steeredCompletionWriteActive(child.SessionID) {
 					return true, nil
