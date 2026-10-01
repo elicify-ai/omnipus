@@ -90,7 +90,10 @@ func TestConsumeTaskAttempt_SupersededSessionStaysActive(t *testing.T) {
 	// follow-up note above this test for why this is sound for THIS
 	// production call specifically.
 	seedStatus := session.StatusFailed
-	if err := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &seedStatus}); err != nil {
+	// Assign, do not declare: err is this test's function-scoped variable
+	// (declared at the NewSession call above); a fresh declaration here
+	// shadows it and fails the govet shadow check.
+	if err = sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &seedStatus}); err != nil {
 		t.Fatalf("seed session to a non-active status: %v", err)
 	}
 
