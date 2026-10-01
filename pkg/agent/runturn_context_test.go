@@ -276,12 +276,23 @@ func TestRunTurn_ImmutableResidueStillSends(t *testing.T) {
 }
 
 // TestRunTurn_MidTurnNeverAdvancesSkip — spec test 39, B-35 row 3 / ADR
-// §17.4c (FR-030): when the oldest over-budget content mid-turn is an
-// EARLIER complete turn, Skip does not move and the request bytes shrink
-// only by marks — the message count never drops mid-turn.
+// §17.4c (FR-030, amended 2026-09-30 MAJ-CW-004): renamed in substance, not
+// just in oracle — "Skip never advances" is exactly the pre-slide claim
+// MAJ-CW-004 replaces. Through the REAL turn loop, an earlier complete
+// turn (and, within it, an earlier complete step) that the current turn's
+// step never touches is cut from the live window WHOLE, and Skip genuinely
+// advances past it — never left as an in-place "emptied" mark. What FR-030
+// still guarantees, and this test now proves instead: the current turn's
+// own initiating user message is the anchor and survives; the newest
+// (floor) step is never slid or corrupted; every request the provider
+// receives stays under budget (SC-002); and a genuine slide can shrink the
+// message count between consecutive requests — that is no longer a defect.
 func TestRunTurn_MidTurnNeverAdvancesSkip(t *testing.T) {
-	// Turn A: two 25,000-char results — fits B (≈ 33k tokens) at rest, so
-	// turn B's PRE-turn site has nothing to do and Skip stays put.
+	// Turn A: two 25,000-char results. Precondition CORRECTED 2026-10-01:
+	// under the real slide-before-empty order, even turn A's own mid-turn
+	// checkpoint (after a-2's result is admitted) finds a-1's step a legal
+	// complete prefix the newest step (a-2) doesn't touch, and slides it
+	// away whole — this was never reachable under the old no-slide model.
 	providerA := testutil.NewScenario().
 		WithToolCalls([]providers.ToolCall{toolCallFor("a-1", "aone")}).
 		WithToolCalls([]providers.ToolCall{toolCallFor("a-2", "atwo")}).
@@ -292,11 +303,22 @@ func TestRunTurn_MidTurnNeverAdvancesSkip(t *testing.T) {
 
 	archiveA, err := h.agent.Sessions.ReadArchive(context.Background(), h.sessionKey)
 	require.NoError(t, err)
-	skipA := len(archiveA) - len(h.agent.Sessions.GetHistory(h.sessionKey))
-	require.Zero(t, skipA, "precondition: nothing evicted after turn A")
+	historyA := h.agent.Sessions.GetHistory(h.sessionKey)
+	skipA := len(archiveA) - len(historyA)
+	assert.Greater(t, skipA, 0,
+		"FR-030/MAJ-CW-004: turn A's own mid-turn checkpoint already slides a-1's step away whole")
+	assert.Less(t, len(historyA), len(archiveA), "the live window genuinely shrank versus the full archive")
+	byIDA := msgsByToolCallID(historyA)
+	_, a1Survived := byIDA["a-1"]
+	assert.False(t, a1Survived, "a-1's step was cut from the live window, not left as a mark")
+	floorA, a2Survived := byIDA["a-2"]
+	require.True(t, a2Survived, "a-2 is the newest step's result — never slid or touched")
+	assert.True(t, strings.HasPrefix(floorA.Content, "atwo:"), "turn A's floor result is intact")
 
 	// Turn B on the SAME session: two 30,000-char results push the total
-	// over B mid-turn; the oldest over-budget content is turn A.
+	// further over B mid-turn. The oldest over-budget content is now all of
+	// turn A's surviving carryover (its own user anchor stops protecting it
+	// once turn B establishes its OWN anchor) plus, in turn, b-1's step.
 	providerB := testutil.NewScenario().
 		WithToolCalls([]providers.ToolCall{toolCallFor("b-1", "bone")}).
 		WithToolCalls([]providers.ToolCall{toolCallFor("b-2", "btwo")}).
@@ -305,27 +327,48 @@ func TestRunTurn_MidTurnNeverAdvancesSkip(t *testing.T) {
 	h.agent.Provider = providerB
 	h.al.RegisterTool(&bigResultTool{size: 30_000})
 
-	reply, err := h.al.processTaskDirect(context.Background(), "mia", "turn B", h.sessionKey, "chat-skip-test")
+	reply, err := h.al.ProcessScheduled(context.Background(), "mia", h.sessionID, "turn B", "scheduled", h.sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, "turn B done", reply)
 
 	archiveB, err := h.agent.Sessions.ReadArchive(context.Background(), h.sessionKey)
 	require.NoError(t, err)
-	assert.Equal(t, len(archiveB)-len(h.agent.Sessions.GetHistory(h.sessionKey)), skipA,
-		"FR-030: Skip did not move — mid-turn only empties")
+	historyB := h.agent.Sessions.GetHistory(h.sessionKey)
+	skipB := len(archiveB) - len(historyB)
+	assert.Greater(t, skipB, skipA,
+		"FR-030/MAJ-CW-004: Skip keeps advancing as turn B's own results force further slides")
+	assert.Less(t, len(historyB), len(archiveB), "the live window stays genuinely smaller than the full archive")
 
-	// Turn A's results were emptied (marks), turn B's floor result intact.
-	final := msgsByToolCallID(providerB.LastMessages())
-	assert.Contains(t, final["a-1"].Content, `"content_state":"emptied"`, "the earlier turn's oldest result is a mark")
-	assert.True(t, strings.HasPrefix(final["b-2"].Content, "btwo:"), "the floor is intact")
-
-	// Bytes shrink only by marks: between consecutive turn-B requests the
-	// message count only ever GROWS (by the appended step), never drops.
-	reqs := providerB.AllRequests()
-	for i := 1; i < len(reqs); i++ {
-		assert.GreaterOrEqual(t, len(reqs[i]), len(reqs[i-1]),
-			"request %d dropped messages mid-turn — a cut, not an empty", i+1)
+	// Turn A's carryover (a-1, a-2) and turn B's own older step (b-1) are
+	// all cut from the live window whole — none of them is present with an
+	// "emptied" mark, because they were never emptied in place; they were
+	// slid away. Only the newest (floor) step, b-2, survives — intact.
+	byIDB := msgsByToolCallID(historyB)
+	for _, id := range []string{"a-1", "a-2", "b-1"} {
+		_, survived := byIDB[id]
+		assert.False(t, survived, "%s's step was cut from the live window, not left as a mark", id)
 	}
+	floorB, b2Survived := byIDB["b-2"]
+	require.True(t, b2Survived, "b-2 is the newest step's result — never slid or touched")
+	assert.True(t, strings.HasPrefix(floorB.Content, "btwo:"), "the floor is intact")
+
+	final := msgsByToolCallID(providerB.LastMessages())
+	finalFloor, ok := final["b-2"]
+	require.True(t, ok, "the floor result reaches the final provider request")
+	assert.True(t, strings.HasPrefix(finalFloor.Content, "btwo:"), "the floor is intact in the final sent request")
+	for _, id := range []string{"a-1", "a-2", "b-1"} {
+		_, present := final[id]
+		assert.False(t, present, "%s never reaches the final provider request — it was slid away", id)
+	}
+
+	// The slide genuinely shrinks the live request between consecutive
+	// turn-B requests — this supersedes the pre-slide invariant that the
+	// message count never drops mid-turn; a real cut, not just a mark, is
+	// exactly what MAJ-CW-004 adds.
+	reqs := providerB.AllRequests()
+	require.GreaterOrEqual(t, len(reqs), 2, "turn B makes at least two provider requests")
+	assert.Less(t, len(reqs[len(reqs)-1]), len(reqs[0]),
+		"the final request is smaller than the first: a genuine slide occurred mid-turn")
 	assertEveryRequestUnderBudget(t, h)
 }
 
