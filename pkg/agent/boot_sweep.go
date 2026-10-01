@@ -259,10 +259,21 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 			r.deliverIfUnconsumed(ctx, rec, message, notice)
 		}
 		message, buildErr := interruptedBootMessage(rec)
+		outcome := steer.OutcomeInterrupted
+		if buildErr == nil && rec.State == session.LifecycleStopped && currentGenerationTimeoutStop(rec) {
+			// A timeout-stopped session's run ended BEFORE the restart: the
+			// restart interrupted nothing — its lifetime budget did. Since the
+			// U1 consolidation (timed out = stopped) this is the only reader
+			// a no-final stopped record reaches, so the retained stop cause
+			// must pick the notice here; delivering it with the "timeout:"
+			// text also keeps bootOutcome's OutcomeTimedOut classification
+			// live for this message on any later restart.
+			message, outcome, buildErr = terminalErrorBootMessage(rec)
+		}
 		if buildErr != nil {
 			notice("interrupted-message:"+id, fmt.Sprintf("session %s interrupted message failed: %v", id, buildErr))
 		} else {
-			r.deliver(ctx, rec, steer.OutcomeInterrupted, message, notice)
+			r.deliver(ctx, rec, outcome, message, notice)
 		}
 		if err := r.failInterrupted(rec); err != nil {
 			notice("interrupted-write:"+id, fmt.Sprintf("session %s interrupted transition failed: %v", id, err))
@@ -428,17 +439,28 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 }
 
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
+	reason := failedReasonInterrupted
+	goalReason := failedReasonInterrupted + ": the gateway restarted while the session was mid-flight"
+	if rec.State == session.LifecycleStopped && currentGenerationTimeoutStop(rec) {
+		// The record's own words must match the notice its parent just
+		// received: a timeout-stopped session failed as "timeout", with the
+		// same lifetime-limit phrasing completionDisposition uses live —
+		// not the restart-interruption reason, which is false for a run
+		// that had already ended before the restart.
+		reason = failedReasonTimeout
+		goalReason = failedReasonTimeout + ": the session exceeded its lifetime limit"
+	}
 	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
 			return nil
 		}
 		current.State = session.LifecycleFailed
-		current.FailedReason = failedReasonInterrupted
+		current.FailedReason = reason
 		current.NeedsInput = nil
 		return nil
 	})
 	if err == nil && r.EndSessionGoal != nil {
-		r.EndSessionGoal(rec.SessionID, failedReasonInterrupted+": the gateway restarted while the session was mid-flight")
+		r.EndSessionGoal(rec.SessionID, goalReason)
 	}
 	return err
 }
@@ -476,24 +498,47 @@ func completedBootMessage(rec *session.LifecycleRecord, result string) (generate
 	return message, steer.OutcomeFinalAnswer, err
 }
 
+// currentGenerationTimeoutStop reports whether rec's CURRENT generation was
+// stopped by its own lifetime budget. The U1 consolidation merged
+// cancelled/timed_out into the single "stopped" state (timed out = stopped,
+// founder ruling), so the state alone can no longer tell the two apart — the
+// RETAINED StopNote cause does, the same distinction
+// goal_child_completion.go keeps live via the outcome. Seq is stamped from
+// Generation at write (see StopNote's doc comment), so a note whose Seq
+// predates the record's current generation is inert history a Revive
+// deliberately kept: it must not rename THIS generation's stop.
+func currentGenerationTimeoutStop(rec *session.LifecycleRecord) bool {
+	return rec.StopNote != nil &&
+		rec.StopNote.Cause == session.StopCauseTimeout &&
+		rec.StopNote.Seq == uint64(rec.Generation)
+}
+
 func terminalErrorBootMessage(rec *session.LifecycleRecord) (generated.SessionMessage, steer.Outcome, error) {
 	prefix, outcome := "failed:", steer.OutcomeFailed
 	switch rec.State {
 	case session.LifecycleStopped:
-		// Unreachable today (the sole caller path guards on rec.Terminal(),
-		// which excludes Stopped), but read the durable StopNote.Cause rather
-		// than hardcoding "interrupted", so this branch can never silently
-		// misreport a timeout as a plain stop if it ever becomes reachable —
-		// mirrors goal_child_completion.go::goalSessionEndedReasonForState's
-		// explicit timed-out branch. "timeout:" is this file's own prefix
-		// vocabulary (bootOutcome classifies it back to OutcomeTimedOut).
-		if rec.StopNote != nil && rec.StopNote.Cause == session.StopCauseTimeout {
+		// Unreachable through this function's own caller path (it guards on
+		// rec.Terminal(), which excludes Stopped) — recoverSteered's
+		// no-final arm now routes stopped records here directly instead.
+		// Read the durable StopNote cause rather than hardcoding
+		// "interrupted", so the mapping lives in one place for both arms and
+		// a timeout can never silently read as a plain stop. "timeout:" is
+		// this file's own prefix vocabulary (bootOutcome classifies it back
+		// to OutcomeTimedOut).
+		if currentGenerationTimeoutStop(rec) {
 			prefix, outcome = "timeout:", steer.OutcomeTimedOut
 		} else {
 			prefix, outcome = "interrupted:", steer.OutcomeInterrupted
 		}
 	case session.LifecycleFailed:
-		if rec.FailedReason == failedReasonInterrupted {
+		if currentGenerationTimeoutStop(rec) {
+			// A boot pass swept the timeout-stopped record to
+			// failed(interrupted) before this delivery, or a stored timeout
+			// notice finished it (failedReasonFromBootText derives the same
+			// "timeout"). The sweep's interrupted reason names the restart,
+			// not what ended the run; the retained note is the truth.
+			prefix, outcome = "timeout:", steer.OutcomeTimedOut
+		} else if rec.FailedReason == failedReasonInterrupted {
 			prefix, outcome = "interrupted:", steer.OutcomeInterrupted
 		}
 	}
