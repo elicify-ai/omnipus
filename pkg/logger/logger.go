@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -87,7 +88,13 @@ func formatFieldValue(i any) string {
 	}
 
 	if strings.Contains(s, "\n") {
-		return fmt.Sprintf("\n%s", s)
+		// Only valid JSON objects and arrays may retain multiline formatting.
+		// Delimiters alone would let ordinary text masquerade as JSON.
+		if ((strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) ||
+			(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]"))) && json.Valid([]byte(s)) {
+			return fmt.Sprintf("\n%s", s)
+		}
+		return fmt.Sprintf("%q", s)
 	}
 
 	if strings.Contains(s, " ") {
