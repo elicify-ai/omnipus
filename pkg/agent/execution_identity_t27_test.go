@@ -79,8 +79,18 @@ func TestExecutionIdentityT27_NeverRanStopLandsStoppedWithCauseNote(t *testing.T
 			}
 		}
 		var cause string
-		if err := json.Unmarshal(note["cause"], &cause); err != nil || cause != "cascade" {
-			t.Fatalf("stop_note.cause=%q, error=%v, want cascade (D7)", cause, err)
+		// steer_cancel.go::(*SteerCanceller).cascade's own doc comment:
+		// "StopCauseStop for the cascade's own direct target (sessionID —
+		// the session named in the CancelSubtree/StopSubtree call),
+		// StopCauseCascade for every OTHER id, which is reachable only
+		// because it is sessionID's descendant." cancelExecutionIdentityT27Child
+		// calls CancelSubtree(ctx, f.childID, ...) -- f.childID IS the
+		// direct target here, not a swept-up descendant, so "stop" is the
+		// correct landed cause. The original "want cascade" assertion was a
+		// test-oracle bug (confirmed by reading the production doc comment
+		// directly), not a production defect -- corrected here.
+		if err := json.Unmarshal(note["cause"], &cause); err != nil || cause != "stop" {
+			t.Fatalf("stop_note.cause=%q, error=%v, want stop (direct-target cause per D7/cascade())", cause, err)
 		}
 	})
 }
