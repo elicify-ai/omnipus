@@ -58,7 +58,7 @@ func newIntegrationSecurityAPI(t *testing.T) (*restAPI, *config.Config, http.Han
 	require.True(t, ok)
 	defaults, ok := agents["defaults"].(map[string]any)
 	require.True(t, ok)
-	defaults["home"] = cfg.Agents.Defaults.Home
+	defaults["workspace"] = cfg.Agents.Defaults.Home
 	doc["gateway"] = cfg.Gateway
 	out, err := json.Marshal(doc)
 	require.NoError(t, err)
@@ -418,6 +418,10 @@ func TestIntegrationSecurity_RemovalWithAppliedReload_Control(t *testing.T) {
 func TestIntegrationSecurity_RemovalWithFailedAsyncReloadReportsPartialFailure(t *testing.T) {
 	withEdition(t, config.EditionCore)
 	api, cfg, handler := newIntegrationSecurityAPI(t)
+	persisted, err := config.LoadConfig(api.configPath())
+	require.NoError(t, err)
+	require.Equal(t, cfg.AgentHomeBasePath(), persisted.AgentHomeBasePath(),
+		"instrument: reload must read the same isolated workspace where the filesystem fault is installed")
 	before := readRolesWebConfig(t, api)
 	rs, cycles := wireIntegrationSecurityReload(t, api)
 	consent := integrationSecurityConsent(t, handler)
@@ -431,14 +435,19 @@ func TestIntegrationSecurity_RemovalWithFailedAsyncReloadReportsPartialFailure(t
 	w := integrationSecurityRequest(t.Context(), handler, http.MethodPut,
 		"/api/v1/integrations/providers/tavily", removeSearchKeyJSON, diagnosticBearer, consent)
 	cycle := receiveIntegrationSecurityReload(t, cycles)
-	require.ErrorContains(t, cycle.err, "error restarting cron service:", "instrument: fail inside the later service-restart stage")
+	require.ErrorContains(t, cycle.err, "error restarting cron service: failed to load store:",
+		"instrument: CronService.Start must fail reading the jobs store in the later service-restart stage")
+	var filesystemErr *os.PathError
+	require.ErrorAs(t, cycle.err, &filesystemErr, "instrument: reload must expose the real filesystem error")
+	require.Equal(t, jobsPath, filesystemErr.Path, "instrument: the failing read must target the installed filesystem fault")
 	require.Equal(t, true, cycle.keyRemovalPublished, "instrument: disabled config was published before the failing cycle")
 	require.Equal(t, true, cycle.pendingDuringExecution, "instrument: the real trigger accepted and queued this cycle")
 	require.Equal(t, true, rs.reloadOutcome.lastFailed(), "instrument: the completed cycle recorded execution failure")
 	require.Equal(t, false, api.agentLoop.IsReloadPending(), "instrument: pending cleared despite execution failure")
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code,
-		"SEC-2: a failed asynchronous restart is partial failure, never removal-success HTTP 200; body=%s", w.Body.String())
+		"SEC-2: a failed asynchronous restart is partial failure, never removal-success HTTP 200; reload_error=%v; disabled_config_published=%t; pending_during_execution=%t; body=%s",
+		cycle.err, cycle.keyRemovalPublished, cycle.pendingDuringExecution, w.Body.String())
 	message := searchSettingError(t, w.Body.Bytes())
 	assert.Contains(t, message, "saved key was removed", "Decision #1104: disclose the persisted deletion")
 	assert.Contains(t, message, "disabled configuration was saved", "Decision #1104: disclose saved disabled state")
