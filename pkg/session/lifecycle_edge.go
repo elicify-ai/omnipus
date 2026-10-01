@@ -157,13 +157,24 @@ type Stop struct {
 	By         Principal `json:"by"`
 }
 
-// Stopped reports whether r is stopped RIGHT NOW — the live-stop predicate
-// every dispatch/delivery/completion path must refuse against. r.Stop
-// encodes a tri-state (D8) that no other method names, so this is the one
-// place that spells out all three shapes plus the fourth,
+// Stopped reports whether r is stopped RIGHT NOW — the predicate every
+// dispatch/delivery/completion/revival path must treat as "durably stopped,"
+// whether the stop is still in flight or has already landed and cleared
+// (ADR-20260928-sub-agent-control-plane.md line ~636: "Stopped() checks
+// landed state OR current fence"). Two independent ways in:
+//
+//   - r.State == LifecycleStopped -> LANDED. TransitionSession
+//     (lifecycle_bridge.go) clears r.Stop the instant it lands this state,
+//     keeping only the retained StopNote — so this check alone must catch
+//     the landed-and-cleared shape; it does not require r.Stop to be set.
+//   - the live Stop fence, below -> not yet landed, still in flight.
+//
+// r.Stop itself encodes a tri-state (D8) that no other method names, so
+// this is the one place that spells out all three shapes plus the fourth,
 // unreachable-by-design one:
 //
-//   - r.Stop == nil            -> never stopped. false.
+//   - r.Stop == nil            -> no live fence. false (falls through to
+//     the landed-state check above).
 //   - r.Stop.Generation == r.Generation -> stopped for the record's CURRENT
 //     generation. Live. true.
 //   - r.Stop.Generation <  r.Generation -> stopped once, on an EARLIER
@@ -177,10 +188,13 @@ type Stop struct {
 //     Treated as not-live (false): a Stop naming a generation that has not
 //     happened yet cannot be "stopping" the record's current generation.
 func (r *LifecycleRecord) Stopped() bool {
-	if r == nil || r.Stop == nil {
+	if r == nil {
 		return false
 	}
-	return r.Stop.Generation == r.Generation
+	if r.State == LifecycleStopped {
+		return true
+	}
+	return r.Stop != nil && r.Stop.Generation == r.Generation
 }
 
 // StopCause is the closed vocabulary naming WHY a session last landed

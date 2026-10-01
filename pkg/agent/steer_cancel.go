@@ -585,8 +585,11 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 			return session.ErrLifecycleNotFound
 		}
 		generation = rec.Generation
-		stopped := rec.Stop != nil && rec.Stop.Generation == rec.Generation
-		if !stopped && !rec.Terminal() {
+		// rec.Stopped() covers BOTH the live current-generation fence and a
+		// record that has already LANDED session.LifecycleStopped with its
+		// fence cleared (ADR-20260928-sub-agent-control-plane.md line ~636) —
+		// both are durably-stopped shapes Revive exists to resurrect.
+		if !rec.Stopped() && !rec.Terminal() {
 			return nil
 		}
 
