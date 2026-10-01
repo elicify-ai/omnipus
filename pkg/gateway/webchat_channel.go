@@ -92,13 +92,34 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 	// ADR-082 D6/FR-012: zero bound connections is not a failure — the
 	// content is durable in the transcript and in the journal.
 	if msg.Content != "" {
-		c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeToken), hubFrameMeta{
-			kind: hubKindToken, content: msg.Content,
-		}, generated.TokenFrame{
+		// #1081 R3: stamp turn_id/message_id when the agent loop supplied
+		// them (bus.OutboundMessage.TurnID/MessageID), mirroring
+		// websocket_streamer.go's Update()/Finalize() — without this, this
+		// Send-fallback TokenFrame (content the live stream never covered,
+		// e.g. a tool-iteration-cap notice emitted after narration already
+		// streamed) reached the client with no turn/message identity at
+		// all, breaking live-content correlation with the durable entry.
+		frame := generated.TokenFrame{
 			Type:      string(generated.WsFrameTypeToken),
 			Content:   msg.Content,
 			SessionId: sid,
-		})
+		}
+		if msg.TurnID != "" {
+			turnID := msg.TurnID
+			frame.TurnId = &turnID
+		}
+		if msg.MessageID != "" {
+			messageID := msg.MessageID
+			frame.MessageId = &messageID
+		}
+		// hubFrameMeta.turnID/messageID (separate from the frame bytes above)
+		// feed the active-turn projection a LATE-attaching connection catches
+		// up through mid-turn (ws_hub_projection.go::projectionTokenFrames) —
+		// stamped too, so a catch-up reconstruction carries the same identity
+		// the original frame did, not a blank one.
+		c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeToken), hubFrameMeta{
+			kind: hubKindToken, content: msg.Content, turnID: msg.TurnID, messageID: msg.MessageID,
+		}, frame)
 	}
 	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeDone), hubFrameMeta{kind: hubKindDone},
 		generated.DoneFrame{

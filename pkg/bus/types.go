@@ -178,6 +178,17 @@ type OutboundMessage struct {
 	WorkspaceID      string `json:"workspace_id,omitempty"`
 	Content          string `json:"content"`
 	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+	// TurnID/MessageID (#1081 R3) carry the originating turn's lifecycle
+	// identity so a channel that builds its own live frame from this message
+	// (webchatChannel.Send's Send-fallback TokenFrame, for content the live
+	// stream never covered) can stamp it, instead of going out unstamped —
+	// mirroring what websocket_streamer.go's Update() already stamps for a
+	// normally-streamed round. In-process plumbing only, like the ownership
+	// fields above; non-webchat channels ignore both. Left empty by every
+	// producer that has no turn to attribute (schedules, device
+	// notifications, reasoning previews, ...).
+	TurnID    string `json:"-"`
+	MessageID string `json:"-"`
 
 	// OwnershipChecked records that the send tool already applied ADR-065's
 	// ownership rule to this message. In-process only — never on the wire.

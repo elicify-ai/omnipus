@@ -378,6 +378,20 @@ func (s *wsStreamer) SetParentSpawnCallID(parentSpawnCallID string) {
 	s.statsMu.Unlock()
 }
 
+// FinalEntryID returns the transcript entry id persistTranscript actually
+// wrote this streamer's terminal assistant content under (see the
+// wsStreamer.finalEntryID field doc comment), or "" if Finalize persisted no
+// entry. Called by pkg/agent's finalizeStreamer (via the optional
+// `interface{ FinalEntryID() string }` probe) immediately after Finalize
+// returns, mirroring the SetTurnID/SetMessageID stamping pattern in reverse —
+// this is a READ taken after the fact, because the id a "separate terminal
+// notice" gets is decided inside Finalize itself, not known beforehand.
+func (s *wsStreamer) FinalEntryID() string {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	return s.finalEntryID
+}
+
 // SuppressTranscriptWrite marks this streamer so its Finalize skips the
 // transcript-append block. The agent loop calls this (via the inline
 // SuppressTranscriptWrite interface) after it has already persisted the round's
@@ -910,6 +924,12 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			if entryID == "" || wsf.pendingFinalContent != "" {
 				entryID = uuid.New().String()
 			}
+			// #1081 R3: record the id this write actually used so a later
+			// webchat Send-fallback delivery of this SAME content (see
+			// FinalEntryID's doc comment on wsStreamer) can carry it too.
+			wsf.s.statsMu.Lock()
+			wsf.s.finalEntryID = entryID
+			wsf.s.statsMu.Unlock()
 			entry := session.TranscriptEntry{
 				ID:      entryID,
 				Role:    "assistant",

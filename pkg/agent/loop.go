@@ -1849,6 +1849,20 @@ func (al *AgentLoop) runAgentLoop(
 	al.lastTurnResultMu.Lock()
 	al.lastTurnResult = result
 	al.lastTurnResultMu.Unlock()
+	// #1081 R3: hand this turn's own identity back to a caller that attached
+	// a turnIdentityOutbox to ctx before calling in (session_worker.go's
+	// processTurn, for the webchat path where SendResponse=false means
+	// runAgentLoop itself never publishes — see turnIdentityOutbox's doc
+	// comment). al.runTurn has already returned, so finalizeStreamer's
+	// deferred call — which sets ts.liveFinalMessageID when a streamer
+	// persisted a separate terminal notice — has already run. A no-op for
+	// every other caller, which never attaches an outbox.
+	if box := turnIdentityOutboxFromContext(ctx); box != nil {
+		box.mu.Lock()
+		box.turnID = ts.turnID
+		box.messageID = ts.getLiveFinalMessageID()
+		box.mu.Unlock()
+	}
 	// MERGE NOTE 2026-09-15: integrate's F2 fix called
 	// al.rearmGoalAfterAbnormalTurn(opts) here (a goal-bearing session whose
 	// turn died on this path never re-armed its idle quiet window and stayed
@@ -1913,11 +1927,20 @@ func (al *AgentLoop) runAgentLoop(
 		// E5 (keeper-originated turns carrying a stale ChatID whose only
 		// live connection may have moved to a different chatID via
 		// reconnect/second-tab attach, while the session id stays valid).
+		// #1081 R3: carry this turn's own identity so webchatChannel.Send's
+		// Send-fallback TokenFrame (content the live stream never covered,
+		// e.g. a tool-iteration-cap notice after narration already
+		// streamed) can stamp turn_id/message_id instead of going out
+		// unstamped — see bus.OutboundMessage.TurnID/MessageID's doc
+		// comment. MessageID is "" when finalizeStreamer never ran or
+		// Finalize persisted no entry; webchatChannel.Send no-ops on empty.
 		if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 			Channel:   opts.Channel,
 			ChatID:    opts.ChatID,
 			Content:   result.finalContent,
 			SessionID: opts.TranscriptSessionID,
+			TurnID:    ts.turnID,
+			MessageID: ts.getLiveFinalMessageID(),
 		}); err != nil {
 			logger.ErrorCF("agent", "Failed to publish outbound response after turn",
 				map[string]any{"channel": opts.Channel, "chat_id": opts.ChatID, "error": err.Error()})

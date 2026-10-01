@@ -480,6 +480,14 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	publishChannel := msg.Channel
 	publishChatID := msg.ChatID
 
+	// #1081 R3: SendResponse is false for this inbound turn, so THIS
+	// function's own publishResponseIfNeeded calls are the only place the
+	// response is sent. identityBox, attached to turnCtx, is how runAgentLoop
+	// (loop.go) hands this turn's own turnID/live-final-messageID back —
+	// see turnIdentityOutbox's doc comment (turn_stream.go).
+	identityBox := &turnIdentityOutbox{}
+	turnCtx := withTurnIdentityOutbox(ctx, identityBox)
+
 	defer func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -488,7 +496,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 			}
 		}()
 		if finalResponse != "" && !published {
-			al.publishResponseIfNeeded(ctx, activeAgent, publishChannel, publishChatID, finalResponse)
+			al.publishTurnResponse(ctx, activeAgent, publishChannel, publishChatID, finalResponse, identityBox)
 			published = true
 		}
 	}()
@@ -519,7 +527,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				// ctx may be canceled during panic unwinding; use a fresh,
 				// short-lived context so the terminal frame still reaches the client.
 				termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				al.publishResponseIfNeeded(termCtx, activeAgent, publishChannel, publishChatID, finalResponse)
+				al.publishTurnResponse(termCtx, activeAgent, publishChannel, publishChatID, finalResponse, identityBox)
 				termCancel()
 				published = true
 			}
@@ -529,7 +537,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		}
 	}()
 
-	response, agent, err := al.processMessage(ctx, msg)
+	response, agent, err := al.processMessage(turnCtx, msg)
 	activeAgent = agent
 	if err != nil {
 		// ADR-051 §RD5: never surface raw err text in the assistant-facing
@@ -588,7 +596,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	if targetErr != nil {
 		if errors.Is(targetErr, ErrNoContinuationTarget) {
 			if finalResponse != "" {
-				al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse)
+				al.publishTurnResponse(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse, identityBox)
 				published = true
 			}
 			return
@@ -626,7 +634,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	}
 	if target == nil {
 		if finalResponse != "" {
-			al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse)
+			al.publishTurnResponse(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse, identityBox)
 			published = true
 		}
 		return
@@ -664,10 +672,14 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		}
 		finalResponse = continued
 		published = false
+		// #1081 R3: `continued` is a DIFFERENT turn (al.Continue, its own
+		// identity, not threaded here) — reset so the publish below never
+		// stamps the FIRST turn's stale identity onto it.
+		identityBox = &turnIdentityOutbox{}
 	}
 
 	if finalResponse != "" {
-		al.publishResponseIfNeeded(ctx, activeAgent, target.Channel, target.ChatID, finalResponse)
+		al.publishTurnResponse(ctx, activeAgent, target.Channel, target.ChatID, finalResponse, identityBox)
 		published = true
 	}
 }

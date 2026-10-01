@@ -4,12 +4,72 @@ package agent
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/google/uuid"
 )
+
+// turnIdentityOutbox carries a completed turn's own lifecycle identity back
+// out to a caller that itself publishes the final response AFTER the turn
+// has fully returned — i.e. session_worker.go's processTurn, for an inbound
+// webchat turn (processOptions.SendResponse=false: runAgentLoop deliberately
+// does not publish; the session worker's own deferred response guard does,
+// via publishResponseIfNeeded, loop_publish.go). #1081 R3: without this, that
+// guard built its bus.OutboundMessage with no TurnID/MessageID at all — the
+// confirmed cause of a live TokenFrame reaching the client with no turn
+// identity for content the live stream never covered (e.g. a tool-
+// iteration-cap notice emitted after narration already streamed).
+//
+// Deliberately additive: no existing function's signature changes. The
+// caller creates one, threads it onto ctx via withTurnIdentityOutbox BEFORE
+// calling processMessage/runAgentLoop (both already propagate the SAME ctx
+// through unchanged — runInboundTurnWithRevival, processMessage's own pm.ctx
+// — so a value attached to the root ctx remains visible deep inside runTurn
+// regardless of the context.With{Timeout,Cancel} wrapping createTurnContext
+// applies; see context.Context's own value-lookup contract: it walks the
+// parent chain). runAgentLoop (loop.go) writes it, once, right after
+// al.runTurn returns — by which point finalizeStreamer's deferred call
+// (which the turn's run already completed) has had its chance to set
+// ts.liveFinalMessageID. A caller with no outbox on ctx (every OTHER
+// processMessage/runAgentLoop caller today) sees no write at all — this is
+// a no-op for them, not a behavior change.
+type turnIdentityOutbox struct {
+	mu        sync.Mutex
+	turnID    string
+	messageID string
+}
+
+type turnIdentityOutboxKey struct{}
+
+// withTurnIdentityOutbox attaches box to ctx so a function deep inside the
+// turn (runAgentLoop) can write this turn's identity back to a caller still
+// holding box after the call returns.
+func withTurnIdentityOutbox(ctx context.Context, box *turnIdentityOutbox) context.Context {
+	return context.WithValue(ctx, turnIdentityOutboxKey{}, box)
+}
+
+// turnIdentityOutboxFromContext returns the outbox withTurnIdentityOutbox
+// attached to ctx, or nil when the caller never attached one (the common
+// case for every path except session_worker.go's webchat turn).
+func turnIdentityOutboxFromContext(ctx context.Context) *turnIdentityOutbox {
+	box, _ := ctx.Value(turnIdentityOutboxKey{}).(*turnIdentityOutbox)
+	return box
+}
+
+// snapshot returns the identity written by runAgentLoop (via
+// turnIdentityOutboxFromContext), safe to call once the call that was given
+// this ctx has returned.
+func (b *turnIdentityOutbox) snapshot() (turnID, messageID string) {
+	if b == nil {
+		return "", ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.turnID, b.messageID
+}
 
 func (ts *turnState) setLastStreamer(s bus.Streamer) {
 	ts.mu.Lock()
@@ -371,6 +431,13 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// without any tokens to record.
 		if err := s.Finalize(ctx, finalContent); err != nil {
 			logger.WarnCF("agent", "Turn-end streaming finalize error", map[string]any{"error": err.Error()})
+		} else if idp, ok := s.(interface{ FinalEntryID() string }); ok {
+			// #1081 R3: read back the id Finalize's persistTranscript actually
+			// wrote this content under, so a later webchat Send-fallback
+			// delivery (loop.go's post-turn publish) can stamp its own live
+			// TokenFrame with the SAME message id — see wsStreamer.FinalEntryID
+			// and turnState.liveFinalMessageID's doc comments.
+			ts.setLiveFinalMessageID(idp.FinalEntryID())
 		}
 	}
 }

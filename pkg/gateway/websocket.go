@@ -1644,4 +1644,21 @@ type wsStreamer struct {
 	// token (see `accumulated` above) but withholds the live TokenFrame send.
 	shadowResolved bool
 	isShadowStream bool
+
+	// finalEntryID is the transcript entry id persistTranscript actually
+	// wrote this streamer's terminal assistant content under (#1081 R3): the
+	// per-round messageID when it covered the whole final content, or a
+	// freshly minted id for a "separate terminal notice" that narration
+	// already saved under a different id (see persistTranscript's own
+	// comment). Read back by pkg/agent's finalizeStreamer, via the optional
+	// FinalEntryID() accessor, immediately after Finalize returns — so a
+	// later webchat Send-fallback delivery (pkg/gateway/webchat_channel.go,
+	// for content the live stream never covered — e.g. the tool-iteration-
+	// cap notice emitted after narration already streamed) can stamp the
+	// SAME id onto its own live TokenFrame.message_id, keeping that frame
+	// correlated with the durable entry exactly like a normally-streamed
+	// round's TokenFrame already is via SetMessageID. Empty when Finalize
+	// persisted no entry at all. Guarded by statsMu, set once inside
+	// persistTranscript.
+	finalEntryID string
 }

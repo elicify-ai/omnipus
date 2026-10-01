@@ -116,6 +116,16 @@ type turnState struct {
 	iteration    int
 	startedAt    time.Time
 	finalContent string
+	// liveFinalMessageID is the transcript entry id finalizeStreamer learned
+	// back from the streamer's FinalEntryID() immediately after Finalize
+	// returned (#1081 R3) — the SAME id a "separate terminal notice" (e.g.
+	// the tool-iteration-cap notice, delivered after narration already
+	// streamed under its own id) was persisted under. runAgentLoop's
+	// post-turn webchat publish (loop.go) carries it on OutboundMessage so
+	// the webchat Send-fallback path's live TokenFrame.message_id matches
+	// the durable entry instead of going out unstamped. Empty when no
+	// streamer ran, or Finalize persisted no entry.
+	liveFinalMessageID string
 
 	followUps []bus.InboundMessage
 
@@ -1587,6 +1597,23 @@ func (ts *turnState) SetFinalContent(content string) {
 	ts.mu.Lock()
 	ts.finalContent = content
 	ts.mu.Unlock()
+}
+
+// setLiveFinalMessageID records the transcript entry id finalizeStreamer read
+// back from the streamer's FinalEntryID() right after Finalize returned
+// (#1081 R3) — see liveFinalMessageID's own field doc comment.
+func (ts *turnState) setLiveFinalMessageID(id string) {
+	ts.mu.Lock()
+	ts.liveFinalMessageID = id
+	ts.mu.Unlock()
+}
+
+// getLiveFinalMessageID returns the id set by setLiveFinalMessageID, or ""
+// when no streamer ran or Finalize persisted no entry for this turn.
+func (ts *turnState) getLiveFinalMessageID() string {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.liveFinalMessageID
 }
 
 func (ts *turnState) eventMeta(source, tracePath string) EventMeta {
