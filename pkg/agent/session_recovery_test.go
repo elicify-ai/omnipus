@@ -313,6 +313,83 @@ func TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls(t *testing.T) {
 	}
 }
 
+// TestRecovery_RecoverOrphaned_ExistingMarkerNoNewOrphan_CleanViewNoNewRecord
+// closes independent-CHECK finding F1: no leaf exercised "history already
+// contains a supported turn_canceled_restart marker from an earlier recovery
+// AND no current orphan exists".
+//
+// Every expected value derives from the contract, never from the
+// implementation:
+//   - loop_run_turn.go::assembleInitialContext — recovery is idempotent on
+//     sessions where the synthetic turn_canceled_restart entry already
+//     exists, the on-disk transcript is preserved, and the returned
+//     LLM-context slice is cleaned so the provider never sees dangling
+//     unanswered tool_call entries (FR-088);
+//   - architect Option A — exclude only the locally bound canceled
+//     group/results/records; preserve the entire remaining sequence;
+//   - tests/plans/orphan-restart-recovery-acceptance.md — "repeated recovery
+//     does not duplicate the record" (position-scoped idempotency ruling).
+//
+// The store is deliberately checkpoint-less (*SessionManager implements no
+// session.ContextWindowStore): on that fallback path the returned slice is
+// authoritative downstream (assembleMessages uses it as-is), so a wrong
+// return reaches the provider.
+func TestRecovery_RecoverOrphaned_ExistingMarkerNoNewOrphan_CleanViewNoNewRecord(t *testing.T) {
+	storage := t.TempDir()
+	store := session.NewSessionManager(storage)
+	// Fixture property, not an oracle: the audited scenario is the
+	// no-checkpoint fallback path. Fails loudly if the store ever grows
+	// checkpoint support and this leaf silently stops covering that path.
+	var checkpointLess session.SessionStore = store
+	_, hasCheckpoints := checkpointLess.(session.ContextWindowStore)
+	require.False(t, hasCheckpoints, "fixture must stay checkpoint-less: only there is the returned slice the authority")
+
+	const sessionKey = "test-premarked-no-new-orphan"
+	// Session recovered once earlier (marker persisted), one clean turn after.
+	seed := []providers.Message{
+		{Role: "user", Content: "first question"}, // 0: unrelated valid context
+		{Role: "assistant", Content: "", ToolCalls: []providers.ToolCall{ // 1: canceled incomplete group
+			{ID: "call_old", Type: "function",
+				Function: &providers.FunctionCall{Name: "exec", Arguments: `{}`}},
+		}},
+		{Role: "system", Content: `{"type":"turn_canceled_restart","tool_call_id":"call_old","reason":"ungraceful_shutdown_recovery"}`}, // 2: marker from the FIRST recovery
+		{Role: "user", Content: "second question"},                    // 3: closes the segment after the marker
+		{Role: "assistant", Content: "second answer", ToolCalls: nil}, // 4: clean last assistant ⇒ no current orphan
+	}
+	for _, msg := range seed {
+		store.AddFullMessage(sessionKey, msg)
+	}
+	require.NoError(t, store.Save(sessionKey), "seed the real persisted session")
+	before := store.GetHistory(sessionKey)
+	require.Len(t, before, 5, "fixture precondition: pre-marked five-message transcript")
+	require.JSONEq(t, seed[2].Content, before[2].Content, "fixture precondition: the persisted marker from the earlier recovery")
+
+	cleaned := RecoverOrphanedToolCalls(store, sessionKey, nil)
+
+	// The last assistant declares no tool calls, so this recovery finds no new
+	// orphan — yet the earlier cancellation stays bound to its position: the
+	// dangling assistant and its marker record stay out of the LLM view while
+	// every unrelated message survives whole and in order.
+	require.Equal(t, []providers.Message{seed[0], seed[3], seed[4]}, cleaned,
+		"pre-marked history with no new orphan: view excludes the bound canceled group and its record, retains the rest in order")
+
+	// Idempotency: no new cancellation record in memory or on disk.
+	require.Equal(t, before, store.GetHistory(sessionKey),
+		"recovery appends no in-memory record when the marker already exists and no orphan exists")
+	persisted := session.NewSessionManager(storage).GetHistory(sessionKey)
+	require.Equal(t, before, persisted,
+		"recovery leaves the persisted transcript unchanged (same messages, no duplicate cancellation)")
+	markers := 0
+	for _, msg := range persisted {
+		if msg.Role == "system" && strings.Contains(msg.Content, "turn_canceled_restart") {
+			markers++
+			require.JSONEq(t, seed[2].Content, msg.Content, "the one cancellation record keeps its exact canonical schema")
+		}
+	}
+	require.Equal(t, 1, markers,
+		"repeated recovery must not duplicate the cancellation record (position-scoped idempotency ruling)")
+}
+
 // --- RecoverOrphanedToolCalls integration tests ---
 
 // TestRecovery_RecoverOrphaned_AppendsSyntheticEntry verifies the full recovery:
