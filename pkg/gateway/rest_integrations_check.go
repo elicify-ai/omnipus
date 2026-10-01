@@ -111,6 +111,7 @@ func (a *restAPI) admitSearchConnectionCheck(ctx context.Context, id string) (*t
 			if errors.As(err, &missing) {
 				return &integrationChangeError{http.StatusConflict, "Save a key before checking the connection."}
 			}
+			logIntegrationChangeFailure(id, "check_credential_read", err)
 			return &integrationChangeError{http.StatusServiceUnavailable, "Could not read the saved key from the credential store. Unlock or repair it, then try again."}
 		}
 		if strings.TrimSpace(key) == "" || def.APIKey(&cfg.Tools.Web) != key {
