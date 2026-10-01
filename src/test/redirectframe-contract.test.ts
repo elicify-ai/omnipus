@@ -85,11 +85,18 @@ describe('generated RedirectFrame Zod schema (ws-schemas)', () => {
   })
 
   // characterization test: Zod `.max(16384)` counts UTF-16 code units, so 8192
-  // astral emoji (16384 units, 16384 UTF-8 bytes, 8192 code points) pass all
-  // three layers, while 8193 emoji (16386 units) FAIL here although the JSON
-  // Schema layer accepts them (8193 code points ≤ 16384 — pinned Go-side) and
-  // the server's 16384-UTF-8-byte runtime ceiling refuses them (16386 bytes).
-  // The three layers disagree exactly at this input — that is the evidence.
+  // astral emoji (8192 code points; 16384 UTF-16 units — exactly at the
+  // ceiling; 32768 UTF-8 bytes = 8192 × 4) PASS both schema layers but would
+  // be REFUSED by the server's 16384-UTF-8-byte runtime ceiling (32768 >
+  // 16384) — that refusal has no runtime seam yet (Backend-CMD, recorded
+  // BLOCKED). 8193 emoji (8193 code points; 16386 UTF-16 units; 32772 UTF-8
+  // bytes) FAIL here although the JSON Schema layer accepts them (8193 code
+  // points ≤ 16384 — pinned Go-side). On that input the layers split
+  // one-pass / two-refuse: the schema layer passes, Zod refuses on UTF-16
+  // units, the runtime ceiling (once it exists) refuses on UTF-8 bytes — two
+  // different refusal thresholds (units bind from 8193 astral chars; bytes
+  // already from 4097, since 4097 × 4 = 16388 > 16384). That split is the
+  // evidence.
   it('counts astral characters as 2 UTF-16 units each (8192 emoji pass, 8193 fail — diverges from the code-point layer)', () => {
     expect(redirectFrameSchema.safeParse({ ...VALID, instruction: '\u{1F600}'.repeat(8192) }).success).toBe(true)
     expect(redirectFrameSchema.safeParse({ ...VALID, instruction: '\u{1F600}'.repeat(8193) }).success).toBe(false)
