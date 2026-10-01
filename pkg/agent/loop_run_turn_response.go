@@ -47,7 +47,7 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 	cr.rr.rq.ri.rf.callLLM = func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
 		cr.rr.rq.ri.rf.callMessages = messagesForCall
 		cr.rr.rq.ri.rf.providerToolDefs = toolDefsForCall
-		if err := cr.rr.rq.checkpointRequest(); err != nil {
+		if err := cr.rr.rq.checkpointRequest(true); err != nil {
 			return nil, err
 		}
 		return cr.rr.rq.ri.rf.rt.callProvider(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)

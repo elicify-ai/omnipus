@@ -58,7 +58,13 @@ func retainLiveWindow(live, request []providers.Message) []providers.Message {
 
 // checkpointRequest runs after actual note/hook assembly and on retry sends.
 // Neither outgoing nor ongoing messages change if persistence fails.
-func (rq *agentLoopRunTurnRequest) checkpointRequest() error {
+// countOverflow gates contextResidueOverflowsTotal: the retry closure inside
+// callLLMWithRetries is the one real choke-point every actual provider-send
+// attempt funnels through (first send, retries, PDF fallback, media
+// downgrade, empty-response retry), so it alone counts (true); the
+// prepare-side call exists for post-trim telemetry/logging on data that
+// hasn't been sent yet, and must not double-count the same overflow (false).
+func (rq *agentLoopRunTurnRequest) checkpointRequest(countOverflow bool) error {
 	rt := rq.ri.rf.rt
 	if err := rt.ts.contextWindowError(); err != nil {
 		return err
@@ -84,7 +90,8 @@ func (rq *agentLoopRunTurnRequest) checkpointRequest() error {
 		shareLimit := toolResultShareLimit(cs, window)
 		// Only request-only additions caused this residue when the surviving
 		// live window fits both bounds. Share-only live pressure is not notes.
-		if (requestTokens(candidate, rq.ri.rf.providerToolDefs) > budget || toolResultShareTokens(candidate) > shareLimit) &&
+		if countOverflow &&
+			(requestTokens(candidate, rq.ri.rf.providerToolDefs) > budget || toolResultShareTokens(candidate) > shareLimit) &&
 			requestTokens(live, rq.ri.rf.providerToolDefs) <= budget && toolResultShareTokens(live) <= shareLimit {
 			contextResidueOverflowsTotal.Add(1)
 		}
