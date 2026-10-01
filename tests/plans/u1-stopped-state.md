@@ -236,3 +236,68 @@ afterward, confirming the rename and assertion changes broke nothing else.
 No production code was left edited by this round (qa-lead owns tests only);
 `git diff pkg/agent/steer_turn_drain.go` against HEAD is empty.
 
+## ui-4 stop-scope fallback RED + CHECK — 2026-10-01 (requestScopedStop never-ran steered child)
+
+Different unit, same stream, documented in this shared file per this session's
+convention (every worktree off this stream carries an identical copy; U1,
+stopped-predicate, list-jobs-paused-status and execution-identity all append
+here rather than fork a per-unit file). RED commit `6db6025e9` (qa-lead
+instance `a9efb7fa72e09813d`) adds one new test file,
+`pkg/gateway/websocket_stop_scope_test.go` — no existing test modified, so
+there is no old-assertion/new-assertion table; this is a changed-test-list of
+one addition plus its independent CHECK.
+
+| file::test | kind | oracle source |
+|---|---|---|
+| `pkg/gateway/websocket_stop_scope_test.go::TestRequestScopedStop_NeverRanChildLandsStoppedAndReportsUpward` | new (RED on `a2a786a42`, red for state="queued"/Stop fence not spent/no subagent_end) | `pkg/agent/steer_cancel.go::terminaliseNeverRanStop`'s own call to `reportSteeredSessionTerminalUpward(..., session.LifecycleStopped, steer.OutcomeInterrupted, ...)` and `steer_frames.go`'s `OutcomeInterrupted -> SubTurnStatusInterrupted` switch — both read and confirmed present in the code by this CHECK round, not copied from a run |
+| `pkg/gateway/websocket_stop_scope_test.go::TestRequestScopedStop_LiveTurnStopDoesNotEndGoalOrLandTerminal` | new positive control (green on `a2a786a42`, unaffected by the bug) | `cancel_stop.go::claimCancel`'s own comment ("Administrative cancellation continues to end session-owned goals") naming the one case commit `c6bc40804` changed |
+
+GREEN commit `fa303d1d9` (backend-lead instance `a7e1cb3fdad4d7056`) adds the
+`stopTurn` fallback to `al.SteerGenerationCancel` in
+`pkg/gateway/websocket_stop_scope.go::requestScopedStop` — production only,
+no test file touched.
+
+### CHECK round (this instance, fresh context — did not write the RED pack)
+
+Full `test-integrity-audit` (AUDIT mode) + mutation-check, independent of the
+squad-lead's own earlier verification. Both named tests re-run non-cached
+(`-count=1`) against unmodified GREEN first: both PASS.
+
+**Mutation 1 (kill the fix):** `websocket_stop_scope.go`'s fallback guard
+changed to `if false && err == nil && !result.Found {` (fallback never
+fires). `TestRequestScopedStop_NeverRanChildLandsStoppedAndReportsUpward`
+died for the right reason (state not `Stopped`, `Stop` fence non-nil,
+`subagent_end` nil); the positive control stayed green (unaffected, as
+expected). Reverted; `git diff` confirmed empty.
+
+**Mutation 2 (over-correction — route every call, not just the not-found
+case, straight through `al.SteerGenerationCancel`, bypassing
+`h.requestTurnStop` entirely, i.e. what a fix that reintroduced the OLD
+administrative `CancelSubtree`-style cascade for ordinary TurnOnly Stops
+would do):** `TestRequestScopedStop_LiveTurnStopDoesNotEndGoalOrLandTerminal`
+died (failed its "the live turn must actually be cancelled by the Stop"
+assertion — the mutation skips the cooperative interrupt path the live turn
+depends on); `TestRequestScopedStop_NeverRanChildLandsStoppedAndReportsUpward`
+stayed green. Reverted; `git diff` confirmed empty. Both tests re-run clean
+afterward (non-cached).
+
+Deterministic Phase 1 sweep: no skip/xfail markers, no suppressed errors, no
+`.only`, no mocks of the unit under test (`adr093IdleProvider` /
+`u2ScopeProvider` fake only the external LLM API boundary — a pre-existing
+shared fixture, not invented for this test). Test Weakening Score: **0**
+(new file, nothing weakened, nothing deleted, nothing suppressed).
+
+Oracle-grounding independently re-verified by direct code read (not trusted
+from the test's own comments): `terminaliseNeverRanStop`'s
+`reportSteeredSessionTerminalUpward(ctx, sessionID, generation,
+session.LifecycleStopped, steer.OutcomeInterrupted, "interrupted: the
+session was cancelled")` call (`steer_cancel.go:391-392`); `OutcomeInterrupted
+-> SubTurnStatusInterrupted` (`steer_frames.go:149-150`); the cascade's own
+`process([]string{sessionID}, session.StopCauseStop)` call confirming the
+direct target (not a cascaded descendant) gets `StopCauseStop`
+(`steer_cancel.go:511`).
+
+**Verdict: PASS.** No production code or test file was modified beyond this
+documentation entry; `git diff --stat` against HEAD (`fa303d1d9`) is empty
+outside this file.
+
