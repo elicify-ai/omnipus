@@ -1872,9 +1872,12 @@ components:
     SessionStartedFrame:
       title: SessionStartedFrame
       description: >
-        Server → client new session minted. Session-scoped (registered in
-        SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit
-        (FR-089) — a chat-lifecycle frame, not turn output.
+        Server → client. Acknowledges a session-less message. For an ordinary first
+        user message, emitted only after its transcript entry is durably saved. The
+        SPA stores session_id as activeSessionId. A recovered acknowledgement names
+        an already-saved first message found in this gateway process's retry cache:
+        no new entry or turn is created, and the client must attach without a cursor.
+        Recovery is in-memory only and does not survive a gateway restart.
       type: object
       required:
       - type
@@ -1887,20 +1890,36 @@ components:
         session_id:
           type: string
           minLength: 1
+          description: The newly minted or recovered session ID.
         agent_id:
           type: string
+          description: The agent that will handle this session.
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The initiating ordinary first message's client-supplied ID.
+        recovered:
+          type: boolean
+          description: >-
+            True only for an already-saved first message found in the process-local
+            retry cache. No new entry or turn is admitted. The client must attach
+            without a cursor; seq and boot_id are absent on this acknowledgement.
+            Absent or false denotes a fresh acknowledgement.
         seq:
           type: integer
           format: int64
           minimum: 1
           description: >-
-            #823 catch-up redesign. The sequence number the newly minted session's hub
-            starts from. Keep in sync by hand with
-            contracts/components/schemas/SessionStartedFrame.yaml.
+            #823 catch-up redesign. The sequence number the newly minted session's per-session
+            hub starts from (its first published frame). Lets the SPA seed the session's cursor
+            at mint time instead of waiting for the first sequenced frame after it.
         boot_id:
           type: string
           description: >-
-            #823 review finding 7. The gateway process that minted this session.
+            #823 review finding 7. The gateway process that minted this session, stored
+            alongside the seeded cursor so a later attach_session can detect a restart the same
+            way it would for any other session — see AttachSessionFrame.boot_id.
     MessageStatusFrame:
       title: MessageStatusFrame
       description: >
@@ -2557,6 +2576,24 @@ components:
           minLength: 1
           maxLength: 4096
           description: Human-readable error description.
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The initiating ordinary first message's client-supplied ID.
+        first_message_error:
+          type: string
+          enum:
+          - not_saved
+          - delivery_unknown
+          - answer_not_started
+          description: >-
+            Ordinary ID-bearing first-send outcome. Requires client_message_id.
+            not_saved proves no user entry was written; delivery_unknown means bytes
+            may have reached disk but durable delivery cannot be confirmed.
+            answer_not_started means the entry is durably saved but turn admission
+            failed, and requires its confirmed session_id. General errors and
+            workspace-setup kickoffs omit these first-send fields.
         payload:
           # Inline mirror of components.schemas.ErrorPayload
           # (contracts/components/schemas/ErrorPayload.yaml). Kept inline

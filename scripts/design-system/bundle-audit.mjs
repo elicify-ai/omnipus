@@ -5,7 +5,15 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const INITIAL_GZIP_BUDGET_BYTES = 25 * 1024
-export const TOTAL_RAW_BUDGET_BYTES = 250 * 1024
+// Founder decision D50 (2026-09-29): raised from 250 KiB to 320 KiB to cover the
+// Mail composer's Tiptap/ProseMirror engine (~432 kB raw), which is lazy-loaded
+// and only fetched when the user opens Mail — first-load gzip budget is
+// therefore unchanged. The first-load gzip ceiling remains 25 KiB.
+// Founder decision (2026-10-01): raised again, 320 KiB to 383 KiB, to absorb
+// +60,083 bytes of release/v0.1.1 drift unrelated to Mail that accumulated
+// against the frozen baseline (commit 92aeb4d5d, 2026-09-17) since D50 —
+// investigation tracked in #1135 rather than blocking Mail's ship on it.
+export const TOTAL_RAW_BUDGET_BYTES = 383 * 1024
 
 export function compareProductionBundles(baseline, candidate, provenance = null) {
   const initialGzipDelta = candidate.initial.gzipBytes - baseline.initial.gzipBytes

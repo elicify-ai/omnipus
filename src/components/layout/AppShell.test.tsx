@@ -530,7 +530,7 @@ describe('AppShell — no connection banner while a transport drop is in progres
 
 // ── <sm docked-browser takeover inerts the collapsed chat region (FW-3, item 6) ──
 //
-// When BrowserLivePanel is docked open on a phone viewport (<640px), the flex
+// When BrowserLivePanel is docked open on a phone viewport (<680px), the flex
 // row gives it the width and the chat region collapses to zero — but its
 // controls stayed in the DOM (and thus the Tab order), so a keyboard user
 // could Tab into invisible stops. `inert` on the main-content wrapper closes
@@ -545,7 +545,7 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
       configurable: true,
       writable: true,
       value: (query: string) => ({
-        matches: query === '(max-width: 639px)' ? matchesPhoneQuery : false,
+        matches: query === '(max-width: 679px)' ? matchesPhoneQuery : false,
         media: query,
         onchange: null,
         addListener: vi.fn(),
@@ -558,7 +558,7 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
   }
 
   afterEach(() => {
-    useUiStore.setState({ browserPanel: null })
+    useUiStore.setState({ activePanel: null })
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
       writable: true,
@@ -566,9 +566,9 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
     })
   })
 
-  it('is inert when the browser panel is open AND the viewport is a phone (<640px)', async () => {
+  it('is inert when the browser panel is open AND the viewport is a phone (<680px)', async () => {
     stubMatchMedia(true)
-    useUiStore.setState({ browserPanel: { sessionId: 's1', agentId: 'a1' } })
+    useUiStore.setState({ activePanel: { id: 'browser', context: { sessionId: 's1', agentId: 'a1' } } })
     vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
     vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
 
@@ -583,7 +583,7 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
 
   it('is NOT inert when the browser panel is open but the viewport is desktop-width', async () => {
     stubMatchMedia(false)
-    useUiStore.setState({ browserPanel: { sessionId: 's1', agentId: 'a1' } })
+    useUiStore.setState({ activePanel: { id: 'browser', context: { sessionId: 's1', agentId: 'a1' } } })
     vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
     vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
 
@@ -595,7 +595,7 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
 
   it('is NOT inert on a phone viewport when the browser panel is closed — differentiation', async () => {
     stubMatchMedia(true)
-    useUiStore.setState({ browserPanel: null })
+    useUiStore.setState({ activePanel: null })
     vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
     vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
 
@@ -782,7 +782,7 @@ function stubSidebarPinMediaQuery(pinMatches: boolean) {
 
 // Phone-takeover shape: answer BOTH queries AppShell/GodModeIndicators ask
 // — the sidebar pin breakpoint (1024px, false → sidebar never pinned) and
-// AppShell's own <640px phone signal (true → panel takeover active).
+// AppShell's own <680px phone signal (true → panel takeover active).
 function stubPhoneTakeoverMediaQuery() {
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
@@ -791,7 +791,7 @@ function stubPhoneTakeoverMediaQuery() {
       matches:
         query === '(min-width: 1024px)'
           ? false
-          : query === '(max-width: 639px)'
+          : query === '(max-width: 679px)'
             ? true
             : false,
       media: query,
@@ -847,7 +847,7 @@ function registerCornerDotHooks() {
 
   afterEach(() => {
     useSidebarStore.setState({ isOpen: false, isPinned: false })
-    useUiStore.setState({ browserPanel: null, libraryPanel: null })
+    useUiStore.setState({ activePanel: null })
     restoreWindowMatchMedia()
   })
 }
@@ -961,7 +961,7 @@ describe('AppShell — God Mode corner dot visibility (2026-09-25)', () => {
 describe('AppShell — God Mode corner dot placement (2026-09-25)', () => {
   registerCornerDotHooks()
 
-  // Review round 2, finding 3: below 640px the docked BrowserLivePanel /
+  // Review round 2, finding 3: below 680px the docked BrowserLivePanel /
   // LibraryPanel take over the full width, and AppShell collapses <main> to
   // zero width and inerts it. A dot living inside <main> is invisible and
   // unclickable exactly while God Mode is on — the highest-risk state shows
@@ -971,7 +971,7 @@ describe('AppShell — God Mode corner dot placement (2026-09-25)', () => {
     stubPhoneTakeoverMediaQuery()
     mockShellFetches()
     useSidebarStore.setState({ isOpen: false, isPinned: false })
-    useUiStore.setState({ browserPanel: { sessionId: 's1', agentId: 'a1' } })
+    useUiStore.setState({ activePanel: { id: 'browser', context: { sessionId: 's1', agentId: 'a1' } } })
 
     renderShell()
 

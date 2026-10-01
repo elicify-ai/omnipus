@@ -155,21 +155,22 @@ vi.mock('@/store/auth', () => {
 })
 
 // Mock useUiStore — Sidebar calls toggleNotificationPanel via the selector-
-// less hook call, and (library-spec.md D-3) openLibraryPanel/openSearchModal
-// via useUiStore.getState() from click handlers — the mock needs a `.getState`
-// static mirroring the real zustand hook shape, or those calls throw.
+// less hook call, and (library-spec.md D-3; side-panel-shell-spec.md §8.1)
+// openPanel/openSearchModal via useUiStore.getState() from click handlers —
+// the mock needs a `.getState` static mirroring the real zustand hook shape,
+// or those calls throw.
 // vi.hoisted (not a plain const): the vi.mock factory below is hoisted above
 // this file's top-level declarations by Vitest's static transform, so a
 // plain `const` here would be a temporal-dead-zone ReferenceError when the
 // factory runs — same reasoning as mockSetActiveWorkspaceId etc. above.
-const { mockOpenLibraryPanel, mockOpenSearchModal } = vi.hoisted(() => ({
-  mockOpenLibraryPanel: vi.fn(),
+const { mockOpenPanel, mockOpenSearchModal } = vi.hoisted(() => ({
+  mockOpenPanel: vi.fn(),
   mockOpenSearchModal: vi.fn(),
 }))
 vi.mock('@/store/ui', () => {
   const state = {
     toggleNotificationPanel: vi.fn(),
-    openLibraryPanel: mockOpenLibraryPanel,
+    openPanel: mockOpenPanel,
     openSearchModal: mockOpenSearchModal,
   }
   const useUiStore = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state)
@@ -291,11 +292,12 @@ describe('Sidebar — overlay rendering when open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    mockOpenLibraryPanel.mockClear()
+    mockOpenPanel.mockClear()
     fireEvent.click(screen.getByTestId('sidebar-library-button'))
 
-    // Called with no argument — undefined workspaceId means the virtual root.
-    expect(mockOpenLibraryPanel).toHaveBeenCalledWith()
+    // Virtual root = empty context (§8.1: context is the panel's own payload;
+    // no workspaceId → the `app` width/identity bucket).
+    expect(mockOpenPanel).toHaveBeenCalledWith('library', {})
   })
 
   it('shows the "omnipus.ai" wordmark in sidebar (gold .ai)', () => {

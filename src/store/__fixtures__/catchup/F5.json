@@ -37,6 +37,7 @@
           "frame": {
             "agent_id": "mia",
             "boot_id": "boot-1",
+            "client_message_id": "client-1",
             "seq": 1,
             "session_id": "sess-1",
             "type": "session_started"

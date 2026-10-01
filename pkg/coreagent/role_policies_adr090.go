@@ -16,6 +16,14 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 			result[name] = policy
 		}
 	}
+	// create_email_draft (email-mail-view-spec §2.7 point 3): drafting is
+	// the safe mail path — it writes only a Drafts copy and can never
+	// send — so every role carries allow, including Admin, whose five
+	// other mail tools stay deny. The inventory's unlisted-tool default is
+	// deny, which would leave the draft tool unreachable for every seeded
+	// role (and would seed an explicit deny the D19 fill may never
+	// overwrite) without this grant.
+	grant(allow, "create_email_draft")
 	grant(allow, "ToolSearch", "Skill")
 
 	commonWork := []string{"read_file", "list_directory", "grep", "list_mounts", "library_list", "library_read", "remember", "recall_memory", "recall_conversation", "send_message", "message_parent", "goal_claim", "read_inbox", "search_email", "read_message", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}

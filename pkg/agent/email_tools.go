@@ -5,14 +5,17 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // registerEmailToolsForAgent registers the M11 email tools (read_inbox,
-// search_email, read_message, send_email, reply) on the given agent
+// search_email, read_message, send_email, reply, create_email_draft — the
+// sixth added by email-mail-view-spec §2.7 point 6) on the given agent
 // UNCONDITIONALLY, like every other builtin. Whether the agent may use them is
 // its tool POLICY; whether it has an inbox to use them ON is data, resolved per
 // turn.
@@ -44,6 +47,19 @@ import (
 // operator could not see or set the permission at all: there was no row.
 // Registering always restores that control without loosening anything, since a
 // denied tool never reaches the model (tools.FilterToolsByPolicy).
+// sharedMailBudget holds the process-wide A8 mail-operation budget the email
+// tools gate their dials through. The gateway installs it BEFORE NewAgentLoop
+// (pkg/gateway/gateway.go::initializeAgentLoop — the same "must run before
+// NewAgentLoop" site as SetWindowCatalog) so it is already present when
+// registerSharedTools registers the email tools at instance construction; a
+// nil pointer means the tools dial ungated (unit tests).
+var sharedMailBudget atomic.Pointer[email.MailBudget]
+
+// SetSharedMailBudget installs the process-wide shared mail budget. One
+// writer per process (gateway boot); the watcher set and the REST handlers
+// resolve the SAME instance themselves via email.SharedMailBudget(stateDir).
+func SetSharedMailBudget(b *email.MailBudget) { sharedMailBudget.Store(b) }
+
 func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *AgentInstance) {
 	if cfg == nil || agent == nil {
 		return
@@ -82,12 +98,14 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 		}
 
 		client, err := email.NewClient(email.Account{
-			IMAPHost: mb.IMAPHost,
-			IMAPPort: mb.IMAPPort,
-			SMTPHost: mb.SMTPHost,
-			SMTPPort: mb.SMTPPort,
-			Username: mb.Username,
-			Password: password,
+			IMAPHost:     mb.IMAPHost,
+			IMAPPort:     mb.IMAPPort,
+			SMTPHost:     mb.SMTPHost,
+			SMTPPort:     mb.SMTPPort,
+			Username:     mb.Username,
+			Password:     password,
+			SentFolder:   mb.SentFolderName,
+			DraftsFolder: mb.DraftsFolderName,
 		})
 		if err != nil {
 			slog.Warn("email tools: mailbox transport construction failed — skipping pair",
@@ -98,6 +116,32 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 	}
 
 	for _, t := range tools.EmailToolset(transports) {
+		// FR-015: the draft tool's chat_link is derived from the gateway's
+		// canonical public origin — the SAME derivation serve_web's preview
+		// URLs use (middleware.CanonicalGatewayOrigin, FR-022 order: public_url
+		// first, wildcard-bind → ""). Injected via an optional setter so
+		// EmailToolset's signature stays tool-map-only (the RED suite constructs
+		// the toolset from transports alone; origin "" → chat_link null with a
+		// stated reason).
+		if origin := middleware.CanonicalGatewayOrigin(cfg); origin != "" {
+			if setter, ok := t.(interface{ SetChatLinkOrigin(origin string) }); ok {
+				setter.SetChatLinkOrigin(origin)
+			}
+		}
+		// A8 mail-operation budget: injected the same way — an optional
+		// setter at registration, so EmailToolset's construction signature
+		// stays transports-only (the RED suite constructs the toolset from
+		// transports alone). The tools gate their dialing reads through this
+		// shared gate (2-per-account cap + backoff refusal, NO retry bypass
+		// — the tool surface structurally cannot set retry, pinned by
+		// pkg/tools/email_no_retry_param_test.go).
+		if b := sharedMailBudget.Load(); b != nil {
+			if setter, ok := t.(interface {
+				SetMailBudget(b *email.MailBudget, agentID string)
+			}); ok {
+				setter.SetMailBudget(b, agentID)
+			}
+		}
 		// registerSharedTools re-runs during config reload and fast agent
 		// upsert. Replacing this first-party toolset is expected: each fresh
 		// instance carries the current workspace-to-mailbox map. Keep strict

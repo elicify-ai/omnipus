@@ -930,6 +930,15 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	// (session cookie, else bearer token), so the key matches by construction —
 	// the logout request still has both at this point.
 	a.revokePreviewTokensForSession(r)
+	// Mail preview tokens (MC-43) die with the session for the same reason:
+	// an unauthenticated bearer credential in a URL path must not outlive the
+	// session that minted it. Same key construction, same fail-closed
+	// placement before the config write.
+	if store := a.mailPreviewTokenStoreOf(); store != nil {
+		if key, ok := PreviewSessionKey(r); ok {
+			store.invalidateSession(key)
+		}
+	}
 
 	// A CLI-token-authenticated caller's synthetic "cli" identity is not
 	// backed by any Gateway.Users row (see CLITokenContextKey's doc) — the
@@ -1256,52 +1265,17 @@ func revokeUserToken(userMap map[string]any, presentedToken, presentedID string)
 // 90-second test. Never reassign it outside tests.
 var reloadWaitTimeout = serviceShutdownTimeout + providerReloadTimeout + 30*time.Second
 
-// triggerReloadAndWaitOutcome is triggerReloadAndWait's richer sibling: same
-// trigger-and-poll sequence, but the return additionally distinguishes a
-// CONFIRMED reload (IsReloadPending cleared before the deadline) from one
-// that merely timed out still pending.
-//
-// FIX 4 (HIGH, live re-review): triggerReloadAndWait's plain `error` return
-// made these two outcomes indistinguishable — both returned nil — and all
-// 16 existing call sites across this package treat err == nil as "the
-// change is live," returning 200 accordingly. executeReload (tool-policy
-// validation, credential re-injection, channel restarts) can plausibly
-// exceed the poll window on a busy gateway, so god-mode, global tool
-// policies, rate limits, prompt guard, mailbox, agent CRUD, etc. could all
-// report "applied" while the OLD config was still in force.
-//
-// triggerReloadAndWait itself keeps its EXACT original signature and
-// behavior (confirmed is discarded below; err == nil on both a confirmed
-// reload and an unconfirmed timeout) rather than being changed in place:
-// 15 of its 16 call sites live in files outside this fix's scope (rest.go,
-// rest_god_mode.go, rest_mailbox.go, rest_rate_limits.go,
-// rest_session_scope.go, rest_onboarding.go, rest_prompt_guard.go,
-// rest_tool_policies.go), so changing the shared signature would force a
-// mechanical edit to every one of them just to keep the package compiling.
-// Worse, most respond with a wire type that has no field to carry the
-// distinction at all — HandleChangePassword's own gen.OperationResult
-// (Success/Error/Validation only) is one example; only
-// rest_prompt_guard.go's response type happens to already have a
-// RequiresRestart/Warning slot, and giving the others one would need a
-// contracts/openapi.yaml change (Constraint #8), disproportionate to this
-// fix. triggerReloadAndWaitOutcome exists so a caller that CAN act on the
-// distinction has a real signal to read instead of only nil — today that is
-// HandleChangePassword's own log line (see its call site); a future pass
-// touching one of the other 15 callers can adopt it for that caller's
-// response too.
+// triggerReloadAndWaitOutcome distinguishes an applied reload from a failed
+// rebuild or an unconfirmed timeout. runReloadCycle records the rebuild outcome
+// before clearing pending; clearing pending alone only proves completion.
 func (a *restAPI) triggerReloadAndWaitOutcome() (confirmed bool, err error) {
-	return waitForReloadOutcome(a.agentLoop)
+	return waitForReloadOutcome(a.agentLoop, a.reloadOutcome)
 }
 
-// waitForReloadOutcome is the free-function core of triggerReloadAndWaitOutcome,
-// taking an explicit *agent.AgentLoop instead of a *restAPI receiver so it can
-// also be wired into pkg/sysagent/tools.Deps.WaitForReloadFunc (AgentDeleteTool
-// — see that field's doc comment for why delete_agent needs this synchronous
-// variant rather than the bare async ReloadFunc every other sysagent CRUD tool
-// uses). Behavior is unchanged from before this extraction; restAPI's method
-// above is now a one-line wrapper so all 16 existing REST call sites keep their
-// exact original behavior.
-func waitForReloadOutcome(agentLoop *agent.AgentLoop) (confirmed bool, err error) {
+// waitForReloadOutcome is shared by REST and the sysagent's synchronous reload
+// wait. A failed rebuild returns a fixed error, never the potentially sensitive
+// execution error retained by the tracker. A nil tracker has no recorded outcome.
+func waitForReloadOutcome(agentLoop *agent.AgentLoop, outcome *reloadOutcomeTracker) (confirmed bool, err error) {
 	if err := agentLoop.TriggerReload(); err != nil {
 		if errors.Is(err, agent.ErrReloadNotConfigured) {
 			// Unit-test environment — no reload pipeline wired; nothing is
@@ -1319,6 +1293,9 @@ func waitForReloadOutcome(agentLoop *agent.AgentLoop) (confirmed bool, err error
 		}
 	}
 	if pollReloadPendingClear(agentLoop) {
+		if outcome.lastFailed() {
+			return false, errRegistryRebuildFailed
+		}
 		return true, nil
 	}
 	// Reload may still be running — the exact ambiguity FIX 4 closes.
@@ -1381,11 +1358,10 @@ func waitForPendingReload(agentLoop *agent.AgentLoop) error {
 	)
 }
 
-// triggerReloadAndWait triggers a config reload and polls until
-// IsReloadPending() clears (indicating the in-memory config has been updated),
-// up to reloadWaitTimeout.
+// triggerReloadAndWait triggers a config reload and waits up to
+// reloadWaitTimeout for completion and a successful recorded rebuild.
 //
-// Returns an error when the reload fails to start AND when the wait times out.
+// Returns an error when the reload fails to start, its rebuild fails, or the wait times out.
 // The timeout MUST NOT be swallowed: it used to `return nil`, which told the
 // caller the rebuild had landed when it had not — callers turn that nil into a
 // 201 with no warning (createAgent) or a plain 200 (rotateGatewayToken,
@@ -1399,14 +1375,18 @@ func waitForPendingReload(agentLoop *agent.AgentLoop) error {
 // full gateway reload pipeline is not wired. Production always configures the
 // reload function during startup.
 func (a *restAPI) triggerReloadAndWait() error {
-	return waitForReload(a.agentLoop)
+	return waitForReload(a.agentLoop, a.reloadOutcome)
 }
 
-// waitForReload is the free-function core of triggerReloadAndWait — see
-// waitForReloadOutcome's doc comment for why this is extracted as a plain
-// function rather than kept as a *restAPI-only method.
-func waitForReload(agentLoop *agent.AgentLoop) error {
-	confirmed, err := waitForReloadOutcome(agentLoop)
+// waitForReload accepts an optional outcome tracker for reload pipelines that
+// record execution results. Both production callers supply the shared tracker;
+// callers without an outcome source retain completion-only observation.
+func waitForReload(agentLoop *agent.AgentLoop, outcomes ...*reloadOutcomeTracker) error {
+	var outcome *reloadOutcomeTracker
+	if len(outcomes) != 0 {
+		outcome = outcomes[0]
+	}
+	confirmed, err := waitForReloadOutcome(agentLoop, outcome)
 	if err != nil {
 		return err
 	}

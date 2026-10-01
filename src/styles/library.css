@@ -28,6 +28,7 @@
 @source "../components/ui/popover.tsx";
 @source "../components/ui/progress.tsx";
 @source "../components/ui/select.tsx";
+@source "../components/ui/resize-separator.tsx";
 @source "../components/ui/separator.tsx";
 @source "../components/ui/sheet.tsx";
 @source "../components/ui/slider.tsx";

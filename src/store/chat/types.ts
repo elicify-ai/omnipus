@@ -1,13 +1,14 @@
 // types.ts: Chat, attachment, subagent-span, rate-limit, and per-session state contracts
 
 import type { Message, ToolCall, AgentKind } from '@/lib/api'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { WsReceiveFrame, WsConnection } from '@/lib/ws'
 import type {
   GoalStatusFrame,
   LoopStatusFrame,
   AskUserQuestionCard,
   AskUserAnswerFrame,
   SubagentStateFrame,
+  MessageFrame,
   LLMError as GeneratedLLMError,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
@@ -150,8 +151,25 @@ export type SubagentSpan = SubagentSpanRunning | SubagentSpanTerminal
 // `normalizeTruncationReason` (src/lib/truncation.ts) legacy-default rule.
 // `getMessageStatusSuffix` (same module) is the single render-layer
 // consumer of both fields — see its D1 precedence doc comment.
+// Local delivery recovery, never persisted or sent as a wire format.
+export type FirstSendStatus = 'sending' | 'unconfirmed' | 'retrying' | 'checking_chat' | 'check_failed' | 'not_saved' | 'saved' | 'answer_not_started' | 'unfinished'
+
+export interface PendingFirstSend {
+  clientMessageId: string
+  payload: MessageFrame
+  workspaceId: string | null
+  attemptGeneration: number
+  sessionId: string | null
+  assistantPlaceholderId: string
+  status: FirstSendStatus
+}
+
 export type ChatMessage = Message & {
   isStreaming?: boolean
+  /** Original wire identity, independent of a replay-rekeyed display id. */
+  clientMessageId?: string
+  /** Ordinary first-send status only; workspace kickoffs never use it. */
+  firstSendStatus?: FirstSendStatus
   /** SPA-only acknowledgement state for a user-authored message. */
   deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed'
   media?: MediaAttachment[]
@@ -453,6 +471,8 @@ export interface SessionChatState {
    * not accidentally inherit a stale true from an earlier restart.
    */
   snapshotWasBootMismatch?: boolean
+  /** Narrow recovery flag: unknown_position alone does not mean interrupted. */
+  recoveredFirstSend?: { clientMessageId: string; attemptGeneration: number; reconciled: boolean }
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
@@ -930,6 +950,17 @@ export interface ChatStore {
    * it directly if needed.
    */
   pendingDrainQueue: OutboundQueueItem[]
+  /** Ordinary first message, distinct from the synthetic workspace kickoff. */
+  pendingFirstSend: PendingFirstSend | null
+  /** IDs abandoned in this tab, so late replies cannot affect a newer chat. */
+  abandonedFirstSendIds: string[]
+  firstSendGeneration: number
+  retryFirstSend: () => void
+  reattachFirstSend: (connection: Pick<WsConnection, 'send'>) => boolean
+  markFirstSendDisconnected: () => void
+  abandonPendingFirstSend: () => void
+  /** Deliberate fresh-ID turn, only for a confirmed unanswered first message. */
+  generateFirstSendAgain: (messageId: string) => void
 
   // ── Actions ───────────────────────────────────────────────────────────────────
   // opts.mediaRefs: optional media:// refs (e.g. uploaded images) threaded

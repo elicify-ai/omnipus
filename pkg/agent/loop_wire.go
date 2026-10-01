@@ -551,6 +551,7 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 	searchTool, err := tools.NewWebSearchTool(tools.WebSearchToolOptions{
 		IngestBoundBytes:      rw.cfg.Context.IngestBoundBytes, // ADR-066 D10
 		BraveAPIKeys:          braveKeys(rw.cfg.Tools.Web.Brave.APIKey()),
+		BraveBaseURL:          rw.cfg.Tools.Web.Brave.BaseURL,
 		BraveMaxResults:       rw.cfg.Tools.Web.Brave.MaxResults,
 		BraveEnabled:          rw.cfg.Tools.Web.Brave.Enabled,
 		TavilyAPIKeys:         tavilyKeys(rw.cfg.Tools.Web.Tavily.APIKey()),
@@ -560,6 +561,7 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 		DuckDuckGoMaxResults:  rw.cfg.Tools.Web.DuckDuckGo.MaxResults,
 		DuckDuckGoEnabled:     rw.cfg.Tools.Web.DuckDuckGo.Enabled,
 		PerplexityAPIKeys:     perplexityKeys(rw.cfg.Tools.Web.Perplexity.APIKey()),
+		PerplexityBaseURL:     rw.cfg.Tools.Web.Perplexity.BaseURL,
 		PerplexityMaxResults:  rw.cfg.Tools.Web.Perplexity.MaxResults,
 		PerplexityEnabled:     rw.cfg.Tools.Web.Perplexity.Enabled,
 		GLMSearchAPIKey:       rw.cfg.Tools.Web.GLMSearch.APIKey(),
@@ -713,11 +715,14 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 		// above no longer targets. Do not reintroduce it.
 	}
 
-	// Email tools (M11) — registered ONLY for the agent that owns a configured,
-	// enabled mailbox with a resolvable password. Email is a TOOL surface
-	// (read_inbox · search_email · read_message · send_email · reply) over the
-	// pure-Go IMAP/SMTP transport, not a conversational channel. The tools flow
-	// through the normal per-agent tool policy, so god-mode / O7 policy applies.
+	// Email tools (M11) — registered UNCONDITIONALLY for every agent. The
+	// tools themselves resolve the mailbox per (agent, workspace) pair at
+	// call time; an agent without a configured, enabled mailbox gets an empty
+	// transport set and no reachable email surface. Email is a TOOL surface
+	// (read_inbox · search_email · read_message · send_email · reply ·
+	// create_email_draft) over the pure-Go IMAP/SMTP transport, not a
+	// conversational channel. The tools flow through the normal per-agent
+	// tool policy, so god-mode / O7 policy applies.
 	registerEmailToolsForAgent(rw.cfg, agentID, agent)
 }
 

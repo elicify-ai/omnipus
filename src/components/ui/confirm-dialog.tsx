@@ -53,6 +53,11 @@ const ConfirmDialog = ({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent
         aria-busy={pending || undefined}
+        onEscapeKeyDown={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onOpenChange(false)
+        }}
         onOpenAutoFocus={() => {
           restoreFocusRef.current = document.activeElement instanceof HTMLElement
             ? document.activeElement

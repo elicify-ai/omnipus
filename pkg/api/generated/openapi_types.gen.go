@@ -4805,6 +4805,225 @@ func (e LibraryPreviewTokenResponseScope) Valid() bool {
 	}
 }
 
+// Defines values for MailFolderSlug.
+const (
+	MailFolderSlugDrafts MailFolderSlug = "drafts"
+	MailFolderSlugInbox  MailFolderSlug = "inbox"
+	MailFolderSlugSent   MailFolderSlug = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderSlug enum.
+func (e MailFolderSlug) Valid() bool {
+	switch e {
+	case MailFolderSlugDrafts:
+		return true
+	case MailFolderSlugInbox:
+		return true
+	case MailFolderSlugSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersSlug.
+const (
+	MailFolderListFoldersSlugDrafts MailFolderListFoldersSlug = "drafts"
+	MailFolderListFoldersSlugInbox  MailFolderListFoldersSlug = "inbox"
+	MailFolderListFoldersSlugSent   MailFolderListFoldersSlug = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersSlug enum.
+func (e MailFolderListFoldersSlug) Valid() bool {
+	switch e {
+	case MailFolderListFoldersSlugDrafts:
+		return true
+	case MailFolderListFoldersSlugInbox:
+		return true
+	case MailFolderListFoldersSlugSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailHtmlPreviewTokenRequestFolder.
+const (
+	MailHtmlPreviewTokenRequestFolderDrafts MailHtmlPreviewTokenRequestFolder = "drafts"
+	MailHtmlPreviewTokenRequestFolderInbox  MailHtmlPreviewTokenRequestFolder = "inbox"
+	MailHtmlPreviewTokenRequestFolderSent   MailHtmlPreviewTokenRequestFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailHtmlPreviewTokenRequestFolder enum.
+func (e MailHtmlPreviewTokenRequestFolder) Valid() bool {
+	switch e {
+	case MailHtmlPreviewTokenRequestFolderDrafts:
+		return true
+	case MailHtmlPreviewTokenRequestFolderInbox:
+		return true
+	case MailHtmlPreviewTokenRequestFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessageFolder.
+const (
+	MailMessageFolderDrafts MailMessageFolder = "drafts"
+	MailMessageFolderInbox  MailMessageFolder = "inbox"
+	MailMessageFolderSent   MailMessageFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailMessageFolder enum.
+func (e MailMessageFolder) Valid() bool {
+	switch e {
+	case MailMessageFolderDrafts:
+		return true
+	case MailMessageFolderInbox:
+		return true
+	case MailMessageFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessagePageMessagesFolder.
+const (
+	MailMessagePageMessagesFolderDrafts MailMessagePageMessagesFolder = "drafts"
+	MailMessagePageMessagesFolderInbox  MailMessagePageMessagesFolder = "inbox"
+	MailMessagePageMessagesFolderSent   MailMessagePageMessagesFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailMessagePageMessagesFolder enum.
+func (e MailMessagePageMessagesFolder) Valid() bool {
+	switch e {
+	case MailMessagePageMessagesFolderDrafts:
+		return true
+	case MailMessagePageMessagesFolderInbox:
+		return true
+	case MailMessagePageMessagesFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessageSummaryFolder.
+const (
+	MailMessageSummaryFolderDrafts MailMessageSummaryFolder = "drafts"
+	MailMessageSummaryFolderInbox  MailMessageSummaryFolder = "inbox"
+	MailMessageSummaryFolderSent   MailMessageSummaryFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailMessageSummaryFolder enum.
+func (e MailMessageSummaryFolder) Valid() bool {
+	switch e {
+	case MailMessageSummaryFolderDrafts:
+		return true
+	case MailMessageSummaryFolderInbox:
+		return true
+	case MailMessageSummaryFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailSummaryListItemsWatcherState.
+const (
+	MailSummaryListItemsWatcherStateBackoff MailSummaryListItemsWatcherState = "backoff"
+	MailSummaryListItemsWatcherStateError   MailSummaryListItemsWatcherState = "error"
+	MailSummaryListItemsWatcherStateOk      MailSummaryListItemsWatcherState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MailSummaryListItemsWatcherState enum.
+func (e MailSummaryListItemsWatcherState) Valid() bool {
+	switch e {
+	case MailSummaryListItemsWatcherStateBackoff:
+		return true
+	case MailSummaryListItemsWatcherStateError:
+		return true
+	case MailSummaryListItemsWatcherStateOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailUnavailableErrorCode.
+const (
+	MailUnavailableErrorCodeBackoff MailUnavailableErrorCode = "backoff"
+	MailUnavailableErrorCodeBusy    MailUnavailableErrorCode = "busy"
+)
+
+// Valid indicates whether the value is a known member of the MailUnavailableErrorCode enum.
+func (e MailUnavailableErrorCode) Valid() bool {
+	switch e {
+	case MailUnavailableErrorCodeBackoff:
+		return true
+	case MailUnavailableErrorCodeBusy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailUnavailableErrorLastErrorClass.
+const (
+	MailUnavailableErrorLastErrorClassAuthFailed     MailUnavailableErrorLastErrorClass = "auth_failed"
+	MailUnavailableErrorLastErrorClassConnectRefused MailUnavailableErrorLastErrorClass = "connect_refused"
+	MailUnavailableErrorLastErrorClassDns            MailUnavailableErrorLastErrorClass = "dns"
+	MailUnavailableErrorLastErrorClassFolderMissing  MailUnavailableErrorLastErrorClass = "folder_missing"
+	MailUnavailableErrorLastErrorClassServerError    MailUnavailableErrorLastErrorClass = "server_error"
+	MailUnavailableErrorLastErrorClassTimeout        MailUnavailableErrorLastErrorClass = "timeout"
+	MailUnavailableErrorLastErrorClassTls            MailUnavailableErrorLastErrorClass = "tls"
+)
+
+// Valid indicates whether the value is a known member of the MailUnavailableErrorLastErrorClass enum.
+func (e MailUnavailableErrorLastErrorClass) Valid() bool {
+	switch e {
+	case MailUnavailableErrorLastErrorClassAuthFailed:
+		return true
+	case MailUnavailableErrorLastErrorClassConnectRefused:
+		return true
+	case MailUnavailableErrorLastErrorClassDns:
+		return true
+	case MailUnavailableErrorLastErrorClassFolderMissing:
+		return true
+	case MailUnavailableErrorLastErrorClassServerError:
+		return true
+	case MailUnavailableErrorLastErrorClassTimeout:
+		return true
+	case MailUnavailableErrorLastErrorClassTls:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailboxNewMailSummaryWatcherState.
+const (
+	MailboxNewMailSummaryWatcherStateBackoff MailboxNewMailSummaryWatcherState = "backoff"
+	MailboxNewMailSummaryWatcherStateError   MailboxNewMailSummaryWatcherState = "error"
+	MailboxNewMailSummaryWatcherStateOk      MailboxNewMailSummaryWatcherState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MailboxNewMailSummaryWatcherState enum.
+func (e MailboxNewMailSummaryWatcherState) Valid() bool {
+	switch e {
+	case MailboxNewMailSummaryWatcherStateBackoff:
+		return true
+	case MailboxNewMailSummaryWatcherStateError:
+		return true
+	case MailboxNewMailSummaryWatcherStateOk:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MaxToolIterationsSavedState.
 const (
 	MaxToolIterationsSavedStateAboveMax MaxToolIterationsSavedState = "above_max"
@@ -8450,6 +8669,69 @@ func (e ScheduleUpdateTriggerKind) Valid() bool {
 	case ScheduleUpdateTriggerKindCron:
 		return true
 	case ScheduleUpdateTriggerKindEvery:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SearchProviderCheckResponseProviderId.
+const (
+	SearchProviderCheckResponseProviderIdBaidu      SearchProviderCheckResponseProviderId = "baidu"
+	SearchProviderCheckResponseProviderIdBrave      SearchProviderCheckResponseProviderId = "brave"
+	SearchProviderCheckResponseProviderIdExa        SearchProviderCheckResponseProviderId = "exa"
+	SearchProviderCheckResponseProviderIdGlm        SearchProviderCheckResponseProviderId = "glm"
+	SearchProviderCheckResponseProviderIdPerplexity SearchProviderCheckResponseProviderId = "perplexity"
+	SearchProviderCheckResponseProviderIdTavily     SearchProviderCheckResponseProviderId = "tavily"
+)
+
+// Valid indicates whether the value is a known member of the SearchProviderCheckResponseProviderId enum.
+func (e SearchProviderCheckResponseProviderId) Valid() bool {
+	switch e {
+	case SearchProviderCheckResponseProviderIdBaidu:
+		return true
+	case SearchProviderCheckResponseProviderIdBrave:
+		return true
+	case SearchProviderCheckResponseProviderIdExa:
+		return true
+	case SearchProviderCheckResponseProviderIdGlm:
+		return true
+	case SearchProviderCheckResponseProviderIdPerplexity:
+		return true
+	case SearchProviderCheckResponseProviderIdTavily:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SearchProviderCheckResponseStatus.
+const (
+	SearchProviderCheckResponseStatusAuthError       SearchProviderCheckResponseStatus = "auth_error"
+	SearchProviderCheckResponseStatusInvalidResponse SearchProviderCheckResponseStatus = "invalid_response"
+	SearchProviderCheckResponseStatusNetworkError    SearchProviderCheckResponseStatus = "network_error"
+	SearchProviderCheckResponseStatusProviderError   SearchProviderCheckResponseStatus = "provider_error"
+	SearchProviderCheckResponseStatusRateLimited     SearchProviderCheckResponseStatus = "rate_limited"
+	SearchProviderCheckResponseStatusSuccess         SearchProviderCheckResponseStatus = "success"
+	SearchProviderCheckResponseStatusTimeout         SearchProviderCheckResponseStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SearchProviderCheckResponseStatus enum.
+func (e SearchProviderCheckResponseStatus) Valid() bool {
+	switch e {
+	case SearchProviderCheckResponseStatusAuthError:
+		return true
+	case SearchProviderCheckResponseStatusInvalidResponse:
+		return true
+	case SearchProviderCheckResponseStatusNetworkError:
+		return true
+	case SearchProviderCheckResponseStatusProviderError:
+		return true
+	case SearchProviderCheckResponseStatusRateLimited:
+		return true
+	case SearchProviderCheckResponseStatusSuccess:
+		return true
+	case SearchProviderCheckResponseStatusTimeout:
 		return true
 	default:
 		return false
@@ -12596,6 +12878,90 @@ func (e ListWorkspacesParamsStatus) Valid() bool {
 	}
 }
 
+// Defines values for ListMailMessagesParamsFolder.
+const (
+	ListMailMessagesParamsFolderDrafts ListMailMessagesParamsFolder = "drafts"
+	ListMailMessagesParamsFolderInbox  ListMailMessagesParamsFolder = "inbox"
+	ListMailMessagesParamsFolderSent   ListMailMessagesParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the ListMailMessagesParamsFolder enum.
+func (e ListMailMessagesParamsFolder) Valid() bool {
+	switch e {
+	case ListMailMessagesParamsFolderDrafts:
+		return true
+	case ListMailMessagesParamsFolderInbox:
+		return true
+	case ListMailMessagesParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetMailMessageParamsFolder.
+const (
+	GetMailMessageParamsFolderDrafts GetMailMessageParamsFolder = "drafts"
+	GetMailMessageParamsFolderInbox  GetMailMessageParamsFolder = "inbox"
+	GetMailMessageParamsFolderSent   GetMailMessageParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the GetMailMessageParamsFolder enum.
+func (e GetMailMessageParamsFolder) Valid() bool {
+	switch e {
+	case GetMailMessageParamsFolderDrafts:
+		return true
+	case GetMailMessageParamsFolderInbox:
+		return true
+	case GetMailMessageParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetMailAttachmentParamsFolder.
+const (
+	GetMailAttachmentParamsFolderDrafts GetMailAttachmentParamsFolder = "drafts"
+	GetMailAttachmentParamsFolderInbox  GetMailAttachmentParamsFolder = "inbox"
+	GetMailAttachmentParamsFolderSent   GetMailAttachmentParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the GetMailAttachmentParamsFolder enum.
+func (e GetMailAttachmentParamsFolder) Valid() bool {
+	switch e {
+	case GetMailAttachmentParamsFolderDrafts:
+		return true
+	case GetMailAttachmentParamsFolderInbox:
+		return true
+	case GetMailAttachmentParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MarkMailMessageSeenParamsFolder.
+const (
+	MarkMailMessageSeenParamsFolderDrafts MarkMailMessageSeenParamsFolder = "drafts"
+	MarkMailMessageSeenParamsFolderInbox  MarkMailMessageSeenParamsFolder = "inbox"
+	MarkMailMessageSeenParamsFolderSent   MarkMailMessageSeenParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MarkMailMessageSeenParamsFolder enum.
+func (e MarkMailMessageSeenParamsFolder) Valid() bool {
+	switch e {
+	case MarkMailMessageSeenParamsFolderDrafts:
+		return true
+	case MarkMailMessageSeenParamsFolderInbox:
+		return true
+	case MarkMailMessageSeenParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
 // AboutResponse Gateway metadata returned by GET /api/v1/about.
 type AboutResponse struct {
 	// Arch CPU architecture (GOARCH).
@@ -14588,6 +14954,27 @@ type ContextSettingsUpdate struct {
 
 // ContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 type ContextWindowSource string
+
+// CreateEmailDraftResult Result of the create_email_draft agent tool (spec §2.4 — the tool returns exactly this shape). Crosses the gateway→SPA boundary: the chat tool-result renderer consumes the generated type (round-2 MIN-013). Property names are exactly as the tool emits them.
+type CreateEmailDraftResult struct {
+	// ChatLink Absolute http(s) chat link built from gateway.public_url exactly like serve_web derives its origin — http allowed (round-1 MAJ-013; pkg/tools/web_serve.go precedent). Null when no origin is derivable (unset public_url, wildcard bind) — the tool still succeeds and chat_link_reason carries the stated reason.
+	ChatLink *string `json:"chat_link"`
+
+	// ChatLinkReason The stated reason when chat_link is null; null otherwise.
+	ChatLinkReason *string `json:"chat_link_reason"`
+
+	// Created Whether the draft was APPENDed (MC-11 asserts created=true).
+	Created bool `json:"created"`
+
+	// MessageId The draft's Message-ID, generated by the tool itself (<random-128-bit@domain-of-the-mailbox's-From-address>, fallback omnipus.invalid) and kept through panel edits and the final send (round-1 MIN-004).
+	MessageId string `json:"message_id"`
+
+	// Uid IMAP UID of the APPENDed draft in the Drafts folder.
+	Uid int `json:"uid"`
+
+	// Uidvalidity UIDVALIDITY of the Drafts folder.
+	Uidvalidity int `json:"uidvalidity"`
+}
 
 // CreateVaultRequest Request body for POST /api/v1/library/{workspace_id}/vaults. Creates a new Omnipus knowledge base ("vault") as a folder inside the workspace's work tree (pkg/knowledge.CreateInWorkspace — FR-022/FR-023/FR-025), writing the .omnipus-vault/ marker plus empty records/ and views/ control-plane directories so the vault is immediately usable by knowledge_configure. workspace_id is NOT a body field — it is already the {workspace_id} path parameter, matching every other per-workspace Library create/write route (LibraryMkdirRequest, LibraryContentRequest, ...) rather than duplicating it and risking the two disagreeing.
 type CreateVaultRequest struct {
@@ -17079,6 +17466,9 @@ type IntegrationProviderUpdateRequest struct {
 	// ApiKey API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider. Storing a key alone (with no role fields in the same request) changes no role (ADR-096 D18 / AC-15).
 	ApiKey *string `json:"api_key,omitempty"`
 
+	// ClearApiKey Search-only, keyed providers: true explicitly removes the catalogue-owned saved key and switches this service off without changing the default, fallback or role migration marker. Requires the same consent as saving. When true, api_key, active and fallback must all be absent, including empty or false values. Omitted or false leaves existing update semantics unchanged; an empty api_key never deletes a key. Undecided roles, a custom credential reference or a key shared with another connection return 409 without writes. Removal does not revoke the upstream key. A later-stage failure returns a non-success response describing any persisted change.
+	ClearApiKey *bool `json:"clear_api_key,omitempty"`
+
 	// Fallback Assign the fallback role. Search only; a fallback field on a voice request is rejected with 400. Search, true: make this provider the web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17). Rejected with 400 when this id is also the default in the same request, or is the stored default — a provider cannot fall back to itself (ADR-096 FR-006 / R5's save rule). Search, false: set the fallback to none ("No fallback"), regardless of which provider id is addressed — an explicit none is a choice, and is never flipped when the default changes (ADR-096 D4). An explicit false on a voice request is rejected with 400 for the same reason an explicit false active is.
 	Fallback *bool `json:"fallback,omitempty"`
 
@@ -17843,6 +18233,477 @@ type LoginResponse struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
+// MailAttachment Attachment descriptor on MailMessage (D28 — inbound messages, drafts and sent copies). The gateway never returns raw MIME names: filename is sanitized for download (no path separators, edge case 21) and the same sanitized name is what the download endpoint serves.
+type MailAttachment struct {
+	// ContentType The MIME part's declared content type, as listed. (The download endpoint serves with an extension-derived content type instead — MC-42.)
+	ContentType string `json:"content_type"`
+
+	// Filename Sanitized attachment filename — no path separators, never trusted raw from the MIME part (MC-32; the same sanitized form is served on the download's Content-Disposition per MC-42).
+	Filename string `json:"filename"`
+
+	// PartIndex Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
+	PartIndex int `json:"part_index"`
+
+	// SizeBytes Decoded attachment size in bytes.
+	SizeBytes int `json:"size_bytes"`
+}
+
+// MailAttachmentInput One attachment supplied for an outbound message (D28) — on the human paths (MailSendRequest.attachments, MailDraftUpdateRequest.attachments). The agent path carries no wire schema: agent tool attachments are workspace-file references resolved server-side through pkg/tools/resolvepath.go::ResolvePath under its open-read rule (D33, security sign-off C2; no separate policy or gate — MC-35).
+type MailAttachmentInput struct {
+	// ContentType The attachment's content type as supplied by the composer.
+	ContentType string `json:"content_type"`
+
+	// DataBase64 The attachment bytes, base64-encoded. Across all attachments of one message the decoded total is capped at 25 MiB with at most 10 files (MC-32) — enforced before any SMTP connection or draft APPEND.
+	DataBase64 []byte `json:"data_base64"`
+
+	// Filename Attachment filename. Sanitized on serve and on attach (MC-32) — no path separators are ever stored or served.
+	Filename string `json:"filename"`
+}
+
+// MailDraftSendRequest Panel send (D12, POST /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}/send): the panel IS the approval. Transmits exactly the request's content — never re-reads the draft as truth (round-1 MAJ-002) — APPENDs the Sent copy (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009): a repeat submit after a completed send returns the recorded first outcome, never a second transmission (FR-021). keep_attachment_parts is optional here and defaults to carrying ALL of the current copy's attachments (spec §2.2; the UI lists exactly what will be carried, D28). Audit event + rate limit.
+type MailDraftSendRequest struct {
+	// Bcc The displayed/edited Bcc recipients. Absent or empty means none.
+	Bcc *[]string `json:"bcc,omitempty"`
+
+	// BodyMarkdown The displayed/edited Markdown body, rendered at send time (MC-3).
+	BodyMarkdown string `json:"body_markdown"`
+
+	// Cc The displayed/edited Cc recipients. Absent or empty means none.
+	Cc *[]string `json:"cc,omitempty"`
+
+	// KeepAttachmentParts Part indices from the current copy's MailMessage.attachments to carry onto the sent message. Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Optional — absent or empty-list semantics: absent carries ALL of the current copy's attachments (spec §2.2 default carry all); an explicit list carries exactly those parts.
+	KeepAttachmentParts *[]int `json:"keep_attachment_parts,omitempty"`
+
+	// Subject The displayed/edited subject, transmitted as-is.
+	Subject string `json:"subject"`
+
+	// To The displayed/edited To recipients, transmitted as-is (round-1 MAJ-002).
+	To []string `json:"to"`
+
+	// Uid uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
+	Uid int64 `json:"uid"`
+
+	// Uidvalidity uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
+	Uidvalidity int64 `json:"uidvalidity"`
+}
+
+// MailDraftUpdateRequest Panel edit of a draft (D12/D23, PUT /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}): the full displayed content plus the staleness precondition (round-2 MAJ-008). The APPEND keeps the draft's Message-ID and \Deleted-flag the old copy (FR-032). Attachment carry-over is by part reference (FR-035): keep_attachment_parts lists the part indices from the current copy's MailMessage.attachments to carry over, and attachments carries new files. Full-replace semantics: keep_attachment_parts is required — the panel lists exactly what will be carried (D28). Audit event + rate limit.
+type MailDraftUpdateRequest struct {
+	// Attachments New files added in the panel (D28).
+	Attachments *[]struct {
+		// ContentType The attachment's content type as supplied by the composer.
+		ContentType string `json:"content_type"`
+
+		// DataBase64 The attachment bytes, base64-encoded. Across all attachments of one message the decoded total is capped at 25 MiB with at most 10 files (MC-32) — enforced before any SMTP connection or draft APPEND.
+		DataBase64 []byte `json:"data_base64"`
+
+		// Filename Attachment filename. Sanitized on serve and on attach (MC-32) — no path separators are ever stored or served.
+		Filename string `json:"filename"`
+	} `json:"attachments,omitempty"`
+
+	// Bcc Bcc recipients replacing the draft's current list. Absent or empty means none.
+	Bcc *[]string `json:"bcc,omitempty"`
+
+	// BodyMarkdown New editable Markdown source (D23). For an Omnipus draft it replaces the stored text/markdown part and re-stamps X-Omnipus-Render-Hash (MC-29); for a foreign draft it replaces the derived source, with the formatting-loss statement shown in the panel (D24).
+	BodyMarkdown string `json:"body_markdown"`
+
+	// Cc Cc recipients replacing the draft's current list. Absent or empty means none.
+	Cc *[]string `json:"cc,omitempty"`
+
+	// KeepAttachmentParts Part indices from the current copy's MailMessage.attachments to carry over (FR-035, server-side carry-over by part reference). Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Required — the panel lists exactly what will be carried (D28).
+	KeepAttachmentParts []int `json:"keep_attachment_parts"`
+
+	// Subject New subject (D23).
+	Subject string `json:"subject"`
+
+	// To To recipients, replacing the draft's current list (D23 — recipients editable).
+	To []string `json:"to"`
+
+	// Uid uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
+	Uid int64 `json:"uid"`
+
+	// Uidvalidity uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
+	Uidvalidity int64 `json:"uidvalidity"`
+}
+
+// MailFolder One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox, as listed live from the mail server. Counts are live IMAP values at request time; the unread count exists for the Inbox only and is null everywhere else (round-1 MIN-005).
+type MailFolder struct {
+	// DisplayName The mail server's real folder name for this slug (the per-mailbox sent_folder_name / drafts_folder_name override applies, else the auto-resolved standard name).
+	DisplayName string `json:"display_name"`
+
+	// Slug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+	Slug MailFolderSlug `json:"slug"`
+
+	// Total Live message count of the folder.
+	Total int `json:"total"`
+
+	// UnreadCount Live IMAP UNSEEN count. Present for the Inbox only; null for Sent and Drafts (round-1 MIN-005). The watcher's per-mailbox unseen_total is the only other unread surface — the list endpoint never filters by it (round-2 OBS-001 dropped the unseen_only query parameter).
+	UnreadCount *int `json:"unread_count"`
+}
+
+// MailFolderSlug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+type MailFolderSlug string
+
+// MailFolderList The three mail folders (D5) of one mailbox with live counts — the response of GET /workspaces/{id}/mail/{agentId}/folders.
+type MailFolderList struct {
+	// Folders Exactly the three D5 folders (Inbox, Sent, Drafts).
+	Folders []struct {
+		// DisplayName The mail server's real folder name for this slug (the per-mailbox sent_folder_name / drafts_folder_name override applies, else the auto-resolved standard name).
+		DisplayName string `json:"display_name"`
+
+		// Slug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+		Slug MailFolderListFoldersSlug `json:"slug"`
+
+		// Total Live message count of the folder.
+		Total int `json:"total"`
+
+		// UnreadCount Live IMAP UNSEEN count. Present for the Inbox only; null for Sent and Drafts (round-1 MIN-005). The watcher's per-mailbox unseen_total is the only other unread surface — the list endpoint never filters by it (round-2 OBS-001 dropped the unseen_only query parameter).
+		UnreadCount *int `json:"unread_count"`
+	} `json:"folders"`
+}
+
+// MailFolderListFoldersSlug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+type MailFolderListFoldersSlug string
+
+// MailHtmlPreviewTokenRequest Request to mint a short-lived token for one message's HTML body (D13/D17, POST /mail/html-preview-token — session-authenticated, stays in the API namespace, security sign-off C1). This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched once, sanitized, and its body plus inline cid: parts and the load_remote remote-image URL list are held in the in-memory token store for the TTL — the /mail-preview/ serve routes (§2.3a) never dial IMAP. load_remote defaults to false (D17 — remote images blocked by default; "Load images" re-mints with true). Rate-limited by a dedicated per-IP limiter (MC-44).
+type MailHtmlPreviewTokenRequest struct {
+	// AgentId ID of the mailbox-owning agent.
+	AgentId string `json:"agent_id"`
+
+	// Folder Folder slug — exactly inbox, sent or drafts (MC-5).
+	Folder MailHtmlPreviewTokenRequestFolder `json:"folder"`
+
+	// LoadRemote Whether the preview may load remote images through the gateway's bounded proxy (D17). Default false — blocked by default; the "Load images" action re-mints with true.
+	LoadRemote *bool `json:"load_remote,omitempty"`
+
+	// MessageRef Folder-scoped message reference: `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>` — the same ref grammar as the read endpoint (§2.3).
+	MessageRef string `json:"message_ref"`
+
+	// WorkspaceId Workspace of the mailbox pair.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// MailHtmlPreviewTokenRequestFolder Folder slug — exactly inbox, sent or drafts (MC-5).
+type MailHtmlPreviewTokenRequestFolder string
+
+// MailHtmlPreviewTokenResponse Minted preview token for one message's HTML body (D13/D17). Mirrors the Library token hygiene (MC-43): 256-bit crypto/rand token, fail-closed on entropy failure, named TTL, per-session live-token cap that refuses never evicts, indistinguishable 404s on the serve routes, logout revocation, bound to (pair, folder, ref, load_remote). The SPA constructs the /mail-preview/html/{token} and /mail-preview/part/{token}/{index} URLs from the token; expiry comes from expires_in_seconds.
+type MailHtmlPreviewTokenResponse struct {
+	// ExpiresInSeconds Seconds from the moment this response was produced until the token stops working (Library precedent: 900 for the 15-minute PreviewTokenTTL).
+	ExpiresInSeconds int `json:"expires_in_seconds"`
+
+	// Token The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (Library token hygiene, MC-43). This string is the entire security of the unauthenticated /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (Referrer-Policy: no-referrer on the served responses).
+	Token string `json:"token"`
+}
+
+// MailMessage Full message for the Mail panel read path (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}) and the response of a panel draft edit (PUT .../folders/drafts/messages/{ref}). Carries every MailMessageSummary field plus the read-path extras. Fetching never writes flags (BODY.PEEK — round-2 MAJ-003); the only \Seen writers are the panel's seen endpoint and agent read_message (D38). bcc is returned only on the owner's own copies (drafts and Sent) and is null otherwise (§2.3 note). No message body text is persisted anywhere by Omnipus (D6) — this object is assembled live from the mail server.
+type MailMessage struct {
+	// Attachments Attachment descriptors (D28) — sanitized names, part indices.
+	Attachments []struct {
+		// ContentType The MIME part's declared content type, as listed. (The download endpoint serves with an extension-derived content type instead — MC-42.)
+		ContentType string `json:"content_type"`
+
+		// Filename Sanitized attachment filename — no path separators, never trusted raw from the MIME part (MC-32; the same sanitized form is served on the download's Content-Disposition per MC-42).
+		Filename string `json:"filename"`
+
+		// PartIndex Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
+		PartIndex int `json:"part_index"`
+
+		// SizeBytes Decoded attachment size in bytes.
+		SizeBytes int `json:"size_bytes"`
+	} `json:"attachments"`
+
+	// Bcc Bcc addresses — returned only on the owner's own copies (drafts and Sent); null on every other message (§2.3 note, D29/R2-3).
+	Bcc *[]string `json:"bcc"`
+
+	// BodyMarkdown The draft's editable Markdown source: the stored text/markdown part of an Omnipus draft whose X-Omnipus-Render-Hash matches the rendered text part; otherwise the server-derived Markdown of a foreign draft (FR-030) with markdown_lossy=true. Null on non-draft messages without an editable source.
+	BodyMarkdown *string `json:"body_markdown"`
+
+	// BodyText Decoded plain-text body.
+	BodyText string `json:"body_text"`
+
+	// Cc Cc addresses (D26).
+	Cc []string `json:"cc"`
+
+	// Date Message date (RFC 3339).
+	Date time.Time `json:"date"`
+
+	// DraftCleanupWarning Set when the OLD draft copy could not be removed after a successful update-APPEND of the new copy (MAJ-009/MC-28 — the panel warns of a possible duplicate draft). Same underlying mechanism as the send path's draft_cleanup_warning (MailSendResponse), triggered by update instead of send. Null when cleanup succeeded, and always null on the read paths (GET message, list messages) — only the update endpoint can set it.
+	DraftCleanupWarning *string `json:"draft_cleanup_warning,omitempty"`
+
+	// Folder The folder slug the message lives in (MC-5).
+	Folder MailMessageFolder `json:"folder"`
+
+	// From The From address (addr-spec).
+	From string `json:"from"`
+
+	// FromName Display name of the sender when present, else null.
+	FromName *string `json:"from_name"`
+
+	// HasHtml Whether an HTML body part exists. The HTML itself is never in this object — it is served only through the token-gated mail-preview routes (D13, §2.3a).
+	HasHtml bool `json:"has_html"`
+
+	// InReplyTo In-Reply-To Message-ID when present, else null.
+	InReplyTo *string `json:"in_reply_to"`
+
+	// IsDraft Whether the message carries the \Draft flag (MC-14).
+	IsDraft bool `json:"is_draft"`
+
+	// IsOmnipusDraft Whether the X-Omnipus-Draft header is present (FR-029).
+	IsOmnipusDraft bool `json:"is_omnipus_draft"`
+
+	// MarkdownLossy True when body_markdown was derived rather than read from a stored text/markdown part — editing such a draft may lose formatting (D24; the panel states the loss plainly).
+	MarkdownLossy bool `json:"markdown_lossy"`
+
+	// MessageId The Message-ID header value, or null when the mail carries none.
+	MessageId *string `json:"message_id"`
+
+	// ReadByAgent Whether the flag list carries the $OmnipusAgentRead keyword (D38, FR-039) — derived per fetch, never stored by Omnipus.
+	ReadByAgent bool `json:"read_by_agent"`
+
+	// References References header (thread chain) when present, else null.
+	References *string `json:"references"`
+
+	// ReplyTo Reply-To address when the message carries one, else null.
+	ReplyTo *string `json:"reply_to"`
+
+	// Seen Whether the message carries the \Seen flag.
+	Seen bool `json:"seen"`
+
+	// Subject Decoded subject (RFC 2047 decoded).
+	Subject string `json:"subject"`
+
+	// To To addresses.
+	To []string `json:"to"`
+
+	// Uid IMAP UID of the message within its folder.
+	Uid int64 `json:"uid"`
+
+	// Uidvalidity IMAP UIDVALIDITY of the folder.
+	Uidvalidity int64 `json:"uidvalidity"`
+}
+
+// MailMessageFolder The folder slug the message lives in (MC-5).
+type MailMessageFolder string
+
+// MailMessagePage One page of mail message envelopes (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Truncation is explicit — the page never silently drops rows (mirrors pkg/email/transport.go::SearchResult's explicit-truncation contract).
+type MailMessagePage struct {
+	// Messages The envelopes of this page, newest first.
+	Messages []struct {
+		// Cc Cc addresses (D26 — recipient lists on every mail surface).
+		Cc []string `json:"cc"`
+
+		// Date Message date (RFC 3339).
+		Date time.Time `json:"date"`
+
+		// Folder The folder slug the message was listed from (MC-5).
+		Folder MailMessagePageMessagesFolder `json:"folder"`
+
+		// From The From address (addr-spec).
+		From string `json:"from"`
+
+		// FromName Display name of the sender when present, else null.
+		FromName *string `json:"from_name"`
+
+		// IsDraft Whether the message carries the \Draft flag (MC-14).
+		IsDraft bool `json:"is_draft"`
+
+		// IsOmnipusDraft Whether the X-Omnipus-Draft header is present (FR-029) — an agent-created draft the approval panel can edit losslessly.
+		IsOmnipusDraft bool `json:"is_omnipus_draft"`
+
+		// MessageId The Message-ID header value, or null when the inbound mail carries none (some mail does). Mid-style refs cannot address such a message.
+		MessageId *string `json:"message_id"`
+
+		// ReadByAgent Whether the message's flag list carries the $OmnipusAgentRead keyword (D38, FR-039). Derived from the fetched flag list on every fetch — never stored by Omnipus (D6). When the mail server rejects custom keywords the value is false and nothing errors (MC-36).
+		ReadByAgent bool `json:"read_by_agent"`
+
+		// Seen Whether the message carries the \Seen flag.
+		Seen bool `json:"seen"`
+
+		// Subject Decoded subject (RFC 2047 decoded).
+		Subject string `json:"subject"`
+
+		// To To addresses.
+		To []string `json:"to"`
+
+		// Uid IMAP UID of the message within its folder (valid under uidvalidity).
+		Uid int64 `json:"uid"`
+
+		// Uidvalidity IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A changed uidvalidity renumbers uids; the mid: ref form survives that (round-1 MAJ-005, D21).
+		Uidvalidity int64 `json:"uidvalidity"`
+	} `json:"messages"`
+
+	// NextBeforeUid The before_uid cursor for the next page when truncated is true; null when this page is the last one.
+	NextBeforeUid *int64 `json:"next_before_uid"`
+
+	// Truncated Whether more messages exist beyond this page.
+	Truncated bool `json:"truncated"`
+}
+
+// MailMessagePageMessagesFolder The folder slug the message was listed from (MC-5).
+type MailMessagePageMessagesFolder string
+
+// MailMessageSummary Envelope row for one mail message as shown in a Mail panel list result (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). All fields are always serialized; nullable fields are the ones the mail server itself may leave unset (round-1 MIN-003 — types and nullability explicit). Fetches behind this row never change flags (BODY.PEEK / EXAMINE — round-2 MAJ-003).
+type MailMessageSummary struct {
+	// Cc Cc addresses (D26 — recipient lists on every mail surface).
+	Cc []string `json:"cc"`
+
+	// Date Message date (RFC 3339).
+	Date time.Time `json:"date"`
+
+	// Folder The folder slug the message was listed from (MC-5).
+	Folder MailMessageSummaryFolder `json:"folder"`
+
+	// From The From address (addr-spec).
+	From string `json:"from"`
+
+	// FromName Display name of the sender when present, else null.
+	FromName *string `json:"from_name"`
+
+	// IsDraft Whether the message carries the \Draft flag (MC-14).
+	IsDraft bool `json:"is_draft"`
+
+	// IsOmnipusDraft Whether the X-Omnipus-Draft header is present (FR-029) — an agent-created draft the approval panel can edit losslessly.
+	IsOmnipusDraft bool `json:"is_omnipus_draft"`
+
+	// MessageId The Message-ID header value, or null when the inbound mail carries none (some mail does). Mid-style refs cannot address such a message.
+	MessageId *string `json:"message_id"`
+
+	// ReadByAgent Whether the message's flag list carries the $OmnipusAgentRead keyword (D38, FR-039). Derived from the fetched flag list on every fetch — never stored by Omnipus (D6). When the mail server rejects custom keywords the value is false and nothing errors (MC-36).
+	ReadByAgent bool `json:"read_by_agent"`
+
+	// Seen Whether the message carries the \Seen flag.
+	Seen bool `json:"seen"`
+
+	// Subject Decoded subject (RFC 2047 decoded).
+	Subject string `json:"subject"`
+
+	// To To addresses.
+	To []string `json:"to"`
+
+	// Uid IMAP UID of the message within its folder (valid under uidvalidity).
+	Uid int64 `json:"uid"`
+
+	// Uidvalidity IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A changed uidvalidity renumbers uids; the mid: ref form survives that (round-1 MAJ-005, D21).
+	Uidvalidity int64 `json:"uidvalidity"`
+}
+
+// MailMessageSummaryFolder The folder slug the message was listed from (MC-5).
+type MailMessageSummaryFolder string
+
+// MailSendRequest Human manual send from the Mail panel compose (D9, POST /workspaces/{id}/mail/{agentId}/messages). Body is Markdown; the backend renders sanitized HTML + plain text (multipart/alternative, MC-3), appends the mailbox signature, sends over SMTP and APPENDs the Sent copy (D7, D18 — always, no provider detection). Audit event + dedicated mailMutationLimiter rate limit (MC-20). The ≤ 50-recipient total cap (D29/R2-6, MC-27) and the attachment caps (≤ 10 files, ≤ 25 MiB total — MC-32) are enforced before any SMTP connection.
+type MailSendRequest struct {
+	// Attachments Files to attach (D28). Decoded total across all files ≤ 25 MiB, at most 10 files (MC-32) — checked pre-dial.
+	Attachments *[]struct {
+		// ContentType The attachment's content type as supplied by the composer.
+		ContentType string `json:"content_type"`
+
+		// DataBase64 The attachment bytes, base64-encoded. Across all attachments of one message the decoded total is capped at 25 MiB with at most 10 files (MC-32) — enforced before any SMTP connection or draft APPEND.
+		DataBase64 []byte `json:"data_base64"`
+
+		// Filename Attachment filename. Sanitized on serve and on attach (MC-32) — no path separators are ever stored or served.
+		Filename string `json:"filename"`
+	} `json:"attachments,omitempty"`
+
+	// Bcc Bcc recipients. Absent or empty means none.
+	Bcc *[]string `json:"bcc,omitempty"`
+
+	// BodyMarkdown Markdown body — rendered server-side to sanitized HTML plus plain text (multipart/alternative, MC-3), signature appended. Bounded at 1 MiB (MC-22).
+	BodyMarkdown string `json:"body_markdown"`
+
+	// Cc Cc recipients. Absent or empty means none.
+	Cc *[]string `json:"cc,omitempty"`
+
+	// InReplyTo Message-ID of the message being replied to — set by the panel Reply action (round-2 MIN-009); In-Reply-To/References are carried through to the sent message. Absent or null = standalone compose.
+	InReplyTo *string `json:"in_reply_to,omitempty"`
+
+	// Subject Subject line; CRLF/LF injection is sanitized (MC-4).
+	Subject string `json:"subject"`
+
+	// To To recipients (de-duplicated, RFC 2047 display names preserved).
+	To []string `json:"to"`
+}
+
+// MailSendResponse Send outcome for the manual send (POST /workspaces/{id}/mail/{agentId}/messages) and the panel send (POST .../folders/drafts/messages/{ref}/send). The `sent` field was dropped (round-2 MIN-006 — it was always true on a 200). Save failures are never silent (D7): a Sent-APPEND failure after a successful SMTP send sets sent_saved=false plus save_warning. A draft that could not be removed after a successful panel send sets draft_cleanup_warning (MAJ-009/MC-28).
+type MailSendResponse struct {
+	// DraftCleanupWarning Set when the draft could not be removed after a successful panel send (MAJ-009/MC-28 — the panel warns of a possible duplicate). Null when cleanup succeeded or there was no draft.
+	DraftCleanupWarning *string `json:"draft_cleanup_warning"`
+
+	// MessageId The sent message's Message-ID (stable across panel edits).
+	MessageId string `json:"message_id"`
+
+	// SaveWarning Set when the Sent APPEND failed after a successful SMTP send — never silent (D7, MC-9); the tool result carries the same warning. Null when the save succeeded.
+	SaveWarning *string `json:"save_warning"`
+
+	// SentSaved Whether the Sent-folder APPEND (D7) succeeded; false plus a non-empty save_warning when the APPEND failed after a successful SMTP send (MC-9, never silent).
+	SentSaved bool `json:"sent_saved"`
+}
+
+// MailSignaturePreviewTokenRequest Request to mint a short-lived token for the draft signature's live preview (POST /mail/signature-preview-token — session-authenticated, stays in the API namespace). Unlike the message HTML-preview mint, this endpoint NEVER dials IMAP: there is no workspace/agent/folder/ref in the request — the signature HTML is sanitized at mint (strip meta/base/forms/scripts/event handlers, harden anchors; the signature policy keeps inline style, tables and https+data images per FR-003) and held in the in-memory token store for the TTL. Mint never persists: the sanitized HTML lives only in memory and dies with the token (logout revocation or TTL expiry). Rate-limited by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+type MailSignaturePreviewTokenRequest struct {
+	// SignatureHtml The signature editor's current HTML (MC-1 bound: 1..16384 characters). Sanitized at mint before it is ever served into the sandboxed preview frame; storage sanitization stays the draft PUT's job — this mint never writes the signature anywhere.
+	SignatureHtml string `json:"signature_html"`
+}
+
+// MailSignaturePreviewTokenResponse Minted preview token for the draft signature's live preview. Mirrors the message preview's token hygiene (MC-43): 256-bit crypto/rand token, fail-closed on entropy failure, named TTL, indistinguishable 404s on the serve routes, logout revocation. Signature-token specifics: the TTL is the named 2-minute MailSignaturePreviewTokenTTL (bounds replay; the preview outlives debounce+render), and mints REPLACE — a session holds at most one live signature token (a new mint revokes the session's previous signature token; message-preview tokens keep their separate cap-8-refuses hygiene). The SPA constructs the /mail-preview/html/{token} URL from the token; expiry comes from expires_in_seconds.
+type MailSignaturePreviewTokenResponse struct {
+	// ExpiresInSeconds Seconds from the moment this response was produced until the token stops working (named signature TTL: 120 for the 2-minute MailSignaturePreviewTokenTTL — replace-on-mint keeps exactly one live signature token per session).
+	ExpiresInSeconds int `json:"expires_in_seconds"`
+
+	// Token The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (Library token hygiene, MC-43). This string is the entire security of the unauthenticated /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (Referrer-Policy: no-referrer on the served responses).
+	Token string `json:"token"`
+}
+
+// MailSummaryList Watcher-driven badge summary for every mailbox in a workspace (GET /workspaces/{id}/mail/summary) — one MailboxNewMailSummary per (agent, workspace) mailbox pair. Served from saved watcher state; never dials IMAP.
+type MailSummaryList struct {
+	// Items One entry per mailbox in the workspace.
+	Items []struct {
+		// AgentId ID of the agent owning the mailbox (the workspace rides the path).
+		AgentId string `json:"agent_id"`
+
+		// LastErrorClass Sanitized error class of the last failed cycle, from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error (MC-8); null when the last cycle succeeded.
+		LastErrorClass *string `json:"last_error_class"`
+
+		// LastSeenUid Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable.
+		LastSeenUid *int64 `json:"last_seen_uid"`
+
+		// LastSuccessAt RFC 3339 instant of the last successful watcher cycle; null when no cycle has ever succeeded (round-2 MAJ-019 — ok never lies about blindness).
+		LastSuccessAt *time.Time `json:"last_success_at"`
+
+		// NextAttemptAt RFC 3339 instant of the watcher's next attempt while backing off (D29/R2-8 — the badge renders "retrying at hh:mm"); null otherwise.
+		NextAttemptAt *time.Time `json:"next_attempt_at"`
+
+		// UnseenTotal The mailbox's live IMAP UNSEEN count as of the watcher's last completed cycle (A11).
+		UnseenTotal int `json:"unseen_total"`
+
+		// WatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+		WatcherState MailSummaryListItemsWatcherState `json:"watcher_state"`
+	} `json:"items"`
+}
+
+// MailSummaryListItemsWatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+type MailSummaryListItemsWatcherState string
+
+// MailUnavailableError Typed 503 body for a mail read that the gateway refused to dial: code=backoff (automatic poll during watcher backoff — carries the saved last error class and next_attempt_at) or code=busy (request queued past the per-mailbox concurrency cap beyond the request deadline — MIN-003). Shares error/code with ErrorResponse so generic handlers work unchanged.
+type MailUnavailableError struct {
+	// Code Machine-readable discriminator. backoff = the automatic poll hit the watcher's backoff window; busy = the request queued past the per-mailbox concurrency cap beyond the request deadline (MIN-003). A client branches on it without string matching on the message.
+	Code MailUnavailableErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+
+	// LastErrorClass Present when code=backoff — the watcher's saved upstream class (same closed enum as the 502 body's code field, MC-8).
+	LastErrorClass *MailUnavailableErrorLastErrorClass `json:"last_error_class,omitempty"`
+
+	// NextAttemptAt Present when code=backoff.
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+}
+
+// MailUnavailableErrorCode Machine-readable discriminator. backoff = the automatic poll hit the watcher's backoff window; busy = the request queued past the per-mailbox concurrency cap beyond the request deadline (MIN-003). A client branches on it without string matching on the message.
+type MailUnavailableErrorCode string
+
+// MailUnavailableErrorLastErrorClass Present when code=backoff — the watcher's saved upstream class (same closed enum as the 502 body's code field, MC-8).
+type MailUnavailableErrorLastErrorClass string
+
 // Mailbox One (agent, workspace) email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox belongs to exactly one (agent, workspace) pair — an agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes), and several agents may each have mailboxes in the same workspace. The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
 type Mailbox struct {
 	// AgentId ID of the agent that owns this mailbox.
@@ -17851,7 +18712,10 @@ type Mailbox struct {
 	// Configured True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned.
 	Configured bool `json:"configured"`
 
-	// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent.
+	// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
+
+	// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply, create_email_draft) are registered for the owning agent.
 	Enabled bool `json:"enabled"`
 
 	// ImapHost IMAP server hostname (implicit TLS / IMAPS).
@@ -17859,6 +18723,12 @@ type Mailbox struct {
 
 	// ImapPort IMAP server port. Defaults to 993 when omitted.
 	ImapPort *int `json:"imap_port,omitempty"`
+
+	// SentFolderName Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	SentFolderName *string `json:"sent_folder_name,omitempty"`
+
+	// SignatureHtml Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy — operator HTML never ships raw into outbound mail. The plain-text signature part is derived at compose time and never stored. Absent or empty means no signature is applied. This is configuration, not mail content: storing it in config.json does not violate the no-local-mail-store rule (D6). A value longer than 16,384 characters is rejected with HTTP 400 on configure.
+	SignatureHtml *string `json:"signature_html,omitempty"`
 
 	// SmtpHost SMTP server hostname.
 	SmtpHost *string `json:"smtp_host,omitempty"`
@@ -17875,6 +18745,9 @@ type Mailbox struct {
 
 // MailboxConfigureRequest Request body to configure one (agent, workspace) mailbox account (M11). The target agent and workspace are both path parameters (PUT /agents/{id}/mailboxes/{workspaceId}) — an agent can hold a different mailbox in each workspace it belongs to. The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
 type MailboxConfigureRequest struct {
+	// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
+
 	// Enabled Whether to register the email tools for the owning agent.
 	Enabled bool `json:"enabled"`
 
@@ -17886,6 +18759,12 @@ type MailboxConfigureRequest struct {
 
 	// Password Mailbox password (or app password). Routed to the encrypted credential store; never persisted inline. Omit to keep the existing stored password; send an empty string to clear it.
 	Password *string `json:"password,omitempty"`
+
+	// SentFolderName Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	SentFolderName *string `json:"sent_folder_name,omitempty"`
+
+	// SignatureHtml Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy before it is persisted. A value longer than 16,384 characters is rejected with HTTP 400. The plain-text signature part is derived at compose time, never stored. Absent or empty means no signature is applied.
+	SignatureHtml *string `json:"signature_html,omitempty"`
 
 	// SmtpHost SMTP server hostname.
 	SmtpHost string `json:"smtp_host"`
@@ -17907,7 +18786,10 @@ type MailboxListResponse struct {
 		// Configured True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned.
 		Configured bool `json:"configured"`
 
-		// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent.
+		// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
+		DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
+
+		// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply, create_email_draft) are registered for the owning agent.
 		Enabled bool `json:"enabled"`
 
 		// ImapHost IMAP server hostname (implicit TLS / IMAPS).
@@ -17915,6 +18797,12 @@ type MailboxListResponse struct {
 
 		// ImapPort IMAP server port. Defaults to 993 when omitted.
 		ImapPort *int `json:"imap_port,omitempty"`
+
+		// SentFolderName Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name.
+		SentFolderName *string `json:"sent_folder_name,omitempty"`
+
+		// SignatureHtml Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy — operator HTML never ships raw into outbound mail. The plain-text signature part is derived at compose time and never stored. Absent or empty means no signature is applied. This is configuration, not mail content: storing it in config.json does not violate the no-local-mail-store rule (D6). A value longer than 16,384 characters is rejected with HTTP 400 on configure.
+		SignatureHtml *string `json:"signature_html,omitempty"`
 
 		// SmtpHost SMTP server hostname.
 		SmtpHost *string `json:"smtp_host,omitempty"`
@@ -17929,6 +18817,33 @@ type MailboxListResponse struct {
 		WorkspaceId string `json:"workspace_id"`
 	} `json:"mailboxes"`
 }
+
+// MailboxNewMailSummary Watcher-driven badge state for one mailbox (GET /workspaces/{id}/mail/summary). Served from the watcher's saved state file — this response never dials IMAP (D29/R2-5, FR-033); the only reference metadata Omnipus stores for a mailbox is this UID/count/error-class state (D6). watcher_state ok never lies about blindness: last_success_at is null until a cycle has actually succeeded, and last_seen_uid makes UID advance observable (round-2 MAJ-019).
+type MailboxNewMailSummary struct {
+	// AgentId ID of the agent owning the mailbox (the workspace rides the path).
+	AgentId string `json:"agent_id"`
+
+	// LastErrorClass Sanitized error class of the last failed cycle, from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error (MC-8); null when the last cycle succeeded.
+	LastErrorClass *string `json:"last_error_class"`
+
+	// LastSeenUid Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable.
+	LastSeenUid *int64 `json:"last_seen_uid"`
+
+	// LastSuccessAt RFC 3339 instant of the last successful watcher cycle; null when no cycle has ever succeeded (round-2 MAJ-019 — ok never lies about blindness).
+	LastSuccessAt *time.Time `json:"last_success_at"`
+
+	// NextAttemptAt RFC 3339 instant of the watcher's next attempt while backing off (D29/R2-8 — the badge renders "retrying at hh:mm"); null otherwise.
+	NextAttemptAt *time.Time `json:"next_attempt_at"`
+
+	// UnseenTotal The mailbox's live IMAP UNSEEN count as of the watcher's last completed cycle (A11).
+	UnseenTotal int `json:"unseen_total"`
+
+	// WatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+	WatcherState MailboxNewMailSummaryWatcherState `json:"watcher_state"`
+}
+
+// MailboxNewMailSummaryWatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+type MailboxNewMailSummaryWatcherState string
 
 // MaxToolIterationAgentChange One agent whose own tool-iteration limit is (or would be) lowered to a new global limit (issue #904, tool-iteration-limit spec D11). Used by the lowering preview, the 409 drift body and the PUT /performance response.
 type MaxToolIterationAgentChange struct {
@@ -21596,6 +22511,30 @@ type ScheduleUpdateSessionMode string
 
 // ScheduleUpdateTriggerKind defines model for ScheduleUpdate.Trigger.Kind.
 type ScheduleUpdateTriggerKind string
+
+// SearchProviderCheckRequest Body for a manual web-search connection check. The empty object is required; keys, queries, URLs, depth, roles and all other fields are rejected. The gateway supplies a fixed non-personal query and uses the saved key.
+type SearchProviderCheckRequest = map[string]interface{}
+
+// SearchProviderCheckResponse Temporary outcome of one real search through the addressed service. Readiness is unchanged: success is not persisted health, and failure does not disable the service or change its roles. Contains no key, results, authorization, upstream payload or free-form upstream error.
+type SearchProviderCheckResponse struct {
+	// CheckedAt UTC completion timestamp for this attempt.
+	CheckedAt time.Time `json:"checked_at"`
+
+	// ProviderId The keyed search catalogue entry that was checked.
+	ProviderId SearchProviderCheckResponseProviderId `json:"provider_id"`
+
+	// RetryAfterSeconds Optional upstream retry guidance for rate_limited. No automatic retry is scheduled. Local admission limits instead use HTTP 429 and Retry-After.
+	RetryAfterSeconds *int `json:"retry_after_seconds,omitempty"`
+
+	// Status Normalized diagnostic outcome; a valid empty result is success.
+	Status SearchProviderCheckResponseStatus `json:"status"`
+}
+
+// SearchProviderCheckResponseProviderId The keyed search catalogue entry that was checked.
+type SearchProviderCheckResponseProviderId string
+
+// SearchProviderCheckResponseStatus Normalized diagnostic outcome; a valid empty result is success.
+type SearchProviderCheckResponseStatus string
 
 // Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
 type Session struct {
@@ -26422,6 +27361,48 @@ type DeleteWorkspaceParams struct {
 	Revision ConfigurationRevision `form:"revision" json:"revision"`
 }
 
+// ListMailFoldersParams defines parameters for ListMailFolders.
+type ListMailFoldersParams struct {
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+}
+
+// ListMailMessagesParams defines parameters for ListMailMessages.
+type ListMailMessagesParams struct {
+	// Limit Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// BeforeUid Cursor — list envelopes with uid lower than this value (from MailMessagePage.next_before_uid of the previous page).
+	BeforeUid *int `form:"before_uid,omitempty" json:"before_uid,omitempty"`
+
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+}
+
+// ListMailMessagesParamsFolder defines parameters for ListMailMessages.
+type ListMailMessagesParamsFolder string
+
+// GetMailMessageParams defines parameters for GetMailMessage.
+type GetMailMessageParams struct {
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+}
+
+// GetMailMessageParamsFolder defines parameters for GetMailMessage.
+type GetMailMessageParamsFolder string
+
+// GetMailAttachmentParams defines parameters for GetMailAttachment.
+type GetMailAttachmentParams struct {
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+}
+
+// GetMailAttachmentParamsFolder defines parameters for GetMailAttachment.
+type GetMailAttachmentParamsFolder string
+
+// MarkMailMessageSeenParamsFolder defines parameters for MarkMailMessageSeen.
+type MarkMailMessageSeenParamsFolder string
+
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest
 
@@ -26482,6 +27463,9 @@ type SetGodModeJSONRequestBody = GodModeUpdateRequest
 // UpdateIntegrationProviderJSONRequestBody defines body for UpdateIntegrationProvider for application/json ContentType.
 type UpdateIntegrationProviderJSONRequestBody = IntegrationProviderUpdateRequest
 
+// CheckSearchProviderConnectionJSONRequestBody defines body for CheckSearchProviderConnection for application/json ContentType.
+type CheckSearchProviderConnectionJSONRequestBody = SearchProviderCheckRequest
+
 // CopyLibraryEntryJSONRequestBody defines body for CopyLibraryEntry for application/json ContentType.
 type CopyLibraryEntryJSONRequestBody = LibraryTransferRequest
 
@@ -26520,6 +27504,12 @@ type UploadLibraryFilesMultipartRequestBody UploadLibraryFilesMultipartBody
 
 // CreateVaultJSONRequestBody defines body for CreateVault for application/json ContentType.
 type CreateVaultJSONRequestBody = CreateVaultRequest
+
+// MintMailHtmlPreviewTokenJSONRequestBody defines body for MintMailHtmlPreviewToken for application/json ContentType.
+type MintMailHtmlPreviewTokenJSONRequestBody = MailHtmlPreviewTokenRequest
+
+// MintMailSignaturePreviewTokenJSONRequestBody defines body for MintMailSignaturePreviewToken for application/json ContentType.
+type MintMailSignaturePreviewTokenJSONRequestBody = MailSignaturePreviewTokenRequest
 
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
@@ -26646,6 +27636,15 @@ type UpdateWorkspaceDelegationJSONRequestBody = WorkspaceDelegationUpdateRequest
 
 // PutWorkspaceInstructionsJSONRequestBody defines body for PutWorkspaceInstructions for application/json ContentType.
 type PutWorkspaceInstructionsJSONRequestBody = WorkspaceInstructionsRequest
+
+// UpdateMailDraftJSONRequestBody defines body for UpdateMailDraft for application/json ContentType.
+type UpdateMailDraftJSONRequestBody = MailDraftUpdateRequest
+
+// SendMailDraftJSONRequestBody defines body for SendMailDraft for application/json ContentType.
+type SendMailDraftJSONRequestBody = MailDraftSendRequest
+
+// SendMailMessageJSONRequestBody defines body for SendMailMessage for application/json ContentType.
+type SendMailMessageJSONRequestBody = MailSendRequest
 
 // CreateWorkspaceMediaAttachmentJSONRequestBody defines body for CreateWorkspaceMediaAttachment for application/json ContentType.
 type CreateWorkspaceMediaAttachmentJSONRequestBody = MediaAttachmentRequest

@@ -1986,6 +1986,108 @@ type Mailbox = {
   smtp_port?: number | undefined;
   username?: string | undefined;
   configured: boolean;
+  signature_html?: string | undefined;
+  sent_folder_name?: string | undefined;
+  drafts_folder_name?: string | undefined;
+};
+type MailFolderList = {
+  folders: Array<MailFolder>;
+};
+type MailFolder = {
+  slug: "inbox" | "sent" | "drafts";
+  display_name: string;
+  total: number;
+  unread_count: number | null;
+};
+type MailMessagePage = {
+  messages: Array<MailMessageSummary>;
+  truncated: boolean;
+  next_before_uid: number | null;
+};
+type MailMessageSummary = {
+  message_id: string | null;
+  uid: number;
+  uidvalidity: number;
+  folder: "inbox" | "sent" | "drafts";
+  subject: string;
+  from: string;
+  from_name: string | null;
+  to: Array<string>;
+  cc: Array<string>;
+  date: string;
+  seen: boolean;
+  is_draft: boolean;
+  is_omnipus_draft: boolean;
+  read_by_agent: boolean;
+};
+type MailMessage = {
+  message_id: string | null;
+  uid: number;
+  uidvalidity: number;
+  folder: "inbox" | "sent" | "drafts";
+  subject: string;
+  from: string;
+  from_name: string | null;
+  to: Array<string>;
+  cc: Array<string>;
+  date: string;
+  seen: boolean;
+  is_draft: boolean;
+  is_omnipus_draft: boolean;
+  read_by_agent: boolean;
+  reply_to: string | null;
+  in_reply_to: string | null;
+  references: string | null;
+  body_text: string;
+  has_html: boolean;
+  bcc: Array<string> | null;
+  attachments: Array<MailAttachment>;
+  body_markdown: string | null;
+  markdown_lossy: boolean;
+  draft_cleanup_warning?: (string | null) | undefined;
+};
+type MailAttachment = {
+  part_index: number;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+};
+type MailSummaryList = {
+  items: Array<MailboxNewMailSummary>;
+};
+type MailboxNewMailSummary = {
+  agent_id: string;
+  unseen_total: number;
+  watcher_state: "ok" | "error" | "backoff";
+  last_error_class: string | null;
+  last_success_at: string | null;
+  last_seen_uid: number | null;
+  next_attempt_at: string | null;
+};
+type MailSendRequest = {
+  to: Array<string>;
+  cc?: Array<string> | undefined;
+  bcc?: Array<string> | undefined;
+  subject: string;
+  body_markdown: string;
+  in_reply_to?: (string | null) | undefined;
+  attachments?: Array<MailAttachmentInput> | undefined;
+};
+type MailAttachmentInput = {
+  filename: string;
+  content_type: string;
+  data_base64: string;
+};
+type MailDraftUpdateRequest = {
+  to: Array<string>;
+  cc?: Array<string> | undefined;
+  bcc?: Array<string> | undefined;
+  subject: string;
+  body_markdown: string;
+  uidvalidity: number;
+  uid: number;
+  attachments?: Array<MailAttachmentInput> | undefined;
+  keep_attachment_parts: Array<number>;
 };
 type OperationResult = {
   success: boolean;
@@ -3060,9 +3162,25 @@ export const IntegrationProvidersResponse: z.ZodType<IntegrationProvidersRespons
 export const IntegrationProviderUpdateRequest = z.object({
   kind: z.enum(["search", "voice"]),
   api_key: z.string().optional(),
+  clear_api_key: z.boolean().optional(),
   active: z.boolean().optional(),
   fallback: z.boolean().optional(),
-});
+}).strict();
+export const SearchProviderCheckRequest = z.object({}).partial().strict();
+export const SearchProviderCheckResponse = z.object({
+  provider_id: z.enum(["brave", "tavily", "perplexity", "glm", "baidu", "exa"]),
+  status: z.enum([
+    "success",
+    "auth_error",
+    "rate_limited",
+    "timeout",
+    "network_error",
+    "provider_error",
+    "invalid_response",
+  ]),
+  checked_at: z.string().datetime({ offset: true }),
+  retry_after_seconds: z.number().int().gte(1).optional(),
+}).strict();
 export const TranscribeResponse = z.object({
   text: z.string(),
   language: z.string().optional(),
@@ -4236,6 +4354,9 @@ export const Mailbox: z.ZodType<Mailbox> = z.object({
   smtp_port: z.number().int().optional(),
   username: z.string().optional(),
   configured: z.boolean(),
+  signature_html: z.string().max(16384).optional(),
+  sent_folder_name: z.string().optional(),
+  drafts_folder_name: z.string().optional(),
 });
 export const MailboxConfigureRequest = z.object({
   enabled: z.boolean(),
@@ -4245,6 +4366,9 @@ export const MailboxConfigureRequest = z.object({
   smtp_port: z.number().int().optional(),
   username: z.string(),
   password: z.string().optional(),
+  signature_html: z.string().max(16384).optional(),
+  sent_folder_name: z.string().optional(),
+  drafts_folder_name: z.string().optional(),
 });
 export const MailboxListResponse: z.ZodType<MailboxListResponse> = z.object({
   mailboxes: z.array(Mailbox),
@@ -5934,6 +6058,158 @@ export const RelationWriteResponse: z.ZodType<RelationWriteResponse> = z.object(
     warnings: z.array(z.string().min(1)),
   }
 );
+export const MailFolder: z.ZodType<MailFolder> = z.object({
+  slug: z.enum(["inbox", "sent", "drafts"]),
+  display_name: z.string(),
+  total: z.number().int(),
+  unread_count: z.number().int().nullable(),
+});
+export const MailFolderList: z.ZodType<MailFolderList> = z.object({
+  folders: z.array(MailFolder),
+});
+export const MailUnavailableError = z.object({
+  error: z.string(),
+  code: z.enum(["busy", "backoff"]),
+  last_error_class: z
+    .enum([
+      "timeout",
+      "dns",
+      "connect_refused",
+      "auth_failed",
+      "tls",
+      "folder_missing",
+      "server_error",
+    ])
+    .optional(),
+  next_attempt_at: z.string().datetime({ offset: true }).optional(),
+});
+export const MailMessageSummary: z.ZodType<MailMessageSummary> = z.object({
+  message_id: z.string().nullable(),
+  uid: z.number().int().gte(0).lte(4294967295),
+  uidvalidity: z.number().int().gte(0).lte(4294967295),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  subject: z.string(),
+  from: z.string(),
+  from_name: z.string().nullable(),
+  to: z.array(z.string()),
+  cc: z.array(z.string()),
+  date: z.string().datetime({ offset: true }),
+  seen: z.boolean(),
+  is_draft: z.boolean(),
+  is_omnipus_draft: z.boolean(),
+  read_by_agent: z.boolean(),
+});
+export const MailMessagePage: z.ZodType<MailMessagePage> = z.object({
+  messages: z.array(MailMessageSummary),
+  truncated: z.boolean(),
+  next_before_uid: z.number().int().gte(0).lte(4294967295).nullable(),
+});
+export const MailAttachment: z.ZodType<MailAttachment> = z.object({
+  part_index: z.number().int(),
+  filename: z.string(),
+  content_type: z.string(),
+  size_bytes: z.number().int(),
+});
+export const MailMessage: z.ZodType<MailMessage> = z.object({
+  message_id: z.string().nullable(),
+  uid: z.number().int().gte(0).lte(4294967295),
+  uidvalidity: z.number().int().gte(0).lte(4294967295),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  subject: z.string(),
+  from: z.string(),
+  from_name: z.string().nullable(),
+  to: z.array(z.string()),
+  cc: z.array(z.string()),
+  date: z.string().datetime({ offset: true }),
+  seen: z.boolean(),
+  is_draft: z.boolean(),
+  is_omnipus_draft: z.boolean(),
+  read_by_agent: z.boolean(),
+  reply_to: z.string().nullable(),
+  in_reply_to: z.string().nullable(),
+  references: z.string().nullable(),
+  body_text: z.string(),
+  has_html: z.boolean(),
+  bcc: z.array(z.string()).nullable(),
+  attachments: z.array(MailAttachment),
+  body_markdown: z.string().nullable(),
+  markdown_lossy: z.boolean(),
+  draft_cleanup_warning: z.string().nullish(),
+});
+export const MailboxNewMailSummary: z.ZodType<MailboxNewMailSummary> = z.object(
+  {
+    agent_id: z.string(),
+    unseen_total: z.number().int(),
+    watcher_state: z.enum(["ok", "error", "backoff"]),
+    last_error_class: z.string().nullable(),
+    last_success_at: z.string().datetime({ offset: true }).nullable(),
+    last_seen_uid: z.number().int().gte(0).lte(4294967295).nullable(),
+    next_attempt_at: z.string().datetime({ offset: true }).nullable(),
+  }
+);
+export const MailSummaryList: z.ZodType<MailSummaryList> = z.object({
+  items: z.array(MailboxNewMailSummary),
+});
+export const MailAttachmentInput: z.ZodType<MailAttachmentInput> = z.object({
+  filename: z.string(),
+  content_type: z.string(),
+  data_base64: z.string(),
+});
+export const MailSendRequest: z.ZodType<MailSendRequest> = z.object({
+  to: z.array(z.string()).min(1).max(50),
+  cc: z.array(z.string()).max(50).optional(),
+  bcc: z.array(z.string()).max(50).optional(),
+  subject: z.string(),
+  body_markdown: z.string(),
+  in_reply_to: z.string().nullish(),
+  attachments: z.array(MailAttachmentInput).max(10).optional(),
+});
+export const MailSendResponse = z.object({
+  message_id: z.string(),
+  sent_saved: z.boolean(),
+  save_warning: z.string().nullable(),
+  draft_cleanup_warning: z.string().nullable(),
+});
+export const MailDraftUpdateRequest: z.ZodType<MailDraftUpdateRequest> =
+  z.object({
+    to: z.array(z.string()).min(1).max(50),
+    cc: z.array(z.string()).max(50).optional(),
+    bcc: z.array(z.string()).max(50).optional(),
+    subject: z.string(),
+    body_markdown: z.string(),
+    uidvalidity: z.number().int().gte(0).lte(4294967295),
+    uid: z.number().int().gte(0).lte(4294967295),
+    attachments: z.array(MailAttachmentInput).max(10).optional(),
+    keep_attachment_parts: z.array(z.number().int()),
+  });
+export const MailDraftSendRequest = z.object({
+  to: z.array(z.string()).min(1).max(50),
+  cc: z.array(z.string()).max(50).optional(),
+  bcc: z.array(z.string()).max(50).optional(),
+  subject: z.string(),
+  body_markdown: z.string(),
+  uidvalidity: z.number().int().gte(0).lte(4294967295),
+  uid: z.number().int().gte(0).lte(4294967295),
+  keep_attachment_parts: z.array(z.number().int()).optional(),
+});
+export const MailHtmlPreviewTokenRequest = z.object({
+  workspace_id: z.string(),
+  agent_id: z.string(),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  message_ref: z.string().min(5),
+  load_remote: z.boolean().optional().default(false),
+});
+export const MailHtmlPreviewTokenResponse = z.object({
+  token: z.string().min(43).max(43),
+  expires_in_seconds: z.number().int().gte(1),
+});
+export const MailSignaturePreviewTokenRequest = z.object({
+  signature_html: z.string().min(1).max(16384),
+});
+export const MailSignaturePreviewTokenResponse = z.object({
+  token: z.string().min(43).max(43),
+  expires_in_seconds: z.number().int().gte(1),
+});
 export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   persistence_status: ConfigurationPersistenceStatus.optional(),
@@ -6482,6 +6758,14 @@ export const BackupEntry = z.object({
   filename: z.string(),
   size_bytes: z.number().int().gte(0),
   created_at: z.string().datetime({ offset: true }),
+});
+export const CreateEmailDraftResult = z.object({
+  created: z.boolean(),
+  message_id: z.string(),
+  uid: z.number().int(),
+  uidvalidity: z.number().int(),
+  chat_link: z.string().nullable(),
+  chat_link_reason: z.string().nullable(),
 });
 export const OnboardingStatusResponse = z
   .object({ onboarding_complete: z.boolean() })
@@ -7090,7 +7374,11 @@ export const MessageParentResponse = z.object({
   error: z.string().optional(),
 });
 
-const endpoints = makeApi([
+// The SPA imports individual generated schemas for response validation; it does
+// not use the generated Zodios client. Mark both client-construction steps pure
+// so production bundlers can discard the complete endpoint catalogue (including
+// its descriptions) when neither `api` nor `createApiClient` is imported.
+const endpoints = /* @__PURE__ */ makeApi([
   {
     method: "get",
     path: "/about",
@@ -8787,7 +9075,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/integrations/providers/:id",
     alias: "updateIntegrationProvider",
-    description: `Stores an API key and/or assigns the provider its role (FR-12.1). ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none (&quot;No fallback&quot;), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 (&quot;needs an API key&quot;). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
+    description: `Stores an API key, removes a saved search key with clear_api_key:true, and/or assigns the provider its role (FR-12.1). Removal switches only that service off and preserves the raw default, fallback and migration marker. It rejects any api_key, active or fallback field, voice/keyless services, undecided roles and shared/custom credential references before writes; ownership conflicts return 409. Success requires deletion, runtime disabling, confirmed reload and audit recording. Partial failures return a non-success error describing what persisted. Removal does not revoke the upstream key. ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none (&quot;No fallback&quot;), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 (&quot;needs an API key&quot;). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
 `,
     requestFormat: "json",
     parameters: [
@@ -8820,8 +9108,82 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/integrations/providers/:id/check",
+    alias: "checkSearchProviderConnection",
+    description: `Runs one real, potentially chargeable search for &quot;Omnipus&quot; through the addressed keyed search client with its saved key, one result where supported, and the cheapest supported depth within the saved cap. Requires authenticated administrator access, but no password step-up: this neither reveals nor changes a secret. A saved key and runtime-usable service are required. No fallback, key rotation, retry, discovery, result fetch or cached success. A 15-second total context deadline cancels on disconnect and does not lengthen a shorter client deadline. Per instance and service, one check may be in flight and at most one check is admitted every 30 seconds, including failures. Local limiting returns 429 with Retry-After and performs no outbound call. Completed upstream outcomes, including valid empty results and upstream failures, return 200 with normalized categories and no upstream payload or key. Gateway/internal failures remain non-2xx. If the service&#x27;s key or configuration generation changes after admission and before completion, the server discards the upstream outcome and returns 409 with the fixed error &quot;The key changed while checking. Check again.&quot; No key identity, fingerprint or generation is returned. Configuration and roles are unchanged; clients refresh readiness separately.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({}).partial().strict(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SearchProviderCheckResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `The saved connection is not ready, or its key/configuration changed while checking. A changed generation discards the provider outcome and returns &quot;The key changed while checking. Check again.&quot;
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
@@ -10314,6 +10676,87 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
       {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/mail/html-preview-token",
+    alias: "mintMailHtmlPreviewToken",
+    description: `Mints the mail HTML-preview credential (email-mail-view-spec §2.3, security sign-off C1) — session-authenticated and STAYS in the API namespace; the serve routes moved to the token-only non-API /mail-preview/ prefix (§2.3a) and are deliberately NOT in this document (Library serving-prefix precedent): /mail-preview/html/{token} serves the sanitized sandboxed HTML body with the MC-10 normative header set; /mail-preview/part/{token}/{index} serves one inline cid: image part within the same token scope; /mail-preview/img/{token}/{index} is the &quot;Load images&quot; proxy (D17/MC-10(6)) — https-only, private/ loopback refused at dial time, zero redirects, ≤ 5 MiB, image/* only, store-recorded URLs only (MC-41). Serve routes answer 404 only — expired/unknown/revoked deliberately indistinguishable, no frame-ancestors, no X-Frame-Options (MC-43/MC-45); the no-redirect tripwire covers the whole prefix (MC-10(1), T62).
+
+This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched once (BODY.PEEK), sanitized, and its body plus inline parts and the load_remote remote-image URL list are held in the in-memory token store for the TTL — the serve routes never dial IMAP (round-2 MAJ-008.3). Sanitize → store → serve ordering (MC-10(5)). 256 KB served-body cap (MC-10(7)). Rate-limited by a dedicated per-IP limiter (MC-44) — 10 req/min, 429 with Retry-After, zero IMAP dials for the refused call.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailHtmlPreviewTokenRequest,
+      },
+    ],
+    response: MailHtmlPreviewTokenResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — unknown folder slug or malformed message_ref.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, mailbox pair, or message not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Upstream mail failure during the mint&#x27;s one IMAP fetch — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/mail/signature-preview-token",
+    alias: "mintMailSignaturePreviewToken",
+    description: `Mints the signature live-preview credential (email-mail-view-spec §16 Signature editor row, security sign-off MC-10 posture) — session-authenticated and STAYS in the API namespace; the SPA frames the served result through the existing token-only non-API /mail-preview/ prefix: /mail-preview/html/{token} serves the sanitized sandboxed signature HTML with the MC-10 normative header set (zero new serve surface; /mail-preview/img/{token}/{index} proxies the signature&#x27;s https images under the same MC-41 rules).
+Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request carries no workspace/agent/folder/ref, only the signature HTML itself. The HTML is sanitized AT MINT (MC-10(5) named-sanitizer discipline: strip meta/base/forms/scripts/event handlers, harden anchors; the signature policy keeps inline style, tables and https+data images per FR-003). The mint NEVER PERSISTS: the sanitized HTML lives only in the in-memory token store for the TTL and dies with the token (logout revocation or expiry). Storage sanitization stays the draft PUT&#x27;s job. Token hygiene: 2-minute named MailSignaturePreviewTokenTTL, REPLACE-ON-MINT — a session holds at most one live signature token (a new mint revokes the session&#x27;s previous signature token; message-preview tokens keep their separate cap-8-refuses hygiene). Rate-limited by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ signature_html: z.string().min(1).max(16384) }),
+      },
+    ],
+    response: MailSignaturePreviewTokenResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — the signature HTML is outside its MC-1 bound (empty, or over the 16384-character maximum).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],
@@ -14421,6 +14864,619 @@ Returns HTTP 201 on success.
   },
   {
     method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders",
+    alias: "listMailFolders",
+    description: `Returns Inbox, Sent and Drafts (D5) for the (agent, workspace) mailbox with live IMAP counts (email-mail-view-spec §2.3). One IMAP session per request (round-1 MAJ-012); automatic panel refreshes never dial while the watcher is backing off — they return the saved error class plus next_attempt_at immediately (D29/R2-9). Identical concurrent refreshes coalesce so N tabs cost one IMAP login per tick. 502 carries a sanitized error class from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error in the body&#x27;s code field (MC-8); raw upstream text is logged server-side only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+    ],
+    response: MailFolderList,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, or mailbox pair not found (getAgentMailbox precedent).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server unreachable — the body&#x27;s code field carries a sanitized error class from the closed enum (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages",
+    alias: "listMailMessages",
+    description: `Envelope page for the folder (email-mail-view-spec §2.3). Messages are addressed folder-scoped (round-1 MAJ-005, D21); listings exclude \Deleted messages (round-2 MIN-005). Fetches never change flags (BODY.PEEK / EXAMINE — round-2 MAJ-003): nothing in the list path marks anything read. The round-1 unseen_only query parameter was dropped (round-2 OBS-001) — the watcher&#x27;s unseen_total is the only unread surface.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().optional().default(20),
+      },
+      {
+        name: "before_uid",
+        type: "Query",
+        schema: z.number().int().optional(),
+      },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+    ],
+    response: MailMessagePage,
+    errors: [
+      {
+        status: 400,
+        description: `Unknown folder slug or malformed limit.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, or mailbox pair not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref",
+    alias: "getMailMessage",
+    description: `Full message for the Mail panel read path (email-mail-view-spec §2.3). Never writes flags — the fetch is BODY.PEEK (round-2 MAJ-003). The ref is folder-scoped (round-1 MAJ-005, D21): uid form is always resolvable from a list row; mid form searches only the addressed folder, among non-\Deleted messages only (round-2 MIN-005 — a no-UIDPLUS server keeps the old copy of an edited draft in the folder with \Deleted and the same Message-ID), resolving multiple hits to the highest UID — never by INTERNALDATE (round-2 MIN-005). Draft actions resolve only inside drafts (MC-13).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+    ],
+    response: MailMessage,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref or failed Message-ID validation.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message not found in the addressed folder (includes a pair with no mailbox; MC-13 — no body or folder leakage).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/attachments/:partIndex",
+    alias: "getMailAttachment",
+    description: `Streams one MIME attachment part (D28, email-mail-view-spec §2.3). Served with Content-Disposition: attachment always — an .html attachment is never inline (MC-42) — plus X-Content-Type-Options: nosniff, an extension-derived content type (extension decides, never the bytes nor the MIME part&#x27;s self-declared type), and the RFC 6266 dual-encoded filename from the sanitized MailAttachment.filename. No CSP on attachment responses (Library MV-13 second half). The download never changes flags.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+      {
+        name: "partIndex",
+        type: "Path",
+        schema: z.number().int(),
+      },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref or part index.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message or attachment part absent.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/seen",
+    alias: "markMailMessageSeen",
+    description: `Marks exactly the addressed message \Seen (FR-020, email-mail-view-spec §2.3). A GET of folders/messages never writes flags, so the flag write is its own endpoint (round-2 MAJ-003). Idempotent: an already-seen message is a no-op 204. This endpoint and agent read_message (D38) are the ONLY \Seen writers in the product; the watcher never writes flags (FR-023).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message not found in the addressed folder.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/workspaces/:id/mail/:agentId/folders/drafts/messages/:ref",
+    alias: "updateMailDraft",
+    description: `Panel edit (email-mail-view-spec §2.3): APPENDs the updated draft with the same Message-ID (round-1 MIN-004) and \Deleted-flags the old copy (FR-032). The body carries the viewed draft&#x27;s uidvalidity/uid; when the path ref is a uid: ref, body and path must agree — mismatch is 400, never silently accepted (round-2 MAJ-008.1/.6). Stale precondition (draft moved/renumbered) is 409 with body code stale_draft (MC-16). Attachment carry-over is by part reference (FR-035); keep_attachment_parts is required full-replace (D28). Audit event + rate limit (MC-20).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailDraftUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: MailMessage,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure, or body uidvalidity/uid disagree with a uid-form path ref (round-2 MAJ-008.1/.6).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Draft gone (deleted elsewhere) or pair has no mailbox.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale precondition — the viewed draft no longer matches uidvalidity:uid; body code stale_draft; nothing mutated (MC-16).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/workspaces/:id/mail/:agentId/folders/drafts/messages/:ref",
+    alias: "discardMailDraft",
+    description: `Panel discard: \Deleted-flags the draft; with UIDPLUS a UID EXPUNGE removes exactly the target UID, without UIDPLUS only \Deleted is stored (deferred expunge — FR-032, MC-17). A non-UID EXPUNGE is never issued by Omnipus. Audit event + rate limit (MC-20). Idempotency is not promised: an already-discarded draft is 404.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Draft gone or pair has no mailbox.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/folders/drafts/messages/:ref/send",
+    alias: "sendMailDraft",
+    description: `Panel send IS the approval (email-mail-view-spec §2.3): transmits the request&#x27;s content (never re-reads the draft as truth — round-1 MAJ-002), APPENDs to Sent (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009, FR-021, MC-28): a repeat submit after a completed send returns the recorded first outcome — never a second transmission. Stale precondition is 409 stale_draft; an already-sent repeat whose recorded outcome is unavailable is also 409. Audit event + rate limit (MC-20).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailDraftSendRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: MailSendResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — recipients, body bound, attachment caps, header injection, precondition disagreement.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Draft gone or pair has no mailbox.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale precondition (stale_draft, MC-16), or an already-sent repeat whose recorded outcome is unavailable (round-2 MAJ-009).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/messages",
+    alias: "sendMailMessage",
+    description: `Human manual send (email-mail-view-spec §2.3): renders Markdown to sanitized multipart/alternative, appends the mailbox signature, sends via SMTP and APPENDs the Sent copy (D7/D18). Audit event + dedicated mailMutationLimiter rate limit (MC-20). Recipient cap 50 across To/Cc/Bcc after de-dup (MC-27); body bound 1 MiB (MC-22); attachments ≤ 10 files / ≤ 25 MiB total, checked pre-dial (MC-32). 429 with Retry-After when rate-limited.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailSendRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MailSendResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — recipients, body bound, attachment caps, header injection.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, or mailbox pair not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `SMTP/IMAP upstream failure — sanitized error class in the body&#x27;s code field (MC-8); nothing transmitted on IMAP-side failure without a send.
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/summary",
+    alias: "getWorkspaceMailSummary",
+    description: `Per-mailbox watcher badge state (MailSummaryList) served from the watcher&#x27;s saved state files — this endpoint never dials IMAP (D29/R2-5, FR-033). Refreshed by the SPA every 60 s from this saved state (round-2 R2-5). A mailbox in error/backoff reports its class and next_attempt_at so the badge can say &quot;retrying at hh:mm&quot; (D29/R2-8); watcher_state ok never lies (round-2 MAJ-019).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MailSummaryList,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/workspaces/:id/media",
     alias: "listWorkspaceMedia",
     requestFormat: "json",
@@ -14706,7 +15762,7 @@ Returns HTTP 201 on success.
   },
 ]);
 
-export const api = new Zodios(endpoints);
+export const api = /* @__PURE__ */ new Zodios(endpoints);
 
 export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
   return new Zodios(baseUrl, endpoints, options);
@@ -14804,6 +15860,8 @@ export const SessionStartedFrame = z
     type: z.literal("session_started"),
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
+    client_message_id: z.string().min(1).max(128).optional(),
+    recovered: z.boolean().optional(),
     seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
   })
@@ -14891,6 +15949,8 @@ export const ErrorFrame = z
     type: z.literal("error"),
     session_id: z.string().max(128).optional(),
     message: z.string().min(1).max(4096),
+    client_message_id: z.string().min(1).max(128).optional(),
+    first_message_error: z.enum(["not_saved", "delivery_unknown", "answer_not_started"]).optional(),
     payload: z
     .object({
       llm_error: LLMError,

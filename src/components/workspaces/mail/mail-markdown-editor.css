@@ -1,0 +1,267 @@
+.mail-markdown-editor {
+  display: flex;
+  min-height: calc(var(--space-8) + var(--space-4));
+  flex: 1 1 0%;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-large);
+  background: var(--color-surface-0);
+  transition: border-color var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.mail-compose-dialog {
+  width: calc(100% - var(--space-5));
+  max-width: calc(var(--space-8) * 16);
+  height: calc(100dvh - var(--space-5));
+  max-height: calc(100dvh - var(--space-5));
+}
+
+.mail-compose-header-row {
+  display: grid;
+  grid-template-columns: var(--space-8) minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-2);
+  padding-block: var(--space-0-5);
+}
+
+.mail-compose-header-row > [role='alert'] {
+  grid-column-start: 2;
+  padding-bottom: var(--space-1);
+}
+
+.mail-markdown-editor:focus-within {
+  border-color: var(--color-accent);
+}
+
+.mail-recipient-input {
+  display: flex;
+  min-height: var(--target-touch-minimum);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-medium);
+  padding-inline: var(--space-1);
+}
+
+.mail-recipient-input:focus-within {
+  border-color: var(--color-accent);
+}
+
+.mail-recipient-chip {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-2);
+  padding-left: var(--space-2);
+  color: var(--color-secondary);
+  font-family: var(--type-caption-family);
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-line-height);
+}
+
+.mail-recipient-chip[data-invalid='true'] {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+.mail-recipient-address {
+  max-width: calc(var(--space-8) * 3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mail-recipient-invalid {
+  font-weight: var(--font-weight-semibold);
+}
+
+.mail-recipient-remove {
+  width: var(--space-5);
+  height: var(--space-5);
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+}
+
+@media (pointer: coarse) {
+  .mail-markdown-editor-toolbar-button,
+  .mail-recipient-remove {
+    width: var(--target-touch-minimum);
+    height: var(--target-touch-minimum);
+  }
+}
+
+.mail-recipient-input .mail-recipient-draft {
+  min-width: calc(var(--space-8) * 2);
+  height: var(--space-5);
+  flex: 1 1 0%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding-block: 0;
+  padding-inline: var(--space-1);
+  font-family: var(--type-body-compact-family);
+  font-size: var(--type-body-compact-size);
+  line-height: var(--type-body-compact-line-height);
+}
+
+@media (min-width: 640px) {
+  .mail-recipient-input {
+    min-height: calc(var(--space-5) + var(--space-1));
+  }
+}
+
+.mail-markdown-editor-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+  padding: var(--space-1);
+}
+
+.mail-markdown-editor-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+
+.mail-markdown-editor-separator {
+  height: var(--space-4);
+}
+
+.mail-markdown-editor-toolbar-spacer {
+  min-width: var(--space-1);
+  flex: 1 1 auto;
+}
+
+.mail-markdown-editor-glyph {
+  font-family: var(--type-caption-family);
+  font-size: var(--type-utility-xs-size);
+  line-height: var(--type-caption-line-height);
+}
+
+.mail-markdown-editor-glyph-bold {
+  font-weight: var(--font-weight-bold);
+}
+
+.mail-markdown-editor-glyph-italic {
+  font-style: italic;
+}
+
+.mail-markdown-editor-glyph-strike {
+  text-decoration: line-through;
+}
+
+.mail-markdown-editor-surface {
+  display: flex;
+  min-height: var(--space-8);
+  flex: 1 1 0%;
+  overflow-y: auto;
+}
+
+.mail-markdown-editor-content {
+  min-height: 100%;
+  width: 100%;
+  padding: var(--space-3);
+  color: var(--color-secondary);
+  font-family: var(--type-body-family);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}
+
+.mail-markdown-editor-content p + p,
+.mail-markdown-editor-content p + ul,
+.mail-markdown-editor-content p + ol,
+.mail-markdown-editor-content p + blockquote,
+.mail-markdown-editor-content ul + p,
+.mail-markdown-editor-content ol + p,
+.mail-markdown-editor-content blockquote + p {
+  margin-top: var(--space-2);
+}
+
+.mail-markdown-editor-content h1,
+.mail-markdown-editor-content h2,
+.mail-markdown-editor-content h3 {
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-1);
+  color: var(--color-secondary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.mail-markdown-editor-content h1 {
+  font-family: var(--type-page-title-family);
+  font-size: var(--type-page-title-size);
+  line-height: var(--type-page-title-line-height);
+}
+
+.mail-markdown-editor-content h2,
+.mail-markdown-editor-content h3 {
+  font-family: var(--type-section-title-family);
+  font-size: var(--type-section-title-size);
+  line-height: var(--type-section-title-line-height);
+}
+
+.mail-markdown-editor-content ul,
+.mail-markdown-editor-content ol {
+  margin-block: var(--space-2);
+  padding-left: var(--space-4);
+}
+
+.mail-markdown-editor-content ul {
+  list-style: disc;
+}
+
+.mail-markdown-editor-content ol {
+  list-style: decimal;
+}
+
+.mail-markdown-editor-content blockquote {
+  margin-block: var(--space-2);
+  border-left: var(--border-width-strong) solid var(--color-accent);
+  padding-left: var(--space-3);
+  color: var(--color-muted);
+}
+
+.mail-markdown-editor-content a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: var(--space-0-5);
+}
+
+.mail-markdown-editor-content code {
+  border-radius: var(--radius-small);
+  background: var(--color-surface-2);
+  padding-inline: var(--space-1);
+  font-family: var(--type-code-family);
+  font-size: var(--type-code-size);
+}
+
+.mail-markdown-editor-content p:only-child:has(> br.ProseMirror-trailingBreak:only-child)::before {
+  color: var(--color-text-tertiary);
+  content: 'Write your message…';
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mail-markdown-editor {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .mail-markdown-editor,
+  .mail-markdown-editor-toolbar {
+    border-color: CanvasText;
+  }
+
+  .mail-markdown-editor:focus-within {
+    border-color: Highlight;
+  }
+}

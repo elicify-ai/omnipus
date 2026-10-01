@@ -34,6 +34,7 @@ import {
   ExecutorSmokeTestResponse as ExecutorSmokeTestResponseSchema,
   OperationResult as OperationResultSchema,
   IntegrationProvidersResponse as IntegrationProvidersResponseSchema,
+  SearchProviderCheckResponse as SearchProviderCheckResponseSchema,
 } from '@/lib/api/generated/schemas'
 import type {
   Provider,
@@ -57,6 +58,8 @@ import type {
   OperationResult,
   IntegrationProvidersResponse,
   IntegrationProviderUpdateRequest,
+  SearchProviderCheckRequest,
+  SearchProviderCheckResponse,
   // Real, live command-line preview for a subagent_3p executor (contract-first #8):
   ExecutorCommandPreviewRequest,
   ExecutorCommandPreviewResponse,
@@ -439,6 +442,20 @@ export function fetchIntegrationProviders(): Promise<IntegrationProvidersRespons
     '/integrations/providers',
     undefined,
     IntegrationProvidersResponseSchema as ZodType<IntegrationProvidersResponse>,
+  )
+}
+
+// One manual search-service diagnostic. The generated response distinguishes
+// upstream outcomes from gateway errors; no query, key or role is sent.
+export function checkSearchProviderConnection(
+  id: string,
+  opts?: { signal?: AbortSignal },
+): Promise<SearchProviderCheckResponse> {
+  const body: SearchProviderCheckRequest = {}
+  return request<SearchProviderCheckResponse>(
+    `/integrations/providers/${encodeURIComponent(id)}/check`,
+    { method: 'POST', body: JSON.stringify(body), signal: opts?.signal },
+    SearchProviderCheckResponseSchema as ZodType<SearchProviderCheckResponse>,
   )
 }
 

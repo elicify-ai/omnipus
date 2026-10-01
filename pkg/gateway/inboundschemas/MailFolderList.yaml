@@ -1,0 +1,14 @@
+title: MailFolderList
+description: >
+  The three mail folders (D5) of one mailbox with live counts — the response
+  of GET /workspaces/{id}/mail/{agentId}/folders.
+type: object
+additionalProperties: false
+required:
+  - folders
+properties:
+  folders:
+    type: array
+    description: Exactly the three D5 folders (Inbox, Sent, Drafts).
+    items:
+      $ref: ./MailFolder.yaml
