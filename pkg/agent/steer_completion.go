@@ -149,7 +149,7 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	// retry loop).
 	var finishingItems []steeringQueueItem
 	transition := func() (bool, error) {
-		return al.commitSteeredTerminal(lifecycle, rec, stopBeforeDelivery, nextState, failureReason)
+		return al.commitSteeredTerminal(lifecycle, rec, stopBeforeDelivery, nextState, outcome, failureReason)
 	}
 	if al.steering == nil {
 		if prepareErr := prepare(); prepareErr != nil {
@@ -310,6 +310,7 @@ func (al *AgentLoop) commitSteeredTerminal(
 	rec *session.LifecycleRecord,
 	stopBeforeDelivery *session.Stop,
 	nextState session.LifecycleState,
+	outcome steer.Outcome,
 	failureReason string,
 ) (bool, error) {
 	if completeStateWriteTestHook != nil {
@@ -395,7 +396,7 @@ func (al *AgentLoop) commitSteeredTerminal(
 	case mutateErr == nil:
 		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
 			goalEndingForTerminalState(nextState, outcome), goalSessionEndedReasonForState(nextState, outcome))
-		return finalWoke, nil
+		return true, nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
 		errors.Is(mutateErr, errCompleteAlreadyTerminal),
