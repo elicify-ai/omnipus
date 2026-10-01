@@ -121,9 +121,9 @@ async function expectRetainedVerboseToggle(kind: ContextWindowNotice['kind']) {
   expect.soft(retained, 'the original notice is retained exactly once, including while hidden').toHaveLength(1)
   expect.soft(retained[0], 'retain full classification, payload and original identity').toMatchObject({
     id: ENTRY_ID, type: 'context_window_notice', timestamp: NOTICE_TIME,
-    agentId: AUTHOR, turnId: TURN_ID, notice: noticePayload(kind),
+    agentId: AUTHOR, turnId: TURN_ID, contextWindowNotice: noticePayload(kind),
   })
-  const retainedNotice: unknown = retained[0] ? Reflect.get(retained[0], 'notice') : undefined
+  const retainedNotice: unknown = retained[0] ? Reflect.get(retained[0], 'contextWindowNotice') : undefined
   expect.soft(retainedNotice, 'the retained notice payload is the exact closed kind/message object').toEqual(noticePayload(kind))
   expect(screen.getByText(ANSWER)).toBeVisible()
 }
@@ -177,9 +177,9 @@ describe('Q33: real REST reload and classified replay', () => {
     ])
     expect(decoded[2], 'REST mapping must preserve the classified carrier, not reduce it to an ordinary system sentence').toMatchObject({
       id: ENTRY_ID, role: 'system', type: 'context_window_notice', content: NOTICE,
-      timestamp: NOTICE_TIME, agentId: AUTHOR, turnId: TURN_ID, notice: noticePayload(kind),
+      timestamp: NOTICE_TIME, agentId: AUTHOR, turnId: TURN_ID, contextWindowNotice: noticePayload(kind),
     })
-    expect(decoded[2], 'the decoded payload is the exact closed kind/message object').toHaveProperty('notice', noticePayload(kind))
+    expect(decoded[2], 'the decoded payload is the exact closed kind/message object').toHaveProperty('contextWindowNotice', noticePayload(kind))
   })
 
   it.each(KINDS)('REST fallback uses the shared Verbose behavior for retained %s history without refetching', async (kind) => {
@@ -228,13 +228,13 @@ describe('Q33: real REST reload and classified replay', () => {
       { source: 'replay', entry: { ...live } },
     ]
     for (const { source, entry } of carriers) {
-      expect(predicate(entry, false), `${source}: classified diagnostic hidden by default`).toBe(false)
-      expect(predicate(entry, true), `${source}: same retained diagnostic revealed by Verbose`).toBe(true)
-      expect(predicate(entry, false), `${source}: toggling changes visibility only`).toBe(false)
+      expect(predicate(entry.type, false), `${source}: classified diagnostic hidden by default`).toBe(false)
+      expect(predicate(entry.type, true), `${source}: same retained diagnostic revealed by Verbose`).toBe(true)
+      expect(predicate(entry.type, false), `${source}: toggling changes visibility only`).toBe(false)
     }
     for (const ordinary of ordinaryHistory()) {
-      expect(predicate(ordinary, false), 'ordinary messages, including identical text, remain visible').toBe(true)
-      expect(predicate(ordinary, true), 'Verbose does not change ordinary-message visibility').toBe(true)
+      expect(predicate(ordinary.type, false), 'ordinary messages, including identical text, remain visible').toBe(true)
+      expect(predicate(ordinary.type, true), 'Verbose does not change ordinary-message visibility').toBe(true)
     }
   })
 })
