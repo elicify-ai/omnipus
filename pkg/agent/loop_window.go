@@ -56,10 +56,10 @@ func (al *AgentLoop) selectCandidates(
 // builds the breadcrumb, splices the recall span, and calls BuildMessages —
 // deduplicating the four former call sites (CRITICAL 2).
 //
-// It reads the archive under ONE consistent snapshot so the breadcrumb and
-// the window see the same archive state (avoids the turn-number race). On a
-// ReadArchive error it logs at ERROR with a stable error id and emits a
-// FALLBACK breadcrumb stub so the recall path stays discoverable.
+// Projection uses the decoded archive read; the breadcrumb independently reads
+// persisted Skip and its evicted prefix under one store lock. Its addresses never
+// depend on the caller's assembled history length. Storage faults are logged and
+// surfaced in the breadcrumb so a failed index cannot look like an empty prefix.
 //
 // Callers pass fresh history (post-trim when called after windowTrim), the
 // current user message + media, and active skill names. The recall span is
@@ -85,7 +85,13 @@ func (al *AgentLoop) assembleMessages(
 			"Earlier turns exist but could not be indexed due to a storage error. " +
 			"Use the recall_conversation tool with a turn_range to retrieve them."
 	} else {
-		breadcrumb = buildBreadcrumb(archive, history, breadcrumbTokenCap)
+		var breadcrumbErr error
+		breadcrumb, breadcrumbErr = buildPersistedBreadcrumb(ctx, ts.agent.Sessions, ts.sessionKey, breadcrumbTokenCap)
+		if breadcrumbErr != nil {
+			logger.ErrorCF("agent", "archive-read-error: could not index persisted evicted range",
+				map[string]any{"session_key": ts.sessionKey, "error": breadcrumbErr.Error()})
+			breadcrumb = breadcrumbReadFailure(breadcrumb, breadcrumbErr, breadcrumbTokenCap)
+		}
 		// ADR-066 FR-019: apply the persisted projection state so the
 		// window the provider sees here (turn start, post-trim, reload) is
 		// byte-identical to what the choke point / the D5 emptying pass
