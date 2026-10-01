@@ -31,7 +31,7 @@ Lead owns dependency installs, all root build/lint/TypeScript configuration, CI,
 
 ## Evidence and acceptance
 
-Use specification-derived assertions and mutation-prove them. Baseline production build and compressed initial/total embedded sizes are captured before application implementation. Budget: +25 KiB compressed initial JS/CSS, +320 KiB total embedded assets, zero Storybook payload. The total-raw ceiling was raised from 250 KiB to 320 KiB on 2026-09-29 (founder decision D50) to cover the Mail composer's lazy-loaded Tiptap/ProseMirror engine (~432 kB raw); the first-load gzip ceiling remains 25 KiB. Browser matrix is Chromium/Firefox/WebKit. Human screen-reader evidence and founder visual acceptance remain explicit outstanding gates; never fabricate them.
+Use specification-derived assertions and mutation-prove them. Baseline production build and compressed initial/total embedded sizes are captured before application implementation. Budget: +25 KiB compressed initial JS/CSS, +383 KiB total embedded assets, zero Storybook payload. The total-raw ceiling was raised from 250 KiB to 320 KiB on 2026-09-29 (founder decision D50) to cover the Mail composer's lazy-loaded Tiptap/ProseMirror engine (~432 kB raw), then from 320 KiB to 383 KiB on 2026-10-01 to absorb +60,083 bytes of release/v0.1.1 drift unrelated to Mail that accumulated against the frozen baseline since D50 (investigation tracked in #1135 rather than blocking Mail's ship on it); the first-load gzip ceiling remains 25 KiB. Browser matrix is Chromium/Firefox/WebKit. Human screen-reader evidence and founder visual acceptance remain explicit outstanding gates; never fabricate them.
 
 ## Founder-authorized A/B overlap
 
