@@ -301,7 +301,7 @@ Implementers load the `test-driven-development` skill first.
 | 10 | `TestExternal_NotSteerable` | Unit | US-2/AS-6 |
 | 11 | `TestGate_SelfTargetAllowedBothFronts` | Unit | US-3 |
 | 12 | `TestCompletion_Disposition_PersistedAndValidated` | Integration (table) | US-4/AS-1,2 — writes the record and validates the entry against the generated contract |
-| 13 | `TestCompletion_LastChildCompletesWaitingParent` | Integration | US-4/AS-3 |
+| 13 | `TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion`, `TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling` | Integration | US-4/AS-3 |
 | 14 | `TestGoalDelegation_Judged` | Integration | US-4/AS-4 |
 | 15 | `TestPlainWork_GoalClaimDenied_Completes` | Integration | US-4/AS-5 |
 | 16 | `TestGoalDelegation_ParentGoalAbsentFromChildInput` | Integration | US-4/AS-7 — asserts on the assembled model input |

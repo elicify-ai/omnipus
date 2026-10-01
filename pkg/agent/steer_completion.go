@@ -933,10 +933,13 @@ func (al *AgentLoop) steeredCompletionWriteActive(sessionID string) bool {
 // Completion-frontier semantics (sub-agent control-plane ADR, D6 Q2=B /
 // D6b): a `stopped` descendant neither blocks nor is it enqueued — it CUTS
 // the traversal, so a working or waiting descendant BEYOND a stopped node is
-// invisible to this frontier. The stopped node's direct parent is told by
-// the stop notice and decides about the branch; when that parent explicitly
-// resumes, the record's state (queued/running/needs_input) blocks again —
-// the cut follows the record's state, never its identity.
+// invisible to this frontier. Per D8.6 the stopped node's direct parent is
+// told about its stopped child by the D6 stopped-child notice — not by a
+// blocking frontier row — and decides about the branch; that notice delivery
+// is a separate D6 deliverable, not wired by this function. When that
+// parent explicitly resumes, the record's state
+// (queued/running/needs_input) blocks again — the cut follows the record's
+// state, never its identity.
 //
 // ADR-091 fix lane RX-HANG: a `running` child is deliberately NOT enough on
 // its own. completionDisposition's steer.OutcomeLifecycleNotice case keeps
@@ -1029,9 +1032,10 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 			case session.LifecycleStopped:
 				// D6 Q2=B / D8.6: a stopped descendant does not block, and it
 				// CUTS the traversal — its subtree is invisible to this
-				// frontier. The direct parent was told by the stop notice and
-				// decides; a resumed record blocks again by state, not
-				// identity.
+				// frontier. D8.6 routes the telling to the D6 stopped-child
+				// notice to the direct parent, not to this frontier; that
+				// notice delivery is a separate D6 deliverable, not wired
+				// here. A resumed record blocks again by state, not identity.
 				continue
 			case session.LifecycleRunning:
 				if al.steeredCompletionWriteActive(child.SessionID) {
