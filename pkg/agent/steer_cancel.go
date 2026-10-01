@@ -587,8 +587,8 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 		generation = rec.Generation
 		// rec.Stopped() covers BOTH the live current-generation fence and a
 		// record that has already LANDED session.LifecycleStopped with its
-		// fence cleared (ADR-20260928-sub-agent-control-plane.md line ~636) —
-		// both are durably-stopped shapes Revive exists to resurrect.
+		// fence cleared — landed state OR the current fence, both
+		// durably-stopped shapes Revive exists to resurrect.
 		if !rec.Stopped() && !rec.Terminal() {
 			return nil
 		}

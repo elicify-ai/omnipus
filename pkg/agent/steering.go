@@ -801,9 +801,12 @@ const (
 
 // EnqueueSteeringWake queues an upward wake into an already-live turn while
 // retaining the inbox message identity needed by I-3's consumed marker.
-// Returns (true, nil) when the wake was accepted into a terminal-transition
-// finishingItems buffer (round-3 finishing-window protocol, S3/S4); the
-// (false, nil) form means it joined the main queue as before.
+// A wake accepted into a terminal-transition finishingItems buffer (round-3
+// finishing-window protocol, S3/S4) is held there for the closing hand-off
+// to revive or drop; otherwise it joins the main queue as before. The single
+// error return does not surface which case occurred — a caller that needs to
+// distinguish them uses enqueueSteeringItemWithStatus, whose EnqueueStatus
+// does.
 func (al *AgentLoop) EnqueueSteeringWake(scope, agentID, transcriptSessionID, messageID string, msg providers.Message) error {
 	if strings.TrimSpace(transcriptSessionID) == "" || strings.TrimSpace(messageID) == "" {
 		return fmt.Errorf("steering wake requires transcript session id and message id")

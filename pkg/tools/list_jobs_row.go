@@ -497,10 +497,14 @@ type normalizedSubagent struct {
 // normalizeSubagent maps a durable lifecycle state onto the FR-006
 // vocabulary.
 //
-// `stopped` maps to `failed` with intentionally_stopped=true rather than to
-// a sixth status value: an agent that stopped a delegation on purpose and then
-// lost context would otherwise see a bare `failed` and re-dispatch work the
-// user deliberately cancelled.
+// `stopped` maps to one of three outcomes by StopNote.Cause, never to a
+// sixth status value: redirect_pause -> blocked (a parked generation is not
+// a stop, see the case below); timeout -> failed with intentionally_stopped
+// false; every other cause, including a missing StopNote, -> failed with
+// intentionally_stopped true. Keeping intentionally_stopped true on that
+// last group means an agent that stopped a delegation on purpose and then
+// lost context does not see a bare `failed` and re-dispatch work the user
+// deliberately cancelled.
 func normalizeSubagent(rec *session.LifecycleRecord) normalizedSubagent {
 	switch rec.State {
 	case session.LifecycleQueued:

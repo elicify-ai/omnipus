@@ -159,9 +159,8 @@ type Stop struct {
 
 // Stopped reports whether r is stopped RIGHT NOW — the predicate every
 // dispatch/delivery/completion/revival path must treat as "durably stopped,"
-// whether the stop is still in flight or has already landed and cleared
-// (ADR-20260928-sub-agent-control-plane.md line ~636: "Stopped() checks
-// landed state OR current fence"). Two independent ways in:
+// whether the stop is still in flight or has already landed and cleared.
+// Stopped checks landed state OR the current fence — two independent ways in:
 //
 //   - r.State == LifecycleStopped -> LANDED. TransitionSession
 //     (lifecycle_bridge.go) clears r.Stop the instant it lands this state,
