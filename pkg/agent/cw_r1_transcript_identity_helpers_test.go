@@ -126,6 +126,8 @@ func cwIdentityAppendRecordedCall(t *testing.T, ts *turnState, tc session.ToolCa
 		appendCall(tc, archiveLine)
 	case func(session.ToolCall, ...int):
 		appendCall(tc, archiveLine)
+	case func(session.ToolCall, ...int) error:
+		require.NoError(t, appendCall(tc, archiveLine))
 	default:
 		t.Fatalf("BLOCKED: appendToolCallTranscript cannot receive the archive line — required by ADR-066 §12 correction 2026-10-01")
 	}
