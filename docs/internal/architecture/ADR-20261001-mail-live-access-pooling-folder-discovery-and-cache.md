@@ -460,7 +460,17 @@ These are design risks, not adjudicated review findings on an implemented branch
 
 ## Non-goals
 
-Pending explicit scope boundaries.
+| Outside this decision | Boundary / reason |
+|---|---|
+| Full mailbox mirror, offline body reader or full-text database/index | Neither phase downloads a whole mailbox or stores bodies/snippets/parts. A bounded server search keeps older messages reachable; it is not a local index or an unrestricted new search product. **Founder core/cache/display decisions.** |
+| New attachment, reply, HTML styling or date features | #1170–#1175 are placeholders only in the section below. Existing preview/token compatibility is handled solely to obey request-only body retention; no pending-feature implementation/design is included. **Founder scope exclusion.** |
+| SMTP pooling or new sending protocol | Existing request-scoped SMTP/send approvals/idempotency remain. JMAP read selection must not silently redesign send/draft behaviour or enable push/upload/event-source workflows. **P1/P2 scope and E-Wire.** |
+| Persistent 13-connection IDLE service, prewarming or closed-panel header sync | Violates/confounds the settled eight-socket ceiling and no-closed-panel refresh rules. Watcher remains metadata-only under its own cadence/budget. **Founder pool/watcher rules; E-Watcher.** |
+| Mail-as-chat channel, drainer, mail-triggered agent turns or Board tasks | Mail stays an agent tool and separate notice surface. Stale comments/older drafts do not authorize reintroducing these. **E-Tools, E-Watcher; Per-(Agent, Workspace) Email Mailboxes reconciliation.** |
+| Browser persistent mail store / plaintext fallback | No IndexedDB/local-storage/service-worker body/header cache, unencrypted cache file, generic filesystem decryption tool or credentials in operator config. Browser active-view working data is bounded and released; saved Phase 2 headers stay server-side encrypted. **Founder privacy rules and E-Crypto.** |
+| New daemon, runtime service, SQLite mirror, CGo or unsupported platform | Keep compiled in-process pure Go; Linux/macOS/Windows only; no BSD expansion. No plugin bridge is needed for either protocol. **E-Authority.** |
+| Unrelated security/policy/credential/backup overhaul | Implement only necessary Mail cache isolation/exclusions/lifetime/wire integration in later work. Do not change credential HKDF, boot/key-loss rules, shell modes, tool-policy layers or historical Git data as a side fix. Report incidental concerns. **E-Crypto and root constraints.** |
+| Code, real contract edits, tests, measurements, PR or push in this task | Deliver **one ADR**, local human-authored checkpoints only. Later plan/gates/UAT are obligations, not work performed or approved here. **Direct dispatch restriction.** |
 
 ## Features pending founder decisions
 
