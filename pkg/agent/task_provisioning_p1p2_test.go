@@ -377,8 +377,11 @@ func provisioningStartedLogs(t *testing.T, f *provisioningFixture) []string {
 		if record["component"] != "task_executor" || record["task_id"] != f.task.ID {
 			continue
 		}
-		if record["message"] == "runTask started" || record["message"] == "runTaskFromInProgress started" {
-			starts = append(starts, record["message"].(string))
+		msg, ok := record["message"].(string)
+		require.True(t, ok, "task_executor record for task %s must carry a string message, got %T",
+			f.task.ID, record["message"])
+		if msg == "runTask started" || msg == "runTaskFromInProgress started" {
+			starts = append(starts, msg)
 		}
 	}
 	require.NoError(t, scanner.Err(), "log reading errors cannot be mistaken for an empty launch log")
