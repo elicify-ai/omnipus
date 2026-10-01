@@ -377,6 +377,41 @@ func TestNormalizeSubagent_RedirectPauseIsDistinctFromFailed(t *testing.T) {
 	}
 }
 
+// TestNormalizeSubagent_TimeoutIsNotIntentionallyStopped is a second
+// regression pin on the same collapsed LifecycleStopped branch this file's
+// redirect_pause test covers: pre-collapse, `LifecycleTimedOut` (see `git show
+// 6fd215138^:pkg/tools/list_jobs_row.go`) reported status=failed but left
+// `stopped` at its zero value — only the dedicated `LifecycleCancelled`
+// branch set stopped=true. A session's own execution-budget timeout
+// (session.StopCauseTimeout) is not a deliberate cancel, so it must not be
+// reported as intentionally_stopped=true: a caller that saw that flag could
+// wrongly conclude a human or agent chose to cancel the work, when in fact
+// nobody did.
+func TestNormalizeSubagent_TimeoutIsNotIntentionallyStopped(t *testing.T) {
+	timedOut := normalizeSubagent(&session.LifecycleRecord{
+		State:    session.LifecycleStopped,
+		StopNote: &session.StopNote{Cause: session.StopCauseTimeout},
+	})
+	if timedOut.status != jobStatusFailed {
+		t.Errorf("a timed-out session must still report status=%q, got %q",
+			jobStatusFailed, timedOut.status)
+	}
+	if timedOut.stopped {
+		t.Error("a timeout must not report intentionally_stopped=true — nobody " +
+			"deliberately cancelled this session, its own execution budget expired")
+	}
+
+	// Positive control, same shape as the redirect_pause test above: a
+	// genuine direct stop is UNCHANGED by this fix.
+	genuineStop := normalizeSubagent(&session.LifecycleRecord{
+		State:    session.LifecycleStopped,
+		StopNote: &session.StopNote{Cause: session.StopCauseStop},
+	})
+	if !genuineStop.stopped {
+		t.Error("a direct stop must still report intentionally_stopped=true")
+	}
+}
+
 // TestLabel_RedactBeforeTruncate proves the ORDER, not just that both steps
 // happen. Truncating first can split a registered secret across the boundary
 // so the replacer no longer matches it, which is exactly the leak the pipeline
