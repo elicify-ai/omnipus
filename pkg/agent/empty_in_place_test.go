@@ -316,8 +316,11 @@ func TestRunTurn_AbortRestoresTurnStartTriple(t *testing.T) {
 	require.NoError(t, err)
 
 	// Turn B: the same session, a new turn state, one more pass driven
-	// directly through the D5 entry point (the mid-turn caller, T066-13)
-	// on turn A's surviving result, then an abort.
+	// directly through the real live descendant of the deleted D5
+	// entry point — windowCheckpoint.shortenResult, committed via
+	// commitWindowProjections (window_relief.go, window_projection_effects.go)
+	// — the same two calls the mid-turn caller (checkpointWindow, T066-13)
+	// makes, on turn A's surviving result, then an abort.
 	ts := newTurnState(h.agent, processOptions{
 		SessionKey:          h.sessionKey,
 		TranscriptSessionID: h.sessionID,
@@ -343,28 +346,64 @@ func TestRunTurn_AbortRestoresTurnStartTriple(t *testing.T) {
 		}))
 	}
 	window := h.agent.Sessions.GetHistory(h.sessionKey)
-	archive, err := h.agent.Sessions.ReadArchive(context.Background(), h.sessionKey)
-	require.NoError(t, err)
-	lineOf := midTurnLineResolver(archive, window)
 
 	// Oldest-first across the WHOLE window (B-21b): turn A's one surviving
 	// result, call-4 (its earlier steps call-1..call-3 were already SLID out
 	// of the window whole during turn A's own checkpoint, not left as
 	// marks — FR-030/MAJ-CW-004), is the oldest eligible result in turn B's
-	// window (this turn's own b-1/b-2/b-3 are all newer). One direct pass
-	// empties it in place: a result of an EARLIER, completed turn, emptied
-	// during turn B, with an archive line BELOW the turn-start archive
-	// length — exactly the case the rollback must undo by restoring the
-	// SET, not by truncating lines.
-	oneEmpty := func(want string) func([]providers.Message) bool {
-		return func(m []providers.Message) bool {
-			return strings.Contains(msgsByToolCallID(m)[want].Content, `"content_state":"emptied"`)
+	// window (this turn's own b-1/b-2/b-3 are all newer).
+	//
+	// Driven end-to-end through the organic relief chain (dropRecall ->
+	// slideOldest -> shortenNext, window_checkpoint.go::checkpointWindow),
+	// slideOldest would win first and shortenResult would never fire for
+	// this fixture — so the intermediate state B-24/SC-003 needs (a result
+	// of an EARLIER, completed turn, emptied during THIS turn, with an
+	// archive line BELOW the turn-start archive length — exactly the case
+	// the rollback must undo by restoring the SET, not by truncating lines)
+	// is built DIRECTLY via the checkpoint/commit path instead: a checkpoint
+	// over turn B's current window, one targeted shortenResult pass on
+	// call-4, then commitWindowProjections — the same two calls the live
+	// mid-turn caller makes, just without the ordering that would skip past
+	// call-4 for this fixture's step shape.
+	cs := config.DefaultContextSettings()
+	if cfg := h.al.GetConfig(); cfg != nil {
+		cs = cfg.Context
+	}
+	p, cwStore, err := newWindowCheckpoint(context.Background(), ts, window, cs)
+	require.NoError(t, err)
+	idx := -1
+	for i, m := range p.messages {
+		if m.Role == "tool" && m.ToolCallID == "call-4" {
+			idx = i
 		}
 	}
-	e1 := h.al.emptyInPlace(ts, h.agent, h.sessionKey, window, lineOf, archive, oneEmpty("call-4"), emptyingSiteMidTurn)
-	require.Len(t, e1, 1)
-	assert.Equal(t, "call-4", e1[0].ToolCallID)
-	assert.Less(t, e1[0].ArchiveLine, ts.initialArchiveLen, "an earlier turn's line")
+	require.GreaterOrEqual(t, idx, 0, "call-4 must be present in turn B's checkpoint message slice")
+	// halve=false: shortenResult's own behavior (window_relief.go) is
+	// kept=0 — fully emptied, state -> memory.ProjectionEmptied — when
+	// halve is false, and kept=k/2 — state -> memory.ProjectionCapped —
+	// only when halve is true. "Empty it in place" (B-24/SC-003) is the
+	// fully-emptied case, so false.
+	changed, err := p.shortenResult(idx, false)
+	require.NoError(t, err)
+	require.True(t, changed, "call-4 must actually be shortened (emptied) by the pass")
+
+	// commitWindowProjections persists the window-metadata transaction and
+	// rewrites the transcript in one call (window_projection_effects.go) —
+	// the same call the live mid-turn caller makes. No separate
+	// Sessions.Save() follows: CommitWindow writes straight into the
+	// session store's own in-memory window state (pkg/session/context_window.go),
+	// which Sessions.GetHistory/Projection below read directly, same as the
+	// precedent TestCommitWindowProjections_TranscriptUndoFailure_PropagatesNotSwallowed
+	// (window_projection_effects_test.go), which reads the committed state
+	// back via store.SnapshotWindow with no Save() call either — Save()
+	// only runs inside restoreSession itself (turn_exit.go), as part of
+	// the abort below, unchanged by this fix.
+	changes, err := h.al.commitWindowProjections(context.Background(), p, cwStore)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, "call-4", changes[0].key.ToolCallID)
+	assert.Less(t, changes[0].key.ArchiveLine, ts.initialArchiveLen, "an earlier turn's line")
+	assert.Equal(t, memory.ProjectionEmptied, changes[0].state)
 	mid := h.agent.Sessions.Projection(h.sessionKey).Entries
 	require.Len(t, mid, 1, "intermediate state: turn A's zero (slid) + the one emptied now")
 	tb, err := h.store.ReadTranscript(h.sessionID)
