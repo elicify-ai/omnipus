@@ -73,8 +73,8 @@ type capturedRequest struct {
 }
 
 // rolesSearchFixture holds one httptest server per provider, keyed by
-// catalogue id ("tavily", "ddg", "brave", "perplexity", "glm", "exa",
-// "searxng", "baidu").
+// retained provider id ("tavily", "ddg", "brave", "perplexity", "glm",
+// "exa", "baidu").
 type rolesSearchFixture struct {
 	servers  map[string]*httptest.Server
 	swaps    map[string]*swapHandler
@@ -130,7 +130,7 @@ func newRolesSearchFixture(t *testing.T,
 			sw.ServeHTTP(w, r)
 		}))
 	}
-	for _, name := range []string{"tavily", "ddg", "brave", "perplexity", "glm", "exa", "searxng", "baidu"} {
+	for _, name := range []string{"tavily", "ddg", "brave", "perplexity", "glm", "exa", "baidu"} {
 		mk(name)
 	}
 
@@ -141,7 +141,6 @@ func newRolesSearchFixture(t *testing.T,
 	f.setHandler("perplexity", jsonBody(`{"choices":[{"message":{"content":"prose answer"}}],"citations":["https://cite.example.com/one"]}`))
 	f.setHandler("glm", jsonBody(`{"search_result":[{"title":"GLM Result","link":"https://example.com/glm","content":"g"}]}`))
 	f.setHandler("exa", jsonBody(`{"results":[{"title":"Exa Result","url":"https://example.com/exa"}]}`))
-	f.setHandler("searxng", jsonBody(`{"results":[{"title":"SX Result","url":"https://example.com/sx","content":"sx snippet"}]}`))
 	f.setHandler("baidu", jsonBody(`{"results":[{"title":"Baidu Result","url":"https://example.com/baidu","abstract":"b"}]}`))
 
 	// Canonical config: Tavily usable default; fallback absent -> auto
@@ -173,8 +172,6 @@ func newRolesSearchFixture(t *testing.T,
 		PerplexityBaseURL:     f.servers["perplexity"].URL,
 		PerplexityEnabled:     true,
 		PerplexityContextSize: "",
-		SearXNGBaseURL:        f.servers["searxng"].URL,
-		SearXNGEnabled:        true,
 		GLMSearchAPIKey:       "wsfx-glm-key",
 		GLMSearchBaseURL:      f.servers["glm"].URL,
 		GLMSearchEnabled:      true,

@@ -47,8 +47,10 @@ An earlier draft of the spec treated this as "add providers" and left Exa off th
 | Provider | Usable when |
 |---|---|
 | Brave, Tavily, Perplexity, GLM, Baidu, Exa | Switched on, **and** `APIKey()` returns a non-empty string |
-| SearXNG | Switched on, **and** the base URL is non-empty after trimming |
+| ~~SearXNG~~ | Removed 2026-09-29 — see the D10 amendment. No longer a provider. |
 | DuckDuckGo | Switched on. Nothing else |
+
+> **Amendment, 2026-09-29 (founder, #1055 fix round): saving a key switches that provider on.** A key-only save for a keyed search provider also sets that provider's own `enabled: true` (no role assigned, `roles_migrated_at` not stamped, no other provider touched). Without it, a keyed provider could never become usable from the Settings screen, which only offers usable providers as default or fallback.
 
 `APIKey()` reads `os.Getenv(<ref>)` (`pkg/config/config_defaults_apply.go::TavilyConfig.APIKey` and the Brave, Perplexity, GLM and Baidu twins). So "usable" is a statement about the **process environment**, which is populated by `credentials.InjectFromConfig`. Two separate consequences follow, and both had to be fixed in round 2: where the migration can run (D11) and what the tool must hold in order to re-check this at call time (D4a).
 
@@ -125,6 +127,8 @@ A save that names a provider whose key does not resolve is **not** simply reject
 A new install ships `duckduckgo.enabled: true`, `default_provider: duckduckgo`, `fallback_provider: none`, every other search provider off. One role, no fallback, so no hop (R1/R2).
 
 **Hand-typed `searxng`** on a file that never resolved to it: treated as a known id, usable only under the SearXNG row of the Definitions table (switched on with a base URL). Otherwise R6 or R7. It is never rejected at load; a file that cannot boot is worse than a file that reports honestly.
+
+> **Superseded 2026-09-29 (D10 amendment):** SearXNG is removed. A stored `searxng` role is cleared on load by the one-time cleanup, not treated as a known id.
 
 ### D4a — What the tool checks usability *against*
 
@@ -281,6 +285,17 @@ Migration still has to know about it: in today's chain SearXNG sits **above** Ta
 | HTTP client | When no SSRF checker is present it constructs its own `&http.Client{Timeout: 10 * time.Second}`, bypassing the SSRF-safe path the others get from `makeSearchClient` via `ssrf.SafeClient()` | Use `makeSearchClient` like every other provider. The base URL is operator-controlled and the request is server-side |
 
 Both carry an acceptance criterion and a test. Neither is optional because the provider is descoped.
+
+**Amendment, 2026-09-29 (founder, via #1056 F-2/squad `websearch-1055-1056`): reversed — SearXNG is fully removed, not merely descoped.** The founder's original "the provider code stays, it is not deleted" instruction above is superseded: the catalogue entry, its `WebToolsConfig.SearXNG` field, its settings-surface exposure, and its documentation are deleted outright. This is an active load-time self-heal, not a passive drop:
+
+1. After one normal config load, the config file on disk carries no `searxng` anywhere — the `tools.web.searxng` block **and** any credential-store reference are removed, not merely ignored.
+2. `default_provider: "searxng"` is cleared to **unset** (the roles-undecided state — R1/R3 of D11's own vocabulary) — never silently replaced with another provider. `fallback_provider: "searxng"` is cleared to **`"none"`**. Both writes happen in the same load-time self-heal.
+3. The self-heal logs exactly one clear warning line naming which role (default and/or fallback) it cleared and why.
+4. With the default cleared to unset, `search_web` gives the existing honest "roles undecided" refusal (D4's table) — it never names `searxng`.
+
+**Correction, 2026-09-29 (same amendment round): this is NOT the passive "unknown keys are silently ignored" behaviour first written here** — `pkg/config`'s lenient loader would leave a stale credential-store reference and give no operator-visible signal that anything changed, which the founder's ruling above explicitly rejects (point 1 and point 3). The developer must write an active migration/self-heal step for this, not rely on the loader's leniency.
+
+The one open risk this reversal creates against D11's own migration (below) — whether any not-yet-migrated install with SearXNG enabled can still be awarded SearXNG's legacy chain position 3 once the typed field is gone — is tracked and resolved in the implementation (`pkg/config` roles-migration code, raw-JSON read if needed instead of new alias/marker machinery). **If the ADR-067 US-11.AC1 greenfield/no-alias-machinery guard blocks this load-time write, the developer escalates to team-lead before inventing an exemption** — not reopened here as a design question the developer resolves alone.
 
 ### D11 — Migration must not silently change who answers, or what it costs — and it must run where it can tell
 
@@ -589,7 +604,7 @@ A rate-limited default means every concurrent call pays a 429 and then a fallbac
 - **AC-6.** The definition registered for the agent lists the usable providers in `provider`'s enum, and omits `depth` and the domain arguments when the resolved default does not honour them. A DuckDuckGo-only install's definition has `query`, `count` and `range` only. The **rendered definition** — description plus serialised parameters — is at most 2,400 bytes **at the maximal configuration** (all eight usable, all capabilities present), and `Description` is byte-identical between the live instance and `GeneralBuiltinMetadata`'s.
 - **AC-7.** Tavily still sends `include_answer: false`. GLM still sends `search_intent: false`. Brave does not send `summary`. A Perplexity result includes the citations array (or an explicit "none returned"). The **decoded** Perplexity request body has `temperature` present and equal to `0`.
 - **AC-8.** `include_domains` against a provider that cannot honour it refuses before any request, names a provider that can, and does not hop. `exclude_domains` against such a provider proceeds and the result states that the exclusion was not applied. Tavily sends snake_case `include_domains` / `exclude_domains`; Exa sends camelCase `includeDomains` / `excludeDomains`.
-- **AC-9.** No new SearXNG field and no SearXNG address control are added. An install that already resolves to SearXNG keeps that default across migration. SearXNG's response goes through the ingest bound and its client comes from `makeSearchClient`.
+- **AC-9.** ~~No new SearXNG field and no SearXNG address control are added. An install that already resolves to SearXNG keeps that default across migration. SearXNG's response goes through the ingest bound and its client comes from `makeSearchClient`.~~ **Superseded 2026-09-29 (D10 amendment):** SearXNG is removed from code, catalogue, config, settings and docs; a stored SearXNG role is cleared on load (default unset, fallback `none`).
 - **AC-10.** The five rows in D11's table hold. Row (c) does not gain a hop; row (d) does not gain a hop and does not drop depth to `basic`; row (e) switches the provider on and logs it.
 - **AC-11.** A new Tavily install sends `basic` unless the agent sets `depth`. A migrated Tavily object sends `advanced` until the operator changes it. `depth: high` sends `advanced` for that call only. `depth` above the operator's configured ceiling is clamped, with a note.
 - **AC-12.** The search badge follows the Definitions test. A key reference with an empty `APIKey()` is not shown as the provider that runs — **and a key stored in the same request reads ready, not "key not reaching search"** (D18).

@@ -107,14 +107,6 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 
 `search_depth` is a ceiling, not a fixed value. When an agent's `search_web` call asks for a `depth` (`low`/`medium`/`high`, mapped to Tavily's `fast`/`basic`/`advanced`), Omnipus clamps it down to this ceiling if it asks for more — it is never raised above it. When the agent's call carries no `depth` at all, Omnipus searches at this ceiling directly. A brand-new install ships `basic` (Tavily's cheapest tier); if the key is ever missing or empty — including on an install upgrading from before this setting existed — Omnipus falls back to `advanced`, the depth the code used unconditionally before this release, so an existing install's search depth (and its Tavily bill) does not change on upgrade. Deeper searches cost more per call, so this is also the operator's cost ceiling for Tavily. Env var: `OMNIPUS_TOOLS_WEB_TAVILY_SEARCH_DEPTH`.
 
-### SearXNG
-
-| Config        | Type   | Default                 | Description               |
-|---------------|--------|-------------------------|---------------------------|
-| `enabled`     | bool   | false                   | Enable SearXNG search     |
-| `base_url`    | string | `http://localhost:8888` | SearXNG instance URL      |
-| `max_results` | int    | 5                       | Maximum number of results |
-
 ### GLM Search
 
 | Config          | Type   | Default                                           | Description                              |
@@ -139,7 +131,9 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 
 ### Default and fallback search provider
 
-Omnipus tries one search provider first (the **default**) and, if that call fails, can try a second (the **fallback**). These are not settings you hand-edit in `config.json` — set them from **Settings > Integrations**, in the **Web Search** group: each provider's row has a **Default** and a **Fallback** radio, plus a **No fallback** choice if you don't want a second try. Under the hood this is `tools.web.default_provider` / `tools.web.fallback_provider`; an install upgrading from before these roles existed gets a one-time migration that keeps using whichever provider it was already using, so switching to this release does not change which provider answers your searches.
+Omnipus tries one search provider first (the default) and, if that call fails, can try a second (the fallback). In **Settings** → **Integrations**, use **Change** on the **Default search** or **Fallback** card to choose a service; **Fallback** also offers **None**. These choices are stored as `tools.web.default_provider` and `tools.web.fallback_provider` in `config.json`.
+
+Saving a web-search API key in **Settings** → **Integrations** sets that provider's `enabled: true`.
 
 ### `search_web` tool parameters
 

@@ -72,7 +72,7 @@ func TestChosen_NamedDefaultEqualsOmitted(t *testing.T) {
 }
 
 // Naming a usable provider with that provider's own capability and failing ->
-// hard fail, NO hop, and the tail line tells the agent its way out.
+// hard fail, NO hop, and the message explains the capability reason and an alternative.
 func TestChosen_CapabilityFailHardFails_NoHop(t *testing.T) {
 	dead := deadServerURL(t)
 	f := newRolesSearchFixture(t, nil, func(o *WebSearchToolOptions) {
@@ -88,8 +88,15 @@ func TestChosen_CapabilityFailHardFails_NoHop(t *testing.T) {
 	if !strings.Contains(res.ForLLM, "- tavily (chosen): network:") {
 		t.Fatalf("expected tavily (chosen) line, got:\n%s", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "This call named tavily, so the fallback was not tried. Omit provider to use the default and the fallback, or set provider to one of: duckduckgo.") {
-		t.Fatalf("expected exact tail line, got:\n%s", res.ForLLM)
+	lower := strings.ToLower(res.ForLLM)
+	if !strings.Contains(lower, "capability") {
+		t.Fatalf("expected the provider-specific capability reason for no hop (ADR-096 D6/AC-5), got:\n%s", res.ForLLM)
+	}
+	if strings.Contains(lower, "no fallback is configured") || strings.Contains(lower, "no fallback configured") {
+		t.Fatalf("duckduckgo is configured and eligible, so the message must not claim there is no fallback, got:\n%s", res.ForLLM)
+	}
+	if !strings.Contains(lower, "duckduckgo") {
+		t.Fatalf("expected duckduckgo as an alternative provider (ADR-096 D6), got:\n%s", res.ForLLM)
 	}
 }
 

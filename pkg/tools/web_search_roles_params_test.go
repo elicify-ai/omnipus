@@ -124,9 +124,9 @@ func TestParams_DescriptionConstantAcrossConfigs(t *testing.T) {
 }
 
 // The rendered definition (description + serialised Parameters) stays inside
-// the 2,400-byte cap at the MAXIMAL configuration (all eight usable, every
-// capability argument present). On overflow the "good for" clauses are
-// dropped, never the enum.
+// the 2,400-byte cap at the MAXIMAL configuration (all seven retained
+// providers usable, every capability argument present). On overflow the
+// "good for" clauses are dropped, never the enum.
 func TestParams_SizeCapAtMaximalConfig(t *testing.T) {
 	f := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
 		c.DefaultProvider = config.SearchProviderTavily
@@ -135,7 +135,6 @@ func TestParams_SizeCapAtMaximalConfig(t *testing.T) {
 		c.GLMSearch = config.GLMSearchConfig{Enabled: true, APIKeyRef: envRefGLM}
 		c.BaiduSearch = config.BaiduSearchConfig{Enabled: true, APIKeyRef: envRefBaidu}
 		c.Exa = config.ExaConfig{Enabled: true, APIKeyRef: envRefExa}
-		c.SearXNG = config.SearXNGConfig{Enabled: true, BaseURL: "https://sx.example.com"}
 	}, nil)
 	rendered := f.tool.Description() + string(mustJSON(t, f.tool.Parameters()))
 	if len(rendered) > 2400 {

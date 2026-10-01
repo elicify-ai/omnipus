@@ -14,16 +14,16 @@ import (
 )
 
 // TestSearchProviderCatalogue_ShippedContentPinned pins the shipped
-// catalogue's content: the eight ADR-096 providers, their keyed/keyless and
-// capability matrix, and the PRE-ADR legacy chain positions the roles
-// migration mirrors (Exa correctly absent — it did not exist pre-ADR).
+// catalogue's content: the seven retained ADR-096 providers, their keyed/keyless
+// and capability matrix, and the PRE-ADR legacy chain positions the roles
+// migration mirrors after SearXNG's full removal (Exa was never in that chain).
 func TestSearchProviderCatalogue_ShippedContentPinned(t *testing.T) {
-	if got := len(SearchProviderCatalogue); got != 8 {
-		t.Fatalf("catalogue has %d providers, want 8", got)
+	if got := len(SearchProviderCatalogue); got != 7 {
+		t.Fatalf("catalogue has %d providers, want 7 after SearXNG removal", got)
 	}
 	ids := catalogueIDsForTest()
 	wantOrder := []string{
-		SearchProviderPerplexity, SearchProviderBrave, SearchProviderSearXNG,
+		SearchProviderPerplexity, SearchProviderBrave,
 		SearchProviderTavily, SearchProviderDuckDuckGo, SearchProviderBaidu,
 		SearchProviderGLM, SearchProviderExa,
 	}
@@ -60,8 +60,8 @@ func TestSearchProviderCatalogue_ShippedContentPinned(t *testing.T) {
 	if !slices.Equal(keyedGot, keyedWant) {
 		t.Errorf("keyed set = %v, want %v", keyedGot, keyedWant)
 	}
-	if !slices.Equal(baseURLWant, []string{SearchProviderSearXNG}) {
-		t.Errorf("base-URL-required set = %v, want [searxng]", baseURLWant)
+	if len(baseURLWant) != 0 {
+		t.Errorf("base-URL-required providers = %v, want none after SearXNG removal", baseURLWant)
 	}
 
 	// Capabilities (ADR-096 D9/D12 matrix): depth on Tavily/Perplexity/GLM,
@@ -83,7 +83,7 @@ func TestSearchProviderCatalogue_ShippedContentPinned(t *testing.T) {
 	if got := webRolesKeyedChainIDs(); !slices.Equal(got, wantKeyedLegacy) {
 		t.Errorf("legacy keyed chain = %v, want %v", got, wantKeyedLegacy)
 	}
-	wantLegacy := []string{SearchProviderPerplexity, SearchProviderBrave, SearchProviderSearXNG, SearchProviderTavily, SearchProviderDuckDuckGo, SearchProviderBaidu, SearchProviderGLM}
+	wantLegacy := []string{SearchProviderPerplexity, SearchProviderBrave, SearchProviderTavily, SearchProviderDuckDuckGo, SearchProviderBaidu, SearchProviderGLM}
 	w := &DefaultConfig().Tools.Web
 	if got := w.preADRChainIDs(); !slices.Equal(got, wantLegacy) {
 		t.Errorf("migration legacy chain = %v, want %v", got, wantLegacy)

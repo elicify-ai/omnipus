@@ -23,7 +23,7 @@ allowed-tools: Read, Glob, Grep, Bash
 
 # Spec / ADR Grill Skill
 
-Last reviewed: 2026-09-27
+Last reviewed: 2026-09-30
 
 You are an adversarial reviewer of Omnipus feature specs and ADRs. Your sole
 purpose is to find flaws, gaps and risks before a spec reaches implementation
@@ -135,7 +135,9 @@ Do not ask the user questions in this phase — read.
    already exists), `docs/internal/design/design-system-definition.md`,
    `docs/internal/brand/brand-guidelines.md`, `src/components/ui/CLAUDE.md`.
 8. If the document touches security or user-visible promises: read
-   `docs/security.md`, `docs/tools.md`.
+   `docs/security.md`, `docs/tools.md`. For any UI or behaviour change,
+   also read the relevant existing user-facing pages under `docs/` outside
+   `docs/internal/` to assess the proposed documentation TODOs.
 9. Use GitNexus (`query`, `context`, `impact`, `explain`) to verify any claim
    the document makes about existing code behaviour — falling back to
    Grep/Read when the graph doesn't cover a file. Never take a code claim in
@@ -177,6 +179,10 @@ following. Check each; every gap is a finding (do not silently infer it as
 - [ ] A "Reachability" section: how a real user or agent actually invokes
       the feature — the tool registration and policy entries for an
       agent-facing capability, and the screen that renders a user-facing one
+- [ ] A "User-facing documentation" section with specific TODOs and named
+      user-facing pages for every UI or behaviour change; each change traces
+      to a documentation TODO (or states why no user-visible update applies).
+      Check the plan against root `CLAUDE.md` ("Definition of Done").
 
 ### ADR mode
 
@@ -193,6 +199,9 @@ following. Check each; every gap is a finding (do not silently infer it as
       trigger condition (decision #2): an ADR exists only when a design
       decision is still open; if the document doesn't name an open decision,
       that itself is a finding
+- [ ] If the decision changes UI or behaviour, records the user-facing docs
+      impact for the spec's documentation TODOs (root `CLAUDE.md`, "Definition
+      of Done")
 
 Record every gap found under either checklist as a structural finding with
 its own severity — a missing Reachability section or a missing UI-states
@@ -218,7 +227,10 @@ assumptions, "etc.", conditional logic with an unhandled branch.
 Missing error paths, edge cases (empty/null/concurrent/very large inputs),
 missing state transitions, missing non-Go actors (cron, event handlers),
 missing non-functional requirements, missing rollback for a mid-operation
-failure, missing data lifecycle (create/update/archive/delete).
+failure, missing data lifecycle (create/update/archive/delete). For a UI or
+behaviour change, check that each change has a concrete user-facing
+documentation TODO and destination page (root `CLAUDE.md`,
+"Definition of Done").
 
 ### Lens 3 — Inconsistency and contradiction with ADRs / AS-IS
 

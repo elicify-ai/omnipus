@@ -413,7 +413,7 @@ func TestWebSearchRolesMigration_AllUnusableTurnsDuckDuckGoBackOn(t *testing.T) 
 	}
 }
 
-// --- T7: the winner is today's chain order; catalogue ids glm/baidu --------
+// --- T7: retained chain order; removed SearXNG cannot win ------------------
 
 func TestWebSearchRolesMigration_WinnerFollowsTodayChainOrder(t *testing.T) {
 	cases := []struct {
@@ -433,14 +433,14 @@ func TestWebSearchRolesMigration_WinnerFollowsTodayChainOrder(t *testing.T) {
 			want:    "brave",
 		},
 		{
-			name: "searxng sits above tavily in the chain",
+			name: "retired searxng cannot displace usable tavily",
 			webSection: `{
 				"enabled": true,
 				"searxng": { "enabled": true, "base_url": "http://searx.internal" },
 				"tavily": { "enabled": true, "api_key_ref": "TAVILYCHAINTEST" }
 			}`,
 			envRefs: map[string]string{"TAVILYCHAINTEST": "t"},
-			want:    "searxng",
+			want:    "tavily",
 		},
 		{
 			name: "glm catalogue id",
@@ -496,7 +496,7 @@ func TestWebSearchRolesMigration_WinnerFollowsTodayChainOrder(t *testing.T) {
 			}
 			MigrateWebSearchRoles(cfg, path, nil)
 			if got := readWebSection(t, path)["default_provider"]; got != tc.want {
-				t.Fatalf("default_provider = %v, want %q (the chain NewWebSearchTool builds today)", got, tc.want)
+				t.Fatalf("default_provider = %v, want %q (retained provider migration chain)", got, tc.want)
 			}
 		})
 	}
@@ -564,25 +564,9 @@ func TestUsableSearchProvider_Boundaries(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "searxng on with a whitespace-only base URL",
+			name: "removed searxng id is never usable",
 			id:   "searxng",
-			web:  func(w *WebToolsConfig) { w.SearXNG = SearXNGConfig{Enabled: true, BaseURL: "   "} },
-			want: false,
-		},
-		{
-			name: "searxng on with a padded base URL",
-			id:   "searxng",
-			web: func(w *WebToolsConfig) {
-				w.SearXNG = SearXNGConfig{Enabled: true, BaseURL: "  http://searx.internal  "}
-			},
-			want: true,
-		},
-		{
-			name: "searxng off though base URL set",
-			id:   "searxng",
-			web: func(w *WebToolsConfig) {
-				w.SearXNG = SearXNGConfig{Enabled: false, BaseURL: "http://searx.internal"}
-			},
+			web:  func(w *WebToolsConfig) {},
 			want: false,
 		},
 		{
@@ -656,7 +640,6 @@ func TestDefaultToolsConfig_WebSearchRolesShipMigrated(t *testing.T) {
 		{"brave", w.Brave.Enabled},
 		{"tavily", w.Tavily.Enabled},
 		{"perplexity", w.Perplexity.Enabled},
-		{"searxng", w.SearXNG.Enabled},
 		{"glm", w.GLMSearch.Enabled},
 		{"baidu", w.BaiduSearch.Enabled},
 	} {

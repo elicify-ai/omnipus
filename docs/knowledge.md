@@ -62,6 +62,8 @@ A note can show things that live elsewhere with the `![[...]]` embed notation. E
 | `$x$` or `$$x$$` | Rendered mathematics |
 | `![](https://www.youtube-nocookie.com/...)` | The video, after you press play |
 
+**A saved-view embed needs a real `.base` file.** Omnipus finds saved views whose `source` matches that file, then matches the text after `#` to a view's display label (or its exact saved-view name as a fallback); it does not build the view from the `.base` file's contents. An authored view saved without `source` appears in the knowledge base's **Saved views** list but cannot be embedded. To embed one, give `knowledge_configure`'s `create_view` or `write_view` a collection-relative `source` such as `Projects.base`, then use `![[Projects.base#View label]]`; Omnipus attempts to create a starter file if needed and warns if it cannot. Imported views retain their original `.base` path as `source`: keep that file and embed its path plus the view label, as in the table above.
+
 Embedding one note inside another works one level deep; the transcluded note's own embeds appear as links. An HTML file, a plain-text file, or a diagram file such as `chart.mmd` stays a link rather than rendering inline. A missing target is named in words, and agents reading the note are told the same.
 
 Editing a record field in a view saves to that record; changing an embed's filter or sort affects only that embed, never the saved view.

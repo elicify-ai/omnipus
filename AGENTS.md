@@ -8,8 +8,7 @@ Guidance for Claude Code when working in this repository. This root file holds o
 
 Omnipus is an agentic core: a single Go binary with the SPA embedded via `go:embed`, kernel-level sandboxing (Landlock + seccomp on Linux 5.13+), audit logging, encrypted credential management, and compiled-in Go channels. Community-facing, MIT-licensed, no telemetry. **Domain:** omnipus.ai
 
-**Code wins over docs on any disagreement.** Authoritative references: `docs/internal/architecture/AS-IS-architecture.md` (evidence-based as-is, code-cited), `plugin-extensibility-assessment.md`, `ADR-*.md` (cite by title, not number alone), `docs/internal/_archive/BRD/` (original intent, superseded where it conflicts), and `docs/internal/_archive/preview-doc-v03-concept/` — the pre-ADR
-workspaces-redesign concept (superseded by ADRs).
+**Code wins over docs on any disagreement.** Authoritative references: `docs/internal/architecture/AS-IS-architecture.md` (evidence-based as-is, code-cited), `plugin-extensibility-assessment.md`, and `ADR-*.md` (cite by title, not number alone). The original BRD and pre-ADR workspaces concept were removed from the live tree on 2026-09-30; consult Git history only for historical context, never as current authority.
 
 **Brand & UI:** "The Sovereign Deep", dark-first, chat-first — `docs/internal/brand/brand-guidelines.md`. No emoji in stored data or UI chrome.
 
@@ -23,11 +22,11 @@ releases; v0.1.1 carries near the full scope once labelled v0.3).
   #155 security hardening (closed 2026-05-04 — env-var allowlist, master.key 0600
   check, shell-guard hardening, internal-CIDR egress blocking, audit HMAC chain,
   auth-endpoint rate limiting), and the bulk of the #156 workspaces redesign
-  (closed 2026-06-27; direction doc archived at
-  `docs/internal/_archive/preview-doc-v03-concept/`, superseded by ADRs).
+  (closed 2026-06-27; the pre-ADR concept was removed from the live tree,
+  remains in Git history and is superseded by ADRs).
   The five rooms-era drafts in `docs/internal/_archive/design-2026-05-rooms-era/`
   are superseded pre-ADR background (retired Rooms/5-core vocabulary) — do not
-  implement from them without checking the concept and the ADRs.
+  implement from them; check the later ADRs and the code instead.
 - **No version label names a future release anymore.** Work the closed issues left
   open stays on its tracked issues (#884, #885, #886, #887, #888, #306, #42) until
   the founder rules where it lands.
@@ -60,6 +59,8 @@ releases; v0.1.1 carries near the full scope once labelled v0.3).
 - Is the tool registered in the builtin catalog with an explicit policy entry for every agent (Hard Constraint #6)? `grep -rl '"<tool_name>"' pkg/coreagent/ pkg/config/ pkg/tools/` returning **0** means nobody can call it, whatever the tests say.
 - Is there a screen or component that renders it? A backend with no UI and no tool registration is a library, not a feature.
 - Was the test plan **executed**, or only written? "Written, not executed" is not testing.
+
+**User-facing documentation (MANDATORY).** Any UI or behaviour change must include a matching update to user-facing documentation under `docs/` (outside `docs/internal/`) in the same change. At design time, name the affected pages and specific documentation TODOs; for small and standard work, include them in the work plan. The implementing lead drafts the update and `docs-verifier` audits it against the actual behaviour before landing. Reviewers check the changed UI/behaviour against the updated pages; a missing matching update is an **Important** finding with a concrete user-impact scenario. If a change has no user-visible effect, record why no user-facing documentation update is needed.
 
 State delivery in two lines that are never merged: *code correct and tested*, and *reachable by a user/agent*. **Why:** the vault-records work was reported six-of-six complete with CI 34/34 green while all six `vault_*` tools were registered in zero config files, the superseded `knowledge_*` tools were still the only ones wired, and no record UI existed.
 

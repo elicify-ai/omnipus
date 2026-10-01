@@ -40,7 +40,6 @@ const (
 	SearchProviderBrave      = "brave"
 	SearchProviderTavily     = "tavily"
 	SearchProviderDuckDuckGo = "duckduckgo"
-	SearchProviderSearXNG    = "searxng"
 	SearchProviderBaidu      = "baidu"
 	SearchProviderGLM        = "glm"
 	SearchProviderExa        = "exa"
@@ -58,8 +57,8 @@ const (
 //
 //   - keyed providers (Brave, Tavily, Perplexity, GLM, Baidu, Exa): usable
 //     when switched on, and APIKey() is non-empty.
-//   - base-URL providers (SearXNG): usable when switched on, and base_url is
-//     non-empty after trimming — a whitespace-only base URL is not usable.
+//   - base-URL providers (catalogue extensions): usable when switched on,
+//     and base_url is non-empty after trimming.
 //   - plain keyless providers (DuckDuckGo): usable when switched on.
 //   - An unknown id is never usable (R9) — and never a boot failure.
 //
@@ -102,9 +101,9 @@ func webRolesKeyedChainIDs() []string {
 // preADRChainIDs returns the FULL PRE-ADR selection chain — the order
 // pkg/tools/web.go::NewWebSearchTool evaluated before ADR-096 roles
 // (Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu > GLM). The
-// migration mirrors it verbatim (D11); Exa is correctly absent (it did not
-// exist pre-ADR, so a test-appended catalogue entry must not enter it
-// either).
+// migration visits only retained catalogue entries: the removed position 3
+// cannot become a default. Exa is absent (it did not exist pre-ADR, so a
+// test-appended catalogue entry must not enter it either).
 func (w *WebToolsConfig) preADRChainIDs() []string {
 	ids := make([]string, 0, len(SearchProviderCatalogue))
 	for _, def := range preADRChainDefs() {
@@ -155,7 +154,7 @@ func (w *WebToolsConfig) isAmbiguousInstall() bool {
 
 // enabledKeyedWithRef reports whether the provider's config object carries
 // enabled=true with a non-empty api_key_ref. Derived from the catalogue —
-// non-keyed ids (DuckDuckGo, SearXNG) and unknown ids are false.
+// non-keyed ids (DuckDuckGo) and unknown ids are false.
 func enabledKeyedWithRef(w *WebToolsConfig, id string) bool {
 	def, ok := SearchProviderDefByID(id)
 	return ok && def.Keyed && def.Enabled(w) && def.APIKeyRef(w) != ""
@@ -170,6 +169,15 @@ func enabledKeyedWithRef(w *WebToolsConfig, id string) bool {
 func offKeyedWithResolvingRef(w *WebToolsConfig, id string) bool {
 	def, ok := SearchProviderDefByID(id)
 	return ok && def.Keyed && !def.Enabled(w) && def.APIKeyRef(w) != "" && def.APIKey(w) != ""
+}
+
+// webRolesAlreadyDecided checks the saved file's role state. LoadConfig
+// overlays DefaultConfig, so the in-memory timestamp cannot be used here.
+func webRolesAlreadyDecided(w map[string]any) bool {
+	if marker, present := w["roles_migrated_at"].(string); present && marker != "" {
+		return true
+	}
+	return false
 }
 
 // MigrateWebSearchRoles runs the ADR-096 D11 roles migration ONCE — when the
@@ -232,7 +240,7 @@ func MigrateWebSearchRoles(cfg *Config, cfgPath string, onSelfHeal SelfHealWrite
 	// THE GATE — on the FILE, not the overlaid struct (see the header
 	// comment). An explicit empty marker still counts as unmigrated: only a
 	// non-empty string is a completed migration.
-	if marker, present := w["roles_migrated_at"].(string); present && marker != "" {
+	if webRolesAlreadyDecided(w) {
 		return
 	}
 
