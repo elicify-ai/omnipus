@@ -77,7 +77,30 @@ Evidence directory: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investig
 | Corrected M2 | 0 | Named M2 PASS; schema, exact ID/name/address and structural assertions all complete | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-m2-cleanup-20261002-86c190/m2-ruled-regex-green-receipt.json` |
 | Nine controls, corrected regex | 0 | All nine named controls PASS, including each invalid token rejected by the actual helper's address assertion | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-m2-cleanup-20261002-86c190/m2-hint-controls-ruled-regex-green-receipt.json` |
 
-Each receipt has its exact command/tree/source manifest, raw log and inner exit file alongside it. Only the M2 case and the three previously rejected valid-hint controls showed RED; the baseline-passing negatives are not described as red-first or mutation-certified. Task 2 execution is pending at this plan update. Independent CHECK remains deferred.
+Each receipt has its exact command/tree/source manifest, raw log and inner exit file alongside it. Only the M2 case and the three previously rejected valid-hint controls showed RED; the baseline-passing negatives are not described as red-first or mutation-certified. Task 2 execution is recorded below. Independent CHECK remains deferred.
+
+## Task 2 execution receipts
+
+Correction: the initial reload probes used the neighboring builders' flattened `ToolCall.Name`. That fixture was unsuitable for exact persisted equality because the field is explicitly `json:"-"`; the canonical persisted name is `Function.Name`, as read in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-orphan-m2-cleanup/pkg/providers/protocoltypes/types.go::ToolCall` and `::FunctionCall`. The two test fixtures now explicitly seed that canonical form. Exact view and archive expectations were not loosened, the shared builders and production were not changed, and clean RED was rerun before public-entry GREEN. Initial logs are retained as superseded evidence, not clean recovery-failure claims.
+
+| Run | Direct Go exit | Named result | Receipt |
+|---|---|---|---|
+| Canonical orphan, old direct seam | 1 | Original cleaned length/role checks complete; FAIL because reopened transcript has 2 entries, not the required original 2 plus a cancellation | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-m2-cleanup-20261002-86c190/recovery-orphan-canonical-old-seam-red-receipt.json` |
+| Canonical no-op controls, old direct seam | 1 | No-call control PASS; completed-call control FAIL because the helper returns 1 message rather than the exact 3-message completed history; stored histories remain unchanged | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-m2-cleanup-20261002-86c190/recovery-noop-canonical-old-seam-red-receipt.json` |
+| Orphan, public entry | 0 | Original legacy name PASS; exact recovered user, retained original transcript and one schema-correct cancellation read after reopening all verified | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-m2-cleanup-20261002-86c190/recovery-orphan-public-entry-green-receipt.json` |
+| No-op controls, public entry | 0 | Both `no_tool_calls` and `resolved_tool_call` PASS; complete returned, in-memory and reloaded histories equal the independent input | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-m2-cleanup-20261002-86c190/recovery-noop-public-entry-green-receipt.json` |
+
+Only the two invocation lines differ between the clean RED snapshots and their GREEN snapshots. This proves the test-entry migration matters; it does not claim the baseline public recovery function had a production bug. The ordinary no-call case was a baseline-passing control, not an observed RED. The obsolete production helper remains present for the separate backend worker to delete after cherry-picking.
+
+The two initial superseded receipts are `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-m2-cleanup-20261002-86c190/recovery-orphan-old-seam-red-receipt.json` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-m2-cleanup-20261002-86c190/recovery-noop-old-seam-red-receipt.json`.
+
+## Final-source recheck
+
+After both Go test-file changes were finalized, M2 and all nine hint controls were rerun serially: direct Go exit 0 for each, with every expected name collected. Final receipts are `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-m2-cleanup-20261002-86c190/final-m2-green-receipt.json` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-m2-cleanup-20261002-86c190/final-hint-controls-green-receipt.json`. The two public-entry recovery GREEN receipts above are also from these same final Go sources. All 13 selected executable leaves pass; this is not the full acceptance pack or full Go suite. No Go source was subsequently edited.
+
+Code correct and tested: narrow test-only correction/migration receipts verified; independent CHECK and full-suite certification are not claimed.
+
+Reachable by a user or agent: no product surface changed; no new live-reachability claim.
 
 ## Known gaps
 

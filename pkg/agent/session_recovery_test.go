@@ -236,38 +236,81 @@ func TestRecovery_FindOrphans_MultipleOrphans(t *testing.T) {
 	assert.False(t, ids["tc-B"], "tc-B must NOT be in orphans (has a result)")
 }
 
-// --- stripOrphanedAssistantTurn unit tests ---
+// --- Public recovery regressions (legacy test names retained for selectors) ---
 
-// TestRecovery_StripOrphanedTurn_RemovesOrphanedAssistant verifies that
-// stripOrphanedAssistantTurn removes the last assistant message with unresolved tool calls.
+// TestRecovery_StripOrphanedTurn_RemovesOrphanedAssistant verifies that public
+// recovery excludes an unresolved assistant from context but preserves the
+// original transcript and appends its restart-cancellation record.
 //
-// Traces to: tool-registry-redesign-spec.md FR-088
+// Traces to: tool-registry-redesign-spec.md FR-069 / FR-088 and architect Option A.
 func TestRecovery_StripOrphanedTurn_RemovesOrphanedAssistant(t *testing.T) {
+	storage := t.TempDir()
+	store := session.NewSessionManager(storage)
+	const sessionKey = "test-public-orphaned-turn"
 	history := buildOrphanedHistory("tc-001", "exec")
-	cleaned := stripOrphanedAssistantTurn(history)
+	// Name is an in-memory convenience field; seed the canonical persisted form.
+	history[1].ToolCalls[0] = providers.ToolCall{ID: "tc-001", Type: "function",
+		Function: &providers.FunctionCall{Name: "exec", Arguments: `{}`}}
+	for _, msg := range history {
+		store.AddFullMessage(sessionKey, msg)
+	}
+	require.NoError(t, store.Save(sessionKey), "seed the real persisted session")
 
-	// Only the user message should remain.
+	cleaned := RecoverOrphanedToolCalls(store, sessionKey, nil)
+
+	// Only the original user message should remain in the recovered view.
 	require.Len(t, cleaned, 1, "cleaned history must have only the user message")
 	assert.Equal(t, "user", cleaned[0].Role)
+	assert.Equal(t, []providers.Message{history[0]}, cleaned, "recovery preserves the complete original user message")
+
+	// Reopen from disk: a cleaned context is not permission to erase the archive
+	// or to treat an in-memory-only cancellation as durable recovery.
+	persisted := session.NewSessionManager(storage).GetHistory(sessionKey)
+	require.Len(t, persisted, len(history)+1, "recovery appends exactly one cancellation to the original persisted transcript")
+	assert.Equal(t, history, persisted[:len(history)], "the orphaned assistant remains archived, unchanged")
+	assert.Equal(t, "system", persisted[len(history)].Role, "cancellation is a system record")
+	require.JSONEq(t, `{"type":"turn_canceled_restart","tool_call_id":"tc-001","reason":"ungraceful_shutdown_recovery"}`,
+		persisted[len(history)].Content, "architect Option A retains the exact one-l restart-record schema")
 }
 
-// TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls verifies that history
-// where the last assistant message has no tool_calls is left unchanged.
+// TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls verifies that public
+// recovery leaves ordinary assistant history unchanged. A resolved-call control
+// also proves that no unresolved calls means no recovery, not unconditional stripping.
 //
-// Note: stripOrphanedAssistantTurn strips the last assistant message IF it has tool
-// calls, regardless of whether a tool result follows. The caller (RecoverOrphanedToolCalls)
-// only invokes it when orphans are detected first. This test verifies the base no-op case.
-//
-// Traces to: tool-registry-redesign-spec.md FR-088
+// Traces to: tool-registry-redesign-spec.md FR-088 and architect Option A's completed-group preservation.
 func TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls(t *testing.T) {
-	// History where the last assistant message has NO tool calls.
-	history := []providers.Message{
-		{Role: "user", Content: "hello"},
-		{Role: "assistant", Content: "hello back", ToolCalls: nil},
+	completed := buildCleanHistory("tc-complete", "exec")
+	completed[1].ToolCalls[0] = providers.ToolCall{ID: "tc-complete", Type: "function",
+		Function: &providers.FunctionCall{Name: "exec", Arguments: `{}`}}
+	cases := []struct {
+		name    string
+		history []providers.Message
+	}{
+		{"no_tool_calls", []providers.Message{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "hello back", ToolCalls: nil},
+		}},
+		{"resolved_tool_call", completed},
 	}
-	cleaned := stripOrphanedAssistantTurn(history)
-	assert.Len(t, cleaned, len(history),
-		"history with no tool_calls in last assistant message must be unchanged")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := t.TempDir()
+			store := session.NewSessionManager(storage)
+			const sessionKey = "test-public-recovery-no-op"
+			history := tc.history
+			for _, msg := range history {
+				store.AddFullMessage(sessionKey, msg)
+			}
+			require.NoError(t, store.Save(sessionKey), "seed the real persisted session")
+
+			cleaned := RecoverOrphanedToolCalls(store, sessionKey, nil)
+			assert.Len(t, cleaned, len(history),
+				"history with no tool_calls in last assistant message must be unchanged")
+			assert.Equal(t, history, cleaned, "every message and field survives when no call is unresolved")
+			assert.Equal(t, history, store.GetHistory(sessionKey), "no-op recovery appends no in-memory cancellation")
+			assert.Equal(t, history, session.NewSessionManager(storage).GetHistory(sessionKey), "no-op recovery changes no persisted message")
+		})
+	}
 }
 
 // --- RecoverOrphanedToolCalls integration tests ---
