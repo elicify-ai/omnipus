@@ -30,6 +30,8 @@ On the Board, the **Agent** and **Tags** filters narrow further. The List filter
 
 To start a saved task later, press **Run** on its card (a play symbol), drag it into **In Progress**, or press **Start Task** in the panel. The engine then drives it: the agent works toward the goal, each run is judged against your criteria, and the card's status follows.
 
+Checks that need the Judge run in their own saved verifier session. If Omnipus cannot create that session, the review does not start: no Judge model or tool call is made for that review, and no verdict is recorded against the worker's completed work.
+
 ## The task form
 
 The fields on the New Task form, in order.
@@ -98,6 +100,7 @@ Click any card or List row and the detail panel slides in. Every field saves as 
 - **A task in a plan is driven by its plan.** It has no Run or Stop control of its own; start, stop, and restart happen at the plan level. See [plans](plans.md).
 - **Dependency circles are rejected.** A chain may not loop back on itself, and dependencies stay inside one plan.
 - **Runs stop after the attempt limit** — three by default. When attempts are spent, the task lands in Failed.
+- **Storage problems can pause the Judge before review starts.** Omnipus uses its existing Judge-unavailable retries rather than spending a work-quality attempt. The reported reason retains the storage error; fix its cause so review can start.
 - **Scheduled and repeating tasks never appear here.** They live in the workspace [calendar](calendar.md).
 - **An assignee warning means the agent cannot finish this task as configured.** The warning names the fix, usually a tool permission; starting anyway fails at once.
 - **Deleting a task cannot be undone.** The confirmation is your last chance.

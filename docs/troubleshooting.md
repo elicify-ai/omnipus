@@ -65,6 +65,12 @@ If a turn fails after text starts streaming, chat shows a failure message in pla
 
 If the agent reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice that remains when you reopen the conversation. Conflicting tool names produce the standard “This turn didn’t finish, and we can’t tell why” failure notice rather than silence.
 
+### The Judge cannot create its review session
+
+This is a failure **before the review starts**, not a judgment that the worker's work failed. Omnipus reports the Judge as unavailable and uses its existing retry waits. No Judge model or tool call is made for that review, no verdict is recorded, and no work-quality attempt or goal round is spent.
+
+The retry or unavailable reason retains the actual storage error. For a filesystem error, that includes the failing location and the operating system's error message. Fix the reported storage problem so the Judge can create its session and start reviewing. A failure before review does not mean the worker did no work; a storage failure later, after tools ran, does not undo those tools' effects.
+
 ## The provider rejects your model requests
 
 **"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then an eligible complete old step; if neither can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.

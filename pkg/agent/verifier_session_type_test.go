@@ -94,8 +94,7 @@ func TestVerifierSessionType_RealAdjudicationStampsVerifierType(t *testing.T) {
 func TestVerifierSessionType_ChatIDIsAPreCreatedSessionNotAnAdHocString(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 
-	creator := p3SessionCreator(t, al)
-	chatID, err := creator("agent:judge:verify:test-key", "task:t-precreate")
+	chatID, err := al.newVerifierSessionChatID("agent:judge:verify:test-key", "task:t-precreate")
 	if err != nil {
 		t.Fatalf("newVerifierSessionChatID: %v", err)
 	}
@@ -160,8 +159,7 @@ func TestVerifierSessionType_FallsBackWhenJudgeNotRegistered(t *testing.T) {
 		}
 	})
 	t.Run("missing_store_creator_returns_error_not_fabricated_id", func(t *testing.T) {
-		creator := p3SessionCreator(t, al)
-		id, err := creator("agent:judge:verify:fallback-key", "task:t-fallback")
+		id, err := al.newVerifierSessionChatID("agent:judge:verify:fallback-key", "task:t-fallback")
 		if id != "" || err == nil {
 			t.Errorf("missing-store creator returned ID=%q error=%v, want empty ID and explicit error under P3", id, err)
 		}

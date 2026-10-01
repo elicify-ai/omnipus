@@ -54,8 +54,7 @@ func TestVerifierProvisioningP3(t *testing.T) {
 	t.Run("creator_returns_no_id_and_original_storage_error", func(t *testing.T) {
 		f := newP3VerifierFixture(t, false, "c1")
 		fault := p3FaultVerifierCreation(t, f.al)
-		creator := p3SessionCreator(t, f.al)
-		id, err := creator("agent:judge:verify:p3-storage", "task:p3-storage")
+		id, err := f.al.newVerifierSessionChatID("agent:judge:verify:p3-storage", "task:p3-storage")
 		if id != "" {
 			t.Errorf("failed creator session ID = %q, want empty, never a synthetic verify: ID", id)
 		}

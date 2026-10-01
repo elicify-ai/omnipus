@@ -107,15 +107,3 @@ func (o *p3BackoffObserver) durations() []time.Duration {
 	defer o.mu.Unlock()
 	return append([]time.Duration(nil), o.waits...)
 }
-
-// Temporary RED compilation scaffolding, not a compatibility adapter. Old
-// production must still compile so the independent live fault tests can run.
-// GREEN may replace callers with direct two-result calls once P3 is implemented.
-func p3SessionCreator(t *testing.T, al *AgentLoop) func(string, string) (string, error) {
-	t.Helper()
-	creator, ok := any(al.newVerifierSessionChatID).(func(string, string) (string, error))
-	if !ok {
-		t.Fatal("BLOCKED: newVerifierSessionChatID(string, string) (string, error) not implemented — required by provisioning ruling section 3 P3")
-	}
-	return creator
-}

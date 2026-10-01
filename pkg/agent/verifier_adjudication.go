@@ -760,66 +760,39 @@ func (al *AgentLoop) scopeWithDescendants(assigneeAgentID string, rootIDs []stri
 // --- Verifier session type stamp (ADR-052 FR-036 — this wave's narrow
 // slice only) -----------------------------------------------------------
 
-// newVerifierSessionChatID resolves the chatID/TranscriptSessionID
-// runVerifierAdjudication dispatches into. Wherever possible it PRE-CREATES
-// the verifier's UnifiedStore session explicitly (mirroring
-// createTaskSessionSync's exact pattern, task_executor.go) so its meta.json
-// is written with Type="verifier" from the moment it exists — UnifiedStore
-// has no post-creation "change type" seam (MetaPatch carries no Type field,
-// and writeMetaLocked/createSessionLocked are package-private to
-// pkg/session), so the type MUST be stamped at creation, not patched in
-// afterward.
+// newVerifierSessionChatID pre-creates the real chatID/TranscriptSessionID
+// runVerifierAdjudication dispatches into. NewVerifierSession writes its
+// metadata with Type="verifier" at creation (ADR-052 FR-036); the session
+// belongs to the executing Judge's existing owned store.
 //
-// Creation goes through session.NewVerifierSession — the ONLY sanctioned
-// way to mint a verifier-typed session (its doc comment carries the
-// spoof-prevention rationale: REST createSession deliberately cannot
-// request type="verifier").
+// The history sessionKey argument is deliberately not used to mint a
+// transcript identity. processOptions.SessionKey still carries that separate
+// history/map-storage key, while unitID supplies the debuggable session title.
 //
-// sessionKey/unitID are used to build the fallback ad hoc chatID (matching
-// Wave 1's exact original construction, byte for byte) and a debuggable
-// session Title. processOptions.SessionKey — the activeTurnStates MAP
-// STORAGE key (registerActiveTurn stores under ts.sessionKey, turn.go) — is
-// unaffected by this function and still carries the caller's own sessionKey
-// value verbatim.
+// The returned chatID becomes processOptions.TranscriptSessionID and then
+// ts.transcriptSessionID — the field RequestCancelForSession matches, not
+// the history key. runVerifierAdjudication registers unitID -> chatID before
+// dispatch so Stop and `/goal clear` can reach the actual turn (FR-037).
 //
-// This function's RETURN VALUE, chatID, is the CANCEL-MATCH key: it becomes
-// processOptions.TranscriptSessionID, which newTurnState stamps onto
-// ts.transcriptSessionID (turn.go) — the field GetActiveTurnHookForSession/
-// RequestCancelForSession actually range-match on, never the map storage
-// key. The caller (runVerifierAdjudication) registers unitID -> chatID in
-// the verifier-session registry for exactly this reason. A prior version of
-// this code (and this comment) registered unitID -> sessionKey instead —
-// a value RequestCancelForSession can never match, since it is never
-// compared against ts.transcriptSessionID — silently defeating Stop/`/goal
-// clear` cancellation of an in-flight verifier turn (7-reviewer gate
-// BLOCKER, FR-037/G1/G8).
-//
-// Falls back to the original ad hoc "verify:"+sessionKey string (Wave 1's
-// exact prior, unstamped behavior) when the Judge's session store isn't
-// resolvable yet (Judge not registered — the retry loop's own
-// judgeInst-not-configured check independently handles that as a D7 pause
-// regardless of what this returns) or session creation itself fails — a
-// missing type stamp must never block adjudication.
-func (al *AgentLoop) newVerifierSessionChatID(sessionKey, unitID string) string {
-	fallback := "verify:" + sessionKey
-
+// A missing store or failed creation returns an empty ID and an error, never
+// a synthetic routing string. The owner handles it as zero-progress D7
+// Unavailable before registration or dispatch. A cosmetic title-patch failure
+// remains nonfatal once the real session exists.
+func (al *AgentLoop) newVerifierSessionChatID(_, unitID string) (string, error) {
 	sessStore := al.GetAgentStore(string(coreagent.IDJudge))
 	if sessStore == nil {
-		return fallback
+		return "", fmt.Errorf("verifier: cannot create review session for %s: Judge session store is unavailable", unitID)
 	}
 	meta, err := sessStore.NewVerifierSession(string(coreagent.IDJudge))
 	if err != nil {
-		logger.WarnCF("agent",
-			"verifier: could not pre-create type-stamped session; falling back to an unstamped ad hoc session id",
-			map[string]any{"unit_id": unitID, "error": err.Error()})
-		return fallback
+		return "", fmt.Errorf("verifier: cannot create review session for %s: %w", unitID, err)
 	}
 	title := "Verifier: " + unitID
 	if setErr := sessStore.SetMeta(meta.ID, session.MetaPatch{Title: &title}); setErr != nil {
 		logger.WarnCF("agent", "verifier: could not set verifier session title",
 			map[string]any{"session_id": meta.ID, "error": setErr.Error()})
 	}
-	return meta.ID
+	return meta.ID, nil
 }
 
 // --- Judge-unavailability escalation (sign-off finding 1) ------------------
@@ -1482,51 +1455,11 @@ agentLoopRunVerifierAdjudicationLoop1:
 		}
 
 		if !registered {
-			// CAS pre-check (corr-MAJOR-3, G-1): if a LIVE verifier session
-			// already holds this unit, a concurrent adjudication is in flight
-			// (an idle-tick + claim-turn race). Back off as "unavailable" —
-			// BEFORE creating a verifier session, so we don't pre-create +
-			// abandon an on-disk session. The atomic Register CAS below is the
-			// real guard against the residual check-then-act gap this Lookup
-			// cannot close. The pre-check uses the richer VerifierSessionRegistry
-			// interface via a type assertion: the production seam (the concrete
-			// *verifierSessionRegistry) always satisfies it; a minimal spy that
-			// does not skips the pre-check and relies on the CAS alone (the
-			// spy's Register returns nil, so the CAS never rejects in tests).
-			if richer, ok := vs.registry.(VerifierSessionRegistry); ok {
-				if existing, held := richer.Lookup(vs.va.unitID); held && existing != "" {
-					// #984: this is a BACK-OFF, not an outage — return the
-					// distinct reason so no caller retries it or paints it as
-					// a judge failure (see VerifierConcurrencyBackoffReason).
-					reason = VerifierConcurrencyBackoffReason
-					unavailable = true
-					return nil, "", "", true, reason, nil, nil
-				}
-			}
-			// Create the type-stamped verifier session now — right before it
-			// is first needed — and register ITS id (chatID), not sessionKey
-			// (BLOCKER fix, FR-037/G1/G8): sessionKey is only the
-			// activeTurnStates map storage key; chatID becomes
-			// ts.transcriptSessionID, the value Stop/`/goal clear`'s
-			// RequestCancelForSession actually matches turns on.
-			vs.va.chatID = vs.va.al.newVerifierSessionChatID(vs.va.sessionKey, vs.va.unitID)
-			if regErr := vs.registry.Register(vs.va.unitID, vs.va.chatID); regErr != nil {
-				// CAS guard (corr-MAJOR-3, G-1): lost the race between the
-				// Lookup pre-check above and this atomic Register — another
-				// adjudication registered a live session in the gap. Back off
-				// as "unavailable" (no-round retry); the in-flight adjudication
-				// will resolve the goal. Do NOT set registered=true — this
-				// call did not create the winning entry, so the deferred
-				// Unregister must not evict the other adjudication's live
-				// session. The chatID just minted is an abandoned shell, same
-				// as any other pre-create failure path above.
-				//
-				// #984: like the Lookup pre-check arm above, this is a
-				// BACK-OFF, not an outage — return the distinct reason so no
-				// caller retries it or paints it as a judge failure.
-				reason = VerifierConcurrencyBackoffReason
-				unavailable = true
-				return nil, "", "", true, reason, nil, nil
+			switch vs.registerVerifierSession(attempt) {
+			case agentLoopRunVerifierAdjudicationReturn:
+				return vs.va.ret0, vs.va.ret1, vs.va.ret2, vs.va.ret3, vs.va.ret4, vs.va.ret5, vs.va.ret6
+			case agentLoopRunVerifierAdjudicationContinue:
+				continue agentLoopRunVerifierAdjudicationLoop1
 			}
 			registered = true
 		}
@@ -1616,6 +1549,68 @@ agentLoopRunVerifierAdjudicationLoop1:
 			return vs.va.ret0, vs.va.ret1, vs.va.ret2, vs.va.ret3, vs.va.ret4, vs.va.ret5, vs.va.ret6
 		}
 	}
+}
+
+// registerVerifierSession provisions and publishes the real verifier identity.
+// A creation failure has made no progress: use D7 before publishing an identity
+// or dispatching a turn, preserving the storage cause in retry and exit reasons.
+func (vs *agentLoopRunVerifierAdjudicationSetup) registerVerifierSession(attempt int) agentLoopRunVerifierAdjudicationFlow {
+	// CAS pre-check (corr-MAJOR-3, G-1): if a LIVE verifier session
+	// already holds this unit, a concurrent adjudication is in flight
+	// (an idle-tick + claim-turn race). Back off as "unavailable" —
+	// BEFORE creating a verifier session, so we don't pre-create +
+	// abandon an on-disk session. The atomic Register CAS below is the
+	// real guard against the residual check-then-act gap this Lookup
+	// cannot close. The pre-check uses the richer VerifierSessionRegistry
+	// interface via a type assertion: the production seam (the concrete
+	// *verifierSessionRegistry) always satisfies it; a minimal spy that
+	// does not skips the pre-check and relies on the CAS alone (the
+	// spy's Register returns nil, so the CAS never rejects in tests).
+	if richer, ok := vs.registry.(VerifierSessionRegistry); ok {
+		if existing, held := richer.Lookup(vs.va.unitID); held && existing != "" {
+			// #984: this is a BACK-OFF, not an outage — return the
+			// distinct reason so no caller retries it or paints it as
+			// a judge failure (see VerifierConcurrencyBackoffReason).
+			vs.va.ret3, vs.va.ret4 = true, VerifierConcurrencyBackoffReason
+			return agentLoopRunVerifierAdjudicationReturn
+		}
+	}
+	// Create the type-stamped verifier session now — right before it
+	// is first needed — and register ITS id (chatID), not sessionKey
+	// (BLOCKER fix, FR-037/G1/G8): sessionKey is only the
+	// activeTurnStates map storage key; chatID becomes
+	// ts.transcriptSessionID, the value Stop/`/goal clear`'s
+	// RequestCancelForSession actually matches turns on.
+	chatID, err := vs.va.al.newVerifierSessionChatID(vs.va.sessionKey, vs.va.unitID)
+	if err != nil {
+		cause := err.Error()
+		logger.WarnCF("agent", "verifier: session creation failed; pausing before dispatch (D7 unavailability)",
+			map[string]any{"unit_id": vs.va.unitID, "error": cause})
+		vs.va.al.noteGoalJudgeRetryWait(vs.va.in, attempt, cause)
+		if waitErr := vs.va.al.judgeBackoffWait(vs.va.ctx, attempt, cause); waitErr != nil {
+			vs.va.ret3, vs.va.ret4 = true, cause
+			return agentLoopRunVerifierAdjudicationReturn
+		}
+		return agentLoopRunVerifierAdjudicationContinue
+	}
+	vs.va.chatID = chatID
+	if regErr := vs.registry.Register(vs.va.unitID, vs.va.chatID); regErr != nil {
+		// CAS guard (corr-MAJOR-3, G-1): lost the race between the
+		// Lookup pre-check above and this atomic Register — another
+		// adjudication registered a live session in the gap. Back off
+		// as "unavailable" (no-round retry); the in-flight adjudication
+		// will resolve the goal. Do NOT set registered=true — this
+		// call did not create the winning entry, so the deferred
+		// Unregister must not evict the other adjudication's live
+		// session. The chatID just minted is an abandoned shell.
+		//
+		// #984: like the Lookup pre-check arm above, this is a
+		// BACK-OFF, not an outage — return the distinct reason so no
+		// caller retries it or paints it as a judge failure.
+		vs.va.ret3, vs.va.ret4 = true, VerifierConcurrencyBackoffReason
+		return agentLoopRunVerifierAdjudicationReturn
+	}
+	return agentLoopRunVerifierAdjudicationNext
 }
 
 // initializeAdjudication initializes the verifier unit, registry, session key, and adjudication correlation id.
