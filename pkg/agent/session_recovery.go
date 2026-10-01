@@ -53,8 +53,9 @@ type orphanedToolCall struct {
 //   - sessionKey: the session whose history to inspect and repair.
 //   - auditLog: optional audit logger; if nil, events are skipped.
 //
-// Returns the cleaned history slice (all messages except the orphaned assistant
-// turn). If no orphaned calls are found, returns the original history unchanged.
+// Returns the history with locally bound restart-canceled groups and their
+// records removed. Users and unrelated controls remain, including after an
+// orphan. History without a recorded cancellation is otherwise unchanged.
 //
 // Safe to call on every session load — it is idempotent: orphans that already
 // have a synthetic turn_canceled_restart system message are skipped.
@@ -69,9 +70,6 @@ func RecoverOrphanedToolCalls(
 	}
 
 	orphans := findOrphanedToolCalls(history)
-	if len(orphans) == 0 {
-		return history
-	}
 
 	// Use the same position-scoped marker binding as snapshot reconstruction.
 	// A canceled call in an earlier assistant cannot suppress a later reused id.
@@ -122,12 +120,20 @@ func RecoverOrphanedToolCalls(
 			"session_key", sessionKey, "tool_call_id", o.ToolCallID, "tool_name", o.ToolName)
 	}
 
-	// FR-088: return a rebuilt history that omits the orphaned assistant turn.
-	// The orphaned message is the last assistant message with tool_calls that
-	// has no matching tool result. Remove it from the context window so the
-	// LLM does not see a dangling unanswered tool call.
-	cleanedHistory := stripOrphanedAssistantTurn(history)
-	return cleanedHistory
+	// Re-read the recorded history: an attempted marker write is not evidence
+	// that it reached the store. Apply the same local binding as window rebuilds
+	// to every recorded cancellation, not just the last assistant's whole tail.
+	history = store.GetHistory(sessionKey)
+	omitted, _ := restartCancellations(len(history), func(i int) providers.Message {
+		return history[i]
+	})
+	cleaned := make([]providers.Message, 0, len(history))
+	for i, msg := range history {
+		if !omitted[i] {
+			cleaned = append(cleaned, msg)
+		}
+	}
+	return cleaned
 }
 
 // findOrphanedToolCalls scans the message history from the end and returns any

@@ -101,7 +101,9 @@ func mapWindowMessages(snap memory.WindowSnapshot, msgs []providers.Message, rec
 		if i >= recallAt && i < recallAt+recallLen {
 			continue
 		}
-		if next < len(history) && sameArchiveIdentity(m, history[next]) {
+		// An unchanged malformed archive entry still owns its original address.
+		// Mapping it does not authorize recovery or bypass group validation.
+		if next < len(history) && (sameArchiveIdentity(m, history[next]) || reflect.DeepEqual(m, history[next])) {
 			lines[i] = sourceLines[next]
 			next++
 		}
