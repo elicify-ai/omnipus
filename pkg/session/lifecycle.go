@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-053 §Contract Surface (S2) — the durable 8-state session-lifecycle
+// ADR-053 §Contract Surface (S2) — the durable session-lifecycle
 // record. This is the single source of truth for "is anything still
 // working?" for a goal-bearing or delegated session — distinct from
 // SessionStatus (daypartition.go — active/archived/interrupted, chat-
@@ -52,27 +52,22 @@ var ErrLifecycleNotFound = errors.New("session: lifecycle record not found")
 // a new generation instead).
 var ErrLifecycleTerminalImmutable = errors.New("session: lifecycle: terminal record is immutable")
 
-// LifecycleState is the durable 8-state session lifecycle (ADR-053 S2 / the
+// LifecycleState is the durable session lifecycle (ADR-053 S2 / the
 // S4 interlock state machine's authority).
 type LifecycleState string
 
-// The eight canonical lifecycle states. These are the ONLY valid values.
+// The six canonical lifecycle states. These are the ONLY valid values.
 const (
 	LifecycleQueued     LifecycleState = "queued"
 	LifecycleRunning    LifecycleState = "running"
 	LifecycleNeedsInput LifecycleState = "needs_input"
-	// LifecyclePaused covers BOTH cooperative cancel-soft grace AND a
-	// plan-owner session idling while its plan is durably
-	// plan_phase=awaiting_supervision (that condition itself lives on
-	// the Plan record — pkg/plan — not as a 9th state here; see
-	// R§8.10's lifecycle-to-pill crosswalk). This package does not persist
-	// or interpret plan_phase; a caller layering the plan-owner semantics on
-	// top (Phase 2 / another wave) reads OwnsPlanID to resolve that link.
-	LifecyclePaused    LifecycleState = "paused"
+	// LifecycleStopped covers cancellation, timeout, and a plan-owner session
+	// idling while its plan is durably awaiting_supervision. It is non-terminal
+	// so the session can continue. The plan phase itself lives on the Plan
+	// record, resolved by callers through OwnsPlanID.
+	LifecycleStopped   LifecycleState = "stopped"
 	LifecycleCompleted LifecycleState = "completed"
 	LifecycleFailed    LifecycleState = "failed"
-	LifecycleCancelled LifecycleState = "cancelled"
-	LifecycleTimedOut  LifecycleState = "timed_out"
 )
 
 // validLifecycleStates is the set of allowed LifecycleState values.
@@ -80,14 +75,12 @@ var validLifecycleStates = map[LifecycleState]bool{
 	LifecycleQueued:     true,
 	LifecycleRunning:    true,
 	LifecycleNeedsInput: true,
-	LifecyclePaused:     true,
+	LifecycleStopped:    true,
 	LifecycleCompleted:  true,
 	LifecycleFailed:     true,
-	LifecycleCancelled:  true,
-	LifecycleTimedOut:   true,
 }
 
-// IsValidLifecycleState reports whether s is one of the eight canonical
+// IsValidLifecycleState reports whether s is one of the six canonical
 // lifecycle states.
 func IsValidLifecycleState(s LifecycleState) bool { return validLifecycleStates[s] }
 
@@ -96,12 +89,10 @@ func IsValidLifecycleState(s LifecycleState) bool { return validLifecycleStates[
 var terminalLifecycleStates = map[LifecycleState]bool{
 	LifecycleCompleted: true,
 	LifecycleFailed:    true,
-	LifecycleCancelled: true,
-	LifecycleTimedOut:  true,
 }
 
-// IsTerminalLifecycleState reports whether s is one of the four terminal
-// states (completed/failed/cancelled/timed_out).
+// IsTerminalLifecycleState reports whether s is one of the two terminal
+// states (completed/failed).
 func IsTerminalLifecycleState(s LifecycleState) bool { return terminalLifecycleStates[s] }
 
 // OwnerScopeKind discriminates LifecycleRecord.OwnerScopeID's meaning (N-9 —
@@ -198,6 +189,12 @@ type LifecycleRecord struct {
 	// generation. Written by the cascade (I-6 Canceller.CancelSubtree) on
 	// the stopped node and every reachable non-terminal descendant.
 	Stop *Stop `json:"stop,omitempty"`
+	// StopNote is the durable, RETAINED record of who last stopped this
+	// session, when, and why (D2/D6; see StopNote's own doc comment in
+	// lifecycle_edge.go for how it differs from Stop above). nil means this
+	// record has never landed LifecycleStopped for any generation.
+	// persistLocked requires it non-nil whenever State == LifecycleStopped.
+	StopNote *StopNote `json:"stop_note,omitempty"`
 
 	OwnerScopeKind OwnerScopeKind `json:"owner_scope_kind"`
 	OwnerScopeID   string         `json:"owner_scope_id,omitempty"`
@@ -566,6 +563,24 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 		if rec.Terminal() && rec.Stop.Generation == rec.Generation {
 			return fmt.Errorf("session: lifecycle: terminal record (state %q) cannot carry a current-generation stop marker", rec.State)
 		}
+	}
+	// D2/CRIT-001: a landed `stopped` record MUST carry the lasting note
+	// (nothing else preserves who/why/when once Stop itself is cleared) and
+	// MUST NOT still carry a current-generation Stop fence (landing a stop
+	// is what clears it — a record claiming both "stopped" and "still
+	// waiting to be stopped" at once is exactly the contradiction the
+	// existing terminal/current-fence guard above already refuses for
+	// completed/failed).
+	if rec.State == LifecycleStopped {
+		if rec.StopNote == nil {
+			return fmt.Errorf("session: lifecycle: state stopped requires stop_note")
+		}
+		if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+			return fmt.Errorf("session: lifecycle: state stopped cannot carry a current-generation stop marker")
+		}
+	}
+	if rec.StopNote != nil && !IsValidStopCause(rec.StopNote.Cause) {
+		return fmt.Errorf("session: lifecycle: invalid stop_note.cause %q", rec.StopNote.Cause)
 	}
 	return nil
 }

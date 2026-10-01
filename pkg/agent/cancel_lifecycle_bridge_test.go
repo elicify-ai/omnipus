@@ -21,7 +21,7 @@ import (
 
 // TestRequestCancel_TransitionsLifecycleRecordToCancelled is the GREEN test for
 // Defect #28: a cancel on a session that HAS a LifecycleRecord must transition
-// that record to LifecycleCancelled — not orphan it. Before the fix, the cancel
+// that record to LifecycleStopped — not orphan it. Before the fix, the cancel
 // path wrote ONLY UnifiedMeta (interrupted), leaving the LifecycleRecord at
 // running/queued until a future boot sweep caught it.
 func TestRequestCancel_TransitionsLifecycleRecordToCancelled(t *testing.T) {
@@ -95,7 +95,7 @@ func TestRequestCancel_TransitionsLifecycleRecordToCancelled(t *testing.T) {
 	// to cancelled. Before the fix it stayed "running" (orphaned).
 	rec, err := ls.Load(sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, session.LifecycleCancelled, rec.State,
+	assert.Equal(t, session.LifecycleStopped, rec.State,
 		"LifecycleRecord must transition to cancelled on cancel, not stay orphaned at %q", rec.State)
 
 	// The UnifiedMeta must ALSO have followed (interrupted) — the mediator's

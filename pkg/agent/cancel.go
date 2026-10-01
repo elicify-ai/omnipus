@@ -629,7 +629,7 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	// cancelled. See cancelDurableDescendantLifecycleRecords's own doc
 	// comment for the full mechanism.
 	if !rc.scope.TurnOnly {
-		go rc.al.cancelDurableDescendantLifecycleRecords(rc.sessionID)
+		go rc.al.cancelDurableDescendantLifecycleRecords(rc.sessionID, rc.canceller)
 	}
 
 	// backgroundSessionsKilled was already computed above (independent of
@@ -768,7 +768,7 @@ func (rc *agentLoopRequestCancel) interruptGracefully() {
 	// --- Transition BOTH stores via the single mediator (Defect #28 fix) ---
 	//
 	// The cancel must transition the durable LifecycleRecord to
-	// LifecycleCancelled AND mirror onto UnifiedMeta (interrupted) — the same
+	// LifecycleStopped AND mirror onto UnifiedMeta (interrupted) — the same
 	// paired transition every task/delegate terminal write performs. Before
 	// this fix, this block wrote ONLY UnifiedMeta (via the hook or the default
 	// branch), orphaning the parent session's LifecycleRecord: it stayed
@@ -783,7 +783,15 @@ func (rc *agentLoopRequestCancel) interruptGracefully() {
 	// UnifiedMeta mirror still proceeds inside the mediator.
 	if !rc.scope.TurnOnly {
 		lifecycleStore := rc.al.GetSessionLifecycleStore()
-		if err := session.TransitionSession(lifecycleStore, rc.store, rc.sessionID, session.LifecycleCancelled, ""); err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
+		// cause=stop: this is the direct target of a human/API Stop
+		// (RequestCancel) — the "legacy" non-cascade path (ordinary chats with
+		// no steering record; see cancelSteeredSubtree's own doc comment,
+		// gateway/websocket_cancel.go, for the routing split with the
+		// SteerCanceller cascade, which stamps its OWN note via stampStop and
+		// never reaches here for the same stop event). rc.canceller is always a
+		// gateway/channel-authenticated identity, i.e. human-originated.
+		stopNote := &session.StopNote{At: time.Now().UTC(), By: session.StopActorHumanUser(rc.canceller.UserID), Cause: session.StopCauseStop}
+		if err := session.TransitionSession(lifecycleStore, rc.store, rc.sessionID, session.LifecycleStopped, "", stopNote); err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
 			slog.Warn("agent: RequestCancel: could not transition session to cancelled",
 				"session_id", rc.sessionID, "error", err)
 		}
@@ -1162,7 +1170,7 @@ func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) ([]string
 // ErrLifecycleTerminalImmutable (the descendant already reached a terminal
 // state on its own, e.g. it completed naturally moments before the Stop)
 // are both expected, benign outcomes and are silenced rather than logged.
-func (al *AgentLoop) cancelDurableDescendantLifecycleRecords(rootSessionID string) {
+func (al *AgentLoop) cancelDurableDescendantLifecycleRecords(rootSessionID string, canceller CancelCanceller) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("agent: cancelDurableDescendantLifecycleRecords: panic",
@@ -1188,9 +1196,15 @@ func (al *AgentLoop) cancelDurableDescendantLifecycleRecords(rootSessionID strin
 		slog.Warn("agent: cancelDurableDescendantLifecycleRecords: descendant walk failed partway through — this cascade is INCOMPLETE, some durable lifecycle records beneath the failure point will NOT be transitioned to cancelled",
 			"root_session_id", rootSessionID, "partial_descendants_found", len(ids), "error", walkErr)
 	}
+	// cause=cascade: every id here is a DESCENDANT of rootSessionID, never
+	// the root itself (the doc comment above: "never re-writes
+	// rootSessionID's own record") — reached by this Stop only because an
+	// ancestor was stopped, the defining shape of "cascade" rather than
+	// "stop" (D2/D6).
+	descendantNote := &session.StopNote{At: time.Now().UTC(), By: session.StopActorHumanUser(canceller.UserID), Cause: session.StopCauseCascade}
 	for _, id := range ids {
 		childStore := al.ResolveSessionStore(id)
-		err := session.TransitionSession(lifecycleStore, childStore, id, session.LifecycleCancelled, "")
+		err := session.TransitionSession(lifecycleStore, childStore, id, session.LifecycleStopped, "", descendantNote)
 		if err != nil && !errors.Is(err, session.ErrLifecycleNotFound) && !errors.Is(err, session.ErrLifecycleTerminalImmutable) {
 			slog.Warn("agent: cancelDurableDescendantLifecycleRecords: could not transition descendant to cancelled",
 				"session_id", id, "root_session_id", rootSessionID, "error", err)

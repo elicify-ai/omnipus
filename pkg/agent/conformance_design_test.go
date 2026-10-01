@@ -1531,9 +1531,13 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 		LastUnmetTerminalSignature: "sig-bs",
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID: "bs-owner", Generation: 1, State: session.LifecyclePaused,
+		SessionID: "bs-owner", Generation: 1, State: session.LifecycleStopped,
 		WorkspaceID: "ws", AgentID: "owner",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-bs",
+		// D2/CRIT-001: same pre-rename `paused` owner fixture as
+		// boot_sweep_test.go's sess-owner; redirect_pause per
+		// delegate_park.go's precedent for this shape.
+		StopNote: &session.StopNote{At: time.Now().UTC(), By: session.StopActorSystem, Seq: 1, Cause: session.StopCauseRedirectPause},
 	})
 	// N-15: an in-flight goal predating the upgrade (stale semantics version).
 	h.pe.currentSemanticsVersionOverride = 3
@@ -1585,7 +1589,7 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 		t.Fatalf("(4) CRIT-1: PreservedAwaitingCorrection = %v, want [bs-owner] (no wedge)", res.PreservedAwaitingCorrection)
 	}
 	owner, _ := h.ls.Load("bs-owner")
-	if owner.State != session.LifecyclePaused {
+	if owner.State != session.LifecycleStopped {
 		t.Errorf("(4) CRIT-1: owner swept to %q (must stay paused — exemption b, no wedge)", owner.State)
 	}
 

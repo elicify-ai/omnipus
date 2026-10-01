@@ -71,6 +71,11 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 		runErr    error
 		result    turnResult
 		wantState session.LifecycleState
+		// wantCause is the required pkg/session/lifecycle_edge.go::StopNote.Cause
+		// for a wantState of session.LifecycleStopped; "" means no stop_note is
+		// expected at all (persistLocked in pkg/session/lifecycle.go requires
+		// and only allows one when State == LifecycleStopped).
+		wantCause session.StopCause
 		wantText  string
 	}{
 		{
@@ -80,16 +85,35 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 			wantText:  "failed:",
 		},
 		{
+			// session.LifecycleTimedOut/LifecycleCancelled were retired into
+			// the single non-terminal session.LifecycleStopped (commit
+			// 4c59cd17a, "replace paused and cancelled states with stopped").
+			// pkg/agent/steer_completion.go::deliverSteeredCompletion
+			// synthesizes StopCauseTimeout for OutcomeTimedOut whenever no
+			// prior stampStop already stamped a note (true here: this test
+			// calls finishSteeredGoalTurn directly, never through
+			// SteerCanceller).
 			name:      "a goal child that runs out of time reports the timeout upward",
 			runErr:    context.DeadlineExceeded,
-			wantState: session.LifecycleTimedOut,
+			wantState: session.LifecycleStopped,
+			wantCause: session.StopCauseTimeout,
 			wantText:  "timed_out:",
 		},
 		{
+			// context.Canceled + TurnEndStatusAborted with no prior
+			// SteerCanceller.stampStop call is steer_completion.go::
+			// completionDisposition's OutcomeInterrupted, landing
+			// LifecycleStopped. deliverSteeredCompletion's synthesis
+			// comment names this exact shape "the legacy RequestCancel path
+			// landing directly on a steered session's own completion
+			// (cancel.go, no SteerCanceller stamp involved) — cause stop,
+			// since this record is by definition the call's own direct
+			// target, never a cascade sweep, in that path."
 			name:      "a stopped goal child reports the interruption upward",
 			runErr:    context.Canceled,
 			result:    turnResult{status: TurnEndStatusAborted},
-			wantState: session.LifecycleCancelled,
+			wantState: session.LifecycleStopped,
+			wantCause: session.StopCauseStop,
 			wantText:  "interrupted:",
 		},
 	}
@@ -137,6 +161,21 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 			if got.State != tc.wantState {
 				t.Fatalf("child state = %q, want %q — a dead child left `running` blocks its parent for ever", got.State, tc.wantState)
 			}
+			// D2/CRIT-001 (pkg/session/lifecycle.go persistLocked): a landed
+			// LifecycleStopped record MUST carry a stop_note; every other
+			// landing (e.g. LifecycleFailed here) is never a stop_note site.
+			if tc.wantCause == "" {
+				if got.StopNote != nil {
+					t.Errorf("stop_note = %+v, want nil — %q is not a stop_note site", got.StopNote, got.State)
+				}
+			} else {
+				if got.StopNote == nil {
+					t.Fatalf("stop_note = nil, want cause %q — D2/CRIT-001 requires every LifecycleStopped landing to carry the lasting note (pkg/session/lifecycle_edge.go::StopNote)", tc.wantCause)
+				}
+				if got.StopNote.Cause != tc.wantCause {
+					t.Errorf("stop_note.cause = %q, want %q (pkg/agent/steer_completion.go::deliverSteeredCompletion)", got.StopNote.Cause, tc.wantCause)
+				}
+			}
 			blocked, blockErr := al.hasRunningOrQueuedDescendant(parentID)
 			if blockErr != nil {
 				t.Fatalf("hasRunningOrQueuedDescendant: %v", blockErr)
@@ -145,6 +184,60 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 				t.Errorf("the parent still has a running or queued descendant after its only child died")
 			}
 		})
+	}
+}
+
+// TestGoalDelegation_StopNoteCauseRequiredByControlPlane was a
+// t.Fatal("BLOCKED: ...") stub (ADR-20260928-sub-agent-control-plane
+// Vocabulary lines 133/137, D2 line ~209) because pkg/session's separate
+// persisted stop_note.cause field did not exist in production. It now does
+// (commit 57c1a20ba, pkg/session/lifecycle_edge.go::StopNote/StopCause), so
+// this proves the field is populated CORRECTLY by the actual I-6
+// control-plane write path (steer_cancel.go::SteerCanceller.CancelSubtree ->
+// stampStop/cascade) for a goal-bearing subtree — not the
+// steer_completion.go synthesis path the table test above already covers —
+// per the commit's own split: "stop for the direct target, cascade for
+// swept descendants".
+func TestGoalDelegation_StopNoteCauseRequiredByControlPlane(t *testing.T) {
+	store := session.NewLifecycleStore(t.TempDir())
+	root := testSteerLifecycleRecord("goal-root", "", session.LifecycleRunning, 1)
+	root.GoalRef = "goal-root-ref"
+	persistSteerLifecycle(t, store, root)
+	child := testSteerLifecycleRecord("goal-child", "goal-root", session.LifecycleRunning, 1)
+	child.GoalRef = "goal-child-ref"
+	persistSteerLifecycle(t, store, child)
+
+	canceller := NewSteerCanceller(store)
+	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}
+	if _, err := canceller.CancelSubtree(context.Background(), "goal-root", by); err != nil {
+		t.Fatalf("CancelSubtree: %v", err)
+	}
+
+	gotRoot, err := store.Load("goal-root")
+	if err != nil {
+		t.Fatalf("load goal-root: %v", err)
+	}
+	if gotRoot.StopNote == nil {
+		t.Fatalf("goal-root stop_note = nil, want a persisted note (D2/CRIT-001, ADR-20260928-sub-agent-control-plane line ~209)")
+	}
+	if gotRoot.StopNote.Cause != session.StopCauseStop {
+		t.Errorf("goal-root stop_note.cause = %q, want %q — the direct target of the Stop call (steer_cancel.go::cascade's process([]string{sessionID}, StopCauseStop))",
+			gotRoot.StopNote.Cause, session.StopCauseStop)
+	}
+	if wantBy := session.StopActorFromPrincipal(by); gotRoot.StopNote.By != wantBy {
+		t.Errorf("goal-root stop_note.by = %q, want %q", gotRoot.StopNote.By, wantBy)
+	}
+
+	gotChild, err := store.Load("goal-child")
+	if err != nil {
+		t.Fatalf("load goal-child: %v", err)
+	}
+	if gotChild.StopNote == nil {
+		t.Fatalf("goal-child stop_note = nil, want a persisted note (D2/CRIT-001, ADR-20260928-sub-agent-control-plane line ~209)")
+	}
+	if gotChild.StopNote.Cause != session.StopCauseCascade {
+		t.Errorf("goal-child stop_note.cause = %q, want %q — swept in only because its ancestor was stopped (steer_cancel.go::cascade's process(first, StopCauseCascade); ADR D7 line 397: \"cause cascade\")",
+			gotChild.StopNote.Cause, session.StopCauseCascade)
 	}
 }
 

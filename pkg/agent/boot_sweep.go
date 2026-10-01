@@ -479,10 +479,8 @@ func completedBootMessage(rec *session.LifecycleRecord, result string) (generate
 func terminalErrorBootMessage(rec *session.LifecycleRecord) (generated.SessionMessage, steer.Outcome, error) {
 	prefix, outcome := "failed:", steer.OutcomeFailed
 	switch rec.State {
-	case session.LifecycleCancelled:
+	case session.LifecycleStopped:
 		prefix, outcome = "interrupted:", steer.OutcomeInterrupted
-	case session.LifecycleTimedOut:
-		prefix, outcome = "timeout:", steer.OutcomeTimedOut
 	case session.LifecycleFailed:
 		if rec.FailedReason == failedReasonInterrupted {
 			prefix, outcome = "interrupted:", steer.OutcomeInterrupted
@@ -721,13 +719,13 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 			// identically -> failed(interrupted)").
 		}
 
-		// Exemption (b): a paused plan-owner session whose plan is durably
+		// Exemption (b): a stopped plan-owner session whose plan is durably
 		// plan_phase=awaiting_supervision is legitimately idle awaiting
 		// the owner (C1/FR-147/INV-9). Resolved via the NAMED linkage
 		// (OwnsPlanID -> plan.PlanPhase), NOT via owner_scope — a top-level
 		// owner session's owner_scope is `human`, which cannot identify the
 		// plan. OwnsPlanID is the reciprocal of plan.Plan.OwnerSessionID.
-		if rec.State == session.LifecyclePaused && rec.OwnsPlanID != "" {
+		if rec.State == session.LifecycleStopped && rec.OwnsPlanID != "" {
 			if pe.planIsAwaitingSupervision(rec.OwnsPlanID) {
 				result.PreservedAwaitingCorrection = append(result.PreservedAwaitingCorrection, rec.SessionID)
 				continue

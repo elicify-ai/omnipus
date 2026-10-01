@@ -445,7 +445,10 @@ func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) 
 // lifecycleStore is nil or the initial mint above failed/was skipped) is
 // logged at Warn and never propagated — a durable-record write failure
 // must never fail or mask the outcome of the underlying task run.
-func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.LifecycleState, failedReason string) {
+// note is the StopNote to land when state == LifecycleStopped (D2/D6);
+// ignored for any other target state. See each call site for its own cause
+// reasoning.
+func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.LifecycleState, failedReason string, note *session.StopNote) {
 	ls := te.getLifecycleStore()
 	if ls == nil || sessionID == "" {
 		return
@@ -457,7 +460,7 @@ func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.
 	if te.agentLoop != nil {
 		us = te.agentLoop.ResolveSessionStore(sessionID)
 	}
-	if err := session.TransitionSession(ls, us, sessionID, state, failedReason); err != nil {
+	if err := session.TransitionSession(ls, us, sessionID, state, failedReason, note); err != nil {
 		logger.WarnCF("task_executor", "transitionTaskLifecycle: dual-store transition failed",
 			map[string]any{"session_id": sessionID, "state": string(state), "error": err.Error()})
 	}
@@ -472,10 +475,10 @@ func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.
 // status->lifecycle-state mapping lives in exactly one place.
 func (te *TaskExecutor) finalizeTaskLifecycle(sessionID string, status task.Status) {
 	if status == task.StatusDone {
-		te.transitionTaskLifecycle(sessionID, session.LifecycleCompleted, "")
+		te.transitionTaskLifecycle(sessionID, session.LifecycleCompleted, "", nil)
 		return
 	}
-	te.transitionTaskLifecycle(sessionID, session.LifecycleFailed, "task_failed")
+	te.transitionTaskLifecycle(sessionID, session.LifecycleFailed, "task_failed", nil)
 }
 
 // ExecuteTask starts executing the dispatchable task identified by taskID. It
