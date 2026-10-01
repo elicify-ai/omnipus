@@ -1287,23 +1287,7 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, wh.wc,
 		)
 	case string(generated.WsFrameTypeCancel):
-		var f generated.CancelFrame
-		if err := json.Unmarshal(data, &f); err != nil {
-			slog.Warn("ws: malformed cancel frame", "error", err)
-			return wsHandlerReadLoopContinue
-		}
-		if f.SessionId == "" {
-			wh.wc.inboundDropped.Add(1)
-			slog.Warn("ws: cancel frame missing required session_id — dropping",
-				"chat_id", wh.chatID)
-			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "cancel requires session_id",
-			})
-			return wsHandlerReadLoopContinue
-		}
-		stopAll := f.Scope != nil && *f.Scope == "tree"
-		wh.h.handleCancelWithScope(wh.wc, f.SessionId, stopAll)
+		return wh.handleCancelFrame(data)
 	case string(generated.WsFrameTypeAttachSession):
 		var f generated.AttachSessionFrame
 		if err := json.Unmarshal(data, &f); err != nil {
