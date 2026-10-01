@@ -80,11 +80,11 @@ Your first message is kept in the open tab while Omnipus checks delivery. If loa
 | Message status | What it means and what you can do |
 |---|---|
 | **Sending…** | Waiting for confirmation that the first message was saved. |
-| **Delivery not confirmed · Retry** | Omnipus cannot yet confirm whether the message was saved. This can follow a lost connection or acknowledgement, or an uncertain save. Select **Retry** while connected; reconnect first if needed. |
+| **Delivery not confirmed · Retry** | Omnipus cannot yet confirm whether the message was saved. This can follow a lost connection or acknowledgement, an uncertain save, or an older gateway's acknowledgement that does not identify your message. Select **Retry** while connected; reconnect first if needed. |
 | **Checking delivery…** | Your explicit Retry is in progress. Another Retry is not available at the same time. |
-| **Saved** | The message was saved. The answer may still be starting or running. |
+| **Saved** | The server confirmed that this message was saved using its delivery ID, directly or through the saved chat's history. A chat-created acknowledgement alone does not confirm a save. The answer may still be starting or running. |
 | **Checking chat…** | Omnipus found an already-saved message and is loading its chat to check whether an answer exists or is still running. |
-| **Could not check this chat · Retry** | Checking the saved chat failed. Your message is kept in the open tab; **Retry** checks the chat again. |
+| **Could not check this chat · Retry** | Checking delivery or loading the saved chat failed. This does not establish whether an unconfirmed message was saved. Your message is kept in the open tab; **Retry** uses the original delivery request if no chat ID is known, or checks the saved chat again. |
 | **Could not save message · Retry** | Omnipus reported that it could not save the message. You can retry delivery. |
 | **Message saved, but no answer started · Generate again** | The message was saved, but no answer began. **Generate again** deliberately starts a new answer in the saved chat. |
 | **Couldn't finish · Generate again** | Checking the recovered chat finished with your message still unanswered and no answer running. You can deliberately generate a new answer. |

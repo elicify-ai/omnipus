@@ -1,5 +1,5 @@
 import { act, createElement, Fragment } from 'react'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { VirtualUserMessageRow } from '@/components/chat/ChatScreen'
 import type { ErrorFrame, MessageFrame } from '@/lib/api/generated/asyncapi-types'
@@ -157,7 +157,7 @@ describe('#1090 C3 — generic correlated first-message refusals', () => {
     expect(chat.messages.filter((message) => message.role === 'assistant'), 'C3: refusal cannot create a new answer turn')
       .toStrictEqual([])
     expect(Object.keys(chat.sessionsById), 'C3: refusal cannot mint or attach another chat').toStrictEqual(['__pending'])
-    expect(screen.getByRole('status').textContent, 'C3: exact failed-check copy and action')
+    expect(within(screen.getByTestId('user-message')).getByRole('status').textContent, 'C3: exact failed-check copy and action')
       .toBe('Could not check this chat · Retry')
     expect(screen.queryByRole('button', { name: /Generate again/ }), 'C3: no new-turn action for an unconfirmed save')
       .not.toBeInTheDocument()
@@ -168,7 +168,7 @@ describe('#1090 C3 — generic correlated first-message refusals', () => {
     expect(sender.send.mock.calls.map(([outbound]) => outbound), 'C3: no automatic resend on refusal')
       .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME])
 
-    const retry = screen.getByRole('button', { name: 'Retry', exact: true })
+    const retry = screen.getByRole('button', { name: /^Retry$/ })
     expect(retry, 'C3: the real recovery Retry control is enabled again').toBeEnabled()
     fireEvent.click(retry)
     expect(sender.send.mock.calls.map(([outbound]) => outbound), 'C3: one explicit click retries the original payload and ID')

@@ -181,7 +181,14 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
       set((state) => {
         const sessionsById = { ...state.sessionsById }
         if (!state.pendingKickoff) delete sessionsById.__pending
-        return { sessionsById, pendingFirstSend: null, firstSendGeneration: state.firstSendGeneration + 1 }
+        return {
+          sessionsById,
+          pendingFirstSend: null,
+          abandonedFirstSendIds: pending
+            ? [...state.abandonedFirstSendIds, pending.clientMessageId]
+            : state.abandonedFirstSendIds,
+          firstSendGeneration: state.firstSendGeneration + 1,
+        }
       })
     },
     generateFirstSendAgain: (messageId) => {

@@ -157,6 +157,14 @@ export function handleFirstSendFrame(context: FirstSendFrameContext): boolean {
   const pending = getPendingFirstSend(get())
   if (frame.type === 'error') {
     if (frame.first_message_error) return handleFirstSendError(context, frame)
+    if (frame.client_message_id) {
+      if (pending?.clientMessageId === frame.client_message_id) {
+        setFirstSendStatus(context, pending, 'check_failed')
+        useConnectionStore.getState().setConnectionError(frame.message)
+        return true
+      }
+      if (get().abandonedFirstSendIds.includes(frame.client_message_id)) return true
+    }
     if (pending?.sessionId && frame.session_id === pending.sessionId && pending.status === 'checking_chat') {
       setFirstSendStatus(context, pending, 'check_failed')
       useConnectionStore.getState().setConnectionError('Could not check this chat — press Retry to check again.')
@@ -165,11 +173,20 @@ export function handleFirstSendFrame(context: FirstSendFrameContext): boolean {
     return false
   }
   if (frame.type === 'session_started') {
-    // Untagged fresh acknowledgements remain compatible with older gateways.
-    // They cannot resolve an uncertain or retried send; those require the ID.
-    const clientId = frame.client_message_id ?? (pending?.status === 'sending' ? pending.clientMessageId : undefined)
-    if (!clientId) return !!pending
+    const clientId = frame.client_message_id
+    if (!clientId) {
+      // Older gateways may acknowledge the chat without confirming this message.
+      // Keep its original request for Retry and any later correlated outcome.
+      if (pending?.status === 'sending' || pending?.status === 'retrying') {
+        setFirstSendStatus(context, pending, 'unconfirmed')
+      }
+      return !!pending
+    }
     if (!pending || pending.clientMessageId !== clientId) {
+      const abandoned = get().abandonedFirstSendIds.includes(clientId)
+      const user = findFirstSendMessage(get().sessionsById[frame.session_id], clientId)
+      // Only this tab's abandoned or confirmed first sends bypass normal binding.
+      if (!abandoned && !user?.firstSendStatus) return false
       queryClient.invalidateQueries({ queryKey: ['sessions'] })
       return true
     }
