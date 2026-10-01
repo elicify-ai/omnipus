@@ -94,6 +94,14 @@ func (c *Client) FolderCounts(ctx context.Context) ([]FolderStat, error) {
 			return client.Status(name, &imap.StatusOptions{NumMessages: true, NumUnseen: true, UIDValidity: true}).Wait()
 		})
 		if serr != nil {
+			// A mailbox with no Sent or Drafts folder must still open: report the
+			// folder as empty instead of failing the whole panel. INBOX stays fatal
+			// (a mailbox without an inbox is a real problem), and any other error
+			// (timeout, auth, cancel) still fails loudly.
+			if slug != FolderInbox && isNonexistentFolder(serr) {
+				out = append(out, FolderStat{Slug: slug, DisplayName: name})
+				continue
+			}
 			return nil, fmt.Errorf("email transport: status %s (%s): %w", slug, name, serr)
 		}
 		st := FolderStat{Slug: slug, DisplayName: name, UIDValidity: status.UIDValidity}
@@ -106,6 +114,13 @@ func (c *Client) FolderCounts(ctx context.Context) ([]FolderStat, error) {
 		out = append(out, st)
 	}
 	return out, nil
+}
+
+// isNonexistentFolder reports whether an IMAP error is the server saying the
+// folder does not exist ([NONEXISTENT], RFC 5530), detected structurally.
+func isNonexistentFolder(err error) bool {
+	var ie *imap.Error
+	return errors.As(err, &ie) && ie.Code == imap.ResponseCodeNonExistent
 }
 
 // mailRef is a parsed folder-scoped message reference (§2.3, D21): either
