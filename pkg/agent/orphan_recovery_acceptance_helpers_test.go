@@ -133,7 +133,12 @@ func orphanACAssertRejectedBeforeSend(t *testing.T, h *cwR1Harness, ts *turnStat
 	require.Len(t, r.requests(t), 0, "real HTTP endpoint receives no unsupported-recovery request")
 }
 
-func orphanACAssertMark(t *testing.T, m providers.Message, id string, line, size, turn int) {
+type orphanACMarkTestingT interface {
+	require.TestingT
+	Helper()
+}
+
+func orphanACAssertMark(t orphanACMarkTestingT, m providers.Message, id string, line, size, turn int) {
 	t.Helper()
 	// Decode the entire mark with the standard JSON decoder, not a production
 	// projection/mark parser. The eight fields are from ToolResultRecallMark.
@@ -149,5 +154,5 @@ func orphanACAssertMark(t *testing.T, m providers.Message, id string, line, size
 	}, mark, "full schema payload addresses the original live result, never a compacted/excluded slot")
 	require.Contains(t, hint, "recall_conversation", "schema hint names the retrieval tool")
 	require.Regexp(t, fmt.Sprintf(`\btool_call_id["']?\s*[:=]\s*["']%s["']`, regexp.QuoteMeta(id)), hint, "hint identifies this exact retained result, not an ID substring")
-	require.Regexp(t, fmt.Sprintf(`\barchive_line["']?\s*[:=]\s*%d(?:\s*[,})]|\s*$)`, line), hint, "hint uses the exact original address, accepting whitespace but not another integer with the same prefix")
+	require.Regexp(t, fmt.Sprintf(`\barchive_line["']?\s*[:=]\s*%d(?:\s|[,{}()]|$)`, line), hint, "hint uses the exact original address, accepting whitespace but not another integer with the same prefix")
 }
