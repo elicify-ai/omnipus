@@ -32,6 +32,21 @@ Two jobs that look like settings live on their own pages: what agents may do is 
 
 API keys are stored encrypted on this server, never in the main configuration file. See [security](security.md) for how the encrypted store works.
 
+## Web search
+
+In **Settings** → **Integrations**, **Web Search** says: "Your agents search with the default service. If it fails, the fallback takes over." When the search roles are available, two cards appear:
+
+| Card | What you can do |
+|---|---|
+| **Default search** | Click **Change** to choose the default service. When that service reports a depth cap, the card shows a read-only **Depth cap:** line. |
+| **Fallback** | Click **Change** to choose a different service or **None**. The picker never offers the current default. When **None** is selected and DuckDuckGo is usable, the card says "DuckDuckGo works without a key — try it as your fallback." |
+
+Only usable services can be chosen. Unusable services shown in the picker are disabled, with "Add a key first", "Key not reaching search", or "Needs configuration" beside them. If a chosen keyed service loses its key, its card warns that searches will fail or that the fallback will not run. Click **Fix** to open that service's key editor.
+
+The service list below the cards puts ready services first. Services needing a key have **Add key** or **Edit key**. With the cards present, enter the key and click **Save key**. On a local install, you must re-type your password; on a hosted or desktop install, you confirm the change instead. A successful key save switches that service on without changing your default or fallback choice.
+
+SearXNG is no longer offered: on upgrade, Omnipus removes its old configuration, clears it as a saved default, and sets a saved SearXNG fallback to **None**.
+
 ## Where each setting lives
 
 Each tab and neighbor screen has one job.

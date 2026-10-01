@@ -101,7 +101,7 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 
 **Kernel-level sandbox** — Landlock + seccomp on Linux 5.13+, a three-tier per-tool policy (allow/ask/deny), and an SSRF guard on every outbound HTTP tool. → [Sandbox modes](docs/operations/sandbox-config.md#modes)
 
-**Encrypted credential vault** — AES-256-GCM with an Argon2id KDF. → [Cryptographic design](docs/credential_encryption.md#cryptographic-design)
+**Encrypted credential vault** — AES-256-GCM; when the key comes from a typed passphrase it is derived with Argon2id. → [Master key and encryption](docs/operations/security-considerations.md#master-key-provisioning)
 
 > Note: the "Credential encryption" link in the First-boot section currently points to a doc that does not exist yet — the target will be re-aimed in a follow-up by another agent.
 
@@ -290,7 +290,7 @@ A 256-bit AES key auto-generates at `~/.omnipus/master.key` (mode `0600`).
 
 **Back it up** — losing it means losing every encrypted credential.
 
-For headless deployments, pre-provision the key via `OMNIPUS_KEY_FILE` or `OMNIPUS_MASTER_KEY`. → [Credential encryption](docs/credential_encryption.md#environment-variables)
+For headless deployments, pre-provision the key via `OMNIPUS_KEY_FILE` or `OMNIPUS_MASTER_KEY`. → [Master key provisioning](docs/operations/security-considerations.md#master-key-provisioning)
 
 ### Headless onboarding (no browser)
 
