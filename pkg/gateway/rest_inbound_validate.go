@@ -102,6 +102,21 @@ func (inboundSchemaLoader) Load(rawURL string) (any, error) {
 func initInboundValidator() *jsonschema.Compiler {
 	inboundValidatorState.once.Do(func() {
 		c := jsonschema.NewCompiler()
+		// These embedded schemas are the OpenAPI 3.0.3 component schemas
+		// (contracts/components/schemas/, synced by scripts/gen-contracts.sh
+		// step 5). OpenAPI 3.0.3's Schema Object is based on the JSON Schema
+		// Wright Draft 00 dialect (~draft-04): exclusiveMinimum/exclusiveMaximum
+		// are booleans paired with minimum/maximum, exactly as
+		// ContextSettings.yaml's tool_result_share_fraction uses them (and as
+		// `redocly lint`, which enforces the OpenAPI 3.0.3 dialect, requires —
+		// a numeric exclusiveMinimum is rejected by that lint). None of these
+		// files declare their own $schema (OpenAPI disallows that key on a
+		// Schema Object), so without an explicit default this compiler falls
+		// back to its own default (draft 2020-12), which requires
+		// exclusiveMinimum to be numeric and fails schema compile at gateway
+		// boot. Setting Draft4 here makes the compiler's dialect match the
+		// dialect these files already are.
+		c.DefaultDraft(jsonschema.Draft4)
 		c.UseLoader(jsonschema.SchemeURLLoader{
 			"file": inboundSchemaLoader{},
 		})

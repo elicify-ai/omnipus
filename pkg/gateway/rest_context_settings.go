@@ -184,7 +184,7 @@ func pruneDeadOverrides(cfg *config.Config, rows []config.ContextModelOverride) 
 	kept := make([]config.ContextModelOverride, 0, len(rows))
 	for _, o := range rows {
 		if !agent.WindowProviderKnown(cfg, o.Provider) {
-			slog.Info("rest: PUT /settings/context: pruned a model override for an unknown provider",
+			logsafeInfo("rest: PUT /settings/context: pruned a model override for an unknown provider",
 				"provider", o.Provider, "model", o.Model)
 			continue
 		}

@@ -1,5 +1,7 @@
 # Spec — ADR-066: Context overflow — window resolution, per-result cap, empty-in-place, mid-turn window check
 
+**Status**: Draft
+
 - **Source ADR:** `docs/internal/architecture/ADR-066-context-budget-and-tool-result-routing.md` (Proposed, restructured 2026-08-22; pass-2 findings resolved in §16a; amended 2026-08-22 from the spec review — commit `docs(adr): ADR-066 amendments from spec review`). Review records: `…-review-pass2.md` (ADR), `docs/internal/specs/adr-066-context-overflow-spec-review.md` (this spec, verdict BLOCK — every finding resolved in this revision; see §13).
 - **Status:** Draft (plan-spec) — revision 2, 2026-08-22, branch `feat/context-budget-and-tool-result-routing`. The ADR is the confirmed requirements brief. Where the ADR was silent the §10 table records the operator's resolutions; every item is closed (A-18/A-19 accepted by the coordinator 2026-08-22; register #3 confirmed).
 - **Scope:** ADR-066 only — D2, D3, D4, D5 (+ recall-by-`tool_call_id`), D6, D7, D9, D10, §16a, ADR §15 task 1 (bounding parameters — FR-038…FR-040), and the two **P0 preconditions for D5** added 2026-08-22 — **D5.4 recall injection at the tool-result site** and **D5.5 hydration must not overwrite the archive** (US-14, US-15; both ship as a with this branch, then this branch inherits them). **D1 (the catalog) is ADR-067 — referenced, not specified.** **D8 is NOT ADOPTED** (ADR-066 commits `ec2e022d`, `80aef474`, `06e6cc17`). Subscriptions / provider deletion / provider UX are ADR-068.
