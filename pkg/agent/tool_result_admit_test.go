@@ -758,9 +758,22 @@ func TestChokePoint_ProducerListByGrep(t *testing.T) {
 	// scanDiscardedChokePointResults above are what actually prove the
 	// property. This just confirms no call site was silently deleted; a
 	// legitimate new call site is expected to raise the floor, not fail it.
+	//
+	// R1's checkpoint consolidation (#1081, eeb4126eb "slide long-turn
+	// context with exact checkpoint state") routed every refusal/skip site
+	// through the shared admitAndCheckpoint helper
+	// (tool_result_checkpoint.go) instead of calling admitToolResult
+	// directly — the floor must count both forms, or every one of those
+	// sites silently stops counting toward it. admitAndCheckpoint itself is
+	// not exempted from proving it still reaches the choke point: its own
+	// definition (included via readLoopSourcesForTest) contains a direct
+	// `admitToolResult(rt.ts, adm)` call, so directCalls below counts it too.
 	loopSrc := readLoopSourcesForTest(t)
-	calls := len(regexp.MustCompile(`\.admitToolResult\(\s*(?:[A-Za-z_]\w*\.)*ts\s*,`).FindAllString(loopSrc, -1))
-	assert.GreaterOrEqual(t, calls, 10, "loop.go: success path + seven denied sites + skipped site + the T066-15 argument-refusal site (FR-016) = at least 10 choke-point calls")
+	directCalls := len(regexp.MustCompile(`\.admitToolResult\(\s*(?:[A-Za-z_]\w*\.)*ts\s*,`).FindAllString(loopSrc, -1))
+	indirectCalls := len(regexp.MustCompile(`\.admitAndCheckpoint\(`).FindAllString(loopSrc, -1))
+	require.Greater(t, directCalls, 0, "admitAndCheckpoint must itself still reach admitToolResult directly — none found")
+	calls := directCalls + indirectCalls
+	assert.GreaterOrEqual(t, calls, 10, "loop.go: success path + seven denied sites + skipped site + the T066-15 argument-refusal site (FR-016) = at least 10 choke-point calls (direct admitToolResult, or via the admitAndCheckpoint wrapper)")
 
 	for _, fname := range []string{"attach_hydrate.go", "recall_conversation.go"} {
 		assert.True(t, fileCallsFunction(t, fname, "projectToolResult"),
@@ -984,12 +997,30 @@ func TestChokePoint_LiveSettingsPerCall(t *testing.T) {
 // newChokePointTurn builds a loop, a JSONL-backed session store and a
 // turnState bound to it, with a context window that yields budget ≈ the
 // requested value (MaxTokens and pinned overhead subtracted).
+//
+// The store MUST implement session.ContextWindowStore: R1's checkpoint
+// consolidation (#1081, eeb4126eb "slide long-turn context with exact
+// checkpoint state") moved the choke point's archive write from
+// AddFullMessage/ReadArchive onto AppendWindowMessage/CommitWindow
+// (tool_result_window.go::admitResultWindow), a step that commit's own
+// message flagged as landing ahead of its test integration ("QA-owned tests
+// are integrated separately ... remain pending"). session.NewSessionManager
+// (the legacy in-memory store) never implements that interface — it is only
+// production's deepest last-resort fallback (see
+// pkg/agent/instance.go::initSessionStore), never the default store a real
+// agent gets — so every admission silently failed closed (zero-value
+// admittedToolResult, Capped always false) instead of exercising the cap
+// logic these tests exist to prove. session.NewUnifiedStore is what a real
+// agent actually gets and what the rest of this package's harnesses already
+// use (e.g. attach_hydrate_test.go).
 func newChokePointTurn(t *testing.T, window int) (*AgentLoop, *turnState, session.SessionStore) {
 	t.Helper()
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	t.Cleanup(cleanup)
 	cfg.Context = config.DefaultContextSettings()
-	store := session.NewSessionManager(t.TempDir())
+	store, err := session.NewUnifiedStore(filepath.Join(t.TempDir(), "sessions"))
+	require.NoError(t, err, "newChokePointTurn: NewUnifiedStore")
+	t.Cleanup(func() { _ = store.Close() })
 	agent := &AgentInstance{
 		ID:            "choke-agent",
 		Name:          "Choke",
