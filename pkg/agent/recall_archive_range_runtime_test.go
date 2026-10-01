@@ -6,12 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -255,9 +257,86 @@ func cwRangeCancellation(t *testing.T) {
 			}
 		})
 	}
-	for _, name := range []string{"cancel_after_page_stops_remaining_reads", "deadline_after_page_stops_remaining_reads"} {
-		t.Run(name, func(t *testing.T) {
-			t.Fatal("BLOCKED: observable raw-archive read/decode checkpoints not implemented — required to prove ADR-066 MAJ-CW-003 MIN-001 / B-58 post-page cancellation/deadline and unconsumed remainder. ReadArchive/ScanArchive expose decoded records only; context-method counts are not read counts. GREEN must supply a testable read boundary; this RED pack must then replace this blocker with a controlled read-progress assertion before CHECK.")
+	for _, tc := range []struct {
+		name string
+		want error
+	}{
+		{"cancel_after_page_stops_remaining_reads", context.Canceled},
+		{"deadline_after_page_stops_remaining_reads", context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// ADR-066 MAJ-CW-003/MIN-001, B-58: the page is collected
+				// before the cutoff; fixture sizes leave five unread records.
+				const cutoff, recordCount = 3, 8
+				records := make([]string, recordCount)
+				readers := make([]*strings.Reader, recordCount)
+				inputs := make([]io.Reader, recordCount)
+				for idx := range records {
+					records[idx] = fmt.Sprintf("{\"role\":\"assistant\",\"content\":\"record-%d ☃\"}\n", idx)
+					readers[idx] = strings.NewReader(records[idx])
+					inputs[idx] = readers[idx]
+				}
+				var ctx context.Context
+				var cancel context.CancelFunc
+				if tc.want == context.DeadlineExceeded {
+					ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+				} else {
+					ctx, cancel = context.WithCancel(context.Background())
+				}
+				defer cancel()
+				page := archiveRangePage{offset: 0, limit: 1}
+				var committed []string
+				callbacks := 0
+				err := memory.ScanJSONLRange(ctx, io.MultiReader(inputs...), 0, recordCount-1,
+					func(idx int, raw []byte, msg memory.ArchivedMessage) error {
+						callbacks++
+						if idx != callbacks-1 || idx < 0 || idx >= recordCount {
+							return fmt.Errorf("record index: want %d, got %d", callbacks-1, idx)
+						}
+						if string(raw) != records[idx] || msg.Role != "assistant" || msg.Content != fmt.Sprintf("record-%d ☃", idx) {
+							return fmt.Errorf("record %d literal/decoded data changed: raw=%q message=%+v", idx, raw, msg)
+						}
+						if err := page.collect(ctx, raw); err != nil {
+							return err
+						}
+						committed = append(committed, string(raw))
+						if callbacks == 1 && (page.payload.String() != "{" || page.returned != 1) {
+							return fmt.Errorf("post-page instrument: first record must collect the one-rune page")
+						}
+						if callbacks == cutoff {
+							if tc.want == context.Canceled {
+								cancel()
+							} else {
+								// Durable blocking advances fake time until the real timer expires.
+								<-ctx.Done()
+							}
+						}
+						return nil
+					})
+				if callbacks != cutoff {
+					t.Fatalf("cutoff: want exactly %d callbacks, got %d", cutoff, callbacks)
+				}
+				wantPrefix := strings.Join(records[:cutoff], "")
+				if got := strings.Join(committed, ""); len(committed) != cutoff || got != wantPrefix {
+					t.Fatalf("committed prefix: want %d unchanged records %q, got %d records %q", cutoff, wantPrefix, len(committed), got)
+				}
+				if err != ctx.Err() || err != tc.want {
+					t.Fatalf("genuine context cause: want exact %T %v = ctx.Err(), got %T %v; ctx.Err()=%v", tc.want, tc.want, err, err, ctx.Err())
+				}
+				if page.payload.String() != "{" || page.returned != 1 || page.total != utf8.RuneCountInString(wantPrefix) {
+					t.Fatalf("processed page/count changed: payload=%q returned=%d total=%d, want %q/1/%d", page.payload.String(), page.returned, page.total, "{", utf8.RuneCountInString(wantPrefix))
+				}
+				for idx, reader := range readers {
+					wantUnread := 0
+					if idx >= cutoff {
+						wantUnread = len(records[idx])
+					}
+					if got := reader.Len(); got != wantUnread {
+						t.Errorf("unconsumed remainder: record %d want %d unread bytes, got %d", idx, wantUnread, got)
+					}
+				}
+			})
 		})
 	}
 }
