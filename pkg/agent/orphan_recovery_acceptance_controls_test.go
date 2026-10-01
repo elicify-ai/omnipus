@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -44,16 +45,33 @@ func orphanACCompletedControls(t *testing.T) {
 			rr := cwR1Flow(h, ts, out, provider)
 			rr.rq.prepareCallMessages()
 			require.NoError(t, ts.contextWindowError(), "positive instrument control takes the real validation path")
-			response, err := rr.rq.ri.rf.rt.callProviderOnce(rr.rq.ri.rf.callMessages, nil)
+			callMessages := rr.rq.ri.rf.callMessages
+			require.Len(t, callMessages, len(raw)+1, "N4 ruling: the complete raw view survives until the normalization/send boundary")
+			require.Equal(t, "system", callMessages[0].Role)
+			require.Equal(t, raw, callMessages[1:], "pre-send validation/repair cannot erase or reorder the raw complete group, unbound records or control")
+			pinnedInput := callMessages[0].Content
+			// Architect N4 ruling: derive the exact wire instructions from the
+			// immutable pinned INPUT plus literal fixture records, not received
+			// output or a production normalizer. Preserve each input occurrence.
+			systemPieces := []string{pinnedInput}
+			for range n {
+				systemPieces = append(systemPieces, `{"type":"turn_canceled_restart","tool_call_id":"done-a","reason":"ungraceful_shutdown_recovery"}`)
+			}
+			systemPieces = append(systemPieces, "retain completed-turn control")
+			wantSystemContent := strings.Join(systemPieces, "\n\n")
+			response, err := rr.rq.ri.rf.rt.callProviderOnce(callMessages, nil)
 			require.NoError(t, err, "valid complete request must cross the same send boundary negatives are forbidden to cross")
 			require.NotNil(t, response)
 			require.Equal(t, "r1-success", response.Content, "paid-model edge replacement observes actual provider progress")
 			bodies := r.requests(t)
 			require.Len(t, bodies, 1, "recorder can see a real request; zero-request negative oracle is not a dead instrument")
+			t.Logf("N4 captured full HTTP body (marker occurrences=%d): %s", n, bodies[0])
 			received := cwR1Messages(t, bodies[0])
 			require.NotEmpty(t, received)
+			require.Len(t, received, 5, "N4 ruling: one composed system message followed by the four unchanged non-system messages")
 			require.Equal(t, "system", received[0].Role)
-			require.Equal(t, raw, received[1:], "final serialized body retains the entire complete group, both results, unbound records and unrelated control")
+			require.Equal(t, raw[:4], received[1:], "final serialized body retains the entire complete group and both results, with every field and order intact")
+			require.Equal(t, wantSystemContent, received[0].Content, "serialized instructions retain the pinned input, every unbound marker occurrence and unrelated control in exact order, without loss or duplicate collapse")
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})
 	}
