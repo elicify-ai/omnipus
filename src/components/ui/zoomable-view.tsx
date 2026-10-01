@@ -37,8 +37,7 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from './dropdown-menu'
-import { cn } from '@/lib/utils'
-import { isEditableEventTarget } from '@/lib/isEditableEventTarget'
+import { cn, isEditableEventTarget } from '@/lib/utils'
 
 // ── Shared range & math (D18: "One zoom range: 25% to 400% on every surface") ──
 

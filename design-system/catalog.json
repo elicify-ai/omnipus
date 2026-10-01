@@ -870,7 +870,8 @@
       "classification": "foundations",
       "exports": [
         "cn",
-        "initialOf"
+        "initialOf",
+        "isEditableEventTarget"
       ],
       "publicExports": [
         "cn"

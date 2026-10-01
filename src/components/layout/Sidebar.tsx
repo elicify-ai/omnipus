@@ -46,8 +46,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
-import { cn } from '@/lib/utils'
-import { isEditableEventTarget } from '@/lib/isEditableEventTarget'
+import { cn, isEditableEventTarget } from '@/lib/utils'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { GodModeSidebarPill } from './GodModeIndicators'
 

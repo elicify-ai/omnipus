@@ -127,6 +127,10 @@ On Windows, Omnipus has no lock between separate processes. If two Omnipus proce
 
 After the upgrade there is deliberately no fallback that reads an old entry: it would let a value be moved between names again. If one entry fails while the others still work, that entry was edited on disk or copied from another entry. The gateway names the entry at fault in its log. Re-enter it the same way.
 
+## A page fails to load after a deployment
+
+If a tab still references JavaScript files from an earlier deployment, loading an app page or full-screen panel can fail before Omnipus checks whether you are signed in. You will see **"Something went wrong loading this page."** Select **Reload page** to fetch the current files and try again. A file-loading failure is not treated as a sign-in failure or a reason to restart setup.
+
 ## The web app looks outdated after a source build
 
 The Go binary embeds the web app from `pkg/gateway/spa/` — a copy of the frontend build output, not the output itself, so building without refreshing that copy serves an old interface. `make build` refreshes it and builds in one step. Confirm a change reached the binary by searching the bundled assets for a string only it contains:
