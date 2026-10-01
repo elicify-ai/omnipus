@@ -140,8 +140,8 @@ func TestReadView_RealIMAPRoundTrip_FullSaveFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compose(save): unexpected error: %v", err)
 	}
-	if _, _, err := cl.AppendMessage(ctx, cl.DraftsFolderName(), []string{"\\Draft"}, saveOut.Transmitted); err != nil {
-		t.Fatalf("AppendMessage(save): unexpected error: %v", err)
+	if _, _, appendErr := cl.AppendMessage(ctx, cl.DraftsFolderName(), []string{"\\Draft"}, saveOut.Transmitted); appendErr != nil {
+		t.Fatalf("AppendMessage(save): unexpected error: %v", appendErr)
 	}
 	if derr := cl.DeleteDraft(ctx, cur.UID); derr != nil {
 		// MAJ-009/MC-28: production treats this as a warning, never an

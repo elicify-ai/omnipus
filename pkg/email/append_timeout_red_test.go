@@ -59,6 +59,7 @@ func (s *stallAppendSession) Append(_ string, r imap.LiteralReader, _ *imap.Appe
 	}
 	block := make(chan struct{})
 	<-block // never closed: this handler never returns, by design
+	//nolint:nilerr // intentionally unreachable after the blocking channel read
 	return nil, nil
 }
 
