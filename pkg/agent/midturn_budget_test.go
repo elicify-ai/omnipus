@@ -79,13 +79,16 @@ func seedMidTurn(t *testing.T, agent *AgentInstance, key string, msgs []provider
 }
 
 // TestMidTurnBudget_OperationBySiteAndPosition — spec test 17 (B-35, B-36,
-// B-21b; FR-030, FR-031): mid-turn the check NEVER advances Skip — an
-// earlier complete turn still in the slice has its results EMPTIED, never
-// cut; a current-turn result of an older step is emptied; the last
-// assistant step (the floor) is never touched and, sized by the D4 clamp,
-// fits without any emptying.
+// B-21b; FR-030, FR-031, amended 2026-09-30 MAJ-CW-004): mid-turn relief
+// tries a whole-step SLIDE before any in-place empty — a legal complete
+// prefix the newest step never touches is cut from the live window and Skip
+// genuinely advances past it, both for an earlier complete turn and for an
+// older step within the current turn (sliding is gated on step completeness
+// and the newest-step/anchor floor, never on turn boundaries). The last
+// assistant step (the floor) is never slid or touched, and when sized by
+// the D4 clamp it fits without any emptying.
 func TestMidTurnBudget_OperationBySiteAndPosition(t *testing.T) {
-	t.Run("mid-turn, oldest over-budget is an earlier complete turn: Skip unchanged, its results emptied (B-35 row 3)", func(t *testing.T) {
+	t.Run("mid-turn, oldest over-budget is an earlier complete turn: the whole earlier turn slides away and Skip advances (B-35 row 3, FR-030)", func(t *testing.T) {
 		al, agent := midTurnFixture(t, 40_000, 0)
 		key := "midturn-earlier-turn"
 		budget := agentContextBudget(agent)
@@ -106,14 +109,31 @@ func TestMidTurnBudget_OperationBySiteAndPosition(t *testing.T) {
 		out, err := al.midTurnWindowCheck(ts, window, nil)
 		require.NoError(t, err)
 
-		assert.Len(t, out, archiveLen, "bytes shrink only by marks — never by removing messages")
-		assert.Contains(t, out[2].Content, `"content_state":"emptied"`, "the earlier turn's result becomes the mark")
-		assert.True(t, strings.HasPrefix(out[6].Content, "lorem"), "the floor (last assistant step's result) is intact")
-		assert.Len(t, agent.Sessions.GetHistory(key), archiveLen, "FR-030: Skip did not move mid-turn")
-		assert.LessOrEqual(t, requestTokens(out, nil), budget*4/5, "emptied to 80%% of the fired condition")
+		// ADR-066 MAJ-CW-004 (2026-09-30 amendment): slideOldest runs BEFORE
+		// any emptying/shortening. Turn one is a legal complete prefix the
+		// newest step (c2) never touches, so the real relief here starts
+		// with a whole-step SLIDE, not an in-place empty: all four of turn
+		// one's messages — including its trailing plain-text reply — are
+		// cut from the live window and Skip genuinely advances past them —
+		// this supersedes the pre-slide assumption that mid-turn relief
+		// never changes the message count. The slide alone is not enough to
+		// reach the 80%% target here, so shortenNext then caps the one
+		// remaining (newest/floor) result's TEXT in place — its slot still
+		// survives, matching MAJ-CW-002's floor-slot protection.
+		require.Len(t, out, 3, "turn one's 4 messages slide away whole; only turn two's 3 messages remain")
+		assert.Equal(t, window[4], out[0], "turn two's own user anchor survives unchanged")
+		assert.Equal(t, window[5], out[1], "the newest step's assistant call survives unchanged")
+		assert.Equal(t, "tool", out[2].Role)
+		assert.Equal(t, "c2", out[2].ToolCallID, "the floor slot is preserved, not removed")
+		assert.True(t, strings.HasPrefix(out[2].Content, "lorem"), "capped text retains the source head")
+		assert.Contains(t, out[2].Content, `"content_state":"capped"`, "the floor is capped in place, not slid or emptied")
+		assert.Less(t, len(out[2].Content), len(big), "the floor's text genuinely shrank")
+		assert.Len(t, agent.Sessions.GetHistory(key), 3, "FR-030: Skip advances past the slid-away turn")
+		assert.Less(t, len(agent.Sessions.GetHistory(key)), archiveLen, "Skip genuinely moved mid-turn")
+		assert.LessOrEqual(t, requestTokens(out, nil), budget*4/5, "brought to the 80%% target by slide + cap")
 	})
 
-	t.Run("mid-turn, current-turn result of an older step is emptied (DS-5 #4)", func(t *testing.T) {
+	t.Run("mid-turn, current-turn result of an older step: the older step slides away whole and Skip advances (DS-5 #4, FR-030)", func(t *testing.T) {
 		al, agent := midTurnFixture(t, 40_000, 0)
 		key := "midturn-older-step"
 		budget := agentContextBudget(agent)
@@ -125,11 +145,27 @@ func TestMidTurnBudget_OperationBySiteAndPosition(t *testing.T) {
 			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("c2", "two")}},
 			{Role: "tool", ToolCallID: "c2", Content: big},
 		})
+		archiveLen := len(window)
 		out, err := al.midTurnWindowCheck(ts, window, nil)
 		require.NoError(t, err)
-		assert.Contains(t, out[2].Content, `"content_state":"emptied"`, "older step emptied (R1)")
-		assert.True(t, strings.HasPrefix(out[4].Content, "lorem"), "newest step intact (R2)")
-		assert.Len(t, agent.Sessions.GetHistory(key), len(out), "Skip unchanged")
+
+		// Same MAJ-CW-004 ordering as above: the older complete step (c1,
+		// plus its own initiating user message — this synthetic
+		// single-turn fixture sets no turn anchor to protect it) is a legal
+		// complete prefix the newest step (c2) never touches, so
+		// slideOldest removes it whole instead of emptying it in place. The
+		// slide alone does not reach the 80%% target, so shortenNext then
+		// caps the remaining (newest/floor) result's TEXT — its slot still
+		// survives, matching MAJ-CW-002's floor-slot protection.
+		require.Len(t, out, 2, "the older step's 3 messages slide away whole; only the newest step's 2 remain")
+		assert.Equal(t, window[3], out[0], "the newest step's assistant call survives unchanged")
+		assert.Equal(t, "tool", out[1].Role)
+		assert.Equal(t, "c2", out[1].ToolCallID, "the floor slot is preserved, not removed")
+		assert.True(t, strings.HasPrefix(out[1].Content, "lorem"), "capped text retains the source head")
+		assert.Contains(t, out[1].Content, `"content_state":"capped"`, "the floor is capped in place, not slid or emptied")
+		assert.Less(t, len(out[1].Content), len(big), "the floor's text genuinely shrank")
+		assert.Len(t, agent.Sessions.GetHistory(key), 2, "FR-030: Skip advances past the slid-away older step")
+		assert.Less(t, len(agent.Sessions.GetHistory(key)), archiveLen, "Skip genuinely moved mid-turn")
 	})
 
 	t.Run("last assistant step never emptied; clamp-sized parallel step fits with no fire (B-36 / DS-5 #5)", func(t *testing.T) {
@@ -360,6 +396,22 @@ func TestMidTurnBudget_NewestSharePressureShortensAndSends(t *testing.T) {
 // size-related is turn-fatal once D4–D6 are in"). The companion test
 // TestMidTurnBudget_C1_NotesStillTriggerEmptying proves noteTokens still
 // drive real D5 work when there IS something eligible to empty.
+//
+// RELOCATED 2026-10-01 (architect ruling, already confirmed against this
+// code): contextResidueOverflowsTotal moved from the shared midTurnWindowCheck
+// per-result checkpoint to checkpointRequest (pkg/agent/window_runtime.go) —
+// the real post-note-assembly final-request checkpoint — firing only when
+// the assembled candidate is still over budget/share AND the window would
+// have fit WITHOUT the notes, i.e.
+// requestTokens(retainLiveWindow(rq.ri.messages, candidate), toolDefs) <= budget
+// (and the matching share bound). midTurnWindowCheck structurally never
+// carries request-only notes, so it can no longer reach this counter. This
+// test now drives checkpointRequest the same way loop_run_turn.go's
+// prepareLLMRequest does: build the candidate exactly as prepareCallMessages
+// does for the workspace-instructions note (injectWorkspaceInstructions +
+// buildWorkspaceInstructionsNote), then call checkpointRequest() on the same
+// minimal agentLoopRunTurnRequest chain cwR1Flow (cw_slide_r1_transport_test.go)
+// builds for the full-turn harness.
 func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
 	al, agent := midTurnFixture(t, 40_000, 0)
 	budget := agentContextBudget(agent)
@@ -376,33 +428,81 @@ func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
 	agentMD := proseOfTokens(budget * 6 / 5) // ~1.2x budget in estimator tokens
 	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "AGENT.md"), []byte(agentMD), 0o644))
 
-	key := "midturn-c1-callmessages"
-	// A tiny conversation with NO tool results: `messages` alone fits B
-	// comfortably, and there is nothing eligible for the D5 pass to empty —
-	// the window portion is therefore trivially under B no matter what the
-	// notes cost. If the check fires at all here it can only be because it
-	// saw the injected note weight (C1); the correct outcome is now "log
-	// and continue", never the FR-032 guard.
-	window, ts := seedMidTurn(t, agent, key, []providers.Message{
-		{Role: "user", Content: "hello"},
-		{Role: "assistant", Content: "hi there"},
+	t.Run("positive: note-only overflow at checkpointRequest increments the counter (C1 preserved, relocated)", func(t *testing.T) {
+		key := "midturn-c1-callmessages"
+		// A tiny conversation with NO tool results: `messages` alone fits B
+		// comfortably, and there is nothing eligible for the D5 pass to empty —
+		// the window portion is therefore trivially under B no matter what the
+		// notes cost. If the check fires at all here it can only be because it
+		// saw the injected note weight (C1); the correct outcome is now "log
+		// and continue", never the FR-032 guard.
+		window, ts := seedMidTurn(t, agent, key, []providers.Message{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "hi there"},
+		})
+		ts.opts.WorkspaceID = wsID
+
+		require.LessOrEqual(t, requestTokens(window, nil), budget,
+			"precondition: messages alone fits B — the C1 bug is invisible without this")
+		require.Greater(t, al.ephemeralSystemNoteTokens(ts), budget,
+			"precondition: the injected workspace-instructions note alone exceeds B")
+
+		// Reproduce prepareCallMessages' own injection for this one note —
+		// the exact call shape of pkg/agent/loop_run_turn.go's
+		// injectWorkspaceInstructions(callMessages, buildWorkspaceInstructionsNote(...)) call.
+		candidate := injectWorkspaceInstructions(window, buildWorkspaceInstructionsNote(wsID))
+		require.Greater(t, requestTokens(candidate, nil), budget,
+			"precondition: the assembled candidate (window + note) is what now overflows B")
+
+		rt := &agentLoopRunTurn{al: al, ts: ts, turnCtx: context.Background()}
+		rf := &agentLoopRunTurnFallbacks{rt: rt, callMessages: candidate}
+		ri := &agentLoopRunTurnIteration{rf: rf, messages: window}
+		rq := &agentLoopRunTurnRequest{ri: ri}
+
+		before := ContextResidueOverflowsTotal()
+		err := rq.checkpointRequest()
+		require.NoError(t, err, "FR-032 amendment: a note-only overflow (nothing eligible to empty, "+
+			"window fits without the notes) must not end the turn — the provider's own context error "+
+			"is the backstop, not this guard")
+		assert.Equal(t, window, rq.ri.messages,
+			"nothing was eligible to empty; the live slice is returned unchanged")
+		assert.Greater(t, ContextResidueOverflowsTotal(), before,
+			"C1 preserved, relocated: checkpointRequest still measured and logged the note-inflated "+
+				"total instead of silently treating the turn as fitting")
 	})
-	ts.opts.WorkspaceID = wsID
 
-	require.LessOrEqual(t, requestTokens(window, nil), budget,
-		"precondition: messages alone fits B — the C1 bug is invisible without this")
-	require.Greater(t, al.ephemeralSystemNoteTokens(ts), budget,
-		"precondition: the injected workspace-instructions note alone exceeds B")
+	t.Run("negative control: a window that is irreducibly over budget on its own must NOT increment the counter", func(t *testing.T) {
+		// Architect's own discriminator (restated above): the counter fires
+		// only when the LIVE window — WITHOUT request-only notes — would
+		// have fit both bounds. Here nothing is injected (no WorkspaceID, so
+		// buildWorkspaceInstructionsNote resolves no default workspace and
+		// returns "") and the window itself — one oversized message with no
+		// tool call for slideOldest/shortenNext to act on — is over budget
+		// for a reason that has nothing to do with notes. The relocated
+		// counter must stay narrow to notes specifically, not degrade into a
+		// generic "still over budget" catch-all.
+		key := "midturn-c1-negative-control"
+		window, ts := seedMidTurn(t, agent, key, []providers.Message{
+			{Role: "user", Content: proseOfTokens(budget * 2)},
+		})
+		require.Empty(t, ts.opts.WorkspaceID, "precondition: no workspace note can be injected")
+		require.Empty(t, buildWorkspaceInstructionsNote(ts.opts.WorkspaceID),
+			"precondition: nothing to inject for this turn")
+		require.Greater(t, requestTokens(window, nil), budget,
+			"precondition: the window alone (no notes) already exceeds B — irreducible pressure")
 
-	before := ContextResidueOverflowsTotal()
-	out, err := al.midTurnWindowCheck(ts, window, nil)
-	require.NoError(t, err, "FR-032 amendment: a note-only overflow (nothing eligible to empty, "+
-		"window fits without the notes) must not end the turn — the provider's own context error "+
-		"is the backstop, not this guard")
-	assert.Equal(t, window, out, "nothing was eligible to empty; the slice is returned unchanged")
-	assert.Greater(t, ContextResidueOverflowsTotal(), before,
-		"C1 preserved: the check still measured and logged the note-inflated total instead of "+
-			"silently treating the turn as fitting")
+		rt := &agentLoopRunTurn{al: al, ts: ts, turnCtx: context.Background()}
+		rf := &agentLoopRunTurnFallbacks{rt: rt, callMessages: window}
+		ri := &agentLoopRunTurnIteration{rf: rf, messages: window}
+		rq := &agentLoopRunTurnRequest{ri: ri}
+
+		before := ContextResidueOverflowsTotal()
+		err := rq.checkpointRequest()
+		require.NoError(t, err, "irreducible overflow is still not a local size-only failure (MAJ-CW-004/010)")
+		assert.Equal(t, before, ContextResidueOverflowsTotal(),
+			"the relocated counter must not fire here: the live window is ALSO over budget without "+
+				"any notes, so the notes-specific discriminator must stay false")
+	})
 }
 
 // TestMidTurnBudget_C1_NotesStillTriggerEmptying — companion to the C1 test

@@ -303,13 +303,19 @@ func TestWindowTrim_SingleHugeTurn_KeepsLastUser(t *testing.T) {
 	assert.Equal(t, 2, skip, "Skip = the floor's position, unchanged by emptying")
 	assert.Equal(t, archiveBefore, archiveLineCount(t, al, sk), "B-23: no archive line changes")
 
-	// Marks present: tc1 and tc2 emptied (oldest first), tc3 is the floor
-	// set and stays. Persisted state keyed by the ARCHIVE line (skip + idx).
+	// Marks present: tc1, tc2 AND tc3 (the floor set) all reach mark-only
+	// under this extreme single-huge-turn pressure. ADR-066 MAJ-CW-002
+	// (already confirmed against this code): "Newest-step text is
+	// shortenable to head/tail plus mark, down to mark-only if necessary;
+	// its slots are not removable." The floor's SLOTS survive (window stays
+	// 7 messages, Skip stays at 2, asserted above) but its TEXT is not
+	// exempt from shortening like any other result. Persisted state keyed
+	// by the ARCHIVE line (skip + idx).
 	pm := agent.Sessions.Projection(sk)
 	assert.Equal(t, memory.ProjectionEmptied, pm.Entries[memory.ProjectionKey{ToolCallID: "tc1", ArchiveLine: 4}])
 	assert.Equal(t, memory.ProjectionEmptied, pm.Entries[memory.ProjectionKey{ToolCallID: "tc2", ArchiveLine: 6}])
-	_, tc3Marked := pm.Entries[memory.ProjectionKey{ToolCallID: "tc3", ArchiveLine: 8}]
-	assert.False(t, tc3Marked, "the floor set is never emptied")
+	assert.Equal(t, memory.ProjectionEmptied, pm.Entries[memory.ProjectionKey{ToolCallID: "tc3", ArchiveLine: 8}],
+		"MAJ-CW-002: the floor set's text reaches mark-only under extreme pressure — only its slot is protected")
 	// Must terminate — not an infinite loop (test itself would hang if it looped).
 }
 
