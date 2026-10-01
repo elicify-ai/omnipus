@@ -766,20 +766,16 @@ func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
-	status := EnqueueStatusNormal
 	item := steeringQueueItem{message: msg, correlationID: correlationID}
-	st, err := al.enqueueSteeringItemWithStatus(scope, agentID, item, func() EnqueueStatus {
-		// Capture the post-finish status from the closing hand-off's
-		// transition buffer (the only path that lands an item during a
-		// terminal transition with non-refusal).
-		status = EnqueueStatusPostFinish
-		return status
+	// onPostFinish fires only when the closing hand-off's transition buffer
+	// accepted this item during a terminal transition with non-refusal; its
+	// return value becomes enqueueSteeringItemWithStatus's own returned
+	// status, so there is nothing left to reconcile here.
+	status, err := al.enqueueSteeringItemWithStatus(scope, agentID, item, func() EnqueueStatus {
+		return EnqueueStatusPostFinish
 	})
 	if err != nil {
 		return "", status, err
-	}
-	if st == EnqueueStatusPostFinish {
-		status = EnqueueStatusPostFinish
 	}
 	return correlationID, status, nil
 }
