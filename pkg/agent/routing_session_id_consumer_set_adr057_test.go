@@ -453,11 +453,10 @@ func u19CountClassAInWS5Artefact(t *testing.T) int {
 // (binding Rule 4 — proving the search is live) BEFORE asserting closure,
 // then asserts every read classifies into one of the five named buckets
 // with the exact expected per-bucket count, and finally asserts the grand
-// total is exactly 28 (7 role-B + 2 pre-arm + 18 WS-stamping + 0
-// inheritance-copy + 1 browser control-gate — see the ADR-091 amendment in
-// this file's header, and each assertion's own comment, for how this
-// dropped from the pre-ADR-091 total of 34) — none outside the set, none
-// silently missing.
+// total is exactly 30 (7 role-B + 2 pre-arm + 20 WS-stamping + 0
+// inheritance-copy + 1 browser control-gate — see the dated amendments
+// beside wantTotal for the two post-ADR-091 payload consumers) — none
+// outside the set, none silently missing.
 func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	fset := token.NewFileSet()
 	agentDir := "."
@@ -517,15 +516,18 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"steered-child reconstruction path (steer_reconstruct.go) does not build or read a pre-arm "+
 			"key from a live turnState at all)", got)
 	}
-	if got := counts[u19BucketWSStamping]; got != 19 {
-		t.Errorf("WS-payload-stamping reads = %d, want 19. The pre-existing eighteen are "+
+	if got := counts[u19BucketWSStamping]; got != 20 {
+		t.Errorf("WS-payload-stamping reads = %d, want 20. The pre-existing eighteen are "+
 			"loop.go x5, its four loop_run_turn*.go siblings x11, and external_dispatch.go x2 "+
 			"(the classifier's own comment on this bucket has the per-site breakdown). The nineteenth "+
 			"is loop_run_turn.go::callProviderOnce's §7.4 RetryObserver closure stamping "+
 			"LLMRetryPayload.SessionID for the provider_retry frame (MAJ-102) — a payload stamp exactly "+
 			"like its bucket siblings, added by this branch (provider-messages) and dated here per this "+
-			"guard's amendment convention; see the total-derivation comment below. Historical context, "+
-			"unchanged by that addition: the bucket dropped from a prior verified total of 22 for TWO "+
+			"guard's amendment convention. The twentieth is loop_run_turn.go::prepareToolSurface's "+
+			"duplicate-tool-definition ErrorPayload.SessionID stamp, added by d2783b1b (2026-09-30) "+
+			"so that the classified terminal error retains its routing identity; see the "+
+			"total-derivation comment below. Historical context, unchanged by these additions: the "+
+			"bucket dropped from a prior verified total of 22 for TWO "+
 			"distinct, independently-verified reasons, not one: (1) ADR-091 deleted subturn.go outright, "+
 			"removing its 2 WS-stamping sites (SubTurnSpawnPayload.SessionID, SubTurnEndPayload.SessionID) "+
 			"with no successor read — the frames themselves SURVIVE (moved to steer_frames.go's "+
@@ -599,7 +601,11 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	// LLMRetryPayload.SessionID (the provider_retry frame's session stamp,
 	// MAJ-102), a legitimate new consumer dated here per this guard's
 	// amendment convention.
-	const wantTotal = 29
+	// Terminal-notice amendment (2026-09-30, d2783b1b): 7 role-B + 2 pre-arm
+	// + 20 WS-stamping + 0 inheritance + 1 browser control-gate = 30. The
+	// added read is prepareToolSurface's duplicate-tool-definition error
+	// payload stamp; it belongs to the existing WS bucket, not a new category.
+	const wantTotal = 30
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the named buckets, or one of the buckets "+
