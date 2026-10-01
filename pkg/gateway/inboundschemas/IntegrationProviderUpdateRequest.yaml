@@ -30,6 +30,19 @@ properties:
       Storing a key alone (with no role fields in the same request) changes no
       role (ADR-096 D18 / AC-15).
     example: "BSA-abc123"
+  clear_api_key:
+    type: boolean
+    description: >
+      Search-only, keyed providers: true explicitly removes the catalogue-owned
+      saved key and switches this service off without changing the default,
+      fallback or role migration marker. Requires the same consent as saving.
+      When true, api_key, active and fallback must all be absent, including
+      empty or false values. Omitted or false leaves existing update semantics
+      unchanged; an empty api_key never deletes a key. Undecided roles, a custom
+      credential reference or a key shared with another connection return 409
+      without writes. Removal does not revoke the upstream key. A later-stage
+      failure returns a non-success response describing any persisted change.
+    example: true
   active:
     type: boolean
     description: >
