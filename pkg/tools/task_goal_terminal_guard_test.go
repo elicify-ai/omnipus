@@ -72,6 +72,7 @@ var knownStatusWriters = []statusWriter{
 	// ---- the terminal writers: each must end the paired goal record ------
 	{where: "pkg/agent.TaskExecutor.completeTaskWithResult", mustHook: true},
 	{where: "pkg/agent.TaskExecutor.failTask", mustHook: true},
+	{where: "pkg/agent.TaskExecutor.failTaskBeforeDispatch", mustHook: true},
 	{where: "pkg/agent.PlanEngine.cancelMemberLocked", mustHook: true},
 	{where: "pkg/gateway.taskPatch.buildPatch", mustHook: true},
 	{where: "pkg/gateway.restAPI.reconcileStuckTasks", mustHook: true},

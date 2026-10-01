@@ -357,7 +357,15 @@ func TestSteeredTurnDrain1020_SteeringAllLaterMarkerFailureDoesNotLoseConsumedPr
 }
 
 func flattenProviderRequests1020(requests [][]providers.Message) []providers.Message {
-	var flattened []providers.Message
+	// Capacity is the actual sum of each request's length, not
+	// len(request)*len(requests): later provider requests carry more
+	// accumulated history than earlier ones, so per-request length is not
+	// uniform and multiplying by one request's length would misestimate it.
+	total := 0
+	for _, request := range requests {
+		total += len(request)
+	}
+	flattened := make([]providers.Message, 0, total)
 	for _, request := range requests {
 		flattened = append(flattened, request...)
 	}

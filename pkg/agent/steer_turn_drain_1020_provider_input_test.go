@@ -73,7 +73,11 @@ func assertSteerRevivalInput1020(t *testing.T, requests [][]providers.Message, a
 		offset int
 	}
 	seen := make(map[string]bool)
-	var firstDelivery []string
+	// Capacity is len(accepted), not len(arrivals)*len(requests): `seen` caps
+	// each accepted text to exactly one append across all request iterations,
+	// so the final size can never exceed len(accepted) regardless of how many
+	// requests or per-request arrivals there are.
+	firstDelivery := make([]string, 0, len(accepted))
 	var lastInput string
 	for _, messages := range requests {
 		var userContents []string

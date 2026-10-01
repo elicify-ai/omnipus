@@ -283,7 +283,7 @@ func testDelegateClearGoalUnauthorizedAgent(t *testing.T) {
 			h := newDelegateClearGoalHarness(t)
 			subhelper := launchGoalBearingChild(t, h.al, h.helper.SessionID, "call-clear-goal-denied-subhelper")
 			leaf := launchGoalBearingChild(t, h.al, subhelper.SessionID, "call-clear-goal-denied-leaf")
-			callerID := ""
+			var callerID string
 			if callerKind == "sibling" {
 				callerID = launchGoalBearingChild(t, h.al, h.parentID, "call-clear-goal-denied-sibling").SessionID
 			} else {

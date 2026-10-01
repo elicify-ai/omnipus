@@ -21,8 +21,8 @@ import (
 )
 
 // restUnrelatedFailedCauseFault reuses the EXISTING gatewayTaskAtomicWriter
-// seam declared in rest_task_session_binding_fault_test.go (the same
-// go:linkname alias to task.writeFileAtomicFn) for a distinct scenario from
+// seam declared in rest_task_session_binding_fault_test.go (the same alias,
+// via go:linkname, to task.writeFileAtomicFn) for a distinct scenario from
 // that file's restBindingWriteFault: here the session-binding write for the
 // target task persistently fails with bindingCause, exactly as
 // installRESTBindingWriteFault does, so the real executor's own
