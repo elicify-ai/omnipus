@@ -480,7 +480,18 @@ func terminalErrorBootMessage(rec *session.LifecycleRecord) (generated.SessionMe
 	prefix, outcome := "failed:", steer.OutcomeFailed
 	switch rec.State {
 	case session.LifecycleStopped:
-		prefix, outcome = "interrupted:", steer.OutcomeInterrupted
+		// Unreachable today (the sole caller path guards on rec.Terminal(),
+		// which excludes Stopped), but read the durable StopNote.Cause rather
+		// than hardcoding "interrupted", so this branch can never silently
+		// misreport a timeout as a plain stop if it ever becomes reachable —
+		// mirrors goal_child_completion.go::goalSessionEndedReasonForState's
+		// explicit timed-out branch. "timeout:" is this file's own prefix
+		// vocabulary (bootOutcome classifies it back to OutcomeTimedOut).
+		if rec.StopNote != nil && rec.StopNote.Cause == session.StopCauseTimeout {
+			prefix, outcome = "timeout:", steer.OutcomeTimedOut
+		} else {
+			prefix, outcome = "interrupted:", steer.OutcomeInterrupted
+		}
 	case session.LifecycleFailed:
 		if rec.FailedReason == failedReasonInterrupted {
 			prefix, outcome = "interrupted:", steer.OutcomeInterrupted

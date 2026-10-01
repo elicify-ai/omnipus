@@ -282,7 +282,8 @@ type LifecycleRecord struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Terminal reports whether r's State is one of the four terminal states.
+// Terminal reports whether r's State is one of the two terminal states
+// (completed/failed).
 func (r *LifecycleRecord) Terminal() bool {
 	if r == nil {
 		return false
@@ -810,7 +811,7 @@ type LifecycleFilter struct {
 	// in this set.
 	States map[LifecycleState]bool
 	// NonTerminalOnly, when true, is shorthand for "State is not one of the
-	// four terminal states" — the boot sweep's primary query (another
+	// two terminal states" — the boot sweep's primary query (another
 	// wave), exposed here since it is the store's natural output shape.
 	NonTerminalOnly bool
 }
@@ -951,7 +952,7 @@ func (s *LifecycleStore) Exists(sessionID string) bool {
 }
 
 // PruneTerminal deletes the persisted .jsonl file for every session_id whose
-// TAIL record is terminal (completed/failed/cancelled/timed_out) and whose
+// TAIL record is terminal (completed/failed) and whose
 // UpdatedAt is older than retentionDays*24h — explicit retention for what
 // would otherwise be an unbounded, append-only-per-session-id store with no
 // prune path at all (mirrors UnifiedStore.RetentionSweep's own contract and

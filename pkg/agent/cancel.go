@@ -41,7 +41,8 @@ var cancelHardAbortDelay = 3 * time.Second
 var cancelDetachDelay = 5 * time.Second
 
 // CancelScope identifies what to cancel.
-// Exactly one of SessionID or (Channel + ChatID) must be set.
+// At least one of SessionID or (Channel + ChatID) must be set; if both are
+// set, SessionID takes priority and Channel/ChatID are ignored.
 //
 //   - SessionID is preferred when known (web SPA, CLI, Tier A /cancel).
 //   - Channel + ChatID is used by Tier B channels that carry no SessionID;
