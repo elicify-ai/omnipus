@@ -566,18 +566,29 @@ func TestMidTurnBudget_C1_NotesStillTriggerEmptying(t *testing.T) {
 // introduced: it added noteTokens (the un-emptiable ephemeral system
 // notes — scratchpad, AGENT.md, web-rendering, compressed manifest) to the
 // residue midTurnPassCanSucceed refuses on, making those notes count
-// against the thrash guard even though D5 can never touch them. A
+// against the thrash guard even though D5 can never empty them. A
 // large-but-legal AGENT.md (D9's 262,144-byte cap has no budget-aware
 // clamp) then made every tool-calling turn on that workspace end with
 // ErrContextUnrecoverable — permanently, since the cause is static
 // configuration, not an injected fault (ADR-066 §7).
 //
-// Scenario, mirroring the reported worked example: the ONLY tool result
-// present IS the entire floor set (the last assistant step's own result —
-// never eligible for D5, so nothing at all can be emptied), sized near the
-// D4 clamp; the workspace's AGENT.md, once injected, is large enough that
-// notes + floor exceed B, but the floor alone (the window, minus the
-// un-emptiable notes) fits comfortably under B on its own.
+// Scenario, distinct from C1's positive subtest (which has NO tool results
+// at all, so D5 is a structural no-op): the ONLY tool result present IS the
+// entire floor set — the last (and only) assistant step's own result.
+// shortenNext (pkg/agent/window_relief.go) treats the newest step's result
+// as eligible too — halving it repeatedly as pressure demands, which this
+// scenario's exhaustive loop drives all the way to content_state=emptied,
+// verified empirically (CHECK-A note: an earlier draft of this fix assumed
+// the newest step's result could only ever be shortened, never emptied;
+// that assumption does not hold — shortenResult marks state=Emptied once
+// `kept` reaches 0, which repeated halving reaches). The AGENT.md note is
+// sized (like C1's) so it alone already exceeds B: the same robust
+// technique C1 uses, and for the same reason — it makes the residue
+// irreducible no matter how exhaustively D5 works the floor result, so the
+// counter/no-fatal-exit assertions below hold regardless of exactly how far
+// shortenNext gets. What this test actually proves, distinct from C1: D5
+// performing real, exhaustive work on the window (not a no-op) still ends
+// in the correct outcome — no fatal exit, and the residue still observed.
 func TestMidTurnBudget_ResidueRegression_NotesAloneDoNotEndTurn(t *testing.T) {
 	al, agent := midTurnFixture(t, 40_000, 0)
 	budget := agentContextBudget(agent)
@@ -588,11 +599,11 @@ func TestMidTurnBudget_ResidueRegression_NotesAloneDoNotEndTurn(t *testing.T) {
 	wsID := "residue-regression-ws"
 	wsDir := filepath.Join(home, "workspaces", wsID)
 	require.NoError(t, os.MkdirAll(wsDir, 0o755))
-	agentMD := proseOfTokens(budget * 7 / 10) // ~0.7B, mirrors the reported ~16,000/23,033
+	agentMD := proseOfTokens(budget * 6 / 5) // ~1.2x budget, mirrors C1: the note alone exceeds B
 	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "AGENT.md"), []byte(agentMD), 0o644))
 
 	key := "midturn-residue-regression"
-	floor := proseOfTokens(budget / 2) // ~0.5B, mirrors the D4-clamp-sized single result
+	floor := proseOfTokens(budget / 2) // ~0.5B: a large single result, distinct from C1's empty window
 	window, ts := seedMidTurn(t, agent, key, []providers.Message{
 		{Role: "user", Content: "run the one tool"},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "a")}},
@@ -602,22 +613,41 @@ func TestMidTurnBudget_ResidueRegression_NotesAloneDoNotEndTurn(t *testing.T) {
 
 	windowOnly := requestTokens(window, nil)
 	require.LessOrEqual(t, windowOnly, budget,
-		"precondition: the window itself already fits B — the single result IS the floor, so nothing "+
-			"is eligible to empty and the D5 pass can only ever be a no-op here")
+		"precondition: the window itself already fits B without any D5 relief")
 	noteTokens := al.ephemeralSystemNoteTokens(ts)
-	require.Positive(t, noteTokens)
-	require.Greater(t, windowOnly+noteTokens, budget,
-		"precondition: total (window + the un-emptiable notes) exceeds B — the trigger still fires (C1)")
+	require.Greater(t, noteTokens, budget,
+		"precondition: the injected workspace-instructions note alone exceeds B — no amount of D5 "+
+			"shortening of the floor result can ever bring the total under B")
+
+	// Reproduce prepareCallMessages' own injection for this one note — the
+	// exact call shape of pkg/agent/loop_run_turn.go's
+	// injectWorkspaceInstructions(callMessages, buildWorkspaceInstructionsNote(...))
+	// call — so the candidate matches what checkpointRequest receives for
+	// real turns (architect's ruling: the counter now lives at the final
+	// assembled-request checkpoint, not the old per-result path).
+	candidate := injectWorkspaceInstructions(window, buildWorkspaceInstructionsNote(wsID))
+	require.Greater(t, requestTokens(candidate, nil), budget,
+		"precondition: the assembled candidate (window + note) is what now overflows B")
+
+	rt := &agentLoopRunTurn{al: al, ts: ts, turnCtx: context.Background()}
+	rf := &agentLoopRunTurnFallbacks{rt: rt, callMessages: candidate}
+	ri := &agentLoopRunTurnIteration{rf: rf, messages: window}
+	rq := &agentLoopRunTurnRequest{ri: ri}
 
 	before := ContextResidueOverflowsTotal()
-	out, err := al.midTurnWindowCheck(ts, window, nil)
+	err := rq.checkpointRequest()
 	require.NoError(t, err,
 		"REGRESSION: FR-032's fatal exit is reserved for an injected fault (a non-tool message itself "+
 			"oversized), never for a configuration-size condition like an oversized AGENT.md — the un-emptiable "+
 			"notes must not end an otherwise-fitting turn")
-	assert.Equal(t, floor, out[2].Content, "nothing was eligible to empty — the floor content is untouched")
+	assert.NotEqual(t, window, rq.ri.messages,
+		"distinct from C1's positive subtest (an empty window D5 can only ever return unchanged): here "+
+			"D5 has a real tool result to work with and exhausts every operation available on it "+
+			"(shortenNext repeatedly halves the newest step's result, eventually emptying it) trying — "+
+			"and failing — to relieve the irreducible notes-driven pressure")
 	assert.Greater(t, ContextResidueOverflowsTotal(), before,
-		"the overflow is still observed and logged (one ERROR), never silently swallowed")
+		"even after D5 exhausts every operation available on the window, the note-driven residue is "+
+			"still observed and logged (one ERROR), never silently swallowed")
 }
 
 // midTurnLineResolverForTest builds the same resolver midTurnWindowCheck
