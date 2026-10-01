@@ -106,8 +106,8 @@ func TestU1PlanStopSteeredMemberNoticeLandsForDirectParentOnly(t *testing.T) {
 	})
 	wakes := observeU1ParentNoticeWakes(t, al, origin)
 
-	if _, err := h.pe.StopPlan(context.Background(), "p1", "tester", "web"); err != nil {
-		t.Fatalf("StopPlan: %v", err)
+	if _, stopErr := h.pe.StopPlan(context.Background(), "p1", "tester", "web"); stopErr != nil {
+		t.Fatalf("StopPlan: %v", stopErr)
 	}
 
 	// Premise (D8.10 keeps it): the plan itself lands failed/stopped_by_user.

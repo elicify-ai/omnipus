@@ -23,8 +23,9 @@ import (
 )
 
 // depthEchoProvider returns the last "user" role message content verbatim as
-// its final answer. Used by TestCompletion_LastChildCompletesWaitingParent
-// (the finding-A/B exit proof) so a re-entered turn's real output is
+// its final answer. Used by TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion
+// and TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling (the
+// finding-A/B exit proofs) so a re-entered turn's real output is
 // traceably derived from what it was actually asked — never a value the
 // test invents — proving the chain carries the CHILD's real result, not a
 // stale value read off the parent's own prior transcript.
@@ -350,13 +351,23 @@ func TestCompletion_IterationLimit_NonFatal_WakesParent(t *testing.T) {
 	}
 }
 
-// TestCompletion_LastChildCompletesWaitingParent is ADR-091 fix lane 1's
-// finding-A/B exit proof: a REAL two-hop delegation (root -> waitingParent
-// -> lastChild) where the grandchild's result must reach the grandparent
-// (root) — not a stale value read off the parent's own prior answer — and
-// every non-parked, non-root session lands terminal.
+// TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion
+// is ADR-091 fix lane 1's finding-A exit proof, re-aimed at the sub-agent
+// control-plane completion frontier (D6 Q2=B / D6b, F1011-Q4): a REAL
+// two-hop delegation (root -> waitingParent -> {lastChild, parked}) where
+// the grandchild's completion genuinely wakes and re-enters the middle
+// parent — but the parent's DONE is held back by its parked needs_input
+// child.
 //
-// Finding A (CRITICAL, the release blocker): lastChild's own
+// Formerly TestCompletion_LastChildCompletesWaitingParent: that name and its
+// post-wake completion/handback assertions pinned the SUPERSEDED ADR-091 D6
+// exemption (a parent completing while a parked sibling held an open
+// question, the question attached to the handback). F1011-Q4/D6b reversed
+// that rule. The successful two-hop completion and the genuine-content /
+// stale-content handback coverage the old assertions also carried now live
+// in TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling below.
+//
+// Finding A (CRITICAL, the original release blocker): lastChild's own
 // SteeredBy.ReportingTarget used to be EMPTY whenever its steering session
 // (waitingParent) had no real external Channel/PeerID of its own — true for
 // every steered session, since a steered session's own identity is minted
@@ -366,15 +377,19 @@ func TestCompletion_IterationLimit_NonFatal_WakesParent(t *testing.T) {
 // waitingParent was never re-entered, and the now-DELETED
 // completeWaitingAncestors shortcut silently substituted waitingParent's
 // OWN stale last answer instead of the real one. This test seeds exactly
-// that stale text (staleText, below) to prove it is never read again.
+// that stale text (staleText, below) and still proves the wake actually
+// arrives: the select below times out on unfixed code.
 //
-// Finding B (CRITICAL, latent): once A is fixed, the wake that reaches
-// waitingParent must itself run a real turn AND complete on that same exit
-// path — loop_inbound.go::processSteeredSystemWake used to return after
-// running the woken turn without ever calling completeSteeredTurn/
-// finishSteeredGoalTurn, leaving a successfully re-entered session `running`
-// forever.
-func TestCompletion_LastChildCompletesWaitingParent(t *testing.T) {
+// D6b (F1011-Q4; supersedes ADR-091 D6's parked exemption): waitingParent's
+// re-entered turn finishes with a real answer, but its criteria-free
+// quiet-subtree completion must WAIT while any descendant reachable without
+// crossing a stopped node is queued, live running, or needs_input. parked
+// holds an open question (q-1), so waitingParent's record stays running and
+// NOTHING is handed back to the root while the question is open — the
+// produced answer is durable in waitingParent's own transcript, and the
+// wait is bounded by the question's 24-hour limit (D1.8), not by this
+// completion check.
+func TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion(t *testing.T) {
 	al, cleanup := newSteerALWithProvider(t, &depthEchoProvider{})
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
@@ -446,16 +461,138 @@ func TestCompletion_LastChildCompletesWaitingParent(t *testing.T) {
 		t.Fatalf("processSystemMessage(wake waitingParent): %v", wakeErr)
 	}
 
-	// Finding B: waitingParent's own turn must have completed on this exit
-	// path too — not left `running` forever after a successful re-entry.
+	// D6b (F1011-Q4): the parked needs_input descendant holds back
+	// waitingParent's done — its re-entered turn's answer is durable in its
+	// transcript and completion waits until the question is answered (the
+	// 24-hour limit, D1.8, bounds the wait). This supersedes ADR-091 D6's
+	// exemption, which let a parent complete while a parked sibling held an
+	// open question.
+	got, err := al.GetSessionLifecycleStore().Load(waitingParent.SessionID)
+	if err != nil {
+		t.Fatalf("Load(waiting parent): %v", err)
+	}
+	if got.State != session.LifecycleRunning {
+		t.Fatalf("waiting parent state after its wake ran = %q, want running — "+
+			"D6b: its parked needs_input descendant holds back its done until "+
+			"the question is answered", got.State)
+	}
+
+	// Nothing may be handed back to the root while a needs_input descendant
+	// holds its question: no premature handback of any kind. (The stale
+	// no-leak guarantee is asserted through a REAL handback at this same
+	// seam by TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling
+	// below — here no handback may exist at all.)
+	msgs, _, _, err := al.GetMessageInboxStore().Drain(rootID, waitingParent.SessionID, "", 10)
+	if err != nil {
+		t.Fatalf("Drain(root): %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("root messages = %d, want 0 — D6b: no handback may reach the root "+
+			"while a needs_input descendant holds its question (stale seed %q must never travel)",
+			len(msgs), staleText)
+	}
+
+	// End state: lastChild landed terminal (asserted above; its own
+	// completion is unaffected by its sibling's hold), and parked KEEPS its
+	// question — needs_input is non-terminal by design under D6b; the wait
+	// is bounded by D1.8's 24-hour expiry, not by this completion check.
+	// waitingParent's `running` is the assertion above.
+	gotLast, err := al.GetSessionLifecycleStore().Load(lastChild.SessionID)
+	if err != nil {
+		t.Fatalf("Load(lastChild) at end: %v", err)
+	}
+	if !gotLast.Terminal() {
+		t.Errorf("lastChild state = %q, want terminal", gotLast.State)
+	}
+	gotParked, err := al.GetSessionLifecycleStore().Load(parked.SessionID)
+	if err != nil {
+		t.Fatalf("Load(parked): %v", err)
+	}
+	if gotParked.State != session.LifecycleNeedsInput {
+		t.Fatalf("parked state = %q, want needs_input — D6b holds the parent's done "+
+			"without disturbing the parked child", gotParked.State)
+	}
+	if gotParked.Terminal() {
+		t.Errorf("parked is terminal (%q), want non-terminal needs_input — D6b bounds the wait by D1.8, not by the parent's completion", gotParked.State)
+	}
+}
+
+// TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling carries the
+// successful two-hop completion coverage that D6b (F1011-Q4) moved off the
+// renamed TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion
+// above: the SAME fixture (root -> waitingParent -> lastChild, the seeded
+// staleText, depthEchoProvider's traceable echo) WITHOUT the parked
+// needs_input sibling — so nothing holds the parent's done back and the
+// original finding-A/finding-B contract holds end to end: lastChild's real
+// result rides the real re-entry into waitingParent's own completed turn
+// and lands in the root's inbox as exactly one handback, never the stale
+// text seeded into waitingParent's own transcript, and no session is left
+// running.
+func TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling(t *testing.T) {
+	al, cleanup := newSteerALWithProvider(t, &depthEchoProvider{})
+	defer cleanup()
+	wireSteerCompletionDeps(t, al)
+	rootID := newTestSteeringSession(t, al, "ws-1")
+	waitingParent := launchRunningChild(t, al, rootID, "call-parent")
+	const staleText = "STALE PARENT TEXT MUST NOT REACH ROOT"
+	if err := al.GetSessionStore().AppendTranscriptStrict(waitingParent.SessionID, session.TranscriptEntry{
+		ID: "parent-answer", Role: "assistant", Content: staleText, Timestamp: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("AppendTranscriptStrict(parent answer): %v", err)
+	}
+	lastChild := launchRunningChild(t, al, waitingParent.SessionID, "call-child")
+
+	// The grandchild completes for real — its wake must reach waitingParent
+	// (finding A's ReportingTarget fix) exactly as in the parked variant.
+	if err := al.completeSteeredTurn(context.Background(), lastChild, turnResult{finalContent: "child result"}, nil); err != nil {
+		t.Fatalf("completeSteeredTurn(lastChild): %v", err)
+	}
+
+	gotChild, err := al.GetSessionLifecycleStore().Load(lastChild.SessionID)
+	if err != nil {
+		t.Fatalf("Load(lastChild): %v", err)
+	}
+	if gotChild.State != session.LifecycleCompleted {
+		t.Fatalf("lastChild state = %q, want completed", gotChild.State)
+	}
+
+	// No shortcut may complete waitingParent before its own re-entry.
+	gotParentBefore, err := al.GetSessionLifecycleStore().Load(waitingParent.SessionID)
+	if err != nil {
+		t.Fatalf("Load(waitingParent) before its wake: %v", err)
+	}
+	if gotParentBefore.State != session.LifecycleRunning {
+		t.Fatalf("waitingParent state before its own wake ran = %q, want running (nothing may complete it early)", gotParentBefore.State)
+	}
+
+	// Drive waitingParent's real re-entry through the SAME
+	// processSystemMessage entry point production uses.
+	var wake bus.InboundMessage
+	select {
+	case wake = <-al.bus.InboundChan():
+	case <-time.After(5 * time.Second):
+		t.Fatal("lastChild's completion never woke waitingParent — Finding A's ReportingTarget fix did not take effect")
+	}
+	if _, wakeErr := al.processSystemMessage(context.Background(), wake); wakeErr != nil {
+		t.Fatalf("processSystemMessage(wake waitingParent): %v", wakeErr)
+	}
+
+	// With no parked sibling there is nothing to hold the done back:
+	// waitingParent's re-entered turn must land completed on this same exit
+	// path (finding B). D6b blocks only on queued / live-running /
+	// needs_input descendants; a completed child is neither.
 	got, err := al.GetSessionLifecycleStore().Load(waitingParent.SessionID)
 	if err != nil {
 		t.Fatalf("Load(waiting parent): %v", err)
 	}
 	if got.State != session.LifecycleCompleted {
-		t.Fatalf("waiting parent state after its wake ran = %q, want completed", got.State)
+		t.Fatalf("waiting parent state after its wake ran = %q, want completed — no needs_input sibling holds it back", got.State)
 	}
 
+	// Genuine content delivery: the root receives exactly one handback and
+	// its result is waitingParent's REAL re-entered answer — the echoed
+	// grandchild's "child result" — never the stale text seeded into
+	// waitingParent's own transcript above.
 	msgs, _, _, err := al.GetMessageInboxStore().Drain(rootID, waitingParent.SessionID, "", 10)
 	if err != nil {
 		t.Fatalf("Drain(root): %v", err)
@@ -467,23 +604,14 @@ func TestCompletion_LastChildCompletesWaitingParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handback: %v", err)
 	}
-	// depthEchoProvider makes waitingParent's real final answer exactly the
-	// wake content it was re-entered with, which carries the GRANDCHILD's
-	// real result — never the stale text seeded above.
 	if !strings.Contains(handback.ResultSoFar, "child result") {
 		t.Fatalf("root's result_so_far = %q, want it to contain the grandchild's real result %q", handback.ResultSoFar, "child result")
 	}
 	if strings.Contains(handback.ResultSoFar, staleText) {
 		t.Fatalf("root's result_so_far = %q leaked waitingParent's OWN stale pre-existing answer instead of a real re-entry", handback.ResultSoFar)
 	}
-	if len(handback.OpenQuestions) != 1 || handback.OpenQuestions[0] != "Which region?" {
-		t.Errorf("open_questions = %#v, want [Which region?]", handback.OpenQuestions)
-	}
 
-	// Nothing is left running: the grandchild and its parent both landed
-	// terminal (the parked sibling is a legitimate, separate exemption —
-	// its own coverage is TestCompletion_LastChildCompletesWaitingParent's
-	// OpenQuestions assertion above, not a terminal-state one).
+	// Nothing is left running: both sessions landed terminal.
 	for _, id := range []string{lastChild.SessionID, waitingParent.SessionID} {
 		rec, err := al.GetSessionLifecycleStore().Load(id)
 		if err != nil {
@@ -497,7 +625,8 @@ func TestCompletion_LastChildCompletesWaitingParent(t *testing.T) {
 
 // TestCompletion_ToolIterationLimit_WakesAndUnblocksParent is ADR-091 fix
 // lane RX-HANG's exit proof: it is the SAME real two-hop shape as
-// TestCompletion_LastChildCompletesWaitingParent above (root -> waitingParent
+// TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling above
+// (root -> waitingParent
 // -> lastChild, a genuine re-entered turn through al.processSystemMessage,
 // never a mock of the completion or delivery path) but exercises the defect
 // this lane fixes instead — lastChild does not finish with an answer, it
