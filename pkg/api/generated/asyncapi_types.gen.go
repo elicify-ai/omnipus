@@ -1383,6 +1383,7 @@ const (
 	WsFrameTypeAuth                     WsFrameType = "auth"
 	WsFrameTypeMessage                  WsFrameType = "message"
 	WsFrameTypeCancel                   WsFrameType = "cancel"
+	WsFrameTypeRedirect                 WsFrameType = "redirect"
 	WsFrameTypePing                     WsFrameType = "ping"
 	WsFrameTypeAttachSession            WsFrameType = "attach_session"
 	WsFrameTypeDevicePairingResponse    WsFrameType = "device_pairing_response"

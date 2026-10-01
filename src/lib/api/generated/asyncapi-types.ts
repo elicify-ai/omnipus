@@ -10,6 +10,7 @@ export type WsFrameType =
   | "auth"
   | "message"
   | "cancel"
+  | "redirect"
   | "ping"
   | "attach_session"
   | "device_pairing_response"
