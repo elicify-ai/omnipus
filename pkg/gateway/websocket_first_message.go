@@ -9,7 +9,7 @@ import (
 
 // acknowledgeNewSession binds the sender before its first echo and supplies
 // the initial cursor. Ordinary first sends call it only after a durable append;
-// workspace kickoffs and ADR-066 oversized-input refusals keep their old order.
+// workspace kickoffs and legacy no-ID oversized refusals keep their old order.
 func (hcm *wsHandlerHandleChatMessage) acknowledgeNewSession() {
 	hcm.h.mu.Lock()
 	hcm.h.sessionIDs[hcm.chatID] = hcm.sessionID

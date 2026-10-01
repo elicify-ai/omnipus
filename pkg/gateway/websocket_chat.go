@@ -105,8 +105,9 @@ type wsHandlerHandleChatMessage struct {
 	msg                 bus.InboundMessage
 	transcriptPersisted bool
 	admitted            bool
-	// firstMessage is an ordinary, within-bound session-less user send.
-	// Oversized input keeps ADR-066's separate agent-side refusal path.
+	// firstMessage is an ordinary session-less send using save-before-ack.
+	// ID-bearing oversized sends are rejected before minting; legacy no-ID
+	// oversized input keeps ADR-066's separate agent-side refusal path.
 	firstMessage bool
 	// firstRequestDigest captures original requested fields before intake mutates
 	// them, so a retry compares the request, not newly resolved server defaults.
@@ -240,7 +241,7 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	}
 	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, wc: wc}
 	hcm.firstMessage = frameSessionID == "" && !setupKickoff &&
-		agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound()
+		(clientMessageID != "" || agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound())
 	defer func() {
 		if !hcm.admitted && !hcm.firstMessage {
 			hcm.h.forgetAcceptedMessage(hcm.sessionID, hcm.clientMessageID)
@@ -326,6 +327,12 @@ func (hcm *wsHandlerHandleChatMessage) prepareMessage() bool {
 		// Saved retries retain the original agent/session if defaults changed.
 		if hcm.answerRetriedMessage() {
 			hcm.admitted = true
+			return true
+		}
+		// A saved retry stays recoverable even if the configured bound changed.
+		// Reject only a new first send, before any session, append, or admission.
+		if agent.UserMessageChars(hcm.content) > hcm.h.agentLoop.UserMessageBound() {
+			hcm.sendFirstMessageError("not_saved")
 			return true
 		}
 	}
@@ -903,7 +910,7 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 
 // mintSession creates and stamps a session for a message with no session_id.
 // Ordinary first-message acknowledgement is deferred until its durable append.
-// Kickoffs and oversized-input refusals keep their existing acknowledgement path.
+// Kickoffs and legacy no-ID oversized refusals keep their acknowledgement path.
 // Returns true when the message was rejected.
 func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 	// No session_id in frame: mint a new session so all subsequent frames have one.
@@ -1051,14 +1058,12 @@ func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
 // persisted, echoes it to every tab as a user_message frame. A failed ordinary
 // first append rejects intake before its acknowledgement or turn admission.
 func (hcm *wsHandlerHandleChatMessage) persistUserMessage() bool {
-	// ADR-066 D4 / FR-015: this handler persists the user message BEFORE
-	// the bus publish, but processMessage is the enforcement point for
-	// the user-message bound and refuses an over-bound message with NO
-	// transcript entry. So the one thing this intake does for the bound
-	// is skip that early write when processMessage is about to refuse —
-	// the refusal reply itself comes back through the ordinary outbound
-	// path (token + done frames, never an error frame). A kickoff turn
-	// discards the client content entirely, so it is never over-bound.
+	// ID-bearing first sends pass their size preflight before session creation.
+	// ADR-066 D4 / FR-015: legacy no-ID first sends and existing-session
+	// messages still rely on processMessage for the over-bound refusal. Skip
+	// their early transcript write; the refusal returns through the ordinary
+	// outbound path (token + done frames). A kickoff turn discards the client
+	// content entirely, so it is never over-bound.
 	overUserBound := !hcm.setupKickoff &&
 		agent.UserMessageChars(hcm.content) > hcm.h.agentLoop.UserMessageBound()
 	if hcm.sessionID != "" && !overUserBound {

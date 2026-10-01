@@ -24,6 +24,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -188,6 +189,17 @@ func (hcm *wsHandlerHandleChatMessage) answerRetriedFirstMessage() bool {
 	// A failed lookup stays a retry hit: do not mint a second chat for this id.
 	meta, err := accepted.store.GetMeta(accepted.sessionID)
 	if err != nil || meta == nil || meta.Owner != hcm.wc.userID {
+		stage := "metadata"
+		if err == nil {
+			if meta == nil {
+				err = errors.New("session metadata is missing")
+			} else {
+				stage = "owner"
+				err = errors.New("session owner does not match retry principal")
+			}
+		}
+		logsafeWarn("ws: could not check cached first-message session",
+			"stage", stage, "session_id", accepted.sessionID, "error", err)
 		cid := hcm.clientMessageID
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:            string(generated.WsFrameTypeError),
