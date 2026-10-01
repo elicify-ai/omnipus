@@ -132,7 +132,19 @@ func TestGoalQ2B_RejectRunningChildren_AllDirectChildrenTerminalProceed(t *testi
 	}{
 		{"q2b-completed-direct", session.LifecycleCompleted},
 		{"q2b-failed-direct", session.LifecycleFailed},
-		{"q2b-cancelled-direct", session.LifecycleCancelled},
+		// A third row for session.LifecycleCancelled used to live here. U1's
+		// lifecycle-state consolidation retired that state: cancellation,
+		// timeout and a paused plan-owner are all now session.LifecycleStopped
+		// (pkg/session/lifecycle.go), which is deliberately NON-terminal (the
+		// consolidation's own point — a stopped session can still continue).
+		// session.IsTerminalLifecycleState only returns true for
+		// Completed/Failed now (terminalLifecycleStates in lifecycle.go), so
+		// there is no longer a third terminal state to substitute in — using
+		// LifecycleStopped here would silently assert the false claim that
+		// Stopped is terminal. This test's intent ("N terminal direct
+		// children -> goal proceeds") is still fully proven by the two real
+		// remaining terminal states below; a third redundant case isn't
+		// needed. Dropped, not replaced.
 	} {
 		child := q2bLaunchDescendant(t, h, tc.callID, session.LifecycleQueued)
 		q2bMakeDirectChildTerminal(t, h, child, tc.state)
