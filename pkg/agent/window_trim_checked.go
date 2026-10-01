@@ -6,7 +6,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -25,7 +24,7 @@ func (al *AgentLoop) trimWindowChecked(ctx context.Context, agent *AgentInstance
 	if err != nil {
 		return compressionResult{Err: err}, false
 	}
-	msgs, lines := memory.WindowHistory(snap)
+	msgs, lines := recoveryWindowHistory(snap)
 	ts := al.getActiveTurnState(key)
 	if ts == nil {
 		ts = &turnState{agent: agent, sessionKey: key}
