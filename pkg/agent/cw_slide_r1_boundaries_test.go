@@ -40,9 +40,10 @@ func TestCWSlideR1_ReusedIDsStayScopedToTheirRetainedSteps(t *testing.T) {
 	var calls []providers.ToolCall
 	var results []providers.Message
 	for _, message := range sent {
-		if message.Role == "assistant" {
+		switch message.Role {
+		case "assistant":
 			calls = append(calls, message.ToolCalls...)
-		} else if message.Role == "tool" {
+		case "tool":
 			results = append(results, message)
 		}
 	}

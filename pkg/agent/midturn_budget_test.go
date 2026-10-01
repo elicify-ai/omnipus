@@ -351,7 +351,6 @@ func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 		assert.Greater(t, requestTokens(out, nil), budget*4/5, "target genuinely unreachable: the oversized user message dominates")
 		assert.LessOrEqual(t, requestTokens(out, nil), budget, "…but the trigger is satisfied")
 	})
-
 }
 
 // TestMidTurnBudget_NewestSharePressureShortensAndSends preserves issue #775's

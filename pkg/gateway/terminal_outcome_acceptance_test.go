@@ -228,7 +228,9 @@ func terminalAcceptanceAssertLog(t *testing.T, path string, end agent.Event, wan
 	if !strings.HasSuffix(firstSentence, ".") {
 		firstSentence += "."
 	}
-	assert.True(t, strings.HasPrefix(responses[0]["message"].(string), "Response: "+firstSentence),
+	message, ok := responses[0]["message"].(string)
+	require.True(t, ok, "diagnostic reason must be a string message; actual=%v", responses[0]["message"])
+	assert.True(t, strings.HasPrefix(message, "Response: "+firstSentence),
 		"diagnostic reason must match the complete specified terminal sentence; actual=%v", responses[0]["message"])
 }
 
@@ -256,7 +258,7 @@ func terminalAcceptanceAssertReplay(
 		}
 	}
 	assert.Equal(t, contents, replayContents, "reattach replay must equal this same turn's actual transcript")
-	var durableIDs []string
+	durableIDs := make([]string, 0, len(terminalEntries))
 	for _, entry := range terminalEntries {
 		durableIDs = append(durableIDs, entry.ID)
 	}

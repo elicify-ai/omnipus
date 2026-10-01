@@ -146,8 +146,8 @@ func (al *AgentLoop) checkpointWindow(ctx context.Context, ts *turnState, messag
 	}
 	progress := false
 	for {
-		if err := ctx.Err(); err != nil {
-			return messages, false, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return messages, false, ctxErr
 		}
 		if force && progress {
 			bytes, sizeErr := retainedPayloadSize(ts, p.messages)
@@ -185,8 +185,8 @@ func (al *AgentLoop) checkpointWindow(ctx context.Context, ts *turnState, messag
 		return messages, false, nil
 	}
 	if force {
-		if err := validateWindowGroups(p.messages); err != nil {
-			return messages, false, err
+		if groupErr := validateWindowGroups(p.messages); groupErr != nil {
+			return messages, false, groupErr
 		}
 	}
 	changes, err := al.commitWindowProjections(ctx, p, store)

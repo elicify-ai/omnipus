@@ -100,8 +100,8 @@ func (t *RecallConversationTool) executeArchiveRange(ctx context.Context, key st
 	if err != nil {
 		return archiveRangeError(err)
 	}
-	if err := ctx.Err(); err != nil {
-		return archiveRangeError(err)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return archiveRangeError(ctxErr)
 	}
 	reader, ok := t.archive.(memory.ArchiveRangeScanner)
 	if !ok {

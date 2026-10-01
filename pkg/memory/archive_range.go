@@ -64,8 +64,8 @@ func (s *JSONLStore) ScanEvictedArchive(ctx context.Context, key string, fn func
 }
 
 func (s *JSONLStore) scanArchiveRangeLocked(ctx context.Context, key string, from, to int, fn func(int, []byte, ArchivedMessage) error) (err error) {
-	if err := ctx.Err(); err != nil {
-		return err
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
 	f, err := os.Open(s.jsonlPath(key))
 	if errors.Is(err, os.ErrNotExist) {

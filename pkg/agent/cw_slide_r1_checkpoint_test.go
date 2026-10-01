@@ -30,12 +30,13 @@ func TestCWSlideR1_CheckpointUsesRelativeBounds(t *testing.T) {
 			h.append(t, providers.Message{Role: "user", Content: ts.userMessage})
 			for _, id := range []string{"old-a", "old-b", "newest"} {
 				narration, result := "", strings.Repeat("readable prose ", b/15)
-				if trigger == "total_only" {
+				switch trigger {
+				case "total_only":
 					// Each narration is roughly half B; the structural floor fits,
 					// three steps do not, while their short results stay below S.
 					narration = strings.Repeat("a", b*5/4)
 					result = "small readable result"
-				} else if trigger == "share_only" {
+				case "share_only":
 					result = strings.Repeat("readable prose ", s*5/(4*15))
 				}
 				h.append(t, cwR1Step(id, narration, result)...)

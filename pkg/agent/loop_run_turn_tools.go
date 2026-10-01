@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -1924,7 +1925,7 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 	}
 	ex.projectRecordedResult()
 	projection, err := ex.recordedProjection()
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrNoWindowProjection) {
 		return ex.contextWindowExit(err)
 	}
 	if err := ex.recordAdmittedTranscript(); err != nil {

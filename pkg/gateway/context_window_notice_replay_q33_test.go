@@ -108,7 +108,7 @@ func TestContextWindowNoticeReplayUsesSameClassifiedFrame_Q33(t *testing.T) {
 			// Do not mistake that terminator for a diagnostic degraded into done.
 			assert.Equal(t, 1, n, "exactly one diagnostic content frame must be emitted")
 			require.Len(t, sink.frames, 2, "one classified notice followed by one replay terminator")
-			var types []string
+			types := make([]string, 0, len(sink.frames))
 			for _, raw := range sink.frames {
 				var envelope map[string]json.RawMessage
 				require.NoError(t, json.Unmarshal(raw, &envelope), "every emitted frame must be valid JSON")

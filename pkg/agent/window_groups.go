@@ -134,12 +134,6 @@ func (ts *turnState) protectWindowControls(msgs []providers.Message) {
 	ts.windowControls = append(ts.windowControls, msgs...)
 }
 
-func (ts *turnState) clearWindowControls() {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	ts.windowControls = nil
-}
-
 func (ts *turnState) protectedWindowMessage(m providers.Message) bool {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()

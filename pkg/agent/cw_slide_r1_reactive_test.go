@@ -27,7 +27,8 @@ func TestCWSlideR1_RejectionDropsRecallThenOneWholeStep(t *testing.T) {
 		h.append(t, cwR1Step(id, "narration for "+id, strings.Repeat("retained source ", 180))...)
 	}
 	archive := h.archive(t)
-	recall := []providers.Message{{Role: "user", Content: "recalled original context"}}
+	recall := make([]providers.Message, 0, 3)
+	recall = append(recall, providers.Message{Role: "user", Content: "recalled original context"})
 	recall = append(recall, cwR1Step("recall_one", "literal recalled narration", strings.Repeat("recalled text ", 180))...)
 	h.al.setRecallSpan(h.key, newRecallSpan(1, 1, recall, []int{1}))
 	messages := h.al.assembleMessages(context.Background(), ts, h.agent.Sessions.GetHistory(h.key), "", nil, nil)

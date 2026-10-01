@@ -2,11 +2,18 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
+
+// ErrNoWindowProjection signals the deliberate no-op: this result was not
+// admitted into a capped projection (not capped, NoHistory, or no archive
+// line), so there is nothing to record — not a failure. Callers check for
+// this sentinel via errors.Is to distinguish it from a real persistence error.
+var ErrNoWindowProjection = errors.New("window projection: nothing to record for this result")
 
 // resultTranscriptSnapshot validates the admitted archive address before writing
 // its transcript record. This also gives the metadata compare-and-commit base.
@@ -50,7 +57,7 @@ func (ex *agentLoopRunTurnToolsExecute) recordAdmittedTranscript() error {
 func (ex *agentLoopRunTurnToolsExecute) recordedProjection() (*windowProjectionChange, error) {
 	ts := ex.rx.rr.rq.ri.rf.rt.ts
 	if !ex.admitted.Capped || ts.opts.NoHistory || ex.admitted.ArchiveLine < 0 {
-		return nil, nil
+		return nil, ErrNoWindowProjection
 	}
 	_, snap, err := ts.resultTranscriptSnapshot(ex.tcRecord, ex.admitted.ArchiveLine)
 	if err != nil {

@@ -279,7 +279,7 @@ func cwRangeCancellation(t *testing.T) {
 				}
 				var ctx context.Context
 				var cancel context.CancelFunc
-				if tc.want == context.DeadlineExceeded {
+				if errors.Is(tc.want, context.DeadlineExceeded) {
 					ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 				} else {
 					ctx, cancel = context.WithCancel(context.Background())
@@ -305,7 +305,7 @@ func cwRangeCancellation(t *testing.T) {
 							return fmt.Errorf("post-page instrument: first record must collect the one-rune page")
 						}
 						if callbacks == cutoff {
-							if tc.want == context.Canceled {
+							if errors.Is(tc.want, context.Canceled) {
 								cancel()
 							} else {
 								// Durable blocking advances fake time until the real timer expires.
@@ -321,7 +321,7 @@ func cwRangeCancellation(t *testing.T) {
 				if got := strings.Join(committed, ""); len(committed) != cutoff || got != wantPrefix {
 					t.Fatalf("committed prefix: want %d unchanged records %q, got %d records %q", cutoff, wantPrefix, len(committed), got)
 				}
-				if err != ctx.Err() || err != tc.want {
+				if !errors.Is(err, ctx.Err()) || !errors.Is(err, tc.want) {
 					t.Fatalf("genuine context cause: want exact %T %v = ctx.Err(), got %T %v; ctx.Err()=%v", tc.want, tc.want, err, err, ctx.Err())
 				}
 				if page.payload.String() != "{" || page.returned != 1 || page.total != utf8.RuneCountInString(wantPrefix) {

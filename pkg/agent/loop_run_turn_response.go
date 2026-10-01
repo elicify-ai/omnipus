@@ -618,7 +618,7 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryContextOverflow(retry
 			Kind:    generated.ContextWindowNoticeKindProviderRetry,
 			Message: "Context window exceeded. Compressing history and retrying...",
 		})
-		if noticeErr != nil {
+		if noticeErr != nil && !errors.Is(noticeErr, ErrContextWindowNoticeDisabled) {
 			rq.ri.rf.err = errors.Join(rq.ri.rf.err, noticeErr)
 			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 		}

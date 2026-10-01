@@ -11,11 +11,11 @@ import (
 // ContextWindowStore is the error-returning checkpoint seam. It is separate
 // from the legacy fire-and-forget session interface, not a second archive.
 type ContextWindowStore interface {
-	AppendWindowMessage(context.Context, string, providers.Message) (memory.WindowSnapshot, error)
-	SnapshotWindow(context.Context, string) (memory.WindowSnapshot, error)
-	CommitWindow(context.Context, string, memory.WindowState, memory.WindowState) error
-	RestoreWindow(context.Context, string, memory.WindowState, memory.WindowState) error
-	RollbackWindow(context.Context, string, memory.WindowState) error
+	AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (memory.WindowSnapshot, error)
+	SnapshotWindow(ctx context.Context, key string) (memory.WindowSnapshot, error)
+	CommitWindow(ctx context.Context, key string, before, after memory.WindowState) error
+	RestoreWindow(ctx context.Context, key string, before, after memory.WindowState) error
+	RollbackWindow(ctx context.Context, key string, start memory.WindowState) error
 }
 
 func (b *JSONLBackend) windowStore() (ContextWindowStore, error) {

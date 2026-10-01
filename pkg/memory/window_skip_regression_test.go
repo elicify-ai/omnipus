@@ -47,8 +47,8 @@ func TestCommitWindow_RefusesSkipRegression(t *testing.T) {
 	// A legitimate forward slide: Skip 0 -> 2.
 	advanced := snap0.State.Clone()
 	advanced.Skip = 2
-	if err := store.CommitWindow(ctx, key, snap0.State, advanced); err != nil {
-		t.Fatalf("legitimate forward CommitWindow (Skip 0 -> 2) must succeed: %v", err)
+	if commitErr := store.CommitWindow(ctx, key, snap0.State, advanced); commitErr != nil {
+		t.Fatalf("legitimate forward CommitWindow (Skip 0 -> 2) must succeed: %v", commitErr)
 	}
 
 	snap1, err := store.SnapshotWindow(ctx, key)
@@ -82,9 +82,9 @@ func TestCommitWindow_RefusesSkipRegression(t *testing.T) {
 	// from this same guard — undoing a prior advance is a legitimate
 	// backward move, and the guard's `!restore` condition exists precisely
 	// to let this succeed while the commit above is refused.
-	if err := store.RestoreWindow(ctx, key, final.State, snap0.State); err != nil {
+	if restoreErr := store.RestoreWindow(ctx, key, final.State, snap0.State); restoreErr != nil {
 		t.Fatalf("RestoreWindow must be allowed to move Skip backward (restore=true is exempt from the "+
-			"commit-only regression guard): %v", err)
+			"commit-only regression guard): %v", restoreErr)
 	}
 	restored, err := store.SnapshotWindow(ctx, key)
 	if err != nil {

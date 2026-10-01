@@ -148,18 +148,6 @@ func projectionFromEntries(entries []projectionEntry) ProjectionSet {
 	return out
 }
 
-// pruneProjectionBelow drops every entry whose archive_line < skip
-// (US-6.AC9 — evicted lines have no window view to project).
-func pruneProjectionBelow(p ProjectionSet, skip int) ProjectionSet {
-	out := make(ProjectionSet, len(p))
-	for k, v := range p {
-		if k.ArchiveLine >= skip {
-			out[k] = v
-		}
-	}
-	return out
-}
-
 // rollbackProjection computes the post-abort set (FR-020, US-6.AC5):
 //
 //   - every entry (current or turn-start) with archive_line ≥ targetLines
