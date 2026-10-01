@@ -5601,7 +5601,7 @@
     {
       "path": "src/components/layout/Sidebar.lifecycle-labels.test.tsx",
       "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file. Reproducible check performed at pin 009da81b897943eb389531118d1053d2504c07ac (2026-10-02): rg -n 'lifecycle-labels' . over the tracked tree (ripgrep, honours .gitignore so dist/ and node_modules/ are excluded) matches only this ledger entry and a prose comment in tests/e2e/stop-scope-tree.spec.ts:7, and the import-specific probe rg -n 'import.*lifecycle-labels|from.*lifecycle-labels|require(.*lifecycle-labels' . finds no import specifier anywhere (exit 1 = no matches). Positive control: the same search mechanism finds 10 real from './Sidebar' import lines under src/ (9 test files plus production AppShell.tsx), so the search demonstrably sees import lines. Limits: a literal text search of static import specifiers, not a computed import-graph check — it cannot see dynamic or glob-computed imports (import(), import.meta.glob; this repo's production import.meta.glob sites glob asset paths, not test files). Aliased static specifiers (vite alias '@' -> ./src) must still contain the file name, so the literal search covers aliased imports too."
     },
     {
       "path": "src/components/layout/Sidebar.m5.test.tsx",
