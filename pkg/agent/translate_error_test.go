@@ -974,22 +974,20 @@ func TestProviderError_FormatCompatForClassifyError(t *testing.T) {
 }
 
 // TestTranslateError_TypedExitsAndAttributions — ADR-066 D7 (T066-11), spec
-// test row 20, B-40 / B-41. The three typed turn exits exist as classifier
-// codes, carry the contract's attribution (`user` is a real vocabulary value),
-// and TranslateTurnError maps the sentinel / context causes onto them instead
-// of falling to `unknown`.
+// test row 20, B-40 / B-41, with the local size-only exit retired by the
+// 2026-09-30 amendment MAJ-CW-010. Remaining typed exits carry the contract's
+// attribution (`user` is a real vocabulary value), and TranslateTurnError
+// maps their sentinel / context causes instead of falling to `unknown`.
 func TestTranslateError_TypedExitsAndAttributions(t *testing.T) {
 	assert.Equal(t, LLMErrorCode("turn_canceled"), CodeTurnCanceled)
 	assert.Equal(t, LLMErrorCode("turn_timed_out"), CodeTurnTimedOut)
 	assert.Equal(t, LLMErrorCode("delegated_task_limit"), CodeDelegatedTaskLimit)
-	assert.Equal(t, LLMErrorCode("context_unrecoverable"), CodeContextUnrecoverable)
 
 	// B-41: attribution is contract-defined; `user` is in the vocabulary.
 	assert.Equal(t, LLMErrorAttribution("user"), AttributionForCode(CodeTurnCanceled))
 	assert.Equal(t, LLMErrorAttribution("provider"), AttributionForCode(CodeTurnTimedOut))
 	assert.Equal(t, LLMErrorAttribution("config"), AttributionForCode(CodeDelegatedTaskLimit))
-	assert.Equal(t, LLMErrorAttribution("product"), AttributionForCode(CodeContextUnrecoverable))
-	for _, c := range []LLMErrorCode{CodeTurnCanceled, CodeTurnTimedOut, CodeDelegatedTaskLimit, CodeContextUnrecoverable} {
+	for _, c := range []LLMErrorCode{CodeTurnCanceled, CodeTurnTimedOut, CodeDelegatedTaskLimit} {
 		assert.NotEqual(t, UserMessageForCode(CodeUnknown), UserMessageForCode(c),
 			"%s must have its own catalogue copy", c)
 	}
@@ -1005,7 +1003,6 @@ func TestTranslateError_TypedExitsAndAttributions(t *testing.T) {
 		{"ErrTurnCanceled sentinel", fmt.Errorf("x: %w", ErrTurnCanceled), CodeTurnCanceled, false},
 		{"raw DeadlineExceeded", context.DeadlineExceeded, CodeTurnTimedOut, true},
 		{"ErrTurnTimedOut sentinel", fmt.Errorf("x: %w", ErrTurnTimedOut), CodeTurnTimedOut, true},
-		{"ErrContextUnrecoverable sentinel", fmt.Errorf("x: %w", ErrContextUnrecoverable), CodeContextUnrecoverable, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1022,7 +1019,6 @@ func TestTranslateError_TypedExitsAndAttributions(t *testing.T) {
 	// The exit sentinels stay distinct from each other and from the
 	// workspace sentinels so errors.Is routing cannot cross-match.
 	assert.False(t, errors.Is(ErrTurnCanceled, ErrTurnTimedOut))
-	assert.False(t, errors.Is(ErrContextUnrecoverable, ErrTurnCanceled))
 	assert.False(t, errors.Is(ErrTurnCanceled, ErrAgentNotWorkspaceMember))
 }
 

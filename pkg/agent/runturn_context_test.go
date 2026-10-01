@@ -11,7 +11,7 @@
 // Spec: docs/internal/specs/adr-066-context-overflow-spec.md — tests 30
 // (TestRunTurn_GuardTest_2MBResultCompletes), 31
 // (TestRunTurn_LongTurn_50CallsAtCap_SmallWindow), 34
-// (TestRunTurn_ThrashGuard_InjectedFaultOnly), 39
+// (superseded by TestRunTurn_ImmutableResidueStillSends), 39
 // (TestRunTurn_MidTurnNeverAdvancesSkip), 40 (TestRunTurn_SmallWindowClamp),
 // 53 (TestRunTurn_InjectedSpanSubjectToD5); B-23, B-33, B-36, B-37, B-39,
 // B-50d; SC-001, SC-002, SC-008, SC-011.
@@ -20,7 +20,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -207,32 +206,58 @@ func TestRunTurn_LongTurn_50CallsAtCap_SmallWindow(t *testing.T) {
 	assert.Equal(t, calls, toolLines)
 }
 
-// TestRunTurn_ThrashGuard_InjectedFaultOnly — spec test 34, B-37 / ADR
-// §17.4 (FR-032): the guard is reachable ONLY through an injected fault —
-// here an oversized non-tool message smuggled past the D4 bounds via the
-// internal task-prompt path (processTaskDirect/ProcessScheduled prompts are
-// not user messages and carry no bound; that is the injection). It then
-// produces the typed context_unrecoverable exit, one ERROR line, and NO
-// further provider call. Without the fault the same loop across the DS-5
-// shapes completes (the no-fault control).
-func TestRunTurn_ThrashGuard_InjectedFaultOnly(t *testing.T) {
-	t.Run("injected oversized non-tool message reaches the guard; provider not called again", func(t *testing.T) {
-		readLog := captureLogFile(t, logger.ERROR)
+// TestRunTurn_ImmutableResidueStillSends — ADR-066's 2026-09-30 amendment,
+// MAJ-CW-004/005/010 and §18.4, replaces old spec test 34's local fatal guard.
+// An oversized task prompt reaches the turn as immutable user text. Relief
+// cannot make that text fit, but must still send a structurally valid request;
+// only a genuine provider rejection may fail it. This provider accepts it.
+// The ordinary-turn control is retained unchanged.
+func TestRunTurn_ImmutableResidueStillSends(t *testing.T) {
+	t.Run("oversized immutable user text still reaches the next provider request", func(t *testing.T) {
 		provider := testutil.NewScenario().
 			WithToolCalls([]providers.ToolCall{toolCallFor("g-1", "one")}).
-			WithText("MUST NEVER BE REQUESTED")
+			WithText("done")
 		h := newCtxTurnHarness(t, provider, 40_000, 100)
 
 		budget := agentContextBudget(h.agent)
-		fault := proseOfTokens(budget * 12 / 10) // > B on its own; emptying cannot touch a user message
+		fault := proseOfTokens(budget * 12 / 10) // > B on its own; result relief cannot shorten user text
+		require.Greater(t, requestTokens([]providers.Message{{Role: "user", Content: fault}}, nil), budget,
+			"instrument: the immutable user text alone exceeds B")
 
-		_, err := h.runScheduled(t, fault)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrContextUnrecoverable),
-			"the guard must surface the typed sentinel, got %v", err)
-		assert.Equal(t, 1, h.provider.CallCount(),
-			"FR-032: after the guard fires the provider is NEVER called again")
-		assert.Contains(t, readLog(), "context_unrecoverable", "one ERROR line names the typed code")
+		reply, err := h.runScheduled(t, fault)
+		require.NoError(t, err, "MAJ-CW-004/010: estimated immutable residue must not end the turn locally")
+		assert.Equal(t, "done", reply, "the accepting provider's completion must reach the caller")
+		require.Equal(t, 2, h.provider.CallCount(), "one tool step followed by the accepting completion")
+		requests := h.provider.AllRequests()
+		require.Len(t, requests, 2, "the second request must cross the provider boundary")
+
+		var users []providers.Message
+		var calls []providers.ToolCall
+		var results []providers.Message
+		callIndex, resultIndex := -1, -1
+		for i, message := range requests[1] {
+			switch message.Role {
+			case "user":
+				users = append(users, message)
+			case "assistant":
+				calls = append(calls, message.ToolCalls...)
+				if len(message.ToolCalls) > 0 {
+					callIndex = i
+				}
+			case "tool":
+				results = append(results, message)
+				resultIndex = i
+			}
+		}
+		require.Equal(t, []providers.Message{{Role: "user", Content: fault}}, users,
+			"the original user anchor is preserved verbatim, exactly once")
+		require.Len(t, calls, 1, "newest assistant call structure survives relief")
+		assert.Equal(t, "g-1", calls[0].ID, "the declared call identity cannot change")
+		assert.Equal(t, toolCallFor("g-1", "one").Function, calls[0].Function,
+			"the declared tool name and exact arguments cannot change")
+		require.Len(t, results, 1, "the newest result slot cannot disappear or duplicate")
+		assert.Equal(t, "g-1", results[0].ToolCallID, "the result remains paired with its declared call")
+		assert.Less(t, callIndex, resultIndex, "the newest assistant call precedes its result")
 	})
 
 	t.Run("no-fault control: the same loop shape completes without the guard", func(t *testing.T) {

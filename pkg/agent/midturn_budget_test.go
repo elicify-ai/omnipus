@@ -16,8 +16,6 @@ package agent
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,8 +164,8 @@ func TestMidTurnBudget_OperationBySiteAndPosition(t *testing.T) {
 // FR-021, FR-029, FR-032): the fired condition picks the target (80 % of
 // itself); emptying stops at the target or when nothing eligible remains;
 // an immediate re-check does not re-fire; an unreachable target with the
-// trigger satisfied continues; the guard fires only when a trigger is still
-// exceeded after every eligible result went.
+// trigger satisfied continues. The fatal-only guard subtests are retired by
+// ADR-066's 2026-09-30 amendment MAJ-CW-004/010.
 func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 	t.Run("share fires: emptied to 80% of absoluteShare, oldest first, one pass, no re-fire (B-34, B-25)", func(t *testing.T) {
 		// Big window so total can never fire; fraction 0.03125 × resolved
@@ -258,160 +256,83 @@ func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 		assert.LessOrEqual(t, requestTokens(out, nil), budget, "…but the trigger is satisfied")
 	})
 
-	t.Run("guard: trigger still exceeded after every eligible result — ErrContextUnrecoverable (B-37 / DS-5 #8)", func(t *testing.T) {
-		al, agent := midTurnFixture(t, 40_000, 0)
-		key := "midturn-guard"
-		budget := agentContextBudget(agent)
-		window, ts := seedMidTurn(t, agent, key, []providers.Message{
-			{Role: "user", Content: proseOfTokens(budget * 12 / 10)}, // injected oversized non-tool message
-			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "a")}},
-			{Role: "tool", ToolCallID: "f1", Content: "tiny floor"},
-		})
-		require.Greater(t, requestTokens(window, nil), budget)
-
-		_, err := al.midTurnWindowCheck(ts, window, nil)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrContextUnrecoverable), "FR-032: the guard is the typed sentinel, got %v", err)
-		assert.Contains(t, err.Error(), "un-emptiable residue exceeds the context budget")
-		assert.NotContains(t, err.Error(), "absolute tool-result-share bound")
-	})
-
-	t.Run("guard is decided BEFORE the pass: an unsatisfiable budget empties and persists nothing", func(t *testing.T) {
-		// The regression: when the un-emptiable residue (tool defs + the
-		// system/user messages + the floor set) alone exceeds B, the check
-		// still ran the whole D5 pass first — emptying every eligible result
-		// AND persisting each (tool_call_id, archive_line) -> emptied — and
-		// only then fired the guard. typedTurnExit (unlike abortTurn) never
-		// calls restoreSession, so those projection entries survived forever:
-		// the marks became permanent and every later turn on the session died
-		// the same way, with the results it might have used already destroyed.
-		al, agent := midTurnFixture(t, 40_000, 0)
-		key := "midturn-guard-preflight"
-		budget := agentContextBudget(agent)
-		eligible := proseOfTokens(budget / 2)
-		window, ts := seedMidTurn(t, agent, key, []providers.Message{
-			// Un-emptiable on its own: no pass can bring total under B.
-			{Role: "user", Content: proseOfTokens(budget * 12 / 10)},
-			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("c1", "a")}},
-			{Role: "tool", ToolCallID: "c1", Content: eligible},
-			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "b")}},
-			{Role: "tool", ToolCallID: "f1", Content: "tiny floor"},
-		})
-		require.Greater(t, requestTokens(window, nil), budget, "precondition: total fired")
-		require.Equal(t, []int{2}, eligibleToolResults(window,
-			midTurnLineResolverForTest(t, agent, key, window), nil),
-			"precondition: there IS an eligible result the old code would have emptied")
-
-		before := ContextEmptiesTotal()
-		out, err := al.midTurnWindowCheck(ts, window, nil)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrContextUnrecoverable), "still the typed sentinel, got %v", err)
-
-		assert.Equal(t, before, ContextEmptiesTotal(),
-			"a turn that is going to abort must not empty anything")
-		assert.Equal(t, eligible, out[2].Content,
-			"the eligible result must be left intact — the turn aborts, the content is not destroyed")
-		assert.Empty(t, agent.Sessions.Projection(key).Entries,
-			"no projection state may be persisted on a turn the guard is certain to kill: "+
-				"typedTurnExit never rolls it back")
-	})
 }
 
-// TestMidTurnBudget_UnemptiableShareErrorNamesAbsoluteShareBound reproduces
-// issue #775's arithmetic shape: the request total fits comfortably below B,
-// while the protected tool-result residue exceeds only absoluteShare. The
-// operator-facing error must name that bound instead of claiming the total
-// context budget was exceeded.
-func TestMidTurnBudget_UnemptiableShareErrorNamesAbsoluteShareBound(t *testing.T) {
-	al, agent := midTurnFixture(t, 770_000, 0)
-	// ResolveWindow caps the fixture's unknown cloud model at its 128k floor.
-	// Reproduce the incident's ~770k resolved window directly; this test is
-	// exercising the mid-turn predicate, not ResolveWindow's unknown-model cap.
-	agent.mu.Lock()
-	agent.ContextWindow = 770_000
-	agent.WindowClamped = false
-	agent.mu.Unlock()
-	key := "midturn-unemptiable-share-bound"
-	budget := agentContextBudget(agent)
-	resolvedWindow, _, _ := agent.windowSnapshot()
-	absShare := toolResultShareLimit(config.DefaultContextSettings(), resolvedWindow)
-	// Default fraction 0.5 × resolved window 770,000 → 385,000 tokens.
-	require.Equal(t, 385_000, absShare)
+// TestMidTurnBudget_NewestSharePressureShortensAndSends preserves issue #775's
+// share-only pressure shape, with the oracle superseded by ADR-066's 2026-09-30
+// amendment (MAJ-CW-001/002/004/007/010). Newest-step structure is protected,
+// not its text: shorten head/tail with an addressed mark, preserve the full
+// archive, and send the request instead of returning a local size-only error.
+func TestMidTurnBudget_NewestSharePressureShortensAndSends(t *testing.T) {
+	// Pin the already-resolved window: this exercises relief, not model resolution
+	// or admission caps, just as the original synthetic over-share residue did.
+	h := cwR1New(t, 770_000)
+	r, p := cwR1OpenAI(t, 0)
+	user := providers.Message{Role: "user", Content: proseOfTokens(100_000)}
+	ts := h.turn(user.Content)
+	full := "newest-result head\n" + proseOfTokens(387_500) + "\nnewest-result tail"
+	h.append(t, user,
+		providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{cwR1Call("floor")}},
+		providers.Message{Role: "tool", ToolCallID: "floor", Content: full})
+	window := h.agent.Sessions.GetHistory(h.key)
+	archiveBefore := h.archive(t)
+	require.Len(t, window, 3, "instrument: one user and one complete newest step")
+	require.Equal(t, full, archiveBefore[2].Content, "instrument: the full source is archived")
 
-	window, ts := seedMidTurn(t, agent, key, []providers.Message{
-		{Role: "user", Content: proseOfTokens(100_000)},
-		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("floor", "latest-step")}},
-		{Role: "tool", ToolCallID: "floor", Content: proseOfTokens(387_500)}, // share limit + 2,500
-	})
-	total := requestTokens(window, nil)
-	share := toolResultShareTokens(window)
-	cfg := al.GetConfig()
-	noteTokens := al.ephemeralSystemNoteTokens(ts) + al.manifestNoteTokens(ts, cfg)
-	observedTotal := total + noteTokens
-	require.Less(t, observedTotal, budget, "precondition: issue #775's total-budget bound did not fire")
-	require.Greater(t, share, absShare, "precondition: issue #775's absolute-share bound fired")
-	require.Empty(t, eligibleToolResults(window, midTurnLineResolverForTest(t, agent, key, window), nil),
-		"precondition: the latest assistant step is the protected, un-emptiable floor")
+	budget := agentContextBudget(h.agent)
+	shareLimit := toolResultShareLimit(h.cfg.Context, h.agent.ContextWindow)
+	// MAJ-CW-007: default 0.5 × W=770,000 gives S=385,000; the reachable
+	// proactive target is 0.8 × S=308,000, independently of the total budget B.
+	require.Equal(t, 385_000, shareLimit)
+	noteTokens := h.al.ephemeralSystemNoteTokens(ts) + h.al.manifestNoteTokens(ts, h.cfg)
+	require.Less(t, requestTokens(window, nil)+noteTokens, budget,
+		"precondition: the total-budget bound did not fire")
+	require.Greater(t, toolResultShareTokens(window), shareLimit,
+		"precondition: only the tool-result-share bound fired")
+	require.Empty(t, eligibleToolResults(window, midTurnLineResolverForTest(t, h.agent, h.key, window), nil),
+		"precondition: no older result can be emptied or slid; newest structure must remain")
 
-	_, err := al.midTurnWindowCheck(ts, window, nil)
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrContextUnrecoverable)
-	assert.Contains(t, err.Error(), "un-emptiable tool-result residue exceeds the absolute tool-result-share bound")
-	assert.NotContains(t, err.Error(), "residue alone exceeds the budget")
-	assert.NotContains(t, err.Error(), "exceeds the context budget")
-	assert.Contains(t, err.Error(), fmt.Sprintf(
-		"total=%d budget=%d share=%d absolute_share=%d window_residue_total=%d residue_share=%d note_tokens=%d",
-		observedTotal, budget, share, absShare, total, share, noteTokens,
-	))
-	assert.Contains(t, err.Error(), "Work completed before this stop may already be persisted")
-	assert.Contains(t, err.Error(), "before retrying or re-delegating")
-}
-
-func TestContextUnrecoverableResidueError_NamesEveryBreachedBound(t *testing.T) {
-	const (
-		budget   = 100
-		absShare = 80
-	)
-	tests := []struct {
-		name      string
-		residue   midTurnResidueStatus
-		want      string
-		notWanted string
-	}{
-		{
-			name:      "context budget only",
-			residue:   midTurnResidueStatus{total: 101, share: 79, checked: allMidTurnBounds},
-			want:      "un-emptiable residue exceeds the context budget",
-			notWanted: "absolute tool-result-share bound",
-		},
-		{
-			name:      "absolute tool-result share only",
-			residue:   midTurnResidueStatus{total: 99, share: 81, checked: allMidTurnBounds},
-			want:      "un-emptiable tool-result residue exceeds the absolute tool-result-share bound",
-			notWanted: "exceeds the context budget",
-		},
-		{
-			name:    "both bounds",
-			residue: midTurnResidueStatus{total: 101, share: 81, checked: allMidTurnBounds},
-			want:    "un-emptiable residue exceeds the context budget and the absolute tool-result-share bound",
-		},
-		{
-			name:    "no breached bound is an accounting error",
-			residue: midTurnResidueStatus{total: 99, share: 79, checked: allMidTurnBounds},
-			want:    "internal context-bound accounting error: no breached bound recorded",
-		},
+	out, err := h.al.midTurnWindowCheck(ts, window, nil)
+	require.NoError(t, err, "MAJ-CW-004/010: newest share pressure must not end the turn locally")
+	projected := cwR1Result(t, out, "floor")
+	require.Less(t, len(projected.Content), len(full), "newest result text must actually shorten")
+	if strings.HasPrefix(projected.Content, "{") {
+		cwR1AssertProjection(t, projected.Content, full, "floor", 2, 0)
+	} else {
+		start, end := strings.Index(projected.Content, "\n{"), strings.LastIndex(projected.Content, "}\n")
+		require.GreaterOrEqual(t, start, 0, "shortened head must precede an intact addressed mark")
+		require.Greater(t, end, start, "shortened tail must follow the addressed mark")
+		// Source is ASCII, so these byte lengths are also the retained rune counts.
+		// The cap is not fixed by the ADR; the exact source halves and mark are.
+		kept := len(projected.Content[:start]) + len(projected.Content[end+2:])
+		require.Positive(t, kept, "capped state retains source text; mark-only uses emptied state")
+		cwR1AssertProjection(t, projected.Content, full, "floor", 2, kept)
 	}
+	require.Equal(t, archiveBefore, h.archive(t), "relief must preserve every full archive line")
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := contextUnrecoverableResidueError(101, budget, 81, absShare, 0, tc.residue, "mia", "session")
-			require.ErrorIs(t, err, ErrContextUnrecoverable)
-			assert.Contains(t, err.Error(), tc.want)
-			if tc.notWanted != "" {
-				assert.NotContains(t, err.Error(), tc.notWanted)
+	// Exercise real final assembly and the HTTP adapter, not a direct mock call.
+	rr := cwR1Flow(h, ts, out, p)
+	cwR1Send(t, rr)
+	requests := r.requests(t)
+	require.Len(t, requests, 1, "the relieved turn sends exactly one successful provider request")
+	sent := cwR1Messages(t, requests[0])
+	for _, view := range [][]providers.Message{out, sent} {
+		cwR1AssertAnchor(t, view, user)
+		cwR1AssertComplete(t, view)
+		var assistants []providers.Message
+		for _, message := range view {
+			if message.Role == "assistant" {
+				assistants = append(assistants, message)
 			}
-		})
+		}
+		require.Equal(t, []providers.Message{window[1]}, assistants,
+			"newest assistant call, ids, arguments and ordering must remain exact")
+		require.Equal(t, projected, cwR1Result(t, view, "floor"),
+			"the exact shortened result role, correlation and slot survive final serialization")
+		require.LessOrEqual(t, toolResultShareTokens(view), 308_000,
+			"MAJ-CW-004: attainable fired-share target is 80%% of S, not a fatal residue guard")
 	}
+	require.Equal(t, archiveBefore, h.archive(t), "sending must not rewrite the full archived source")
 }
 
 // TestMidTurnBudget_C1_CallMessagesInjections — ADR-066 D6, C1 (CRITICAL):
