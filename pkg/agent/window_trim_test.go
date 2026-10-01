@@ -679,10 +679,17 @@ func readOwnedFileForTest(t *testing.T, filename string) string {
 // "// ---- file: <name> ----" banner. Guard tests that used to read "loop.go"
 // alone must read this instead: loop.go was split into loop_*.go files by
 // lifecycle on 2026-09-15, so a symbol scanned by name may live in any of them.
+//
+// R1's consolidation (#1081) moved genuine loop call sites out of the
+// loop*.go glob — admitAndCheckpoint/checkpointRecordedResult (the two
+// shared admitted-result checkpoint helpers) into tool_result_checkpoint.go,
+// and windowTrim's checked wiring into window_trim_checked.go. Both are
+// included explicitly so a scan of "every loop source" still sees them.
 func readLoopSourcesForTest(t *testing.T) string {
 	t.Helper()
 	matches, err := filepath.Glob("loop*.go")
 	require.NoError(t, err, "readLoopSourcesForTest: glob")
+	matches = append(matches, "tool_result_checkpoint.go", "window_trim_checked.go")
 	var b strings.Builder
 	n := 0
 	for _, name := range matches {
