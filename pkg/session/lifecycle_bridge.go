@@ -71,6 +71,53 @@ func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 	}
 }
 
+// LifecycleDisplayState is the domain mirror of the wire
+// Session.yaml::lifecycle_state enum (SessionLifecycleState in
+// pkg/api/generated) — the "exact helper-state display" referenced by
+// lifecycleToUnifiedStatus's own doc comment above. Its five string values
+// are chosen to equal the generated wire enum's values byte-for-byte, so a
+// plain string cast (gen.SessionLifecycleState(string(d))) at the REST
+// boundary is always schema-valid — the same mirroring contract
+// TestOwnerScopeKind_MirrorsWireEnum pins for OwnerScopeKind, enforced here
+// by TestLifecycleDisplayState_MirrorsWireEnum.
+type LifecycleDisplayState string
+
+const (
+	LifecycleDisplayWorking          LifecycleDisplayState = "working"
+	LifecycleDisplayWaitingForAnswer LifecycleDisplayState = "waiting_for_answer"
+	LifecycleDisplayDone             LifecycleDisplayState = "done"
+	LifecycleDisplayFailed           LifecycleDisplayState = "failed"
+	LifecycleDisplayStopped          LifecycleDisplayState = "stopped"
+)
+
+// LifecycleStateToDisplay is the CANONICAL mapping from a LifecycleRecord's
+// 6-value LifecycleState to the 5-value Session.yaml::lifecycle_state
+// display enum — no other site may hand-roll this collapse (same "single
+// authority" rule as lifecycleToUnifiedStatus above). Per Session.yaml's own
+// field doc: `queued`/`running` both collapse to `working`, `needs_input`
+// maps to `waiting_for_answer`, `completed` maps to `done`, and `failed`/
+// `stopped` pass through unchanged.
+func LifecycleStateToDisplay(s LifecycleState) LifecycleDisplayState {
+	switch s {
+	case LifecycleQueued, LifecycleRunning:
+		return LifecycleDisplayWorking
+	case LifecycleNeedsInput:
+		return LifecycleDisplayWaitingForAnswer
+	case LifecycleCompleted:
+		return LifecycleDisplayDone
+	case LifecycleFailed:
+		return LifecycleDisplayFailed
+	case LifecycleStopped:
+		return LifecycleDisplayStopped
+	default:
+		// Unreached for any record that passed validateLifecycleRecordForPersist
+		// (IsValidLifecycleState gates every write), but fall back to the
+		// broadest, least-alarming bucket rather than emitting an unknown
+		// wire-enum string a Zod-validated SPA response would otherwise reject.
+		return LifecycleDisplayWorking
+	}
+}
+
 // TransitionSession transitions BOTH session stores for sid in one call:
 //
 //  1. Writes the durable LifecycleRecord to `to` (authoritative), using the
