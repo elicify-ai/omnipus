@@ -64,7 +64,7 @@ func (a *restAPI) handleSearchConnectionCheck(w http.ResponseWriter, r *http.Req
 		if retry > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(retry))
 		}
-		writeIntegrationChangeError(w, err, "Could not prepare the connection check. Try again.")
+		writeIntegrationChangeError(w, err, "Could not prepare the connection check. Try again.", id, "check_admission")
 		return
 	}
 	defer a.searchChecks.finish(id)

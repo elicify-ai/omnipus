@@ -3,10 +3,13 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
 	"strings"
+	"syscall"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -54,12 +57,13 @@ func (a *restAPI) handleSearchKeyRemoval(w http.ResponseWriter, r *http.Request,
 		// Even a deletion/environment failure must attempt to load the disabled
 		// state. The durable config write is not rolled back across files.
 		if applyErr := a.applyWrittenConfigLocked(out); applyErr != nil {
+			logIntegrationChangeFailure(def.id, "config_apply", applyErr)
 			state.failedStages = append(state.failedStages, "config_apply")
 		}
 	}
 	a.configMu.Unlock()
 	if err != nil {
-		writeIntegrationChangeError(w, err, "Could not save the disabled configuration. The saved key was not removed.")
+		writeIntegrationChangeError(w, err, "Could not save the disabled configuration. The saved key was not removed.", def.id, "config_write")
 		return
 	}
 
@@ -72,9 +76,13 @@ func (a *restAPI) handleSearchKeyRemoval(w http.ResponseWriter, r *http.Request,
 	state.runtimeDisabled = confirmed && reloadErr == nil && !state.enabled &&
 		searchDef.APIKeyRef(&post.Tools.Web) == "" && !post.Tools.Web.UsableSearchProvider(def.id)
 	if !state.runtimeDisabled {
+		if reloadErr != nil {
+			logIntegrationChangeFailure(def.id, "reload", reloadErr)
+		}
 		state.failedStages = append(state.failedStages, "reload")
 	}
 	if err := a.auditSearchKeyRemoval(r, def, state); err != nil {
+		logIntegrationChangeFailure(def.id, "audit", err)
 		state.failedStages = append(state.failedStages, "audit")
 	}
 	if len(state.failedStages) != 0 {
@@ -117,11 +125,13 @@ func (a *restAPI) persistSearchKeyRemoval(def config.SearchProviderDef, state *s
 		}
 		out = written
 		if err := a.removeStoredCredential(def.CredRef); err != nil {
+			logIntegrationChangeFailure(def.ID, "credential_delete", err)
 			state.failedStages = append(state.failedStages, "credential_delete")
 		} else {
 			state.keyRemoved = true
 		}
 		if err := os.Unsetenv(def.CredRef); err != nil {
+			logIntegrationChangeFailure(def.ID, "environment_clear", err)
 			state.failedStages = append(state.failedStages, "environment_clear")
 		}
 		return nil // Publish the persisted disabled state, including on partial failure.
@@ -146,10 +156,12 @@ func (a *restAPI) preflightSearchKeyRemoval(raw map[string]any, cfg *config.Conf
 	}
 	live, err := json.Marshal(cfg)
 	if err != nil {
+		logIntegrationChangeFailure(def.ID, "config_inspect", err)
 		return &integrationChangeError{http.StatusInternalServerError, "Could not inspect the current configuration."}
 	}
 	var liveRaw map[string]any
 	if decodeErr := json.Unmarshal(live, &liveRaw); decodeErr != nil {
+		logIntegrationChangeFailure(def.ID, "config_inspect", decodeErr)
 		return &integrationChangeError{http.StatusInternalServerError, "Could not inspect the current configuration."}
 	}
 	if credentialReferenceUsedElsewhere(liveRaw, def.CredRef, omit, nil) {
@@ -160,6 +172,7 @@ func (a *restAPI) preflightSearchKeyRemoval(raw map[string]any, cfg *config.Conf
 	_, err = a.savedIntegrationCredential(def.CredRef)
 	var missing *credentials.NotFoundError
 	if err != nil && !errors.As(err, &missing) {
+		logIntegrationChangeFailure(def.ID, "credential_read", err)
 		return &integrationChangeError{http.StatusServiceUnavailable, "Could not read the saved key from the credential store. Unlock or repair it, then try again."}
 	}
 	return nil
@@ -248,11 +261,30 @@ func (state searchKeyRemovalState) failureMessage() string {
 	return message + " Failed stages: " + strings.Join(state.failedStages, ", ") + ". Try again."
 }
 
-func writeIntegrationChangeError(w http.ResponseWriter, err error, fallback string) {
+func writeIntegrationChangeError(w http.ResponseWriter, err error, fallback, service, stage string) {
 	var change *integrationChangeError
 	if errors.As(err, &change) {
 		jsonErr(w, change.status, change.message)
 		return
 	}
+	logIntegrationChangeFailure(service, stage, err)
 	jsonErr(w, http.StatusInternalServerError, fallback)
+}
+
+// Log only typed, non-secret causes. Free-form error text and filesystem paths
+// may contain sensitive configuration, so they never reach this boundary's log.
+func logIntegrationChangeFailure(service, stage string, err error) {
+	cause := fmt.Sprintf("%T", err)
+	var errno syscall.Errno
+	switch {
+	case errors.Is(err, credentials.ErrStoreLocked):
+		cause = "credential_store_locked"
+	case errors.Is(err, credentials.ErrWrongKey):
+		cause = "credential_authentication_failed"
+	case errors.Is(err, os.ErrPermission):
+		cause = "permission_denied"
+	case errors.As(err, &errno):
+		cause = errno.Error()
+	}
+	slog.Error("integration change failed", "service", service, "stage", stage, "cause", cause)
 }
