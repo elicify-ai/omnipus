@@ -22,7 +22,10 @@ import (
 //   - Rejection oracle: tool-registry-redesign-spec.md FR-066 requires failure
 //     of the provider call on an internal duplicate-name invariant violation.
 //   - User-copy oracle: contracts/components/schemas/LLMError.yaml,
-//     x-user-messages.unknown. No new error code or copy is invented here.
+//     x-user-messages.unknown. No new error code or copy is invented here —
+//     the expected text is read from the canonical catalogue
+//     (UserMessageForCode(CodeUnknown)), not pasted by hand; see
+//     pkg/api/generated/llm_error_no_hardcopy_test.go.
 //   - Real boundary: runAgentLoop, request assembly, registry, event bus, and
 //     session storage are real. The provider and external tool descriptors are
 //     fixtures. Mutating a descriptor constructs FR-066's controlled duplicate
@@ -33,7 +36,7 @@ import (
 //     the synthetic system payload. GREEN and mutation proof belong to CHECK.
 //   - Not covered: production collision races, frontend rendering, cancellation,
 //     limit validation, or historical occurrence of this exit.
-const terminalDuplicateUnknownNotice = "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
+var terminalDuplicateUnknownNotice = UserMessageForCode(CodeUnknown)
 
 func TestRunTurn_DuplicateToolDefinitions_DeliversTerminalMessage(t *testing.T) {
 	const probeName = "terminal_duplicate_probe"

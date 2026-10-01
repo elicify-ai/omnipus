@@ -409,13 +409,16 @@ describe('a live error on a second tab does not rewrite the last healthy reply',
 })
 
 // #1081 RC2: the terminal sentence must replace already-streamed narration.
-// Oracle: contracts/asyncapi.yaml, LLMError.x-user-messages.turn_timed_out;
-// use the contract literal, not the reducer's output or its translation helper.
+// Oracle: contracts/asyncapi.yaml, LLMError.x-user-messages.turn_timed_out,
+// read from the generated catalogue (codeToDisplay) instead of pasted by hand
+// — same pattern as RATE_LIMIT_COPY above. This test's load-bearing
+// assertions are about reducer behavior (bubble identity, narration
+// replacement, terminal status, the verbose-detail gate), not about whether
+// codeToMessage('turn_timed_out') itself returns the right sentence.
 // This is a real-store reproduction, NOT a live-browser/delivery capture.
 // GREEN and implementation mutation checks are deferred to independent CHECK.
 describe('#1081 RC2 — narration cannot hide a terminal error', () => {
-  const CONTEXT_ERROR_COPY =
-    'The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details.'
+  const CONTEXT_ERROR_COPY = codeToDisplay.turn_timed_out
   const NARRATION = 'Let me check the task list before continuing.'
   const DETAIL = 'un-emptiable tool-result residue exceeds the absolute tool-result-share bound'
 
