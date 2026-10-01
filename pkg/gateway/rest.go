@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
@@ -83,10 +84,18 @@ type restAPI struct {
 	copilotProbe copilotProbeGuard
 	// searchChecks bounds manual diagnostic requests per static search service.
 	searchChecks searchCheckAdmission
-	homePath     string              // ~/.omnipus — root of the data directory
-	configMu     sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
-	taskStore    *task.Store         // unified task persistence
-	taskExecutor *agent.TaskExecutor // task execution engine
+	homePath     string // ~/.omnipus — root of the data directory
+	// mailBudget is the restAPI's handle on the shared A8 mail-operation
+	// budget (spec §2.3/A8): the four dialing Mail panel GETs gate their
+	// IMAP dials through it (rest_mail_budget.go). Nil is allowed —
+	// mailBudgetFor then resolves the process-wide instance lazily
+	// (email.SharedMailBudget, keyed by the state dir), so a directly
+	// constructed restAPI (the unit-test literal) shares the same gate.
+	mailBudget     *email.MailBudget
+	mailBudgetOnce sync.Once
+	configMu       sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
+	taskStore      *task.Store         // unified task persistence
+	taskExecutor   *agent.TaskExecutor // task execution engine
 
 	// limitAgentStore is the agent store the #904 global tool-iteration
 	// lowering (PUT /performance, D11) reads and writes. Nil in production
@@ -225,6 +234,12 @@ type restAPI struct {
 	// Nil until the preview routes are registered; every reader goes through
 	// previewTokenStore(), which is nil-safe.
 	previewTokens atomic.Pointer[PreviewTokenStore]
+
+	// mailPreviewTokens is the Mail HTML-preview token store (rest_mail_preview.go,
+	// MC-43), published by newMailPreviewRoutes at registration time and read by
+	// logout revocation. Nil until registered; readers go through
+	// mailPreviewTokenStoreOf(), which is nil-safe.
+	mailPreviewTokens atomic.Pointer[mailPreviewTokenStore]
 
 	// devServers is the gateway-wide Tier 3 dev-server registry. Shared with
 	// the web_serve tool (dev mode) and workspace.shell_bg tool via the agent
@@ -555,6 +570,17 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 	}
 }
 
+// jsonErrCode writes an ErrorResponse with a machine-readable code (MC-8's
+// closed error-class enum in `code`, MC-16's stale_draft). Same Content-Type
+// discipline as jsonErr.
+func jsonErrCode(w http.ResponseWriter, status int, msg, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: msg, Code: &code}); err != nil {
+		slog.Debug("rest: write error response failed", "error", err)
+	}
+}
+
 // boolPtr returns a pointer to b. Used wherever an API response field requires
 // *bool but the source value is a plain bool.
 func boolPtr(b bool) *bool { return &b }
@@ -642,8 +668,13 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// GET/PUT/DELETE and /approve /stop live here.
 	rae.cm.RegisterHTTPHandler("/api/v1/plans", rae.a.withAuth(rae.a.HandlePlans))
 	rae.cm.RegisterHTTPHandler("/api/v1/plans/", rae.a.withAuth(rae.a.HandlePlans))
-	rae.cm.RegisterHTTPHandler("/api/v1/workspaces", rae.a.withAuth(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
-	rae.cm.RegisterHTTPHandler("/api/v1/workspaces/", rae.a.withAuth(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
+	// withWorkspacesBodyLimit (rest_mail.go): the Mail panel's /mail/ routes
+	// get their own larger body limit (mailBodyLimit) instead of the
+	// generic withAuth's 1 MiB, which truncated any real MC-32 attachment
+	// over 1 MiB before mail's own 25 MiB budget check ever ran; every
+	// other workspace-scoped route is unaffected (still the generic 1 MiB).
+	rae.cm.RegisterHTTPHandler("/api/v1/workspaces", rae.a.withWorkspacesBodyLimit(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
+	rae.cm.RegisterHTTPHandler("/api/v1/workspaces/", rae.a.withWorkspacesBodyLimit(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
 	// Library file explorer (rest_library.go). withUploadAuth, not plain
 	// withAuth: /library/{id}/upload streams multipart straight through this
 	// dispatcher, and withAuth's body limit would truncate it. Every JSON
@@ -662,6 +693,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// so the two halves share one token store. The mint path is an EXACT
 	// pattern, so it outranks the "/api/v1/library/" subtree above.
 	rae.a.registerLibraryPreviewRoutes(rae.cm)
+	// Mail HTML preview (email-mail-view-spec 2.3a, MC-10): the session-auth
+	// mint endpoint and the token-only /mail-preview/ serve prefix, sharing
+	// one token store published on the restAPI for logout revocation.
+	rae.a.registerMailPreviewRoutes(rae.cm)
 	// GET/PUT /api/v1/providers/default-model (ADR-068 FR-018/FR-042,
 	// T068-11): its OWN route with the high-blast-radius adminWrap chain
 	// (withAuth → RequireNotBypass — 401 unauthenticated, 503 under

@@ -24,7 +24,7 @@
 //
 // Deep-linking (ADR-067 FR-012, US-3 AS-2/3/4/5): "which workspace, which
 // file" is expressible as an ADDRESS — see `LibraryAddress` below. A caller
-// that can put that address in a URL (the /library pop-out route) passes it
+// that can put that address in a URL (the standalone /library route) passes it
 // in and receives every change back; a caller that cannot (the docked
 // panel) passes neither and this component keeps the same state internally,
 // exactly as before. The addressed mode is deliberately CONTROLLED rather
@@ -96,8 +96,10 @@ import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { LibrarySearchBar } from './search/LibrarySearchBar'
 import { useLibraryCrossTabRefresh } from './useLibraryCrossTabRefresh'
+import { ListPreviewLayout, ListPreviewRegion } from '@/components/panel-shell/ListPreviewLayout'
 import {
   confirmDiscardLibraryEdits,
+  discardConfirmDialogHostUnmounted,
   getDiscardConfirmDialogOpen,
   resolveDiscardConfirmDialog,
   subscribeDiscardConfirmDialog,
@@ -168,14 +170,15 @@ export interface LibraryExplorerProps {
   /** Extra classes for the root element — e.g. the pop-out route's `absolute inset-0` fill. */
   className?: string
   /** Fires whenever the workspace currently being VIEWED changes (including
-   * the initial mount) — null for the virtual root. library-spec.md D-4's
-   * pop-out route uses this to know what to announce via libraryHandoff.ts,
-   * and it must keep using THIS rather than reading the workspace back out of
-   * its own URL: this fires at the moment the workspace changes, whereas the
-   * URL is written by a router navigation that settles a tick later — and at
-   * `pagehide` there is no later tick. (Before deep-linking the reason was
-   * different but the conclusion identical: the param went stale the moment
-   * the user navigated inside the explorer.) */
+   * the initial mount) — null for the virtual root. The pop-out route uses
+   * this to feed the continuous workspace presence announcement
+   * (`panelTabPresence.ts`), and it must keep using THIS rather than reading
+   * the workspace back out of its own URL: this fires at the moment the
+   * workspace changes, whereas the URL is written by a router navigation
+   * that settles a tick later — and at `pagehide` there is no later tick.
+   * (Before deep-linking the reason was different but the conclusion
+   * identical: the param went stale the moment the user navigated inside the
+   * explorer.) */
   onWorkspaceChange?: (workspaceId: string | null) => void
   /**
    * Fires whenever the CURRENT selection changes (the selected file, or —
@@ -195,7 +198,7 @@ export interface LibraryExplorerProps {
    * 'stacked' (default, the docked <aside>): preview BELOW the list. The aside
    * is a narrow column, so a side-by-side split there would leave neither half
    * usable.
-   * 'split' (the fullscreen /#/library tab): preview to the RIGHT, taking 60%
+   * 'split' (a standalone or shell full-screen tab): preview to the RIGHT, taking 60%
    * — a full-width window has the room, and an editor is far more useful tall
    * than wide.
    */
@@ -261,8 +264,9 @@ export function LibraryExplorer({
   // there rather than here). Both Library entry points always keep a
   // LibraryExplorer mounted whenever a navigation guard could fire, so
   // hosting the dialog here (rendered below, alongside the other dialogs)
-  // covers the docked panel AND the /library pop-out route's useBlocker.
+  // covers the docked panel AND the standalone /library route's useBlocker.
   const discardDialogOpen = useSyncExternalStore(subscribeDiscardConfirmDialog, getDiscardConfirmDialogOpen)
+  useEffect(() => discardConfirmDialogHostUnmounted, [])
 
   // Uncontrolled fallbacks — used only when the caller does NOT address the
   // Library by URL. In addressed mode these are never read or written, so
@@ -296,7 +300,6 @@ export function LibraryExplorer({
   // ongoing sync.
   const [browsedDir, setBrowsedDir] = useState(address?.path ? parentDirOf(address.path) : address?.folder ?? '')
   const [includeHidden, setIncludeHidden] = useState(false)
-  const isSplit = layout === 'split'
   const [renameTarget, setRenameTarget] = useState<LibraryEntry | null>(null)
   const [renameError, setRenameError] = useState<string>()
   const [deleteTarget, setDeleteTarget] = useState<LibraryEntry | null>(null)
@@ -1155,16 +1158,13 @@ export function LibraryExplorer({
           Stacked in the docked aside, side-by-side in the fullscreen tab. In
           BOTH the list stays visible and clickable while a file is open, which
           is the in-app navigation path confirmDiscardLibraryEdits() guards. */}
-      <div className={cn('flex min-h-0 flex-1', isSplit ? 'flex-row' : 'flex-col')}>
+      <ListPreviewLayout layout={layout}>
       {/* Body */}
-      <div
-        className={cn(
-          'min-h-0 min-w-0 overflow-y-auto p-[var(--space-2)] relative',
-          // Preview open: it takes the larger share (60% split / 55% stacked —
-          // the stacked figure is the old even split plus the 10% the operator
-          // asked for). Closed: the list has the whole box to itself.
-          !previewOpen ? 'flex-1' : isSplit ? 'flex-[40]' : 'flex-[45]',
-        )}
+      <ListPreviewRegion
+        layout={layout}
+        region="list"
+        previewVisible={previewOpen}
+        surface="library-list"
       >
         {workspaceId === null ? (
           // US-4 AS-2: the bar renders in EVERY Library location, disabled at
@@ -1270,16 +1270,15 @@ export function LibraryExplorer({
               ))}
           </LibrarySearchBar>
         )}
-      </div>
+      </ListPreviewRegion>
 
       {/* ── Preview / edit pane (library-spec.md D-5) ─────────────────────── */}
       {previewOpen && (
-        <div
-          className={cn(
-            'min-h-0 min-w-0 border-[var(--color-border)]',
-            isSplit ? 'flex-[60] border-l' : 'flex-[55] border-t',
-          )}
-          data-testid="library-preview-pane-wrapper"
+        <ListPreviewRegion
+          layout={layout}
+          region="preview"
+          previewVisible={previewOpen}
+          testId="library-preview-pane-wrapper"
         >
           <LibraryPreviewPane
             workspaceId={workspaceId}
@@ -1298,9 +1297,9 @@ export function LibraryExplorer({
               goTo(workspaceId, workspacePath)
             }}
           />
-        </div>
+        </ListPreviewRegion>
       )}
-      </div>
+      </ListPreviewLayout>
 
       {/* ── Rename dialog ────────────────────────────────────────────────── */}
       <LibraryRenameDialog
@@ -1548,7 +1547,7 @@ export function LibraryExplorer({
           if (!next) resolveDiscardConfirmDialog(false)
         }}
         title="Discard unsaved changes?"
-        description="You have unsaved changes in the Library editor. Leaving now will discard them. Continue?"
+        description={`You have unsaved changes in ${selectedEntry?.name ?? 'the Library editor'}. Leaving now will discard them. Continue?`}
         confirmLabel="Discard"
         destructive
         onConfirm={() => resolveDiscardConfirmDialog(true)}

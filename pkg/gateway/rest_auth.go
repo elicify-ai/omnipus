@@ -930,6 +930,15 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	// (session cookie, else bearer token), so the key matches by construction —
 	// the logout request still has both at this point.
 	a.revokePreviewTokensForSession(r)
+	// Mail preview tokens (MC-43) die with the session for the same reason:
+	// an unauthenticated bearer credential in a URL path must not outlive the
+	// session that minted it. Same key construction, same fail-closed
+	// placement before the config write.
+	if store := a.mailPreviewTokenStoreOf(); store != nil {
+		if key, ok := PreviewSessionKey(r); ok {
+			store.invalidateSession(key)
+		}
+	}
 
 	// A CLI-token-authenticated caller's synthetic "cli" identity is not
 	// backed by any Gateway.Users row (see CLITokenContextKey's doc) — the

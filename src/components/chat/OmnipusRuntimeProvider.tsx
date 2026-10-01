@@ -1,7 +1,7 @@
 // Wraps the app with AssistantUI's runtime context and manages the WebSocket lifecycle.
 // Lives in AppShell so the WebSocket stays connected across all screens.
 
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useOmnipusRuntime } from "@/lib/omnipus-runtime";
 import { useChatStore } from "@/store/chat";
@@ -38,6 +38,15 @@ import {
   BrowserWaitUI, BrowserWaitUnderscoreUI,
   BrowserEvaluateUI, BrowserEvaluateUnderscoreUI,
 } from "./tools/BrowserTool";
+
+// Email draft cards are the only mail-specific code in the always-mounted
+// runtime provider. Keep their registrations live, but load the implementation
+// after the entry graph has rendered so the Mail feature does not inflate the
+// production entry bundle.
+const LazyDraftLinkToolUIs = lazy(async () => {
+  const module = await import("./tools/DraftLink");
+  return { default: module.DraftLinkToolUIs };
+});
 
 // Manages the memory pressure observer lifecycle.
 // Starts the polling loop on mount and wires heap-level transitions into the connection store.
@@ -336,6 +345,9 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <BrowserEvaluateUI />
       <BrowserEvaluateUnderscoreUI />
       <SetGoalToolUI />
+      <Suspense fallback={null}>
+        <LazyDraftLinkToolUIs />
+      </Suspense>
       <MemoryObserverLifecycle />
       <WsLifecycle />
       {children}

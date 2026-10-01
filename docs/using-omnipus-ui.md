@@ -13,7 +13,7 @@ flowchart LR
   SignIn[Sign-in screen] -->|opens| Workspace[Your default workspace]
   Bar[Sidebar] -->|lists| Workspaces[All your workspaces]
   Bar -->|links to| Screens[Agents, Connectors, Skills and Tools, Library]
-  Workspace -->|tabs| Tabs[Chat, Tasks, Calendar, Library, Team]
+  Workspace -->|tabs and panels| Tabs[Chat, Tasks, Calendar, Library, Mail, Team]
   Workspace -->|chat tab shows| Chat[Replies, tool calls, activity]
 ```
 
@@ -47,17 +47,18 @@ The magnifier at the top of the sidebar searches all your conversations.
 
 ## A workspace and its tabs
 
-A [workspace](workspaces.md) is where one effort lives: conversations, task board, files, team. Switch workspaces from the sidebar; each opens on the same five tabs.
+A [workspace](workspaces.md) is where one effort lives: conversations, task board, files, team. Switch workspaces from the sidebar. The workspace bar has four page tabs and two controls that open panels alongside Chat:
 
-| Tab | What it is for |
+| Entry | What it is for |
 |---|---|
 | Chat | Talking to the workspace's agents; their work and replies appear here. |
 | Tasks | The workspace's work as a [board, list, or graph](tasks.md), including its [plans](plans.md). |
 | Calendar | [Scheduled and recurring work](calendar.md), shown by when it fires. |
-| Library | The workspace's files and notes; the tab opens the docked [Library](library.md) panel. |
+| Library | The workspace's files and notes; opens the [Library](library.md) panel beside Chat on wider screens. |
+| Mail | The workspace agents' configured mailboxes; opens the [Mail](mail.md) panel beside Chat on wider screens. |
 | Team | Who is on this workspace's team and which [agent](agents.md) may delegate to which. |
 
-Workspace settings are not a tab: select the workspace's name at the left of the tab bar. On a narrow screen the tabs collapse into one switcher menu that carries the same entries.
+Workspace settings are not an entry: select the workspace's name at the left of the bar. On a narrow screen these entries move into one switcher menu.
 
 ## The chat area
 
@@ -97,6 +98,19 @@ When the current first message has no known chat ID, `/new` shows **“Delivery 
 
 **Limits:** recovery before a chat ID is known lives only in the open tab; a full browser reload can lose it. The gateway remembers delivery IDs only for its current process, and only for a limited number of recent first messages: up to 256 per account and 10,000 in total. When those limits are reached, the oldest are forgotten first, so a Retry of a very old unconfirmed first message can create a second chat and answer twice, exactly as after a restart. If it crashes after saving the message but before acknowledging it, Retry after that restart can likewise create a second chat and answer twice. Reusing a delivery ID for a different message is refused with a conflict error instead of being treated as the same message. Delivery Retry is not a guarantee of exactly-once answers or tool actions. After a gateway upgrade, reload any browser tab that was already open: an older tab does not understand the new delivery messages, so starting a new chat there can appear to hang until the page is reloaded.
 
+## Panels beside chat
+
+[Library](library.md), [Browser](browser.md), and [Mail](mail.md) use the same panel controls. From a workspace, select **Library** or **Mail** in the workspace bar to toggle that panel. The chat's **Open library** button opens Library; **Open browser** opens the agent's live Browser panel when a browser session is available. Only one panel sits beside Chat at a time. Choosing another replaces it; if the outgoing panel has protected unsaved changes, you are asked before it leaves.
+
+| Control | What it does |
+|---|---|
+| Panel heading and **Close** (X) | Shows which panel is open; X closes it and returns focus to Chat. On a narrow screen, the panel replaces the chat area and also has **Back** at the top to return to Chat. |
+| Divider between Chat and the panel | Drag it to change the panel's width. You can focus the divider and press the left or right arrow key; **Home** and **End** jump to its narrowest and widest sizes. Double-click it to reset the width. |
+| **Expand** icon | Opens the current panel in a separate full-screen browser tab, or focuses its existing tab. If pop-ups are blocked, the docked panel stays put and shows **Pop-up blocked — allow pop-ups to expand.** |
+| **Back to chat** in the full-screen tab | Closes an app-opened tab when the browser permits it, returning the panel beside Chat. If that tab cannot close itself, the button goes back to workspace Chat with the panel open. |
+
+Library and Mail ask before an app-initiated close, panel switch, expansion, or full-screen return when their editors have protected unsaved changes; cancel the prompt to stay. In Mail, that covers changed drafts and Compose messages with a nonempty body, **not** a new Compose message with only recipients or subject filled in. The Browser panel has no equivalent text-edit warning. See the [Mail guide](mail.md#work-with-drafts) for Save and draft-sending steps.
+
 ## Where settings and account live
 
 App-wide settings live behind **Settings** in the account menu, on tabs from providers and models to security, data, and chat behavior; [settings](settings.md) walks each one. Your **Profile** (preferences, password, and what agents should know about you) and **Usage** (token history) are separate entries in the same menu. Settings for one workspace live in that workspace, under its name.
@@ -107,7 +121,7 @@ App-wide settings live behind **Settings** in the account menu, on tabs from pro
 - Sending mid-turn steers the running turn; it does not queue a message for afterwards. To let the agent finish first, wait for the reply before sending.
 - Stop is a request, not a switch: the agent halts where it is, and work already finished stays finished.
 - The activity pill disappears when everything has ended successfully. A failed background item keeps it visible, so failures do not vanish silently.
-- The **Library** tab does not open a page; it opens the Library panel over your chat and returns you to the Chat tab.
+- The **Library** and **Mail** entries open panels beside Chat on wider screens, rather than separate workspace pages; on narrower screens a panel takes over the chat area.
 - For readability, some routine tool activity is hidden from the conversation by default. **Settings**, then **Chat**, then **Verbose chat** reveals every call.
 
 ## Related pages
@@ -117,4 +131,6 @@ App-wide settings live behind **Settings** in the account menu, on tabs from pro
 - [agents](agents.md) — the roster, the default agent, building your own.
 - [tasks](tasks.md) — the board, list, and graph views, and plans.
 - [tools](tools.md) — what agents can do, and the permissions that gate them.
+- [mail](mail.md) — read, compose, and manage drafts in the Mail panel.
+- [browser](browser.md) — watch or drive an agent's live browser in its panel.
 - [settings](settings.md) — every settings tab in detail.

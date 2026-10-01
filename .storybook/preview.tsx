@@ -96,6 +96,17 @@ const preview: Preview = {
     a11y: { test: 'error' },
     controls: { expanded: true },
     options: { storySort: { method: 'alphabetical' } },
+    // MIN-201: every side-panel-shell story is reviewable at BOTH sides of
+    // the 680px takeover boundary and at the docked desktop size. `680x900`
+    // proves the docked layout still fits the boundary exactly; `679x900`
+    // proves the takeover takes over below it.
+    viewport: {
+      options: {
+        panel679x900: { name: 'Panel 679x900 (takeover)', styles: { width: '679px', height: '900px' } },
+        panel680x900: { name: 'Panel 680x900 (boundary)', styles: { width: '680px', height: '900px' } },
+        panel1280x800: { name: 'Panel 1280x800 (docked)', styles: { width: '1280px', height: '800px' } },
+      },
+    },
   },
   tags: ['autodocs'],
 }

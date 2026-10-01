@@ -55,8 +55,57 @@ func TestClient_AddressReturnsUsername(t *testing.T) {
 	}
 }
 
+// TestClient_AccountKey_DiffersByPort — RED for the real, independently
+// confirmed defect in AccountKey() (the mail-budget's per-account
+// singleflight/semaphore key, mail_budget.go): the derivation used to be
+// "host|username" with the port OMITTED. Two mailboxes on the SAME IMAP
+// host at DIFFERENT ports (a common setup: two accounts behind one
+// mail-server IP, distinguished only by port) collided onto one AccountKey
+// — sharing the 2-per-account concurrency cap and, worse, the coalescing
+// map: a listMailMessages flight for account X could be answered by an
+// in-flight result actually fetched from account Y's port. AccountKey must
+// include the port so same-host-same-username-different-port accounts
+// never collide.
+func TestClient_AccountKey_DiffersByPort(t *testing.T) {
+	clA, err := NewClient(Account{IMAPHost: "mail.example.test", IMAPPort: 993, SMTPHost: "s", Username: "same@x.com", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clB, err := NewClient(Account{IMAPHost: "mail.example.test", IMAPPort: 1993, SMTPHost: "s", Username: "same@x.com", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyA, keyB := clA.AccountKey(), clB.AccountKey()
+	if keyA == keyB {
+		t.Fatalf("AccountKey() must differ when only the port differs (same host, same username): "+
+			"both accounts produced %q — they would collide in the mail budget's 2-per-account "+
+			"semaphore and singleflight coalescing map", keyA)
+	}
+}
+
+// TestClient_AccountKey_SamePortSameAccountIsStable is the sibling
+// assertion: identical host+port+username must still derive the SAME key
+// (the fix must not over-widen into "always unique").
+func TestClient_AccountKey_SamePortSameAccountIsStable(t *testing.T) {
+	cl1, err := NewClient(Account{IMAPHost: "mail.example.test", IMAPPort: 993, SMTPHost: "s", Username: "same@x.com", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl2, err := NewClient(Account{IMAPHost: "mail.example.test", IMAPPort: 993, SMTPHost: "s", Username: "same@x.com", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cl1.AccountKey() != cl2.AccountKey() {
+		t.Fatalf("AccountKey() must be stable for identical host+port+username: got %q vs %q",
+			cl1.AccountKey(), cl2.AccountKey())
+	}
+}
+
 func TestBuildEmailBody_Headers(t *testing.T) {
-	body := buildEmailBody("from@x.com", "to@x.com", "Hello", "the body", "")
+	body, err := buildEmailBody("from@x.com", "to@x.com", "Hello", "the body", "")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	for _, want := range []string{
 		"From: from@x.com\r\n",
 		"To: to@x.com\r\n",
@@ -79,7 +128,10 @@ func TestBuildEmailBody_Headers(t *testing.T) {
 }
 
 func TestBuildEmailBody_ReplyThreadingHeaders(t *testing.T) {
-	body := buildEmailBody("from@x.com", "to@x.com", "Re: Hi", "reply text", "<orig@x.com>")
+	body, err := buildEmailBody("from@x.com", "to@x.com", "Re: Hi", "reply text", "<orig@x.com>")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	if !strings.Contains(body, "In-Reply-To: <orig@x.com>\r\n") {
 		t.Error("reply must set In-Reply-To")
 	}
@@ -140,7 +192,10 @@ func TestSanitizeHeader_Differentiation(t *testing.T) {
 // in the subject is neutralized in the output wire format.
 // Traces to: transport.go buildEmailBody + sanitizeHeader (injection guard)
 func TestBuildEmailBody_InjectionInSubject(t *testing.T) {
-	body := buildEmailBody("from@x.com", "to@x.com", "Hi\r\nBcc: evil@x.com", "body text", "")
+	body, err := buildEmailBody("from@x.com", "to@x.com", "Hi\r\nBcc: evil@x.com", "body text", "")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	lines := strings.Split(body, "\r\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "Bcc:") {
@@ -154,7 +209,10 @@ func TestBuildEmailBody_InjectionInSubject(t *testing.T) {
 // buildEmailBody accepts whatever subject the caller passes; with empty it stays empty.
 // Traces to: transport.go buildEmailBody
 func TestBuildEmailBody_EmptySubjectPassThrough(t *testing.T) {
-	body := buildEmailBody("f@x.com", "t@x.com", "", "body", "")
+	body, err := buildEmailBody("f@x.com", "t@x.com", "", "body", "")
+	if err != nil {
+		t.Fatalf("buildEmailBody: %v", err)
+	}
 	if !strings.Contains(body, "Subject: \r\n") {
 		t.Fatalf("empty subject must produce 'Subject: \\r\\n' header, got body:\n%s", body)
 	}
@@ -163,8 +221,14 @@ func TestBuildEmailBody_EmptySubjectPassThrough(t *testing.T) {
 // TestBuildEmailBody_Differentiation ensures two distinct recipients yield two
 // distinct wire bodies (rules out hardcoded output).
 func TestBuildEmailBody_Differentiation(t *testing.T) {
-	a := buildEmailBody("f@x.com", "alice@x.com", "Hello", "body", "")
-	b := buildEmailBody("f@x.com", "bob@x.com", "Hello", "body", "")
+	a, aerr := buildEmailBody("f@x.com", "alice@x.com", "Hello", "body", "")
+	if aerr != nil {
+		t.Fatalf("buildEmailBody: %v", aerr)
+	}
+	b, berr := buildEmailBody("f@x.com", "bob@x.com", "Hello", "body", "")
+	if berr != nil {
+		t.Fatalf("buildEmailBody: %v", berr)
+	}
 	if a == b {
 		t.Fatalf("buildEmailBody must differ for different recipients")
 	}
@@ -725,15 +789,12 @@ func TestClient_Send_SMTPSDialFails(t *testing.T) {
 }
 
 // TestDialIMAP_ContextCancelledBeforeDial verifies that when the parent context
-// is already canceled, dialIMAP returns the context error without waiting for
-// the dial goroutine. This exercises the dialCtx.Done() select branch.
-// Traces to: transport.go dialIMAP (context cancellation path, line 165-166)
+// is already canceled, dialIMAP returns the context error without starting a
+// network connection.
 func TestDialIMAP_ContextCancelledBeforeDial(t *testing.T) {
-	// Use a host that takes time to refuse (non-routable address causes timeout,
-	// not immediate connection refused). We cancel the context immediately.
+	// Use a non-routable host, then cancel the context before the dial begins.
 	cl, _ := NewClient(Account{
-		// 192.0.2.x is TEST-NET-1 (RFC 5737) — packets are black-holed, so
-		// the dial goroutine will block, and the canceled context wins the select.
+		// 192.0.2.x is TEST-NET-1 (RFC 5737).
 		IMAPHost: "192.0.2.1",
 		IMAPPort: 993,
 		SMTPHost: "127.0.0.1",

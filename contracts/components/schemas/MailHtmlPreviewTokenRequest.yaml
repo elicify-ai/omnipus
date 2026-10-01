@@ -1,0 +1,49 @@
+title: MailHtmlPreviewTokenRequest
+description: >
+  Request to mint a short-lived token for one message's HTML body (D13/D17,
+  POST /mail/html-preview-token — session-authenticated, stays in the API
+  namespace, security sign-off C1). This mint is the ONE live-IMAP fetch of
+  the preview flow: the message is fetched once, sanitized, and its body
+  plus inline cid: parts and the load_remote remote-image URL list are held
+  in the in-memory token store for the TTL — the /mail-preview/ serve routes
+  (§2.3a) never dial IMAP. load_remote defaults to false (D17 — remote
+  images blocked by default; "Load images" re-mints with true). Rate-limited
+  by a dedicated per-IP limiter (MC-44).
+type: object
+additionalProperties: false
+required:
+  - workspace_id
+  - agent_id
+  - folder
+  - message_ref
+properties:
+  workspace_id:
+    type: string
+    description: Workspace of the mailbox pair.
+    example: "ws_my_workspace"
+  agent_id:
+    type: string
+    description: ID of the mailbox-owning agent.
+    example: "mia"
+  folder:
+    type: string
+    enum:
+      - inbox
+      - sent
+      - drafts
+    description: Folder slug — exactly inbox, sent or drafts (MC-5).
+    example: "inbox"
+  message_ref:
+    type: string
+    minLength: 5
+    description: >
+      Folder-scoped message reference: `uid:<uidvalidity>:<uid>` or
+      `mid:<Message-ID>` — the same ref grammar as the read endpoint (§2.3).
+    example: "uid:456:123"
+  load_remote:
+    type: boolean
+    default: false
+    description: >
+      Whether the preview may load remote images through the gateway's
+      bounded proxy (D17). Default false — blocked by default; the "Load
+      images" action re-mints with true.
