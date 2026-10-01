@@ -26,7 +26,6 @@ package agent
 import (
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -35,8 +34,9 @@ import (
 
 // orphanedToolCall describes a tool call that has no matching tool result.
 type orphanedToolCall struct {
-	ToolCallID string
-	ToolName   string
+	ToolCallID     string
+	ToolName       string
+	assistantIndex int
 }
 
 // RecoverOrphanedToolCalls inspects the tail of the session's message history.
@@ -73,17 +73,20 @@ func RecoverOrphanedToolCalls(
 		return history
 	}
 
-	// Build a set of tool_call_ids that already have a synthetic
-	// turn_canceled_restart entry in the history (idempotency guard).
-	alreadyCancelled := existingCancelledToolCallIDs(history)
+	// Use the same position-scoped marker binding as snapshot reconstruction.
+	// A canceled call in an earlier assistant cannot suppress a later reused id.
+	_, alreadyCancelled := restartCancellations(len(history), func(i int) providers.Message {
+		return history[i]
+	})
 
 	// Append a synthetic system message to the transcript for audit/replay.
 	// We do NOT remove the orphaned entry from the on-disk transcript — the
 	// transcript is an immutable audit record. We only strip it from the
 	// reconstructed history we pass to the LLM (FR-088).
 	for _, o := range orphans {
-		// Idempotency: skip if a synthetic entry already exists for this tool_call_id.
-		if alreadyCancelled[o.ToolCallID] {
+		// Idempotency belongs to this assistant position and declared call only.
+		identity := restartCallIdentity{assistantIndex: o.assistantIndex, toolCallID: o.ToolCallID}
+		if alreadyCancelled[identity] {
 			slog.Debug("agent: SIGKILL recovery — synthetic entry already present, skipping",
 				"session_key", sessionKey, "tool_call_id", o.ToolCallID)
 			continue
@@ -125,57 +128,6 @@ func RecoverOrphanedToolCalls(
 	// LLM does not see a dangling unanswered tool call.
 	cleanedHistory := stripOrphanedAssistantTurn(history)
 	return cleanedHistory
-}
-
-// existingCancelledToolCallIDs builds a set of tool_call_id values for which a
-// turn_canceled_restart system message already exists in history (idempotency
-// guard for recoverOrphanedToolCalls). Uses strings.Contains rather than a full
-// JSON parse to avoid allocations in the hot path.
-func existingCancelledToolCallIDs(history []providers.Message) map[string]bool {
-	result := make(map[string]bool)
-	for _, msg := range history {
-		if msg.Role == "system" &&
-			len(msg.Content) > 0 &&
-			strings.Contains(msg.Content, "turn_canceled_restart") &&
-			strings.Contains(msg.Content, "tool_call_id") {
-			// Extract tool_call_id from the content string via simple scan.
-			// Format: {"type":"turn_canceled_restart","tool_call_id":"<id>",...}
-			if id := extractJSONStringField(msg.Content, "tool_call_id"); id != "" {
-				result[id] = true
-			}
-		}
-	}
-	return result
-}
-
-// extractJSONStringField extracts a string value for the given key from a
-// simple JSON object string using string scanning (no full JSON parse).
-// Returns "" if the key is not found. Handles only simple string values (no
-// escaped quotes in the value).
-func extractJSONStringField(s, key string) string {
-	// Look for `"<key>":"` pattern.
-	needle := `"` + key + `":"`
-	idx := -1
-	for i := 0; i <= len(s)-len(needle); i++ {
-		if s[i:i+len(needle)] == needle {
-			idx = i + len(needle)
-			break
-		}
-	}
-	if idx < 0 {
-		return ""
-	}
-	end := -1
-	for i := idx; i < len(s); i++ {
-		if s[i] == '"' {
-			end = i
-			break
-		}
-	}
-	if end < 0 {
-		return ""
-	}
-	return s[idx:end]
 }
 
 // findOrphanedToolCalls scans the message history from the end and returns any
@@ -224,8 +176,9 @@ func findOrphanedToolCalls(history []providers.Message) []orphanedToolCall {
 				name = tc.Function.Name
 			}
 			orphans = append(orphans, orphanedToolCall{
-				ToolCallID: tc.ID,
-				ToolName:   name,
+				ToolCallID:     tc.ID,
+				ToolName:       name,
+				assistantIndex: lastAssistantIdx,
 			})
 		}
 	}

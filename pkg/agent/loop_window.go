@@ -10,7 +10,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -71,7 +70,7 @@ func (al *AgentLoop) assembleMessages(
 			return history
 		}
 		var lines []int
-		history, lines = memory.WindowHistory(snap)
+		history, lines = recoveryWindowHistory(snap)
 		cs := config.DefaultContextSettings()
 		if cfg := al.GetConfig(); cfg != nil {
 			cs = cfg.Context
