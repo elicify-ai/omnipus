@@ -94,8 +94,9 @@ func TestFirstUserMessage_OverBoundRejectsWithCorrelatedNotSaved(t *testing.T) {
 
 	store := handler.agentLoop.GetSessionStore()
 	require.NotNil(t, store)
-	entries := []session.TranscriptEntry{}
-	for _, sessionID := range issue1090SessionDirectories(t, store) {
+	sessionDirs := issue1090SessionDirectories(t, store)
+	entries := make([]session.TranscriptEntry, 0, len(sessionDirs))
+	for _, sessionID := range sessionDirs {
 		entries = append(entries, issue1090DiskTranscriptEntries(t, store, sessionID)...)
 	}
 	assert.Equal(t, []session.TranscriptEntry{}, entries, "SF-2: the oversized first user entry must not reach any disk transcript")
