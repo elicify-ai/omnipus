@@ -165,6 +165,60 @@ Observability for the validation layer:
 Both sides expose their counters via dev-tools hooks and (eventually)
 gateway `/metrics` once the metrics endpoint lands.
 
+### 6. Schema dialect [addendum, 2026-10-01]
+
+This ADR did not originally pin a JSON Schema dialect for the compiler
+(`santhosh-tekuri/jsonschema/v6`, `pkg/gateway/rest_inbound_validate.go::initInboundValidator`).
+None of the 460 files under `contracts/components/schemas/` declare a
+`$schema` key (`contracts/openapi.yaml` is pinned to `openapi: 3.0.3`,
+whose Schema Object is a superset of JSON Schema Wright Draft 00 — the
+draft-04 family — and OpenAPI disallows `$schema` on a Schema Object), so
+every embedded schema compiled under whatever dialect the compiler
+defaulted to internally. `jsonschema/v6`'s own default is "the latest
+draft supported" (`jsonschema.draftLatest = Draft2020`,
+`santhosh-tekuri/jsonschema/v6@v6.0.2/draft.go`) — a dialect none of these
+files are actually written in.
+
+This surfaced as a total gateway boot failure on every platform: Draft
+2020-12 requires `exclusiveMinimum`/`exclusiveMaximum` to be numeric
+(`metaschemas/draft/2020-12/meta/validation`, `properties.exclusiveMinimum.type == "number"`),
+while `ContextSettings.yaml`'s `tool_result_share_fraction` uses the
+boolean form paired with `minimum` — the only form OpenAPI 3.0.3 permits
+and that `redocly lint` accepts. Since `PreCompileAllInboundSchemas()`
+runs unconditionally at boot (§2, above) and a compile failure aborts
+boot, one dialect-mismatched schema took down the whole gateway.
+
+**Decision:** `initInboundValidator` sets
+`c.DefaultDraft(jsonschema.Draft4)` explicitly, matching the dialect
+every one of these files is already authored in (OpenAPI 3.0.3 ≈
+draft-04-family / Wright Draft 00). This is a dialect correction, not a
+new design — it makes the compiler's default agree with the one dialect
+contract authors already write, lint (`redocly lint`), and intend.
+
+**Consequence — `required: []` is now a compile error, not a no-op.**
+Draft-04's metaschema requires the `required` array to have at least one
+item when present (`metaschemas/draft-04/schema`, `definitions.stringArray.minItems == 1`);
+draft 2020-12 dropped that constraint. `required: []` is semantically a
+no-op under both dialects (requires nothing — identical in meaning to
+omitting the key) but is only syntactically legal under 2020-12. One file,
+`ChannelRouting.yaml`, used the empty-array form; it was removed from the
+canonical source (`contracts/components/schemas/ChannelRouting.yaml`) and
+the embed mirror regenerated via `scripts/gen-contracts.sh` step 5
+(`pkg/gateway/inboundschemas/ChannelRouting.yaml`) — not patched at the
+Go loader. **Do not add a loader-side "treat empty `required` as omitted"
+preprocessing step** — that would re-encode contract meaning in Go,
+contradicting Hard Constraint #8's contract-first rule, and would leave
+the next `required: []` schema to fail boot again with no lint signal to
+catch it before CI. A new schema author who needs "no required fields"
+simply omits the `required` key (the standard, already-idiomatic form);
+`redocly lint` does not require the empty-array form.
+
+Verified: `TestPreCompileAllInboundSchemas_AllSchemasCompile` (all 460
+embedded schemas compile under Draft4) and
+`TestContextSettings_PutRejectsOutOfRange` (field-boundary rejections,
+including the share-fraction lower bound, still enforced) —
+`pkg/gateway/rest_inbound_validate_test.go`, `pkg/gateway/rest_context_settings_test.go`.
+
 ---
 
 ## Default-Flip Target
