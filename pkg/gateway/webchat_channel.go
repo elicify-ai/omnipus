@@ -31,12 +31,50 @@ type webchatChannel struct {
 	// the response. Send() skips these to avoid duplication.
 	mu       sync.Mutex
 	streamed map[string]bool
+
+	// turnIdentity carries the turn_id/message_id of the MOST RECENT turn a
+	// wsStreamer finalized for a given chatID, recorded by
+	// wsStreamerFinalize.publishDone (websocket_streamer.go) immediately
+	// before it decides whether to markStreamed. Send's fallback path
+	// (below) consumes it so a frame built directly here — bypassing the
+	// streamer's own Update/Finalize, which already stamp TurnId/MessageId
+	// — still carries the SAME identity a live frame would have, instead of
+	// a nil turn_id/message_id. Populated for every non-shadow Finalize,
+	// including the cases markStreamed itself skips (a distinct terminal
+	// notice after already-persisted narration; a turn that streamed no
+	// tokens at all) — exactly the cases whose delivery actually falls
+	// through to Send().
+	turnIdentity map[string]turnIdentity
+}
+
+// turnIdentity is the (turn, durable message) identity pair a wsStreamer
+// recorded for its chatID at Finalize — see webchatChannel.turnIdentity's
+// doc comment.
+type turnIdentity struct {
+	turnID    string
+	messageID string
+}
+
+// stampFrame sets *turnID/*messageID from id, mirroring exactly what a live
+// wsStreamer.Update/Finalize call stamps on TokenFrame/DoneFrame
+// (websocket_streamer.go) — leaves a pointer nil (the generated frame's
+// "absent" wire representation) when the corresponding id is empty.
+func (id turnIdentity) stampFrame(turnID, messageID **string) {
+	if id.turnID != "" {
+		t := id.turnID
+		*turnID = &t
+	}
+	if id.messageID != "" {
+		m := id.messageID
+		*messageID = &m
+	}
 }
 
 func newWebchatChannel(wsHandler *WSHandler) *webchatChannel {
 	return &webchatChannel{
-		wsHandler: wsHandler,
-		streamed:  make(map[string]bool),
+		wsHandler:    wsHandler,
+		streamed:     make(map[string]bool),
+		turnIdentity: make(map[string]turnIdentity),
 	}
 }
 
@@ -44,6 +82,29 @@ func (c *webchatChannel) markStreamed(chatID string) {
 	c.mu.Lock()
 	c.streamed[chatID] = true
 	c.mu.Unlock()
+}
+
+// recordTurnIdentity stashes the turn/message identity of the turn a
+// wsStreamer just finalized for chatID, for a subsequent Send() fallback
+// delivery to consume. A no-op when both ids are empty (nothing useful to
+// hand a later fallback frame).
+func (c *webchatChannel) recordTurnIdentity(chatID, turnID, messageID string) {
+	if turnID == "" && messageID == "" {
+		return
+	}
+	c.mu.Lock()
+	c.turnIdentity[chatID] = turnIdentity{turnID: turnID, messageID: messageID}
+	c.mu.Unlock()
+}
+
+// consumeTurnIdentity returns and clears the most recently recorded turn
+// identity for chatID, so a later unrelated turn never inherits a stale id.
+func (c *webchatChannel) consumeTurnIdentity(chatID string) turnIdentity {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := c.turnIdentity[chatID]
+	delete(c.turnIdentity, chatID)
+	return id
 }
 
 func (c *webchatChannel) Name() string { return "webchat" }
@@ -68,20 +129,32 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 		return nil
 	}
 
+	// This delivery bypasses the streamer's own Update/Finalize — the one
+	// place that normally stamps TurnId/MessageId on a live frame — so pull
+	// whatever identity the turn's streamer recorded for this chatID (see
+	// turnIdentity's doc comment) and stamp it here instead. Empty when no
+	// streamer ever ran for this chatID (e.g. a non-webchat-turn producer),
+	// in which case the frame carries no identity, exactly as before.
+	identity := c.consumeTurnIdentity(msg.ChatID)
+
 	sid, origin := c.resolveOutbound(msg.ChatID, msg.SessionID)
 	if sid == "" {
 		// No session to number against: the only possible viewer is the
 		// originating connection itself (if it is still open).
 		if origin != nil {
 			if msg.Content != "" {
-				sendConnGenFrame(origin, string(generated.WsFrameTypeToken), generated.TokenFrame{
+				tokenFrame := generated.TokenFrame{
 					Type:    string(generated.WsFrameTypeToken),
 					Content: msg.Content,
-				})
+				}
+				identity.stampFrame(&tokenFrame.TurnId, &tokenFrame.MessageId)
+				sendConnGenFrame(origin, string(generated.WsFrameTypeToken), tokenFrame)
 			}
-			sendConnGenFrame(origin, string(generated.WsFrameTypeDone), generated.DoneFrame{
+			doneFrame := generated.DoneFrame{
 				Type: string(generated.WsFrameTypeDone),
-			})
+			}
+			identity.stampFrame(&doneFrame.TurnId, &doneFrame.MessageId)
+			sendConnGenFrame(origin, string(generated.WsFrameTypeDone), doneFrame)
 		}
 		return nil
 	}
@@ -92,19 +165,22 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 	// ADR-082 D6/FR-012: zero bound connections is not a failure — the
 	// content is durable in the transcript and in the journal.
 	if msg.Content != "" {
-		c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeToken), hubFrameMeta{
-			kind: hubKindToken, content: msg.Content,
-		}, generated.TokenFrame{
+		tokenFrame := generated.TokenFrame{
 			Type:      string(generated.WsFrameTypeToken),
 			Content:   msg.Content,
 			SessionId: sid,
-		})
+		}
+		identity.stampFrame(&tokenFrame.TurnId, &tokenFrame.MessageId)
+		c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeToken), hubFrameMeta{
+			kind: hubKindToken, content: msg.Content,
+		}, tokenFrame)
 	}
-	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeDone), hubFrameMeta{kind: hubKindDone},
-		generated.DoneFrame{
-			Type:      string(generated.WsFrameTypeDone),
-			SessionId: sid,
-		})
+	doneFrame := generated.DoneFrame{
+		Type:      string(generated.WsFrameTypeDone),
+		SessionId: sid,
+	}
+	identity.stampFrame(&doneFrame.TurnId, &doneFrame.MessageId)
+	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeDone), hubFrameMeta{kind: hubKindDone}, doneFrame)
 	return nil
 }
 

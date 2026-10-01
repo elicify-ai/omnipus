@@ -749,6 +749,18 @@ func (wsf *wsStreamerFinalize) publishDone() {
 				hubFrameMeta{kind: hubKindDone, turnID: wsf.turnID}, data, nil)
 		}
 	}
+	if wsf.s.channel != nil {
+		// Hand the channel this turn's identity BEFORE the markStreamed
+		// decision below, regardless of it: the cases markStreamed skips
+		// (a distinct terminal notice after already-persisted narration; a
+		// turn that streamed no tokens at all) are exactly the ones whose
+		// delivery falls through to Send(), which needs this to stamp its
+		// own frame — see webchatChannel.turnIdentity's doc comment.
+		wsf.s.statsMu.Lock()
+		finalizedID := wsf.s.finalizedMessageID
+		wsf.s.statsMu.Unlock()
+		wsf.s.channel.recordTurnIdentity(wsf.s.chatID, wsf.turnID, finalizedID)
+	}
 	// Suppress Send only when streaming already covered the final outcome.
 	// Earlier narration must not suppress a separate terminal notice; nor
 	// should an empty stream suppress the outbound fallback.
@@ -910,6 +922,17 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			if entryID == "" || wsf.pendingFinalContent != "" {
 				entryID = uuid.New().String()
 			}
+			// Record the id actually being persisted so publishDone can hand
+			// it to the channel's turnIdentity record (webchat_channel.go),
+			// for a later outbound-fallback Send() to stamp onto its own
+			// frame — see wsStreamer.finalizedMessageID's doc comment.
+			// Matters most for a distinct terminal notice (entryID freshly
+			// minted above), but set unconditionally so the silent/
+			// no-narration fallback case (entryID == wsf.messageID) is
+			// equally covered.
+			wsf.s.statsMu.Lock()
+			wsf.s.finalizedMessageID = entryID
+			wsf.s.statsMu.Unlock()
 			entry := session.TranscriptEntry{
 				ID:      entryID,
 				Role:    "assistant",
