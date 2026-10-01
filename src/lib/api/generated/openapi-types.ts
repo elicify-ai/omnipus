@@ -235,7 +235,7 @@ export interface paths {
         put?: never;
         /**
          * Check a saved web-search connection
-         * @description Runs one real, potentially chargeable search for "Omnipus" through the addressed keyed search client with its saved key, one result where supported, and the cheapest supported depth within the saved cap. Requires authenticated administrator access, but no password step-up: this neither reveals nor changes a secret. A saved key and runtime-usable service are required. No fallback, key rotation, retry, discovery, result fetch or cached success. A 15-second total context deadline cancels on disconnect and does not lengthen a shorter client deadline. Per instance and service, one check may be in flight and at most one check is admitted every 30 seconds, including failures. Local limiting returns 429 with Retry-After and performs no outbound call. Completed upstream outcomes, including valid empty results and upstream failures, return 200 with normalized categories and no upstream payload or key. Gateway/internal failures remain non-2xx. Configuration and roles are unchanged; clients refresh readiness separately and discard results for an older credential/configuration generation.
+         * @description Runs one real, potentially chargeable search for "Omnipus" through the addressed keyed search client with its saved key, one result where supported, and the cheapest supported depth within the saved cap. Requires authenticated administrator access, but no password step-up: this neither reveals nor changes a secret. A saved key and runtime-usable service are required. No fallback, key rotation, retry, discovery, result fetch or cached success. A 15-second total context deadline cancels on disconnect and does not lengthen a shorter client deadline. Per instance and service, one check may be in flight and at most one check is admitted every 30 seconds, including failures. Local limiting returns 429 with Retry-After and performs no outbound call. Completed upstream outcomes, including valid empty results and upstream failures, return 200 with normalized categories and no upstream payload or key. Gateway/internal failures remain non-2xx. If the service's key or configuration generation changes after admission and before completion, the server discards the upstream outcome and returns 409 with the fixed error "The key changed while checking. Check again." No key identity, fingerprint or generation is returned. Configuration and roles are unchanged; clients refresh readiness separately.
          */
         post: operations["checkSearchProviderConnection"];
         delete?: never;
@@ -17028,7 +17028,15 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
+            /** @description The saved connection is not ready, or its key/configuration changed while checking. A changed generation discards the provider outcome and returns "The key changed while checking. Check again." */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             429: components["responses"]["429TooManyRequests"];
             500: components["responses"]["500InternalServerError"];
             503: components["responses"]["503ServiceUnavailable"];

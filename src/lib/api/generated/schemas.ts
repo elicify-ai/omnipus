@@ -8799,7 +8799,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/integrations/providers/:id/check",
     alias: "checkSearchProviderConnection",
-    description: `Runs one real, potentially chargeable search for &quot;Omnipus&quot; through the addressed keyed search client with its saved key, one result where supported, and the cheapest supported depth within the saved cap. Requires authenticated administrator access, but no password step-up: this neither reveals nor changes a secret. A saved key and runtime-usable service are required. No fallback, key rotation, retry, discovery, result fetch or cached success. A 15-second total context deadline cancels on disconnect and does not lengthen a shorter client deadline. Per instance and service, one check may be in flight and at most one check is admitted every 30 seconds, including failures. Local limiting returns 429 with Retry-After and performs no outbound call. Completed upstream outcomes, including valid empty results and upstream failures, return 200 with normalized categories and no upstream payload or key. Gateway/internal failures remain non-2xx. Configuration and roles are unchanged; clients refresh readiness separately and discard results for an older credential/configuration generation.
+    description: `Runs one real, potentially chargeable search for &quot;Omnipus&quot; through the addressed keyed search client with its saved key, one result where supported, and the cheapest supported depth within the saved cap. Requires authenticated administrator access, but no password step-up: this neither reveals nor changes a secret. A saved key and runtime-usable service are required. No fallback, key rotation, retry, discovery, result fetch or cached success. A 15-second total context deadline cancels on disconnect and does not lengthen a shorter client deadline. Per instance and service, one check may be in flight and at most one check is admitted every 30 seconds, including failures. Local limiting returns 429 with Retry-After and performs no outbound call. Completed upstream outcomes, including valid empty results and upstream failures, return 200 with normalized categories and no upstream payload or key. Gateway/internal failures remain non-2xx. If the service&#x27;s key or configuration generation changes after admission and before completion, the server discards the upstream outcome and returns 409 with the fixed error &quot;The key changed while checking. Check again.&quot; No key identity, fingerprint or generation is returned. Configuration and roles are unchanged; clients refresh readiness separately.
 `,
     requestFormat: "json",
     parameters: [
@@ -8838,7 +8838,8 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists.`,
+        description: `The saved connection is not ready, or its key/configuration changed while checking. A changed generation discards the provider outcome and returns &quot;The key changed while checking. Check again.&quot;
+`,
         schema: ErrorResponse,
       },
       {

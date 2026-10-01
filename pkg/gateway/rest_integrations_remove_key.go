@@ -124,6 +124,9 @@ func (a *restAPI) persistSearchKeyRemoval(def config.SearchProviderDef, state *s
 			return err
 		}
 		out = written
+		// The persisted disabled state invalidates an old check even if deleting
+		// the credential or applying the reload subsequently fails.
+		a.searchChecks.bumpGeneration(def.ID)
 		if err := a.removeStoredCredential(def.CredRef); err != nil {
 			logIntegrationChangeFailure(def.ID, "credential_delete", err)
 			state.failedStages = append(state.failedStages, "credential_delete")

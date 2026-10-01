@@ -45,7 +45,7 @@ func (a *restAPI) handleSearchConnectionCheck(w http.ResponseWriter, r *http.Req
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), searchConnectionCheckDeadline)
 	defer cancel()
-	probe, retry, err := a.admitSearchConnectionCheck(ctx, id)
+	probe, generation, retry, err := a.admitSearchConnectionCheck(ctx, id)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			// Use the same closed outcomes as an interrupted outbound check;
@@ -69,6 +69,10 @@ func (a *restAPI) handleSearchConnectionCheck(w http.ResponseWriter, r *http.Req
 	}
 	defer a.searchChecks.finish(id)
 	response, err := probe.Check(ctx)
+	if a.searchChecks.generation(id) != generation {
+		jsonErr(w, http.StatusConflict, "The key changed while checking. Check again.")
+		return
+	}
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "The connection check could not run. Try again.")
 		return
@@ -79,13 +83,15 @@ func (a *restAPI) handleSearchConnectionCheck(w http.ResponseWriter, r *http.Req
 // admitSearchConnectionCheck serializes key/config snapshots and admission with
 // integration saves/removals and the loop's sysagent config writers. The locks
 // are released before any outbound request, so removing a key need not wait for
-// an already-sent diagnostic; its pinned response contains no credential data.
-func (a *restAPI) admitSearchConnectionCheck(ctx context.Context, id string) (*tools.SearchConnectionProbe, int, error) {
+// an already-sent diagnostic. Its generation binds the outcome to this snapshot
+// without retaining or exposing any key identity.
+func (a *restAPI) admitSearchConnectionCheck(ctx context.Context, id string) (*tools.SearchConnectionProbe, uint64, int, error) {
 	if err := lockSearchCheckMutex(ctx, &a.configMu); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	defer a.configMu.Unlock()
 	var probe *tools.SearchConnectionProbe
+	var generation uint64
 	var retry int
 	err := a.agentLoop.WithConfigReadLockContext(ctx, func(cfg *config.Config) error {
 		if cfg == nil {
@@ -122,9 +128,10 @@ func (a *restAPI) admitSearchConnectionCheck(ctx context.Context, id string) (*t
 		if !admitted {
 			return &integrationChangeError{http.StatusTooManyRequests, "A connection check is already running or was started recently. Wait before trying again."}
 		}
+		generation = a.searchChecks.generation(id)
 		return nil
 	})
-	return probe, retry, err
+	return probe, generation, retry, err
 }
 
 // lockSearchCheckMutex waits without leaving a goroutine that could acquire the
@@ -161,6 +168,31 @@ type searchCheckAdmission struct {
 type searchCheckSlot struct {
 	inFlight      bool
 	nextAdmission time.Time
+	generation    uint64
+}
+
+func (g *searchCheckAdmission) generation(id string) uint64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	index := searchCheckCatalogueIndex(id)
+	if index < 0 || index >= len(g.slots) {
+		return 0
+	}
+	return g.slots[index].generation
+}
+
+// bumpGeneration invalidates held outcomes without altering admission/cooldown.
+// Writers hold configMu, as admission does when it captures the generation.
+func (g *searchCheckAdmission) bumpGeneration(id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.slots == nil {
+		g.slots = make([]searchCheckSlot, len(config.SearchProviderCatalogue))
+	}
+	index := searchCheckCatalogueIndex(id)
+	if index >= 0 && index < len(g.slots) {
+		g.slots[index].generation++
+	}
 }
 
 func (g *searchCheckAdmission) begin(ctx context.Context, id string) (int, bool, error) {

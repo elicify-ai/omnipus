@@ -23,6 +23,10 @@ func (a *restAPI) persistIntegrationProviderUpdate(w http.ResponseWriter, def in
 				"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets")
 			return false
 		}
+		if def.kind == "search" {
+			// The key changed even if the subsequent config write fails.
+			a.searchChecks.bumpGeneration(def.id)
+		}
 	}
 	if err := a.updateConfigJSONLocked(func(raw map[string]any) error {
 		return applyIntegrationRoles(raw, def, write)
