@@ -108,13 +108,14 @@ func TestContextOverflowPlain_MixedHistoryUsesOldestEndpoint(t *testing.T) {
 	const key, trigger = "agent:mia:plain-mixed", "continue mixed history"
 	p := plainHistoryRejectOnce(errors.New("context_length_exceeded"), "mixed recovered")
 	al, agent, _ := newPlainHistoryLoop(t, p)
-	retained := []providers.Message{
-		{Role: "user", Content: "keep this tool exchange"},
-		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("kept-b", "second-named-first"), toolCallFor("kept-a", "first-named-second")}},
-		{Role: "tool", ToolCallID: "kept-b", Content: "exact B result Ω"},
-		{Role: "tool", ToolCallID: "kept-a", Content: "exact A result 漢"},
-		{Role: "assistant", Content: "newest assistant must survive"},
-	}
+	retained := make([]providers.Message, 0, 6)
+	retained = append(retained,
+		providers.Message{Role: "user", Content: "keep this tool exchange"},
+		providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("kept-b", "second-named-first"), toolCallFor("kept-a", "first-named-second")}},
+		providers.Message{Role: "tool", ToolCallID: "kept-b", Content: "exact B result Ω"},
+		providers.Message{Role: "tool", ToolCallID: "kept-a", Content: "exact A result 漢"},
+		providers.Message{Role: "assistant", Content: "newest assistant must survive"},
+	)
 	history := append(plainHistoryExchange(1), retained...)
 	seedPlainHistory(t, agent, key, history)
 	response, err := al.runAgentLoop(context.Background(), agent, processOptions{SessionKey: key, UserMessage: trigger})

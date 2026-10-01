@@ -3371,39 +3371,6 @@ func TestFilterClientWebSearch_EmptyInput(t *testing.T) {
 	}
 }
 
-type overflowProvider struct {
-	calls        int
-	lastMessages []providers.Message
-	chatFunc     func(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, opts map[string]any) (*providers.LLMResponse, error)
-}
-
-func (p *overflowProvider) Chat(
-	ctx context.Context,
-	messages []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	opts map[string]any,
-) (*providers.LLMResponse, error) {
-	p.calls++
-	p.lastMessages = append([]providers.Message(nil), messages...)
-
-	if p.chatFunc != nil {
-		return p.chatFunc(ctx, messages, tools, model, opts)
-	}
-
-	if p.calls == 1 {
-		return nil, errors.New("context_window_exceeded")
-	}
-
-	return &providers.LLMResponse{
-		Content: "Recovered from overflow",
-	}, nil
-}
-
-func (p *overflowProvider) GetDefaultModel() string {
-	return "test-model"
-}
-
 func TestProcessMessage_ContextOverflowRecovery(t *testing.T) {
 	runPlainHistoryEntryRecovery(t, false)
 }
