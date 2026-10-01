@@ -82,11 +82,19 @@ Removal is refused without changes if search roles are still undecided, another 
 | **Could not reach the service. Try again.** | Check network availability, then try again after the cooldown. |
 | **The service could not complete the check. Try again.** | Try again after the cooldown. |
 | **The service returned an unexpected response. Try again.** | Try again after the cooldown. |
+| **The key changed while checking. Check again.** | The server rejected the old key's result. Wait for the cooldown, then check the current saved key. |
+| **Could not read the saved key from the credential store. Unlock or repair it, then try again.** | Unlock or repair the credential store before checking again. |
+| **The saved key is not available to the running service. Reload the configuration, then try again.** | Reload the configuration before checking again. |
+| **The server is unavailable. Please try again in a moment.** | No specific server recovery message was provided. Wait, then check manually after the cooldown. |
 | **You can check again in {N} seconds.** | Another check was refused by the local limit. Wait for the displayed countdown; no check is scheduled automatically. |
 
 There can be only one check in progress for each service, with a 30-second cooldown per service on this Omnipus instance, including failed checks. A service may request a longer wait. After the cooldown, click **Check connection** for a fresh attempt; an old success is not reused as a new check.
 
-Connection results are temporary. Saving or removing a key clears the old result, and a late reply from an older configuration is not used for the new row. Checks do not change your roles, switch off a service, or change ordinary fallback or native-model search behaviour.
+If the server cannot complete a check, the row shows its own recovery message when one is provided, rather than replacing instructions to unlock, repair or reload with a generic unavailable message.
+
+Connection results are temporary and belong to one service. Finishing another service's check does not clear them. Saving or removing a key clears only that service's old result; a changed service row also clears its result. Checks do not change your roles, switch off a service, or change ordinary fallback or native-model search behaviour.
+
+A key change detected by the server while checking rejects the old outcome. There is a remaining short window after the check response but before the final status refresh: if a replacement key leaves the row looking identical, the previous key's result may still appear. Run a fresh check after the cooldown to verify the current key.
 
 SearXNG is no longer offered: on upgrade, Omnipus removes its old configuration, clears it as a saved default, and sets a saved SearXNG fallback to **None**.
 
