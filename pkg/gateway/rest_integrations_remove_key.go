@@ -3,7 +3,6 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -274,11 +273,15 @@ func writeIntegrationChangeError(w http.ResponseWriter, err error, fallback, ser
 	jsonErr(w, http.StatusInternalServerError, fallback)
 }
 
-// Log only typed, non-secret causes. Free-form error text and filesystem paths
-// may contain sensitive configuration, so they never reach this boundary's log.
+// Log only fixed labels: the catalogue's service ID, a literal caller stage, and
+// an error category. The operator sees stage and category; OS error text,
+// free-form errors, and filesystem paths are deliberately not logged.
 func logIntegrationChangeFailure(service, stage string, err error) {
-	cause := fmt.Sprintf("%T", err)
-	var errno syscall.Errno
+	loggedService := "unknown"
+	if def, ok := integrationDefByID(service); ok {
+		loggedService = def.id
+	}
+	var cause string
 	switch {
 	case errors.Is(err, credentials.ErrStoreLocked):
 		cause = "credential_store_locked"
@@ -286,8 +289,18 @@ func logIntegrationChangeFailure(service, stage string, err error) {
 		cause = "credential_authentication_failed"
 	case errors.Is(err, os.ErrPermission):
 		cause = "permission_denied"
-	case errors.As(err, &errno):
-		cause = errno.Error()
+	case errors.Is(err, os.ErrNotExist):
+		cause = "not_found"
+	case errors.Is(err, syscall.ENOSPC):
+		cause = "no_space"
+	case errors.Is(err, syscall.EIO):
+		cause = "io_error"
+	case errors.Is(err, syscall.EISDIR):
+		cause = "is_a_directory"
+	case errors.Is(err, syscall.ENOTDIR):
+		cause = "not_a_directory"
+	default:
+		cause = "other"
 	}
-	slog.Error("integration change failed", "service", service, "stage", stage, "cause", cause)
+	slog.Error("integration change failed", "service", loggedService, "stage", stage, "cause", cause)
 }
