@@ -16,7 +16,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,8 +164,8 @@ func TestMidTurnBudget_OperationBySiteAndPosition(t *testing.T) {
 // FR-021, FR-029, FR-032): the fired condition picks the target (80 % of
 // itself); emptying stops at the target or when nothing eligible remains;
 // an immediate re-check does not re-fire; an unreachable target with the
-// trigger satisfied continues; the guard fires only when a trigger is still
-// exceeded after every eligible result went.
+// trigger satisfied continues. The fatal-only guard subtests are retired by
+// ADR-066's 2026-09-30 amendment MAJ-CW-004/010.
 func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 	t.Run("share fires: emptied to 80% of absoluteShare, oldest first, one pass, no re-fire (B-34, B-25)", func(t *testing.T) {
 		// Big window so total can never fire; fraction 0.03125 × resolved
@@ -257,63 +256,6 @@ func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 		assert.LessOrEqual(t, requestTokens(out, nil), budget, "…but the trigger is satisfied")
 	})
 
-	t.Run("guard: trigger still exceeded after every eligible result — ErrContextUnrecoverable (B-37 / DS-5 #8)", func(t *testing.T) {
-		al, agent := midTurnFixture(t, 40_000, 0)
-		key := "midturn-guard"
-		budget := agentContextBudget(agent)
-		window, ts := seedMidTurn(t, agent, key, []providers.Message{
-			{Role: "user", Content: proseOfTokens(budget * 12 / 10)}, // injected oversized non-tool message
-			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "a")}},
-			{Role: "tool", ToolCallID: "f1", Content: "tiny floor"},
-		})
-		require.Greater(t, requestTokens(window, nil), budget)
-
-		_, err := al.midTurnWindowCheck(ts, window, nil)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrContextUnrecoverable), "FR-032: the guard is the typed sentinel, got %v", err)
-		assert.Contains(t, err.Error(), "un-emptiable residue exceeds the context budget")
-		assert.NotContains(t, err.Error(), "absolute tool-result-share bound")
-	})
-
-	t.Run("guard is decided BEFORE the pass: an unsatisfiable budget empties and persists nothing", func(t *testing.T) {
-		// The regression: when the un-emptiable residue (tool defs + the
-		// system/user messages + the floor set) alone exceeds B, the check
-		// still ran the whole D5 pass first — emptying every eligible result
-		// AND persisting each (tool_call_id, archive_line) -> emptied — and
-		// only then fired the guard. typedTurnExit (unlike abortTurn) never
-		// calls restoreSession, so those projection entries survived forever:
-		// the marks became permanent and every later turn on the session died
-		// the same way, with the results it might have used already destroyed.
-		al, agent := midTurnFixture(t, 40_000, 0)
-		key := "midturn-guard-preflight"
-		budget := agentContextBudget(agent)
-		eligible := proseOfTokens(budget / 2)
-		window, ts := seedMidTurn(t, agent, key, []providers.Message{
-			// Un-emptiable on its own: no pass can bring total under B.
-			{Role: "user", Content: proseOfTokens(budget * 12 / 10)},
-			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("c1", "a")}},
-			{Role: "tool", ToolCallID: "c1", Content: eligible},
-			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "b")}},
-			{Role: "tool", ToolCallID: "f1", Content: "tiny floor"},
-		})
-		require.Greater(t, requestTokens(window, nil), budget, "precondition: total fired")
-		require.Equal(t, []int{2}, eligibleToolResults(window,
-			midTurnLineResolverForTest(t, agent, key, window), nil),
-			"precondition: there IS an eligible result the old code would have emptied")
-
-		before := ContextEmptiesTotal()
-		out, err := al.midTurnWindowCheck(ts, window, nil)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrContextUnrecoverable), "still the typed sentinel, got %v", err)
-
-		assert.Equal(t, before, ContextEmptiesTotal(),
-			"a turn that is going to abort must not empty anything")
-		assert.Equal(t, eligible, out[2].Content,
-			"the eligible result must be left intact — the turn aborts, the content is not destroyed")
-		assert.Empty(t, agent.Sessions.Projection(key).Entries,
-			"no projection state may be persisted on a turn the guard is certain to kill: "+
-				"typedTurnExit never rolls it back")
-	})
 }
 
 // TestMidTurnBudget_NewestSharePressureShortensAndSends preserves issue #775's
@@ -391,53 +333,6 @@ func TestMidTurnBudget_NewestSharePressureShortensAndSends(t *testing.T) {
 			"MAJ-CW-004: attainable fired-share target is 80%% of S, not a fatal residue guard")
 	}
 	require.Equal(t, archiveBefore, h.archive(t), "sending must not rewrite the full archived source")
-}
-
-func TestContextUnrecoverableResidueError_NamesEveryBreachedBound(t *testing.T) {
-	const (
-		budget   = 100
-		absShare = 80
-	)
-	tests := []struct {
-		name      string
-		residue   midTurnResidueStatus
-		want      string
-		notWanted string
-	}{
-		{
-			name:      "context budget only",
-			residue:   midTurnResidueStatus{total: 101, share: 79, checked: allMidTurnBounds},
-			want:      "un-emptiable residue exceeds the context budget",
-			notWanted: "absolute tool-result-share bound",
-		},
-		{
-			name:      "absolute tool-result share only",
-			residue:   midTurnResidueStatus{total: 99, share: 81, checked: allMidTurnBounds},
-			want:      "un-emptiable tool-result residue exceeds the absolute tool-result-share bound",
-			notWanted: "exceeds the context budget",
-		},
-		{
-			name:    "both bounds",
-			residue: midTurnResidueStatus{total: 101, share: 81, checked: allMidTurnBounds},
-			want:    "un-emptiable residue exceeds the context budget and the absolute tool-result-share bound",
-		},
-		{
-			name:    "no breached bound is an accounting error",
-			residue: midTurnResidueStatus{total: 99, share: 79, checked: allMidTurnBounds},
-			want:    "internal context-bound accounting error: no breached bound recorded",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := contextUnrecoverableResidueError(101, budget, 81, absShare, 0, tc.residue, "mia", "session")
-			require.ErrorIs(t, err, ErrContextUnrecoverable)
-			assert.Contains(t, err.Error(), tc.want)
-			if tc.notWanted != "" {
-				assert.NotContains(t, err.Error(), tc.notWanted)
-			}
-		})
-	}
 }
 
 // TestMidTurnBudget_C1_CallMessagesInjections — ADR-066 D6, C1 (CRITICAL):
