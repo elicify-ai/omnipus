@@ -193,14 +193,14 @@ func credentialReferenceUsedElsewhere(value any, ref string, omit, path []string
 				continue
 			}
 			if strings.HasSuffix(key, "_ref") {
-				if name, ok := child.(string); ok && name == ref {
+				if name, ok := child.(string); ok && strings.TrimSpace(name) == ref {
 					return true
 				}
 			}
 			if key == "env_refs" {
 				if refs, ok := child.(map[string]any); ok {
-					for _, name := range refs {
-						if name == ref {
+					for _, refValue := range refs {
+						if name, ok := refValue.(string); ok && strings.TrimSpace(name) == ref {
 							return true
 						}
 					}
