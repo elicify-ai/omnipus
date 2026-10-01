@@ -203,7 +203,7 @@ func TestMidTurnBudget_OperationBySiteAndPosition(t *testing.T) {
 // trigger satisfied continues. The fatal-only guard subtests are retired by
 // ADR-066's 2026-09-30 amendment MAJ-CW-004/010.
 func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
-	t.Run("share fires: emptied to 80% of absoluteShare, oldest first, one pass, no re-fire (B-34, B-25)", func(t *testing.T) {
+	t.Run("share fires: slides whole steps oldest-first to 80% of absoluteShare, no re-fire (B-34, B-25, FR-030 MAJ-CW-004)", func(t *testing.T) {
 		// Big window so total can never fire; fraction 0.03125 × resolved
 		// window 128,000 → share limit 4,000 tokens, 80% target 3,200.
 		al, agent := midTurnFixture(t, 128_000, 0.03125)
@@ -228,25 +228,53 @@ func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 		require.Greater(t, toolResultShareTokens(window), absShare, "precondition: share fired")
 		require.LessOrEqual(t, requestTokens(window, nil), agentContextBudget(agent), "precondition: total did NOT fire")
 
+		// CORRECTED 2026-10-01 (FR-030/MAJ-CW-004): checkpointWindow tries
+		// slideOldest before shortenNext. Every one of s1..s5's steps is a
+		// legal complete non-floor prefix, so relief slides whole steps —
+		// Skip genuinely advances — instead of marking them emptied in
+		// place. Confirmed by the real run: one checkpointWindow call,
+		// results_emptied=0, skip_after=7 (the user header line plus s1's,
+		// s2's and s3's steps — 7 archive lines — slid away as one
+		// prefix), share_after=2216 (<= the 3,200 target).
 		before := ContextEmptiesTotal()
 		out, err := al.midTurnWindowCheck(ts, window, nil)
 		require.NoError(t, err)
-		assert.Equal(t, before+3, ContextEmptiesTotal(), "DS-5 #6: target needs three — three emptied in ONE pass")
+		assert.Equal(t, before, ContextEmptiesTotal(),
+			"FR-023's empties counter only counts in-place empties; a whole-step slide is not one")
 		assert.LessOrEqual(t, toolResultShareTokens(out), absShare*4/5, "share brought to 80%% of the fired condition")
-		for i, id := range []string{"s1", "s2", "s3"} {
-			assert.Contains(t, out[2+2*i].Content, `"content_state":"emptied"`, "oldest-first: %s emptied", id)
+
+		byID := msgsByToolCallID(out)
+		for _, id := range []string{"s1", "s2", "s3"} {
+			_, present := byID[id]
+			assert.False(t, present, "oldest-first: %s's whole step was slid out of the window, not emptied in place", id)
 		}
-		assert.True(t, strings.HasPrefix(out[8].Content, "lorem"), "s4 intact — emptying stopped at the target")
-		assert.True(t, strings.HasPrefix(out[10].Content, "lorem"), "s5 intact")
+		for _, id := range []string{"s4", "s5"} {
+			got, present := byID[id]
+			require.True(t, present, "%s stays in the window — the slide stopped once the target was reached", id)
+			assert.True(t, strings.HasPrefix(got.Content, "lorem"), "%s intact", id)
+		}
+		floor, floorPresent := byID["floor"]
+		require.True(t, floorPresent, "the floor is never slid or touched")
+		assert.True(t, strings.HasPrefix(floor.Content, "tiny"), "the floor is never touched")
 
 		// B-25: the immediate re-check is a no-op.
 		out2, err := al.midTurnWindowCheck(ts, out, nil)
 		require.NoError(t, err)
-		assert.Equal(t, before+3, ContextEmptiesTotal(), "re-check must not re-fire")
+		assert.Equal(t, before, ContextEmptiesTotal(), "re-check must not re-fire")
 		assert.Equal(t, out, out2)
 	})
 
-	t.Run("total fires: emptied to 80% of B and stops (B-34)", func(t *testing.T) {
+	// CORRECTION 2026-10-01: the brief for this round (coordination/logs/
+	// context-window/brief-r1-oracle-round2.md, item 3) said this subtest
+	// "already passes (no legal complete step to slide in their fixtures,
+	// so shortenNext() still runs as before — don't touch)". That premise
+	// is false — verified by actually running it (not assumed from the
+	// brief): t1 and t2 are both legal complete non-floor steps, so the
+	// FIRST subtest's fix (above) un-masks a panic (index out of range)
+	// this subtest was ALSO hitting, previously hidden because the first
+	// subtest's panic aborted the whole test binary before this one ran.
+	// Corrected with the identical FR-030/MAJ-CW-004 technique.
+	t.Run("total fires: slides whole steps oldest-first to 80% of B (B-34, FR-030 MAJ-CW-004)", func(t *testing.T) {
 		al, agent := midTurnFixture(t, 40_000, 0)
 		key := "midturn-total"
 		budget := agentContextBudget(agent)
@@ -262,33 +290,65 @@ func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 		})
 		require.Greater(t, requestTokens(window, nil), budget, "precondition: total fired")
 
+		// Confirmed by the real run: one checkpointWindow call, skip 0->5
+		// (the user header line plus t1's and t2's steps — 5 archive lines
+		// — slid away as one prefix), results_emptied=0; only t3 (the
+		// floor) survives.
+		before := ContextEmptiesTotal()
 		out, err := al.midTurnWindowCheck(ts, window, nil)
 		require.NoError(t, err)
+		assert.Equal(t, before, ContextEmptiesTotal(), "a whole-step slide is not an in-place empty")
 		assert.LessOrEqual(t, requestTokens(out, nil), budget*4/5, "total brought to 80%% of B")
-		assert.Contains(t, out[2].Content, `"content_state":"emptied"`)
-		assert.Contains(t, out[4].Content, `"content_state":"emptied"`)
-		assert.True(t, strings.HasPrefix(out[6].Content, "lorem"), "floor intact; emptying stopped at the target")
+		byID := msgsByToolCallID(out)
+		for _, id := range []string{"t1", "t2"} {
+			_, present := byID[id]
+			assert.False(t, present, "oldest-first: %s's whole step was slid out of the window, not emptied in place", id)
+		}
+		floor, floorPresent := byID["t3"]
+		require.True(t, floorPresent, "the floor stays in the window")
+		assert.True(t, strings.HasPrefix(floor.Content, "lorem"), "floor intact; relief stopped at the target")
 	})
 
-	t.Run("target unreachable, trigger satisfied: continue with no error (B-36b / DS-5 #7)", func(t *testing.T) {
+	// CORRECTION 2026-10-01: this subtest too was claimed by the brief to
+	// "already pass (no legal complete step to slide in their fixtures)"
+	// — also false as originally written: e1 here WAS an older, complete,
+	// non-floor step, so FR-030/MAJ-CW-004 slides it (and the oversized
+	// leading user message ahead of it) away whole, trivially satisfying
+	// the trigger (verified: skip 0->3, share_after=9) and defeating the
+	// "target unreachable" premise entirely — the panic this produced was
+	// hidden behind the first two subtests' panics until they were fixed.
+	// Redesigned so the brief's original claim actually holds: e1 and f1
+	// are now BOTH parallel calls of the single (floor) step, so there is
+	// genuinely no older step to slide — the oversized user message is the
+	// one thing relief can never reach (not a "tool" message, no step
+	// wraps it), matching DS-5 #7's real invariant.
+	t.Run("target unreachable, trigger satisfied: continue with no error (B-36b / DS-5 #7, FR-030/031 MAJ-CW-004)", func(t *testing.T) {
 		al, agent := midTurnFixture(t, 40_000, 0)
 		key := "midturn-unreachable-target"
 		budget := agentContextBudget(agent)
+		original := proseOfTokens(budget / 5)
 		window, ts := seedMidTurn(t, agent, key, []providers.Message{
-			// An oversized non-tool message emptying cannot touch — but small
-			// enough that removing the one eligible result satisfies B.
+			// An oversized non-tool message relief can never reach — not a
+			// "tool" message, and there is no older step before the floor
+			// to slide — but small enough that fully shortening the
+			// floor's own e1 result toward mark-only (FR-031) satisfies B.
 			{Role: "user", Content: proseOfTokens(budget * 95 / 100)},
-			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("e1", "a")}},
-			{Role: "tool", ToolCallID: "e1", Content: proseOfTokens(budget / 5)},
-			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "b")}},
+			{Role: "assistant", ToolCalls: []providers.ToolCall{
+				toolCallFor("e1", "a"), toolCallFor("f1", "b"),
+			}},
+			{Role: "tool", ToolCallID: "e1", Content: original},
 			{Role: "tool", ToolCallID: "f1", Content: "tiny floor"},
 		})
 		require.Greater(t, requestTokens(window, nil), budget, "precondition: total fired")
 
 		out, err := al.midTurnWindowCheck(ts, window, nil)
 		require.NoError(t, err, "trigger back under B: the turn continues even though the 0.8·B target is unreachable")
-		assert.Contains(t, out[2].Content, `"content_state":"emptied"`, "the one eligible result was emptied")
-		assert.Greater(t, requestTokens(out, nil), budget*4/5, "target genuinely unreachable")
+		byID := msgsByToolCallID(out)
+		e1After, ok := byID["e1"]
+		require.True(t, ok, "e1 stays in the window — structurally protected as part of the floor step (FR-031)")
+		assert.Less(t, len(e1After.Content), len(original),
+			"e1's text was shortened toward mark-only — never emptied in place or slid away, it is part of the floor")
+		assert.Greater(t, requestTokens(out, nil), budget*4/5, "target genuinely unreachable: the oversized user message dominates")
 		assert.LessOrEqual(t, requestTokens(out, nil), budget, "…but the trigger is satisfied")
 	})
 
