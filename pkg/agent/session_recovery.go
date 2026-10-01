@@ -190,28 +190,3 @@ func findOrphanedToolCalls(history []providers.Message) []orphanedToolCall {
 	}
 	return orphans
 }
-
-// stripOrphanedAssistantTurn returns a copy of history with the last assistant
-// message removed when it contains unresolved tool calls. This is the FR-088
-// context-hygiene step — the message stays in the on-disk transcript but is
-// excluded from the next LLM prompt rebuild.
-func stripOrphanedAssistantTurn(history []providers.Message) []providers.Message {
-	if len(history) == 0 {
-		return history
-	}
-
-	// Find the last assistant message (same logic as findOrphanedToolCalls).
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role == "assistant" && len(history[i].ToolCalls) > 0 {
-			// Remove this entry and everything after it (any partial tool results).
-			cleaned := make([]providers.Message, i)
-			copy(cleaned, history[:i])
-			return cleaned
-		}
-		// If the last assistant message has no tool_calls, nothing to strip.
-		if history[i].Role == "assistant" {
-			break
-		}
-	}
-	return history
-}
