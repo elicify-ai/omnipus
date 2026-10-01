@@ -7,7 +7,8 @@ package gateway
 // Oracles: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1104-1105/design.md,
 // Decision #1104 (ownership, persisted disabling, partial changes and audit),
 // and /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-integrations/receipts/a-review-tests.md,
-// C1 and I1. The coverage brief additionally requires response key_removed:false.
+// C1 and I1. The 2026-10-01 team-lead correction makes key_removed an audit
+// field, not an HTTP error-response field (Decision #1104).
 // These tests keep the handler, encrypted store, config writes and audit real;
 // only the existing config-loading reload fixture replaces the absent pipeline.
 // RED and mutation proof are deferred to an independent CHECK, not claimed here.
@@ -231,19 +232,4 @@ func TestRemoveSearchKey_DeletionWriteFailureRetainsKeyAndReloadsDisabledState(t
 	assert.NotContains(t, response.Error, "The saved key was removed.")
 	assert.NotContains(t, w.Body.String(), searchSettingsSecret)
 	t.Logf("HTTP %d; reload attempts=%d; audit outcome=%v, failed_stage=%v, key_removed=%v; error=%q", w.Code, reloadAttempts.Load(), values["outcome"], values["failed_stage"], values["key_removed"], response.Error)
-
-	// I1 requires an explicit response key_removed:false, not an absent value
-	// or merely the audit field. Inspect generic JSON without a hand-written
-	// wire struct; no location was specified, so accept top-level or the
-	// generated standard error envelope's structured Details.
-	var fields map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &fields))
-	keyRemoved, present := fields["key_removed"]
-	if !present && response.Details != nil {
-		keyRemoved, present = (*response.Details)["key_removed"]
-	}
-	if !present {
-		t.Fatal("BLOCKED: partial-failure response key_removed is not implemented — required by I1 coverage brief (key_removed:false); audit is not response evidence")
-	}
-	assert.Equal(t, false, keyRemoved, "the response must explicitly report that the retained key was not removed")
 }
