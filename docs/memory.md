@@ -41,7 +41,7 @@ Every agent has all four. The agent calls them on its own judgment; you trigger 
 |---|---|---|
 | `remember` | Saves a note as a decision, reference, or lesson | Up to 4,096 characters; shared room by default |
 | `recall_memory` | Keyword search over saved notes and past retrospectives | Both rooms by default; 20 results, at most 50 |
-| `recall_conversation` | Reads back earlier turns of the current conversation | By keyword, turn numbers, time window, or one tool result |
+| `recall_conversation` | Reads back earlier context from the current conversation | By keyword, turn numbers, time window, an addressed tool result, or an inclusive archive-line range |
 | `run_retrospective` | Records what went well and what to improve | Always the agent's private room |
 
 ## What happens when a session ends
@@ -68,6 +68,15 @@ The live window is the part of the conversation sent to the model. Omnipus can s
 | The model receives a short notice identifying what left or was shortened. | The original message that started the turn, including media, instructions and not-yet-consumed steering messages remain. The relief notice is model context, not a new chat message. |
 
 This is literal removal and text projection, not a summary, and it makes no extra model call. The same saved projection is applied when the live window is loaded again. `recall_conversation` can retrieve addressed earlier results; shortened text is not presented as a complete result.
+
+Even when older steps leave during one turn, without another user message, the agent receives a breadcrumb naming the full evicted prefix as a **zero-based, inclusive archive-line range**. Its bounded list shows recent literal snippets first. Tool-result entries pair `tool_call_id` with `archive_line`, so repeated call IDs still identify the exact result. The full range address stays available even when some entries cannot fit in the breadcrumb.
+
+| Address the agent can use with `recall_conversation` | What it retrieves |
+|---|---|
+| `archive_range: {"from": 0, "to": 3}` | The archive's literal JSON Lines text for records 0 through 3, including both endpoints. These are archive-line numbers, not turn numbers. |
+| `tool_call_id` together with `archive_line` | One exact archived tool result, including text that was shortened or removed from the live view. |
+
+The agent uses one recall mode at a time. Range pages are **quoted archive data in the current tool result**, not revived historical instructions or tool calls. Both range and addressed-result recall support `offset` and `length` paging by Unicode characters (runes). Each page reports the total size and the next offset when more remains. Pages still pass through normal result caps and context-pressure handling; a shortened page is not proof that the whole range or result reached the model.
 
 By default, combined tool results trigger relief above an estimated **50% of the model's context window**. The separate total-request budget also reserves space for the reply, safety margin and core instructions. These are estimates, not a promise that the provider will accept the request. See [settings](settings.md) for the tool-result share setting and [troubleshooting](troubleshooting.md#the-provider-rejects-your-model-requests) for provider rejections.
 
