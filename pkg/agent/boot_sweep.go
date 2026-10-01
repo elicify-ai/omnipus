@@ -919,8 +919,13 @@ func (pe *PlanEngine) reconcileUnifiedMetaStatus(rec *session.LifecycleRecord) {
 	if sessStore == nil {
 		return
 	}
-	interrupted := session.StatusInterrupted
-	setErr := sessStore.SetMeta(rec.SessionID, session.MetaPatch{Status: &interrupted})
+	// Sub-agent control plane ADR D4/MAJ-009: this function is only ever
+	// called on a record just swept to LifecycleFailed
+	// (sweepToFailedInterrupted, above), so the coarse mirror is the
+	// genuinely-failed case — StatusFailed, never the retired
+	// StatusInterrupted.
+	failed := session.StatusFailed
+	setErr := sessStore.SetMeta(rec.SessionID, session.MetaPatch{Status: &failed})
 	if setErr == nil {
 		return
 	}

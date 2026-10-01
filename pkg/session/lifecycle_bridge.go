@@ -49,21 +49,24 @@ func lifecycleMutatorIsNil(ls LifecycleMutator) bool {
 
 // lifecycleToUnifiedStatus is the CANONICAL mapping from a LifecycleState
 // to the UnifiedMeta SessionStatus that mirrors it. It is the single authority
-// — no other site in the codebase may hand-roll this mapping. Stopped is
-// non-terminal, but still mirrors the interrupted turn onto chat metadata.
-// The queued/running/needs_input states return (zero, false): no mirror.
+// — no other site in the codebase may hand-roll this mapping. Sub-agent
+// control plane ADR D4/MAJ-009: genuine `failed` mirrors to StatusFailed;
+// `stopped` (and waiting/working) stay coarse-active, so it joins
+// queued/running/needs_input in the no-mirror bucket below — exact helper
+// display now lives on Session.lifecycle_state (SessionLifecycleState), not
+// on this coarse status. StatusInterrupted is retired from the wire enum and
+// is never returned here.
 //
 //   - LifecycleCompleted → StatusArchived
-//   - LifecycleFailed    → StatusInterrupted
-//   - LifecycleStopped   → StatusInterrupted
-//   - Queued/Running/NeedsInput → (no mirror; chat stays Active)
+//   - LifecycleFailed    → StatusFailed
+//   - LifecycleStopped/Queued/Running/NeedsInput → (no mirror; chat stays Active)
 func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 	switch to {
 	case LifecycleCompleted:
 		return StatusArchived, true
-	case LifecycleFailed, LifecycleStopped:
-		return StatusInterrupted, true
-	default: // LifecycleQueued, LifecycleRunning, LifecycleNeedsInput
+	case LifecycleFailed:
+		return StatusFailed, true
+	default: // LifecycleStopped, LifecycleQueued, LifecycleRunning, LifecycleNeedsInput
 		return "", false
 	}
 }

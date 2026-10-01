@@ -3321,8 +3321,14 @@ components:
       description: >
         Server → client (ADR-053 §Contract Surface — "Mid-span subagent
         frames"). A flat projection of SessionLifecycleRecord.state riding
-        between subagent_start/subagent_end, plus an optional steering-
-        receipt. Canonical copy — keep in sync by hand.
+        between subagent_start/subagent_end, plus an optional control-
+        receipt (sub-agent control plane ADR D4/MIN-003; replaces the
+        former steering_receipt — the field is gone, a dev install
+        replaying an old persisted frame that still carries it drops the
+        unknown field rather than failing validation, OBS-003). Canonical
+        copy — keep in sync by hand with
+        contracts/components/schemas/SubagentStateFrame.yaml and
+        contracts/components/schemas/ControlReceipt.yaml.
       type: object
       required:
         - type
@@ -3357,21 +3363,70 @@ components:
             - stopped
             - completed
             - failed
-        steering_receipt:
+        control_receipt:
           type: object
           # Not nullable — see components/schemas/SubagentStateFrame.yaml's
           # own note: this field is emitted via an omitempty Go pointer,
-          # present or absent, never an explicit JSON null.
+          # present or absent, never an explicit JSON null. Train-3 scope
+          # note: only the steer verb is wired today (verb/state are
+          # constants "steer"/"delivered"; seq/accepted_at are documented
+          # stand-ins) — see components/schemas/ControlReceipt.yaml for the
+          # full rationale. Kept in sync by hand with that file.
           required:
-            - correlation_id
-            - applied_at
+            - seq
+            - control_id
+            - verb
+            - state
+            - accepted_at
           additionalProperties: false
           properties:
-            correlation_id:
+            seq:
+              type: integer
+              format: int64
+              minimum: 0
+            control_id:
               type: string
+              minLength: 1
+            verb:
+              type: string
+              enum:
+                - steer
+                - stop
+                - stop_all
+                - redirect
+                - resume
+                - respond
+                - escalate
+                - clear_goal
+            state:
+              type: string
+              enum:
+                - queued
+                - delivered
+                - applied
+                - superseded
+            accepted_at:
+              type: string
+              format: date-time
+            delivered_at:
+              type: string
+              format: date-time
             applied_at:
               type: string
               format: date-time
+            superseded_at:
+              type: string
+              format: date-time
+            superseded_by_seq:
+              type: integer
+              format: int64
+              minimum: 0
+            reason:
+              type: string
+            released_control_ids:
+              type: array
+              items:
+                type: string
         created_at:
           type: string
           format: date-time

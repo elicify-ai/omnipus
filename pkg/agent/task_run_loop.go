@@ -885,7 +885,9 @@ func (te *TaskExecutor) appendRunErrorTranscript(t *task.Task, taskSessionID str
 		logger.WarnCF("task_executor", "Transcript write failed",
 			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
 	}
-	status := session.StatusInterrupted
+	// A genuine run error (sub-agent control plane ADR D4/MAJ-009: maps to
+	// coarse metadata `failed`, not the retired `interrupted`).
+	status := session.StatusFailed
 	if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &status}); setErr != nil {
 		logger.WarnCF("task_executor", "Meta update failed",
 			map[string]any{"task_id": t.ID, "error": setErr.Error()})

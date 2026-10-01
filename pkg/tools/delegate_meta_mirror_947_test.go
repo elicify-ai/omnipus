@@ -23,7 +23,18 @@ import (
 //
 // RED under the pre-fix code (transitionLifecycle passes nil): the lifecycle
 // record lands cancelled but the mirror is skipped, so meta.json status stays
-// active. GREEN after the fix: the mirror lands interrupted.
+// active.
+//
+// Sub-agent control plane ADR D4/MAJ-009 note: LifecycleStopped (what
+// droppedQueuedResult always lands) no longer mirrors to a distinct coarse
+// status at all — stopped stays active by design. This specific fixture can
+// therefore no longer tell "mirror skipped because the store was nil" apart
+// from "mirror correctly ran and wrote nothing" by status value alone; both
+// now leave meta.json at active. The assertion below still pins the correct
+// CURRENT behavior (status stays active), but the original defect-947
+// regression coverage this test existed for is weakened for this specific
+// fixture — flagged for qa-lead to retarget at a still-mirrored terminal
+// state (e.g. LifecycleFailed/LifecycleCompleted) in a follow-up.
 func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	us, err := session.NewUnifiedStore(t.TempDir())
@@ -76,14 +87,15 @@ func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T
 		t.Errorf("lifecycle state = %q, want cancelled", rec.State)
 	}
 
-	// Mirror half (the defect): sessions/<id>/meta.json must NOT stay active.
+	// Mirror half: sessions/<id>/meta.json must stay active (ADR D4/MAJ-009 —
+	// stopped is coarse-active; see the note above this test).
 	got, err := us.GetMeta(childID)
 	if err != nil {
 		t.Fatalf("get meta: %v", err)
 	}
-	if got.Status != session.StatusInterrupted {
-		t.Errorf("meta.json status = %q, want %q — a delegate child transitioned to a terminal state must mirror onto UnifiedMeta (issue #947 defect 2)",
-			got.Status, session.StatusInterrupted)
+	if got.Status != session.StatusActive {
+		t.Errorf("meta.json status = %q, want %q — a stopped delegate child stays coarse-active (ADR D4)",
+			got.Status, session.StatusActive)
 	}
 }
 

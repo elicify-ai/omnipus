@@ -248,13 +248,15 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 		assert.Less(t, hi, di, "'hard' must precede 'detached'")
 	}
 
-	// ASSERT: session status must be interrupted in meta.
+	// ASSERT: session status stays coarse-active after cancel (sub-agent
+	// control plane ADR D4/MAJ-009 — a cancel is a stop, not a failure; the
+	// retired StatusInterrupted is never written).
 	store := al.ResolveSessionStore(sessionID)
 	if store != nil {
 		meta, err := store.GetMeta(sessionID)
 		if err == nil {
-			assert.Equal(t, session.StatusInterrupted, meta.Status,
-				"session status must be 'interrupted' after cancel")
+			assert.Equal(t, session.StatusActive, meta.Status,
+				"session status must stay 'active' after cancel (ADR D4)")
 		}
 	}
 

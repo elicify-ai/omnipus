@@ -354,9 +354,18 @@ export interface SubagentStateFrame {
   child_session_id?: string;
   span_id: string;
   state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
-  steering_receipt?: {
-    correlation_id: string;
-    applied_at: string;
+  control_receipt?: {
+    seq: number;
+    control_id: string;
+    verb: "steer" | "stop" | "stop_all" | "redirect" | "resume" | "respond" | "escalate" | "clear_goal";
+    state: "queued" | "delivered" | "applied" | "superseded";
+    accepted_at: string;
+    delivered_at?: string;
+    applied_at?: string;
+    superseded_at?: string;
+    superseded_by_seq?: number;
+    reason?: string;
+    released_control_ids?: Array<string>;
   };
   created_at: string;
   seq?: number;

@@ -103,7 +103,18 @@ type Session = {
   protected?: boolean | undefined;
   agent_id: string;
   title: string;
-  status: "active" | "archived" | "interrupted";
+  status: "active" | "archived" | "failed";
+  lifecycle_state?:
+    | ("working" | "waiting_for_answer" | "done" | "failed" | "stopped")
+    | undefined;
+  stop_note?:
+    | {
+        at: string;
+        by: string;
+        seq: number;
+        cause: "stop" | "redirect_pause" | "cascade" | "restart" | "timeout";
+      }
+    | undefined;
   created_at: string;
   updated_at: string;
   model?: string | undefined;
@@ -212,10 +223,27 @@ type Message = {
           | "stopped"
           | "completed"
           | "failed";
-        steering_receipt?:
+        control_receipt?:
           | {
-              correlation_id: string;
-              applied_at: string;
+              seq: number;
+              control_id: string;
+              verb:
+                | "steer"
+                | "stop"
+                | "stop_all"
+                | "redirect"
+                | "resume"
+                | "respond"
+                | "escalate"
+                | "clear_goal";
+              state: "queued" | "delivered" | "applied" | "superseded";
+              accepted_at: string;
+              delivered_at?: string | undefined;
+              applied_at?: string | undefined;
+              superseded_at?: string | undefined;
+              superseded_by_seq?: number | undefined;
+              reason?: string | undefined;
+              released_control_ids?: Array<string> | undefined;
             }
           | undefined;
         created_at: string;
@@ -3153,7 +3181,24 @@ export const Session: z.ZodType<Session> = z.object({
   protected: z.boolean().optional(),
   agent_id: z.string(),
   title: z.string(),
-  status: z.enum(["active", "archived", "interrupted"]),
+  status: z.enum(["active", "archived", "failed"]),
+  lifecycle_state: z
+    .enum(["working", "waiting_for_answer", "done", "failed", "stopped"])
+    .optional(),
+  stop_note: z
+    .object({
+      at: z.string().datetime({ offset: true }),
+      by: z.string(),
+      seq: z.number().int().gte(0),
+      cause: z.enum([
+        "stop",
+        "redirect_pause",
+        "cascade",
+        "restart",
+        "timeout",
+      ]),
+    })
+    .optional(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
   model: z.string().optional(),
@@ -3334,10 +3379,28 @@ export const Message: z.ZodType<Message> = z.object({
         "completed",
         "failed",
       ]),
-      steering_receipt: z
+      control_receipt: z
         .object({
-          correlation_id: z.string(),
-          applied_at: z.string().datetime({ offset: true }),
+          seq: z.number().int().gte(0),
+          control_id: z.string().min(1),
+          verb: z.enum([
+            "steer",
+            "stop",
+            "stop_all",
+            "redirect",
+            "resume",
+            "respond",
+            "escalate",
+            "clear_goal",
+          ]),
+          state: z.enum(["queued", "delivered", "applied", "superseded"]),
+          accepted_at: z.string().datetime({ offset: true }),
+          delivered_at: z.string().datetime({ offset: true }).optional(),
+          applied_at: z.string().datetime({ offset: true }).optional(),
+          superseded_at: z.string().datetime({ offset: true }).optional(),
+          superseded_by_seq: z.number().int().gte(0).optional(),
+          reason: z.string().optional(),
+          released_control_ids: z.array(z.string()).optional(),
         })
         .optional(),
       created_at: z.string().datetime({ offset: true }),
@@ -15002,10 +15065,19 @@ export const SubagentStateFrame = z
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     state: z.enum(["queued", "running", "needs_input", "stopped", "completed", "failed"]),
-    steering_receipt: z
+    control_receipt: z
     .object({
-      correlation_id: z.string(),
-      applied_at: z.string(),
+      seq: z.number().int().min(0),
+      control_id: z.string().min(1),
+      verb: z.enum(["steer", "stop", "stop_all", "redirect", "resume", "respond", "escalate", "clear_goal"]),
+      state: z.enum(["queued", "delivered", "applied", "superseded"]),
+      accepted_at: z.string(),
+      delivered_at: z.string().optional(),
+      applied_at: z.string().optional(),
+      superseded_at: z.string().optional(),
+      superseded_by_seq: z.number().int().min(0).optional(),
+      reason: z.string().optional(),
+      released_control_ids: z.array(z.string()).optional(),
     })
     .strict().optional(),
     created_at: z.string(),

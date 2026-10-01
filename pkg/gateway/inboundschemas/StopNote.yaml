@@ -1,0 +1,56 @@
+type: object
+title: StopNote
+description: >
+  The durable, LASTING record of who stopped a session, when, and why
+  (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`).
+  Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` /
+  `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop
+  it names is carried out — this note is RETAINED on the landed `stopped`
+  record so a direct parent's stopped-child notice, and any later observer,
+  can read who/why/when. Exposed on `Session.yaml::stop_note` only when the
+  session's authoritative lifecycle record has landed `stopped` for its
+  current generation; absent otherwise.
+additionalProperties: false
+required:
+  - at
+  - by
+  - seq
+  - cause
+properties:
+  at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when this stop note was written.
+    example: "2026-07-22T10:05:00Z"
+  by:
+    type: string
+    description: >
+      Who or what initiated the stop, formatted "human:<id>" / "agent:<id>",
+      or "system" for a cause with no human/agent principal behind it (a
+      lifetime-budget timeout, boot-recovery restart) — see
+      `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` /
+      `::StopActorSystem`.
+    example: "human:user-123"
+  seq:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      Stamped from the record's own generation at the moment of write — a
+      documented stand-in until the per-session control ledger (sub-agent
+      control plane ADR D4, "Controls") exists and can supply a true
+      per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote`
+      doc comment).
+    example: 1
+  cause:
+    type: string
+    enum:
+      - stop
+      - redirect_pause
+      - cascade
+      - restart
+      - timeout
+    description: >
+      The closed vocabulary naming WHY the session last landed `stopped`
+      (`pkg/session/lifecycle_edge.go::StopCause`).
+    example: "stop"

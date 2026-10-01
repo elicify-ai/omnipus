@@ -4073,11 +4073,19 @@ export interface components {
              */
             title: string;
             /**
-             * @description Current lifecycle status of the session.
+             * @description Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
              * @example active
              * @enum {string}
              */
-            status: "active" | "archived" | "interrupted";
+            status: "active" | "archived" | "failed";
+            /**
+             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+             * @example working
+             * @enum {string}
+             */
+            lifecycle_state?: "working" | "waiting_for_answer" | "done" | "failed" | "stopped";
+            /** @description Present only when `lifecycle_state == stopped` (or the session's current generation last landed `stopped`) — the durable, lasting reason for the stop (who/when/why). Absent for every other `lifecycle_state`, and for a session with no lifecycle record. */
+            stop_note?: components["schemas"]["StopNote"];
             /**
              * Format: date-time
              * @description RFC3339 timestamp when the session was created.
@@ -15351,7 +15359,7 @@ export interface components {
         };
         /**
          * SessionLifecycleRecord
-         * @description The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/interrupted — the older chat-transcript- metadata status) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+         * @description The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
          */
         SessionLifecycleRecord: {
             /**
@@ -16344,6 +16352,35 @@ export interface components {
             error?: string;
         };
         /**
+         * StopNote
+         * @description The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
+         */
+        StopNote: {
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when this stop note was written.
+             * @example 2026-07-22T10:05:00Z
+             */
+            at: string;
+            /**
+             * @description Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", or "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, boot-recovery restart) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem`.
+             * @example human:user-123
+             */
+            by: string;
+            /**
+             * Format: int64
+             * @description Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
+             * @example 1
+             */
+            seq: number;
+            /**
+             * @description The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+             * @example stop
+             * @enum {string}
+             */
+            cause: "stop" | "redirect_pause" | "cascade" | "restart" | "timeout";
+        };
+        /**
          * SubagentStartFrame
          * @description Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
          */
@@ -16372,8 +16409,78 @@ export interface components {
             seq?: number;
         };
         /**
+         * ControlReceipt
+         * @description Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `escalate`, `clear_goal`). Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+         *     Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
+         */
+        ControlReceipt: {
+            /**
+             * Format: int64
+             * @description Monotonic per-child control sequence (ADR D4). Stand-in value today — see the schema description above.
+             * @example 1
+             */
+            seq: number;
+            /**
+             * @description The accepted control's identifier — caller-supplied correlation id, or server-assigned when blank.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            control_id: string;
+            /**
+             * @description Which control this receipt reports on.
+             * @example steer
+             * @enum {string}
+             */
+            verb: "steer" | "stop" | "stop_all" | "redirect" | "resume" | "respond" | "escalate" | "clear_goal";
+            /**
+             * @description ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+             * @example delivered
+             * @enum {string}
+             */
+            state: "queued" | "delivered" | "applied" | "superseded";
+            /**
+             * Format: date-time
+             * @description When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
+             * @example 2026-07-22T10:00:30Z
+             */
+            accepted_at: string;
+            /**
+             * Format: date-time
+             * @description When a `steer` reached `delivered` (durable transcript injection).
+             * @example 2026-07-22T10:00:30Z
+             */
+            delivered_at?: string;
+            /**
+             * Format: date-time
+             * @description When a non-steer control reached `applied` (runtime-enforced effect).
+             * @example 2026-07-22T10:00:30Z
+             */
+            applied_at?: string;
+            /**
+             * Format: date-time
+             * @description When this control was superseded.
+             * @example 2026-07-22T10:00:30Z
+             */
+            superseded_at?: string;
+            /**
+             * Format: int64
+             * @description The superseding control's own `seq`, when `state == superseded`.
+             * @example 2
+             */
+            superseded_by_seq?: number;
+            /**
+             * @description Free-text reason, set for a `superseded` state or a notable transition.
+             * @example superseded by a newer redirect
+             */
+            reason?: string;
+            /**
+             * @description Control ids released together with this receipt (e.g. a RESUME that releases preserved restart-pending controls in sequence, ADR D4 boot reconciliation).
+             * @example []
+             */
+            released_control_ids?: string[];
+        };
+        /**
          * SubagentStateFrame
-         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional control-receipt acknowledgement (sub-agent control plane ADR D4/MIN-003; `control_receipt` replaces the former `steering_receipt`, see `ControlReceipt.yaml`). A dev install replaying an old persisted frame that still carries `steering_receipt` drops that unknown field rather than failing validation (ADR OBS-003) — the field is gone from this schema and Go's default lenient JSON decode on the replay path (`pkg/gateway/replay.go`) already does not reject it.
          */
         SubagentStateFrame: {
             /** @enum {string} */
@@ -16393,19 +16500,8 @@ export interface components {
              * @enum {string}
              */
             state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
-            /** @description Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3). */
-            steering_receipt?: {
-                /**
-                 * @description The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
-                 * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
-                 */
-                correlation_id: string;
-                /**
-                 * Format: date-time
-                 * @example 2026-07-22T10:00:30Z
-                 */
-                applied_at: string;
-            };
+            /** @description Present when this state ping is reporting that a prior control (`steer`/`respond`/...) reached a receipt-worthy state (INV-3). */
+            control_receipt?: components["schemas"]["ControlReceipt"];
             /**
              * Format: date-time
              * @description RFC3339 timestamp this state ping was emitted.

@@ -45,24 +45,27 @@ import (
 // durable S2 record too when that store IS wired, exactly like
 // completeTaskWithResult's own belt-and-suspenders dual write.
 //
-// session.StatusInterrupted (via LifecycleStopped — mirrors to
-// StatusInterrupted per lifecycle_bridge.go's canonical mapping) rather than
-// StatusArchived: this attempt didn't error out and the TASK itself has not
+// session.StatusActive (via LifecycleStopped — sub-agent control plane ADR
+// D4/MAJ-009: stopped stays coarse-active, no mirror write for this state
+// via lifecycle_bridge.go's canonical mapping) rather than StatusArchived or
+// StatusFailed: this attempt didn't error out and the TASK itself has not
 // been judged failed (nextStatus is `next`, not `failed`) — the session's
-// own life simply ended in favor of a new attempt, the same "terminated, not
+// own life simply ended in favor of a new attempt, the same "stopped, not
 // cleanly completed" shape a genuine execution error or a user Stop already
-// use StatusInterrupted for, rather than the "intentionally closed" shape
+// use (but a stopped session is resumable and stays active, never the
+// retired StatusInterrupted), rather than the "intentionally closed" shape
 // StatusArchived captures for a task that actually reached a terminal
-// outcome.
+// outcome. This is an explicit write (not a no-op) so a session whose
+// status had drifted away from active for any other reason still converges.
 func (te *TaskExecutor) supersedeTaskSession(agentID, taskSessionID string) {
 	if taskSessionID == "" {
 		return
 	}
 	if sessStore := te.agentLoop.taskSessionStore(taskSessionID, agentID); sessStore != nil {
-		statusInterrupted := session.StatusInterrupted
-		if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusInterrupted}); setErr != nil {
+		statusActive := session.StatusActive
+		if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusActive}); setErr != nil {
 			logger.WarnCF("task_executor",
-				"goal-loop: could not mark superseded attempt's session interrupted",
+				"goal-loop: could not mark superseded attempt's session active",
 				map[string]any{"session_id": taskSessionID, "error": setErr.Error()})
 		}
 	}

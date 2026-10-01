@@ -234,8 +234,12 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if partial := responseBuilder.String(); partial != "" {
 				h.recordAssistantMessageStatus(sessionID, partial, "interrupted")
 			} else if sessionID != "" && h.partitions != nil {
-				if err := h.partitions.SetStatus(sessionID, session.StatusInterrupted); err != nil {
-					slog.Warn("sse: could not set session status interrupted",
+				// A disconnect/cancel mid-stream is a stop, not a failure —
+				// sub-agent control plane ADR D4/MAJ-009: stopped stays
+				// coarse-active (the retired StatusInterrupted is never
+				// written here).
+				if err := h.partitions.SetStatus(sessionID, session.StatusActive); err != nil {
+					slog.Warn("sse: could not set session status active",
 						"session_id", sessionID, "error", err)
 				}
 			}

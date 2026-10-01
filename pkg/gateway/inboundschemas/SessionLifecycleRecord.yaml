@@ -3,8 +3,9 @@ title: SessionLifecycleRecord
 description: >
   The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053
   §Contract Surface, S2; state consolidated per F0929-2). Distinct from
-  `Session.status` (active/archived/interrupted — the older chat-transcript-
-  metadata status) and from `Plan.state` (the 5-state draft/approved/running/
+  `Session.status` (active/archived/failed — the coarse chat-transcript-
+  metadata status; see `Session.lifecycle_state` for the exact 5-state
+  display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/
   done/failed plan state machine) — do not conflate the three. This record is
   the durable authority the boot sweep (§5), idle settlement, `blocked_by`,
   and the S4 interlock state machine all read from. The immutable-terminal

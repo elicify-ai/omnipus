@@ -5198,6 +5198,66 @@ func (e MessageSubagentStartType) Valid() bool {
 	}
 }
 
+// Defines values for MessageSubagentStateControlReceiptState.
+const (
+	MessageSubagentStateControlReceiptStateApplied    MessageSubagentStateControlReceiptState = "applied"
+	MessageSubagentStateControlReceiptStateDelivered  MessageSubagentStateControlReceiptState = "delivered"
+	MessageSubagentStateControlReceiptStateQueued     MessageSubagentStateControlReceiptState = "queued"
+	MessageSubagentStateControlReceiptStateSuperseded MessageSubagentStateControlReceiptState = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateControlReceiptState enum.
+func (e MessageSubagentStateControlReceiptState) Valid() bool {
+	switch e {
+	case MessageSubagentStateControlReceiptStateApplied:
+		return true
+	case MessageSubagentStateControlReceiptStateDelivered:
+		return true
+	case MessageSubagentStateControlReceiptStateQueued:
+		return true
+	case MessageSubagentStateControlReceiptStateSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentStateControlReceiptVerb.
+const (
+	MessageSubagentStateControlReceiptVerbClearGoal MessageSubagentStateControlReceiptVerb = "clear_goal"
+	MessageSubagentStateControlReceiptVerbEscalate  MessageSubagentStateControlReceiptVerb = "escalate"
+	MessageSubagentStateControlReceiptVerbRedirect  MessageSubagentStateControlReceiptVerb = "redirect"
+	MessageSubagentStateControlReceiptVerbRespond   MessageSubagentStateControlReceiptVerb = "respond"
+	MessageSubagentStateControlReceiptVerbResume    MessageSubagentStateControlReceiptVerb = "resume"
+	MessageSubagentStateControlReceiptVerbSteer     MessageSubagentStateControlReceiptVerb = "steer"
+	MessageSubagentStateControlReceiptVerbStop      MessageSubagentStateControlReceiptVerb = "stop"
+	MessageSubagentStateControlReceiptVerbStopAll   MessageSubagentStateControlReceiptVerb = "stop_all"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateControlReceiptVerb enum.
+func (e MessageSubagentStateControlReceiptVerb) Valid() bool {
+	switch e {
+	case MessageSubagentStateControlReceiptVerbClearGoal:
+		return true
+	case MessageSubagentStateControlReceiptVerbEscalate:
+		return true
+	case MessageSubagentStateControlReceiptVerbRedirect:
+		return true
+	case MessageSubagentStateControlReceiptVerbRespond:
+		return true
+	case MessageSubagentStateControlReceiptVerbResume:
+		return true
+	case MessageSubagentStateControlReceiptVerbSteer:
+		return true
+	case MessageSubagentStateControlReceiptVerbStop:
+		return true
+	case MessageSubagentStateControlReceiptVerbStopAll:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageSubagentStateState.
 const (
 	MessageSubagentStateStateCompleted  MessageSubagentStateState = "completed"
@@ -8396,11 +8456,38 @@ func (e ScheduleUpdateTriggerKind) Valid() bool {
 	}
 }
 
+// Defines values for SessionLifecycleState.
+const (
+	SessionLifecycleStateDone             SessionLifecycleState = "done"
+	SessionLifecycleStateFailed           SessionLifecycleState = "failed"
+	SessionLifecycleStateStopped          SessionLifecycleState = "stopped"
+	SessionLifecycleStateWaitingForAnswer SessionLifecycleState = "waiting_for_answer"
+	SessionLifecycleStateWorking          SessionLifecycleState = "working"
+)
+
+// Valid indicates whether the value is a known member of the SessionLifecycleState enum.
+func (e SessionLifecycleState) Valid() bool {
+	switch e {
+	case SessionLifecycleStateDone:
+		return true
+	case SessionLifecycleStateFailed:
+		return true
+	case SessionLifecycleStateStopped:
+		return true
+	case SessionLifecycleStateWaitingForAnswer:
+		return true
+	case SessionLifecycleStateWorking:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionStatus.
 const (
-	SessionStatusActive      SessionStatus = "active"
-	SessionStatusArchived    SessionStatus = "archived"
-	SessionStatusInterrupted SessionStatus = "interrupted"
+	SessionStatusActive   SessionStatus = "active"
+	SessionStatusArchived SessionStatus = "archived"
+	SessionStatusFailed   SessionStatus = "failed"
 )
 
 // Valid indicates whether the value is a known member of the SessionStatus enum.
@@ -8410,7 +8497,34 @@ func (e SessionStatus) Valid() bool {
 		return true
 	case SessionStatusArchived:
 		return true
-	case SessionStatusInterrupted:
+	case SessionStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionStopNoteCause.
+const (
+	SessionStopNoteCauseCascade       SessionStopNoteCause = "cascade"
+	SessionStopNoteCauseRedirectPause SessionStopNoteCause = "redirect_pause"
+	SessionStopNoteCauseRestart       SessionStopNoteCause = "restart"
+	SessionStopNoteCauseStop          SessionStopNoteCause = "stop"
+	SessionStopNoteCauseTimeout       SessionStopNoteCause = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SessionStopNoteCause enum.
+func (e SessionStopNoteCause) Valid() bool {
+	switch e {
+	case SessionStopNoteCauseCascade:
+		return true
+	case SessionStopNoteCauseRedirectPause:
+		return true
+	case SessionStopNoteCauseRestart:
+		return true
+	case SessionStopNoteCauseStop:
+		return true
+	case SessionStopNoteCauseTimeout:
 		return true
 	default:
 		return false
@@ -8723,6 +8837,66 @@ func (e SessionDetailMessagesSubagentStartType) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesSubagentStateControlReceiptState.
+const (
+	SessionDetailMessagesSubagentStateControlReceiptStateApplied    SessionDetailMessagesSubagentStateControlReceiptState = "applied"
+	SessionDetailMessagesSubagentStateControlReceiptStateDelivered  SessionDetailMessagesSubagentStateControlReceiptState = "delivered"
+	SessionDetailMessagesSubagentStateControlReceiptStateQueued     SessionDetailMessagesSubagentStateControlReceiptState = "queued"
+	SessionDetailMessagesSubagentStateControlReceiptStateSuperseded SessionDetailMessagesSubagentStateControlReceiptState = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateControlReceiptState enum.
+func (e SessionDetailMessagesSubagentStateControlReceiptState) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStateControlReceiptStateApplied:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptStateDelivered:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptStateQueued:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptStateSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentStateControlReceiptVerb.
+const (
+	SessionDetailMessagesSubagentStateControlReceiptVerbClearGoal SessionDetailMessagesSubagentStateControlReceiptVerb = "clear_goal"
+	SessionDetailMessagesSubagentStateControlReceiptVerbEscalate  SessionDetailMessagesSubagentStateControlReceiptVerb = "escalate"
+	SessionDetailMessagesSubagentStateControlReceiptVerbRedirect  SessionDetailMessagesSubagentStateControlReceiptVerb = "redirect"
+	SessionDetailMessagesSubagentStateControlReceiptVerbRespond   SessionDetailMessagesSubagentStateControlReceiptVerb = "respond"
+	SessionDetailMessagesSubagentStateControlReceiptVerbResume    SessionDetailMessagesSubagentStateControlReceiptVerb = "resume"
+	SessionDetailMessagesSubagentStateControlReceiptVerbSteer     SessionDetailMessagesSubagentStateControlReceiptVerb = "steer"
+	SessionDetailMessagesSubagentStateControlReceiptVerbStop      SessionDetailMessagesSubagentStateControlReceiptVerb = "stop"
+	SessionDetailMessagesSubagentStateControlReceiptVerbStopAll   SessionDetailMessagesSubagentStateControlReceiptVerb = "stop_all"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateControlReceiptVerb enum.
+func (e SessionDetailMessagesSubagentStateControlReceiptVerb) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStateControlReceiptVerbClearGoal:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbEscalate:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbRedirect:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbRespond:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbResume:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbSteer:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbStop:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbStopAll:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesSubagentStateState.
 const (
 	SessionDetailMessagesSubagentStateStateCompleted  SessionDetailMessagesSubagentStateState = "completed"
@@ -8981,11 +9155,38 @@ func (e SessionDetailMessagesVerdictScope) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailSessionLifecycleState.
+const (
+	SessionDetailSessionLifecycleStateDone             SessionDetailSessionLifecycleState = "done"
+	SessionDetailSessionLifecycleStateFailed           SessionDetailSessionLifecycleState = "failed"
+	SessionDetailSessionLifecycleStateStopped          SessionDetailSessionLifecycleState = "stopped"
+	SessionDetailSessionLifecycleStateWaitingForAnswer SessionDetailSessionLifecycleState = "waiting_for_answer"
+	SessionDetailSessionLifecycleStateWorking          SessionDetailSessionLifecycleState = "working"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailSessionLifecycleState enum.
+func (e SessionDetailSessionLifecycleState) Valid() bool {
+	switch e {
+	case SessionDetailSessionLifecycleStateDone:
+		return true
+	case SessionDetailSessionLifecycleStateFailed:
+		return true
+	case SessionDetailSessionLifecycleStateStopped:
+		return true
+	case SessionDetailSessionLifecycleStateWaitingForAnswer:
+		return true
+	case SessionDetailSessionLifecycleStateWorking:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailSessionStatus.
 const (
-	SessionDetailSessionStatusActive      SessionDetailSessionStatus = "active"
-	SessionDetailSessionStatusArchived    SessionDetailSessionStatus = "archived"
-	SessionDetailSessionStatusInterrupted SessionDetailSessionStatus = "interrupted"
+	SessionDetailSessionStatusActive   SessionDetailSessionStatus = "active"
+	SessionDetailSessionStatusArchived SessionDetailSessionStatus = "archived"
+	SessionDetailSessionStatusFailed   SessionDetailSessionStatus = "failed"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailSessionStatus enum.
@@ -8995,7 +9196,34 @@ func (e SessionDetailSessionStatus) Valid() bool {
 		return true
 	case SessionDetailSessionStatusArchived:
 		return true
-	case SessionDetailSessionStatusInterrupted:
+	case SessionDetailSessionStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailSessionStopNoteCause.
+const (
+	SessionDetailSessionStopNoteCauseCascade       SessionDetailSessionStopNoteCause = "cascade"
+	SessionDetailSessionStopNoteCauseRedirectPause SessionDetailSessionStopNoteCause = "redirect_pause"
+	SessionDetailSessionStopNoteCauseRestart       SessionDetailSessionStopNoteCause = "restart"
+	SessionDetailSessionStopNoteCauseStop          SessionDetailSessionStopNoteCause = "stop"
+	SessionDetailSessionStopNoteCauseTimeout       SessionDetailSessionStopNoteCause = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailSessionStopNoteCause enum.
+func (e SessionDetailSessionStopNoteCause) Valid() bool {
+	switch e {
+	case SessionDetailSessionStopNoteCauseCascade:
+		return true
+	case SessionDetailSessionStopNoteCauseRedirectPause:
+		return true
+	case SessionDetailSessionStopNoteCauseRestart:
+		return true
+	case SessionDetailSessionStopNoteCauseStop:
+		return true
+	case SessionDetailSessionStopNoteCauseTimeout:
 		return true
 	default:
 		return false
@@ -15297,7 +15525,7 @@ type DelegateStatusResponse struct {
 		Text      *string    `json:"text,omitempty"`
 	} `json:"last_progress,omitempty"`
 
-	// Session The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/interrupted — the older chat-transcript- metadata status) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+	// Session The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
 	Session struct {
 		// AgentId The agent running this session.
 		AgentId string `json:"agent_id"`
@@ -18177,10 +18405,47 @@ type Message struct {
 		Type      MessageSubagentStartType `json:"type"`
 	} `json:"subagent_start,omitempty"`
 
-	// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+	// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional control-receipt acknowledgement (sub-agent control plane ADR D4/MIN-003; `control_receipt` replaces the former `steering_receipt`, see `ControlReceipt.yaml`). A dev install replaying an old persisted frame that still carries `steering_receipt` drops that unknown field rather than failing validation (ADR OBS-003) — the field is gone from this schema and Go's default lenient JSON decode on the replay path (`pkg/gateway/replay.go`) already does not reject it.
 	SubagentState *struct {
 		// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
 		ChildSessionId *string `json:"child_session_id,omitempty"`
+
+		// ControlReceipt Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `escalate`, `clear_goal`). Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+		// Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
+		ControlReceipt *struct {
+			// AcceptedAt When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
+			AcceptedAt time.Time `json:"accepted_at"`
+
+			// AppliedAt When a non-steer control reached `applied` (runtime-enforced effect).
+			AppliedAt *time.Time `json:"applied_at,omitempty"`
+
+			// ControlId The accepted control's identifier — caller-supplied correlation id, or server-assigned when blank.
+			ControlId string `json:"control_id"`
+
+			// DeliveredAt When a `steer` reached `delivered` (durable transcript injection).
+			DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+
+			// Reason Free-text reason, set for a `superseded` state or a notable transition.
+			Reason *string `json:"reason,omitempty"`
+
+			// ReleasedControlIds Control ids released together with this receipt (e.g. a RESUME that releases preserved restart-pending controls in sequence, ADR D4 boot reconciliation).
+			ReleasedControlIds *[]string `json:"released_control_ids,omitempty"`
+
+			// Seq Monotonic per-child control sequence (ADR D4). Stand-in value today — see the schema description above.
+			Seq int64 `json:"seq"`
+
+			// State ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+			State MessageSubagentStateControlReceiptState `json:"state"`
+
+			// SupersededAt When this control was superseded.
+			SupersededAt *time.Time `json:"superseded_at,omitempty"`
+
+			// SupersededBySeq The superseding control's own `seq`, when `state == superseded`.
+			SupersededBySeq *int64 `json:"superseded_by_seq,omitempty"`
+
+			// Verb Which control this receipt reports on.
+			Verb MessageSubagentStateControlReceiptVerb `json:"verb"`
+		} `json:"control_receipt,omitempty"`
 
 		// CreatedAt RFC3339 timestamp this state ping was emitted.
 		CreatedAt time.Time `json:"created_at"`
@@ -18196,15 +18461,7 @@ type Message struct {
 
 		// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
 		State MessageSubagentStateState `json:"state"`
-
-		// SteeringReceipt Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3).
-		SteeringReceipt *struct {
-			AppliedAt time.Time `json:"applied_at"`
-
-			// CorrelationId The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
-			CorrelationId string `json:"correlation_id"`
-		} `json:"steering_receipt,omitempty"`
-		Type MessageSubagentStateType `json:"type"`
+		Type  MessageSubagentStateType  `json:"type"`
 	} `json:"subagent_state,omitempty"`
 
 	// Summary Compaction summary text (present only on type=compaction entries).
@@ -18364,6 +18621,12 @@ type MessageSubagentMessageType string
 
 // MessageSubagentStartType defines model for Message.SubagentStart.Type.
 type MessageSubagentStartType string
+
+// MessageSubagentStateControlReceiptState ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+type MessageSubagentStateControlReceiptState string
+
+// MessageSubagentStateControlReceiptVerb Which control this receipt reports on.
+type MessageSubagentStateControlReceiptVerb string
 
 // MessageSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
 type MessageSubagentStateState string
@@ -21363,6 +21626,9 @@ type Session struct {
 	// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 	LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
+	// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+	LifecycleState *SessionLifecycleState `json:"lifecycle_state,omitempty"`
+
 	// Model LLM model name used in this session (may be empty for legacy sessions).
 	Model *string `json:"model,omitempty"`
 
@@ -21423,8 +21689,23 @@ type Session struct {
 		ToolCalls int `json:"tool_calls"`
 	} `json:"stats"`
 
-	// Status Current lifecycle status of the session.
+	// Status Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
 	Status SessionStatus `json:"status"`
+
+	// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
+	StopNote *struct {
+		// At RFC3339 timestamp when this stop note was written.
+		At time.Time `json:"at"`
+
+		// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", or "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, boot-recovery restart) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem`.
+		By string `json:"by"`
+
+		// Cause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+		Cause SessionStopNoteCause `json:"cause"`
+
+		// Seq Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
+		Seq int64 `json:"seq"`
+	} `json:"stop_note,omitempty"`
 
 	// TaskId Associated task ID when this session was created to service a task.
 	TaskId *string `json:"task_id,omitempty"`
@@ -21442,8 +21723,14 @@ type Session struct {
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// SessionStatus Current lifecycle status of the session.
+// SessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+type SessionLifecycleState string
+
+// SessionStatus Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
 type SessionStatus string
+
+// SessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+type SessionStopNoteCause string
 
 // SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
 type SessionType string
@@ -21653,10 +21940,47 @@ type SessionDetail struct {
 			Type      SessionDetailMessagesSubagentStartType `json:"type"`
 		} `json:"subagent_start,omitempty"`
 
-		// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+		// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional control-receipt acknowledgement (sub-agent control plane ADR D4/MIN-003; `control_receipt` replaces the former `steering_receipt`, see `ControlReceipt.yaml`). A dev install replaying an old persisted frame that still carries `steering_receipt` drops that unknown field rather than failing validation (ADR OBS-003) — the field is gone from this schema and Go's default lenient JSON decode on the replay path (`pkg/gateway/replay.go`) already does not reject it.
 		SubagentState *struct {
 			// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
 			ChildSessionId *string `json:"child_session_id,omitempty"`
+
+			// ControlReceipt Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `escalate`, `clear_goal`). Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+			// Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
+			ControlReceipt *struct {
+				// AcceptedAt When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
+				AcceptedAt time.Time `json:"accepted_at"`
+
+				// AppliedAt When a non-steer control reached `applied` (runtime-enforced effect).
+				AppliedAt *time.Time `json:"applied_at,omitempty"`
+
+				// ControlId The accepted control's identifier — caller-supplied correlation id, or server-assigned when blank.
+				ControlId string `json:"control_id"`
+
+				// DeliveredAt When a `steer` reached `delivered` (durable transcript injection).
+				DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+
+				// Reason Free-text reason, set for a `superseded` state or a notable transition.
+				Reason *string `json:"reason,omitempty"`
+
+				// ReleasedControlIds Control ids released together with this receipt (e.g. a RESUME that releases preserved restart-pending controls in sequence, ADR D4 boot reconciliation).
+				ReleasedControlIds *[]string `json:"released_control_ids,omitempty"`
+
+				// Seq Monotonic per-child control sequence (ADR D4). Stand-in value today — see the schema description above.
+				Seq int64 `json:"seq"`
+
+				// State ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+				State SessionDetailMessagesSubagentStateControlReceiptState `json:"state"`
+
+				// SupersededAt When this control was superseded.
+				SupersededAt *time.Time `json:"superseded_at,omitempty"`
+
+				// SupersededBySeq The superseding control's own `seq`, when `state == superseded`.
+				SupersededBySeq *int64 `json:"superseded_by_seq,omitempty"`
+
+				// Verb Which control this receipt reports on.
+				Verb SessionDetailMessagesSubagentStateControlReceiptVerb `json:"verb"`
+			} `json:"control_receipt,omitempty"`
 
 			// CreatedAt RFC3339 timestamp this state ping was emitted.
 			CreatedAt time.Time `json:"created_at"`
@@ -21672,15 +21996,7 @@ type SessionDetail struct {
 
 			// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
 			State SessionDetailMessagesSubagentStateState `json:"state"`
-
-			// SteeringReceipt Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3).
-			SteeringReceipt *struct {
-				AppliedAt time.Time `json:"applied_at"`
-
-				// CorrelationId The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
-				CorrelationId string `json:"correlation_id"`
-			} `json:"steering_receipt,omitempty"`
-			Type SessionDetailMessagesSubagentStateType `json:"type"`
+			Type  SessionDetailMessagesSubagentStateType  `json:"type"`
 		} `json:"subagent_state,omitempty"`
 
 		// Summary Compaction summary text (present only on type=compaction entries).
@@ -21837,6 +22153,9 @@ type SessionDetail struct {
 		// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 		LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
+		// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+		LifecycleState *SessionDetailSessionLifecycleState `json:"lifecycle_state,omitempty"`
+
 		// Model LLM model name used in this session (may be empty for legacy sessions).
 		Model *string `json:"model,omitempty"`
 
@@ -21897,8 +22216,23 @@ type SessionDetail struct {
 			ToolCalls int `json:"tool_calls"`
 		} `json:"stats"`
 
-		// Status Current lifecycle status of the session.
+		// Status Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
 		Status SessionDetailSessionStatus `json:"status"`
+
+		// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
+		StopNote *struct {
+			// At RFC3339 timestamp when this stop note was written.
+			At time.Time `json:"at"`
+
+			// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", or "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, boot-recovery restart) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem`.
+			By string `json:"by"`
+
+			// Cause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+			Cause SessionDetailSessionStopNoteCause `json:"cause"`
+
+			// Seq Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
+			Seq int64 `json:"seq"`
+		} `json:"stop_note,omitempty"`
 
 		// TaskId Associated task ID when this session was created to service a task.
 		TaskId *string `json:"task_id,omitempty"`
@@ -21950,6 +22284,12 @@ type SessionDetailMessagesSubagentMessageType string
 // SessionDetailMessagesSubagentStartType defines model for SessionDetail.Messages.SubagentStart.Type.
 type SessionDetailMessagesSubagentStartType string
 
+// SessionDetailMessagesSubagentStateControlReceiptState ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+type SessionDetailMessagesSubagentStateControlReceiptState string
+
+// SessionDetailMessagesSubagentStateControlReceiptVerb Which control this receipt reports on.
+type SessionDetailMessagesSubagentStateControlReceiptVerb string
+
 // SessionDetailMessagesSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
 type SessionDetailMessagesSubagentStateState string
 
@@ -21980,13 +22320,19 @@ type SessionDetailMessagesVerdictPerCriterionProvenance string
 // SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type SessionDetailMessagesVerdictScope string
 
-// SessionDetailSessionStatus Current lifecycle status of the session.
+// SessionDetailSessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+type SessionDetailSessionLifecycleState string
+
+// SessionDetailSessionStatus Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
 type SessionDetailSessionStatus string
+
+// SessionDetailSessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+type SessionDetailSessionStopNoteCause string
 
 // SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
 type SessionDetailSessionType string
 
-// SessionLifecycleRecord The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/interrupted — the older chat-transcript- metadata status) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+// SessionLifecycleRecord The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
 type SessionLifecycleRecord struct {
 	// AgentId The agent running this session.
 	AgentId string `json:"agent_id"`

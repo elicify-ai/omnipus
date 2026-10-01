@@ -1,9 +1,10 @@
 // Package agent — cancel_lifecycle_bridge_test.go
 //
 // Defect #28 mutation tests: prove the cancel path transitions BOTH stores
-// (LifecycleRecord → cancelled, UnifiedMeta → interrupted) via the single
-// TransitionSession mediator, closing the orphan that the pre-fix cancel path
-// produced by writing UnifiedMeta alone.
+// (LifecycleRecord → stopped, UnifiedMeta → coarse-active per sub-agent
+// control plane ADR D4/MAJ-009: stopped stays active, no mirror write) via
+// the single TransitionSession mediator, closing the orphan that the pre-fix
+// cancel path produced by writing UnifiedMeta alone.
 package agent
 
 import (
@@ -98,12 +99,15 @@ func TestRequestCancel_TransitionsLifecycleRecordToCancelled(t *testing.T) {
 	assert.Equal(t, session.LifecycleStopped, rec.State,
 		"LifecycleRecord must transition to cancelled on cancel, not stay orphaned at %q", rec.State)
 
-	// The UnifiedMeta must ALSO have followed (interrupted) — the mediator's
-	// canonical mapping (cancelled → interrupted).
+	// The UnifiedMeta must stay coarse-active (sub-agent control plane ADR
+	// D4/MAJ-009: stopped/waiting/working all stay `active` — the mediator's
+	// canonical mapping no longer mirrors LifecycleStopped at all). The
+	// exact helper state (stopped) now lives on lifecycle_state, not this
+	// coarse status.
 	postMeta, err := store.GetMeta(sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, session.StatusInterrupted, postMeta.Status,
-		"UnifiedMeta must mirror to interrupted when LifecycleRecord transitions to cancelled")
+	assert.Equal(t, session.StatusActive, postMeta.Status,
+		"UnifiedMeta must stay active when LifecycleRecord transitions to stopped (ADR D4)")
 }
 
 // TestRequestCancel_LifecycleRecordMissing_DoesNotPanic verifies the cancel
@@ -164,9 +168,11 @@ func TestRequestCancel_LifecycleRecordMissing_DoesNotPanic(t *testing.T) {
 	)
 	require.NoError(t, err, "cancel must not error when no LifecycleRecord exists")
 
-	// UnifiedMeta still mirrored (the mediator proceeds past ErrLifecycleNotFound).
+	// UnifiedMeta stays coarse-active (the mediator proceeds past
+	// ErrLifecycleNotFound, but LifecycleStopped no longer mirrors at all —
+	// ADR D4/MAJ-009).
 	postMeta, err := store.GetMeta(sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, session.StatusInterrupted, postMeta.Status,
-		"UnifiedMeta must still mirror to interrupted even without a LifecycleRecord")
+	assert.Equal(t, session.StatusActive, postMeta.Status,
+		"UnifiedMeta must stay active even without a LifecycleRecord (ADR D4)")
 }

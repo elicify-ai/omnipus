@@ -1125,21 +1125,30 @@ type SubagentStartFrame struct {
 	Type      string `json:"type"`
 }
 
-// SubagentStateFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat projection of SessionLifecycleRecord.state riding between subagent_start/subagent_end, plus an optional steering- receipt. Canonical copy — keep in sync by hand.
+// SubagentStateFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat projection of SessionLifecycleRecord.state riding between subagent_start/subagent_end, plus an optional control- receipt (sub-agent control plane ADR D4/MIN-003; replaces the former steering_receipt — the field is gone, a dev install replaying an old persisted frame that still carries it drops the unknown field rather than failing validation, OBS-003). Canonical copy — keep in sync by hand with contracts/components/schemas/SubagentStateFrame.yaml and contracts/components/schemas/ControlReceipt.yaml.
 type SubagentStateFrame struct {
 	// Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing subagent_start frame's child_session_id carries (ADR-091 I-4).
 	ChildSessionId *string `json:"child_session_id,omitempty"`
-	CreatedAt      string  `json:"created_at"`
+	ControlReceipt *struct {
+		AcceptedAt         string   `json:"accepted_at"`
+		AppliedAt          *string  `json:"applied_at,omitempty"`
+		ControlId          string   `json:"control_id"`
+		DeliveredAt        *string  `json:"delivered_at,omitempty"`
+		Reason             *string  `json:"reason,omitempty"`
+		ReleasedControlIds []string `json:"released_control_ids,omitempty"`
+		Seq                int64    `json:"seq"`
+		State              string   `json:"state"`
+		SupersededAt       *string  `json:"superseded_at,omitempty"`
+		SupersededBySeq    *int64   `json:"superseded_by_seq,omitempty"`
+		Verb               string   `json:"verb"`
+	} `json:"control_receipt,omitempty"`
+	CreatedAt string `json:"created_at"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/SubagentStateFrame.yaml.
-	Seq             *int64 `json:"seq,omitempty"`
-	SessionId       string `json:"session_id"`
-	SpanId          string `json:"span_id"`
-	State           string `json:"state"`
-	SteeringReceipt *struct {
-		AppliedAt     string `json:"applied_at"`
-		CorrelationId string `json:"correlation_id"`
-	} `json:"steering_receipt,omitempty"`
-	Type string `json:"type"`
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	SpanId    string `json:"span_id"`
+	State     string `json:"state"`
+	Type      string `json:"type"`
 }
 
 // SystemOverloadFrame — Server → client system at capacity (FR-016, MAJ-009). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
