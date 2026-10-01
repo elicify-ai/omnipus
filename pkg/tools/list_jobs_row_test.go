@@ -247,7 +247,7 @@ func asTriple(status, native string, unmapped bool) struct {
 // distinction. An agent that stopped a delegation on purpose and then lost
 // context must not re-dispatch work the user deliberately cancelled.
 func TestIntentionallyStopped_DerivedFromClosedEnums(t *testing.T) {
-	cancelled := normalizeSubagent(&session.LifecycleRecord{State: session.LifecycleCancelled})
+	cancelled := normalizeSubagent(&session.LifecycleRecord{State: session.LifecycleStopped})
 	if !cancelled.stopped {
 		t.Error("a cancelled session must report intentionally_stopped=true")
 	}

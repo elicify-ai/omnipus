@@ -401,7 +401,7 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	// it: a new generation was already persisted, so leaving it `queued`
 	// would strand it and block its parent for ever.
 	if err := t.appendFollowUpInstruction(newSessionID, instructions); err != nil {
-		t.transitionLifecycle(newSessionID, session.LifecycleFailed, err.Error())
+		t.transitionLifecycle(newSessionID, session.LifecycleFailed, err.Error(), nil)
 		slog.Error("delegate: follow-up instruction did not land; dispatch refused",
 			"session_id", newSessionID,
 			"generation", newRec.Generation,
@@ -412,7 +412,7 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 
 	dispatch, err := t.launcher.Dispatch(ctx, newSessionID, newRec.Generation)
 	if err != nil {
-		t.transitionLifecycle(newSessionID, session.LifecycleFailed, err.Error())
+		t.transitionLifecycle(newSessionID, session.LifecycleFailed, err.Error(), nil)
 		slog.Error("delegate: follow-up dispatch failed",
 			"session_id", newSessionID,
 			"generation", newRec.Generation,

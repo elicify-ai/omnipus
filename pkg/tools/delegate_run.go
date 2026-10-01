@@ -493,14 +493,21 @@ func resolveDelegateTimeoutSeconds(args map[string]any) (time.Duration, error) {
 // terminally correct). Callers MUST NOT already hold Lock(sessionID):
 // sync.Mutex is not reentrant, and Mutate takes the lock ONCE internally.
 // The sibling comment in message_parent.go parkNeedsInput mirrors this one.
-func (t *DelegateTool) transitionLifecycle(sessionID string, state session.LifecycleState, failedReason string) {
+// transitionLifecycle transitions sessionID's durable record to state. note
+// is the StopNote to land when state == LifecycleStopped (D2/D6) — pass nil
+// when a prior write in the SAME stop event (typically a SteerCanceller
+// cascade stamp, via cancelHard/cancelSoft) already landed one; every
+// current call site does exactly that (see each call site's own comment),
+// so TransitionSession's own "retain the existing note" behavior applies.
+// Ignored for any other target state.
+func (t *DelegateTool) transitionLifecycle(sessionID string, state session.LifecycleState, failedReason string, note *session.StopNote) {
 	if t.lifecycle == nil || sessionID == "" {
 		return
 	}
 	// t.lifecycle (MessageParentLifecycleStore) satisfies
 	// session.LifecycleMutator, so no type assertion is needed.
 	// t.unified may be nil; TransitionSession then skips the mirror.
-	if err := session.TransitionSession(t.lifecycle, t.unified, sessionID, state, failedReason); err != nil {
+	if err := session.TransitionSession(t.lifecycle, t.unified, sessionID, state, failedReason, note); err != nil {
 		slog.Warn("delegate: transitionLifecycle: dual-store transition failed", "session_id", sessionID, "state", state, "error", err)
 	}
 }
@@ -663,7 +670,12 @@ func (t *DelegateTool) droppedQueuedResult(sessionID, warnings string) *ToolResu
 	if err != nil || rec == nil || rec.State != session.LifecycleQueued {
 		return nil
 	}
-	t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user")
+	// note=nil: this call is reached only after the caller's own cancelHard/
+	// cancelSoft hook already ran (executeCancel, below) — that hook is
+	// al.cancelDelegatedSubtree, which stamps the durable Stop marker AND
+	// (steer_cancel.go::stampStop) the stop_note for sessionID itself with
+	// cause "stop" before this lands the terminal write. Retain it.
+	t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
 	return NewToolResult(fmt.Sprintf(
 		"Session %s was still queued behind the concurrency limit and had not started; it has been dropped and will never run.",
 		sessionID,
@@ -817,7 +829,10 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		if dropped := t.droppedQueuedResult(sessionID, cancelBackgroundShellWarnings(killFailed, walkIncomplete)); dropped != nil {
 			return dropped
 		}
-		t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user")
+		// note=nil: t.cancelHard (just above) is al.cancelDelegatedSubtree,
+		// which already stamped the stop_note for sessionID (cause "stop",
+		// it is the direct cancel target) via stampStop. Retain it.
+		t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
 		msg := fmt.Sprintf("Session %s hard-cancelled immediately.", sessionID)
 		msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
 		return NewToolResult(msg)
@@ -880,7 +895,9 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			if len(backstopDescendants) == 0 {
 				return
 			}
-			t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user")
+			// note=nil: t.cancelHard (just above) already stamped the
+			// stop_note for sessionID (cause "stop") via stampStop. Retain it.
+			t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
 		}()
 	}
 

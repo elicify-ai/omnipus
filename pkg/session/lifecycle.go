@@ -189,6 +189,12 @@ type LifecycleRecord struct {
 	// generation. Written by the cascade (I-6 Canceller.CancelSubtree) on
 	// the stopped node and every reachable non-terminal descendant.
 	Stop *Stop `json:"stop,omitempty"`
+	// StopNote is the durable, RETAINED record of who last stopped this
+	// session, when, and why (D2/D6; see StopNote's own doc comment in
+	// lifecycle_edge.go for how it differs from Stop above). nil means this
+	// record has never landed LifecycleStopped for any generation.
+	// persistLocked requires it non-nil whenever State == LifecycleStopped.
+	StopNote *StopNote `json:"stop_note,omitempty"`
 
 	OwnerScopeKind OwnerScopeKind `json:"owner_scope_kind"`
 	OwnerScopeID   string         `json:"owner_scope_id,omitempty"`
@@ -587,6 +593,24 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 		if rec.Terminal() && rec.Stop.Generation == rec.Generation {
 			return fmt.Errorf("session: lifecycle: terminal record (state %q) cannot carry a current-generation stop marker", rec.State)
 		}
+	}
+	// D2/CRIT-001: a landed `stopped` record MUST carry the lasting note
+	// (nothing else preserves who/why/when once Stop itself is cleared) and
+	// MUST NOT still carry a current-generation Stop fence (landing a stop
+	// is what clears it — a record claiming both "stopped" and "still
+	// waiting to be stopped" at once is exactly the contradiction the
+	// existing terminal/current-fence guard above already refuses for
+	// completed/failed).
+	if rec.State == LifecycleStopped {
+		if rec.StopNote == nil {
+			return fmt.Errorf("session: lifecycle: state stopped requires stop_note")
+		}
+		if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+			return fmt.Errorf("session: lifecycle: state stopped cannot carry a current-generation stop marker")
+		}
+	}
+	if rec.StopNote != nil && !IsValidStopCause(rec.StopNote.Cause) {
+		return fmt.Errorf("session: lifecycle: invalid stop_note.cause %q", rec.StopNote.Cause)
 	}
 	return nil
 }

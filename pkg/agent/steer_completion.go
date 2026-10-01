@@ -206,6 +206,30 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
 			cur.Stop = nil
 		}
+		// D2: landing retains an existing stop_note (a prior stampStop
+		// already wrote one, for an OutcomeInterrupted turn a cascade
+		// cancelled — cause stop/cascade depending on whether this session
+		// was the cascade's own target or a swept descendant). Two outcomes
+		// reach LifecycleStopped with no prior stamp and need one
+		// synthesized here: OutcomeTimedOut (a lifetime-budget expiry is
+		// never stamped by any cascade — D2/Vocabulary line 137) always
+		// gets cause timeout; OutcomeInterrupted with no stamp is the
+		// "legacy" RequestCancel path landing directly on a steered
+		// session's own completion (cancel.go, no SteerCanceller stamp
+		// involved) — cause stop, since this record is by definition the
+		// call's own direct target, never a cascade sweep, in that path.
+		// Neither branch has a session.Principal available at this layer,
+		// so the actor is "system".
+		if nextState == session.LifecycleStopped && cur.StopNote == nil {
+			cause := session.StopCauseStop
+			if outcome == steer.OutcomeTimedOut {
+				cause = session.StopCauseTimeout
+			}
+			cur.StopNote = &session.StopNote{
+				At: time.Now().UTC(), By: session.StopActorSystem,
+				Seq: uint64(cur.Generation), Cause: cause,
+			}
+		}
 		if nextState == session.LifecycleFailed {
 			cur.FailedReason = failureReason
 		}
@@ -470,7 +494,20 @@ func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, rec *session.Lifecycle
 	// any ancestor that was only waiting on this child. Without it the
 	// record stayed `running` for ever and the parent waited on a worker
 	// that was already gone.
-	if _, nextState, _ := completionDisposition(*result, runErr, strings.TrimSpace(result.finalContent)); session.IsTerminalLifecycleState(nextState) {
+	//
+	// completionDisposition lands a dead turn on EITHER LifecycleFailed
+	// (session.IsTerminalLifecycleState — a genuine terminal write) or
+	// LifecycleStopped (timed_out/cancelled outcomes). Since the
+	// lifecycle-state consolidation (pkg/session/lifecycle.go),
+	// LifecycleStopped is deliberately non-terminal — a stopped session can
+	// still be revived — so IsTerminalLifecycleState alone no longer
+	// recognizes it. Checking for it explicitly here is what keeps those two
+	// outcomes on this path instead of silently falling through to the
+	// runErr-nil-return below: the ONLY other non-empty nextState
+	// completionDisposition ever returns is LifecycleRunning (the
+	// tool-iteration lifecycle notice), which this condition correctly
+	// leaves alone — that child is resumable, not dead.
+	if _, nextState, _ := completionDisposition(*result, runErr, strings.TrimSpace(result.finalContent)); session.IsTerminalLifecycleState(nextState) || nextState == session.LifecycleStopped {
 		if err := al.completeSteeredTurn(context.Background(), rec, *result, runErr); err != nil {
 			logger.WarnCF("agent", "steer: report a dead goal-bearing child upward failed",
 				map[string]any{"session_id": rec.SessionID, "state": string(nextState), "error": err.Error()})

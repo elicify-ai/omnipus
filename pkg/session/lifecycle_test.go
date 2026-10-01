@@ -117,7 +117,7 @@ func TestPublishChildUnderParentLock_ChildWriteFailureRestoresExistingParent(t *
 		if !existed {
 			t.Fatal("existing parent was not loaded")
 		}
-		current.State = LifecyclePaused
+		current.State = LifecycleStopped
 		return &LifecycleRecord{
 			SessionID: childID, Generation: 1, State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeParentSession,
@@ -193,13 +193,13 @@ func TestLifecycleStore_PersistAndReload(t *testing.T) {
 	}
 }
 
-func TestLifecycleStore_AllEightStatesValid(t *testing.T) {
+func TestLifecycleStore_AllSixStatesValid(t *testing.T) {
 	states := []LifecycleState{
-		LifecycleQueued, LifecycleRunning, LifecycleNeedsInput, LifecyclePaused,
-		LifecycleCompleted, LifecycleFailed, LifecycleCancelled, LifecycleTimedOut,
+		LifecycleQueued, LifecycleRunning, LifecycleNeedsInput, LifecycleStopped,
+		LifecycleCompleted, LifecycleFailed,
 	}
-	if len(states) != 8 {
-		t.Fatalf("expected exactly 8 canonical states in this test table, got %d", len(states))
+	if len(states) != 6 {
+		t.Fatalf("expected exactly 6 canonical states in this test table, got %d", len(states))
 	}
 	for _, st := range states {
 		if !IsValidLifecycleState(st) {
@@ -403,7 +403,12 @@ func TestLifecycleStore_Mutate_AppliesAndPersists(t *testing.T) {
 		if rec.State != LifecycleRunning {
 			t.Fatalf("expected to see running, got %s", rec.State)
 		}
-		rec.State = LifecyclePaused
+		rec.State = LifecycleStopped
+		// D2/CRIT-001: landing LifecycleStopped now requires a StopNote
+		// (persistLocked rejects the write otherwise). This mutation is a
+		// direct single-session stop, so cause "stop" per StopCauseStop's
+		// own doc comment.
+		rec.StopNote = &StopNote{At: time.Now().UTC(), By: "human:qa-lead", Seq: uint64(rec.Generation), Cause: StopCauseStop}
 		return nil
 	})
 	if err != nil {
@@ -413,8 +418,8 @@ func TestLifecycleStore_Mutate_AppliesAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if rec.State != LifecyclePaused {
-		t.Errorf("state = %q, want paused", rec.State)
+	if rec.State != LifecycleStopped {
+		t.Errorf("state = %q, want stopped", rec.State)
 	}
 }
 
