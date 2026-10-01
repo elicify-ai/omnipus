@@ -53,17 +53,21 @@ func init() {
 	once.Do(func() {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
-		consoleWriter := zerolog.ConsoleWriter{
-			Out:        os.Stdout,
-			TimeFormat: "15:04:05",
-
-			// Custom formatter to handle multiline strings and JSON objects
-			FormatFieldValue: formatFieldValue,
-		}
+		consoleWriter := newConsoleWriter(os.Stdout)
 
 		logger = zerolog.New(consoleWriter).With().Timestamp().Caller().Logger()
 		fileLogger = zerolog.Logger{}
 	})
+}
+
+func newConsoleWriter(out io.Writer) zerolog.ConsoleWriter {
+	return zerolog.ConsoleWriter{
+		Out:        out,
+		TimeFormat: "15:04:05",
+
+		// Custom formatter to handle multiline strings and JSON objects
+		FormatFieldValue: formatFieldValue,
+	}
 }
 
 func formatFieldValue(i any) string {
