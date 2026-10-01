@@ -84,10 +84,12 @@ Your first message is kept in the open tab while Omnipus checks delivery. If loa
 | **Checking delivery…** | Your explicit Retry is in progress. Another Retry is not available at the same time. |
 | **Saved** | The server confirmed that this message was saved using its delivery ID, directly or through the saved chat's history. A chat-created acknowledgement alone does not confirm a save. The answer may still be starting or running. |
 | **Checking chat…** | Omnipus found an already-saved message and is loading its chat to check whether an answer exists or is still running. |
-| **Could not check this chat · Retry** | Checking delivery or loading the saved chat failed. This does not establish whether an unconfirmed message was saved. Your message is kept in the open tab; **Retry** uses the original delivery request if no chat ID is known, or checks the saved chat again. |
+| **Could not check this chat · Retry** | Checking delivery or loading the saved chat failed. This does not establish whether an unconfirmed message was saved. Your message is kept in the open tab; **Retry** uses the original delivery request until a save is confirmed, even if a chat ID is known. After a confirmed save, it checks the saved chat again. |
 | **Could not save message · Retry** | Omnipus reported that it could not save the message. You can retry delivery. |
 | **Message saved, but no answer started · Generate again** | The message was saved, but no answer began. **Generate again** deliberately starts a new answer in the saved chat. |
 | **Couldn't finish · Generate again** | Checking the recovered chat finished with your message still unanswered and no answer running. You can deliberately generate a new answer. |
+
+An older gateway's acknowledgement can still open the chat and apply its agent and Auto-approve settings without showing **Saved**. Messages buffered while that chat was being created resume after the current turn ends.
 
 An unconfirmed message does not offer **Generate again**. That action is separate from delivery Retry: it sends a new request and may repeat work or tool actions. The saved chat's current Auto-approve setting applies, not a restored setting from the original send.
 

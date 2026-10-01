@@ -10,6 +10,7 @@ import {
   attachRecoveredFirstSend,
   findFirstSendMessage,
   getPendingFirstSend,
+  hasFirstSendReceipt,
   removeFirstSendPlaceholder,
   setFirstSendStatus,
   type FirstSendContext,
@@ -83,13 +84,15 @@ function confirmFirstSend(context: FirstSendFrameContext, pending: PendingFirstS
 function handleFirstSendError(context: FirstSendFrameContext, frame: Extract<Frame, { type: 'error' }>): boolean {
   if (!frame.first_message_error) return false
   const pending = getPendingFirstSend(context.get())
+  const message = pending && findFirstSendMessage(context.get().sessionsById[pending.sessionId ?? '__pending'], pending.clientMessageId)
+  const confirmed = hasFirstSendReceipt(message ?? undefined)
   if (!frame.client_message_id) {
     useConnectionStore.getState().setConnectionError('Delivery not confirmed — the server did not identify the message. Reconnect and press Retry.')
     if (pending) setFirstSendStatus(context, pending, 'unconfirmed')
     return true
   }
   if (frame.first_message_error !== 'answer_not_started') {
-    if (pending?.clientMessageId === frame.client_message_id && !pending.sessionId) {
+    if (pending?.clientMessageId === frame.client_message_id && !confirmed) {
       setFirstSendStatus(context, pending, frame.first_message_error === 'not_saved' ? 'not_saved' : 'unconfirmed')
     }
     return true // A late tagged error must never be filed under a new chat.
@@ -99,7 +102,7 @@ function handleFirstSendError(context: FirstSendFrameContext, frame: Extract<Fra
     useConnectionStore.getState().setConnectionError('Delivery not confirmed — the server did not identify the saved chat. Reconnect and press Retry.')
     return true
   }
-  if (pending?.clientMessageId === frame.client_message_id && !pending.sessionId) {
+  if (pending?.clientMessageId === frame.client_message_id && !confirmed) {
     confirmFirstSend(context, pending, { type: 'session_started', session_id: frame.session_id, client_message_id: frame.client_message_id })
   }
   const bucket = context.get().sessionsById[frame.session_id]
@@ -138,6 +141,7 @@ function reconcileRecoveredFirstSend(context: FirstSendFrameContext, pending: Pe
   if (frame.session_id !== pending.sessionId || frame.client_message_id !== pending.clientMessageId) return false
   const serverId = frame.id
   if (!serverId) return false
+  const recovering = !!context.get().sessionsById[pending.sessionId]?.recoveredFirstSend
   context.withBucket(pending.sessionId, (bucket) => produce(bucket, (draft) => {
     const message = findFirstSendMessage(draft, pending.clientMessageId)
     if (!message) return
@@ -146,8 +150,13 @@ function reconcileRecoveredFirstSend(context: FirstSendFrameContext, pending: Pe
       draft.messageOrder = [...new Set(draft.messageOrder.map((id) => id === message.id ? serverId : id))]
     }
     draft.messagesById[serverId] = { ...message, id: serverId, clientMessageId: pending.clientMessageId, deliveryStatus: 'received' }
+    if (!recovering) draft.messagesById[serverId].firstSendStatus = 'saved'
     if (draft.recoveredFirstSend) draft.recoveredFirstSend.reconciled = true
   }))
+  if (!recovering) {
+    context.set({ pendingFirstSend: null })
+    context.get().drainOutboundQueue()
+  }
   return true
 }
 
@@ -155,6 +164,8 @@ function reconcileRecoveredFirstSend(context: FirstSendFrameContext, pending: Pe
 export function handleFirstSendFrame(context: FirstSendFrameContext): boolean {
   const { frame, get } = context
   const pending = getPendingFirstSend(get())
+  const message = pending && findFirstSendMessage(get().sessionsById[pending.sessionId ?? '__pending'], pending.clientMessageId)
+  const confirmed = hasFirstSendReceipt(message ?? undefined)
   if (frame.type === 'error') {
     if (frame.first_message_error) return handleFirstSendError(context, frame)
     if (frame.client_message_id) {
@@ -175,12 +186,18 @@ export function handleFirstSendFrame(context: FirstSendFrameContext): boolean {
   if (frame.type === 'session_started') {
     const clientId = frame.client_message_id
     if (!clientId) {
-      // Older gateways may acknowledge the chat without confirming this message.
-      // Keep its original request for Retry and any later correlated outcome.
-      if (pending?.status === 'sending' || pending?.status === 'retrying') {
-        setFirstSendStatus(context, pending, 'unconfirmed')
+      // Bind/migrate through the normal reducer, but retain the exact request
+      // and client ID until a correlated receipt proves this entry was saved.
+      if (pending && !pending.sessionId) {
+        const status = pending.status === 'sending' || pending.status === 'retrying' ? 'unconfirmed' : pending.status
+        context.withBucket('__pending', (bucket) => produce(bucket, (draft) => {
+          for (const message of Object.values(draft.messagesById)) message.session_id = frame.session_id
+          const user = findFirstSendMessage(draft, pending.clientMessageId)
+          if (user) user.firstSendStatus = status
+        }))
+        context.set({ pendingFirstSend: { ...pending, sessionId: frame.session_id, status } })
       }
-      return !!pending
+      return false
     }
     if (!pending || pending.clientMessageId !== clientId) {
       const abandoned = get().abandonedFirstSendIds.includes(clientId)
@@ -201,7 +218,7 @@ export function handleFirstSendFrame(context: FirstSendFrameContext): boolean {
     return true
   }
   if (!pending) return false
-  if (frame.type === 'message_status' && frame.client_message_id === pending.clientMessageId && !pending.sessionId) {
+  if (frame.type === 'message_status' && frame.client_message_id === pending.clientMessageId && !confirmed) {
     if (frame.state === 'failed') {
       setFirstSendStatus(context, pending, 'unconfirmed')
     } else {

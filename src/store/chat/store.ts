@@ -12,7 +12,7 @@ import { applyMessageArray, emptySessionState, omitKeys } from './session'
 import type { ChatMessage, ChatStore, OutboundQueueItem, RateLimitEventData, SessionChatState } from './types'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
-import { createFirstSendActions, getPendingFirstSend } from './first-send'
+import { createFirstSendActions, firstSendBlocksQueue } from './first-send'
 import { createFrameSlice } from './slices/frames'
 
 // HIGH-2: consecutive unknown frame counter. Reset on any known-good frame.
@@ -276,7 +276,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
    */
   function maybeDrainNext(): void {
     const { pendingDrainQueue, isStreaming } = get()
-    if (pendingDrainQueue.length === 0 || isStreaming || getPendingFirstSend(get())) return
+    if (pendingDrainQueue.length === 0 || isStreaming || firstSendBlocksQueue(get())) return
     const [next, ...rest] = pendingDrainQueue
     set({ pendingDrainQueue: rest })
     drainQueuedMessage(get, next)

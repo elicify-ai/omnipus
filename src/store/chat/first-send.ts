@@ -30,6 +30,17 @@ export function getPendingFirstSend(state: ChatStore): PendingFirstSend | null {
     : null
 }
 
+/** A bound chat ID alone is not proof that its first user entry was saved. */
+export function hasFirstSendReceipt(message: ChatMessage | undefined): boolean {
+  return message?.deliveryStatus === 'received' || message?.deliveryStatus === 'working'
+}
+
+/** Bound legacy chats may drain after their turn without claiming a save. */
+export function firstSendBlocksQueue(state: ChatStore): boolean {
+  const pending = getPendingFirstSend(state)
+  return !!pending && (!pending.sessionId || pending.status !== 'unconfirmed')
+}
+
 export function removeFirstSendPlaceholder(bucket: SessionChatState, placeholderId: string): void {
   const placeholder = bucket.messagesById[placeholderId]
   if (placeholder?.role !== 'assistant' || placeholder.content.trim() || placeholder.tool_calls?.length) return
@@ -46,7 +57,7 @@ export function setFirstSendStatus(context: FirstSendContext, pending: PendingFi
     if (message) {
       message.firstSendStatus = status
       message.status = status === 'not_saved' ? 'error' : 'done'
-      message.deliveryStatus = pending.sessionId ? 'received' : status === 'not_saved' ? 'failed' : 'sending'
+      message.deliveryStatus = hasFirstSendReceipt(message) ? 'received' : status === 'not_saved' ? 'failed' : 'sending'
     }
     removeFirstSendPlaceholder(draft, pending.assistantPlaceholderId)
     draft.isStreaming = false
@@ -146,7 +157,8 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
       const { connection, isConnected } = useConnectionStore.getState()
       if (!pending || !connection || !isConnected) return
       if (pending.status !== 'unconfirmed' && pending.status !== 'not_saved' && pending.status !== 'check_failed') return
-      if (pending.sessionId) {
+      const message = findFirstSendMessage(get().sessionsById[pending.sessionId ?? '__pending'], pending.clientMessageId)
+      if (pending.sessionId && hasFirstSendReceipt(message)) {
         attachRecoveredFirstSend(context)
         return
       }
@@ -165,7 +177,8 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
     markFirstSendDisconnected: () => {
       const pending = getPendingFirstSend(get())
       if (!pending) return
-      setFirstSendStatus(context, pending, pending.sessionId ? 'check_failed' : pending.status === 'not_saved' ? 'not_saved' : 'unconfirmed')
+      const message = findFirstSendMessage(get().sessionsById[pending.sessionId ?? '__pending'], pending.clientMessageId)
+      setFirstSendStatus(context, pending, hasFirstSendReceipt(message) ? 'check_failed' : pending.status === 'not_saved' ? 'not_saved' : 'unconfirmed')
     },
     abandonPendingFirstSend: () => {
       const pending = getPendingFirstSend(get())
@@ -175,7 +188,7 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
           draft.isReplaying = false
           draft.awaitingCatchUp = false
           const message = findFirstSendMessage(draft, pending.clientMessageId)
-          if (message) message.firstSendStatus = 'saved'
+          if (message && hasFirstSendReceipt(message)) message.firstSendStatus = 'saved'
         }) as Partial<SessionChatState>)
       }
       set((state) => {
