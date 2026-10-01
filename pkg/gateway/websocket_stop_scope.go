@@ -34,10 +34,29 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 		if id == sessionID {
 			rootOutcome, rootErr = outcome, err
 		}
-		return agent.GenerationCancelResult{
+		result := agent.GenerationCancelResult{
 			Found: outcome.Fired || outcome.Armed, Cancelled: outcome.Fired,
 			SkippedNewerGeneration: outcome.SkippedNewerGeneration,
-		}, err
+		}
+		if err == nil && !result.Found {
+			// id was stamped by this same cascade pass (cancelStamped only
+			// invokes stopTurn for ids in report.Reached) but had no live
+			// turn to cancel and nothing armed for it: it was only ever
+			// queued/parked, never ran a turn. h.requestTurnStop alone never
+			// reaches terminaliseNeverRanStop — only al.SteerGenerationCancel
+			// does (its only call site, pkg/agent/steer_cancel.go). Reuse
+			// that already-correct, already-tested chain (queue-position
+			// cleanup + the never-ran terminal landing + upward report)
+			// instead of reimplementing it here; the redundant second
+			// requestCancelForGeneration attempt inside it is a harmless
+			// no-op given result.Found is already false.
+			fallback, fbErr := h.agentLoop.SteerGenerationCancel(ctx, id, generation)
+			if fbErr != nil {
+				return result, fbErr
+			}
+			result = fallback
+		}
+		return result, err
 	}
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: wc.userID}
 	report, durable := applySteeredCancel(h.agentLoop, sessionID, func(canceller steer.Canceller) (steer.CancelReport, error) {
