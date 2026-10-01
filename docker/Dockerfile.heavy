@@ -152,9 +152,11 @@ EXPOSE 5000
 # Dockerfile.
 ENV OMNIPUS_GATEWAY_HOST=0.0.0.0
 
-# Default sandbox mode = permissive inside Docker. The default unprivileged
-# container seccomp profile blocks syscalls the hardened-exec path requires,
-# causing "fork/exec /bin/sh: permission denied" with sandbox=enforce.
+# This general-purpose image defaults to permissive and is also used by Fly UAT.
+# On Fly's guest kernel Landlock is unavailable (ENOSYS), measured 2026-09-24
+# on omnipus-uat-swimlane: backend=fallback, kernel_sandbox_active=false.
+# That measurement does not establish a Docker seccomp-profile failure;
+# kernel-sandbox availability on other Docker hosts must be checked separately.
 ENV OMNIPUS_SANDBOX_MODE=permissive
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

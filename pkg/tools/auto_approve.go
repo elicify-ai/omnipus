@@ -6,11 +6,11 @@
 // Under Auto, a call whose effective policy is "ask" runs without a prompt
 // when this file's classifier says it may. Everything else keeps today's
 // flow (grant store, then a human prompt, or the unattended auto-deny).
-// This file never decides whether Auto is ACTIVE (God Mode off,
-// ResolveAutoApprove true, an enforcing kernel sandbox) — that is the agent
-// loop's shared check — and it never turns an allow or deny into anything
-// else. It only answers: "given Auto is on and this call would ask, may it
-// run?"
+// This file never decides whether Auto is ACTIVE (God Mode off and the
+// agent loop's shared Auto-approve check resolving on). Auto does not require
+// an enforcing kernel sandbox (founder decision, 2026-09-24). This classifier
+// never turns an allow or deny into anything else. It only answers: "given
+// Auto is on and this call would ask, may it run?"
 //
 // # API for the agent loop (lane L3)
 //

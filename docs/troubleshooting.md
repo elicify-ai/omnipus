@@ -127,9 +127,9 @@ On Windows, Omnipus has no lock between separate processes. If two Omnipus proce
 
 After the upgrade there is deliberately no fallback that reads an old entry: it would let a value be moved between names again. If one entry fails while the others still work, that entry was edited on disk or copied from another entry. The gateway names the entry at fault in its log. Re-enter it the same way.
 
-## A page fails to load after a deployment
+## The page shows "Something went wrong loading this page"
 
-If a tab still references JavaScript files from an earlier deployment, loading an app page or full-screen panel can fail before Omnipus checks whether you are signed in. You will see **"Something went wrong loading this page."** Select **Reload page** to fetch the current files and try again. A file-loading failure is not treated as a sign-in failure or a reason to restart setup.
+A page, panel, or the onboarding wizard could not load or render — for example when a tab still references JavaScript files from an earlier deployment. This is not a sign-in failure and not a reason to restart setup. Press **Reload page** to fetch the current files and try again. If the message keeps returning, open your browser's developer console and copy the error when reporting the problem. Look for `[router] route load/render failed:` or `[app] Uncaught render error:`.
 
 ## The web app looks outdated after a source build
 
