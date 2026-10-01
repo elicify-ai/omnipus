@@ -3354,11 +3354,9 @@ components:
             - queued
             - running
             - needs_input
-            - paused
+            - stopped
             - completed
             - failed
-            - cancelled
-            - timed_out
         steering_receipt:
           type: object
           # Not nullable — see components/schemas/SubagentStateFrame.yaml's

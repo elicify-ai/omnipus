@@ -2104,34 +2104,28 @@ func (e DelegatePeekActionAction) Valid() bool {
 
 // Defines values for DelegatePeekResponseState.
 const (
-	DelegatePeekResponseStateCancelled  DelegatePeekResponseState = "cancelled"
 	DelegatePeekResponseStateCompleted  DelegatePeekResponseState = "completed"
 	DelegatePeekResponseStateFailed     DelegatePeekResponseState = "failed"
 	DelegatePeekResponseStateNeedsInput DelegatePeekResponseState = "needs_input"
-	DelegatePeekResponseStatePaused     DelegatePeekResponseState = "paused"
 	DelegatePeekResponseStateQueued     DelegatePeekResponseState = "queued"
 	DelegatePeekResponseStateRunning    DelegatePeekResponseState = "running"
-	DelegatePeekResponseStateTimedOut   DelegatePeekResponseState = "timed_out"
+	DelegatePeekResponseStateStopped    DelegatePeekResponseState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegatePeekResponseState enum.
 func (e DelegatePeekResponseState) Valid() bool {
 	switch e {
-	case DelegatePeekResponseStateCancelled:
-		return true
 	case DelegatePeekResponseStateCompleted:
 		return true
 	case DelegatePeekResponseStateFailed:
 		return true
 	case DelegatePeekResponseStateNeedsInput:
 		return true
-	case DelegatePeekResponseStatePaused:
-		return true
 	case DelegatePeekResponseStateQueued:
 		return true
 	case DelegatePeekResponseStateRunning:
 		return true
-	case DelegatePeekResponseStateTimedOut:
+	case DelegatePeekResponseStateStopped:
 		return true
 	default:
 		return false
@@ -2155,34 +2149,28 @@ func (e DelegateRespondActionAction) Valid() bool {
 
 // Defines values for DelegateRespondResponseCorrectiveSessionState.
 const (
-	DelegateRespondResponseCorrectiveSessionStateCancelled  DelegateRespondResponseCorrectiveSessionState = "cancelled"
 	DelegateRespondResponseCorrectiveSessionStateCompleted  DelegateRespondResponseCorrectiveSessionState = "completed"
 	DelegateRespondResponseCorrectiveSessionStateFailed     DelegateRespondResponseCorrectiveSessionState = "failed"
 	DelegateRespondResponseCorrectiveSessionStateNeedsInput DelegateRespondResponseCorrectiveSessionState = "needs_input"
-	DelegateRespondResponseCorrectiveSessionStatePaused     DelegateRespondResponseCorrectiveSessionState = "paused"
 	DelegateRespondResponseCorrectiveSessionStateQueued     DelegateRespondResponseCorrectiveSessionState = "queued"
 	DelegateRespondResponseCorrectiveSessionStateRunning    DelegateRespondResponseCorrectiveSessionState = "running"
-	DelegateRespondResponseCorrectiveSessionStateTimedOut   DelegateRespondResponseCorrectiveSessionState = "timed_out"
+	DelegateRespondResponseCorrectiveSessionStateStopped    DelegateRespondResponseCorrectiveSessionState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegateRespondResponseCorrectiveSessionState enum.
 func (e DelegateRespondResponseCorrectiveSessionState) Valid() bool {
 	switch e {
-	case DelegateRespondResponseCorrectiveSessionStateCancelled:
-		return true
 	case DelegateRespondResponseCorrectiveSessionStateCompleted:
 		return true
 	case DelegateRespondResponseCorrectiveSessionStateFailed:
 		return true
 	case DelegateRespondResponseCorrectiveSessionStateNeedsInput:
 		return true
-	case DelegateRespondResponseCorrectiveSessionStatePaused:
-		return true
 	case DelegateRespondResponseCorrectiveSessionStateQueued:
 		return true
 	case DelegateRespondResponseCorrectiveSessionStateRunning:
 		return true
-	case DelegateRespondResponseCorrectiveSessionStateTimedOut:
+	case DelegateRespondResponseCorrectiveSessionStateStopped:
 		return true
 	default:
 		return false
@@ -2968,34 +2956,28 @@ func (e DelegateRunActionGoalTerminalHistoryVerdictScope) Valid() bool {
 
 // Defines values for DelegateSessionResponseState.
 const (
-	DelegateSessionResponseStateCancelled  DelegateSessionResponseState = "cancelled"
 	DelegateSessionResponseStateCompleted  DelegateSessionResponseState = "completed"
 	DelegateSessionResponseStateFailed     DelegateSessionResponseState = "failed"
 	DelegateSessionResponseStateNeedsInput DelegateSessionResponseState = "needs_input"
-	DelegateSessionResponseStatePaused     DelegateSessionResponseState = "paused"
 	DelegateSessionResponseStateQueued     DelegateSessionResponseState = "queued"
 	DelegateSessionResponseStateRunning    DelegateSessionResponseState = "running"
-	DelegateSessionResponseStateTimedOut   DelegateSessionResponseState = "timed_out"
+	DelegateSessionResponseStateStopped    DelegateSessionResponseState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegateSessionResponseState enum.
 func (e DelegateSessionResponseState) Valid() bool {
 	switch e {
-	case DelegateSessionResponseStateCancelled:
-		return true
 	case DelegateSessionResponseStateCompleted:
 		return true
 	case DelegateSessionResponseStateFailed:
 		return true
 	case DelegateSessionResponseStateNeedsInput:
 		return true
-	case DelegateSessionResponseStatePaused:
-		return true
 	case DelegateSessionResponseStateQueued:
 		return true
 	case DelegateSessionResponseStateRunning:
 		return true
-	case DelegateSessionResponseStateTimedOut:
+	case DelegateSessionResponseStateStopped:
 		return true
 	default:
 		return false
@@ -3079,34 +3061,28 @@ func (e DelegateStatusResponseSessionOwnerScopeKind) Valid() bool {
 
 // Defines values for DelegateStatusResponseSessionState.
 const (
-	DelegateStatusResponseSessionStateCancelled  DelegateStatusResponseSessionState = "cancelled"
 	DelegateStatusResponseSessionStateCompleted  DelegateStatusResponseSessionState = "completed"
 	DelegateStatusResponseSessionStateFailed     DelegateStatusResponseSessionState = "failed"
 	DelegateStatusResponseSessionStateNeedsInput DelegateStatusResponseSessionState = "needs_input"
-	DelegateStatusResponseSessionStatePaused     DelegateStatusResponseSessionState = "paused"
 	DelegateStatusResponseSessionStateQueued     DelegateStatusResponseSessionState = "queued"
 	DelegateStatusResponseSessionStateRunning    DelegateStatusResponseSessionState = "running"
-	DelegateStatusResponseSessionStateTimedOut   DelegateStatusResponseSessionState = "timed_out"
+	DelegateStatusResponseSessionStateStopped    DelegateStatusResponseSessionState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegateStatusResponseSessionState enum.
 func (e DelegateStatusResponseSessionState) Valid() bool {
 	switch e {
-	case DelegateStatusResponseSessionStateCancelled:
-		return true
 	case DelegateStatusResponseSessionStateCompleted:
 		return true
 	case DelegateStatusResponseSessionStateFailed:
 		return true
 	case DelegateStatusResponseSessionStateNeedsInput:
 		return true
-	case DelegateStatusResponseSessionStatePaused:
-		return true
 	case DelegateStatusResponseSessionStateQueued:
 		return true
 	case DelegateStatusResponseSessionStateRunning:
 		return true
-	case DelegateStatusResponseSessionStateTimedOut:
+	case DelegateStatusResponseSessionStateStopped:
 		return true
 	default:
 		return false
@@ -5224,34 +5200,28 @@ func (e MessageSubagentStartType) Valid() bool {
 
 // Defines values for MessageSubagentStateState.
 const (
-	MessageSubagentStateStateCancelled  MessageSubagentStateState = "cancelled"
 	MessageSubagentStateStateCompleted  MessageSubagentStateState = "completed"
 	MessageSubagentStateStateFailed     MessageSubagentStateState = "failed"
 	MessageSubagentStateStateNeedsInput MessageSubagentStateState = "needs_input"
-	MessageSubagentStateStatePaused     MessageSubagentStateState = "paused"
 	MessageSubagentStateStateQueued     MessageSubagentStateState = "queued"
 	MessageSubagentStateStateRunning    MessageSubagentStateState = "running"
-	MessageSubagentStateStateTimedOut   MessageSubagentStateState = "timed_out"
+	MessageSubagentStateStateStopped    MessageSubagentStateState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the MessageSubagentStateState enum.
 func (e MessageSubagentStateState) Valid() bool {
 	switch e {
-	case MessageSubagentStateStateCancelled:
-		return true
 	case MessageSubagentStateStateCompleted:
 		return true
 	case MessageSubagentStateStateFailed:
 		return true
 	case MessageSubagentStateStateNeedsInput:
 		return true
-	case MessageSubagentStateStatePaused:
-		return true
 	case MessageSubagentStateStateQueued:
 		return true
 	case MessageSubagentStateStateRunning:
 		return true
-	case MessageSubagentStateStateTimedOut:
+	case MessageSubagentStateStateStopped:
 		return true
 	default:
 		return false
@@ -8755,34 +8725,28 @@ func (e SessionDetailMessagesSubagentStartType) Valid() bool {
 
 // Defines values for SessionDetailMessagesSubagentStateState.
 const (
-	SessionDetailMessagesSubagentStateStateCancelled  SessionDetailMessagesSubagentStateState = "cancelled"
 	SessionDetailMessagesSubagentStateStateCompleted  SessionDetailMessagesSubagentStateState = "completed"
 	SessionDetailMessagesSubagentStateStateFailed     SessionDetailMessagesSubagentStateState = "failed"
 	SessionDetailMessagesSubagentStateStateNeedsInput SessionDetailMessagesSubagentStateState = "needs_input"
-	SessionDetailMessagesSubagentStateStatePaused     SessionDetailMessagesSubagentStateState = "paused"
 	SessionDetailMessagesSubagentStateStateQueued     SessionDetailMessagesSubagentStateState = "queued"
 	SessionDetailMessagesSubagentStateStateRunning    SessionDetailMessagesSubagentStateState = "running"
-	SessionDetailMessagesSubagentStateStateTimedOut   SessionDetailMessagesSubagentStateState = "timed_out"
+	SessionDetailMessagesSubagentStateStateStopped    SessionDetailMessagesSubagentStateState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateState enum.
 func (e SessionDetailMessagesSubagentStateState) Valid() bool {
 	switch e {
-	case SessionDetailMessagesSubagentStateStateCancelled:
-		return true
 	case SessionDetailMessagesSubagentStateStateCompleted:
 		return true
 	case SessionDetailMessagesSubagentStateStateFailed:
 		return true
 	case SessionDetailMessagesSubagentStateStateNeedsInput:
 		return true
-	case SessionDetailMessagesSubagentStateStatePaused:
-		return true
 	case SessionDetailMessagesSubagentStateStateQueued:
 		return true
 	case SessionDetailMessagesSubagentStateStateRunning:
 		return true
-	case SessionDetailMessagesSubagentStateStateTimedOut:
+	case SessionDetailMessagesSubagentStateStateStopped:
 		return true
 	default:
 		return false
@@ -9133,34 +9097,28 @@ func (e SessionLifecycleRecordOwnerScopeKind) Valid() bool {
 
 // Defines values for SessionLifecycleRecordState.
 const (
-	SessionLifecycleRecordStateCancelled  SessionLifecycleRecordState = "cancelled"
 	SessionLifecycleRecordStateCompleted  SessionLifecycleRecordState = "completed"
 	SessionLifecycleRecordStateFailed     SessionLifecycleRecordState = "failed"
 	SessionLifecycleRecordStateNeedsInput SessionLifecycleRecordState = "needs_input"
-	SessionLifecycleRecordStatePaused     SessionLifecycleRecordState = "paused"
 	SessionLifecycleRecordStateQueued     SessionLifecycleRecordState = "queued"
 	SessionLifecycleRecordStateRunning    SessionLifecycleRecordState = "running"
-	SessionLifecycleRecordStateTimedOut   SessionLifecycleRecordState = "timed_out"
+	SessionLifecycleRecordStateStopped    SessionLifecycleRecordState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the SessionLifecycleRecordState enum.
 func (e SessionLifecycleRecordState) Valid() bool {
 	switch e {
-	case SessionLifecycleRecordStateCancelled:
-		return true
 	case SessionLifecycleRecordStateCompleted:
 		return true
 	case SessionLifecycleRecordStateFailed:
 		return true
 	case SessionLifecycleRecordStateNeedsInput:
 		return true
-	case SessionLifecycleRecordStatePaused:
-		return true
 	case SessionLifecycleRecordStateQueued:
 		return true
 	case SessionLifecycleRecordStateRunning:
 		return true
-	case SessionLifecycleRecordStateTimedOut:
+	case SessionLifecycleRecordStateStopped:
 		return true
 	default:
 		return false
@@ -15401,7 +15359,7 @@ type DelegateStatusResponse struct {
 		// SessionId Unique durable session identifier.
 		SessionId string `json:"session_id"`
 
-		// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+		// State The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 		State DelegateStatusResponseSessionState `json:"state"`
 
 		// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
@@ -15479,7 +15437,7 @@ type DelegateStatusResponseSessionOriginKind string
 // DelegateStatusResponseSessionOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type DelegateStatusResponseSessionOwnerScopeKind string
 
-// DelegateStatusResponseSessionState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+// DelegateStatusResponseSessionState The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type DelegateStatusResponseSessionState string
 
 // DelegateStatusResponseSessionSteeredByAuthorizationMode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
@@ -22090,7 +22048,7 @@ type SessionLifecycleRecord struct {
 	// SessionId Unique durable session identifier.
 	SessionId string `json:"session_id"`
 
-	// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+	// State The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 	State SessionLifecycleRecordState `json:"state"`
 
 	// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
@@ -22164,7 +22122,7 @@ type SessionLifecycleRecordOriginKind string
 // SessionLifecycleRecordOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type SessionLifecycleRecordOwnerScopeKind string
 
-// SessionLifecycleRecordState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+// SessionLifecycleRecordState The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type SessionLifecycleRecordState string
 
 // SessionLifecycleRecordSteeredByAuthorizationMode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.

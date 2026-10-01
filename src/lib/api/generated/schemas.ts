@@ -209,11 +209,9 @@ type Message = {
           | "queued"
           | "running"
           | "needs_input"
-          | "paused"
+          | "stopped"
           | "completed"
-          | "failed"
-          | "cancelled"
-          | "timed_out";
+          | "failed";
         steering_receipt?:
           | {
               correlation_id: string;
@@ -2782,11 +2780,9 @@ type SessionLifecycleRecord = {
     | "queued"
     | "running"
     | "needs_input"
-    | "paused"
+    | "stopped"
     | "completed"
-    | "failed"
-    | "cancelled"
-    | "timed_out";
+    | "failed";
   terminal: boolean;
   owner_scope_kind: "parent_session" | "plan" | "human";
   owner_scope_id?: string | undefined;
@@ -2876,11 +2872,9 @@ type DelegateSessionResponse = {
     | "queued"
     | "running"
     | "needs_input"
-    | "paused"
+    | "stopped"
     | "completed"
-    | "failed"
-    | "cancelled"
-    | "timed_out";
+    | "failed";
 };
 type MessageParentRequest =
   | MessageParentProgress
@@ -3336,11 +3330,9 @@ export const Message: z.ZodType<Message> = z.object({
         "queued",
         "running",
         "needs_input",
-        "paused",
+        "stopped",
         "completed",
         "failed",
-        "cancelled",
-        "timed_out",
       ]),
       steering_receipt: z
         .object({
@@ -6691,11 +6683,9 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
       "queued",
       "running",
       "needs_input",
-      "paused",
+      "stopped",
       "completed",
       "failed",
-      "cancelled",
-      "timed_out",
     ]),
     terminal: z.boolean(),
     owner_scope_kind: z.enum(["parent_session", "plan", "human"]),
@@ -6918,11 +6908,9 @@ export const DelegateSessionResponse: z.ZodType<DelegateSessionResponse> =
       "queued",
       "running",
       "needs_input",
-      "paused",
+      "stopped",
       "completed",
       "failed",
-      "cancelled",
-      "timed_out",
     ]),
   });
 export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
@@ -6965,11 +6953,9 @@ export const DelegatePeekResponse = z.object({
     "queued",
     "running",
     "needs_input",
-    "paused",
+    "stopped",
     "completed",
     "failed",
-    "cancelled",
-    "timed_out",
   ]),
   latest_checkpoint_summary: z.string().optional(),
   latest_progress_text: z.string().optional(),
@@ -15015,7 +15001,7 @@ export const SubagentStateFrame = z
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
-    state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
+    state: z.enum(["queued", "running", "needs_input", "stopped", "completed", "failed"]),
     steering_receipt: z
     .object({
       correlation_id: z.string(),

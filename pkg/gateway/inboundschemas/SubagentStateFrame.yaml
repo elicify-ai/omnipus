@@ -42,11 +42,9 @@ properties:
       - queued
       - running
       - needs_input
-      - paused
+      - stopped
       - completed
       - failed
-      - cancelled
-      - timed_out
     description: The child's current durable lifecycle state (SessionLifecycleRecord.state).
     example: "running"
   steering_receipt:

@@ -52,18 +52,18 @@ properties:
       - queued
       - running
       - needs_input
-      - paused
+      - stopped
       - completed
       - failed
-      - cancelled
-      - timed_out
     description: >
-      The durable 8-state lifecycle (S2, the S4 interlock state machine's
-      authority). `paused` covers BOTH cooperative cancel-soft grace AND
-      a plan-owner session idling while its plan is durably
+      The durable 6-state lifecycle (S2, the S4 interlock state machine's
+      authority). `stopped` replaces the former `cancelled`/`timed_out`/
+      `paused` states as one non-terminal state (session alive,
+      continuable) — it covers cancellation, timeout, AND a plan-owner
+      session idling while its plan is durably
       `plan_phase=awaiting_supervision` (that condition itself lives
-      on the Plan record, not as a 9th state here — see `Plan.plan_phase`
-      and R§8.10's lifecycle-to-pill crosswalk).
+      on the Plan record, not as a separate state here — see
+      `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
     example: "running"
   terminal:
     type: boolean

@@ -340,7 +340,7 @@ export const SubagentStateFrame = z
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
-    state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
+    state: z.enum(["queued", "running", "needs_input", "stopped", "completed", "failed"]),
     steering_receipt: z
     .object({
       correlation_id: z.string(),

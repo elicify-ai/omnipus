@@ -353,7 +353,7 @@ export interface SubagentStateFrame {
   session_id: string;
   child_session_id?: string;
   span_id: string;
-  state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+  state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
   steering_receipt?: {
     correlation_id: string;
     applied_at: string;

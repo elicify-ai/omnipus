@@ -15370,11 +15370,11 @@ export interface components {
              */
             resumed_from?: string | null;
             /**
-             * @description The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+             * @description The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
             /**
              * @description Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
              * @example false
@@ -16030,7 +16030,7 @@ export interface components {
              * @example queued
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
         };
         /**
          * DelegateStatusResponse
@@ -16108,7 +16108,7 @@ export interface components {
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
             /**
              * @description The most recent checkpoint summary, if any.
              * @example Wrote the write-set-scoped diff extractor; tests pending.
@@ -16392,7 +16392,7 @@ export interface components {
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
             /** @description Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3). */
             steering_receipt?: {
                 /**
