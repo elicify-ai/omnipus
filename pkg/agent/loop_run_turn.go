@@ -48,6 +48,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 			// Genuine failure: tool-iteration ceiling hit without a final response.
 			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
 			rz.rc.rx.finalContent = toolLimitResponse
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
 			rz.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
 		} else {
 			// The engine fell through without an LLM response and uses the
