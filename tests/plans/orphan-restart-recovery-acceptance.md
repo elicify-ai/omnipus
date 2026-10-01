@@ -77,8 +77,42 @@ These are planned breakage predictions, **not mutation receipts**. This RED auth
 | Exact dynamic pinned prompt and recall-hint whitespace | Outside recovery behavior; mark schema fields/address and retained structure are asserted, not producer-dependent encoding order |
 | Identical valid markers for one already-bound incomplete group | Ruling permits multiple records for a parallel group but does not declare duplicate valid marker multiplicity invalid; duplicate records cannot authorize removal of a complete or structurally invalid group |
 
-Production files, documentation and the implementer's worktree are untouched. Matching behavior documentation belongs to the implementing lead; the architect named `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-orphan-acceptance-tests/docs/memory.md` as the documentation TODO.
+This RED author changed no production files, user-facing documentation or files in the implementer's worktree. Matching behavior documentation belongs to the implementing lead; the architect named `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/cw-orphan-acceptance-tests/docs/memory.md` as the documentation TODO. After the RED receipt was finalized, the squad lead separately combined the production fix into this branch; that combine is not a production edit or GREEN certification by this author.
 
 ## Execution record
 
-Pending RED receipt. Tests will run against the unfixed `380af72061a3b0c798f1a58b1fe9c71d71cf1228` production tree, with the test-only pack added. Named failure output, raw command exit code and collected leaf-case count will be reported; negative controls already passing on pre-change code will be distinguished from observed RED. GREEN, mutation, full-suite and reachability certification remain unverified/deferred to CHECK and CI.
+**RED executed, not GREEN-certified.** The single narrow tagged run used tests-only commit `0966af8d3bba3d3d2cce14f26c9a622098f29309` on unfixed production baseline `380af72061a3b0c798f1a58b1fe9c71d71cf1228`. The raw Go exit was **1**, with **76/76 executable leaf cases collected: 26 FAIL, 50 PASS, zero skipped**. The failure log contains behavioral expected-versus-actual failures, not a missing-symbol or collection failure. Passing baseline controls have not been described as observed RED or mutation-proven.
+
+| Group | Executable leaves | FAIL | PASS |
+|---|---:|---:|---:|
+| Rebuild/reload/later turn/forced trim | 5 | 5 | 0 |
+| Mapping/projection/cursor-anchor boundaries | 13 | 7 | 6 |
+| Parallel cancellation/reused IDs/idempotency | 6 | 6 | 0 |
+| Unsupported markers/binding boundaries/invalid structure | 43 | 3 | 40 |
+| Completed/unbound/parsed-JSON controls | 9 | 5 | 4 |
+| Total | 76 | 26 | 50 |
+
+| Receipt | Immutable evidence |
+|---|---|
+| Exact command, environment, frozen tree and original file hashes | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-acceptance-red-20261001/red-manifest.json` |
+| Named failures and expected-versus-actual output | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-acceptance-red-20261001/red.log` |
+| Direct exit code and all 76 named leaf results | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cw-orphan-acceptance-red-20261001/red-receipt.json` |
+| Raw log SHA256 | `6d2ebb366827a90a62186269215fc61b2de29de3fe406993c8b35b9907b5c8a3` |
+
+The raw receipt was finalized at **2026-10-01T15:44:33.984Z**. The branch reflog records the separate squad-lead combine `d8a5f6def01252b18a2b253ef20102986f0dd32f` at **2026-10-01T15:45:29Z**, after that receipt. The dispatcher confirmed that combine was deliberate. All seven test-source hashes still match the frozen RED manifest; this later plan-only execution update does not change the tested source. No extra RED, GREEN or mutation test process was launched by this author.
+
+### Unresolved assertions — retained, not worked around
+
+| Case | Observed RED and consequence | Disposition |
+|---|---|---|
+| N1 `wrong_role_tool` and N3 `empty_result_ID_in_group` | Raw malformed-ID tool messages remain visible, but mapping returns -1; exact-address assertions abort before their later provider-rejection/zero-send checks | Keep exact original-address expectations and report the two unexecuted dependent checks. Dispatcher/architect adjudicates the malformed-address contract; no assertion is loosened. |
+| Both N4 completed-group variants | Validation succeeds, one actual HTTP request is recorded and the fixture response is returned; the final assertion expects trailing systems in `received[1:]` | Existing send-time normalization composes system contents into the first system message. The log does not print `received[0]`; exact sent system retention was not verified. This is a boundary/oracle question, not established recovery data loss. Hold the assertion unchanged pending the architect's ruling. |
+| M2 projection details | The pre-fix run fails exact archive mapping before dependent recall-mark field assertions | Those later field assertions were not executed in the RED run; GREEN and mutation evidence must establish them. |
+
+The dispatcher has routed the N4 boundary question for an architect ruling. No outcome is presumed. A possible strengthening for malformed-ID negatives is to run their existing exact rejection/zero-send checks before the exact mapping assertion; this has **not** been performed and would retain every assertion.
+
+Step 4 item 2 (GREEN), item 3 (mutations), and the Proof-of-failability checklist remain **deferred to a fresh CHECK instance**. Full-suite/race/platform results belong to CI. The unchanged `TestRecoverOrphan_Wired_In_SessionLoadPath` remains an additional integration requirement, not a result certified by this pack's author.
+
+Code correct and tested: **not certified — this is RED evidence with unresolved assertion boundaries, not a CHECK verdict.**
+
+Reachable by a user or agent: **not certified in this test-only dispatch.**
