@@ -1058,7 +1058,7 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 		}
 	}
 
-	if err := rq.checkpointRequest(); err != nil {
+	if err := rq.checkpointRequest(false); err != nil {
 		rq.ri.turnStatus = TurnEndStatusError
 		rq.ret0 = turnResult{status: TurnEndStatusError}
 		rq.ret1 = err
