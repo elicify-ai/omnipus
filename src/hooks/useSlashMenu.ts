@@ -26,8 +26,9 @@
 //
 // The `/cancel` client command needs to drive the Stop button's visual
 // state, which is owned by the sibling `useCancelState` hook — the caller
-// wires that hook's `cancelIfStreaming` in as a parameter rather than this
-// hook reaching across to import it, keeping the two hooks independently
+// wires that hook's cancel function (since ADR-20260928 D9, the
+// self-confirming tree cancel) in as a parameter rather than this hook
+// reaching across to import it, keeping the two hooks independently
 // testable.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -77,7 +78,16 @@ export interface UseSlashMenuParams {
   composerRuntime: ComposerRuntime
   appendMessage: (message: ChatMessage) => void
   startNewSession: () => void
-  /** `/cancel` delegates here — see useCancelState.cancelIfStreaming's doc comment for why this variant (not the unconditional one) is correct for a client command. */
+  /**
+   * `/cancel` delegates here. ADR-20260928 D9: `/cancel` is ITSELF the
+   * Stop-all confirmation — the caller wires the self-confirming tree
+   * cancel (`useCancelState`'s `cancelAllTreeScoped`, one invocation → one
+   * `scope: "tree"` frame) into this parameter. The historical name comes
+   * from when `/cancel` shared the local Escape handler's
+   * single-session variant; the semantics changed with the stop-all
+   * scoping, the stable name keeps the hook's callers (and its test
+   * constructors) unchanged.
+   */
   cancelIfStreaming: () => void
 }
 
@@ -764,9 +774,12 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     }
 
     if (name === 'cancel') {
-      // FR-3a: /cancel uses the same cancelIfStreaming() as the local
-      // Escape handler — only morph the button to "Stopping..." if the turn
-      // is actively streaming.
+      // ADR-20260928 D9: /cancel is itself the Stop-all confirmation — one
+      // invocation sends exactly one scope:"tree" cancel frame (the server
+      // stops this session and its descendants, never up or sideways). No
+      // confirmation window, no second activation. The caller wires the
+      // tree-scoped cancel into this (historically named) parameter — see
+      // UseSlashMenuParams.cancelIfStreaming.
       cancelIfStreaming()
       return true
     }
@@ -904,9 +917,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   //
   // Deliberately NOT wrapped in useCallback: it (transitively, via
   // runClientCommand) closes over appendMessage/startNewSession/
-  // cancelIfStreaming, none of which are guaranteed referentially stable
-  // across renders (cancelIfStreaming in particular gets a new identity
-  // whenever isStreaming toggles — see useCancelState). None of this hook's
+  // cancelAllTreeScoped, none of which are guaranteed referentially stable
+  // across renders (cancelAllTreeScoped's dependencies rebind whenever
+  // isStreaming toggles — see useCancelState). None of this hook's
   // returned functions are consumed by a memoized child or an effect
   // dependency list, so there is no performance case for memoizing them —
   // only a staleness risk from an incomplete dependency array. A plain

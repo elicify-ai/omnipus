@@ -73,6 +73,18 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // listing, and parent_session_id-filtered listing); zero for a session
   // with no children. Not necessarily present on GET /sessions/{id} detail.
   child_count?: number
+  // ADR-20260928 MAJ-009/T26 — exact helper-state display, passed through
+  // verbatim from the wire Session schema (the 5-value display projection:
+  // the server collapses queued/running→working, needs_input→
+  // waiting_for_answer, completed→done). Absent for a session with no
+  // lifecycle record — the sidebar renders no lifecycle label at all for it.
+  // Coarse `status` above NEVER drives this display (a stopped helper has
+  // status 'active', lifecycle_state 'stopped').
+  lifecycle_state?: WireSessionShape['lifecycle_state']
+  // ADR-20260928 MAJ-009 — the durable, lasting stop reason, present only
+  // when lifecycle_state is 'stopped'. The stopped sidebar row shows its
+  // cause alongside the Stopped label.
+  stop_note?: WireSessionShape['stop_note']
 }
 
 interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
@@ -91,6 +103,9 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   protected?: boolean
   parent_session_id?: string
   child_count?: number
+  // ADR-20260928 MAJ-009 — wire pass-through (see public Session above).
+  lifecycle_state?: WireSessionShape['lifecycle_state']
+  stop_note?: WireSessionShape['stop_note']
   stats?: {
     tokens_in: number
     tokens_out: number
@@ -131,6 +146,10 @@ function rawToSession(raw: RawSession): Session {
     // and "explicitly zero" (list endpoint) stay distinguishable.
     parent_session_id: raw.parent_session_id,
     child_count: raw.child_count,
+    // ADR-20260928 MAJ-009/T26: verbatim wire pass-through — absent stays
+    // absent (a session with no lifecycle record shows no lifecycle label).
+    lifecycle_state: raw.lifecycle_state,
+    stop_note: raw.stop_note,
   }
 }
 

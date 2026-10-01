@@ -12,6 +12,7 @@ import { useSessionStore } from '@/store/session'
 // call, which references every REST schema and defeats tree-shaking
 // (bundle-budget incident, PR #860).
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/ws-schemas'
+import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
@@ -784,7 +785,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       return true
     },
 
-    cancelStream: (sessionId) => {
+    cancelStream: (sessionId, scope) => {
       const { connection } = useConnectionStore.getState()
       const { activeSessionId } = useSessionStore.getState()
       const targetSid = sessionId ?? activeSessionId
@@ -830,11 +831,25 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         return
       }
 
-      if (targetIsStreaming) {
-        // Only send the cancel frame to the server if the turn is still active.
-        // Sending cancel for a completed turn is a no-op on the server but wastes
-        // a round-trip and may confuse the audit log.
-        const sent = connection.send({ type: 'cancel', session_id: targetSid })
+      // ADR-20260928 D9: a CONFIRMED tree stop sends even when this
+      // session's own turn already ended locally (the first activation
+      // marked it interrupted): the confirmation targets the whole tree,
+      // whose descendants may still be running. Session-scoped cancels keep
+      // the completed-turn no-op gate exactly as before — sending cancel for
+      // a completed turn is a no-op on the server but wastes a round-trip
+      // and may confuse the audit log.
+      if (targetIsStreaming || scope === 'tree') {
+        // ADR-20260928 MAJ-002: `scope` rides the generated CancelFrame
+        // verbatim. Omitted (every pre-existing call path) goes out WITHOUT
+        // the key — the wire default is `session`, a single-session stop the
+        // server must never cascade — and keeps the frame byte-identical to
+        // the pre-stop-all shape. Only the confirmed tree stop passes
+        // 'tree' (server dispatches on scope before cancelSteeredSubtree;
+        // never up or sideways — ADR D7).
+        const cancelFrame: CancelFrame = scope
+          ? { type: 'cancel', session_id: targetSid, scope }
+          : { type: 'cancel', session_id: targetSid }
+        const sent = connection.send(cancelFrame)
         if (!sent) {
           console.warn('[chat] cancelStream: send failed — connection may be closed')
           logDiagnostic('chatCancelStreamSendFailed', { sessionId: targetSid })
