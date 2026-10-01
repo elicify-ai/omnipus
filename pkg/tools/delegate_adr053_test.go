@@ -937,6 +937,12 @@ func TestDelegateTool_Respond_3P_OriginalNotLeftRunning(t *testing.T) {
 	if orig.State != session.LifecycleStopped {
 		t.Errorf("original state = %q, want %q (superseded by corrective re-dispatch)", orig.State, session.LifecycleStopped)
 	}
+	// ADR Vocabulary line 133: Stopped is explicitly non-terminal, so the correct
+	// assertion is the inverse of the old (now-contradictory) Terminal()==true
+	// check — proving the record is resumable, not proving it is terminal.
+	if orig.Terminal() {
+		t.Errorf("orig = %+v, want non-terminal (stopped is no longer a terminal state)", orig)
+	}
 	if orig.FailedReason == "" {
 		t.Error("expected a non-empty FailedReason recording the supersession")
 	}
