@@ -642,6 +642,15 @@ func handleConfigReload(
 	defer reloadCancel()
 
 	reloadErr := al.ReloadProviderAndConfig(reloadCtx, newProvider, newCfg)
+	if reloadErr == nil && runningServices != nil && runningServices.restAPIRef != nil {
+		// Invalidate held checks before releasing the same config-write lock
+		// admission takes. A later service-restart failure does not undo the swap.
+		for _, def := range config.SearchProviderCatalogue {
+			if def.Keyed {
+				runningServices.restAPIRef.searchChecks.bumpGeneration(def.ID)
+			}
+		}
+	}
 	// The swap is done (or failed): config writers may proceed.
 	unlockWrites()
 	if reloadErr != nil {

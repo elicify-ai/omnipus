@@ -238,6 +238,7 @@ type searchRequest struct {
 	includeDomains []string
 	excludeDomains []string
 	namedID        string // provider arg, "" = not named
+	metadataOnly   bool   // Do not request images or raw page content for diagnostics.
 }
 
 // ExaSearchProvider calls the Exa search API (ADR-096 D2/AC-1).
@@ -1344,6 +1345,10 @@ func (p *TavilySearchProvider) searchCaps(ctx context.Context, req searchRequest
 			"search_depth":   depth,
 			"include_answer": false,
 			"max_results":    req.count,
+		}
+		if req.metadataOnly {
+			payload["include_images"] = false
+			payload["include_raw_content"] = false
 		}
 		if timeRange := mapTavilyTimeRange(req.rangeFilter); timeRange != "" {
 			payload["time_range"] = timeRange

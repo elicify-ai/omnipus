@@ -53,7 +53,10 @@ General settings for fetching and processing webpage content.
 |---------------|--------|---------|------------------------------------------------------------|
 | `enabled`     | bool   | false   | Enable Brave search                                        |
 | `api_key_ref` | string | -       | Env-var name of the Brave Search credential (see below)    |
+| `base_url`    | string | empty   | Optional API URL. Empty uses `https://api.search.brave.com/res/v1/web/search`. |
 | `max_results` | int    | 5       | Maximum number of results                                  |
+
+Brave and Perplexity accept an optional `base_url` in their `tools.web` configuration section. Leave it empty to use the official endpoint. Ordinary searches and manual connection checks use the same configured endpoint and the same client setup for proxy and private-address protection. Each check creates a fresh HTTP client and does not follow redirects. When `sandbox.ssrf.enabled` is on, the shared protection against private/internal addresses still applies, including its configured exceptions. Use only a trusted API endpoint: Omnipus sends the provider's key there. Environment overrides are `OMNIPUS_TOOLS_WEB_BRAVE_BASE_URL` and `OMNIPUS_TOOLS_WEB_PERPLEXITY_BASE_URL`.
 
 ### DuckDuckGo
 
@@ -93,6 +96,7 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 |---------------|--------|---------|----------------------------------------------------------|
 | `enabled`     | bool   | false   | Enable Perplexity search                                 |
 | `api_key_ref` | string | -       | Env-var name of the Perplexity credential                |
+| `base_url`    | string | empty   | Optional API URL. Empty uses `https://api.perplexity.ai/chat/completions`. |
 | `max_results` | int    | 5       | Maximum number of results                                |
 
 ### Tavily
@@ -134,6 +138,12 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 Omnipus tries one search provider first (the default) and, if that call fails, can try a second (the fallback). In **Settings** → **Integrations**, use **Change** on the **Default search** or **Fallback** card to choose a service; **Fallback** also offers **None**. These choices are stored as `tools.web.default_provider` and `tools.web.fallback_provider` in `config.json`.
 
 Saving a web-search API key in **Settings** → **Integrations** sets that provider's `enabled: true`.
+
+Removing a saved search key deletes its encrypted entry, clears the service's credential reference and loaded environment value, and switches that service off. Your default and fallback choices are retained; removal does not choose a replacement or revoke the key at the provider. A shared key, a custom credential reference, or undecided search roles blocks removal without changing the saved configuration. Removal requires the same password confirmation as saving in local mode. If a later deletion, reload or audit step fails, the operation reports the persisted change instead of claiming success.
+
+A manual connection check makes one potentially chargeable search for `Omnipus` through the addressed service, using its saved key and a minimal result request. It never falls back, rotates keys or retries. The total request deadline is at most 15 seconds, including waits for configuration locks; a shorter provider-client timeout still applies. A disconnected client cancels the check. A check cancelled or timed out before admission makes no search and consumes no server cooldown. Each service admits only one check at a time and one new check every 30 seconds, including admitted attempts that fail. Checks require a saved key and a usable, switched-on service. Results are temporary diagnostics, not saved health or changes to the service's readiness, roles or enabled setting.
+
+The server refuses key removal and connection checks while `gateway.dev_mode_bypass` is active. Disable development authentication bypass and sign in before retrying. Ordinary key saves retain their existing confirmation requirements.
 
 ### `search_web` tool parameters
 

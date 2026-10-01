@@ -48,6 +48,7 @@ Delegation is one agent handing work to another: passing a research question to 
 
 1. Open the workspace's **Team** tab. Each agent on the team appears as a node in a picture.
 2. To grow the team, click **Add agent** and pick from your agents. Membership saves on its own; the indicator in the header shows when it has saved.
+   If you added the agent in another tab or window, the agent picker and the `@` menu in a chat pick up the change when you return to that chat's tab. You do not need to reload the page.
 3. To trust one agent to delegate to another, drag from the small gold dot on the first agent's node onto the second node. A line appears between them. That line is the trust.
 4. Click the line to tune it with the settings in the table below.
 5. To take trust away, delete the line. Removing an agent from the team removes every line touching it.

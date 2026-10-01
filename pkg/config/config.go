@@ -1571,6 +1571,7 @@ type BraveConfig struct {
 	// At runtime the system resolves the reference, decrypts the value, and injects it
 	// via the process environment (SEC-22). Raw values must never appear in config files.
 	APIKeyRef  string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_BRAVE_API_KEY_REF"`
+	BaseURL    string `json:"base_url" yaml:"-" env:"OMNIPUS_TOOLS_WEB_BRAVE_BASE_URL"` // Empty uses the official endpoint.
 	MaxResults int    `json:"max_results"           yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_BRAVE_MAX_RESULTS"`
 }
 
@@ -1601,6 +1602,7 @@ type PerplexityConfig struct {
 	// At runtime the system resolves the reference, decrypts the value, and injects it
 	// via the process environment (SEC-22). Raw values must never appear in config files.
 	APIKeyRef string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_API_KEY_REF"`
+	BaseURL   string `json:"base_url" yaml:"-" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_BASE_URL"` // Empty uses the official endpoint.
 	// SearchContextSize is the operator's Perplexity search-context-size
 	// default (ADR-096 D12: low | medium | high). Shipped default is
 	// ABSENT — the field is not sent today, and the roles migration is

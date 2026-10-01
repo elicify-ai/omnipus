@@ -16,8 +16,9 @@
 // stay in AgentPicker, which is the sole side-effect writer to the session
 // store on mount — a second writer here would race it.
 
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { queryClient } from '@/lib/queryClient'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchAgents, fetchWorkspaces, isWorker, workspacesQueryKeys } from '@/lib/api'
 import type { Agent, Workspace } from '@/lib/api'
@@ -61,7 +62,7 @@ export interface UseChatAgentsResult {
 }
 
 export function useChatAgents(): UseChatAgentsResult {
-  const { data: agents = EMPTY_AGENTS, isError, refetch } = useQuery({
+  const { data: agents = EMPTY_AGENTS, dataUpdatedAt: agentsUpdatedAt, isError, refetch } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
   })
@@ -77,6 +78,17 @@ export function useChatAgents(): UseChatAgentsResult {
   })
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId)
   const teamIds = activeWorkspace?.core_team
+
+  // Focus recovery and agent_created both refresh ['agents'], but team
+  // membership can change separately. Refresh the workspace query too, even
+  // when structural sharing preserves the same agents array after a refetch.
+  useEffect(() => {
+    if (activeWorkspaceId && agentsUpdatedAt > 0) {
+      void queryClient.invalidateQueries({
+        queryKey: workspacesQueryKeys.list({ status: 'active' }),
+      })
+    }
+  }, [activeWorkspaceId, agentsUpdatedAt])
 
   // Fix 10: memoize the filter chain. This hook is shared (AgentPicker AND
   // the "@" mention menu both call it), and consumers put `chatAgents` in

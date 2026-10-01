@@ -1008,20 +1008,15 @@ describe('chat store — M4 workspace→turn binding (metadata.workspace_id)', (
   })
 })
 
-// ── #253: recovery error-bubble tests ────────────────────────────────────────
-// Traces to: sprint-258 review finding #253 — failed send must preserve typed
-// content as a retriable error bubble, not silently drop the message.
+// ── #253: no-session send preservation ───────────────────────────────────────
+// Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
+// C2 ruling: uncertain delivery keeps the text and same-ID Retry, not an error bubble.
 
-describe('chat store — #253 no-session send failure creates retriable error bubble', () => {
-  it('when activeSessionId is null and send() fails, user message gets status:error (not dropped)', () => {
-    // BDD:
-    //   Given no active session (activeSessionId = null)
-    //   And the WS send() returns false (connection dropped mid-send)
-    //   When sendMessage('Hello') is called
-    //   Then a user message with content 'Hello' and status 'error' is present in the store
-    //   And isStreaming is false (no phantom spinner)
-    //   And a Retry affordance is reachable (the message is in the store with status:'error')
-    const mockSend = vi.fn().mockReturnValue(false) // send fails
+describe('chat store — #253 no-session send failure preserves a retriable unconfirmed message', () => {
+  it('when send() fails, keeps exact text with done/unconfirmed and retries the original identity', () => {
+    const content = 'Hello no-session'
+    const clientMessageId = '253-no-session-client'
+    const mockSend = vi.fn<WsConnection['send']>().mockReturnValue(false)
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
@@ -1029,32 +1024,34 @@ describe('chat store — #253 no-session send failure creates retriable error bu
         isConnected: true,
         connectionError: null,
       })
-      // No active session — null triggers the no-session path
-      useSessionStore.setState({
-        activeSessionId: null,
-        activeAgentId: 'general-assistant',
-      })
-      useChatStore.getState().sendMessage('Hello no-session')
+      useSessionStore.setState({ activeSessionId: null, activeAgentId: 'general-assistant' })
+      useChatStore.getState().sendMessage(content, { clientMessageId })
     })
 
-    // After the failed send, the user message must be preserved with status:'error'
     const state = useChatStore.getState()
+    expect(mockSend.mock.calls, 'C2: the original send was attempted exactly once').toHaveLength(1)
+    const originalFrame = structuredClone(mockSend.mock.calls[0][0])
+    expect(originalFrame, 'C2: retain the requested text and wire identity').toMatchObject({
+      type: 'message', content, client_message_id: clientMessageId, agent_id: 'general-assistant',
+    })
+    expect(originalFrame, 'C2: first send has no confirmed session').not.toHaveProperty('session_id')
+    expect(state.messages.filter((m) => m.role === 'user')
+      .map(({ id, clientMessageId: wireId, content: text, status, firstSendStatus }) =>
+        ({ id, wireId, text, status, firstSendStatus })), 'C2: exact retained bubble, not confirmed non-delivery')
+      .toStrictEqual([{ id: clientMessageId, wireId: clientMessageId, text: content, status: 'done', firstSendStatus: 'unconfirmed' }])
+    expect(state.isStreaming, 'C2: no phantom spinner after uncertainty').toBe(false)
+    expect(state.pendingFirstSend?.clientMessageId, 'C2: recovery keeps the original ID').toBe(clientMessageId)
+    expect(state.pendingFirstSend?.payload, 'C2: recovery retains the complete original request').toStrictEqual(originalFrame)
+    expect(state.pendingFirstSend?.status, 'C2: uncertainty permits Retry').toBe('unconfirmed')
 
-    // The message must be in SOME bucket (either the pending one or the active one)
-    // Check the global messages selector which reflects the active session.
-    // The pending bucket is activated via setActiveSession('__pending', ...)
-    const userMsg = state.messages.find((m) => m.role === 'user' && m.content === 'Hello no-session')
-    expect(userMsg).toBeDefined()
-    expect(userMsg?.status).toBe('error')
-
-    // isStreaming must be false — no phantom spinner
-    expect(state.isStreaming).toBe(false)
-
-    // The Retry affordance: VirtualUserMessageRow renders UserMessageRetryButton
-    // when message.status === 'error'. Assert the store state that drives it:
-    // the user message with status:'error' IS reachable in the messages array.
-    const errorMessages = state.messages.filter((m) => m.role === 'user' && m.status === 'error')
-    expect(errorMessages.length).toBeGreaterThan(0)
+    // Exercise the real action used by the user-message Retry button.
+    mockSend.mockReturnValue(true)
+    act(() => useChatStore.getState().resendMessage(clientMessageId))
+    expect(mockSend.mock.calls.map(([frame]) => frame), 'C2: usable Retry sends the identical request once')
+      .toStrictEqual([originalFrame, originalFrame])
+    expect(useChatStore.getState().pendingFirstSend?.status, 'C2: explicit Retry starts a delivery check').toBe('retrying')
+    expect(useChatStore.getState().messages.filter((m) => m.role === 'user').map(({ id, content: text }) => ({ id, text })),
+      'C2: Retry must not duplicate or replace the original text').toStrictEqual([{ id: clientMessageId, text: content }])
   })
 
   it('when activeSessionId is null and send() succeeds, user message is rendered optimistically', () => {

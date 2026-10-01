@@ -110,8 +110,9 @@ func (wh *wsHandlerHandleAttachSession) resolveSession() bool {
 	wh.store = wh.h.resolveSessionStore(wh.attachID)
 	if wh.store == nil {
 		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:    string(generated.WsFrameTypeError),
-			Message: "session not found",
+			Type:      string(generated.WsFrameTypeError),
+			SessionId: &wh.attachID,
+			Message:   "session not found",
 		})
 		return false
 	}

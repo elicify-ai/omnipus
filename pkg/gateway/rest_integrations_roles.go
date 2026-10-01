@@ -338,13 +338,26 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 	}
 
 	var body gen.IntegrationProviderUpdateRequest
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "IntegrationProviderUpdateRequest", &body, validateEnabled) {
+	// Credential changes always enforce the closed contract, even when the
+	// optional general inbound validator is disabled.
+	if !decodeAndValidate(w, r, "IntegrationProviderUpdateRequest", &body, true) {
 		return
 	}
 	if string(body.Kind) != def.kind {
 		jsonErr(w, http.StatusBadRequest,
 			fmt.Sprintf("provider %q is a %q integration, not %q", id, def.kind, body.Kind))
+		return
+	}
+
+	if body.ClearApiKey != nil && *body.ClearApiKey {
+		// Removal adds the existing bypass guard before consuming consent;
+		// ordinary saves retain their current consent-only behaviour.
+		a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
+			if !a.requireReAuth(w, r, user.Username) {
+				return
+			}
+			a.handleSearchKeyRemoval(w, r, def, body)
+		})(w, r)
 		return
 	}
 
@@ -408,28 +421,8 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 // finishIntegrationProviderUpdate stores the credential, persists and audits the
 // role write, reloads it, then reports the post-reload role state.
 func (a *restAPI) finishIntegrationProviderUpdate(w http.ResponseWriter, r *http.Request, def integrationDef, id, apiKey string, write integrationRoleWrite) {
-	// Store the key (if supplied) in the encrypted credential store BEFORE
-	// writing the ref to config.json (SEC-23: no plaintext fallback).
 	write.keySet = apiKey != ""
-	if write.keySet {
-		if def.credRef == "" {
-			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("%s does not accept an API key", def.displayName))
-			return
-		}
-		if _, err := a.storeCredential(def.credRef, apiKey); err != nil {
-			slog.Error("integrations: credential store failed", "provider", def.id, "error", err)
-			jsonErr(w, http.StatusServiceUnavailable,
-				"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets")
-			return
-		}
-	}
-
-	// Persist the role/key writes through the raw-map patch.
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		return applyIntegrationRoles(m, def, write)
-	}); err != nil {
-		slog.Error("integrations: config update failed", "provider", def.id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to save integration config")
+	if !a.persistIntegrationProviderUpdate(w, def, apiKey, write) {
 		return
 	}
 
@@ -557,10 +550,12 @@ func (a *restAPI) validateSearchIntegrationRoleWrite(w http.ResponseWriter, id s
 			return true
 		}
 		if _, present := state.web["fallback_provider"]; !present {
-			ddgUsable := false
-			if fresh, err := config.LoadConfig(a.configPath()); err == nil {
-				ddgUsable = fresh.Tools.Web.UsableSearchProvider(config.SearchProviderDuckDuckGo)
+			fresh, err := config.LoadConfig(a.configPath())
+			if err != nil {
+				jsonErr(w, http.StatusInternalServerError, "could not read the current configuration")
+				return true
 			}
+			ddgUsable := fresh.Tools.Web.UsableSearchProvider(config.SearchProviderDuckDuckGo)
 			if id != config.SearchProviderDuckDuckGo && ddgUsable {
 				write.materializeFallback = true
 			}

@@ -82,6 +82,8 @@ type restAPI struct {
 	// cache TTL rather than one per HTTP call. Zero value is ready; see
 	// copilotProbeGuard (rest_signin_copilot.go).
 	copilotProbe copilotProbeGuard
+	// searchChecks bounds manual diagnostic requests per static search service.
+	searchChecks searchCheckAdmission
 	homePath     string // ~/.omnipus — root of the data directory
 	// mailBudget is the restAPI's handle on the shared A8 mail-operation
 	// budget (spec §2.3/A8): the four dialing Mail panel GETs gate their

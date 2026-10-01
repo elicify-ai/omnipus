@@ -1342,7 +1342,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// restAPI.triggerReloadAndWait, so a delete_agent tool call blocks for
 		// exactly as long as REST's DELETE /api/v1/agents/{id} does before
 		// either call reports success.
-		WaitForReloadFunc: func() error { return waitForReload(rc.agentLoop) },
+		WaitForReloadFunc: func() error { return waitForReload(rc.agentLoop, rc.runningServices.reloadOutcome) },
 		// WaitForPendingReloadFunc (agent-picker-freshness fix, #1009): the
 		// wait-only IsReloadPending poll for the create/update publish path
 		// (publishAgentActivation). NEVER calls TriggerReload / reloadTrigger

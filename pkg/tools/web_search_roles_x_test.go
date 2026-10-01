@@ -175,6 +175,8 @@ func TestLegacy_PathUnchanged_WhenRolesNil(t *testing.T) {
 	dead := deadServerURL(t)
 	f2 := newRolesSearchFixture(t, nil, func(o *WebSearchToolOptions) {
 		o.Roles = nil
+		o.PerplexityEnabled = false
+		o.BraveEnabled = false
 		o.TavilyBaseURL = dead
 	})
 	res := f2.run(map[string]any{"query": "golang"})

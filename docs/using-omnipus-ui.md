@@ -74,6 +74,30 @@ While a turn is running, the message box stays yours:
 | **Stop** or **Escape** | Asks the agent to halt. The button shows a stopping state, then the turn ends as cancelled. |
 | Activity pill | Below the message box: shows running background work. Select it to open the Activity panel with running and finished items, including any that failed. |
 
+### If the first message loses its connection
+
+Your first message is kept in the open tab while Omnipus checks delivery. If loading a saved chat's history fails, the message list may temporarily show **Could not load messages.** instead; select that screen's **Retry** to reload the history. Reconnecting does not resend the message automatically. **Retry** is available only while connected; delivery Retry uses the original message and delivery ID, not the current agent, model, attachment or Auto-approve choices.
+
+| Message status | What it means and what you can do |
+|---|---|
+| **Sending…** | Waiting for confirmation that the first message was saved. |
+| **Delivery not confirmed · Retry** | Omnipus cannot yet confirm whether the message was saved. This can follow a lost connection or acknowledgement, an uncertain save, or an older gateway's acknowledgement that does not identify your message. Select **Retry** while connected; reconnect first if needed. |
+| **Checking delivery…** | Your explicit Retry is in progress. Another Retry is not available at the same time. |
+| **Saved** | The server confirmed that this message was saved using its delivery ID, directly or through the saved chat's history. A chat-created acknowledgement alone does not confirm a save. The answer may still be starting or running. |
+| **Checking chat…** | Omnipus knows the chat ID and is loading its history to check whether the first message was saved and whether an answer exists or is still running. |
+| **Could not check this chat · Retry** | Checking delivery or loading the saved chat failed. This does not establish whether an unconfirmed message was saved. Your message is kept in the open tab; **Retry** uses the original delivery request until a save is confirmed, even if a chat ID is known. After a confirmed save, it checks the saved chat again. |
+| **Could not save message · Retry** | Omnipus reported that it could not save the message. You can retry delivery. |
+| **Message saved, but no answer started · Generate again** | The message was saved, but no answer began. **Generate again** deliberately starts a new answer in the saved chat. |
+| **Couldn't finish · Generate again** | Checking the recovered chat finished with your message still unanswered and no answer running. You can deliberately generate a new answer. |
+
+An older gateway's acknowledgement can still open the chat and apply its agent and Auto-approve settings without showing **Saved**. Messages buffered while that chat was being created resume after the current turn ends.
+
+An unconfirmed message does not offer **Generate again**. That action is separate from delivery Retry: it sends a new request and may repeat work or tool actions. The saved chat's current Auto-approve setting applies, not a restored setting from the original send.
+
+When the current first message has no known chat ID, `/new` shows **“Delivery not confirmed. Copy your message before starting a new chat.”** before clearing its local message and recovery request. Choose **Keep this chat** to retain it, or **Start a new chat** to clear it. Copy advice matters: the old bubble will no longer be visible in the new chat. If a chat ID is already known, `/new` starts a new chat without this warning and clears the delivery-recovery request.
+
+**Limits:** recovery before a chat ID is known lives only in the open tab; a full browser reload can lose it. The gateway remembers delivery IDs only for its current process, and only for a limited number of recent first messages: up to 256 per account and 10,000 in total. When those limits are reached, the oldest are forgotten first, so a Retry of a very old unconfirmed first message can create a second chat and answer twice, exactly as after a restart. If it crashes after saving the message but before acknowledging it, Retry after that restart can likewise create a second chat and answer twice. Reusing a delivery ID for a different message is refused with a conflict error instead of being treated as the same message. Delivery Retry is not a guarantee of exactly-once answers or tool actions. After a gateway upgrade, reload any browser tab that was already open: an older tab does not understand the new delivery messages, so starting a new chat there can appear to hang until the page is reloaded.
+
 ## Panels beside chat
 
 [Library](library.md), [Browser](browser.md), and [Mail](mail.md) use the same panel controls. From a workspace, select **Library** or **Mail** in the workspace bar to toggle that panel. The chat's **Open library** button opens Library; **Open browser** opens the agent's live Browser panel when a browser session is available. Only one panel sits beside Chat at a time. Choosing another replaces it; if the outgoing panel has protected unsaved changes, you are asked before it leaves.

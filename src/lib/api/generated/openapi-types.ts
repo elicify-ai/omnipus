@@ -214,10 +214,30 @@ export interface paths {
         get?: never;
         /**
          * Configure a search or voice-input integration provider
-         * @description Stores an API key and/or assigns the provider its role (FR-12.1). ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none ("No fallback"), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 ("needs an API key"). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
+         * @description Stores an API key, removes a saved search key with clear_api_key:true, and/or assigns the provider its role (FR-12.1). Removal switches only that service off and preserves the raw default, fallback and migration marker. It rejects any api_key, active or fallback field, voice/keyless services, undecided roles and shared/custom credential references before writes; ownership conflicts return 409. Success requires deletion, runtime disabling, confirmed reload and audit recording. Partial failures return a non-success error describing what persisted. Removal does not revoke the upstream key. ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none ("No fallback"), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 ("needs an API key"). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
          */
         put: operations["updateIntegrationProvider"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/providers/{id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a saved web-search connection
+         * @description Runs one real, potentially chargeable search for "Omnipus" through the addressed keyed search client with its saved key, one result where supported, and the cheapest supported depth within the saved cap. Requires authenticated administrator access, but no password step-up: this neither reveals nor changes a secret. A saved key and runtime-usable service are required. No fallback, key rotation, retry, discovery, result fetch or cached success. A 15-second total context deadline cancels on disconnect and does not lengthen a shorter client deadline. Per instance and service, one check may be in flight and at most one check is admitted every 30 seconds, including failures. Local limiting returns 429 with Retry-After and performs no outbound call. Completed upstream outcomes, including valid empty results and upstream failures, return 200 with normalized categories and no upstream payload or key. Gateway/internal failures remain non-2xx. If the service's key or configuration generation changes after admission and before completion, the server discards the upstream outcome and returns 409 with the fixed error "The key changed while checking. Check again." No key identity, fingerprint or generation is returned. Configuration and roles are unchanged; clients refresh readiness separately.
+         */
+        post: operations["checkSearchProviderConnection"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10820,6 +10840,11 @@ export interface components {
              */
             api_key?: string;
             /**
+             * @description Search-only, keyed providers: true explicitly removes the catalogue-owned saved key and switches this service off without changing the default, fallback or role migration marker. Requires the same consent as saving. When true, api_key, active and fallback must all be absent, including empty or false values. Omitted or false leaves existing update semantics unchanged; an empty api_key never deletes a key. Undecided roles, a custom credential reference or a key shared with another connection return 409 without writes. Removal does not revoke the upstream key. A later-stage failure returns a non-success response describing any persisted change.
+             * @example true
+             */
+            clear_api_key?: boolean;
+            /**
              * @description Assign the default role. Search: make this provider the web-search default (tried first; it also switches the provider on, and never deletes another provider's key reference — ADR-096 FR-005). Voice: make this provider the active transcriber — behaviour unchanged (ADR-096 D19-neutral voice rule). An explicit false is rejected with 400: roles are moved by setting another provider active, they are not unset (ADR-096 D18 — a silently accepted no-op is how a UI comes to lie).
              * @example true
              */
@@ -10829,6 +10854,37 @@ export interface components {
              * @example true
              */
             fallback?: boolean;
+        };
+        /**
+         * @description Body for a manual web-search connection check. The empty object is required; keys, queries, URLs, depth, roles and all other fields are rejected. The gateway supplies a fixed non-personal query and uses the saved key.
+         * @example {}
+         */
+        SearchProviderCheckRequest: Record<string, never>;
+        /** @description Temporary outcome of one real search through the addressed service. Readiness is unchanged: success is not persisted health, and failure does not disable the service or change its roles. Contains no key, results, authorization, upstream payload or free-form upstream error. */
+        SearchProviderCheckResponse: {
+            /**
+             * @description The keyed search catalogue entry that was checked.
+             * @example tavily
+             * @enum {string}
+             */
+            provider_id: "brave" | "tavily" | "perplexity" | "glm" | "baidu" | "exa";
+            /**
+             * @description Normalized diagnostic outcome; a valid empty result is success.
+             * @example success
+             * @enum {string}
+             */
+            status: "success" | "auth_error" | "rate_limited" | "timeout" | "network_error" | "provider_error" | "invalid_response";
+            /**
+             * Format: date-time
+             * @description UTC completion timestamp for this attempt.
+             * @example 2026-09-30T12:00:00Z
+             */
+            checked_at: string;
+            /**
+             * @description Optional upstream retry guidance for rate_limited. No automatic retry is scheduled. Local admission limits instead use HTTP 429 and Retry-After.
+             * @example 61
+             */
+            retry_after_seconds?: number;
         };
         /** @description Response from POST /api/v1/voice/transcribe. Returns the text transcribed from an uploaded audio clip by the active Transcriber (FR-12.1, composer mic). 503 when no transcriber is configured. */
         TranscribeResponse: {
@@ -17697,7 +17753,52 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
+            409: components["responses"]["409Conflict"];
             500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    checkSearchProviderConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Keyed search catalogue ID (brave, tavily, perplexity, glm, baidu or exa). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchProviderCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Completed diagnostic outcome; no health or configuration change is persisted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchProviderCheckResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            /** @description The saved connection is not ready, or its key/configuration changed while checking. A changed generation discards the provider outcome and returns "The key changed while checking. Check again." */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     transcribeAudio: {
@@ -25653,6 +25754,8 @@ export type ReAuthResponse = components["schemas"]["ReAuthResponse"];
 export type IntegrationProvider = components["schemas"]["IntegrationProvider"];
 export type IntegrationProvidersResponse = components["schemas"]["IntegrationProvidersResponse"];
 export type IntegrationProviderUpdateRequest = components["schemas"]["IntegrationProviderUpdateRequest"];
+export type SearchProviderCheckRequest = components["schemas"]["SearchProviderCheckRequest"];
+export type SearchProviderCheckResponse = components["schemas"]["SearchProviderCheckResponse"];
 export type TranscribeResponse = components["schemas"]["TranscribeResponse"];
 export type Skill = components["schemas"]["Skill"];
 export type SlashCommand = components["schemas"]["SlashCommand"];
