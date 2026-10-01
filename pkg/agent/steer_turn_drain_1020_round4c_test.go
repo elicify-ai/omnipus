@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -86,7 +87,22 @@ func TestSteeredTurnDrain1020Round4_OuterExhaustionReportsEachQueuedSteerToParen
 			// drainSteeredTurn then cannot run them, so only the OUTER budget's
 			// exhaustion path can dispose of them.
 			if err := al.GetSessionLifecycleStore().Mutate(childID, func(rec *session.LifecycleRecord) error {
-				rec.State = session.LifecycleCancelled
+				// U1 collapsed cancellation into the single non-terminal
+				// LifecycleStopped, and the D2/CRIT-001 invariant requires any
+				// record landing it to carry a non-nil StopNote in the SAME
+				// mutation (persistLocked rejects otherwise). StopCauseCascade
+				// (not StopCauseStop) models this as the child being reached as
+				// a DESCENDANT of an independent ancestor's cascade — this
+				// write is deliberately not the cascade's own direct target,
+				// matching "a separate terminal writer ... landing after" in
+				// the comment above.
+				rec.State = session.LifecycleStopped
+				rec.StopNote = &session.StopNote{
+					At:    time.Now().UTC(),
+					By:    session.StopActorSystem,
+					Seq:   uint64(rec.Generation),
+					Cause: session.StopCauseCascade,
+				}
 				return nil
 			}); err != nil {
 				return fmt.Errorf("concurrent terminal transition: %w", err)
@@ -115,8 +131,8 @@ func TestSteeredTurnDrain1020Round4_OuterExhaustionReportsEachQueuedSteerToParen
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
-	if rec.State != session.LifecycleCancelled || rec.Generation != snapshot.Generation {
-		t.Fatalf("independent transition = %s generation %d, want cancelled generation %d", rec.State, rec.Generation, snapshot.Generation)
+	if rec.State != session.LifecycleStopped || rec.Generation != snapshot.Generation {
+		t.Fatalf("independent transition = %s generation %d, want stopped generation %d", rec.State, rec.Generation, snapshot.Generation)
 	}
 	if pending := al.pendingSteeringCountForScope(childID); pending != 0 {
 		t.Errorf("outer exhaustion left %d queued steers, want 0: both must be reported, not stranded", pending)

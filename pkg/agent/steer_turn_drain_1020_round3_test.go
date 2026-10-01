@@ -577,7 +577,14 @@ func TestSteeredTurnDrain1020Round3_StopRaceDuringWakeDeliveryNeverStrandsAccept
 	hookMu.Lock()
 	calls := hookCalls
 	hookMu.Unlock()
-	if calls < 1 || stopErr != nil || stopReadErr != nil || stopState != session.LifecycleCancelled || len(stopReport.Unreachable) != 0 {
+	// U1 collapsed cancellation/timeout into the single non-terminal
+	// LifecycleStopped (session.LifecycleCancelled is retired); the real
+	// cascade (steer_cancel.go::stampStop / terminaliseNeverRanStop) lands
+	// a Stop there now, always with its StopNote stamped in the same
+	// Mutate call that sets the Stop fence (D2/CRIT-001), so this real
+	// Stop's own setup already satisfies that invariant independently of
+	// this assertion.
+	if calls < 1 || stopErr != nil || stopReadErr != nil || stopState != session.LifecycleStopped || len(stopReport.Unreachable) != 0 {
 		t.Fatalf("SETUP: real Stop must terminalise the child in the finishing window: calls=%d state=%q stopErr=%v readErr=%v unreachable=%+v completionErr=%v",
 			calls, stopState, stopErr, stopReadErr, stopReport.Unreachable, completionErr)
 	}

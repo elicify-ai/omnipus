@@ -466,7 +466,11 @@ func TestGoalChildCompletion947_CancelPreservesSessionOwnedGoal(t *testing.T) {
 		if g.TerminalReason != "" {
 			t.Errorf("active goal terminal reason = %q, want empty: stopping must not end the goal (D6/D7)", g.TerminalReason)
 		}
-		if active := activeGoalForSession(rec.SessionID); active == nil || active.GoalID != rec.GoalRef {
+		active, activeErr := activeGoalForSession(rec.SessionID)
+		if activeErr != nil {
+			t.Fatalf("activeGoalForSession(after stop): %v", activeErr)
+		}
+		if active == nil || active.GoalID != rec.GoalRef {
 			t.Errorf("session lost its original active goal binding %q after stop (D6/D7)", rec.GoalRef)
 		}
 	}

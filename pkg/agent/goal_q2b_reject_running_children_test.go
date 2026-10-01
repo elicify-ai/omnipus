@@ -132,7 +132,10 @@ func TestGoalQ2B_RejectRunningChildren_AllDirectChildrenTerminalProceed(t *testi
 	}{
 		{"q2b-completed-direct", session.LifecycleCompleted},
 		{"q2b-failed-direct", session.LifecycleFailed},
-		{"q2b-cancelled-direct", session.LifecycleCancelled},
+		// No third row: U1 collapsed paused/cancelled/timed-out into the single
+		// non-terminal LifecycleStopped — session.IsTerminalLifecycleState /
+		// terminalLifecycleStates list only LifecycleCompleted and LifecycleFailed
+		// as terminal now, so there is no longer a 3rd terminal state to use here.
 	} {
 		child := q2bLaunchDescendant(t, h, tc.callID, session.LifecycleQueued)
 		q2bMakeDirectChildTerminal(t, h, child, tc.state)

@@ -84,7 +84,9 @@ func assertDelegateGoalCleared(t *testing.T, before *goal.Goal) {
 		"the retained terminal record must still name the session that carried it")
 	require.Equal(t, before.Criteria, after.Criteria, "clearing retains the outcome criteria")
 	require.Equal(t, before.DoD, after.DoD, "clearing retains the definition of done")
-	require.Nil(t, activeGoalForSession(before.ActiveSessionID),
+	active, activeErr := activeGoalForSession(before.ActiveSessionID)
+	require.NoError(t, activeErr, "activeGoalForSession(after clear) must not fail")
+	require.Nil(t, active,
 		"the helper must no longer have an active goal for the goal loop to continue")
 }
 
