@@ -45,8 +45,22 @@ func (a *restAPI) handleSearchConnectionCheck(w http.ResponseWriter, r *http.Req
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), searchConnectionCheckDeadline)
 	defer cancel()
-	probe, retry, err := a.admitSearchConnectionCheck(id)
+	probe, retry, err := a.admitSearchConnectionCheck(ctx, id)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			// Use the same closed outcomes as an interrupted outbound check;
+			// cancellation does not introduce a new wire status.
+			status := gen.SearchProviderCheckResponseStatusNetworkError
+			if errors.Is(err, context.DeadlineExceeded) {
+				status = gen.SearchProviderCheckResponseStatusTimeout
+			}
+			jsonOK(w, gen.SearchProviderCheckResponse{
+				ProviderId: gen.SearchProviderCheckResponseProviderId(id),
+				Status:     status,
+				CheckedAt:  time.Now().UTC(),
+			})
+			return
+		}
 		if retry > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(retry))
 		}
@@ -66,12 +80,14 @@ func (a *restAPI) handleSearchConnectionCheck(w http.ResponseWriter, r *http.Req
 // integration saves/removals and the loop's sysagent config writers. The locks
 // are released before any outbound request, so removing a key need not wait for
 // an already-sent diagnostic; its pinned response contains no credential data.
-func (a *restAPI) admitSearchConnectionCheck(id string) (*tools.SearchConnectionProbe, int, error) {
-	a.configMu.Lock()
+func (a *restAPI) admitSearchConnectionCheck(ctx context.Context, id string) (*tools.SearchConnectionProbe, int, error) {
+	if err := lockSearchCheckMutex(ctx, &a.configMu); err != nil {
+		return nil, 0, err
+	}
 	defer a.configMu.Unlock()
 	var probe *tools.SearchConnectionProbe
 	var retry int
-	err := a.agentLoop.WithConfigReadLock(func(cfg *config.Config) error {
+	err := a.agentLoop.WithConfigReadLockContext(ctx, func(cfg *config.Config) error {
 		if cfg == nil {
 			return &integrationChangeError{http.StatusServiceUnavailable, "The current configuration is unavailable."}
 		}
@@ -99,13 +115,40 @@ func (a *restAPI) admitSearchConnectionCheck(id string) (*tools.SearchConnection
 			return &integrationChangeError{http.StatusInternalServerError, "Could not prepare the search client. Check its configuration, then try again."}
 		}
 		var admitted bool
-		retry, admitted = a.searchChecks.begin(id, time.Now())
+		retry, admitted, err = a.searchChecks.begin(ctx, id)
+		if err != nil {
+			return err
+		}
 		if !admitted {
 			return &integrationChangeError{http.StatusTooManyRequests, "A connection check is already running or was started recently. Wait before trying again."}
 		}
 		return nil
 	})
 	return probe, retry, err
+}
+
+// lockSearchCheckMutex waits without leaving a goroutine that could acquire the
+// mutex after cancellation. On success the caller owns mu and must unlock it.
+func lockSearchCheckMutex(ctx context.Context, mu *sync.Mutex) error {
+	retry := time.NewTicker(10 * time.Millisecond)
+	defer retry.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if mu.TryLock() {
+			if err := ctx.Err(); err != nil {
+				mu.Unlock()
+				return err
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-retry.C:
+		}
+	}
 }
 
 // A slot exists only for each static catalogue entry, never an account, URL,
@@ -120,24 +163,32 @@ type searchCheckSlot struct {
 	nextAdmission time.Time
 }
 
-func (g *searchCheckAdmission) begin(id string, now time.Time) (int, bool) {
-	g.mu.Lock()
+func (g *searchCheckAdmission) begin(ctx context.Context, id string) (int, bool, error) {
+	if err := lockSearchCheckMutex(ctx, &g.mu); err != nil {
+		return 0, false, err
+	}
 	defer g.mu.Unlock()
 	if g.slots == nil {
 		g.slots = make([]searchCheckSlot, len(config.SearchProviderCatalogue))
 	}
 	index := searchCheckCatalogueIndex(id)
 	if index < 0 || index >= len(g.slots) {
-		return 1, false
+		return 1, false, nil
 	}
 	slot := &g.slots[index]
+	now := time.Now()
 	if slot.inFlight || now.Before(slot.nextAdmission) {
 		seconds := max(1, int((slot.nextAdmission.Sub(now)+time.Second-1)/time.Second))
-		return seconds, false
+		return seconds, false, nil
+	}
+	// Check under the admission mutex immediately before spending the pause,
+	// including cancellation during credential resolution or client creation.
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
 	}
 	slot.inFlight = true
 	slot.nextAdmission = now.Add(searchConnectionCheckCooldown)
-	return 0, true
+	return 0, true, nil
 }
 
 func (g *searchCheckAdmission) finish(id string) {

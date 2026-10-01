@@ -349,13 +349,20 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Sensitive change → require the re-auth consent token (FR-12.2).
-	if !a.requireReAuth(w, r, user.Username) {
+	if body.ClearApiKey != nil && *body.ClearApiKey {
+		// Removal adds the existing bypass guard before consuming consent;
+		// ordinary saves retain their current consent-only behaviour.
+		a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
+			if !a.requireReAuth(w, r, user.Username) {
+				return
+			}
+			a.handleSearchKeyRemoval(w, r, def, body)
+		})(w, r)
 		return
 	}
 
-	if body.ClearApiKey != nil && *body.ClearApiKey {
-		a.handleSearchKeyRemoval(w, r, def, body)
+	// Sensitive change → require the re-auth consent token (FR-12.2).
+	if !a.requireReAuth(w, r, user.Username) {
 		return
 	}
 

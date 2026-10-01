@@ -47,6 +47,8 @@ The service list below the cards puts ready services first. Services needing a k
 
 If an integration save fails, its error message shows the server's reason when one is provided.
 
+The server refuses **Remove key** and **Check connection** while development authentication bypass (`gateway.dev_mode_bypass`) is active. Turn it off and sign in before retrying. Ordinary key saves keep the confirmation rules above.
+
 ### Remove a saved key
 
 For a service with a saved key, **Remove key** appears after **Edit key** and **Check connection**. DuckDuckGo needs no key, so it has neither removal nor connection-check actions.
