@@ -7,7 +7,11 @@ import { promisify } from 'node:util'
 import { gzipSync } from 'node:zlib'
 
 import { measureProductionBundle } from '../../scripts/design-system/bundle-measure.mjs'
-import { compareProductionBundles } from '../../scripts/design-system/bundle-audit.mjs'
+import {
+  compareProductionBundles,
+  INITIAL_GZIP_BUDGET_BYTES,
+  TOTAL_RAW_BUDGET_BYTES,
+} from '../../scripts/design-system/bundle-audit.mjs'
 import { designSystemProductionProvenance } from '../../scripts/design-system/bundle-provenance.mjs'
 
 const runMeasureCli = promisify(execFile)
@@ -80,7 +84,12 @@ test('reports Storybook-like output evidence without treating ordinary prose as 
 
 test('enforces inclusive initial gzip and total raw byte budgets', () => {
   const baseline = { initial: { gzipBytes: 100 }, total: { rawBytes: 1_000 }, storybook: { clean: true }, assets: [] }
-  const atLimit = { initial: { gzipBytes: 25_700 }, total: { rawBytes: 257_000 }, storybook: { clean: true }, assets: [{ path: 'assets/app.js', sha256: 'candidate-hash' }] }
+  const atLimit = {
+    initial: { gzipBytes: baseline.initial.gzipBytes + INITIAL_GZIP_BUDGET_BYTES },
+    total: { rawBytes: baseline.total.rawBytes + TOTAL_RAW_BUDGET_BYTES },
+    storybook: { clean: true },
+    assets: [{ path: 'assets/app.js', sha256: 'candidate-hash' }],
+  }
   const provenance = { clean: true, chunks: [{ file: 'assets/app.js', sha256: 'candidate-hash', modules: ['/repo/src/main.tsx'] }], javascriptAssets: [] }
   assert.equal(compareProductionBundles(baseline, atLimit, provenance).pass, true)
 
