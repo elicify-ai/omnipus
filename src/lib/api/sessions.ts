@@ -17,6 +17,7 @@ import {
 } from '@/lib/api/generated/schemas'
 import type {
   GoalOutcome as WireGoalOutcome,
+  Session as WireSessionShape,
   Attachment,
   ClearAllSessionsResponse,
   OperationResult,
@@ -37,7 +38,7 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // delegation — it always carries a non-empty parent_session_id below.
   // Like 'scheduled'/'heartbeat'/'verifier' it is server-minted only.
   type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
-  status?: 'active' | 'archived' | 'interrupted'
+  status?: WireSessionShape['status']
   task_id?: string
   workspace_id?: string
   created_at: string
@@ -79,7 +80,7 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   agent_id: string
   title: string
   type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
-  status?: 'active' | 'archived' | 'interrupted'
+  status?: WireSessionShape['status']
   task_id?: string
   workspace_id?: string
   created_at: string
