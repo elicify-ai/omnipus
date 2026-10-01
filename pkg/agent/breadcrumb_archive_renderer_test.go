@@ -134,10 +134,13 @@ func TestArchiveBreadcrumbCapPressureRetainsNewestEntriesAndCountsOmitted(t *tes
 	const entries = 40
 	total := entries
 	// Every tool record with a ToolCallID renders an addressed pointer entry,
-	// whatever its snippet, so all 40 records here produce entries costing
-	// exactly the same runes: ids are fixed width, every archive_line has two
-	// digits and every snippet is the same 80-rune literal, making the
-	// retained-count derivation below exact.
+	// whatever its snippet. Ids are fixed width and every snippet is the same
+	// 80-rune literal; archive_line renders two digits for lines 10..39 and
+	// one digit for lines 0..9, so the two-digit line 39 used below is the
+	// widest entry, and the retained newest block (39 downward — still inside
+	// the two-digit range at this fixture size under the frozen cap) costs
+	// exactly perEntry runes per entry, making the retained-count derivation
+	// below exact for the retained set.
 	snippet := "m08 literal payload | " + strings.Repeat("p", 58) // 80 runes: at truncateSnippet's limit, no truncation
 	archive := make([]memory.ArchivedMessage, 0, total)
 	for i := 0; i < total; i++ {
@@ -175,6 +178,45 @@ func TestArchiveBreadcrumbCapPressureRetainsNewestEntriesAndCountsOmitted(t *tes
 	}
 	if n := utf8.RuneCountInString(crumb); n > breadcrumbTokenCap*breadcrumbCharsPerToken {
 		t.Fatalf("breadcrumb exceeds the cap contract: %d > %d", n, breadcrumbTokenCap*breadcrumbCharsPerToken)
+	}
+}
+
+// F1 (CHECK of 23180217d): the cap-pressure oracle above derives its allowed
+// bound from breadcrumbTokenCap itself, so a widened production cap kept it
+// green — the bound moved with the defect (mutant M09, 1000 → 1050, survived).
+// MAJ-CW-003 requires the breadcrumb to fit "the existing breadcrumb cap": the
+// cap as frozen in the pre-#1081 baseline 0a750f3c2 — breadcrumbTokenCap=1000
+// and breadcrumbCharsPerToken=4, both unchanged since 3c3604301 — i.e. 4000
+// runes. This guard pins that bound as a literal, independent of the
+// production constants and helpers, so a cap-contract change fails here
+// instead of silently re-deriving a larger allowance.
+func TestArchiveBreadcrumbCapPressureStaysWithinFrozenBaselineCap(t *testing.T) {
+	// Same fixture family as the cap-pressure test above: 40 same-cost tool
+	// records, so the renderer is genuinely under pressure at 4000 runes.
+	const entries = 40
+	snippet := "m08 literal payload | " + strings.Repeat("p", 58) // 80 runes: at truncateSnippet's limit, no truncation
+	archive := make([]memory.ArchivedMessage, 0, entries)
+	for i := 0; i < entries; i++ {
+		archive = append(archive, archiveGapToolMsg(fmt.Sprintf("bc-cap-call-%02d", i), snippet))
+	}
+	crumb := buildArchiveBreadcrumb(archive, entries)
+	// The frozen bound itself: 1000 tokens x 4 chars/token at baseline
+	// 0a750f3c2 (ADR-066 MAJ-CW-003, "within the existing breadcrumb cap").
+	// Deliberately not breadcrumbTokenCap*breadcrumbCharsPerToken — the point
+	// of this guard is that the bound does not move with those constants.
+	const frozenBoundRunes = 4000
+	if n := utf8.RuneCountInString(crumb); n > frozenBoundRunes {
+		t.Fatalf("breadcrumb exceeds the frozen existing-cap contract (baseline 0a750f3c2: 1000 tokens x 4 chars/token = %d runes): got %d runes", frozenBoundRunes, n)
+	}
+	// The bound must be exercised, not vacuous: at 4000 runes the fixture
+	// cannot fit whole, so the omitted marker must be present.
+	if !strings.Contains(crumb, "earlier ranges") {
+		t.Fatalf("fixture must be under real cap pressure at the frozen %d-rune bound; no omitted marker in %q", frozenBoundRunes, crumb)
+	}
+	// And the pressure must retain the newest record, not satisfy the bound
+	// by dropping the useful entries (MAJ-CW-003 retention semantics).
+	if !strings.Contains(crumb, "archive_line=39") {
+		t.Fatalf("newest record (archive_line=39) must be retained under cap pressure: %q", crumb)
 	}
 }
 
