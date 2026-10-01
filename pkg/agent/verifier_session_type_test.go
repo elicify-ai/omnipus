@@ -14,7 +14,9 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -92,7 +94,11 @@ func TestVerifierSessionType_RealAdjudicationStampsVerifierType(t *testing.T) {
 func TestVerifierSessionType_ChatIDIsAPreCreatedSessionNotAnAdHocString(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 
-	chatID := al.newVerifierSessionChatID("agent:judge:verify:test-key", "task:t-precreate")
+	creator := p3SessionCreator(t, al)
+	chatID, err := creator("agent:judge:verify:test-key", "task:t-precreate")
+	if err != nil {
+		t.Fatalf("newVerifierSessionChatID: %v", err)
+	}
 
 	judgeStore := al.GetAgentStore(string(coreagent.IDJudge))
 	if judgeStore == nil {
@@ -110,35 +116,54 @@ func TestVerifierSessionType_ChatIDIsAPreCreatedSessionNotAnAdHocString(t *testi
 	}
 }
 
-// TestVerifierSessionType_FallsBackWhenJudgeNotRegistered proves
-// newVerifierSessionChatID degrades gracefully — never blocks adjudication
-// — when the Judge's session store cannot be resolved (the Judge is not
-// registered at all, e.g. a raw pkg/agent harness that never ran
-// coreagent.SeedConfig): it returns the ORIGINAL Wave-1 ad hoc
-// "verify:"+sessionKey construction verbatim, unstamped, rather than
-// erroring or panicking. Uses a minimal config with NO agents at all
-// (mirrors cancel_test.go's newCancelTestAgentLoop harness shape) so
-// al.GetAgentStore(string(coreagent.IDJudge)) genuinely returns nil.
+// Keep this existing name and missing-Judge fixture per the P3 brief. Option A
+// explicitly retires its old synthetic-ID oracle: the live missing-Judge gate
+// stays D7 Unavailable, and calling the creator without a store must fail, not
+// manufacture an ID. This is distinct from a configured Judge's storage outage.
 func TestVerifierSessionType_FallsBackWhenJudgeNotRegistered(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv(config.EnvHome, tmpDir)
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}},
-			// Deliberately no List entries — no Judge, no worker, nothing.
+			// Preserve the mia-only setup: deliberately no Judge entry.
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
-	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	provider := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{Content: `{"met":true,"criteria":[{"id":"c1","met":true,"reason":"ok"}]}`}, nil
+	}}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	t.Cleanup(func() { al.Close() })
+	registry := p3ObserveRegistry(t)
+	clock := p3StopAfterFirstBackoff(t)
 
 	if store := al.GetAgentStore(string(coreagent.IDJudge)); store != nil {
 		t.Fatal("test premise broken: the Judge must NOT be registered in this harness")
 	}
 
-	sessKey := "agent:judge:verify:fallback-key"
-	got := al.newVerifierSessionChatID(sessKey, "task:t-fallback")
-	if want := "verify:" + sessKey; got != want {
-		t.Errorf("newVerifierSessionChatID with no Judge registered = %q, want the ad hoc fallback %q", got, want)
-	}
+	t.Run("missing_judge_remains_d7_unavailable", func(t *testing.T) {
+		input := p3TaskInput("t-fallback")
+		input.AssigneeAgentID = "mia"
+		result := al.JudgeCriteria(context.Background(), input)
+		const wantReason = "judge_not_configured: Judge System Agent is not registered"
+		if !result.Unavailable || result.Verdict != nil || result.ConcurrencyBackoff || result.Reason != wantReason {
+			t.Errorf("missing-Judge result = %+v, want D7 Unavailable/no verdict/no concurrency backoff and reason %q", result, wantReason)
+		}
+		registered, unregistered := registry.history()
+		if provider.callCount() != 0 || len(registered) != 0 || len(unregistered) != 0 {
+			t.Errorf("missing-Judge dispatch: provider=%d registration=%+v unregister=%v, want exactly zero work", provider.callCount(), registered, unregistered)
+		}
+		if waits := clock.durations(); !reflect.DeepEqual(waits, []time.Duration{60 * time.Second}) {
+			t.Errorf("missing-Judge D7 waits = %v, want [1m0s] (ADR-049 D7)", waits)
+		}
+	})
+	t.Run("missing_store_creator_returns_error_not_fabricated_id", func(t *testing.T) {
+		creator := p3SessionCreator(t, al)
+		id, err := creator("agent:judge:verify:fallback-key", "task:t-fallback")
+		if id != "" || err == nil {
+			t.Errorf("missing-store creator returned ID=%q error=%v, want empty ID and explicit error under P3", id, err)
+		}
+	})
 }
