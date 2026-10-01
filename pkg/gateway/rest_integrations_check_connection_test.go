@@ -37,7 +37,7 @@ import (
 const diagnosticBearer = "search-diagnostic-test-bearer"
 const discardedSearchContent = "private-upstream-result-must-be-discarded"
 
-func newSearchCheckMux(t *testing.T) (*restAPI, *config.Config, *http.ServeMux) {
+func newSearchCheckMux(t *testing.T) (*restAPI, *config.Config, http.Handler) {
 	t.Helper()
 	api, user, cfg := newSearchSettingsAPI(t)
 	hash, err := bcrypt.GenerateFromPassword([]byte(diagnosticBearer), bcrypt.MinCost)
@@ -49,17 +49,18 @@ func newSearchCheckMux(t *testing.T) (*restAPI, *config.Config, *http.ServeMux) 
 	t.Setenv("NO_PROXY", "127.0.0.1,localhost")
 	mux := http.NewServeMux()
 	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
+	handler := api.configSnapshotMiddleware(mux)
 	// The positive control proves both the registration and bearer instrument
 	// can reach a known existing authenticated Settings route.
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/providers", nil)
 	r.Header.Set("Authorization", "Bearer "+diagnosticBearer)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, r)
+	handler.ServeHTTP(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "positive route/auth control; body=%s", w.Body.String())
-	return api, cfg, mux
+	return api, cfg, handler
 }
 
-func postSearchCheck(ctx context.Context, mux *http.ServeMux, id, body, bearer string) *httptest.ResponseRecorder {
+func postSearchCheck(ctx context.Context, mux http.Handler, id, body, bearer string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/integrations/providers/"+id+"/check", strings.NewReader(body)).WithContext(ctx)
 	r.Header.Set("Content-Type", "application/json")
 	if bearer != "" {
