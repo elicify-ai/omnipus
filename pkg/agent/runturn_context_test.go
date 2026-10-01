@@ -139,14 +139,21 @@ func TestRunTurn_GuardTest_2MBResultCompletes(t *testing.T) {
 	assert.True(t, found)
 }
 
-// TestRunTurn_LongTurn_50CallsAtCap_SmallWindow — spec test 31, B-33 / B-21
-// / B-36 / ADR §17.2 (SC-002, SC-011): a turn of 50 tool calls, each near
-// the cap, against a small window. Every request stays ≤ B at every
-// iteration, the most recent result is always intact (the floor), emptied
-// results carry marks, Skip never moves mid-turn, the check ran once per
-// admitted result (B-33) and no archive byte changed (B-23).
+// TestRunTurn_LongTurn_50CallsAtCap_SmallWindow — spec test 31 as amended by
+// the 2026-09-30 #1081 amendment (ADR-066 §18.2 MAJ-CW-004/005/007, §18.4
+// row 1; spec Amendment [2026-09-30] FR-029–FR-032, SC-002, B-54; oracle
+// adapted 2026-10-02 from the pre-amendment no-cut assertions): a turn of 50
+// tool calls, each near the cap, against a small window. Every request stays
+// ≤ B at every iteration (SC-002). Relief is slide-first (FR-032): legal
+// completed steps leave the request WHOLE, so Skip genuinely advances —
+// repeatedly — and because this fixture always has a legal slide available,
+// nothing is ever emptied in place and no emptied mark ever appears. The
+// verbatim user anchor and the newest structural floor (call-50's complete
+// group, full text — FR-031 lets pressure shorten it, but slides suffice
+// here) survive every request; the archive keeps every admitted byte (B-23).
 func TestRunTurn_LongTurn_50CallsAtCap_SmallWindow(t *testing.T) {
 	const calls = 50
+	const prompt = "fill the window fifty times"
 	provider := testutil.NewScenario()
 	for i := 1; i <= calls; i++ {
 		provider.WithToolCalls([]providers.ToolCall{toolCallFor(fmt.Sprintf("call-%d", i), fmt.Sprintf("tag%d", i))})
@@ -156,19 +163,35 @@ func TestRunTurn_LongTurn_50CallsAtCap_SmallWindow(t *testing.T) {
 
 	checksBefore := MidTurnBudgetChecksTotal()
 	emptiesBefore := ContextEmptiesTotal()
-	reply, err := h.runScheduled(t, "fill the window fifty times")
+	reply, err := h.runScheduled(t, prompt)
 	require.NoError(t, err)
 	assert.Equal(t, "done", reply)
 	require.Equal(t, calls+1, h.provider.CallCount(), "50 tool steps + the final text; the guard never fired")
 
-	assert.Equal(t, checksBefore+calls, MidTurnBudgetChecksTotal(),
-		"B-33: the check runs once per admitted result — N results, N mid-turn checks")
-	assert.Greater(t, ContextEmptiesTotal(), emptiesBefore, "a 50-call turn against a small window must have emptied")
+	// Checkpoint composition (MAJ-CW-004): one check per admitted result
+	// (calls) plus one prepare-side and one send-side check per assembled
+	// request (2 × (calls+1)). Asserted as that composition — not a magic
+	// total — so adding or removing a checkpoint site fails loudly here
+	// instead of silently needing a new hardcoded number.
+	assert.Equal(t, int64(calls+2*(calls+1)), MidTurnBudgetChecksTotal()-checksBefore,
+		"a check at every admitted result (%d) plus the prepare-side and send-side checks for each of the %d assembled requests", calls, calls+1)
+
+	// Slide-first relief (FR-032 / MAJ-CW-004): every relief pass in this
+	// fixture has a legal completed step to slide (steps 1..calls-1 are all
+	// complete before the newest group finishes), so emptying is never
+	// reached. The no-legal-slide fallback (emptying to the mark) is covered
+	// separately by midturn_budget_test.go's emptying tests.
+	assert.Equal(t, emptiesBefore, ContextEmptiesTotal(),
+		"slide-first: with a legal slide always available, no result is ever emptied")
 
 	assertEveryRequestUnderBudget(t, h)
 
-	// The floor: in every request after step k, result k (the newest) is
-	// intact. Request i+2 is the first carrying result i+1.
+	// The floor (FR-031): in every request after step k, result k (the
+	// newest) is present, intact and FULL-SIZE. Amended FR-031 permits
+	// pressure-shortening the newest text, but only when relief needs it —
+	// here slides always suffice, so the newest result must keep its whole
+	// door-admitted size (fixture arithmetic: tag prefix + 30,000 chars, the
+	// result enters whole because it is under the half-B admission clamp).
 	for i, req := range h.provider.AllRequests() {
 		if i == 0 {
 			continue
@@ -178,22 +201,86 @@ func TestRunTurn_LongTurn_50CallsAtCap_SmallWindow(t *testing.T) {
 		require.Contains(t, byID, newest, "request %d must carry result %s", i+1, newest)
 		assert.True(t, strings.HasPrefix(byID[newest].Content, fmt.Sprintf("tag%d:", i)),
 			"SC-011: the most recent result is intact in request %d", i+1)
+		assert.GreaterOrEqual(t, len(byID[newest].Content), 30_000,
+			"FR-031: slides suffice in this fixture — request %d's newest result must be full-size, not pressure-shortened", i+1)
 	}
 
-	// Marks in the final request; Skip untouched (mid-turn never cuts).
-	final := h.provider.LastMessages()
-	marks := 0
-	for _, m := range final {
-		if m.Role == "tool" && strings.Contains(m.Content, `"content_state":"emptied"`) {
-			marks++
+	// §18.4 row 1: many admitted results force MULTIPLE mid-turn Skip
+	// advances, observed on the recorded requests: the set of live results
+	// only ever shrinks — a group slid out of the window never returns
+	// (FR-030; sliding is removal from the view, not a mark) — and it shrinks
+	// at more than one point (repeated advances, not one final cut).
+	requests := h.provider.AllRequests()
+	everGone := map[string]bool{}
+	advances := 0
+	for i, req := range requests {
+		live := msgsByToolCallID(req)
+		if i > 0 {
+			returned := []string{}
+			for id := range everGone {
+				if _, ok := live[id]; ok {
+					returned = append(returned, id)
+				}
+			}
+			assert.Empty(t, returned,
+				"FR-030: results slid out of the live window never return (returned by request %d)", i+1)
+			removed := false
+			for id := range msgsByToolCallID(requests[i-1]) {
+				if _, ok := live[id]; !ok {
+					everGone[id] = true
+					removed = true
+				}
+			}
+			if removed {
+				advances++
+			}
 		}
 	}
-	assert.Greater(t, marks, 0, "emptied results carry marks in the live request")
+	assert.GreaterOrEqual(t, advances, 2,
+		"§18.4: many admitted results force MULTIPLE mid-turn Skip advances — the live set must shrink at more than one point")
+
+	// The final request (MAJ-CW-005 + fixture arithmetic): exactly the
+	// verbatim initiating user anchor and the newest COMPLETE group. One
+	// retained full result keeps both bounds satisfied at the 80% target;
+	// two would re-fire the share bound (S = 0.5·W = 20,000); zero would
+	// violate the structural floor. Older completed groups all slid away.
+	final := h.provider.LastMessages()
+	userCount, callCount, resultCount := 0, 0, 0
+	callIndex, resultIndex := -1, -1
+	for i, m := range final {
+		switch m.Role {
+		case "user":
+			userCount++
+			assert.Equal(t, prompt, m.Content,
+				"MAJ-CW-005: the initiating user anchor survives every slide verbatim")
+		case "assistant":
+			if len(m.ToolCalls) > 0 {
+				callCount++
+				callIndex = i
+				require.Len(t, m.ToolCalls, 1, "the retained newest group keeps its single declared call")
+				assert.Equal(t, "call-50", m.ToolCalls[0].ID,
+					"the retained newest call keeps its declared identity")
+				assert.Equal(t, toolCallFor("call-50", "tag50").Function, m.ToolCalls[0].Function,
+					"the retained newest call keeps its declared tool name and exact arguments")
+			}
+		case "tool":
+			resultCount++
+			resultIndex = i
+			assert.Equal(t, "call-50", m.ToolCallID,
+				"the newest result is the only retained result — every older complete group slid away whole (FR-030/MAJ-CW-004)")
+		}
+	}
+	assert.Equal(t, 1, userCount, "exactly one user message: the anchor, never duplicated by a slide")
+	assert.Equal(t, 1, callCount, "exactly one retained call: the newest group")
+	assert.Equal(t, 1, resultCount, "exactly one retained result: the newest group")
+	assert.Less(t, callIndex, resultIndex, "the retained call precedes its result")
 
 	archive, err := h.agent.Sessions.ReadArchive(context.Background(), h.sessionKey)
 	require.NoError(t, err)
-	assert.Len(t, h.agent.Sessions.GetHistory(h.sessionKey), len(archive),
-		"FR-030: Skip never moved — the pre-turn site saw an empty session and mid-turn never cuts")
+	// B-23, exact fixture arithmetic: 1 initiating user + 50 × (call +
+	// result) + 1 final assistant. Sliding is removal from the request view
+	// (Q3) — the archive never grows a duplicate or loses a line to relief.
+	require.Len(t, archive, 2*calls+2)
 
 	// B-23: every archive tool line still holds its full bytes.
 	toolLines := 0
@@ -204,6 +291,25 @@ func TestRunTurn_LongTurn_50CallsAtCap_SmallWindow(t *testing.T) {
 		}
 	}
 	assert.Equal(t, calls, toolLines)
+
+	// The committed live view (MAJ-CW-005): the anchor user line + the newest
+	// complete group + the final assistant text — 4 records against the
+	// 102-line archive. Skip genuinely advanced mid-turn; the full history
+	// stays recoverable from the untouched archive (recall/B-58 coverage is
+	// separate). The transient relief notice is request-only, never persisted.
+	history := h.agent.Sessions.GetHistory(h.sessionKey)
+	require.Len(t, history, 4, "anchor + newest complete group + final assistant — no emptied marks, no duplicates")
+	assert.Equal(t, "user", history[0].Role)
+	assert.Equal(t, prompt, history[0].Content, "the live anchor carries the original user text")
+	assert.Equal(t, "assistant", history[1].Role)
+	require.Len(t, history[1].ToolCalls, 1)
+	assert.Equal(t, "call-50", history[1].ToolCalls[0].ID)
+	assert.Equal(t, "tool", history[2].Role)
+	assert.Equal(t, "call-50", history[2].ToolCallID)
+	assert.Equal(t, "assistant", history[3].Role)
+	assert.Equal(t, "done", history[3].Content)
+	assert.Greater(t, len(archive)-len(history), 0,
+		"FR-030 (amended): Skip genuinely advanced mid-turn — the live window is an anchored suffix, not the whole archive")
 }
 
 // TestRunTurn_ImmutableResidueStillSends — ADR-066's 2026-09-30 amendment,
