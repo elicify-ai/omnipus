@@ -28,11 +28,19 @@ import (
 // fake channel is registered under that name.
 func TestProcessTaskDirect_MediaToolDelivery_StampsWorkspaceID(t *testing.T) {
 	al, defaultAgent, webchatChannel, _ := newMediaWorkspaceIDTestLoop(t, "webchat")
+	sessionStore := al.GetAgentStore(defaultAgent.ID)
+	require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
+	taskSession, err := sessionStore.NewSession(session.SessionTypeTask, "system", defaultAgent.ID)
+	require.NoError(t, err)
+	require.NotNil(t, taskSession)
+	require.NotEmpty(t, taskSession.ID)
+	ws := "sales"
+	require.NoError(t, sessionStore.SetMeta(taskSession.ID, session.MetaPatch{WorkspaceID: &ws}))
 
 	ctx := tools.WithWorkspaceID(context.Background(), "sales")
 	result, err := al.processTaskDirect(
 		ctx, defaultAgent.ID, "take a screenshot of the screen and send it to me",
-		"task-sess-1", "task:1",
+		"task-sess-1", taskSession.ID,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "Here is the screenshot.", result)

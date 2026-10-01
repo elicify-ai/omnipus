@@ -65,6 +65,16 @@ If a turn fails after text starts streaming, chat shows a failure message in pla
 
 If the agent reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice that remains when you reopen the conversation. Conflicting tool names produce the standard “This turn didn’t finish, and we can’t tell why” failure notice rather than silence.
 
+## A task is refused before work starts
+
+Errors saying the assigned agent's store was not found, or that a task session could not be created, mean Omnipus could not create the task's conversation. A queued dispatch or manual start refuses to hand work to either a native agent or an external command-line agent in that case. It does not consume an execution attempt or add a run-history entry.
+
+Read the returned error and the gateway log. A conversation-creation error keeps the underlying storage cause, such as a path that is not a directory or cannot be written. Resolve that cause, or restore the assigned agent's conversation store, before retrying. Do not create a replacement conversation by hand.
+
+A queued dispatch tries to save **Failed** and verifies the saved status. A new manual start through the web app or `run_task` instead tries to restore the task's previous status. If task storage itself cannot save that change, **In Progress** is not proof that work started; check the error and run history. See [tasks](tasks.md#if-the-task-conversation-cannot-be-created).
+
+This is a pre-start refusal, not a failure after tools or an external command have already acted. It does not imply that a later execution failure undoes those actions.
+
 ## The provider rejects your model requests
 
 **"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then an eligible complete old step; if neither can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.
