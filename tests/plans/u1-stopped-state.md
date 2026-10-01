@@ -79,3 +79,38 @@ production invariant is correct and untouched.
 
 Per dispatch brief: read the real hard-cancel path (`pkg/agent/steer_delegate_cancel.go::cancelDelegatedSubtree` → `pkg/agent/steer_cancel.go::SteerCanceller.CancelSubtree`/`StopSubtree` → `stampStop`). Confirmed `stampStop` (steer_cancel.go:628-659) sets `rec.StopNote` in the SAME `Mutate` call that sets `rec.Stop`, cause taken from the caller (cascade uses `StopCauseCascade`, the direct target uses `StopCauseStop` per `delegate_run.go`'s own comments at lines 676-677 and 832-834). The shared terminal-landing closure (`steer_cancel.go:211-224`) also carries a defensive fallback synthesizing a `StopCauseStop` note if none exists, so even an edge-case caller cannot strand a record. **Conclusion: no production gap — verdict is stale test double, fixed as a standard test-file repair.**
 
+## U1 small fix round — 2026-10-01 (post-CI: lint + 2 more stale-fence fixtures)
+
+Following a real CI green run (`https://github.com/elicify-ai/omnipus/actions/runs/36797255093`,
+241s, no hang/leak — prior local contention ruled out, not a regression). CI found two
+lint findings in one already-owned test file, plus two more pre-existing stale-fence
+assertions in `steer_delegate_cancel_test.go`, same class as the 8 fixed in the round
+above but in a file that round's scope list didn't cover.
+
+### Lint (mechanical, no behavior change)
+
+| file::location | finding | before | after |
+|---|---|---|---|
+| `pkg/agent/stopped_child_notice_u1_test.go::u1NoticeBody` (prealloc) | `var parts []string` grown via unbounded `append` in a `for range fields` loop | `var parts []string` | `parts := make([]string, 0, len(fields))` |
+| `pkg/agent/stopped_child_notice_u1_test.go` (QF1001, De Morgan's law) | `!(strings.Contains(body, "ask") \|\| strings.Contains(body, "check with"))` | `!(strings.Contains(body, "ask") \|\| strings.Contains(body, "check with"))` inside `(!strings.Contains(body, "owner") \|\| !(...))` | `(!strings.Contains(body, "ask") && !strings.Contains(body, "check with"))` inside `(!strings.Contains(body, "owner") \|\| (...))` |
+
+Verified clean: `golangci-lint run --build-tags=goolm,stdjson ./pkg/agent` → `0 issues` (exit 0); the file is no longer named in output (single-file invocation fails typecheck on package-external symbols, so the package-scoped run is the correct instrument — confirmed by reading its own error list first).
+
+### Stale-fence fixtures (D2/CRIT-001 pattern, same class as the 8 above)
+
+| file::test | old assertion | new assertion | justification |
+|---|---|---|---|
+| `pkg/agent/steer_delegate_cancel_test.go::TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts` | `if rec.Stop == nil && !rec.Terminal() { t.Fatalf(...) }` — demanded a live Stop fence OR Terminal()==true | `if rec.State != session.LifecycleStopped { t.Fatalf(...) }` followed by `if rec.StopNote == nil { t.Fatalf(...) }` | `session.LifecycleStopped` is deliberately non-terminal (`lifecycle.go::LifecycleStopped` doc comment, `terminalLifecycleStates` excludes it) and `Stop` (the in-flight fence) is documented to clear "the instant the stop it names is carried out" (`lifecycle_edge.go::StopNote` doc comment) — so a correctly-landed stopped record always has `Stop == nil` and `Terminal() == false`, making the old assertion fire on EVERY correct landing. `State == LifecycleStopped` + non-nil `StopNote` is the durable, authoritative, D2/CRIT-001-backed proof the cancel actually landed; stronger than the old proxy, not weaker. |
+| `pkg/agent/steer_delegate_cancel_test.go::TestDelegateCancel_RunningSubagentStopsItsGrandchildren` | `if childRec.Stop == nil { t.Fatalf(...) }` | `if childRec.State != session.LifecycleStopped { t.Fatalf(...) }` followed by `if childRec.StopNote == nil { t.Fatalf(...) }` | Same class/reason as above. `childID` is the direct hard-cancel target, which lands synchronously by the time the tool call returns (`res.ForLLM` already reports "hard-cancelled immediately"), so its fence has already cleared — `Stop == nil` is expected, not a failure. Scope note: the neighbouring `grandRec.Stop == nil \|\| grandRec.Stop.Generation != grandRec.Generation` check (same test, checked a few lines earlier) was deliberately left untouched — read `lifecycle_edge.go::Stop`'s own doc comment confirming the fence is written per-descendant and cleared only once THAT descendant's own turn lands; the grandchild's async turn is still winding down at the point of that check (the test waits on `grandTS.Finished()` only afterward), so a still-live fence there is the correct in-flight proof, not a stale one — out of the dispatch brief's scope and confirmed correct by source reading, not skipped. |
+
+### Proof (compile + named runs, under the shared lock, serial)
+
+| Probe | Command (abbreviated) | Exit | Result |
+|---|---|---|---|
+| Compile-only | `go vet -tags goolm,stdjson ./pkg/agent/` | 0 | clean |
+| `TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts` | `go test -tags goolm,stdjson -p 1 -run '^TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts$' ./pkg/agent/ -v` | 0 | `--- PASS (4.67s)` |
+| `TestDelegateCancel_RunningSubagentStopsItsGrandchildren` | `go test -tags goolm,stdjson -p 1 -run '^TestDelegateCancel_RunningSubagentStopsItsGrandchildren$' ./pkg/agent/ -v` | 0 | `--- PASS (1.83s)` |
+| D6 regression check (file untouched — `git diff --stat` empty) | `go test -tags goolm,stdjson -p 1 -run '^TestComplete_StopThatCausedThisCompletionLandsTerminal$' ./pkg/agent/ -v` | 1 | `--- FAIL`, message still names `hasRunningOrQueuedDescendant` — the same, correctly-tracked D6 gap, not touched by this round |
+
+No production code was edited this round; test-file-only, same as every prior round.
+

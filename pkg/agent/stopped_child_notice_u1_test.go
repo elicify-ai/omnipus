@@ -144,7 +144,7 @@ func assertU1StopNoticeMetadata(t *testing.T, rec *session.LifecycleRecord, noti
 	if !strings.Contains(body, "clear") || !strings.Contains(body, "goal") {
 		t.Errorf("D6 notice does not offer clearing the helper's goal: %s", body)
 	}
-	if wantActor != "" && (!strings.Contains(body, "owner") || !(strings.Contains(body, "ask") || strings.Contains(body, "check with"))) {
+	if wantActor != "" && (!strings.Contains(body, "owner") || (!strings.Contains(body, "ask") && !strings.Contains(body, "check with"))) {
 		t.Errorf("human-stop notice lacks advice to consider asking the owner first (D6): %s", body)
 	}
 	return string(noteRaw)
@@ -154,7 +154,7 @@ func u1NoticeBody(fields map[string]any) string {
 	// Read all payload strings, so either text or structured action labels
 	// can satisfy the observable notice contract. Routing fields are not
 	// evidence that the notice tells its reader the stop cause/actor.
-	var parts []string
+	parts := make([]string, 0, len(fields))
 	for key, value := range fields {
 		switch key {
 		case "message_id", "session_id", "parent_session_id", "direction", "depth", "generation", "sender_identity", "created_at", "untrusted_origin", "kind":
