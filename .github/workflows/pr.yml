@@ -567,7 +567,7 @@ jobs:
 
       - name: Prepare SPA embed stub (gateway browser tests)
         run: |
-          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep || exit 1
           # Fail loudly here rather than later inside `go test`.
           test -d pkg/gateway/spa/assets || { echo "::error::SPA stub failed: pkg/gateway/spa/assets missing" >&2; exit 1; }
 
