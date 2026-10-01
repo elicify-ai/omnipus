@@ -478,7 +478,30 @@ Issue placeholders only: #1170, #1171, #1172, #1173, #1174, #1175. A separate la
 
 ## Open questions for the founder
 
-Pending evidence review; settled decisions will not be reopened.
+Recorded for the **later design/spec review**, not a new interview in this dispatch. All founder-set Phase 1 choices remain settled: plain IMAP first; two/eight connections; two-minute idle release; no retained panel sockets while closed; encrypted folder metadata; event-driven 24-hour/five-minute refresh; memory-only newest 50; 30-minute closed retention; request-only bodies/parts; 25/+25/200 and search; independent watcher sharing A8. Filename/date handling and #1170–#1175 scope are also settled. No question below proposes weakening them.
+
+**Q1 — Phase 2 limits and re-probe intervals.** Headers/flags would become sensitive retained disk metadata; exact limits were not set in the brief. Approval makes retention and test/footprint gates definite before Phase 2 starts.
+
+| Option | Decision |
+|---|---|
+| **A — Recommended** | Accept proposed 150 headers/mailbox, 7-day successful-validation age, 1 MiB/mailbox, 32 MiB global header/state disk bound, 64 KiB folder-file bound; periodic/negative probe at 7 days, failed-probe minimum 15 minutes; five-second/1 MiB discovery and three trusted redirects. Accept the **headers/flags/folder-state-only** D6/D21 amendment when Phase 2 is accepted/implemented. |
+| B | Change specific proposed bounds/intervals in the spec. Phase 2 waits; Phase 1 core limits and no-body rule do not change. |
+
+**Q2 — What an explicit JMAP preference means.** A forced choice that quietly falls back can mislead diagnosis; a strict choice may leave Mail unavailable on an unsupported server. Auto already provides graceful fallback.
+
+| Option | Decision |
+|---|---|
+| **A — Recommended** | **Auto** permits visible IMAP fallback; **IMAP** disables probes; explicit **JMAP** is strict and shows the reason/Retry if unavailable. Keep endpoint-origin trust separate; no preference bypasses TLS/SSRF/credential restrictions. |
+| B | Explicit JMAP means “prefer,” with a clearly labelled IMAP fallback. Document that weaker meaning; do not claim the request used JMAP. |
+
+**Q3 — Operational and performance acceptance bars.** Tighter waits and concrete response targets make completion measurable, but network/server variability and request-only HTML fetches can affect them. These bars are not observed results or founder-set constants.
+
+| Option | Decision |
+|---|---|
+| **A — Recommended** | Accept the proposed five-second pool wait inside a 45-second overall read budget, 4 MiB reusable metadata budget in both phases, and the measurement plan's cached-display/warm-live/cold/body/summary bars, with paired receipts and explicit trade-off approval for deviations. Keep every fixed resource/privacy/correctness rule non-negotiable. |
+| B | Set different proposed timing/memory/sampling bars in the spec before implementation. Do not backfit them to a failing run or reinterpret a cache hit as fresh server success. |
+
+**Engineering verification gaps — not questions the founder must guess at:** trace the real data-autocommit job/exclusion owner; verify socket auth/liveness/teardown integration and restart-stable credential/config identity; establish exact JMAPACCESS URL support and service-origin configuration; collect missing message-open/Retry/large-folder baseline and diagnose saved-state summary latency. Backend/QA/security own those receipts. Until verified, they remain **Unknown**; no number/provider/API syntax is invented to fill them.
 
 ## Evidence table
 
