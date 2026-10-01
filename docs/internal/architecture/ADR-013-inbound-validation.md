@@ -219,6 +219,238 @@ embedded schemas compile under Draft4) and
 including the share-fraction lower bound, still enforced) —
 `pkg/gateway/rest_inbound_validate_test.go`, `pkg/gateway/rest_context_settings_test.go`.
 
+### 7. Correction — global Draft4 silently disabled `const` [addendum, 2026-10-01]
+
+**Correction: §6 said "this is a dialect correction, not a new design" and
+approved a global `c.DefaultDraft(jsonschema.Draft4)`. That was incomplete —
+it traded one gateway-boot-killing defect for a second, narrower but real,
+validation-enforcement defect it did not check for. Correct fix: keep the
+compiler's own modern default (2020-12) for 458 of 460 schemas; scope
+Draft4 to only the 2 files that actually need it, via a load-time `$schema`
+tag on those two documents, not a global compiler setting.**
+
+**What broke.** `santhosh-tekuri/jsonschema/v6 v6.0.2`'s `const` keyword is
+wired up only in `compileDraft6`
+(`objcompiler.go::objCompiler.compileDraft6`), which `objCompiler.compile`
+only calls `if s.DraftVersion >= 6` (`objcompiler.go::objCompiler.compile`,
+line 46). `Draft4.version == 4` (`draft.go`, `Draft4 = &Draft{version: 4,
+...}`), so under the global Draft4 pin `compileDraft6` never runs for any
+embedded schema, `s.Const` stays `nil` for all of them, and
+`validator.go`'s const check (`if s.Const != nil { ... }`, line 106) never
+fires — a `const`-constrained field silently accepts any value of the
+declared JSON type. This is not a corner case of the library; it is the
+documented split between the draft-04 and draft-06 keyword sets, and it
+is global because `DefaultDraft` sets `c.roots.defaultDraft`
+(`compiler.go::Compiler.DefaultDraft`), which every schema document falls
+back to unless it declares its own `$schema`, and none of the 460 embedded
+files do.
+
+**Scope, verified directly, not estimated.** `grep -rl "const:"
+pkg/gateway/inboundschemas/*.yaml` → exactly 73 files. Every one uses
+`const` on exactly one of two patterns: a `type` string discriminator (71
+files — every `*Frame.yaml` client↔server WS frame shape) or a boolean tag
+discriminator (`_ref`/`_truncated`, 2 files — `ToolResultRef.yaml`,
+`TruncatedResult.yaml`, both embedded only inside
+`ToolCallResultFrame.yaml`'s `result` field). No REST (`decodeAndValidate`)
+schema uses `const` — confirmed against every schema name passed to
+`decodeAndValidate(...)` across `pkg/gateway/rest_*.go`, `sse.go`,
+`signin_provider.go`: zero overlap with the 73.
+
+**Live blast radius is narrower than it first looks, but the defect is
+real and currently RED, not a silent production hole.** Traced every call
+site that reaches `ValidateInboundFrameJSON`:
+
+- The chat WS (`pkg/gateway/websocket.go::wsHandler.readLoop`) and the
+  browser WS (`pkg/gateway/browser_ws.go`, same pattern) both derive the
+  schema name from the **same raw frame bytes** they then validate:
+  `peek.Type` (or `typ.Type`) is unmarshalled from `data`, fed into
+  `wsFrameSchemaName(peek.Type)` to pick the schema, and the unmodified
+  `data` is then validated against that schema
+  (`websocket.go::wsHandler.readLoop`, the
+  `schemaName := wsFrameSchemaName(peek.Type)` /
+  `ValidateInboundFrameJSON(schemaName, data)` pair). Because the
+  discriminator that selects the schema and the discriminator inside the
+  validated payload are the same bytes, a client cannot make the routed
+  schema disagree with the payload's own `type` field — there is no
+  "validate as X, dispatch as Y" confusion to exploit through this path.
+- The 3 call sites that hardcode a schema name instead of deriving it from
+  the payload (`browser_dedicated_input.go` ×2 → `BrowserInputOfferFrame`,
+  `BrowserInputFrame`; `browser_webrtc.go` → `BrowserCaptureHelloFrame`)
+  never read the decoded frame's `Type` field for any downstream decision
+  (verified: `dispatchDedicatedInputOffer` and the dedicated-input send
+  path use `f.InputEpoch`/`f.OfferId`/etc., never `f.Type`) — so an
+  unenforced `const` on `type` here is inert too.
+- `ToolResultRef`/`TruncatedResult`'s `const` fields are on a shape that is
+  **server→client only** — built in `replay.go::buildResultFrame` and
+  `websocket_forward_hub.go`, never unmarshalled from client-controlled
+  bytes through `ValidateInboundFrameJSON` at all (not in
+  `wsFrameSchemaName`'s switch, no literal call site). Zero live exposure.
+
+So the gap does not currently give an attacker a working type-confusion
+exploit against any wired handler. What it does do, verified by running
+the suite, is break an existing contract test:
+`TestWebRTCFrameSchemasRoundTrip` (`pkg/gateway/browser_webrtc_contract_test.go`)
+asserts a wrong `type` const is rejected; under the global Draft4 pin it
+is not, and `CGO_ENABLED=0 go test -tags goolm,stdjson -run
+'^TestWebRTCFrameSchemasRoundTrip$' -p 1 ./pkg/gateway/` fails all 7
+subtests on their "wrong const must be rejected" assertion (confirmed by a
+local run — all 7 `--- FAIL`, overall `FAIL`, `exit=1`). That test
+predates this stream and is unrelated to its own diff (`git log --
+pkg/gateway/browser_webrtc_contract_test.go` shows it introduced on
+`6e080c9d4`, "W2-C"; `git show origin/main:...` confirms it is absent from
+`main` entirely — it only exists on this integration lineage) — but Hard
+Constraint #7 makes it this stream's to fix regardless of origin, and it
+blocks the gate as-is. It is also a forward-looking risk: any future
+`oneOf`+discriminator schema added under this validator (the one Hard
+Constraint #8 exception, ADR-034-style) would have its discriminator
+silently stop discriminating under the same pin — today it happens to be
+inert because nothing yet trusts `const` as an authority, but that is a
+property of the current call graph, not of the fix, and should not be
+relied on going forward.
+
+**The squad lead's candidate fix (rejected as unnecessary, not as
+wrong-in-kind) and the correct fix.**
+
+The candidate — drop the global Draft4 pin, restore the compiler's 2020-12
+default, and translate `exclusiveMinimum`/`exclusiveMaximum` from the
+OpenAPI-3.0.3 boolean form into 2020-12's numeric form **for every
+schema**, at load time in `inboundSchemaLoader.Load()` — gets the
+direction right (drop the global pin) but over-scopes the mechanism.
+`grep -rl "exclusiveMinimum\|exclusiveMaximum"
+contracts/components/schemas/*.yaml` → exactly 2 files,
+`ContextSettings.yaml` and `ContextSettingsUpdate.yaml` (both
+`tool_result_share_fraction`), not "every schema." Translating a value
+that doesn't exist in the other 458 files is dead code the moment it's
+written, and a value-rewrite is the wrong tool even for those 2: it
+reaches into the schema's own semantics (what `minimum`/`exclusiveMinimum`
+*mean*) rather than telling the validator library which dialect a
+document is already written in.
+
+**Is this the same mistake as the rejected ChannelRouting loader
+workaround?** No — verified the distinction, not assumed it. The
+ChannelRouting case (§6, "Consequence") was `required: []`: a form that
+means exactly the same thing ("nothing required") under every dialect,
+where the fix — delete the key — is *more* idiomatic OpenAPI regardless of
+dialect and was rejected as a loader workaround only because a strictly
+equivalent, dialect-neutral edit existed at the source and was skipped in
+favour of a Go-side special case. Here, no dialect-neutral source edit
+exists:
+
+- A numeric `exclusiveMinimum` in `ContextSettings.yaml` (the 2020-12
+  form) is rejected by `redocly lint` — verified directly, not taken on
+  the squad lead's word: edited `tool_result_share_fraction` to
+  `maximum: 1` / `exclusiveMinimum: 0`, ran
+  `npx --no-install @redocly/cli lint contracts/openapi.yaml
+  --skip-rule no-server-example.com` → `exit=1`,
+  `[1] contracts/components/schemas/ContextSettings.yaml:49:23 at
+  #/properties/tool_result_share_fraction/exclusiveMinimum ... Error was
+  generated by the struct rule`. File restored immediately after
+  (`git status --short` clean).
+- Adding `$schema` directly inside the `ContextSettings.yaml` component
+  schema object is also rejected by the same linter — verified the same
+  way: `exit=1`,
+  `[1] contracts/components/schemas/ContextSettings.yaml:10:1 at
+  #/$schema ... Property \`$schema\` is not expected here`. Restored,
+  clean.
+- OpenAPI 3.0.3's Schema Object is contractually the boolean-paired form
+  (that is the entire reason §6 exists), and `redocly lint` is this
+  project's own enforcement of that dialect on the committed YAML.
+  draft 2020-12's metaschema requires `exclusiveMinimum` to be a number
+  (`metaschemas/draft/2020-12/meta/validation`,
+  `"exclusiveMinimum": {"type": "number"}`, read directly from the
+  vendored module). The two mandatory constraints — OpenAPI 3.0.3 shape in
+  the committed contract, correct `const` semantics in the validator — are
+  structurally incompatible for these 2 fields specifically. There is no
+  dialect-neutral YAML edit to fall back to, unlike ChannelRouting.
+
+That is the dispositive difference: ChannelRouting's rejected fix moved a
+*meaning* decision (is an empty `required` array the same as an absent
+one?) into Go when an equally-correct, dialect-neutral YAML edit already
+existed. The fix below moves no meaning anywhere — `exclusiveMinimum: true`
+paired with `minimum: 0` stays exactly as authored, asserting exactly what
+it always asserted — and only tells the third-party validator library
+which spec dialect to read two specific documents under, which is
+implementation plumbing for a chosen dependency, not contract content.
+
+**Decision.**
+
+1. In `initInboundValidator()` (`pkg/gateway/rest_inbound_validate.go`),
+   replace `c.DefaultDraft(jsonschema.Draft4)` with
+   `c.DefaultDraft(jsonschema.Draft2020)` — explicit, not a reliance on
+   the library's unexported internal default (`draft.go::draftLatest`),
+   so a future `jsonschema/v6` upgrade cannot silently change our dialect
+   out from under us.
+2. In `inboundSchemaLoader.Load()` (same file), after `yaml.Unmarshal`
+   into `doc`, if the schema's base name (the `path` with `.yaml`
+   stripped — the same derivation `PreCompileAllInboundSchemas` already
+   uses) is `ContextSettings` or `ContextSettingsUpdate`, and `doc` is a
+   `map[string]any`, set `doc["$schema"] =
+   "http://json-schema.org/draft-04/schema"` (exact string, no trailing
+   `#` — `draft.go::draftFromURL` rejects a URL with a fragment and falls
+   through to a remote-fetch attempt) before returning. Use a small,
+   explicit, named map/slice literal for the two names — do not infer
+   "needs Draft4" by sniffing for a boolean `exclusiveMinimum` in the
+   parsed doc; an explicit allow-list is auditable and fails loudly (a
+   future third file using the boolean form without being added to the
+   list fails CI's `TestPreCompileAllInboundSchemas_AllSchemasCompile`
+   immediately, the same fail-closed property §2 already relies on).
+3. Do **not** touch any file under `contracts/components/schemas/` or its
+   generated mirror `pkg/gateway/inboundschemas/` — both rejected routes
+   above are reasons, not just data points.
+4. Do **not** implement the squad lead's numeric-translation loader step.
+   It is unneeded (2 files, not all 460) and it is the wrong shape of fix
+   even for those 2 — a dialect tag, not a value rewrite.
+
+**Why this works, verified empirically, not just read off the API.**
+`santhosh-tekuri/jsonschema/v6`'s `Compiler` has no per-URL/per-resource
+dialect override method (`grep -n "^func (c \*Compiler)" compiler.go` —
+full list checked, only `DefaultDraft` sets a dialect, and it is global);
+the only other lever is a document's own `$schema` key, read in
+`roots.go::_collectResources` → `loader.go::defaultLoader.getDraft`, and
+it is read **per freshly-loaded root document** — `$ref`ing a different
+file (e.g. `ContextSettings.yaml`'s `model_overrides` →
+`./ContextModelOverride.yaml`) calls `roots.addRoot` for that new URL with
+fallback dialect `rr.defaultDraft` (`roots.go::addRoot`, line 48), **not**
+the referencing document's resolved dialect — confirmed by reading
+`addRoot`/`collectResources`, where cross-document fallback is always
+`rr.defaultDraft` and only same-document nested subschemas inherit the
+parent's already-resolved dialect (`roots.go`, lines 185 and 223 use
+`baseRes.dialect`/`base.dialect`, both scoped to resources already inside
+the same root). So tagging exactly 2 files scopes Draft4 to exactly those
+2 resources; everything they reference, and all 458 other files, get the
+2020-12 default.
+
+Verified directly with a throwaway local probe (not committed): a
+compiler configured exactly as above (`DefaultDraft(Draft2020)`, loader
+injecting `$schema` only for the 2 named files) —
+
+- compiled all 460 embedded schemas with zero errors
+  (`TestZZZArchitectProbeDraft2020Compile`, local run, `PASS`,
+  `"all 460 embedded schemas compiled cleanly under Draft2020 with 2-file
+  Draft4 override"`);
+- correctly rejected a wrong `type` const on `CancelFrame`
+  (`TestZZZArchitectProbeConstEnforced`, `PASS`,
+  `at '/type': value must be 'cancel'`);
+- correctly still rejects `tool_result_share_fraction: 0` and still
+  accepts `0.5` on `ContextSettingsUpdate`
+  (`TestZZZArchitectProbeContextSettingsStillWorks`, `PASS`,
+  `exclusiveMinimum: got 0, want 0`, then no error for `0.5`).
+
+The probe file was deleted after the run — it is not part of this
+decision's shipped mechanism, only its verification.
+
+**Required follow-up, not optional.** After the mechanism lands:
+`TestWebRTCFrameSchemasRoundTrip` must go green on all 7 cases (both the
+const-rejection and required-field-rejection assertions);
+`TestPreCompileAllInboundSchemas_AllSchemasCompile` must still show 460/460;
+`TestContextSettings_PutRejectsOutOfRange` must still pass unchanged. In
+addition, qa-lead should add at least one regression test asserting
+`const` rejection on one of the 71 `type`-discriminated frame schemas
+beyond the 7 already covered by `TestWebRTCFrameSchemasRoundTrip` (e.g.
+`CancelFrame` or `MessageFrame`, both reached through
+`wsFrameSchemaName`'s derived-schema path rather than a hardcoded one) —
+flagged to team-lead as a test-coverage gap, not fixed here.
+
 ---
 
 ## Default-Flip Target
