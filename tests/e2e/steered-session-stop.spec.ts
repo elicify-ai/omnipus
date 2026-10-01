@@ -45,15 +45,30 @@
  *        `steer.OutcomeInterrupted` -> `SubTurnStatusInterrupted`, i.e.
  *        `subagent_end.status = "interrupted"` — this is `item.status`, i.e.
  *        `data-status`.
- *      - `pkg/agent/steer_audience.go` (~line 182-183) separately maps that
- *        SAME `steer.OutcomeInterrupted` -> `session.LifecycleCancelled`
- *        ("cancelled") for the `subagent_state` frame — this is
- *        `lifecycleState`, rendered as the row's visible status TEXT via
- *        `getLifecycleStatusDot` (`src/lib/subagentStatus.tsx`), never as
- *        `data-status`.
+ *      - `pkg/agent/steer_audience.go::subagentStateForOutcome` (lines
+ *        232-245) separately maps that SAME `steer.OutcomeInterrupted` ->
+ *        `session.LifecycleStopped` ("stopped") for the `subagent_state`
+ *        frame — this is `lifecycleState`, rendered as the row's visible
+ *        status TEXT via `getLifecycleStatusDot`
+ *        (`src/lib/subagentStatus.tsx`), never as `data-status`.
  *    The old assertion (`data-status: 'cancelled'`) read the second value off
  *    the first attribute — a value the system never emits there. Fixed below
- *    to assert `data-status: 'interrupted'` and the visible label "cancelled".
+ *    to assert `data-status: 'interrupted'` and the visible label "stopped".
+ *
+ *    UPDATE (2026-09-29/30, founder rulings on session states, F0929-2):
+ *    `cancelled`/`timed_out`/`paused` were consolidated into one single
+ *    non-terminal, resumable state, `stopped`. `session.LifecycleCancelled`
+ *    no longer exists as a Go symbol — `subagentStateForOutcome` now returns
+ *    `session.LifecycleStopped` ("stopped") for both `steer.OutcomeInterrupted`
+ *    and `steer.OutcomeTimedOut`. The visible label this row shows for a
+ *    stopped steered child is therefore "stopped", not "cancelled" — the two
+ *    `getByText` assertions below were updated to match. Source of truth:
+ *    `docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md`
+ *    (F0929-2) and `coordination/PLAN-2026-09-28.md`, "2026-09-29 Founder
+ *    rulings — session states, stop model". This test will only actually go
+ *    green once the wire-contract and rendering fixes for `stopped` have
+ *    landed alongside it — the oracle text here is corrected ahead of that,
+ *    not proof it currently passes.
  *
  * 2. UNREACHABLE STOP BUTTON. `ChatScreen.tsx`'s `stop-btn` only renders
  *    while `isStreaming` is true for the currently attached session, and
@@ -379,23 +394,24 @@ test(
     // `data-status` is `ActivityRow`'s SPAN axis (`item.status`, from
     // `subagent_end.status`) — a Stop maps to `steer.OutcomeInterrupted`,
     // which `deliverSubagentEnd` (pkg/agent/steer_frames.go) stamps as
-    // "interrupted", never "cancelled". "cancelled" is the SEPARATE
-    // `lifecycleState` axis (`subagent_state.state`, pkg/agent/
-    // steer_audience.go ~182-183) that never reaches `data-status` — it
-    // only drives the row's visible label (getLifecycleStatusDot,
-    // src/lib/subagentStatus.tsx). Assert both, on their correct axes, and
-    // explicitly rule out the states an interrupted-but-mishandled Stop
-    // most often gets confused with.
+    // "interrupted", never "stopped". "stopped" is the SEPARATE
+    // `lifecycleState` axis (`subagent_state.state`,
+    // pkg/agent/steer_audience.go::subagentStateForOutcome, lines 232-245)
+    // that never reaches `data-status` — it only drives the row's visible
+    // label (getLifecycleStatusDot, src/lib/subagentStatus.tsx). Assert
+    // both, on their correct axes, and explicitly rule out the states an
+    // interrupted-but-mishandled Stop most often gets confused with.
     await expect(rowAfterStop).toHaveAttribute('data-status', 'interrupted', { timeout: 15_000 })
-    // 'cancelled' (not 'failed') is the confusion this rules out: it is a
-    // REAL `ActivityStatus` member that the OTHER axis (lifecycleState) does
-    // carry for this exact Stop, so stamping it on `data-status` is the
-    // plausible mistake. ('failed' is not in the `ActivityStatus` union at
-    // all — src/hooks/useRunningActivity.ts — so asserting its absence was
+    // 'cancelled' (not 'failed') is the confusion this rules out on the
+    // `data-status` axis: it remains a REAL `ActivityStatus` member
+    // (src/hooks/useRunningActivity.ts) — unaffected by the F0929-2 session-
+    // state consolidation, which only touched `lifecycleState` — so stamping
+    // it on `data-status` is still the plausible mistake. ('failed' is not
+    // in the `ActivityStatus` union at all, so asserting its absence was
     // vacuous.)
     await expect(rowAfterStop).not.toHaveAttribute('data-status', 'cancelled')
     await expect(rowAfterStop).not.toHaveAttribute('data-status', 'running')
-    await expect(rowAfterStop.getByText('cancelled', { exact: true })).toBeVisible()
+    await expect(rowAfterStop.getByText('stopped', { exact: true })).toBeVisible()
 
     // Reload and confirm the stopped state was durably persisted, not just
     // held in the client's in-memory store.
@@ -409,6 +425,6 @@ test(
     await openActivityPanel(page)
     const rowAfterReload = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
     await expect(rowAfterReload).toHaveAttribute('data-status', 'interrupted', { timeout: 15_000 })
-    await expect(rowAfterReload.getByText('cancelled', { exact: true })).toBeVisible()
+    await expect(rowAfterReload.getByText('stopped', { exact: true })).toBeVisible()
   },
 )
