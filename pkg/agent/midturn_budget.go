@@ -45,10 +45,14 @@ func toolResultShareLimit(cs config.ContextSettings, window int) int {
 
 // ephemeralSystemNoteTokens estimates request-only notes for the pre-turn
 // entry check: scratchpad, workspace instructions, web-rendering guidance and
-// the goal rubric. The final request checkpoint measures the actual assembled
-// messages after note injection and hooks; it does not use this estimate.
-// The compressed manifest is already charged by sentToolSurfaceTokens at
-// the pre-turn site, so including it here would double-count its cost.
+// the goal rubric. The admitted-result mid-turn checkpoint
+// (midTurnWindowCheck) charges the same estimate on top of its measured
+// messages (C1): its candidate does not yet contain the notes, so the
+// estimate is the only way its trigger and 4/5 target can see them. The
+// final request checkpoint measures the actual assembled messages after note
+// injection and hooks; it does not use this estimate. The compressed
+// manifest is already charged by sentToolSurfaceTokens at the pre-turn site,
+// so including it here would double-count its cost.
 func (al *AgentLoop) ephemeralSystemNoteTokens(ts *turnState) int {
 	if ts == nil || ts.agent == nil {
 		return 0
@@ -100,7 +104,7 @@ func (al *AgentLoop) midTurnWindowCheck(ts *turnState, messages []providers.Mess
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	out, _, err := al.checkpointWindow(ctx, ts, messages, toolDefs, false)
+	out, _, err := al.checkpointWindow(ctx, ts, messages, toolDefs, false, estimateEphemeralNotes())
 	if err != nil {
 		return messages, err
 	}
