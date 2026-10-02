@@ -962,21 +962,32 @@ All REST rows reference `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/
 
 ---
 
-## 10. Definition of Done
+## 10. Definition of Done — later implementation, not this correction's results
 
-**Code correct and tested** — requires ALL of:
-- Every §6 test written from this spec (RED first), passing (GREEN), with red-before-green receipts on the implementation branch (tests-only CI proof, or the single dispatcher-owned narrow local run the root rules permit), then an independent CHECK/mutation audit (the X-1…X-10 counterexamples each demonstrated to kill their mutation).
-- `make verify-contracts` green with the §8 artifacts regenerated in the same commits as their spec changes; no hand-edited generated files.
-- `make lint-budgets`, `make lint-guards` and the full CI gate green (remote cluster per the root rules); the four fixed+architect+security 5-reviewer gate clean on the feature branch, and the whole-epic gate before `→ main`.
-- The truthful-outcome rule proven: at least one test (B-18) drives a real unlink failure and asserts the non-success outcome; the removal paths never return unconditional success.
+**Code correct and tested** — all requirements below are mandatory before delivery:
 
-**Reachable by a user/agent** — requires ALL of:
-- An executed UI journey: real Mail panel open produces the presence ack; panel close/socket death closes retained sockets (server-side counter evidence, not assertion-only); cached-state and `cache_unavailable` notice visible in the SPA when the gate refuses.
-- An executed agent journey: an allowed agent's mail tool call resolves the shared runtime (same-instance evidence); a file-tool attempt on `mail-cache/` is refused (MC-16 executed, not just written).
-- An executed privacy journey: mint → serve → logout on a real preview; token store inspection shows zero bytes; the marker-scan test executed against a marker-talking fake server.
-- The deployment receipt: US-4's E1–E5 executed **fresh on the target machine** (after the job is reloaded and unblocked), cited by path and date in the delivery report — the trace's snapshot is motivation, never proof.
-- Hard Constraint #6 honoured negatively (no new tools — §8 step 7) and positively for reachability: the feature is reachable through the existing registered mail surfaces (panel + existing tools), with the executed journeys above as evidence — registration/policy checks alone are not reachability.
-- User-facing documentation updates below landed and audited by `docs-verifier` against the actual behaviour in the same change.
+| Gate | Required evidence |
+|---|---|
+| RED → GREEN → independent CHECK | All **48 planned TDD rows**, every scenario and every **X-1…X-18** mutation obligation evidenced. RED is a tests-only CI commit or the single dispatcher-owned narrow local run permitted by root rules; GREEN and restored mutation receipts name the build/log/exit code. A mixed spec+test commit alone is not tests-only RED proof. Written tests or zero matched tests are not execution. |
+| Contract-first boundary | W0's full §8 union and regenerated Go/TS/Zod artifacts committed atomically and `make verify-contracts` green. The hand-written-type prohibition is separately checked by `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/scripts/check-no-handwritten-wire-types.sh`; drift and hand-written types are different checks. No stub or local replacement type. |
+| Full delivery gate | Budgets, guards and every required CI gate green under root rules; **three fixed reviewers + architect + security-lead = five**, on the feature branch and the whole integration before main. No pre-existing failure is silently waived; remaining blocking items are escalated by team-lead, not put through an extra correction round here. |
+| Truthful cleanup / no resurrection | Real cache **and watcher-state** unlink faults, after-config-row-gone authorized Retry, paused writers and restart orphan reconciliation. Saved user files/provenance remain intact. A log-only failure cannot count as `removed`. |
+| Product-owned privacy and runbook | Fresh **E1–E5 product-only** staging/archive/restore receipts, including history/current/temp/retired fixtures and ordinary-file controls, on supported installs. The **owner-drafted tracked-state remediation runbook exists and is audited** (US-4.3/B-34/row 34) regardless of whether a tracked file was found. No external setup is a prerequisite or substitute. |
+| Real Windows evidence | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/.github/workflows/cross-platform.yml` extension actually executes the native cache/ACL test with named assertions/denied-access control, or an equivalent signed Windows UAT receipt. Compile-only, daemon-only or unrelated path tests do not prove Mail ACL behaviour. |
+| Instrument and freeze completeness | w6's one record definition, W1/W2 owned fields and w5 production envelope all exist; success/failure/mint/serve/summary/removal records are observed. **§13 Q8 must be resolved by w6** before removal emission/proof; missing records make a campaign invalid/not judgeable, never a green bar. |
+
+**Reachable by a user/agent** — this is a separate claim, requiring all executed journeys:
+
+| Journey | Required observable proof |
+|---|---|
+| Real panel and presence | Acknowledged observer on authenticated WS, **both folder/list REST `observer_id` params**, actual retained-socket close on close/disconnect/logout and independent-owner control; cached/unknown/stale/genuine-cache-failure states visible. |
+| Bounded older-mail access | Real **25/+25/200**, subject/from/to server search and typed stale 409; fresh open/switch zero live refresh, absent/>5-minute one refresh, manual Refresh always and own-action refresh unchanged. Not source-grep or mocked output proof. |
+| Permitted agent | Existing/new permitted mail tool resolves the same runtime; no-Message-ID attachment journey uses **actual issued refs**, same-lease validation and selected-part PEEK. Private-cache file/shell attempt refuses. W4 supplies registration/literal-policy/Auto proof; this package adds no new tool names and takes no credit from an empty grep. |
+| Preview and Save | Metadata mint → real capped live serve → exit/logout, zero retained message payload, no whole-message fallback; larger browser Download separate; a successful Save yields the real Library entry/file with ordinary workspace resources. Saved HTML original bytes/provenance/scripts-off/per-file checkbox remain proven through supported file operations/restore. |
+| Privacy and recovery | Genuine dual-gate failure shows `cache_unavailable`; real cleanup-pending remains visible/retryable after config removal; marker scan detects its positive fixture and zero forbidden output markers. Product-only initialization and E1–E5 are executed, not merely documented. |
+| Matching user documentation | Every §11 TODO lands in the implementation's **same change** and docs-verifier checks it against actual behaviour/receipts. A missing update is Important; this spec-only correction changes no current UI/behaviour and does not edit those user pages. |
+
+For **this correction**: **code correct and tested — not assessed/no tests run**. **Reachable by a user/agent — not implemented or claimed**. Those two statements must remain separate in the later delivery report.
 
 ---
 
