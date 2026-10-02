@@ -869,7 +869,18 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// tool or marker. Under D13 the Judge is dispatched AFTER this
 		// turn's own answer has been delivered, off the critical path
 		// (runAgentLoop, loop.go) — this function no longer invokes the
-		// Judge itself; it records the DEFERRED work below and returns.
+		// Judge itself.
+		//
+		// Q2 B (the deferred-work arm): a met claim may not schedule
+		// adjudication immediately if the delegated subtree is not quiet
+		// (waiting_descendants install below). On every early return inside
+		// this branch — the install-and-promote critical section refused
+		// (second-claim race), subtree quietness check failed or unreadable,
+		// the promote-to-Adjudicating CAS refused (concurrent terminal writer)
+		// — no goalDeferredAdjudication is
+		// recorded. Only the happy path that wins the install AND the
+		// quietness check AND the promote CAS sets the work struct, and it
+		// is the ONLY path that records deferred work.
 		//
 		// JUDGE-FR-101 (open item 3): a second claim arriving while an
 		// adjudication is already in flight for this goal MUST be refused,
@@ -919,6 +930,63 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 			logger.WarnCF("agent", "goal: could not persist the met claim onto the goal record",
 				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": cerr.Error()})
 		}
+		// Q2 B: a met claim is pending intent until the session's whole
+		// delegated subtree is quiet. Install the fence while holding the same
+		// parent-publication lock used by launchSteered. A launch that already
+		// passed its fence check finishes publishing before this lock is
+		// acquired; a later launch sees this phase and is refused. The subtree
+		// read runs after release because child IDs can share the store's
+		// striped mutex with their parent, making a recursive List deadlock.
+		lifecycle := gl.al.GetSessionLifecycleStore()
+		// Q2=B gate round 1 type-design finding 1: a second claim must not
+		// downgrade Adjudicating to Waiting. The transition primitive refuses
+		// that install, coalescing the new claim with the Judge already running.
+		// When the store exists, install under the parent-publication lock so
+		// launches cannot slip between the fence check and the phase write.
+		var installed bool
+		if lifecycle == nil {
+			// SteerLauncher.Launch cannot create descendants without this store.
+			// There is no publication lock to take: the subtree is quiet.
+			logger.DebugCF("agent", "goal: no lifecycle store wired; completion subtree is quiet",
+				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID})
+			installed = gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
+		} else {
+			if goalClaimBeforePublicationLockTestHook != nil {
+				goalClaimBeforePublicationLockTestHook(gl.sessionID)
+			}
+			publicationMu := lifecycle.Lock(gl.sessionID)
+			publicationMu.Lock()
+			installed = gl.al.goalInstallWaitingCompletion(gl.rec.GoalID)
+			publicationMu.Unlock()
+		}
+		if !installed {
+			// The latest claim is durable, but adjudication already owns this
+			// round. A second claim must not schedule a second Judge call.
+			s := goalTriggers()
+			s.mu.Lock()
+			phase := s.completionPhase[gl.rec.GoalID]
+			s.mu.Unlock()
+			logger.InfoCF("agent", "goal: met claim coalesced into the in-flight adjudication",
+				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "phase": phase.String()})
+			return
+		}
+		blocked, blockErr := gl.al.hasRunningOrQueuedDescendant(gl.sessionID)
+		if blockErr != nil || blocked {
+			if blockErr != nil {
+				logger.WarnCF("agent", "goal: completion claim held because descendant state could not be read",
+					map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": blockErr.Error()})
+			}
+			// A terminal transition may have landed just before the waiting
+			// phase was recorded. Re-check immediately so that race cannot
+			// strand the claim; an actually-live descendant remains a no-op.
+			gl.al.resumeDeferredGoalForSession(gl.sessionID, gl.rec.GoalID)
+			return
+		}
+		if !gl.al.goalPromoteCompletionToAdjudicating(gl.rec.GoalID) {
+			// A concurrent terminal writer already dispatched the one fresh-
+			// claim turn. The stale claim must never reach the Judge as well.
+			return
+		}
 		gl.result.goalDeferredAdjudication = &goalDeferredAdjudicationWork{
 			agentInst: gl.agentInst, workspaceID: gl.opts.WorkspaceID,
 			sessionID: gl.sessionID, claimText: claimText,
@@ -958,6 +1026,11 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		gl.al.maybeNudgeUnregisteredGoal(gl.store, gl.sessionID, gl.rec, gl.agentInst, gl.opts)
 	}
 }
+
+// goalClaimBeforePublicationLockTestHook is a test-only synchronization seam
+// fired immediately before the met-claim path acquires its session's parent-
+// publication lock. Always nil in production.
+var goalClaimBeforePublicationLockTestHook func(sessionID string)
 
 // maybeNudgeUnregisteredGoal is ADR-088 D3 amendment item 3's immediate
 // post-turn correction: called only from checkGoalLoopAfterTurn's ordinary-

@@ -1004,7 +1004,13 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 				},
 				// (e)three (FD1=A, #947 defect 1): the boot sweep's
 				// failInterrupted terminal write also ends the session-owned goal.
-				EndSessionGoal: stg.agentLoop.EndSessionOwnedGoalOnTerminal,
+				// Q2=B (#984 follow-up): a non-terminal descendant terminal write
+				// ALSO triggers the re-evaluation hook, so a session whose
+				// last-descendant finishes before a crash still gets its fresh-
+				// claim turn on the next boot. See pkg/agent/boot_sweep.go and
+				// pkg/agent/goal_child_completion.go::ResumeDeferredGoalAfterDescendantTerminal.
+				EndSessionGoal:     stg.agentLoop.EndSessionOwnedGoalOnTerminal,
+				DescendantTerminal: stg.agentLoop.ResumeDeferredGoalAfterDescendantTerminal,
 			}
 			return recovery.Run(ctx)
 		},

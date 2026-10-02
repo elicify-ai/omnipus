@@ -47,6 +47,8 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 	if rec.Terminal() {
 		return false, nil
 	}
+	al.goalSetSteeredCompletionWrite(rec.SessionID, true)
+	defer al.goalSetSteeredCompletionWrite(rec.SessionID, false)
 
 	answer := strings.TrimSpace(result.finalContent)
 	outcome, nextState, failureReason := completionDisposition(result, runErr, answer)
@@ -217,6 +219,7 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		// goal, no action), and it never speaks for a task-owned goal.
 		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
 			goalEndingForTerminalState(nextState), goalSessionEndedReasonForState(nextState))
+		al.resumeDeferredGoalAfterDescendantTerminal(rec.SessionID)
 		return finalWoke, nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
@@ -694,6 +697,12 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 // be the wrong question — a run between turns has no registered turn at all.
 func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		// SteerLauncher.Launch refuses a child without a lifecycle store, so
+		// there is no descendant to wait for. A failed List on a wired store
+		// still returns an error and fails the completion fence closed.
+		return false, nil
+	}
 	seen := map[string]bool{parentID: true}
 	queue := []string{parentID}
 	for len(queue) > 0 {
@@ -713,6 +722,9 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 			case session.LifecycleQueued:
 				return true, nil
 			case session.LifecycleRunning:
+				if al.goalSteeredCompletionWriteActive(child.SessionID) {
+					return true, nil
+				}
 				if ts := al.getActiveTurnState(child.SessionID); ts != nil && ts.IsAlive() {
 					return true, nil
 				}
@@ -756,8 +768,8 @@ func (al *AgentLoop) completeSteeredTurnAfterGoal(ctx context.Context, sessionID
 	}
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
-		logger.WarnCF("agent", "goal: completion tail skipped — lifecycle store is not wired",
-			map[string]any{"session_id": sessionID})
+		// Without this store no steered child can have been launched, so no
+		// parent-facing completion tail exists for this ordinary goal.
 		return false
 	}
 	snapshot, err := lifecycle.Load(sessionID)

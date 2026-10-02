@@ -444,6 +444,24 @@ func (l *SteerLauncher) launchSteered(
 				}
 				return nil, steer.ErrSteeringStopped
 			}
+			// Q2 B completion fence: once this session has claimed completion,
+			// no new child may be published while that claim is waiting on its
+			// existing descendants or being adjudicated. This check is inside
+			// the parent's publication lock and precedes every child record.
+			//
+			// Q2=B gate round 1 finding 2 (security-lead + silent-failure-hunter):
+			// an unreadable goal store used to silently map to "no fence" and
+			// let the launch through — the very Judge race the fence exists
+			// to prevent. The fence now returns an error and the launch
+			// refuses the call explicitly when goal authority is unreadable.
+			if fenceActive, fenceErr := l.al.goalCompletionFenceActive(req.SteeringSessionID); fenceErr != nil {
+				return nil, fmt.Errorf("steer: launch: completion fence could not be read: %w", fenceErr)
+			} else if fenceActive {
+				return nil, fmt.Errorf("steer: launch: completion claim is pending for steering session %q", req.SteeringSessionID)
+			}
+			if launchAfterCompletionFenceTestHook != nil {
+				launchAfterCompletionFenceTestHook(req.SteeringSessionID)
+			}
 			steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)
 			if metaErr != nil {
 				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %w",
@@ -841,6 +859,18 @@ func dispatchRefusalError(reason string) error {
 func commitSteeredDispatchState(
 	lifecycle *session.LifecycleStore, sessionID string, gen int, state session.LifecycleState,
 ) (*session.LifecycleRecord, error) {
+	return commitSteeredDispatchStateWithPendingMessage(lifecycle, sessionID, gen, state, "")
+}
+
+// commitSteeredDispatchStateWithPendingMessage is commitSteeredDispatchState
+// plus a pending wake payload stamp (Q2=B gate round 1 silent-failure-hunter
+// finding 1). The wake's content is appended in the SAME atomic Mutate that
+// flips the state to LifecycleQueued, so every queued wake reaches the next
+// promoted turn in arrival order. An empty pendingMessage is the same as the
+// plain commitSteeredDispatchState (no field written).
+func commitSteeredDispatchStateWithPendingMessage(
+	lifecycle *session.LifecycleStore, sessionID string, gen int, state session.LifecycleState, pendingMessage string,
+) (*session.LifecycleRecord, error) {
 	var committed *session.LifecycleRecord
 	var refusal error
 	err := lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
@@ -853,6 +883,9 @@ func commitSteeredDispatchState(
 			return refusal
 		}
 		rec.State = state
+		if pendingMessage != "" {
+			rec.PendingUserMessages = append(rec.PendingUserMessages, pendingMessage)
+		}
 		committed = rec
 		return nil
 	})
@@ -883,6 +916,11 @@ var dispatchStateWriteTestHook func(sessionID string, gen int)
 // can run to completion and deregister within one poll interval, so a test
 // that samples getActiveTurnState afterwards can miss it entirely.
 var turnRegisteredTestHook func(sessionID string, ts *turnState)
+
+// launchAfterCompletionFenceTestHook is a test-only synchronization seam
+// fired inside the parent-publication lock immediately after the Q2 B
+// completion fence passes. Always nil in production.
+var launchAfterCompletionFenceTestHook func(parentSessionID string)
 
 // dispatchSteeredSession is I-2/I-3's authoritative admission decision.
 // Reserves via I-6's live reserveDispatch guard,
