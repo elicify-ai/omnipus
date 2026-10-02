@@ -32,6 +32,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -519,5 +520,204 @@ func TestReadFolderPage_ConfirmedAbsentRoleReturnsEmptyNotError(t *testing.T) {
 	}
 	if truncated {
 		t.Fatal("an empty folder is not truncated")
+	}
+}
+
+// specialUseSession is a test-only session wrapper whose LIST reply carries
+// the fixture's SPECIAL-USE attributes. imapmemserver drops
+// CreateOptions.SpecialUse (the harness gap named in this file's header), so
+// the RFC 6154 attribute path is driven by session instrumentation in test
+// code only — the ADR test-strategy row this pack already cites. STATUS
+// probes and every other command delegate to the real in-memory server, so
+// existence and UIDVALIDITY stay server-truth.
+type specialUseSession struct {
+	*discoveryInstr
+	entries []imap.ListData
+}
+
+func (s *specialUseSession) List(w *imapserver.ListWriter, ref string, patterns []string, options *imap.ListOptions) error {
+	s.mu.Lock()
+	s.listCalls++
+	s.mu.Unlock()
+	for i := range s.entries {
+		if err := w.WriteList(&s.entries[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// startSpecialUseIMAP boots the real in-memory IMAP server with the named
+// folders (each really created, so STATUS probes are server-truth), the given
+// LIST attributes, and the specialUseSession wrapper on the dial seam. Same
+// shape as startDiscoveryIMAP.
+func startSpecialUseIMAP(t *testing.T, attrs map[string][]imap.MailboxAttr, caps imap.CapSet) (*Client, *discoveryInstr) {
+	t.Helper()
+
+	mem := imapmemserver.New()
+	user := imapmemserver.NewUser(testIMAPUser, testIMAPPass)
+	if err := user.Create("INBOX", nil); err != nil {
+		t.Fatalf("create INBOX: %v", err)
+	}
+	names := []string{"INBOX"}
+	for name := range attrs {
+		if name == "INBOX" {
+			continue
+		}
+		if err := user.Create(name, nil); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var entries []imap.ListData
+	for _, name := range names {
+		entries = append(entries, imap.ListData{Mailbox: name, Delim: '/', Attrs: attrs[name]})
+	}
+	mem.AddUser(user)
+
+	instr := &discoveryInstr{
+		Session:  mem.NewSession(),
+		statusOf: map[string]int{},
+		stall:    map[string]chan struct{}{},
+	}
+	t.Cleanup(instr.releaseStalls)
+	session := &specialUseSession{discoveryInstr: instr, entries: entries}
+
+	srv := imapserver.New(&imapserver.Options{
+		NewSession: func(*imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
+			return session, nil, nil
+		},
+		InsecureAuth: true,
+		Caps:         caps,
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close(); _ = ln.Close() })
+
+	prev := imapDial
+	imapDial = func(_ context.Context, addr string, _ *tls.Config) (*imapclient.Client, error) {
+		return imapclient.DialInsecure(addr, nil)
+	}
+	t.Cleanup(func() { imapDial = prev })
+
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	cl, err := NewClient(Account{
+		IMAPHost: host,
+		IMAPPort: port,
+		SMTPHost: host,
+		Username: testIMAPUser,
+		Password: testIMAPPass,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return cl, instr
+}
+
+// TestDiscovery_AmbiguousSpecialUseAsks — A-1, US-4.1, DT-1 "two sent tags",
+// R-3.5-2/R-3.5-3; closes the CHECK mutation-audit hole F-3 (survivor M15: an
+// arbitrary sorted[0] pick passed the whole discovery family).
+// Oracle: two folders carry \Sent and no saved mapping stands — the role is
+// unresolved-by-ambiguity: source none, availability unknown, the distinct
+// safe reason class mapping_ambiguous, BOTH candidate names surfaced for the
+// user to choose, no folder auto-selected, no epoch fabricated, and the
+// server not touched for that role beyond the enumeration already performed
+// (R-3.5-2). The single-tag drafts role on the SAME server still resolves
+// automatically — the decision is per-role, never a whole-read failure.
+func TestDiscovery_AmbiguousSpecialUseAsks(t *testing.T) {
+	cl, instr := startSpecialUseIMAP(t, map[string][]imap.MailboxAttr{
+		"INBOX":      nil,
+		"Sent":       {imap.MailboxAttrSent},
+		"Sent Items": {imap.MailboxAttrSent},
+		"Drafts":     {imap.MailboxAttrDrafts},
+	}, imap.CapSet{imap.CapIMAP4rev1: {}, imap.CapListExtended: {}, imap.CapSpecialUse: {}})
+
+	m, err := resolveAutomatic(t, cl)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if m.Sent.Availability != "unknown" {
+		t.Fatalf("sent availability = %q, want unknown — two special-use candidates must surface the ambiguity, never auto-resolve (R-3.5-2/US-4.1)", m.Sent.Availability)
+	}
+	if m.Sent.Source != "none" {
+		t.Fatalf("sent source = %q, want none — an ambiguous role resolved nothing (register row 3)", m.Sent.Source)
+	}
+	if m.Sent.Reason != "mapping_ambiguous" {
+		t.Fatalf("sent reason = %q, want %q — the ambiguity variant of unknown carries its distinct safe class (US-4.1/§3.12)", m.Sent.Reason, "mapping_ambiguous")
+	}
+	if m.Sent.Name != "" {
+		t.Fatalf("sent resolved name = %q, want empty — never send or draft into an arbitrarily picked folder (R-3.5-3)", m.Sent.Name)
+	}
+	if m.Sent.UIDValidity != nil {
+		t.Fatalf("sent UIDVALIDITY = %d, want nil — an ambiguous role has no validated epoch", *m.Sent.UIDValidity)
+	}
+	if len(m.Sent.Ambiguity) != 2 || !containsFold(m.Sent.Ambiguity, "Sent") || !containsFold(m.Sent.Ambiguity, "Sent Items") {
+		t.Fatalf("sent ambiguity list = %+v, want exactly both tagged folders (Sent, Sent Items) — the user must see every candidate (R-3.5-2)", m.Sent.Ambiguity)
+	}
+
+	// R-3.5-2: beyond the enumeration, the server is not touched for that
+	// role — the ambiguity surfaced from the listing, no probe happened.
+	status, _, _, _ := instr.counts()
+	if status["Sent"] != 0 || status["Sent Items"] != 0 {
+		t.Fatalf("ambiguous role probed the server (Sent=%d, Sent Items=%d) — ambiguity must surface from the enumeration alone (R-3.5-2)", status["Sent"], status["Sent Items"])
+	}
+
+	// The single-tag role on the same server resolves automatically: the
+	// ambiguity decision is per-role.
+	if m.Drafts.Availability != "present" || m.Drafts.Name != "Drafts" || m.Drafts.Source != "special_use" {
+		t.Fatalf("drafts = %+v, want present/Drafts/special_use — a single tagged folder resolves without surfacing ambiguity", m.Drafts)
+	}
+}
+
+// TestDiscovery_SpecialUseResolvesBeforeFallback — D-1, US-1.1, §3.2 step 3.
+// The CHECK audit's F-3 related gap (the SPECIAL-USE attribute path had zero
+// coverage — imapmemserver drops the attributes) and this file's POSITIVE
+// CONTROL for the ambiguity test: ONE tagged folder, named so no fallback
+// candidate guesses it, resolves automatically with source special_use, and
+// the fallback list is never probed after the tag match (D-1: zero fallback
+// probes). Without this control the ambiguity test could pass by an
+// implementation that refuses every attribute match.
+func TestDiscovery_SpecialUseResolvesBeforeFallback(t *testing.T) {
+	cl, instr := startSpecialUseIMAP(t, map[string][]imap.MailboxAttr{
+		"INBOX":            nil,
+		"Archivio-Inviata": {imap.MailboxAttrSent}, // tagged, outside the candidate list
+		"Drafts":           nil,                    // untagged: only the fallback list can resolve it
+	}, imap.CapSet{imap.CapIMAP4rev1: {}, imap.CapListExtended: {}, imap.CapSpecialUse: {}})
+
+	m, err := resolveAutomatic(t, cl)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if m.Sent.Availability != "present" || m.Sent.Name != "Archivio-Inviata" {
+		t.Fatalf("sent = %+v, want present/Archivio-Inviata — the single \\Sent-tagged folder resolves automatically (D-1/US-1.1)", m.Sent)
+	}
+	if m.Sent.Source != "special_use" {
+		t.Fatalf("sent source = %q, want special_use (§3.2 step 3)", m.Sent.Source)
+	}
+	if m.Sent.UIDValidity == nil || *m.Sent.UIDValidity == 0 {
+		t.Fatalf("sent UIDVALIDITY must be a real probed value (R-3.2-1), got %+v", m.Sent.UIDValidity)
+	}
+
+	status, _, _, _ := instr.counts()
+	if status["Archivio-Inviata"] != 1 {
+		t.Fatalf("tagged folder probed %d times, want exactly 1", status["Archivio-Inviata"])
+	}
+	for _, cand := range []string{"Sent", "Sent Items", "Sent Messages", "[Gmail]/Sent Mail"} {
+		if status[cand] != 0 {
+			t.Fatalf("fallback candidate %q probed %d times — the special-use match ends the ladder with zero fallback probes (D-1)", cand, status[cand])
+		}
+	}
+
+	// The untagged folder rides the candidate list — the ladder still reaches
+	// step 4 for roles the tags do not fill.
+	if m.Drafts.Availability != "present" || m.Drafts.Name != "Drafts" || m.Drafts.Source != "fallback" {
+		t.Fatalf("drafts = %+v, want present/Drafts/fallback — an untagged folder resolves through the candidate list", m.Drafts)
 	}
 }

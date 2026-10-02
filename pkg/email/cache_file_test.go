@@ -32,7 +32,11 @@ package email
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -616,5 +620,226 @@ func TestCacheFile_DeleteRemovesSnapshot(t *testing.T) {
 	}
 	if err := store.Delete(Scope{PairID: "never-written", Generation: "gen-1"}); err != nil {
 		t.Fatalf("Delete of a never-written pair must be orphan-tolerant (E-4 best-effort), got %v", err)
+	}
+}
+
+// envelopeTransportOffset is the byte offset of the transport marker inside
+// the sealed-envelope framing (magic | envelopeVersion | schema | transport
+// length | transport | nonce | ciphertext). It anchors the transport-tamper
+// fixture; a precondition assertion fatals loudly if the framing drifts
+// instead of letting the test pass by tampering the wrong bytes.
+const envelopeTransportOffset = len(envelopeMagic) + 1 + 4 + 1
+
+// TestCacheFile_ForeignPairAADRefusesAtAuthentication — R-3.7-4, CX-7's layer
+// claim; closes the CHECK mutation-audit hole F-2 (survivor M5: the AAD's
+// pair/generation/transport bindings enforced by no test — refusals came only
+// from the post-decrypt payload comparison).
+// Oracle: the AAD binds the pair identity, so an envelope SEALED under a
+// foreign pair's identity must fail AUTHENTICATION even when its decrypted
+// payload would have satisfied the payload comparison — the payload below
+// carries the READER's own pair identity. A refusal is then possible only at
+// the authentication layer; a mutant dropping the pair binding opens this
+// envelope and dies on the found=false assertion.
+func TestCacheFile_ForeignPairAADRefusesAtAuthentication(t *testing.T) {
+	base := t.TempDir()
+	key := bytes.Repeat([]byte{0xAA}, 32)
+	readerScope := Scope{PairID: "pair-A", Generation: "gen-1"}
+
+	// Payload identity fields AGREE with the reading scope: with the pair
+	// binding dropped from the AAD this envelope would open cleanly.
+	snap := testSnapshot()
+	snap.PairIdentity = readerScope.PairID
+	snap.ConfigGeneration = readerScope.Generation
+	payload, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	// Seal under a FOREIGN pair identity: the AAD binds pair-B; the envelope
+	// header and payload stay self-consistent for pair-A.
+	envelope, err := sealSnapshot(payload, testPurposeFolder, snap, Scope{PairID: "pair-B", Generation: readerScope.Generation}, key)
+	if err != nil {
+		t.Fatalf("seal under foreign pair identity: %v", err)
+	}
+
+	path := snapshotPath(base, readerScope.PairID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	if err := os.WriteFile(path, envelope, 0o600); err != nil {
+		t.Fatalf("write envelope: %v", err)
+	}
+
+	store := newTestStore(t, base, testKey(0xAA), testPurposeFolder, 1)
+	got, found, err := store.Load(readerScope)
+	if found {
+		t.Fatalf("an envelope whose AAD binds a foreign pair must not be served (R-3.7-4: it must fail AUTHENTICATION, not fall through to the payload comparison), got found=true with sent name %q", got.Roles.Sent.Name)
+	}
+	if !errors.Is(err, ErrCacheCorrupt) {
+		t.Fatalf("foreign-pair AAD mismatch must refuse with the cache-corrupt class (CX-7), got %v", err)
+	}
+	if !reflect.DeepEqual(got, Snapshot{}) {
+		t.Fatalf("a refused envelope yields no plaintext, got %+v", got)
+	}
+}
+
+// TestCacheFile_ForeignGenerationAADRefusesAtAuthentication — R-3.7-4, CX-7,
+// §3.11's "the old generation's file is unopenable anyway (AAD binding)". The
+// generation twin of the pair test: sealed under generation gen-1, payload
+// agreeing with the gen-2 reader — refusal can only come from authentication.
+func TestCacheFile_ForeignGenerationAADRefusesAtAuthentication(t *testing.T) {
+	base := t.TempDir()
+	key := bytes.Repeat([]byte{0xAA}, 32)
+	readerScope := Scope{PairID: "pair-1", Generation: "gen-2"}
+
+	snap := testSnapshot()
+	snap.PairIdentity = readerScope.PairID
+	snap.ConfigGeneration = readerScope.Generation
+	payload, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	envelope, err := sealSnapshot(payload, testPurposeFolder, snap, Scope{PairID: readerScope.PairID, Generation: "gen-1"}, key)
+	if err != nil {
+		t.Fatalf("seal under foreign generation: %v", err)
+	}
+
+	path := snapshotPath(base, readerScope.PairID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	if err := os.WriteFile(path, envelope, 0o600); err != nil {
+		t.Fatalf("write envelope: %v", err)
+	}
+
+	store := newTestStore(t, base, testKey(0xAA), testPurposeFolder, 1)
+	got, found, err := store.Load(readerScope)
+	if found {
+		t.Fatalf("an envelope whose AAD binds a foreign generation must not be served (R-3.7-4), got found=true with sent name %q", got.Roles.Sent.Name)
+	}
+	if !errors.Is(err, ErrCacheCorrupt) {
+		t.Fatalf("foreign-generation AAD mismatch must refuse with the cache-corrupt class (CX-7), got %v", err)
+	}
+	if !reflect.DeepEqual(got, Snapshot{}) {
+		t.Fatalf("a refused envelope yields no plaintext, got %+v", got)
+	}
+}
+
+// TestCacheFile_TransportHeaderTamperRefusesAtAuthentication — R-3.7-4 (the
+// AAD binds the transport). Closes the CHECK audit's sharpest F-2 loss: the
+// transport binding was checked by NOTHING outside the AAD, so dropping it
+// (mutation M5) was invisible. Oracle: tampering the envelope header's
+// transport marker (same length, so the framing survives) must fail
+// authentication; the ciphertext — and therefore the payload, which still
+// agrees with the scope — is untouched, so only the authentication layer can
+// refuse.
+func TestCacheFile_TransportHeaderTamperRefusesAtAuthentication(t *testing.T) {
+	base := t.TempDir()
+	scope := Scope{PairID: "pair-1", Generation: "gen-1"}
+	store := newTestStore(t, base, testKey(0xAA), testPurposeFolder, 1)
+	if err := store.Save(scope, testSnapshot(), Revision(1), bytes.Repeat([]byte{0xAA}, 32)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	good, err := os.ReadFile(snapshotPath(base, "pair-1"))
+	if err != nil {
+		t.Fatalf("read sealed file: %v", err)
+	}
+
+	// Fixture preconditions (loud, never silent): the header must carry the
+	// expected transport marker at the framing's documented offset.
+	if len(good) < envelopeTransportOffset+len(transportIMAP) {
+		t.Fatalf("envelope implausibly short (%d bytes) — the transport header field is missing and this fixture must be revisited", len(good))
+	}
+	if gotLen := int(good[envelopeTransportOffset-1]); gotLen != len(transportIMAP) {
+		t.Fatalf("envelope header transport length = %d, want %d — framing drifted, fixture must be revisited", gotLen, len(transportIMAP))
+	}
+	if gotMarker := string(good[envelopeTransportOffset : envelopeTransportOffset+len(transportIMAP)]); gotMarker != transportIMAP {
+		t.Fatalf("envelope header transport marker = %q, want %q — fixture must be revisited", gotMarker, transportIMAP)
+	}
+
+	tampered := append([]byte(nil), good...)
+	tampered[envelopeTransportOffset] ^= 0x01 // same length, different marker: a foreign-transport header
+	if err := os.WriteFile(snapshotPath(base, "pair-1"), tampered, 0o600); err != nil {
+		t.Fatalf("write tampered envelope: %v", err)
+	}
+
+	got, found, err := store.Load(scope)
+	if found {
+		t.Fatalf("a tampered transport header must not authenticate — the AAD binds the transport (R-3.7-4), got found=true with sent name %q", got.Roles.Sent.Name)
+	}
+	if !errors.Is(err, ErrCacheCorrupt) {
+		t.Fatalf("transport-header tamper must refuse with the cache-corrupt class (R-3.7-4), got %v", err)
+	}
+	if !reflect.DeepEqual(got, Snapshot{}) {
+		t.Fatalf("a refused envelope yields no plaintext, got %+v", got)
+	}
+}
+
+// TestCacheFile_SealedWithoutAADRefusesNoFallback — R-3.7-1 ("there is no
+// plaintext fallback path in either direction"). Closes the CHECK mutation
+// audit's F-4 hole (survivor M4): a "compatibility" reader that retries
+// without the AAD and accepts what opens was invisible, because nothing in
+// the pack constructed an envelope that authenticates ONLY without the AAD.
+// This test does exactly that — a test-side AES-256-GCM seal under the SAME
+// key with a valid tag and NO AAD, payload agreeing with the reading scope —
+// and requires Load to refuse it. A fallback mutant serves it and dies.
+func TestCacheFile_SealedWithoutAADRefusesNoFallback(t *testing.T) {
+	base := t.TempDir()
+	key := bytes.Repeat([]byte{0xAA}, 32)
+	scope := Scope{PairID: "pair-1", Generation: "gen-1"}
+
+	// Payload identity agrees with the reading scope: a nil-AAD fallback
+	// would open it, decrypt it and pass the payload comparison.
+	snap := testSnapshot()
+	payload, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("gcm: %v", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("rand: %v", err)
+	}
+	ct := gcm.Seal(nil, nonce, payload, nil) // NO AAD — the fallback shape itself
+
+	// Frame it exactly as an envelope the reader would parse.
+	var out bytes.Buffer
+	out.WriteString(envelopeMagic)
+	out.WriteByte(envelopeVersion)
+	var v [4]byte
+	binary.BigEndian.PutUint32(v[:], uint32(snap.SchemaVersion))
+	out.Write(v[:])
+	out.WriteByte(byte(len(snap.Transport)))
+	out.WriteString(snap.Transport)
+	out.Write(nonce)
+	out.Write(ct)
+
+	path := snapshotPath(base, scope.PairID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatalf("write envelope: %v", err)
+	}
+
+	store := newTestStore(t, base, testKey(0xAA), testPurposeFolder, 1)
+	got, found, err := store.Load(scope)
+	if found {
+		t.Fatalf("an envelope that authenticates only WITHOUT its AAD must be refused — there is no plaintext fallback path (R-3.7-1), got found=true with sent name %q", got.Roles.Sent.Name)
+	}
+	if !errors.Is(err, ErrCacheCorrupt) {
+		t.Fatalf("a no-AAD envelope must refuse with the cache-corrupt class (R-3.7-1/R-3.7-7), got %v", err)
+	}
+	if !reflect.DeepEqual(got, Snapshot{}) {
+		t.Fatalf("a refused envelope yields no plaintext, got %+v", got)
 	}
 }
