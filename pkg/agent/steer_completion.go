@@ -394,8 +394,10 @@ func (al *AgentLoop) commitSteeredTerminal(
 	})
 	switch {
 	case mutateErr == nil:
-		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
-			goalEndingForTerminalState(nextState, outcome), goalSessionEndedReasonForState(nextState, outcome))
+		// MAJ-003 (sub-agent control plane): this terminal write ends the
+		// TURN, never the child's session-owned goal — the FD1=A pair-end is
+		// retired. Only natural met/exhaustion adjudication and an explicit
+		// clear (/goal clear, authorized clear_goal) end a session goal.
 		return true, nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),

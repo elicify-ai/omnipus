@@ -274,8 +274,10 @@ func (te *TaskExecutor) mintLegacyTaskGoal(t *task.Task) (*goal.Goal, error) {
 // called this hook even if their authors had wanted to. The implementation
 // moved to pkg/tools — the only package all four writer packages already
 // import that can also see pkg/goal — and this wrapper exists purely so
-// pkg/agent's three call sites (completeTaskWithResult, failTask,
-// PlanEngine.cancelMemberLocked) keep their short, store-free signature.
+// pkg/agent's remaining call sites (completeTaskWithResult, failTask,
+// failTaskBeforeDispatch) keep their short, store-free signature.
+// PlanEngine.cancelMemberLocked no longer calls it: a user Stop keeps the
+// paired goal record active (MAJ-003, GoalStateForTerminalTask).
 // Read tools.TerminateTaskGoalRecord's section header for the full rationale,
 // including why a real store-level chokepoint is impossible here.
 //

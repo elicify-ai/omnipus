@@ -590,14 +590,15 @@ type GoalOutcomeFrame struct {
 
 // GoalOutcomeFrameOutcome — Hand-synced WS copy of contracts/components/schemas/GoalOutcome.yaml (the REST/transcript carrier — see it for every field's meaning). Named differently because pkg/api/generated holds the OpenAPI and AsyncAPI Go types in one package and cannot declare `GoalOutcome` twice. Any field edit MUST be mirrored in GoalOutcome.yaml.
 type GoalOutcomeFrameOutcome struct {
-	CriteriaTotal *int    `json:"criteria_total,omitempty"`
-	EndedAt       string  `json:"ended_at"`
-	Ending        string  `json:"ending"`
-	GoalId        string  `json:"goal_id"`
-	GoalText      string  `json:"goal_text"`
-	JudgeReason   *string `json:"judge_reason,omitempty"`
-	MaxRounds     int     `json:"max_rounds"`
-	RoundsUsed    int     `json:"rounds_used"`
+	CriteriaTotal *int   `json:"criteria_total,omitempty"`
+	EndedAt       string `json:"ended_at"`
+	// WHY the goal ended (mirror of components/schemas/GoalOutcome.yaml `ending` — edit both together). `stopped_by_user` is an EXPLICIT user ending only: the owning session's `/goal clear` or an authorized parent's `delegate(action="clear_goal")`. NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active.
+	Ending      string  `json:"ending"`
+	GoalId      string  `json:"goal_id"`
+	GoalText    string  `json:"goal_text"`
+	JudgeReason *string `json:"judge_reason,omitempty"`
+	MaxRounds   int     `json:"max_rounds"`
+	RoundsUsed  int     `json:"rounds_used"`
 }
 
 // GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053 §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/GoalStatusFrame.yaml. Class not yet assigned by the ADR-057 W5 audit (FR-089).

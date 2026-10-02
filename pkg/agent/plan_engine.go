@@ -275,15 +275,14 @@ type PlanEngine struct {
 	// session.failed event / drive recovery (FR-118 deliverable 3). Best-effort:
 	// a hook failure is logged, never blocks the sweep.
 	sessionFailedHook func(sessionID, reason string)
-	// steeredGoalEndHook is the FD1=A pair-end for steered records the boot
-	// sweep lands on failed(interrupted) (F3, #984 founder-rule follow-up):
-	// a steered session's own goal ends with its session — "the pair ends
-	// together" — through the same seam SteerBootRecovery.EndSessionGoal
-	// wires at boot (gateway_boot.go::wireSteerDeps). Fired ONLY for steered
-	// records: ordinary roots are exempt from the sweep upstream
-	// (standingRootExemptFromSweep) and task-origin records carry no steered
-	// edge, so the founder rule "a cancel never ends an ancestor goal" holds
-	// structurally. Nil-safe everywhere: unwired (tests) → sweep unchanged.
+	// steeredGoalEndHook is the RETIRED FD1=A pair-end for steered records
+	// the boot sweep lands on failed(interrupted) (F3, #984 founder-rule
+	// follow-up). MAJ-003 (sub-agent control plane) retires it: no session
+	// lifecycle transition — including this sweep — ends a session-owned
+	// goal, and sweepToFailedInterrupted no longer fires the hook. The field
+	// and setter are kept ONLY until the RED harness that installs the hook
+	// to assert its non-firing is rewritten without it (QA-owned test
+	// files), then deleted outright.
 	steeredGoalEndHook func(sessionID, reason string)
 	// goalSemanticsVersioner reports the recorded trigger-semantics version
 	// of a goal-bearing session (N-15 live-upgrade re-baseline). Wired by
@@ -590,11 +589,14 @@ func (pe *PlanEngine) SetSessionFailedHook(fn func(sessionID, reason string)) {
 	pe.mu.Unlock()
 }
 
-// SetSteeredGoalEndHook installs the FD1=A pair-end fired for every STEERED
-// record the boot sweep lands on failed(interrupted)
-// (boot_sweep.go::sweepToFailedInterrupted, F3 #984 follow-up). Wired at
-// gateway boot to AgentLoop.EndSessionOwnedGoalOnTerminal — the same seam
-// SteerBootRecovery.EndSessionGoal uses. Best-effort, nil-safe.
+// SetSteeredGoalEndHook is the RETIRED FD1=A pair-end's installer (F3 #984
+// follow-up): it used to wire the hook fired for every STEERED record the
+// boot sweep landed on failed(interrupted)
+// (boot_sweep.go::sweepToFailedInterrupted). MAJ-003 retires the pair-end —
+// sweepToFailedInterrupted no longer fires the hook and no gateway wiring
+// remains — so the setter stays inert until the RED harness referencing it is
+// rewritten without it (QA-owned test files), then deleted outright with the
+// field. Nil-safe by construction.
 func (pe *PlanEngine) SetSteeredGoalEndHook(fn func(sessionID, reason string)) {
 	pe.mu.Lock()
 	pe.steeredGoalEndHook = fn
@@ -1370,13 +1372,13 @@ func (pe *PlanEngine) cancelMemberLocked(taskID, userID string) (*task.Task, err
 			map[string]any{"task_id": taskID, "error": err.Error()})
 		return nil, fmt.Errorf("plan_engine: cancel task %q: %w", taskID, err)
 	}
-	// GOAL-FR-015/FR-027/FR-028: the same reasoning as the streak clear above,
-	// for the paired goal record — this is a terminal disposition for taskID
-	// that bypasses TaskExecutor's own chokepoints, so it must end the goal
-	// record itself or a user Stop leaves it ACTIVE forever. A user Stop maps
-	// to `cleared`, not `exhausted` (goalStateForTerminalTask), matching what
-	// `/goal clear` writes for the chat equivalent of the same action.
-	terminateTaskGoalRecord(taskID, updated.Status, updated.CancelReason, result)
+	// MAJ-003 (sub-agent control plane): this user Stop keeps the member's
+	// paired goal record ACTIVE — a stop is not an adjudication, so no
+	// terminateTaskGoalRecord call sits here. Only the task's own met/
+	// exhaustion adjudication (tools.TerminateTaskGoalRecord from the genuine
+	// terminal writers) or an explicit clear ends a goal. Plan restart relies
+	// on the record surviving: goal id, active state and session binding all
+	// carry across (D8.10; W4 consumes this).
 	if pe.agentLoop != nil {
 		sessionID := updated.SessionID
 		if sessionID == "" {

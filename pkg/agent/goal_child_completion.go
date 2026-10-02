@@ -3,12 +3,14 @@
 // lifecycle state `running` for ever — the parent never re-entered, the goal
 // record stayed active for the keeper to iterate forever.
 //
-// The design (the approved design note, decisions (a)-(e); founder FD1=A, FD2=A):
+// The design (the approved design note, decisions (a)-(e); founder FD2=A):
 // the goal path keeps DECIDING; the ADR-091 completion path owns FINISHING.
 // One completion tail — Deliver, then terminalise — serves every exit
 // (goal met, rounds exhausted, judge unavailable, session cancelled, boot
-// recovery), and every terminal session write ends the session-owned goal
-// with it ("the pair ends together"). The judge-unavailable arm of the
+// recovery). MAJ-003 (sub-agent control plane) retires the FD1=A pair-end:
+// NO terminal session write ends the session-owned goal — only natural
+// met/round-exhaustion adjudication and an explicit clear (/goal clear,
+// authorized clear_goal) do. The judge-unavailable arm of the
 // deferred adjudication is re-driven a bounded number of times inside the
 // already-off-critical-path goroutine, then the child is failed visibly.
 //
@@ -46,11 +48,12 @@ const goalJudgeRedriveAttempts = 3
 // as it collapses the retries alone.
 var goalJudgeRedriveBackoff = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second} //nolint:gochecknoglobals
 
-// goalSessionEndedNotePrefix marks endActiveGoal's note-switch with the
-// FD1=A pair-end: a session-owned goal ended because its SESSION ended, not
-// because the user cleared it or the rounds ran out. endActiveGoal maps this
-// prefix to the cleared pill/state; the note (stored as the goal's
-// TerminalReason) names the session-level cause.
+// goalSessionEndedNotePrefix marked endActiveGoal's note-switch for the
+// RETIRED FD1=A pair-end: a session-owned goal that ended because its SESSION
+// ended. MAJ-003 stops every session-lifecycle goal ending, so nothing writes
+// the prefix any more; the prefix and endActiveGoal's matching case are kept
+// only until the pair-end helpers below are deleted with the RED harness
+// that still references them, then removed outright.
 const goalSessionEndedNotePrefix = "session ended: "
 
 // redriveGoalAdjudication is decision (c)'s bounded re-drive: it wraps the
@@ -63,9 +66,10 @@ const goalSessionEndedNotePrefix = "session ended: "
 //
 // On exhaustion the child is failed through the SAME completion tail the met
 // arm uses (completeSteeredTurnAfterGoal): terminal `failed` with a reason
-// naming the judge, a wake-eligible error to the parent, and — via the
-// terminal write's own pair-end — the goal record ended. The claim needs no
-// re-capture: it is persisted on the goal record, and every attempt re-reads
+// naming the judge and a wake-eligible error to the parent. MAJ-003: the
+// terminal write itself is NOT a goal ending — the goal record stays active
+// and only natural adjudication or an explicit clear ends it. The claim needs
+// no re-capture: it is persisted on the goal record, and every attempt re-reads
 // the record fresh, so a goal cleared or restated mid-re-drive is simply not
 // adjudicated further.
 //
@@ -138,40 +142,16 @@ func (al *AgentLoop) waitGoalRedriveBackoff(previousAttempt int) {
 	}
 }
 
-// goalEndingForTerminalState maps a turn's final lifecycle state onto the
-// goal outcome's ending vocabulary (GoalOutcome.ending). The outcome keeps
-// cancellation distinct from timeout now that both use LifecycleStopped:
-// a human Stop reads as stopped_by_user; every other cause remains `other`.
-func goalEndingForTerminalState(state session.LifecycleState, outcome steer.Outcome) generated.GoalOutcomeEnding {
-	if state == session.LifecycleStopped && outcome != steer.OutcomeTimedOut {
-		return generated.GoalOutcomeEndingStoppedByUser
-	}
-	return generated.GoalOutcomeEndingOther
-}
-
-// goalSessionEndedReasonForState is the session-level "why" recorded as the
-// goal's TerminalReason when the pair ends together (FD1=A: the outcome
-// records why). The outcome preserves the cause despite the merged state.
-func goalSessionEndedReasonForState(state session.LifecycleState, outcome steer.Outcome) string {
-	switch state {
-	case session.LifecycleStopped:
-		if outcome == steer.OutcomeTimedOut {
-			return "the session timed out"
-		}
-		return "the session was cancelled"
-	case session.LifecycleFailed:
-		return "the session failed"
-	default:
-		return "the session ended"
-	}
-}
-
-// endSessionOwnedGoalOnTerminal is decision (e)'s pair-end helper: when a
-// steered child's record lands terminal, its ACTIVE session-owned goal ends
-// with the session (founder decision FD1=A — "a session-owned goal ends with
-// its session, and the outcome records why"). Idempotent by construction: no
-// active goal, no action; and the state the note-switch below maps to is
-// `cleared`, one of the goal contract's terminal states.
+// endSessionOwnedGoalOnTerminal is the RETIRED FD1=A pair-end helper: it
+// used to end a steered child's ACTIVE session-owned goal when the child's
+// record landed terminal (founder decision FD1=A — "a session-owned goal
+// ends with its session"). MAJ-003 (sub-agent control plane) retires the
+// pair-end: no session lifecycle transition — completion, cancellation,
+// boot-recovery interruption — ends a goal, so NO production caller remains;
+// only the RED harness still references the exported wrapper. The helper is
+// kept ONLY until that harness is rewritten without it (QA-owned test
+// files), then deleted outright. It stays correct-by-construction while it
+// lingers: idempotent (no active goal, no action), session-owned only.
 //
 // Task-owned goals are out of scope ON PURPOSE: their single terminal writer
 // is tools.TerminateTaskGoalRecord (goal_outcome.go's header), and this
@@ -211,12 +191,13 @@ func (al *AgentLoop) endSessionOwnedGoalOnTerminal(sessionID string, ending gene
 	}
 }
 
-// EndSessionOwnedGoalOnTerminal is the exported boot-wiring seam for the
-// (e)three pair-end: the gateway binds this method into SteerBootRecovery's
-// EndSessionGoal hook, where no ending parameter is knowable (the sweep
-// terminalises mid-flight sessions as interrupted) and the package boundary
-// requires an exported symbol. The ending is `other`; the reason names the
-// interruption.
+// EndSessionOwnedGoalOnTerminal is the RETIRED FD1=A pair-end's exported
+// boot-wiring seam (founder decision FD1=A — "a session-owned goal ends with
+// its session"). MAJ-003 retires the pair-end: no session lifecycle
+// transition ends a goal, so nothing binds this method any more — SteerBootRecovery's
+// EndSessionGoal hook is never fired (boot_sweep.go). The method is kept ONLY
+// until the RED harness referencing it is rewritten without it (QA-owned test
+// files), then deleted outright with the unexported helper below.
 func (al *AgentLoop) EndSessionOwnedGoalOnTerminal(sessionID, reason string) {
 	al.endSessionOwnedGoalOnTerminal(sessionID, generated.GoalOutcomeEndingOther, reason)
 }
