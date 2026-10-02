@@ -125,3 +125,148 @@ No HIGH/CRITICAL blast radius found: every modified symbol has its consumers in-
 ### 2.5 Cluster placement
 
 This package spans the **email transport/tools** cluster (`pkg/email/mailhtml/`, `pkg/email/reply.go`, `pkg/tools/email_attachments.go`, `pkg/mailattachment/`), the **gateway** cluster (attachment preview/save/token handlers), the **Library** leaf (`pkg/library` consumers only — no edits to its safety primitives) and the **SPA workspace surfaces** cluster (`src/components/library/preview/`, Mail panel files). It must not create an import cycle: the shared recipient helper lives in `pkg/email` (below both `pkg/tools` and `pkg/gateway`); the save service lives in `pkg/mailattachment` (below Library and tools, importing neither `pkg/tools` nor gateway HTTP).
+
+---
+
+## 3. Interfaces — what this package publishes and consumes
+
+Stated so the packages can be built in parallel without editing each other's files.
+
+### 3.1 PUBLISHES (owned and delivered by this package)
+
+| Interface | Owning owner | Consumers |
+|---|---|---|
+| `pkg/mailattachment/service.go::Transfer` (proposed path) — the single application-level save/read/download service; mode selects transient viewer bytes, browser response, or explicit Library write | W7 | Gateway preview/attachment handlers (W4 files), `pkg/tools/email_attachments.go` (W10) |
+| The save-operation-token reconciliation (prior-receipt lookup on an explicit same-token retry) | W7 | Gateway save handler; SPA retry path |
+| The mail-derived marker + per-file scripts-allowance storage (Q5=A), surviving move/copy/rename/restore — with the provenance proof | W7 | Library gateway preview policy, `LibraryPreviewPane` HTML profile selection (W8) |
+| `pkg/email/mailhtml/` — the parsed CSS policy: style-attribute filtering via bluemonday's own CSS layer, the `<style>`-block pass, the checked-in property/value table, and the CSS `url()` extraction/rewrite helpers | W9 | `rest_mail_preview.go::mailSanitizePreviewHTML`, `::mailRewritePreviewSources` (W4-owned integration points) |
+| `pkg/email/reply.go::BuildReplyRecipients` (proposed) — the transport-neutral recipient rule (Reply-To otherwise From; reply-all merge; self-exclusion; de-duplication) | W10 | Gateway reply-context handler; `pkg/tools/email_compose.go` adapter; indirectly the SPA (which implements nothing) |
+| `pkg/tools/email_attachments.go` — `list_email_attachments`, `read_email_attachment`, `download_email_attachment` + `read_message`'s attachment list | W10 | `EmailToolset`, catalog, inventory, seed, agent registration |
+| `src/components/library/mailAttachmentPreviewSource.ts` (proposed) — the temporary-source adapter + resource policy the renderers consume | W8 | `LibraryPreviewPane`, `LibraryExplorer`, every reused renderer |
+| The handoff callback shape Mail→Library (frozen jointly with W3 before either side builds) | W8 + W3 jointly, frozen first | `MailPanel` (W3), `LibraryExplorer` (W8) |
+
+### 3.2 CONSUMES (delivered by others; this package edits none of their files)
+
+| Interface | Owner | This package's obligation |
+|---|---|---|
+| All contract schemas and regenerated artifacts named in §2.3 | W0 (only editor of `contracts/`, `pkg/api/generated/`, `src/lib/api/generated/`) | Consume generated types only; never hand-write a wire shape |
+| The targeted single-part reader (part-specific PEEK), the stable `part_index` semantics, and the shared pool/budget injection | W1/W2 | Inject into `Transfer`; never build a private client/pool |
+| The gateway-issued `message_ref` (first-phase issuance + same-lease epoch/generation validation) | Read-runtime package (I-03 seam) | Consume the reference unchanged; refuse stale references with the typed error |
+| `has_attachments` metadata + the MIME structure classifier | W2 | `read_message`'s attachment list reuses the same classifier output — no second MIME walker |
+| The handoff callback shape (frozen above) | W3 | Mail panel invokes it; Library honours it |
+| `pkg/library` path-safety primitives, `pkg/audit` logger, `pkg/tools/resolvepath` policy, `pkg/config` ceiling/inventory seams | Existing owners (Library leaf, audit, tools, config) | Call them; never bypass or weaken |
+| Tool description text for the three new tools | prometheus-prompt-engineer, supplied to W10's file | Paste, not author |
+
+---
+
+## 4. User stories and acceptance criteria
+
+Priorities: P0 = the feature is incomplete without it; P1 = high; P2 = follows after the P0s of the same story.
+
+### US-1 — Open an attachment without saving (P0) — F1, #1174
+
+A user receives a message with an attachment and wants to look at it before deciding to keep it. Today the only action is browser Download, and anything over the cap fails with a 413 error. With this story, **Open** shows the attachment in the Library viewer, inside its existing panel, as a temporary, non-persisted entry: every Library renderer works (image, video, audio, PDF, markdown, code, text, static SVG), HTML renders with scripts off, and a context bar — exactly **"From mail: \<subject\> · Back to mail · Save to Library"** — sits outside the rendered content. Nothing is written to disk: no workspace file, no spool, no byte cache, no browser persistent store. The existing 25 MB per-attachment cap applies; larger attachments offer **Download only**.
+
+**Why this priority**: it is the founder's option-B decision and the entry point for Save; without the temporary viewer there is no attachment UX beyond today's Download.
+
+**Independent test**: with a message holding attachments of each supported kind, Open each one; assert the viewer renders, the context bar reads exactly as specified, the data directory gains no file (with a Save positive control proving the observer would have seen a write), every stored-file action is disabled with its explanation, and Back returns focus to the originating attachment action.
+
+**Acceptance scenarios**:
+
+1. **Given** a message with an image, video, audio, PDF, markdown, code and text attachment, **When** the user clicks Open on each, **Then** the Library viewer renders each with its existing renderer inside the Library panel, without any file being created, and the context bar reads exactly "From mail: \<subject\> · Back to mail · Save to Library".
+2. **Given** a temporary preview is open, **When** the user attempts Library edit/autosave, PDF fill/sign, rename, move/copy/delete or download-to-browser from the Library, **Then** every such action is disabled with a "Save to Library first" explanation that is visible without hover and readable by screen readers — and no mutation/API call fires even if the control is invoked programmatically.
+3. **Given** an HTML attachment, **When** it is opened, **Then** it renders through the token-scoped isolated Mail representation with scripts off entirely (`script-src 'none'`, sandbox without scripts), forms and event handlers dead, and never as a raw HTML object URL, `srcdoc`, or the authenticated download URL served as a document.
+4. **Given** an attachment over 25 MB actual decoded bytes, **When** the user tries Open (and Save), **Then** both are unavailable with the existing cap explanation, and **Download** remains the offered browser action.
+5. **Given** an open preview, **When** the user presses Back (or closes, navigates, reloads, logs out), **Then** that view's fetches abort, media detach, PDF/render tasks destroy, object URLs and the source token revoke, and a late mint/fetch cannot resurrect the view.
+6. **Given** the preview open, **When** the user navigates to a real Library file, **Then** the temporary source is disposed first and never becomes a breadcrumb, listing row or fallback file.
+7. **Given** an unsupported format, **When** opened, **Then** the Library's honest unsupported-format state shows with Mail Download available — no invented Office renderer, no fake zero-byte file.
+
+### US-2 — Save to Library; browser Download unchanged (P0) — F2, #1170
+
+The user decides to keep the attachment. **Save to Library** lands it as a real workspace file under `mail/<mailbox>/<year-month>/`, with the sanitized name (numbered suffix on a clash), the same 25 MB cap, an audit entry, and an **Open in Library** follow-up that selects the real file. Browser **Download** stays exactly what it is today — a browser download, not another name for Save. Panel Save and the agent's save tool call **one shared server function**.
+
+**Why this priority**: Save is the consent act that turns a preview into a user file; the audit entry and the unchanged Download are the founder's explicit conditions.
+
+**Independent test**: save the same attachment twice (second must get a numbered suffix), over-cap (must refuse with a safe reason), with audit disabled and with audit failing after commit (must return saved-with-warning, not a failed save), and with the response lost after commit (must resolve to the prior receipt on an explicit same-token retry — exactly one file). Assert exact bytes landed at the exact path; browser Download produces no Library file.
+
+**Acceptance scenarios**:
+
+1. **Given** an open preview or an attachment row, **When** the user clicks Save to Library, **Then** the file lands under `mail/<mailbox>/<UTC save month>/<sanitized name>` in the workspace work root, missing directories are created through the path-safe primitives, and the response returns the real Library entry, the exact final name, the workspace-relative path and a separately resolved absolute path.
+2. **Given** a file with the same name already exists (including case-folded), **When** Save runs, **Then** the name gets a numbered suffix before the extension (`report (1).pdf`) — never an overwrite — and the final suffixed candidate is validated too.
+3. **Given** the attachment's declared filename carries separators, control characters or dot-names, **When** Save runs, **Then** the stored name is the `SanitizeAttachmentName` output, then passed through Library create-name validation (Windows-invalid names, path limits) — sanitization is not the authorization, validation is.
+4. **Given** a successful save, **When** the audit logger is enabled, **Then** a `mail.attachment_saved` audit entry records actor, workspace/pair, folder/message reference, part index, original and final names, final path and byte count — and no attachment bytes, subject, password or token.
+5. **Given** audit write failure **after** the file committed, **When** the response is built, **Then** it reports saved=true with an explicit audit warning and the real path — not a failed save, and no advice to retry (a retry would create a numbered duplicate).
+6. **Given** the Save response is lost after the server committed (disconnect/abort), **When** the user explicitly retries the same save, **Then** the client first shows a visible "Save result unknown" state claiming neither success nor failure and never re-sends on its own; the explicit retry carries the same save-operation token and the server answers with the **prior receipt** — exactly one file exists, under the original numbered name, with intact audit status. A retry with a different token is a new request and saves normally. No automatic replay ever fires.
+7. **Given** any refusal (missing authority, effective deny, declined ask, stale message/part, over cap, unsafe path, parent-file conflict, disk full, failed transfer), **When** Save fails, **Then** the panel shows "Could not save to Library" with a safe specific reason beside the action; permission/size refusals never masquerade as network errors; no partial file remains (incomplete output is removed, and a cleanup failure is reported explicitly).
+8. **Given** any successful or failed Save, **When** the user instead clicks Download, **Then** the browser download behaves exactly as today — same destination, disposition and filename — and creates no Library file.
+9. **Given** Save succeeded, **When** the user clicks Open in Library, **Then** the real file opens in the Library viewer as a stored entry (full stored-file capabilities) and the Library list refreshes through its existing change notification. The saved file is user data: mailbox deletion or cache expiry never removes it.
+
+### US-3 — Agent attachment tools and the reference journey (P0) — F3, #1171
+
+An agent with a permitted mailbox can list and read received attachments without an attachment-specific approval, and save one into its workspace with the ordinary `ask` shipped default — no extra approval mechanism, no file-type blocklist, no hardcoded fallback. `read_message` returns the attachment list plus the gateway-issued `message_ref`, so the whole journey runs from real tool output alone — a message without a Message-ID included (grill I-03).
+
+**Why this priority**: reachability — without reference issuance in this phase the tools are unreachable for exactly the mail that lacks Message-IDs, whatever the tests say.
+
+**Independent test**: end-to-end with a fake IMAP server: pick a message with no Message-ID; chain `read_message` → `list_email_attachments` → `read_email_attachment` → `download_email_attachment` using only returned values; then present references from a wrong pair, an old configuration generation and a recreated folder (new UIDVALIDITY) — each must be refused before any fetch. Policy: old config without the new keys self-heals to allow/allow/ask; an agent `allow` cannot loosen the global `ask`; Auto-on runs save through the ordinary workspace-path class; refusal performs zero transfer/write.
+
+**Acceptance scenarios**:
+
+1. **Given** an owned pair with a message holding attachments, **When** the agent calls `list_email_attachments` with the issued `message_ref`, **Then** it returns the descriptor list (sanitized name, content type, honest nullable size, stable `part_index`) — structure metadata only: no body bytes, no file, no Seen change just to list.
+2. **Given** the same message, **When** `read_message` runs, **Then** its result carries the same `attachments[]` descriptors and the `message_ref` — the attachment list rides the existing tool.
+3. **Given** a text-ish attachment, **When** `read_email_attachment` runs, **Then** the agent receives the actual content through the normal tool-result reader representation; a format/size the reader cannot represent yields an explicit unsupported/too-large outcome plus the Save option — never an empty "read" or binary disguised as text.
+4. **Given** a message whose Message-ID header is absent, **When** the agent chains `read_message` → `list_email_attachments` → `read_email_attachment` → `download_email_attachment` using only actual tool output, **Then** every step succeeds with no Message-ID anywhere and no step synthesizing identity; and references from a wrong pair, an old generation, or a recreated folder (old UID against new UIDVALIDITY) are each refused with the typed stale-reference error **before** any fetch or mutation, checked on the same selected lease that would have performed the action.
+5. **Given** the shipped configuration, **When** any install loads, **Then** the ceiling holds literal `list_email_attachments: allow`, `read_email_attachment: allow`, `download_email_attachment: ask`; an old config gains the missing entries additively on load without overwriting operator-set values; no per-agent deny backfill appears.
+6. **Given** Auto-approve ON and a save tool call, **When** the classifier resolves it, **Then** it runs through the ordinary workspace-path conditional class exactly like any other ask-default tool (founder Q4=A) — with Auto off it asks; a declined approval performs zero transfer and zero write; an agent-level `allow` can never loosen the global `ask`.
+7. **Given** a successful agent save, **When** the tool returns, **Then** it reports the actual workspace file — workspace-relative path and absolute path — plus size and audit status; the agent's ordinary file tools can read that path immediately; the same shared service, cap, naming, audit event and refusal semantics as the panel apply.
+8. **Given** another agent's or workspace's mailbox, **When** the tools are invoked against it, **Then** normal pair authorization refuses — "freely" never crosses pair ownership.
+
+### US-4 — Email styling, safely (P1) — F4, #1172
+
+Modern marketing/transactional mail is styled with inline styles, classes, `<style>` blocks and media queries. Today the inbound sanitizer strips all of it, so legitimate mail renders as uncoloured text. This story renders safe styling — colours, fonts, table layout, backgrounds, responsive rules — using the security artefact's parsed allow-list, while scripts, remote loads, `@import`, `@font-face`, `position` and friends stay impossible. "As much as Gmail and Outlook support" is a compatibility target, not a pixel-parity promise.
+
+**Why this priority**: quality-of-rendering with a required security review ahead of it; the founder's quick wins (reply, dates) and the attachment flow land first.
+
+**Independent test**: render a positive fixture (colour/font/table/cell/background/media-query mail) and assert computed styles survive in the browser; render the artefact's nine counterexample classes (P1–P9) plus escaped/shorthand/custom-property cases and assert zero scripts, zero non-consented remote fetches (network counters with an uncontained positive control), and readable fallbacks.
+
+**Acceptance scenarios**:
+
+1. **Given** mail with inline `style` attributes, `class` attributes and a `<style>` block (including `@media` queries), **When** the message renders in the preview, **Then** allowed declarations survive — verified in the browser by computed style, not by string presence in HTML — and denied ones are dropped without dropping unrelated safe content.
+2. **Given** a CSS `url()` in `background`/`background-image`, **When** the mail is minted, **Then** the URL is extracted into the same pinned remote-image grant and rewritten onto the token-scoped `/mail-preview/img/…` path — backgrounds actually render under Load-images consent, and any non-conforming URL (`http:`, protocol-relative, relative, `data:image/svg+xml`, other `data:`) has its declaration dropped.
+3. **Given** `@font-face` (remote **or** `data:`-font) and `data:image/svg+xml` in a CSS `url()`, **When** sanitized, **Then** both are stripped — these are the two paths where the browser's CSP would otherwise admit the content (`font-src data:`, `img-src … data:`), so the sanitizer is the **only** gate.
+4. **Given** `position`/`top`/`right`/`bottom`/`left`/`z-index`, `expression()`, `behavior`, `-moz-binding`, `filter`, `@import`, `@keyframes`/animation/transition, custom properties/`var()`, `content`, `cursor`, `list-style-image`/`border-image` — **When** sanitized, **Then** each is dropped, per the artefact's deny list with its named attack or parity reason.
+5. **Given** an escape trick (`col\6fr:red`, `url("ht\74 tps://…")`, comment-spliced declarations), **When** sanitized, **Then** the parser-decoded truth decides: the decoded-safe property survives, the decoded-dangerous URL and decoded-denied property are dropped — the anti-regex property of real parsing.
+6. **Given** malformed CSS (unclosed block), an oversized style attribute, or deeply nested `@media`, **When** sanitized, **Then** no panic, bounded work within the existing 256 KB HTML cap, the style attribute dropped entirely on parse error (fail-closed), and the body remains readable with one plain notice that unsupported styling was removed.
+7. **Given** any styled render, **When** the browser is observed, **Then** zero script executions, zero direct remote loads (fonts, images, stylesheets), zero same-origin API calls from mail content — remote images load only after the user's explicit Load-images consent, through the existing token-scoped proxy; sender CSS never reaches SPA chrome.
+
+### US-5 — Reply all, sender choice and quoted context (P0) — F5, #1173
+
+Today the panel's Reply fills only the original sender and an empty body — the other recipients are silently dropped and nothing is quoted (verified: `replyTarget` carries `from`/`subject`/`messageId` only; the compose dialog starts `cc`/`bcc` empty). This story puts **Reply all** beside **Reply**, fills recipients from one shared rule, and pre-fills an editable quoted original. The agent-side rule already merges To+Cc correctly (verified in `parseReplyRecipients`); this story extracts it so panel and agent share one implementation instead of growing a second copy.
+
+**Position on plain Reply (decision, per the ADR's recommendation): plain Reply does NOT keep the other recipients.** It fills the sender/Reply-To only, Cc/Bcc empty. Reasons: (a) making plain Reply keep everyone would make it indistinguishable from Reply all; (b) a private response to one sender would be disclosed to the whole group by a single reflexive click — the graver failure; (c) the agent-side `reply_all=false` behaviour already works this way, so one rule covers both surfaces. Dropping Cc on **plain** Reply is not the defect; dropping it on **Reply all** is.
+
+**Why this priority**: a founder quick win with real data-loss character (silently dropped group recipients).
+
+**Independent test**: original From A, Reply-To R, To = self+X+duplicate-R, Cc = Y+mixed-case-X+self+display-name-duplicate-R, hidden Bcc. Reply all → To=R, Cc=X and Y exactly once each, no self/primary/Bcc duplication — asserted in the final composed/send payload, not just displayed chips. Reply → R only, Cc/Bcc empty. The quote is editable escaped Markdown; context response delays and mailbox/message changes cannot overwrite another message's compose input.
+
+**Acceptance scenarios**:
+
+1. **Given** an open message, **When** the user clicks Reply all, **Then** compose opens with To = Reply-To (else From), Cc = original To + original Cc minus the mailbox's own address and the primary, de-duplicated case-insensitively across the set including display-name duplicates — and the original Bcc never copied.
+2. **Given** the same message, **When** the user clicks plain Reply, **Then** compose opens with the primary recipient only, Cc/Bcc empty — the other recipients are not silently kept.
+3. **Given** the Reply-To header is absent, **When** either reply mode runs, **Then** the primary falls back to From; if self-exclusion leaves no eligible primary, editable empty recipients show rather than sending to self or guessing a replacement; an invalid supplied address yields an actionable error, not silent omission.
+4. **Given** either reply mode, **When** compose opens, **Then** the draft contains an editable quoted original — readable body with escaped attribution (sender/date, or "No date") — with the original's Markdown/image/embed syntax escaped so the quote cannot load remote images or resolve workspace embeds inside Compose; no raw HTML/CSS paste; the original's files are not auto-attached; `Re:`/signature not duplicated; the human can edit or delete the quote before Send.
+5. **Given** both the panel and the agent adapter, **When** recipients are computed, **Then** both call the one shared `BuildReplyRecipients` helper — the SPA implements no recipient algorithm; the context call creates compose state only, never a server draft, body cache or send; existing validation/recipient caps/threading rules are preserved.
+
+### US-6 — Message-date fallback: never year one (P1) — F6, #1175
+
+A message without a usable Date header currently renders as "1 Jan 1" in detail views (the list hides it, the detail does not — verified asymmetry). This story applies one normalized date rule everywhere: valid Date header → server internal/received date → null displayed as **"No date"**. Never a zero date, epoch, "today" or a blank cell.
+
+**Why this priority**: small, self-contained correctness fix explicitly requested by the founder; no other story delivers it.
+
+**Independent test**: fixtures with missing/unparsable/zero Date plus valid internal date; valid Date differing from received time; neither present. Assert displayed output (list row, detail header, Sent copy, reply attribution) — not just that a formatter parsed something.
+
+**Acceptance scenarios**:
+
+1. **Given** a message with a missing, unparsable or zero Date header and a valid internal date, **When** it is displayed (list, detail, Sent, agent result, reply attribution), **Then** the internal date shows — normalized once in the transport layer, not re-derived per surface.
+2. **Given** a message with neither a usable Date nor an internal date, **When** displayed anywhere, **Then** exactly "No date" appears — never "1 Jan 1", never the epoch, never today's date, never a silently blank cell in the detail view.
+3. **Given** a message with a valid Date, **When** displayed, **Then** the Date wins over the (possibly different) internal date, and the existing local display formatting is unchanged.
+4. **Given** the wire contract, **When** date is absent, **Then** `date` serializes as explicit null (required-but-nullable), the generated consumers are regenerated before the Go/TS formatting changes, and no Go zero time is ever serialized.
