@@ -1375,12 +1375,15 @@ must be recorded once before the W8 renderer changes land, so a later regression
   panel open and folder switch it MUST issue one only when the folder's data is absent or its last
   validation is older than five minutes, while manual Refresh and the panel's own successful actions
   always refresh (founder Q-C) — and MUST drop any response whose `publication_revision` is older than
-  the newest applied revision. (MUST; US-1)
+  the newest applied revision. The panel-local absent-or-older-than-five-minutes computation governs
+  issuing; the response's `stale`/`refresh_needed` flags govern presentation only (grill Round 2
+  R2-M3). (MUST; US-1)
 - **FR-W3-3**: The panel MUST NOT contain a repeating timer that fetches folders, counts or headers;
   the watcher banner's 30-second saved-state summary poll MAY remain. (MUST; US-1)
-- **FR-W3-4**: Every folder/list/detail response's `MailReadMetadata` MUST be rendered as its exact
-  freshness state; a cache hit MUST NOT be presented as a settled server check; a null
-  `last_validated_at` MUST present as unknown/stale. (MUST; US-2)
+- **FR-W3-4**: Every landed freshness-metadata instance (`MailFolder.mapping_metadata`,
+  `MailFolder.count_metadata`, `MailMessagePage.metadata` — the §2.4 mapping table) MUST be rendered as
+  its exact freshness state on its own surface; a cache hit MUST NOT be presented as a settled server
+  check; a null or not-yet-populated `last_validated_at` MUST present as unknown/stale. (MUST; US-2)
 - **FR-W3-5**: Unknown counts (`total: null`, `unread_count: null`) MUST render "—"; zero MUST render
   only when the count is genuinely zero. (MUST; US-2)
 - **FR-W3-6**: A failed live refresh MUST preserve stale rows, their original checked time, and a
@@ -1453,7 +1456,7 @@ must be recorded once before the W8 renderer changes land, so a later regression
 | FR-W3-2 | US-1 | 1.2, 1.5 | U1, U2, U3 |
 | FR-W3-3 | US-1 | 1.3, 1.6 | C6, C8 |
 | FR-W3-4 | US-2 | 2.1, 2.5 | U11, U12, C1 |
-| FR-W3-5 | US-2 | 2.3 | C3 (D-1 row 4, D-3) |
+| FR-W3-5 | US-2 | 2.3 | C3 (D-3 null rows; D-1's null-count leg returns with the `total`-nullability amendment) |
 | FR-W3-6 | US-2 | 2.2 | U4, C1 |
 | FR-W3-7 | US-3 | 3.1, 3.2 | C2, E2 |
 | FR-W3-8 | US-3 | 3.3, 3.4 | C2, E2 |
@@ -1505,7 +1508,7 @@ verified)* and must not drift.
 | S-18 | Handoff opened | Context bar + live region | Bar: `From mail: <subject>` heading + `Back to mail` + `Save to Library` controls; announcement `Opening <filename> from mail.`; focus on the heading. |
 | S-19 | Returned to mail | Live region | `Returned to <filename> in <folder>.` / fallback: `<filename>'s message is no longer in this folder. Focus moved to the <message list | folder tab>.` |
 | S-20 | Disabled stored-file action | Viewer | Control rendered disabled with associated text `Save to Library first.` — keyboard-discoverable, visible without hover. |
-| S-21 | Ceiling reached | Below list | `You're viewing the newest 200 messages. Search to find older ones.` + adjacent search control; `Load more` absent. |
+| S-21 | Ceiling reached (browse) | Below list | `You're viewing the newest 200 messages. Search to find older ones.` + adjacent search control; `Load more` absent. |
 | S-22 | Search empty | List area | `No messages match "<query>".` |
 | S-23 | Stale cursor reset | Notice (once) | `The folder changed. Showing the newest messages.` |
 | S-24 | Scripts-off mail HTML | Library viewer notice | `Scripts are disabled because this file came from mail.` + per-file `Allow scripts` checkbox with helper `Applies to this file only.` |
@@ -1514,6 +1517,7 @@ verified)* and must not drift.
 | S-27 | Open failed — message reference stale | Attachment row | `This message changed or was deleted. Refresh the list.` (S-11's text, row-scoped) + `Refresh list`; no preview mounts; no silent return to the list. |
 | S-28 | Open failed — busy | Attachment row | S-9's busy copy for the returned `reason` + `Retry`; no preview mounts. |
 | S-29 | Open in flight | Attachment row | The row's Open control is disabled reading `Opening <filename>…` with `aria-busy="true"`; a second mint cannot start from the same row while one is in flight. |
+| S-30 | Search ceiling reached | Below search results | `You're viewing the newest 200 matches. Refine your search to find older messages.` + the search input remains available; `Load more` absent; `Back to <folder>` remains one control away. (The browse ceiling keeps S-21's copy — the two states are distinct; grill Round 2 R2-M2.) |
 
 ## 12. Components: reuse the catalogue, justify anything new
 
@@ -1566,8 +1570,12 @@ docs-verifier audits them against executed behaviour before landing, per the roo
 Evaluated by a human or an external script against a built instance — not referenced by any development
 test:
 
-1. *(Happy)* Open Mail on a warm mailbox, then pull the network cable; the panel shows rows with their
-   checked time and a clear "couldn't refresh" — nothing spins, nothing claims freshness.
+1. *(Happy)* Open Mail on a mailbox whose cached data is older than five minutes, then pull the
+   network cable; the open event issues its one live refresh, which fails visibly: the panel shows the
+   cached rows with their checked time and a clear "couldn't refresh" — nothing spins, nothing claims
+   freshness. (On a cache younger than five minutes the open event dials nothing by design — founder
+   Q-C stale-gating, US-1 AS-8 — so no failure can appear there; this holdout exercises the stale
+   branch. Grill Round 2 R2-I1.)
 2. *(Happy)* In a 300-message folder, click Load more six times; the eighth attempt is impossible; search
    for a message you know is old; it appears; press "Back to Inbox"; the newest 200 are still there.
 3. *(Happy)* Open an attachment, save it, reopen it from the Library; it is a real file with a real name
@@ -1585,8 +1593,9 @@ test:
 
 ## 15. Assumptions (explicit, challengeable)
 
-- **A-1**: The gateway's generated `MailReadMetadata` rides the existing 200 responses (no new endpoint
-  for cached reads) — the ADR's `mode` parameter proposal, assumed unchanged by W0.
+- **A-1 (verified landed)**: `mode=cache_first|live` and `refresh_mapping` ride the existing read
+  operations (landed `contracts/openapi.yaml` params, commit `5f23ae8a0`) — no new endpoint for cached
+  reads; the ADR's proposal landed as proposed.
 - **A-2**: `observer_id` is generated client-side per panel instance (`crypto.randomUUID()`), opaque to
   the gateway's authorization logic (identity = authenticated connection). Authorization for mailbox
   work stays exactly where it is today (pair + session); presence never grants anything.
@@ -1626,6 +1635,26 @@ forever rejected: it leaks across workspaces and complicates the gateway's per-w
 The panel control is folder-scoped UI over the REST search param; the agent tool is unchanged; no shared
 client code beyond the generated types. Stated to pre-empt a "reuse the tool" misread.
 
+**Q6 — Holdout 1's premise under the restored stale-gating (grill Round 2 Q1; R2-I1).** **DECIDED —
+applied per the grill's recommended option A; owner: this final fix round (team-lead's dispatch,
+2026-10-02).** Holdout 1 gains the age clause ("cached data older than five minutes"), making the
+founder-facing lens consistent with founder Q-C instead of contradicting it; the holdout now exercises
+the stale branch explicitly. Option B (keep the wrong text, brief the evaluator) rejected: it re-trips
+in front of the founder.
+
+**Q7 — The freshness metadata model (grill Round 2 Q2; R2-I3).** **DECIDED — the ADR's wire row
+governs (the grill's option A); owner: this final fix round.** W3 adopts the landed separate instances
+(`MailFolder.mapping_metadata`, `MailFolder.count_metadata`, `MailMessagePage.metadata`) with §2.4's
+label-mapping table, and re-scopes the `encrypted_disk` fixtures to the Phase-1 mapping surface. The
+alternative (ask W0 for one flat metadata object) was rejected: it would reopen the ADR's settled wire
+shape and w5's landed queue — a founder-decision reopening this dispatch forbids.
+
+**Q8 — Accessibility test scope (grill Round 2 Q3; R2-I2).** **DECIDED — the grill's option A; owner:
+qa-lead's plan (§8).** C5's scope gains scenario 7.5's in-place explanation assertion; E3's gains the
+keyboard-only pass, the 320 px / 200 % legibility pass, and the S-29 `aria-busy`/disabled assertion.
+The alternative (defer 7.5/7.6/S-29 as a tracked issue) rejected: D16 makes them release requirements
+of a P0 story.
+
 ## 17. Reachability — Definition of Done (the two never-merged lines)
 
 **Code correct and tested** — evidence required before this line may be stated:
@@ -1638,9 +1667,12 @@ client code beyond the generated types. Stated to pre-empt a "reuse the tool" mi
   no hand-written parallel wire type slipped in, and `make verify-contracts` green proves the committed
   generated artifacts are not stale** (correction F-12: verify-contracts catches staleness, not
   hand-written types — the dedicated guard is the instrument for that class, and both gates run).
-- Wave order per the landing-order register §4: this spec's wire-consuming code lands only after Wave B
-  (the W0 contracts wave, backend-lead) merges its regenerated artifacts; this file is Wave A's
-  correction for w3 and merges first.
+- Wave order per the landing-order register §4: Wave B (the W0 contracts wave, backend-lead) has landed
+  its regenerated artifacts on this branch (commit `5f23ae8a0`, `make verify-contracts` green per the
+  wave CHECK); this spec's wire-consuming code lands only on top of it. The branch stays unpushed until
+  the disclosed gateway consumer adaptation lands (wave CHECK finding F1) — the branch-level gate this
+  spec's landing inherits. This file is Wave A's correction for w3 and merges first among the spec
+  fixes.
 - The D25-era oracle rewrites (§8.8) landed through qa-lead with citations to this spec.
 
 **Reachable by a user/agent** — evidence required before this line may be stated:
@@ -1702,7 +1734,52 @@ Evidence table (this correction round):
 | Founder rulings applied, none reopened | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/mail-feature-decisions.md` read in full this round (Q-A…Q-E table) | Verified |
 | **Self-check** | Re-read the corrected file end-to-end after the final edit: every §11 cross-reference in §2.4/§4/§7 resolves to a defined state (S-15/S-16/S-17 for save outcomes; S-26–S-29 now exist; scenario 2.5's string is pinned in S-5); every register row touching W3 names its single publisher in §2.4/§3.2; §10's traceability covers all 23 FRs including the two new ones; §16 has no open question left unmarked. Forbidden moves checked: no test weakened (the only test-plan changes add oracles — E6, scenario 6.7, U1's fresh-cache case, mutations 11–12, D-1 row 8); no limit widened (25/25/200, 25 MB, 5-minute threshold, four frame keys, 30-minute retention all restated at founder-set values); no stub type created (every consumed interface names its publisher instead); no silent scope change (the only scope wording changes restate founder rulings; the one superseded behaviour — refresh-even-when-fresh — is founder-ruled, not quietly dropped). The only file in every commit of this round is this spec, authored as Daniel Piatkowski with no co-author trailer. | Verified |
 
+### 18.1 Round-2 fix-round record (2026-10-02, final)
+
+The Round 2 grill (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill2-w3.md`) returned
+PASS WITH FINDINGS — 0 Critical, 3 Important, 4 Minor. Every finding is applied in the text above; the
+three grill founder-questions were resolved to their recommended options because they are the only
+options that neither reopen a founder-settled decision nor defer a D16 release requirement (§16
+Q6–Q8 record the decisions and owners). The independent contracts-wave CHECK
+(`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/receipts/contracts-wave-check.md`) was applied
+where it names this spec (F4, F5) and where the landed shapes it verified change this spec's named
+fields (F2, F3); the wave commit is `5f23ae8a0`, an ancestor of this branch's HEAD, verified in this
+checkout.
+
+| Finding | Resolution in this spec |
+|---|---|
+| R2-I1 (Important — holdout 1's premise invalidated by the Q-C correction) | §14 holdout 1 rewritten with the age clause ("cached data older than five minutes"), the stale branch named, and the fresh-cache zero-dial rule cross-cited (US-1 AS-8). Applied per the grill's option A (§16 Q6). |
+| R2-I2 (Important — 7.5/7.6/S-29 claimed covered by tests whose scope stops short) | §8.4 C5's scope line gains scenario 7.5 (in-place "Save to Library first." explanation); §8.5 E3's gains the keyboard-only pass, the 320 px / 200 % pass, and the S-29 assertion. §10's FR-W3-16 row (C5, E3 for 7.1–7.6) is now accurate. Applied per the grill's option A (§16 Q8). |
+| R2-I3 (Important — single-metadata model diverged from the ADR's separate-instances wire row; `encrypted_disk` fixtures exercised a Phase-2 value) | §2.4 retitled to the landed wave and gains the freshness-model table naming the three landed instances and their label mapping; §1's freshness bullet, US-2 AS-2, U11, D-1 row 4 (+ its note), MC-W3-4, counterexample 3 and §10's FR-W3-5 row re-scoped to the Phase-1 mapping surface; FR-W3-4 names the three instances. Applied per the grill's option A (§16 Q7). |
+| R2-M1 (Minor — two residual ADR-numbered "W5" references) | §8's opening line now names the proof lane by file (`mail-live-access-w6-proof-spec.md`); US-6 AS-3's no-write proof now names its owners by file (the w4 file's ADR-W8 renderer work and the w6 proof package). |
+| R2-M2 (Minor — the search view's 200-ceiling state had no pinned text) | New §11 state S-30 pins the search-ceiling copy; S-21 renamed "(browse)"; US-3 AS-4, §5's paging block, §7 scenario 3.3 and C2's scope now cite it. |
+| R2-M3 (Minor — flag-driven vs clock-driven refresh unordered) | §3.1's cache-view row and FR-W3-2 state the precedence: the panel-local five-minute computation governs issuing; the response flags govern presentation. |
+| R2-M4 (Minor — `saved`-value requirement cited the wrong scenario) | §2.4's folder-fields row now cites dataset D-3 (which carries the pin), not US-4 AS-5. |
+| Contracts-wave CHECK F4 (Minor — landed `limit` prose contradicts the 25-row statement this spec builds from) | §2.3/§2.4/§3.2 state the panel always sends `limit=25` explicitly and never relies on the server default while the landed prose awaits its scheduled amendment. |
+| Contracts-wave CHECK F5 (Minor — landed `search` prose says "Q-D pending", stale) | §2.4/§3.2 state Q-D=A is decided (2026-10-02) and the stale prose is not an open question. |
+| Contracts-wave CHECK F2/F3 (Important — `total`/`date` non-nullable in the landed shapes; nullability deferred) | Named as the wave author's scheduled amendment at every point that bites (§1, §2.3, §2.4 rows 2/6, MC-W3-4, D-1 row 4, counterexample 3, §10 FR-W3-5); the dependent panel work gates on the amendment, never on an improvised sentinel. |
+
+Round-2 evidence table:
+
+| Claim | Evidence (command + exit code + key output, or file::symbol) | Certainty |
+|---|---|---|
+| The contracts wave is an ancestor of this branch's HEAD | `git merge-base --is-ancestor 5f23ae8a0 HEAD` → exit 0 ("IS ancestor"); HEAD `581a30107` | Verified |
+| `MailFolder.total` non-nullable; role fields landed | `contracts/components/schemas/MailFolder.yaml` read this session: `required: [slug, display_name, total, unread_count]`, `total: type: integer` (no `nullable`), `availability`/`uidvalidity` (nullable)/`mapping_source` (5 values)/`mapping_metadata`/`count_metadata` present | Verified |
+| Separate metadata instances landed | `MailFolder.yaml::mapping_metadata`, `::count_metadata`, `MailMessagePage.yaml::metadata` — each `$ref: ./MailReadMetadata.yaml`; `MailMessage.yaml` read: no metadata property | Verified |
+| `MailReadMetadata` shape and Phase-1 `encrypted_disk` scoping | `contracts/components/schemas/MailReadMetadata.yaml` read: 6 required fields, `source` enum 4 values, description "headers never emit encrypted_disk in Phase 1" | Verified |
+| `total`/`date` deferral is disclosed, not discovered here | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/receipts/contracts-wave-check.md` F2/F3 rows ("Mitigated by the author's disclosed amendment schedule") | Verified |
+| `has_attachments`/`message_ref` landed on summary and detail | `contracts/components/schemas/MailMessageSummary.yaml::has_attachments`, `::message_ref`; `MailMessage.yaml::message_ref`, `::has_attachments` — all read this session | Verified |
+| Preview/save/reply shapes match this spec's named fields | `MailAttachmentPreviewRequest.yaml` (required `workspace_id, agent_id, folder, message_ref, part_index`), `MailAttachmentPreviewResponse.yaml` (`kind: mail_attachment`, `preview_id`, `subject`, `attachment`, `text_readable`, `content_source`, `read_only` const-true), `MailAttachmentSaveRequest.yaml::save_operation_token` (required), `MailAttachmentSaveResponse.yaml` (`saved` const-true, `entry`, `path`, `absolute_path`, `size_bytes`, `audit_status`, `warning_code`), `MailReplyContextResponse.yaml` (`to, cc, bcc, subject, body_markdown, in_reply_to`) — all read this session | Verified |
+| Presence frames landed | `grep -n "MailPanelObserverFrame\|mail_panel_observer" contracts/asyncapi.yaml` → exit 0; frame + ack + error messages and three `WsFrameType` entries | Verified |
+| `observer_id` on both read operations; `mode`/`refresh_mapping` landed | `grep -n "observer_id\|cache_first\|refresh_mapping" contracts/openapi.yaml` → exit 0; `observer_id` at the folders and messages reads, `mode` (enum `cache_first`) and `refresh_mapping` params on both | Verified |
+| `search` param landed with the stale Q-D prose; `MailStaleReferenceError` landed | `contracts/openapi.yaml` messages-read `search` param description read ("founder decision Q-D pending at the time of this contract"); `contracts/components/schemas/MailStaleReferenceError.yaml::code` (`stale_cursor\|stale_reference`) | Verified |
+| `LibraryEntry` preview fields landed | `grep -n -A3 "preview_profile\|preview_scripts_allowed" contracts/components/schemas/LibraryEntry.yaml` → exit 0; enum `workspace\|mail_restricted`, per-file boolean | Verified |
+| w2's search rule agrees with this spec's | `docs/internal/specs/mail-live-access-w2-discovery-and-cache-spec.md` §3.13 read: "subject + sender/recipient substring, server-side IMAP header search, inside the 25/200 bounds (founder Q-D=A)" | Verified |
+| No Critical finding names this spec | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill2-w3.md` verdict block: "Counts: 0 Critical · 3 Important · 4 Minor" (read in full this session); the dispatch's CRIT-1 parenthetical names the w2 lane's review, not this file | Verified |
+| **Self-check (Round-2 fix round)** | Re-read the full corrected spec after the final edit (all 18 sections): every R2 finding's correction is in the spec text (verified by re-reading §14 holdout 1, §8 C5/E3, §2.4's mapping table, §8 line 1 + US-6 AS-3 for "(W5)", §11 S-30, §3.1/FR-W3-2 precedence, §2.4's D-3 citation) — no fix lives only in this record. Every contract-check item that names this spec (F3's "w4/w3", F4/F5) plus the F2 shape this spec depends on is addressed in text. Every landed shape named in §2.3/§2.4 was read in the schemas this session — none is asserted from the wave report alone. §16 marks Q6–Q8 decided with owners; no founder decision reopened (the stale-gating, Q-D fields, saved-file policy, scripts-off rule and the ADR's wire row are all restated as settled). Forbidden moves checked: no test weakened (C5/E3 scope extensions only ADD assertions — 7.5, the keyboard pass, S-29; no oracle was removed or loosened); no limit widened (25/25/200, 25 MB, 5-minute threshold, four frame keys, 30-minute retention unchanged; `limit=25` explicit is a tightening, not a widening); no stub type created (every consumed shape names its landed schema file); no silent scope change (the `encrypted_disk` re-scope follows the landed contract's Phase-1 scoping — the ADR's own row — and is recorded in D-1's note, not dropped). The only file in every commit of this round is this spec, authored as Daniel Piatkowski with no co-author trailer. | Verified |
+
 ---
 
 *Spec ends. Prepared by the architect for team-lead's grill dispatch; corrected once per the
-spec-process rule; nothing in this file is implementation approval.*
+spec-process rule, then the final Round-2 fix round applied (2026-10-02); nothing in this file is
+implementation approval.*
