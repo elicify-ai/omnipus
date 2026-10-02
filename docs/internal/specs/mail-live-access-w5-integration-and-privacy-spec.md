@@ -453,101 +453,120 @@ Technical enforcement detail belongs here and in the TDD/interface sections; all
 **When** a mailbox request addresses a pair in workspace W2 the connection is not authorized for,
 **Then** the existing pair authorization refuses it exactly as it would without any presence — observer association adds retention, never access.
 
-### Feature: Encrypted cache placement and the write gate
+### Feature: Product-owned cache placement and the unified gate
 
-#### Scenario B-9: First cache write lands correctly
-**Happy** · Traces to: US-3.1, US-3.2, MC-5
-**Given** a temp data directory whose ignore file matches the cache directory,
+#### Scenario B-9: Product-only initialization makes the first write private
+**Happy Path** · Traces to: US-3.1, US-3.2, US-4.1, MC-5, MC-6, MC-17
+**Given** a fresh synthetic configured data root with no external exclusion setup, two pairs and product-established staging **and** archive protection,
 **When** a pair's folder metadata is written,
-**Then** the file exists at `<data-root>/mail-cache/<opaque-pair-id>/folders.enc`, the directory is 0700, the file 0600, the content is ciphertext (no plaintext marker survives), and a second pair's path differs.
+**Then** it is complete ciphertext in that random persisted pair-ID subtree, Unix permissions are 0700/0600, the second pair's subtree is distinct, and ordinary state remains eligible for staging/backup.
 
-#### Scenario B-10: Unexcluded directory blocks writes
-**Error** · Traces to: US-3.3, MC-6
-**Given** a temp data directory whose ignore files do NOT match the cache directory,
-**When** the first cache write is attempted,
-**Then** no file or directory is created, the pair serves live-only, and the surfaced cache state carries the `cache_unavailable` notice code.
-
-#### Scenario B-11: Rule present in either location allows writes
-**Alternate** · Traces to: US-3.3, MC-6
-**Given** the rule present in `.git/info/exclude` but not `.gitignore` (and the mirror case),
+#### Scenario B-10: Genuine exclusion failure blocks cache writes visibly
+**Error Path** · Traces to: US-3.3, US-4.4, MC-6
+**Given** product establishment cannot prove an effective exclusion because its policy is unreadable, negated or conflicts with tracked sensitive state,
 **When** a cache write is attempted,
-**Then** the write proceeds — either location satisfies the conservative gate.
+**Then** no cache file is created, normal authorized live work is not bypassed, and `cache_unavailable` is visible — not a silent skip or plaintext fallback.
 
-#### Scenario B-12: Symlink at the cache path is refused
-**Error** · Traces to: US-3.4
-**Given** a symlink placed at the cache directory path pointing outside the data root,
-**When** the manager resolves or writes,
-**Then** the operation is refused with a safe class and nothing is written through the link.
+#### Scenario Outline B-11: Staging AND archive exclusion are both required
+**Edge Case** · Traces to: US-3.3, US-4.4, MC-6
+**Given** product-established coverage is independently faulted to the staging/archive state below,
+**When** the next cache write is attempted,
+**Then** the single gate returns the indicated outcome and only the allowed case publishes ciphertext.
 
-#### Scenario B-13: File tools cannot reach the cache
-**Error** · Traces to: US-3.5, MC-16
-**Given** an agent holding normal workspace file authority,
-**When** it resolves a path under `mail-cache/` for read or write,
-**Then** the filesystem policy refuses the path — the cache is never agent-reachable regardless of workspace grants.
+| Effective staging exclusion | Application archive exclusion | Expected outcome |
+|---|---|---|
+| Proven | Proven | Allowed |
+| Proven | Failed/unproven | Refused; `cache_unavailable`; no cache file |
+| Failed/unproven | Proven | Refused; `cache_unavailable`; no cache file |
+| Failed/unproven | Failed/unproven | Refused; `cache_unavailable`; no cache file |
 
-### Feature: Backup, restore and the deployment exclusion
+#### Scenario B-12: Symlink at the private cache path is refused
+**Error Path** · Traces to: US-3.4, MC-5
+**Given** a synthetic cache-path component is a symlink out of the private root,
+**When** the application attempts a cache write,
+**Then** it refuses safely and writes nothing through the link.
 
-#### Scenario B-14: Tar backup skips the cache, keeps the control
-**Happy** · Traces to: US-4.2, MC-7
-**Given** a data directory containing `mail-cache/x.enc` and an ordinary allowed state file,
-**When** a backup archive is created,
-**Then** the member listing contains the control file and no `mail-cache` member.
+#### Scenario B-13: Ordinary file authority cannot reach private cache
+**Error Path** · Traces to: US-3.5, MC-16
+**Given** an agent holding ordinary workspace-file authority and an authorized ordinary-file control,
+**When** it attempts a file/shell operation under the private cache root,
+**Then** that path is refused while the same policy instrument permits the ordinary-file control.
 
-#### Scenario B-15: Restore never resurrects cache members
-**Alternate** · Traces to: US-4.2, MC-7
-**Given** a hand-built archive that (like an old pre-fix archive could) contains a `mail-cache` member,
-**When** it is restored into a scratch directory,
-**Then** no cache file materializes, while ordinary members extract normally.
+### Feature: Product backup, archive and restore exclusion
 
-#### Scenario B-16: The exclusion gate matches the deployed deny-list semantics
-**Edge** · Traces to: US-4.1, US-4.4
-**Given** the live provisioning-script ignore template with the `mail-cache/` rule added,
-**When** the product gate evaluates exclusion,
-**Then** the gate's rule-match semantics agree with `git check-ignore` on the deployed rules — the gate is conservative (refuses on doubt), and E1–E5 of US-4 all pass on the deployment receipt.
+#### Scenario B-14: Every application archive excludes sensitive Mail state
+**Happy Path** · Traces to: US-4.2, US-4.5, MC-7, MC-23
+**Given** synthetic cache/watcher current/temp/retired files, repository objects carrying their historical markers, ordinary state and a saved workspace-file control,
+**When** each product backup/archive path creates an archive,
+**Then** member/content inspection finds no protected fixture or historical marker and does find the ordinary state/saved-file controls (E3); exclusion covers more than the current directory name.
 
-### Feature: Removal cascades
+#### Scenario B-15: Old/hostile archives cannot restore protected Mail state
+**Alternate Path** · Traces to: US-4.2, US-4.5, MC-7, MC-23
+**Given** old/hostile archives containing protected Mail files/history plus ordinary saved-file/provenance controls,
+**When** the product restores them into a scratch root,
+**Then** no cache/watcher/history bypass materializes and ordinary controls restore under their normal rules (E4).
 
-#### Scenario B-17: Mailbox removal with successful cleanup
-**Happy** · Traces to: US-5.2
-**Given** a configured pair with a cache subtree,
+#### Scenario B-16: Product exclusion agrees with the independent policy oracle
+**Edge Case** · Traces to: US-4.1, US-4.4, US-4.5, MC-6
+**Given** fresh/upgrade/no-repository/later-repository roots and effective-policy precedence/negation/tracked-state fixtures,
+**When** the product-only exclusion campaign evaluates them,
+**Then** self-evaluated product decisions agree with an independent Git staging/policy oracle, unreadable/doubtful coverage refuses, **no product security path spawns Git**, and fresh **E1–E5** receipts include sensitive-negative and ordinary-positive controls. Product establishment, not externally supplied configuration, is under test.
+
+### Feature: Cache and watcher-state removal cascades
+
+#### Scenario B-17: Mailbox removal purges both private state targets
+**Happy Path** · Traces to: US-5.2, US-5.10, MC-8, MC-23
+**Given** a configured pair with cache/watcher files and a saved Library-file/provenance control,
 **When** the mailbox is deleted,
-**Then** the response is full `removed`, the config entry and credentials are gone, and the pair's cache subtree no longer exists on disk.
+**Then** full `removed` means both private targets are gone, runtime/grants are revoked and the config/credentials no longer authorize it; the saved user-file control is untouched.
 
-#### Scenario B-18: Failed unlink is cleanup-pending, never success
-**Error** · Traces to: US-5.2, US-5.3, MC-8
-**Given** a pair whose cache directory is made unwritable (unlink will fail),
-**When** the mailbox is deleted,
-**Then** the response is `removed_cleanup_pending` with a safe cleanup code, the pair remains tombstoned, no success is claimed, and the Retry-cleanup operation — invoked after the config row is gone — completes the purge and reports success truthfully.
+#### Scenario Outline B-18: Either unlink failure is visible pending cleanup
+**Error Path** · Traces to: US-5.2, US-5.3, MC-8, MC-23
+**Given** deletion of the target below will fail and the pair remains tombstoned after config removal,
+**When** the user invokes the separately authorized Retry-cleanup operation after the failure is cleared,
+**Then** the preceding removal outcome was `removed_cleanup_pending` with a safe code (never a successful purge), and retry now completes both purges truthfully.
 
-#### Scenario B-19: Late cache write cannot resurrect a removed pair
-**Error** · Traces to: US-5.4, MC-9
-**Given** a cache write paused mid-flight when the mailbox is deleted,
-**When** the paused write resumes and completes,
-**Then** the tombstone/generation check discards it: no file exists, no cache state advances, and the deletion outcome is unchanged.
+| Failed target |
+|---|
+| Cache subtree |
+| Watcher state file |
 
-#### Scenario B-20: Agent deletion cascades all its pairs
-**Alternate** · Traces to: US-5.5
-**Given** an agent with mailboxes in three workspaces and cache subtrees for each,
+#### Scenario B-19: Late cache and watcher completion cannot resurrect removal
+**Error Path** · Traces to: US-5.4, MC-9, MC-23
+**Given** cache and watcher-state writes paused at deterministic pre-publication/pre-write points and removal already completed,
+**When** those completions are released,
+**Then** no removed-pair file, row, count or timestamp is recreated/advanced; an independent agent turn is not cancelled because of UI loss.
+
+#### Scenario B-20: Agent deletion cascades every pair's private state
+**Alternate Path** · Traces to: US-5.5, MC-8, MC-23
+**Given** an agent with three mailbox pairs, both private state targets for each and a saved-file control,
 **When** the agent is deleted,
-**Then** all three subtrees are purged (best-effort, truthful outcome), and any failed purge surfaces the pending-cleanup state rather than a clean success.
+**Then** all three pairs cascade; any cache/watcher purge failure is visible in the mail-cleanup result and saved files remain untouched.
 
-#### Scenario B-21: Workspace deletion purges pairs it cascades
-**Alternate** · Traces to: US-5.6
-**Given** a workspace with two mailbox pairs and cache subtrees,
-**When** the workspace is deleted,
-**Then** each cascaded pair's subtree is purged during `releaseRuntimeResources`, and the wholesale workspace-directory wipe's success is not mistaken for cache cleanup (the cache lives outside `workspaces/<id>/`).
+#### Scenario B-21: Workspace deletion does not mistake its directory wipe for Mail purge
+**Alternate Path** · Traces to: US-5.6, MC-8, MC-23
+**Given** two mailbox pairs whose private state lives outside the workspace directory,
+**When** that workspace is deleted,
+**Then** each pair's cache and watcher state are explicitly purged, with truthful failure discrimination independent of the workspace-directory outcome.
 
-#### Scenario B-22: Credential change invalidates and rebuilds
-**Error** · Traces to: US-5.7, US-8.3, MC-10
-**Given** a pair with a valid encrypted snapshot,
-**When** its password is changed in config (offline, then process restart),
-**Then** the old snapshot is rejected by fingerprint mismatch, deleted without plaintext salvage, leases from the old identity are closed, and the pair rebuilds live on next open.
+#### Scenario Outline B-22: Reconfiguration advances the one persisted generation
+**Error Path** · Traces to: US-5.7, US-8.3, MC-10, MC-17
+**Given** a valid old-generation snapshot and paused old work,
+**When** the relevant supported change below commits,
+**Then** the epoch/canonical identity yields a new generation before publication, old work/snapshots are rejected/deleted without salvage and the same pair's random ID remains stable. No plaintext password is stored in config.
 
-#### Scenario B-23: Key lock is distinct from cache miss
-**Edge** · Traces to: US-8.4
-**Given** a locked credential store,
-**When** a cache read is attempted,
-**Then** the manager reports the store-locked state distinctly (not a cache miss, not corruption), serves live-only per the budget, and shows the safe cache warning — and never creates or regenerates a key over existing data.
+| Change |
+|---|
+| Credential replacement at the same credential reference, with persisted epoch advance |
+| Identical configuration re-save, with persisted epoch advance |
+| Endpoint/port/username/override change |
+| Stopped-process endpoint change, detected from canonical identity on restart |
+
+#### Scenario B-23: Store lock is not a cache miss or invented live authentication
+**Edge Case** · Traces to: US-8.4, MC-10
+**Given** a locked/broken credential store,
+**When** cache/live access is attempted,
+**Then** the store state is reported distinctly; cache is unavailable, live work follows only genuine credential/authorization readiness or its visible refusal, and no replacement key or fabricated successful dial is created.
 
 ### Feature: Metadata-only preview grants
 
@@ -558,9 +577,9 @@ Technical enforcement detail belongs here and in the TDD/interface sections; all
 **Then** the grant in the token store contains the pair/folder/ref/load-remote identity, session binding and expiry — and zero HTML string, zero inline part bytes, zero attachment data (white-box inspection).
 
 #### Scenario B-25: Serve fetches live through the budget
-**Happy** · Traces to: US-6.2, MC-12
-**Given** a minted grant,
-**When** the SPA serves the preview HTML and one inline part,
+**Happy Path** · Traces to: US-6.2, US-6.5, MC-12, MC-18
+**Given** a minted grant and a message with N inline resources (N=0,1,5),
+**When** the SPA renders that preview through its HTML and inline serve requests,
 **Then** each serve request performs its own budget-gated live fetch (fake-server command counter increments per request), the response carries `Cache-Control: no-store`, and no bytes persist after the request ends.
 
 #### Scenario B-26: Mint dials nothing; failures surface at serve
@@ -590,16 +609,147 @@ Technical enforcement detail belongs here and in the TDD/interface sections; all
 ### Feature: Redaction
 
 #### Scenario B-30: Leak markers never reach durable state
-**Error** · Traces to: US-7.1, US-7.2, MC-15
-**Given** a fake IMAP server whose failure responses embed synthetic markers (a distinctive subject, address and folder name),
-**When** failures flow through watcher recording, budget refusals, cache warnings and gateway logs,
-**Then** a scan of logs, watcher state, audit entries and cache envelopes finds zero markers and finds the safe class strings — with the scan's positive control (a deliberately recorded class string) proving it could have seen a leak.
+**Error Path** · Traces to: US-7.1, US-7.2, US-7.4, US-7.5, MC-15
+**Given** a fake IMAP server whose failures contain distinctive subject/address/folder/URL/credential markers, plus a separate deliberately marked synthetic scan-control fixture,
+**When** failures flow through W1's watcher state and this package's gateway logs/notices/cleanup/error boundaries,
+**Then** operational outputs and persisted failure state contain zero forbidden markers and do contain safe classes; the **same scan finds the marker in the separate control fixture** and in the provider input, proving it could detect a leak. An allowed class string alone is not a leak-detection control.
 
-#### Scenario B-31: Watcher state stops carrying raw error text
-**Alternate** · Traces to: US-7.3
-**Given** a watcher cycle failing against a raw-talking fake server,
-**When** the state file is written,
-**Then** the persisted error text is empty or class-derived, while the wire summary response is byte-identical in shape (it already carried only the class).
+#### Scenario B-31: W1's watcher correction is consumed without a second redactor
+**Alternate Path** · Traces to: US-7.3, MC-15
+**Given** W1's watcher fails against a raw-talking synthetic server,
+**When** its persisted failure is read through the gateway summary seam,
+**Then** the persisted text is empty/class-derived, the generated summary remains class-only and w5 adds no watcher-file edit or substitute implementation.
+
+### Feature: Missing proof obligations and frozen-interface integration
+
+#### Scenario B-32: Native Windows permissions are executed, not inferred
+**Edge Case** · Traces to: US-3.6, MC-5
+**Given** a real Windows runner with the tagged pure-Go cache tests and current-user/denied-user controls,
+**When** product cache creation/access is exercised,
+**Then** native access-control assertions run and refuse the denied control; a signed named-test/exit-code receipt exists. A compile-only job or Unix mode result cannot satisfy this scenario.
+
+#### Scenario Outline B-33: Boot rejects and reconciles orphan private state
+**Error Path** · Traces to: US-5.9, MC-8, MC-9, MC-23
+**Given** the target below belongs to a pair absent from live config and unlink is either successful or faulted,
+**When** the gateway reconciles state at restart,
+**Then** the orphan is never served, successful deletion removes it, and faulted deletion keeps safe visible/retryable cleanup intent without claiming purge success; no late writer recreates it.
+
+| Orphan target |
+|---|
+| Cache subtree |
+| Watcher state file |
+
+#### Scenario B-34: The tracked-state remediation runbook exists at delivery
+**Alternate Path** · Traces to: US-4.3, MC-6, MC-7
+**Given** a synthetic already-tracked Mail-state conflict,
+**When** the implementation's documentation/evidence pack is reviewed,
+**Then** this owner's audited runbook explains blocked activation, removal from the current index, rechecking both exclusions and the separate founder authorization for any history/external-copy cleanup. No destructive remediation was silently executed and no personal setup is a prerequisite.
+
+#### Scenario Outline B-35: One frozen record for every gateway outcome
+**Happy Path / Error Path** · Traces to: US-7.6, US-7.7, US-7.8, MC-18
+**Given** the operation below has the W1/W2 frozen dependencies and w6's complete operation enum,
+**When** it completes successfully or with a scripted safe failure,
+**Then** exactly one complete record reaches the sink and dedicated log, with real outcome/duration, supplied fields and no sensitive marker; cache hits/mints have zero acquisition and joiners have `socket_count=0` plus `shared_flight=true`.
+**And** repeating the observation with an absent sink yields an invalid/not-judgeable campaign, never a zero-duration success. The **removal** row remains a publisher-boundary gate until **§13 Q8** is resolved by w6, not a skipped requirement.
+
+| Gateway operation |
+|---|
+| Folder/list/open |
+| Metadata-only preview mint |
+| Message/attachment preview serve, including each inline request |
+| Saved-state summary (zero mail commands) |
+| Removal cascade, including cleanup-pending |
+
+#### Scenario B-36: A no-Message-ID journey uses only actual issued references
+**Happy Path** · Traces to: US-9.1, US-9.2, MC-19
+**Given** an authorized nested-part message without Message-ID and genuine list/agent results,
+**When** the permitted attachment list/read/Save journey uses only those returned references and indices,
+**Then** w5's single issuer supplies every ref, W2 validates on the same W1 lease, only the selected part is fetched with PEEK and the shared Save service produces the real file/receipt.
+
+#### Scenario B-37: Search and browse stay within the frozen 25/200 boundary
+**Happy Path / Edge Case** · Traces to: US-10.1, MC-20
+**Given** a folder with over 200 synthetic matches, including subject-only, sender-only and recipient-only matches older than the current browse view,
+**When** the user follows the real browse/search flow,
+**Then** server header search and pages use W2's single issuer, default/max page is 25, Load more adds 25, no view exceeds 200, no next cursor exists at the ceiling and search remains reachable without a body/local-index fetch or reusable-cache growth.
+
+#### Scenario Outline B-38: Mismatched cursor/reference refuses before content work
+**Error Path** · Traces to: US-9.3, US-10.2, MC-19, MC-20
+**Given** an independently authorized route and the stale/foreign binding below,
+**When** the next page/message action uses the issued cursor/reference,
+**Then** the generated HTTP 409 carries the appropriate `stale_cursor`/`stale_reference` discriminator, no prohibited content FETCH/STORE occurs and the client can reset/re-read once, not loop or replay a mutation.
+
+| Binding mismatch |
+|---|
+| Cursor pair/folder/query/config/epoch |
+| Message reference from another authorized pair |
+| Message reference from an old config/mapping generation |
+| Same numeric UID after UIDVALIDITY/folder recreation |
+
+#### Scenario Outline B-39: Generated metadata retains null and source truth
+**Edge Case** · Traces to: US-10.4, MC-21
+**Given** W2 supplies the state below through the generated schema,
+**When** the gateway maps the result,
+**Then** the expected value remains unchanged, with no second MIME walk or fabricated validation time.
+
+| W2 state | Expected wire fact |
+|---|---|
+| Unknown count | `total=null`, not 0 |
+| Confirmed absent Sent/Drafts | `total=0`, availability absent |
+| Saved Phase-1 folder mapping | Mapping source `saved`; mapping metadata source `encrypted_disk` |
+| Phase-1 cached headers/counts | Source `memory`, never `encrypted_disk` |
+| Metadata-only classifier success/failure | Same list/detail/agent flag; visible failure instead of uncomputed false; zero attachment bytes |
+
+#### Scenario Outline B-40: Eligible refresh keeps the founder's stale-gating
+**Alternate Path / Edge Case** · Traces to: US-10.3, MC-22
+**Given** W2 owns the header/count freshness decision and W3 supplies the real panel event below,
+**When** that event occurs,
+**Then** the resulting gateway calls obey the expected live-refresh count; separate mapping metadata remains on its 24-hour/invalidation rule and automatic work never carries human Retry.
+
+| Event/data | Live refreshes |
+|---|---|
+| Open/switch, absent data | One |
+| Open/switch, age 5 min−1 s | Zero |
+| Open/switch, age exactly 5 min | Zero |
+| Open/switch, age 5 min+1 s | One |
+| Manual Refresh, fresh data | One |
+| Confirmed own mutation, open panel | One after invalidation |
+| Closed panel across several intervals | Zero panel-data refreshes |
+
+#### Scenario B-41: Revision advancement rejects delayed publication everywhere
+**Error Path** · Traces to: US-1.2, US-5.4, US-10.3, MC-24
+**Given** a read captured W1's revision before server work and is paused after its old snapshot, then a confirmed mutation and newer refresh complete,
+**When** the old read's completion is released,
+**Then** W2 publishes no old row/count/snapshot/timestamp, w5 does not attach a new revision to old data and the newer refresh did not join the older flight. One capture seam, one counter and no new timer exist.
+
+#### Scenario Outline B-42: Disable and key events use the same honest cascade
+**Alternate Path** · Traces to: US-5.1, US-5.8, MC-8, MC-9, MC-23
+**Given** private pair state, active owned work and a saved-file control,
+**When** the trigger below invalidates the pair/cache,
+**Then** relevant work/grants/keys and disposable state are invalidated before later publication; any deletion failure is visible/retryable, saved files remain unchanged and no replacement master key is created.
+
+| Trigger |
+|---|
+| Mailbox enabled → disabled |
+| Credential-store lock |
+| Key rotation |
+
+#### Scenario B-43: Random pair ID and the one generation survive unchanged restart
+**Happy Path** · Traces to: US-3.2, US-8.1, US-8.2, MC-10, MC-17
+**Given** the persisted random 128-bit pair ID, canonical identity/config epoch and an authenticated eligible snapshot,
+**When** the application restarts with those values unchanged,
+**Then** pool/cache/gateway consume the same opaque ID/generation and the snapshot remains eligible; password rotation later changes generation via the epoch, never the pair ID or a credential-material fingerprint.
+
+#### Scenario B-44: Gateway endpoints consume only the selected-part reader
+**Edge Case** · Traces to: US-6.7, US-9.2, MC-14, MC-19
+**Given** an issued reference for a nested multipart message with two attachments, an inline body CID resource, a dedicated draft marker and a genuine user `message.md`,
+**When** a preview/read/Save/Download adapter requests one stable attachment index,
+**Then** the real protocol trace shows only the addressed part-specific PEEK and necessary metadata, no whole-message/unrelated body transfer and no Seen change; W2's classifier alone supplies attachment facts. Removing W2's reader yields a visible missing-dependency boundary, not a fallback.
+
+#### Scenario B-45: Saving ends temporary resource authority without losing the HTML rule
+**Alternate Path** · Traces to: US-6.8, US-5.10, US-10.5, MC-23
+**Given** temporary mail markdown targeting a Library/API/embed/remote resource and mail HTML with a script-effect marker, plus ordinary stored-file controls,
+**When** explicit Save succeeds and the real saved entries are opened,
+**Then** the temporary source is disposed, saved markdown follows **ordinary workspace resource rules** (the control proves requests could be observed), and saved HTML keeps **original bytes/provenance and scripts off by default** until its visible per-file checkbox deliberately allows that file's scripts. Provenance survives move/copy/rename/restore; mailbox removal leaves the saved files alone. The stricter temporary resource policy is never silently extended to saved non-HTML files.
 
 ---
 
