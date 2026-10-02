@@ -662,6 +662,13 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	stg.wsHandler = newWSHandler(stg.msgBus, stg.agentLoop, stg.allowedOrigin)
 	stg.wsHandler.home = stg.homePath
+	// w5-integration (US-2/MC-4): bind W1's ONE Mail panel presence registry
+	// to the WS lifecycle (frames dispatch, teardown revokes), and flip the
+	// pool's retention gate — the production activation the conservative
+	// request-scoped default has been waiting for. Retention still only ever
+	// extends an authorized read; presence never grants access.
+	stg.wsHandler.SetMailPresence(gatewayMailSessionsFor(stg.homePath).Presence())
+	gatewayMailSessionsFor(stg.homePath).EnableRetention()
 	toolStore := newToolResultStore(stg.homePath)
 	stg.wsHandler.toolStore = toolStore
 	stg.runningServices.toolStore = toolStore

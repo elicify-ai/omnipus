@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/pairing"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -177,6 +178,12 @@ type WSHandler struct {
 	msgBus        *bus.MessageBus
 	agentLoop     *agent.AgentLoop
 	allowedOrigin string
+
+	// mailPresence is W1's ONE Mail panel presence registry
+	// (pkg/email/pool.go::PanelPresence), bound by boot via SetMailPresence
+	// (mail_presence.go). The adapter — never a second store: observers bind
+	// to this connection's chat ID and revoke through teardown's UnbindAll.
+	mailPresence atomic.Pointer[email.PanelPresence]
 
 	// activeConns tracks in-flight ServeHTTP goroutines so Wait() can block
 	// until all connections have fully torn down (used by tests to avoid
@@ -669,6 +676,13 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(h.sessionIDs, chatID)
 		h.unbindConnHubLocked(wc)
 		h.mu.Unlock()
+		// w5-integration (US-2.3/MC-4): revoke this connection's Mail panel
+		// observers BEFORE the socket closes. This deferred block is the one
+		// choke point every disconnected socket passes through — explicit
+		// close frame, read error, ping-deadline expiry, abnormal closure;
+		// logout and browser quit converge here because they all end the
+		// socket — so no separate presence sweeper or heartbeat exists.
+		h.revokeMailPanelObservers(chatID)
 		wc.close()
 
 		// Emit observability counters at connection teardown so operators can
@@ -1389,6 +1403,19 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			return wsHandlerReadLoopContinue
 		}
 		wh.h.subscribePairingInterest(wh.wc, f.ChannelId, f.Active)
+	case string(generated.WsFrameTypeMailPanelObserver):
+		// w5-integration (US-2/MC-4): Mail panel presence open/close. No
+		// inbound JSON Schema was generated for this frame, so validation is
+		// the handler's own (mail_presence.go) — the owned ack/safe-error
+		// shape; the generic unknown-frame fallback below is never relied on.
+		var f generated.MailPanelObserverFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			wh.wc.inboundDropped.Add(1)
+			slog.Warn("ws: malformed mail_panel_observer frame", "chat_id", wh.chatID)
+			wh.h.sendMailPanelObserverError(wh.wc, f, "malformed_frame", "malformed mail panel observer frame")
+			return wsHandlerReadLoopContinue
+		}
+		wh.h.handleMailPanelObserverFrame(wh.wc, wh.chatID, f)
 	case string(generated.WsFrameTypeAskUserAnswer):
 		// AskUserQuestion card submission/cancel (askuserquestion-tool-
 		// spec v3 §3): bridge to askuser.Registry.Submit / CancelByUser.
