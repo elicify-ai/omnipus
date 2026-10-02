@@ -78,6 +78,9 @@ func ensureStagingExclusion(dataRoot string) error {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return errors.New("staging exclusion not provable: the cache directory is outside its repository root")
 	}
+	// Git's index and ignore patterns always use "/" separators; normalize the
+	// repo-relative path once so both checks below are platform-stable.
+	rel = filepath.ToSlash(rel)
 	// E-3 first: a tracked cache path is not excluded, whatever the rules say.
 	tracked, err := repo.tracksUnder(rel)
 	if err != nil {
