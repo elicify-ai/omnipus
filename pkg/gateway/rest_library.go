@@ -301,7 +301,47 @@ func (a *restAPI) handleLibraryEntriesList(w http.ResponseWriter, r *http.Reques
 		entries = []gen.LibraryEntry{}
 	}
 	annotateKnowledgeBaseEntries(root, entries)
+	a.annotateMailDerivedEntries(workspaceID, entries)
 	jsonOK(w, entries)
+}
+
+// annotateMailDerivedEntries sets preview_profile=mail_restricted (and, when
+// the per-file checkbox has been answered, preview_scripts_allowed) on every
+// FILE entry the workspace's marker store marks mail-derived — §5.4's
+// wire-visible half of the founder's Q5=A default: the SPA states the
+// preview posture from the listing instead of inferring it. Ordinary files
+// carry neither field (the generated field docs specify exactly that
+// absence). One bulk index read per listing.
+//
+// An unreadable store annotates nothing: this annotation is the UI's fact,
+// never the enforcement — the serve side applies the same §5.4 fail-safe
+// itself (libraryPreviewMailRestricted), so a corrupt index still previews
+// scripts-off.
+func (a *restAPI) annotateMailDerivedEntries(workspaceID string, entries []gen.LibraryEntry) {
+	marker := a.mailMarkerStore(workspaceID)
+	if marker == nil || len(entries) == 0 {
+		return
+	}
+	views, err := marker.ViewUnder("")
+	if err != nil {
+		logger.WarnCF("rest", "library listing: mail-derived marker index unreadable; preview profiles not annotated",
+			map[string]any{"workspace_id": workspaceID, "error": err.Error()})
+		return
+	}
+	for i := range entries {
+		if entries[i].IsDir {
+			continue
+		}
+		v, ok := views[entries[i].Path]
+		if !ok || !v.MailDerived {
+			continue
+		}
+		profile := gen.LibraryEntryPreviewProfileMailRestricted
+		entries[i].PreviewProfile = &profile
+		if v.ScriptsAllowed != nil {
+			entries[i].PreviewScriptsAllowed = v.ScriptsAllowed
+		}
+	}
 }
 
 // annotateKnowledgeBaseEntries sets IsKnowledgeBase on every directory entry
