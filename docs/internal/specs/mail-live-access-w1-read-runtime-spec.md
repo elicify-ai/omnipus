@@ -896,4 +896,108 @@ Each row is a test that must **fail** against the named careless implementation.
 
 (Test numbers reference §8's order column, e.g. T15 = `TestBudget_CoalescingIdentityMatrix`.)
 
-<!-- W1-SPEC-CONTINUES -->
+---
+
+## 11. Non-goals
+
+| Outside this work package | Boundary / reason |
+|---|---|
+| Folder discovery, overrides, unknown-vs-absent classification, the folder-mapping file, header cache, and every `pkg/email/view.go` edit | W2's package (§3.3). W1 consumes resolved folder names and publishes the lease; W2 never edits `transport.go`. |
+| Wire contracts, generated types, the presence WebSocket frames, the 503 `reason` enum, `mode=cache_first|live`, `publication_revision` response metadata | W0's contract wave; W4's handler work. W1 produces the typed error values and revision-capture seam only. |
+| Gateway/agent injection call sites, boot/reload wiring, removal cascades, backup/Git-exclusion work, watcher-provider re-injection | W4's package. W1 ships the seams; §4.1's switch is W4's integration wave. |
+| All test files | W5's package. This spec names them (§8); production owners never edit tests. |
+| JMAP transport selection, encrypted disk header cache, persisted JMAP state, Phase 2 invalidation events | W6/later waves after separate Phase 1 evidence. Plain IMAP only here. |
+| SMTP pooling or any send-path change | SMTP stays request-scoped outside the read pool (verified ADR boundary). |
+| IDLE / server-push subscriptions | Deferred by the ADR (13 rotating IDLE subscriptions exceed the 8-socket ceiling; confounds the plain-IMAP benchmark). |
+| Mail-driven agent turns, tasks, or a drainer reintroduction | Retired surfaces; the watcher stays metadata-only. |
+| Performance tuning to hit the accepted latency bars | The bars (Q3=A) are *targets* judged by the separate measurement plan; W1 delivers correct bounded mechanics, not a benchmark result. |
+| Sanitizing watcher error text and the raw-error logging seams | W4's logging policy; the ADR records the seams (verified: `recordFailure` accepts raw text) without making them W1's task. |
+
+---
+
+## 12. Definition of Done
+
+**Code correct and tested** — evidenced by all of:
+
+1. **RED before green:** every new test in §8 first ran and failed against the pre-change code — proven by CI on a tests-only commit or by the one dispatcher-owned narrow local run (`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^<Name>$' -p 1 ./pkg/email/`, one at a time) — then passed on the implementation branch, with receipts (log path + exit code) per claim.
+2. **CI green on the full gate set** for the branch: `gofmt go-build go-vet lint go-test go-race` (Go tier) — race is mandatory: this package is concurrency-first. No pre-existing failure is waved through ("ours to fix", Hard Constraint #7).
+3. **Preserved regressions:** the §8.2 set passes unchanged; `TestMailBudget_SingleflightKeyIncludesParams` updated only to the new identity shape, never weakened; W5's CHECK audit (mutation check + test-integrity-audit) returns PASS on the new suite.
+4. **Counterexamples demonstrably kill:** at minimum CX-1 (reservation counting) and CX-6 (superseded publication) shown failing against a deliberately mutated implementation in W5's CHECK receipt.
+5. **No test hook in production code:** grep-verifiable — no pool/budget/revision flag, global or setter exists that production sets for tests.
+
+**Reachable by a user/agent** — evidenced by all of:
+
+1. **Panel path:** a real user opens the Mail panel on a configured mailbox and reads folders/lists/messages served through the pooled path — UAT lane evidence (executed, not written), with the counter receipt showing fewer server connections than operations on the warm pass (SC-W1-7).
+2. **Agent path:** `read_inbox` / `search_email` / `read_message` — the existing registered tools — run through the same pool; registration is unchanged by W1 (no new tool; the Hard Constraint #6 check — `grep -rl '"read_inbox"' pkg/coreagent/ pkg/config/ pkg/tools/` non-empty — passes as today, re-run and recorded).
+3. **Watcher path:** the badge advances on real mail with the panel closed, and the state file's last-checked honestly reflects skips (executed watcher scenario).
+4. **No dead-end configuration:** every new behavior (busy outcomes, retention) is observable through existing surfaces — the busy outcome renders through the panel's existing 503 handling; retention needs no user action.
+5. **User-facing documentation updated in the same change** (§13) and audited by `docs-verifier` against actual behavior.
+
+Both lines are stated separately in the delivery report and neither is merged into the other.
+
+---
+
+## 13. User-facing documentation TODOs
+
+W1's user-visible outcomes are narrow (speed feel, busy states, honest last-checked). Drafting owners follow the ADR's docs table; `docs-verifier` audits each against actual behavior before landing.
+
+| Page | Owner | What must be said (W1-scoped additions) |
+|---|---|---|
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/mail.md` | W3 (frontend-lead) drafts | In the existing "If something goes wrong" section: the "Mail is busy. Try again." state — that it appears when too many mail requests run at once (many tabs/mailboxes), that Retry still respects the limits, and that this is not an error in their mailbox. A short note that repeatedly opening folders/messages no longer reconnects every time (faster repeat visits), with no promised numbers. That closing Mail stops its background activity. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/troubleshooting.md` | W4 (backend-lead) drafts | New Mail guidance distinguishing: **busy** (too many simultaneous requests — wait and retry), **backoff** (the mailbox failed repeatedly; automatic retries paused until the shown time; Retry overrides the pause once), and a **server connection limit** (the provider refuses more connections; Omnipus adapts, configured maxima are ceilings not promises). That agent tasks and the new-mail watcher are not interrupted by closing Mail. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/connectors.md` | W4 | One sentence under the mailbox settings: Omnipus keeps at most two live connections per mailbox and eight overall, and reuses healthy ones — operators sizing self-hosted servers can plan with those numbers. |
+
+(Nothing in `docs/library.md` or `docs/security.md` changes from W1 alone; their pending updates belong to the attachment/encryption work packages.)
+
+---
+
+## 14. Open questions
+
+| Q | Question | Options | Recommendation |
+|---|---|---|---|
+| OQ-1 | **Generation source shape** (W4 implements; W1 consumes an opaque string). What is the durable, restart-stable generation for a pair? | **A** — persisted per-pair config write-epoch counter (survives restart; changes on every mailbox save). **B** — purpose-keyed hash of the canonical endpoint/credential-reference identity (restart-stable by construction; stable across unrelated config edits). **C** — both combined: hash of canonical identity + epoch, so a moved-back edit still changes the generation. | **C**, lite: `B` as the base (catches endpoint/credential changes without persistence) plus the config revision so operator edits are never invisible. Opaque to W1 either way; W4's security review owns the non-secret property. |
+| OQ-2 | **Does the 45 s total read deadline bound agent-tool reads too** (`read_inbox`, `search_email`, `read_message`), or only panel reads? | **A** — panel reads only; tools keep today's looser turn-context bounds. **B** — all pooled reads including tools; watcher STATUS exempt. | **B**: a tool read is the same operation shape; a hung tool dial is exactly what the original `dialTimeout` existed to bound (verified comment), and equal treatment keeps the "every read finishes inside its stated bounds" story honest. Watcher stays on cadence+backoff+per-command bounds. |
+| OQ-3 | **Server connection-limit handling:** when a server refuses connections beyond its own lower limit, how far does W1 go in Phase 1? | **A** — recognize + retire + typed error only; capacity reduction deferred. **B** — also reduce the effective per-mailbox reservation ceiling for that server identity in-process (down to 1 if the response establishes it), reset on process restart; persisted adjustment deferred. | **B**, with the recognition strictly structural (the response must establish the limit — the ADR forbids promoting unknown text to a precise cause). In-process only; no persistence, no reconnect fighting. The typed class crossing the wire remains W0's contract. |
+| OQ-4 | **Watcher parallelism bound:** exact maximum concurrent watcher cycles? | **A** — fixed small constant (e.g. 3). **B** — unbounded goroutine-per-due-mailbox (safety from non-blocking acquisition alone). **C** — derived: min(configured mailbox count, small constant). | **A** with 3: enough to keep 13 mailboxes' cadence honest under normal latency, small enough that a pathological server cannot park many goroutines; per-mailbox single-flight guard does the rest. Tunable constant, not founder-set. |
+
+---
+
+## 15. Holdout evaluation scenarios (post-implementation; NOT in the traceability matrix)
+
+Evaluated outside the codebase, by a human or independent validator, on a real configured mailbox:
+
+1. **Warm-repeat feel (happy):** open a folder, go back, open it again within a couple of minutes — the second open is noticeably quicker and shows correct current data; open a different folder — its data is its own.
+2. **Two-client honesty (happy):** with the panel open in two browser tabs, mark a message read in one; the other tab reflects reality after its next eligible refresh, and neither shows stale rows labeled fresh.
+3. **Closed-panel quiet (edge):** close Mail completely, watch the mail server's session list (or a self-hosted server's logs) for two-plus minutes — no Omnipus sessions linger beyond the idle window, while the new-mail badge still updates within its cadence.
+4. **Cap refusal (error):** scripted/atypical load — many mailboxes opened in rapid succession across tabs — produces at most a clear "Mail is busy" message on the excess, never an error storm, and recovery is immediate once load drops.
+5. **Broken-server behavior (error):** point a mailbox at a port that accepts and hangs; every panel action ends with a visible named failure with Retry inside a minute — no spinner survives the bound.
+6. **Server restart survival (edge):** restart the mail server between two panel actions; the first action after the restart either succeeds (one in-bounds reconnect) or fails visibly with Retry — never wrong data.
+7. **Recovery after failure (happy):** after a deliberate failure (server stopped and restarted), press Retry once — the action completes with correct data, the error clears, and no duplicate side effect occurs (a marked-read message is marked once).
+
+---
+
+## 16. Grounding and verification
+
+Every code claim in this spec was checked first-hand in this checkout; commands ran read-only; nothing was built, tested or measured. Certainty: **Verified** = read/run in this task; **Inferred** = architectural consequence, reasoned not tested; **Unknown** = genuine gap owned elsewhere.
+
+| Claim | Evidence | Certainty |
+|---|---|---|
+| Client is connectionless per call; every read dials+logs in+SELECTs INBOX and closes | `pkg/email/transport.go::Client` (doc comment + struct), `::dialIMAP` (verified: dial → login → `client.Select("INBOX", nil)`), `::runIMAP` (per-command `commandTimeout` bound, buffered result channel) | Verified |
+| Account key is `host:port|username` (contention only after I-01); mail_budget.go header comment is stale | `pkg/email/transport.go::AccountKey` (comment records the port-collision defect); `pkg/email/mail_budget.go` file header vs code | Verified (discrepancy noted) |
+| Flight key omits pair/generation (I-01's exact defect); params JSON-encoded; empty params opt out | `pkg/email/mail_budget.go::MailBudgetRequest.flightKey` (`Account + "\x00" + Operation + "\x00" + json(Params)`); `::call` (DoChan, detached `flightContext`, joiner select) | Verified |
+| Budget = backoff → singleflight → 2-slot semaphore; `TryCall` non-blocking, never coalesces; skip ≠ failure | `pkg/email/mail_budget.go::backoffRefusal`, `::TryCall`, `runDialValue`, `mailBudgetSlotsPerAccount = 2`; `pkg/email/watcher.go::Cycle` (ErrMailSkipped branch) | Verified |
+| Watcher: 60 s cadence, 60 s→15 min cap ±20% jitter, auth→cap; sequential `CycleAll`; stagger i×1 min; `cycleIfDue` due gate; STATUS probe; `recordFailure` takes raw text | `pkg/email/watcher.go::WatcherBackoff`, `::WatcherInitialOffset`, `::probe`, `::recordFailure`, `::cycleIfDue`; `pkg/email/watcher_set.go::CycleAll` (sequential `for` verified); `pkg/email/agent_read.go::MailboxStatus` | Verified |
+| REST path: per-request `NewClient`; budget wrapper passes pair fields the key ignores; dial closures named | `pkg/gateway/rest_mail.go::mailPairClient`; `pkg/gateway/rest_mail_budget.go::mailBudgetWrap`, `::mailBudgetErr`; `pkg/gateway/rest_mail_read.go::handleMailFolders`, `::handleMailList` | Verified |
+| Resolve-then-mutate split discards the epoch between sessions (lease must replace it) | `pkg/gateway/rest_mail_read.go::handleMailSeen` (ResolveRef epoch unused → MarkSeenIn separate session) | Verified |
+| Reads are PEEK-only today; non-UIDPLUS draft delete leaves `\Deleted` pending (release must not CLOSE) | `pkg/email/view.go::selectFolder` (comment), `::DeleteDraftStatus` (symbol verified at its definition; deferral semantics per the ADR and the existing draft tests) | Verified (symbol + fetch discipline); CLOSE-expunge behavior reasoned from IMAP semantics — **Inferred, high confidence**, proven by MC-W1-14's server-side test |
+| Tool path gates via outer wrapper + injected budget setter | `pkg/tools/email.go::gateMailDial`, per-tool `::SetMailBudget` (3 tools verified); `pkg/agent/email_tools.go::registerEmailToolsForAgent`, `::SetSharedMailBudget` | Verified |
+| Watcher provider wiring sites exist as described | `pkg/gateway/gateway_boot.go` (MailboxProviderFunc → NewMailboxWatcherSet → heartbeat service), same shape in `pkg/gateway/gateway_reload.go` | Verified |
+| Test harness + named regression tests exist | `pkg/email/imapserver_test.go::startMemIMAP` (seam swap + cleanup verified); `pkg/email/view_missing_folder_test.go` (3 named tests read in full); `pkg/email/mail_budget_red_test.go` + watcher RED files (test names listed via grep) | Verified |
+| No GitNexus index in this worktree; impact rows are Inferred | `ls .gitnexus` → absent; per `omnipus-shared-rules` rule 9 the fallback sweep replaced graph analysis | Verified (absence) |
+| Pool manager, presence registry, revision seam, new identity do not exist yet — they are this spec's deliverables | `ls pkg/email/pool.go` → absent; grep for `RevisionSource`/`PanelPresence` → absent | Verified (absence) |
+| Blast radius of `dialIMAP` split and `MailBudgetRequest` extension | §2.2 table — first-hand grep of all `dialIMAP` callers (within `pkg/email` only) and all `MailBudgetRequest` literals (`mailBudgetWrap`, `gateMailDial`, `probe`) | Inferred (medium-high confidence — no graph run) |
+| Ceiling/deadline/jitter numbers are founder-accepted targets, not measurements | ADR P1.1 table + recorded Q3=A (cited in the ADR's founder-decisions record); no benchmark was run by this spec | Verified (as recorded decisions); measured attainment **Unknown** |
+
+**Self-check:** re-read the finished spec end-to-end against the dispatch's coverage list — all thirteen "cover at least" bullets are present (manager+injection §4.1; ceilings+reservations §4.2; leases+re-select+PEEK §4.3; deadlines/lock-order/failed-dial §4.4; poison+reader-termination+one-reconnect+no-mutation-replay §4.5; idle/LRU/all-busy §4.6; presence contract §4.7; I-01 identity §4.8; I-02 revision §4.9; watcher fairness/caps/skip §4.10; no-double-acquire §4.11; new-vs-changed files + consumed interfaces §3.3/§3.2). All nine dispatch-mandated spec elements present (§2, §5, §7, §8, §11, §12, §13, §9, §14) plus publishes/consumes (§3). Every scenario carries a category and a Traces-to line; every FR appears in the matrix; test names are derived from the design sections, not from any implementation. No measurement, test result, or library-internals claim is invented; the two library-behavior dependences (reader termination, CLOSE-expunge) are routed through behavioral tests rather than asserted from recall.
+
+skills: omnipus-shared-rules, plan-spec, omnipus-backend-rules
