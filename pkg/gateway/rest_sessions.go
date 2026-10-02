@@ -159,13 +159,17 @@ func intPtrIfPositive(n int) *int {
 
 // stopNoteEntry aliases the oapi-codegen-inlined Session.stop_note element so
 // it can be referenced by name (Go cannot name the anonymous inline struct).
-// Field order/tags must match gen.Session.StopNote exactly (At, By, Cause,
-// Seq) for the two anonymous struct types to be assignment-compatible.
+// Field order/tags must match gen.Session.StopNote exactly (At, BootSeq, By,
+// Cause, Seq) for the two anonymous struct types to be assignment-compatible.
+// BootSeq is declared but deliberately left nil by this package's producers —
+// stamping it belongs to the boot-restart writer (sub-agent control plane
+// ADR D8.3, later E/W3 implementation), not to the REST mapping.
 type stopNoteEntry = struct { // not-wire-format: alias of the codegen-inlined Session.stop_note element; canonical wire schema is contracts/components/schemas/StopNote.yaml, not a new type
-	At    time.Time                `json:"at"`
-	By    string                   `json:"by"`
-	Cause gen.SessionStopNoteCause `json:"cause"`
-	Seq   int64                    `json:"seq"`
+	At      time.Time                `json:"at"`
+	BootSeq *int64                   `json:"boot_seq,omitempty"`
+	By      string                   `json:"by"`
+	Cause   gen.SessionStopNoteCause `json:"cause"`
+	Seq     int64                    `json:"seq"`
 }
 
 // modelEntry aliases the oapi-codegen-inlined Session.Stats.by_model element so
