@@ -1058,12 +1058,13 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 		}
 	}
 
-	if err := rq.checkpointRequest(false); err != nil {
-		rq.ri.turnStatus = TurnEndStatusError
-		rq.ret0 = turnResult{status: TurnEndStatusError}
-		rq.ret1 = err
-		return agentLoopRunTurnRequestReturn
-	}
+	// No checkpoint on this seam: checkpointRequest runs once per actual send
+	// attempt from the callLLM closure (loop_run_turn_response.go) — MAJ-CW-004's
+	// one post-assembly pre-send measurement — and a prepare-side call here
+	// re-measured the same unchanged candidate, double-counting
+	// midTurnChecksTotal (B-33 count: N + N+1 required, duplicate measured 152
+	// for 50 results). Validation and relief still cover every actual send,
+	// inside the closure.
 
 	// The exact tool set this request offers, captured AFTER every step that
 	// shapes providerToolDefs (goal-door narrowing, compressed manifest,

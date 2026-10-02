@@ -56,14 +56,14 @@ func retainLiveWindow(live, request []providers.Message) []providers.Message {
 	return out
 }
 
-// checkpointRequest runs after actual note/hook assembly and on retry sends.
-// Neither outgoing nor ongoing messages change if persistence fails.
-// countOverflow gates contextResidueOverflowsTotal: the retry closure inside
+// checkpointRequest is the send-seam checkpoint: the callLLM closure inside
 // callLLMWithRetries is the one real choke-point every actual provider-send
 // attempt funnels through (first send, retries, PDF fallback, media
-// downgrade, empty-response retry), so it alone counts (true); the
-// prepare-side call exists for post-trim telemetry/logging on data that
-// hasn't been sent yet, and must not double-count the same overflow (false).
+// downgrade, empty-response retry), so it is the only production caller —
+// one post-assembly pre-send measurement per actual attempt (MAJ-CW-004).
+// Neither outgoing nor ongoing messages change if persistence fails.
+// countOverflow gates contextResidueOverflowsTotal: production always passes
+// true; a direct harness drive that must not count the overflow passes false.
 func (rq *agentLoopRunTurnRequest) checkpointRequest(countOverflow bool) error {
 	rt := rq.ri.rf.rt
 	if err := rt.ts.contextWindowError(); err != nil {
