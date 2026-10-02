@@ -62,13 +62,26 @@ const (
 	StyleMaxBlockBytes = 16 << 10
 )
 
-// styleAttrOversizedRe strips a style ATTRIBUTE whose value already exceeds
-// the cap, before any parsing (bounded work on hostile input). The quoting
-// is tolerant (double/single), matching the pipeline's existing attr
-// handling.
-var styleAttrOversizedRe = regexp.MustCompile(`(?i)\sstyle\s*=\s*("[^"]{4097,}"|'[^']{4097,}')`)
+// styleAttrAnyRe matches a style ATTRIBUTE with any quoted value; the
+// over-cap DECISION is a length check in the replacement function — RE2
+// caps repeat counts at 1000, so the cap number cannot live in the pattern
+// itself.
+var styleAttrAnyRe = regexp.MustCompile(`(?i)\sstyle\s*=\s*("[^"]*"|'[^']*')`)
 
-// StripOversizedStyleAttrs removes over-cap style attributes from raw HTML.
+// StripOversizedStyleAttrs removes over-cap style attributes from raw HTML
+// (bounded work on hostile input, P8).
 func StripOversizedStyleAttrs(html string) string {
-	return styleAttrOversizedRe.ReplaceAllString(html, "")
+	return styleAttrAnyRe.ReplaceAllStringFunc(html, func(attr string) string {
+		// attr = ` style="…"` / ` style='…'`; the value sits between the
+		// first and last quote.
+		first := strings.IndexAny(attr, `"'`)
+		if first < 0 || first+1 >= len(attr) {
+			return ""
+		}
+		value := attr[first+1 : len(attr)-1]
+		if len(value) > StyleMaxAttrBytes {
+			return ""
+		}
+		return attr
+	})
 }

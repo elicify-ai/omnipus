@@ -32,6 +32,11 @@ var (
 	ErrStaleRef             = email.ErrMailStaleReference
 	ErrNoMailboxLabel       = errors.New("mailbox label is required")
 	ErrUnsafeName           = errors.New("unsafe file name")
+	// ErrDestinationWrite marks a destination-side failure (folder creation,
+	// reservation, write, close, marker) — the 500 class of the save
+	// contract, distinct from a mail-server failure (502) and from the typed
+	// permission/size refusals.
+	ErrDestinationWrite = errors.New("destination write failed")
 )
 
 // PartReader is the targeted single-part seam the service consumes — the
@@ -205,13 +210,13 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (*SaveReceipt, erro
 	}
 	for _, dir := range []string{"mail", path.Join("mail", label), path.Join("mail", label, month)} {
 		if err := s.writer.Mkdir(dir); err != nil {
-			return nil, fmt.Errorf("could not create the mail save folder: %w", err)
+			return nil, fmt.Errorf("%w: could not create the mail save folder: %v", ErrDestinationWrite, err)
 		}
 	}
 
 	finalRel, file, err := s.writer.CreateUnique(rel)
 	if err != nil {
-		return nil, fmt.Errorf("could not reserve the file in the Library: %w", err)
+		return nil, fmt.Errorf("%w: could not reserve the file in the Library: %v", ErrDestinationWrite, err)
 	}
 	if err := s.writer.ValidateCreateName(finalRel); err != nil {
 		s.cleanupAfterRefusal(finalRel, file)
@@ -219,10 +224,10 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (*SaveReceipt, erro
 	}
 	var writeErr error
 	if n, werr := file.Write(part.Data); werr != nil {
-		writeErr = fmt.Errorf("write failed after %d of %d bytes: %w", n, len(part.Data), werr)
+		writeErr = fmt.Errorf("%w: write failed after %d of %d bytes: %v", ErrDestinationWrite, n, len(part.Data), werr)
 	}
 	if cerr := file.Close(); cerr != nil && writeErr == nil {
-		writeErr = fmt.Errorf("close failed: %w", cerr)
+		writeErr = fmt.Errorf("%w: close failed: %v", ErrDestinationWrite, cerr)
 	}
 	if writeErr != nil {
 		s.cleanupAfterRefusal(finalRel, nil)
@@ -236,7 +241,7 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (*SaveReceipt, erro
 	if s.writer.MarkerStore() != nil && strings.EqualFold(path.Ext(finalRel), ".html") {
 		if merr := s.writer.MarkerStore().Mark(finalRel); merr != nil {
 			s.cleanupAfterRefusal(finalRel, nil)
-			return nil, fmt.Errorf("could not record the mail-derived marker for the saved HTML file: %w", merr)
+			return nil, fmt.Errorf("%w: could not record the mail-derived marker for the saved HTML file: %v", ErrDestinationWrite, merr)
 		}
 	}
 
