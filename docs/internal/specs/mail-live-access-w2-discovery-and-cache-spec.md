@@ -527,6 +527,55 @@ Diagnostics must let an operator debug discovery and cache behaviour without eve
 1. **Given** any operation in this package (success, unknown, ambiguous, failure), **when** its diagnostics are written, **then** they carry only opaque pair/generation IDs, safe classes, durations and counts.
 2. **Given** a server error containing folder names or message data, **when** it is reduced at the boundary, **then** only the safe class survives into logs and state.
 
+### US-11 — Older messages are reachable through folder search (P1 — correction round; register row 4; founder Q-D=A)
+
+A user browsing past the 200-row ceiling must be able to *reach* older messages, not just be told to search: the panel's search runs server-side inside the 25/200 bounds, matching subject and sender/recipient substrings, and never consults the header cache.
+
+**Independent test:** fake IMAP server with 300 messages; a subject-substring search returns 25-row pages under a cursor up to the 200 ceiling (`view_limit_reached` beyond); a sender-substring search finds messages the subject search misses; the header cache's stored rows are neither served from nor written to by any search.
+
+1. **Given** messages whose subjects contain the query, **when** a folder search runs, **then** results come from a server-side IMAP SEARCH (SUBJECT header match), 25 per page under an issued cursor.
+2. **Given** a message whose sender (or recipient) matches while its subject does not, **when** a folder search runs on FROM/TO, **then** the message is found — sender/recipient substring matching is part of the decided surface.
+3. **Given** a search sequence that has delivered 200 rows, **when** the next page is requested, **then** `view_limit_reached` is reported with no next cursor and no auto-continuation.
+4. **Given** a cursor from another query, folder version or generation, **when** it is presented, **then** the typed 409 stale-cursor result requests one visible view reset — and zero search rows ever enter or leave the header cache.
+
+### US-12 — Attachments are read part-wise and flagged truthfully (P1 — correction round; register rows 14–15)
+
+Opening or saving an attachment must fetch only that attachment's part — transiently, on the leased session — and the message list's paperclip indicator must be derived from the message's actual structure, with `false` meaning *checked, no attachments*.
+
+**Independent test:** a message with two attachments and an Omnipus draft marker: the part reader fetches exactly the addressed part (partial fetch for text; whole part for an image) with zero flag changes; the classifier yields two descriptors with the draft part excluded and `has_attachments=true`; a message with no attachment parts yields `has_attachments=false`; the same structure classifies identically twice.
+
+1. **Given** an addressed `part_index` on a leased session, **when** the part reader fetches, **then** only that part's bytes are transferred (BODY.PEEK part fetch — text/markdown may be partial; image/PDF whole), flags are untouched, and nothing is written to the server's disk or kept by this package.
+2. **Given** the draft-body marker part, **when** the leaf indices are resolved, **then** the marker is excluded from numbering and from classification, and the same message resolves identical indices on every read under the same epoch.
+3. **Given** a message's MIME structure, **when** the classifier runs, **then** `has_attachments` reflects the attachment-classified parts with `false` as established absence — and the same structure always yields the same classification.
+
+### US-13 — A stale message reference is refused, never silently resolved (P0 — correction round; register row 16)
+
+The current `view.go` takes a supplied UID without comparing its embedded epoch — the reference-validation seam. With gateway-issued references, a ref minted against another folder epoch or configuration generation must fail visibly.
+
+**Independent test:** mint a reference against epoch N; change the folder's UIDVALIDITY (or bump the generation); present the reference to read/seen/part-fetch — each is refused with the typed stale-reference result requesting one view reset; zero server commands act on the stale ref.
+
+1. **Given** a reference whose embedded epoch differs from the live folder epoch, **when** a detail read, seen-write or part fetch receives it, **then** validation on the same lease refuses it with the visible typed result — the server is never asked to act on the stale reference.
+2. **Given** a reference minted under another configuration generation, **when** any `view.go` operation receives it, **then** it is refused the same way; and this package never mints references (issuance is w5-integration's, register row 16).
+
+### US-14 — Counts are memory-only and refresh only when stale (P1 — correction round; register row 21; founder Q-C=A)
+
+The rail's counts must be instant (memory), honest (unknown ≠ zero), and infrequent: refreshed on a trigger only when absent or older than five minutes, with manual Refresh always current — and no timer anywhere.
+
+**Independent test:** counts fetched 4:59 ago are served again on a trigger with zero IMAP commands; at 5:01 one refresh runs; manual Refresh refreshes despite freshness; a failed refresh keeps prior counts with a visible error and no timestamp reset; no repeating timer exists.
+
+1. **Given** counts younger than 5 minutes, **when** a trigger event fires (panel open, folder switch, own action), **then** the stored counts are served with zero live dials.
+2. **Given** counts absent or older than 5 minutes, **when** a trigger event fires, **then** exactly one live refresh runs; **manual Refresh always refreshes** regardless of age; and no repeating timer exists on any path.
+3. **Given** a failed counts refresh, **when** the next render happens, **then** the previous counts stand with the visible error/Retry, the timestamp is unchanged, and a superseded refresh publishes nothing (§3.10).
+
+### US-15 — This package's instrument sub-fields are emitted per the frozen record (P2 — correction round; register row 17)
+
+The measurement campaign (w6) can only judge what the emitters record: this package emits its cache/discovery sub-fields of the w6-frozen record, with coalesced joiners recording `socket_count=0` plus the shared-flight marker.
+
+**Independent test:** drive a cache hit, a cache miss and a coalesced (joined) discovery: each emits the w6-shaped record fields W2 owns (`source`, `hit`, `duration_ms`, `outcome`); the joined discovery records `socket_count=0` plus the shared-flight marker; no field owned by another layer is invented.
+
+1. **Given** a cache read or discovery operation, **when** it completes, **then** its instrument record carries W2's sub-fields per §3.17 and no sub-fields owned by w1/w5-integration are fabricated.
+2. **Given** an operation that joined a coalesced flight, **when** its record is written, **then** `socket_count=0` plus the shared-flight marker are recorded (the joiner rule), keeping the socket sum comparable to the server's connection counter.
+
 ---
 
 ## 6. BDD scenarios
@@ -777,13 +826,90 @@ Format: Given/When/Then, one action per When; each scenario is typed **Happy / A
   **then** the row leaves the cache, affected counts invalidate, and an open stale ref gets the visible changed-or-deleted outcome — never a served-as-fresh row.
   Traces to: US-9.5 (and §3.11's move/delete row).
 
-### 6.9 Logging (US-10)
+### 6.9 Logging and instrumentation (US-10, US-15)
 
 - **Scenario L-1 — Marker-free logs.** **Error.**
   **Given** synthetic folder names, subjects and addresses carrying distinctive leak markers, driven through every §6 scenario,
   **when** all log sinks are examined,
   **then** zero markers appear, while safe classes, durations and counts do appear.
   Traces to: US-10.1, US-10.2.
+- **Scenario L-2 — Instrument sub-fields and the joiner rule.** **Edge.**
+  **Given** a cache hit, a cache miss, and a discovery that joined a coalesced flight,
+  **when** each operation's instrument record is written,
+  **then** each carries W2's sub-fields of the w6-frozen shape (`source`, `hit`, `duration_ms`, `outcome`) and nothing owned by another layer, and the joined discovery records `socket_count=0` plus the shared-flight marker.
+  Traces to: US-15.1, US-15.2.
+
+### 6.10 Folder search (US-11)
+
+- **Scenario S-1 — Subject substring, server-side.** **Happy.**
+  **Given** messages whose subjects contain the query among 300 in the folder,
+  **when** a folder search runs,
+  **then** the matching command is a server-side IMAP SEARCH on SUBJECT, results return 25 per page under an issued cursor, and the header cache is neither read nor written.
+  Traces to: US-11.1.
+- **Scenario S-2 — Sender/recipient substring.** **Happy.**
+  **Given** a message whose sender matches the query while its subject does not,
+  **when** a folder search runs on FROM/TO,
+  **then** the message is found (the decided matching surface is subject + sender/recipient, founder Q-D=A).
+  Traces to: US-11.2.
+- **Scenario S-3 — Beyond 200 the search view ends honestly.** **Edge.**
+  **Given** a search sequence that has delivered 200 rows,
+  **when** the next page is requested,
+  **then** `view_limit_reached` is reported with no next cursor and no auto-continuation.
+  Traces to: US-11.3.
+- **Scenario S-4 — Stale cursor resets visibly once.** **Error.**
+  **Given** a cursor bound to another query, folder version or generation,
+  **when** it is presented,
+  **then** the typed 409 stale-cursor result requests one visible view reset — no silent reinterpretation, no reset loop, zero cache interaction.
+  Traces to: US-11.4.
+
+### 6.11 Part reader and MIME classification (US-12)
+
+- **Scenario P-1 — Part fetch is transient and flag-free.** **Happy.**
+  **Given** an addressed `part_index` on the leased session,
+  **when** the part reader fetches a text part,
+  **then** only that part's bytes transfer (partial fetch permitted), zero flag changes occur, nothing is written server-side, and nothing is retained by this package.
+  Traces to: US-12.1.
+- **Scenario P-2 — Draft marker excluded from indices.** **Edge.**
+  **Given** a message carrying the Omnipus draft-body marker plus two attachments,
+  **when** leaf indices are resolved,
+  **then** the marker part is excluded from numbering and classification, and two reads under the same epoch resolve identical indices.
+  Traces to: US-12.2.
+- **Scenario P-3 — Established absence.** **Edge.**
+  **Given** a message with no attachment-classified parts,
+  **when** the classifier runs,
+  **then** `has_attachments=false` is established absence, and the same structure classifies identically on a second run.
+  Traces to: US-12.3.
+
+### 6.12 Reference validation (US-13)
+
+- **Scenario R-1 — Stale-epoch reference refused.** **Error.**
+  **Given** a reference minted against folder epoch N and the folder's UIDVALIDITY now N+1,
+  **when** a detail read, seen-write or part fetch presents it,
+  **then** the same-lease validation refuses it with the typed stale-reference result requesting one view reset, and zero server commands act on it.
+  Traces to: US-13.1.
+- **Scenario R-2 — Foreign-generation reference refused.** **Error.**
+  **Given** a reference minted under another configuration generation,
+  **when** any `view.go` operation receives it,
+  **then** it is refused the same way, and no path in this package mints a reference.
+  Traces to: US-13.2.
+
+### 6.13 Counts freshness (US-14)
+
+- **Scenario C-1 — Fresh counts are served, not re-dialed.** **Happy.**
+  **Given** counts fetched 4 minutes 59 seconds ago,
+  **when** a trigger event fires (panel open, folder switch, own action),
+  **then** the stored counts are served with zero IMAP commands (stale-gating, founder Q-C=A).
+  Traces to: US-14.1.
+- **Scenario C-2 — Stale counts refresh exactly once; manual always; no timer.** **Alternate.**
+  **Given** counts absent or older than 5 minutes,
+  **when** a trigger fires — and separately, when manual Refresh fires on fresh counts,
+  **then** the stale case runs exactly one live refresh, the manual case refreshes regardless of age, and no repeating counts timer exists on any path.
+  Traces to: US-14.1, US-14.2.
+- **Scenario C-3 — Failed counts refresh preserves and labels.** **Error.**
+  **Given** a counts refresh that fails,
+  **when** the next render happens,
+  **then** the previous counts stand with the visible error/Retry, the timestamp is unchanged, and a superseded refresh publishes nothing (§3.10).
+  Traces to: US-14.3.
 
 ---
 
