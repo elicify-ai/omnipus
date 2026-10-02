@@ -17178,7 +17178,7 @@ export interface components {
              */
             at: string;
             /**
-             * @description Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", or "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, boot-recovery restart) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem`.
+             * @description Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
              * @example human:user-123
              */
             by: string;
@@ -17194,6 +17194,12 @@ export interface components {
              * @enum {string}
              */
             cause: "stop" | "redirect_pause" | "cascade" | "restart" | "timeout";
+            /**
+             * Format: int64
+             * @description Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present for restart notes (sub-agent control plane ADR D8.3); absent otherwise.
+             * @example 1
+             */
+            boot_seq?: number;
         };
         /**
          * SubagentStartFrame

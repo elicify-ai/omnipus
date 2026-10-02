@@ -113,6 +113,7 @@ type Session = {
         by: string;
         seq: number;
         cause: "stop" | "redirect_pause" | "cascade" | "restart" | "timeout";
+        boot_seq?: number | undefined;
       }
     | undefined;
   created_at: string;
@@ -3315,6 +3316,7 @@ export const Session: z.ZodType<Session> = z.object({
         "restart",
         "timeout",
       ]),
+      boot_seq: z.number().int().gte(1).optional(),
     })
     .optional(),
   created_at: z.string().datetime({ offset: true }),
