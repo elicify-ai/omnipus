@@ -894,6 +894,26 @@ Format: Given/When/Then, one action per When; each scenario is typed **Happy / A
   **when** it is presented,
   **then** the typed 409 stale-cursor result requests one visible view reset — no silent reinterpretation, no reset loop, zero cache interaction.
   Traces to: US-11.4.
+- **Scenario S-5 — Browse pages issue bound cursors.** **Happy (round-2 CRIT-1).**
+  **Given** a folder with more than 25 messages and the newest-50 cache warm,
+  **when** the list's Load-more runs through its pages,
+  **then** each page carries a browse cursor binding pair, generation, folder, folder epoch, `sequence=browse` and the delivered-row count — issued by `view.go`, never by the gateway.
+  Traces to: US-11.5.
+- **Scenario S-6 — `has_more` past the cache window is live truth.** **Edge (round-2 CRIT-1).**
+  **Given** a browse sequence loading pages beyond the cached newest-50,
+  **when** each next page is requested,
+  **then** the page runs live and `has_more` (and the 200 ceiling) reflect the live delivered-row count — the cache window never ends the sequence early, fakes the ceiling, or serves the page.
+  Traces to: US-11.6.
+- **Scenario S-7 — Browse ceiling ends with the search remedy.** **Edge (round-2 CRIT-1).**
+  **Given** a browse sequence that has delivered 200 rows,
+  **when** Load-more runs,
+  **then** `view_limit_reached=true`, no next browse cursor is issued, and the reachable search is offered.
+  Traces to: US-11.7.
+- **Scenario S-8 — Cross-sequence and stale browse cursors refuse.** **Error (round-2 CRIT-1).**
+  **Given** a browse cursor presented after the folder's epoch changed (or under another generation, or a search cursor presented to the browse sequence),
+  **when** it is presented,
+  **then** the typed 409 stale-cursor result requests one visible view reset, and the legacy `truncated`/`next_before_uid` fields are never populated by the new path.
+  Traces to: US-11.8.
 
 ### 6.11 Part reader and MIME classification (US-12)
 
@@ -943,6 +963,24 @@ Format: Given/When/Then, one action per When; each scenario is typed **Happy / A
   **when** the next render happens,
   **then** the previous counts stand with the visible error/Retry, the timestamp is unchanged, and a superseded refresh publishes nothing (§3.10).
   Traces to: US-14.3.
+
+### 6.14 Date normalization (US-16, round-2 fix)
+
+- **Scenario N-1 — Header date wins.** **Happy.**
+  **Given** a message with a valid, non-zero Date header,
+  **when** its list row and detail render,
+  **then** the normalized effective date is that header date (RFC 3339), identical on both surfaces.
+  Traces to: US-16.1.
+- **Scenario N-2 — Internal date is the fallback, without a second fetch.** **Alternate.**
+  **Given** a message whose Date header is zero or unparsable but whose server internal date exists,
+  **when** any surface renders it,
+  **then** the internal date is shown, obtained from the existing envelope/detail fetches — no second server round-trip was issued to find a date.
+  Traces to: US-16.2.
+- **Scenario N-3 — Neither source means null everywhere.** **Error.**
+  **Given** a message with neither a usable Date header nor an internal date,
+  **when** the list row, the detail and the cache are examined,
+  **then** the effective date is null on every surface — never `1 Jan 1`, the epoch, or today — and the cached row preserves the null.
+  Traces to: US-16.3.
 
 ---
 
