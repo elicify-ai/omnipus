@@ -287,3 +287,185 @@ Each MC-P is testable as stated; the right-hand column names the primary proof.
 | W7's save service, W8's viewer source union, W9's sanitizer table, W10's tools/catalog | Feature journey tests | Feature tests red until each lands; sequenced per the ADR (date/reply wins first, then attachments, CSS after security review) |
 | Fake IMAP server + its fault-injection extensions (test code only) | Every runtime/cache test | A harness fault that cannot be injected becomes a coordination question — never a production hook |
 | The live instance + the 13 mailboxes | Measurement arms and UAT rows | An unavailable pair is reported *not applicable*/unavailable — never silently replaced with a convenient provider (ADR measurement rule) |
+
+---
+
+## 5. BDD scenarios
+
+Every scenario carries its category (Happy / Alternate / Error / Edge) and traces to a US-Pn acceptance criterion. Fixtures are synthetic throughout — marker subjects/addresses/folder names exist so leak scans have something to find.
+
+#### Scenario B-P1: A successful message open emits a timing record
+**Traces to**: US-P1 AC-1 · **Category**: Happy Path
+- **Given** the instrument wired with a recording sink and `startMemIMAP` holding ≥ 1 message
+- **When** the panel opens that message end-to-end
+- **Then** exactly one record exists with `operation=open`, `source=live`, `hit=false`, `duration_ms > 0`, `socket_count ≥ 1`, `outcome=ok` — on the success path that today logs nothing
+- **And** the same holds for folders, list, summary, discovery and attachment reads (each its own record, correct operation label)
+
+#### Scenario B-P2: The record cannot leak mail content
+**Traces to**: US-P1 AC-2 · **Category**: Error Path
+- **Given** synthetic mail whose subject, sender address and folder name are distinctive marker strings, and a record-scan harness that finds markers when present (positive control on the mail data itself)
+- **When** any operation completes and its record is captured
+- **Then** zero marker strings appear in any record field — and the positive control proves the scan could have found them
+
+#### Scenario B-P3: The ninth socket is refused with a typed busy result
+**Traces to**: US-P2 AC-2 · **Category**: Error Path
+- **Given** eight leases held active by stalled (never-completing) fake-server responses and one reservation in the connecting state counted as active
+- **When** a ninth read arrives
+- **Then** it waits at most the 5 s acquisition wait and receives the typed busy result (`pool_busy`) — and the fake server's connection counter shows **no ninth dial**
+
+#### Scenario B-P4: Two simultaneous different-folder reads stay isolated
+**Traces to**: US-P2 AC-3 · **Category**: Alternate Path
+- **Given** one mailbox whose server pauses borrower A's command mid-flight, while borrower B selects a different folder
+- **When** both complete
+- **Then** A's results contain only A's folder markers, B's only B's — neither fetch observes the other's SELECT state
+- **And** the fetches were PEEK: `\Seen` is unchanged server-side, and no release/eviction performed EXPUNGE
+
+#### Scenario B-P5: A poisoned socket is retired, never reused
+**Traces to**: US-P2 AC-4 · **Category**: Error Path
+- **Given** a socket that receives a server BYE (siblings: command timeout, cancelled command, protocol error)
+- **When** the failure is handled and the next operation runs
+- **Then** the poisoned connection was closed, the next operation dialed fresh (server login count +1), and 20 subsequent cycles show no reuse of the retired session and a bounded goroutine trend
+
+#### Scenario B-P6: Panel close releases sockets; independent work survives
+**Traces to**: US-P2 AC-5 · **Category**: Alternate Path
+- **Given** an open panel with warm sockets and an in-flight watcher cycle plus an agent tool read
+- **When** the last panel observer leaves (each variant: close frame, browser disconnect without a frame, logout, workspace exit)
+- **Then** panel-retained sockets return to zero, the watcher/tool work completes normally, and a detached shared flight never returns its socket to panel retention
+- **But** an independent tool request is never cancelled merely because the UI disappeared
+
+#### Scenario B-P7: A cancelled request releases every reservation
+**Traces to**: US-P2 AC-6 · **Category**: Alternate Path
+- **Given** a read in its acquisition queue holding a global reservation, an account slot and a mailbox lease, with no other waiter
+- **When** its context is cancelled
+- **Then** all three reservations return to baseline before the call returns
+- **And** if the detached flight later completes, it publishes only under the current revision and restores no panel retention
+
+#### Scenario B-P8: Same account, different mapping — no shared result
+**Traces to**: US-P2 AC-7 · **Category**: Error Path
+- **Given** two pairs on one `host:port|username` account with different configured Sent mappings, both issuing the same concurrent `list folder=sent`
+- **When** both complete
+- **Then** each result carries only its own mapping's marker messages — the second pair never receives the first's Sent mapping
+- **And** total concurrent dials across both pairs never exceeded the account's two-slot gate
+
+#### Scenario B-P9: Old generation never joins or feeds a new one
+**Traces to**: US-P2 AC-8 · **Category**: Error Path
+- **Given** an identical operation in flight for a pair's old configuration generation, the pair then reconfigured (generation bumped), the same operation issued again, and one joiner of the old flight cancelled mid-flight
+- **When** both flights finish
+- **Then** the new-generation request never joined the old flight and never received its data; the old flight's completion published nothing for the new generation; the joiner's cancellation neither failed nor cancelled the flight other waiters still depend on
+
+#### Scenario B-P10: A superseded read publishes nothing
+**Traces to**: US-P2 AC-9 · **Category**: Error Path
+- **Given** a pre-mutation read paused (fake-server hold) after its server snapshot
+- **When** a mark-read mutation completes and its post-mutation refresh finishes, then the paused read is released
+- **Then** the released read publishes nothing — memory rows unchanged, no disk snapshot write, no `last_validated` advance, no UI/count update — and the post-mutation refresh never joined the superseded flight
+- **And** sibling cases hold: a cache-first read overtaken by the mutation; UIDVALIDITY changing mid-read; a delayed frontend response carrying an older `publication_revision` arriving after a newer one is dropped
+- **But** no new scheduled refresh timer was introduced (the revision advances only on the listed events)
+
+#### Scenario B-P11: Envelope round-trips; corruption is rejected without salvage
+**Traces to**: US-P3 AC-1, AC-2 · **Category**: Happy Path (round-trip) / Error Path (corruption)
+- **Given** a resolved folder mapping written through the cache envelope
+- **When** it is read back, then read again as (a) bit-flipped, (b) truncated, (c) foreign-purpose-key, (d) wrong-pair-AAD and (e) schema-mismatched ciphertext
+- **Then** the round-trip is byte-faithful (roles, names, UIDVALIDITY); each corruption is rejected with a visible cache warning, the live path serves the request, no plaintext is salvaged, and no `last_validated` timestamp advances on any failure
+- **And** the on-disk file is ciphertext only (marker scan with positive control), atomically replaced, with a fresh nonce per write
+
+#### Scenario B-P12: A UIDVALIDITY change discards every old cursor and row
+**Traces to**: US-P3 AC-3 · **Category**: Error Path
+- **Given** cached rows, cursors and issued references for a folder whose epoch then changes on the fake server (folder recreated; a numeric UID reused for a different message)
+- **When** any old reference is exercised — read, mark-seen or attachment access
+- **Then** every old cursor/row is discarded, the old reference is refused with the typed stale-reference error **before** any fetch or mutation, and the refusal is checked on the same selected lease that would have acted
+- **But** a fresh reference issued after the change works normally
+
+#### Scenario B-P13: A stale row is never presented as fresh
+**Traces to**: US-P3 AC-4 · **Category**: Edge Case
+- **Given** cached rows older than the 5-minute threshold
+- **When** the panel displays them and the single live refresh then fails
+- **Then** the rows render labelled stale with a refresh indicator, the error and Retry stay visible, and `last_validated` is not reset — the stale label survives the failed refresh
+
+#### Scenario B-P14: The bounds hold — 50 headers, 4 MiB, 30 minutes
+**Traces to**: US-P3 AC-5, AC-6 · **Category**: Edge Case
+- **Given** synthetic folders of 500 messages and metadata sized past the 4 MiB global budget
+- **When** the caches fill and the panel closes for 30 fake-clock minutes
+- **Then** at most 50 reusable headers per role are retained, active-view older pages did not enlarge the cache, search ran live, 4 MiB overflow produced a visible cache-unavailable outcome (no truncated fields, no silently omitted rows), and the memory headers were dropped after exactly the 30-minute threshold (a reopen inside 30 minutes retained them; the drop issued zero IMAP commands)
+
+#### Scenario B-P15: A cache write is invisible to Git and backups
+**Traces to**: US-P3 AC-7 · **Category**: Edge Case
+- **Given** the data folder under Git with the autocommit job's staging rules and the application backup walker
+- **When** a cache write lands
+- **Then** `git status --porcelain` is unchanged, nothing is staged, and no archive member contains the cache file — while the positive control (an ordinary allowed state file) **is** staged and archived, proving the inspection could see a write
+- **And** until W4 traces and excludes the real deployed autocommit job, this test stays red — that red gates disk-cache activation
+
+#### Scenario B-P16: Open writes nothing to disk
+**Traces to**: US-P4 AC-1 · **Category**: Happy Path
+- **Given** attachments of every renderable kind and a filesystem snapshot plus data-folder Git status taken before
+- **When** each is Opened and then dismissed by Back / Close / navigation / reload / logout — including a close mid-stream and a mid-preview mailbox removal
+- **Then** the snapshot and Git status are byte-identical after — zero attachment-file, directory, spool or persistent-byte writes; object URLs are revoked; the token is dead after exit; reopening performs a fresh authorized fetch
+- **And** the positive control (a Save of the same payload) produces exactly one visible write, proving the instrument sees writes
+
+#### Scenario B-P17: The temporary source cannot load a same-origin workspace resource
+**Traces to**: US-P4 AC-2 · **Category**: Error Path
+- **Given** a mail Markdown attachment containing `![x]` pointing at (a) a same-origin Library download/API path, (b) a workspace embed target, (c) a remote image — and a request counter observing every image/embed/network request
+- **When** the temporary viewer renders it
+- **Then** the counter records **zero** requests for all three targets; the viewer's own minted resources do load; a consented Load-images case loads only through the token-scoped proxy
+- **And** the positive control — the same Markdown opened as an ordinary workspace Library file — shows the counter firing, proving the observer works
+- **But** ordinary workspace rendering of the same file is unchanged
+
+#### Scenario B-P18: Save lands confined, sanitized and unique
+**Traces to**: US-P4 AC-3 · **Category**: Happy Path / Error Path
+- **Given** attachments named with separators, control characters, dot names, Windows-invalid names and an existing case-folded collision; plus escape attempts (symlink, mount redirect, parent-file conflict) and a concurrent panel+agent save of the same name
+- **When** each Save runs
+- **Then** every landed file sits under the authorized `mail/<mailbox-label>/<UTC save-month>/` hierarchy with the sanitized, numbered-unique name and exact original bytes; the collision became `name (1).ext`; the concurrent saves produced two distinct files; every escape attempt was refused with a visible safe reason and zero partial files
+- **And** a positive control asserts exact bytes for a benign payload (except an explicitly disclosed Q5=A HTML case, which keeps original bytes with the scripts-off profile)
+
+#### Scenario B-P19: The agent save follows the ask default with no extra mechanism
+**Traces to**: US-P4 AC-4 · **Category**: Alternate Path
+- **Given** an agent invoking `download_email_attachment` under each mode: Auto off (approval granted / declined), global deny, per-agent deny/ask/allow, Auto on, God Mode — and an old config missing the new keys
+- **When** the tool runs
+- **Then** the shipped ceiling is literal allow/allow/**ask**; a declined approval performed zero transfer and zero write; Auto-on ran through the existing workspace-path conditional class with no attachment-specific prompt; per-agent `allow` did not loosen the global `ask`; reconciliation added the missing keys without overwriting operator values
+- **And** the saved result returned the actual workspace file's absolute path, readable by the agent's normal file tools
+
+#### Scenario B-P20: The Reply-all recipient set is exact
+**Traces to**: US-P4 AC-5 · **Category**: Happy Path
+- **Given** the fixture message (From A, Reply-To R, To = self+X+duplicate R, Cc = Y + mixed-case X + self + display-name duplicate R, hidden Bcc)
+- **When** Reply all is composed (and separately plain Reply)
+- **Then** the final send payload shape carries To=[R], Cc=[X, Y] — no self, no primary duplicate, no Bcc, no display-name duplicate — and plain Reply carries To=[R], Cc/Bcc empty
+- **And** the quoted original is editable, escaped text with attribution; editing or deleting the quote and sending/cancelling leaves the recipient rule intact; a stale context response cannot overwrite a different message's compose input
+
+#### Scenario B-P21: Styled mail keeps colour and loses every remote load
+**Traces to**: US-P4 AC-6 · **Category**: Alternate Path
+- **Given** an HTML mail with safe colour/font/table/media-query styling and scripts, handlers, forms, `@import`, remote `url()`, `position:fixed`, `expression()` — plus controlled external and same-origin API endpoints, and an uncontained positive-control page
+- **When** it renders in the isolated mail view
+- **Then** computed-style assertions confirm the safe styling survives (including a media-query layout change); the unsafe constructs produced zero effects; the endpoints recorded zero default loads; Load-images fetched only token-scoped proxy resources after explicit consent; the stripped-style fallback stayed readable with one plain notice
+- **But** the positive-control page proves the observers detect loads when they occur
+
+#### Scenario B-P22: A missing date is never year one
+**Traces to**: US-P4 AC-7 · **Category**: Edge Case
+- **Given** messages with (a) no Date + valid internal date, (b) neither date, (c) a valid Date differing from received time, (d) an unparsable/zero Date
+- **When** list, detail, Sent and reply attribution render
+- **Then** precedence holds (Date → internal date → **No date**), absence renders **No date** everywhere (never year one, epoch or today), and list/detail agree for the same message
+
+#### Scenario B-P23: Cached display and live fetch are measured separately
+**Traces to**: US-P5 AC-2, AC-1 · **Category**: Happy Path
+- **Given** the measurement harness on the candidate build with a warm cache
+- **When** a cached-first display and its follow-up live refresh are both exercised
+- **Then** the receipt carries two separate samples — the cache hit with its display-time column and the live refresh with its own request-clock sample — never merged, each with both clocks, status, rows and n
+
+#### Scenario B-P24: An invalid measurement run is discarded and re-run
+**Traces to**: US-P5 AC-3, AC-4 · **Category**: Error Path
+- **Given** a series in progress when an invalid-run condition fires (each tested: reload mid-op; a second request to the same URL; a response served from browser memory — request verified absent from the network log; a second actor on the mailbox; a gateway restart; a build mismatch)
+- **When** the harness evaluates the series
+- **Then** the affected run is discarded and re-run, and the receipt states the discard — no invalid sample reaches any median, percentile or bar judgement
+- **And** an exercised operation with zero instrument records is itself invalid
+
+#### Scenario B-P25: The live-instance campaign never mutates real mail
+**Traces to**: US-P6 AC-1, AC-2 · **Category**: Edge Case
+- **Given** the live instance, the 13 mailboxes and the campaign checklist
+- **When** the rows execute
+- **Then** every claim carries its named screenshot; no send completed, no message/folder deleted, no credential/key change, no server folder created/renamed, no epoch-inducing operation performed; Reply-all rows opened compose without sending
+- **And** subjects/addresses are redacted in the receipts before they leave the lane, noted per screenshot
+
+#### Scenario B-P26: Each mutation kills its test
+**Traces to**: US-P7 AC-1 · **Category**: Error Path
+- **Given** a green implementation and the mutation list of §7
+- **When** each mutation is applied alone and its named test runs
+- **Then** the test fails; restoring the code returns it to green
+- **But** any mutation whose test still passes is a CHECK BLOCK naming both
