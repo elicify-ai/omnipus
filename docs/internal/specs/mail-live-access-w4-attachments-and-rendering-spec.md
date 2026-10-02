@@ -893,29 +893,29 @@ Ownership follows the ADR's work-package rows (grill-2 F-2): points 1–6 and 8�
 
 ## 13. Open questions (with options and recommendations)
 
-No founder-level question remains open (Q1–Q5 answered and recorded). The founder's 2026-10-02 spec-grill rulings (mail-feature-decisions.md, "Founder answers to the spec-grill decisions") are likewise settled: **Q-A** (the product owns its cache-directory exclusion from staging and from the application's own backups/archives on every install — this spec depends on no personal machine configuration; §16 records the sweep), **Q-B** (watcher state excluded and purged on mailbox removal — w1/w5's surfaces, not touched here), **Q-C** (refresh-on-open keeps the design's stale-gating — out of this package's scope), **Q-D** (folder search: subject + sender/recipient, server-side, 25/200 bounds — w2's surface, not touched here), **Q-E** (saved mail file = ordinary workspace file; recorded in §5.1/§5.4). None is reopened by this spec. The five items below are **engineering** decisions, each with a status and owner; work proceeds on the stated default.
+No founder-level question remains open (Q1–Q5 answered and recorded). The founder's 2026-10-02 spec-grill rulings (mail-feature-decisions.md, "Founder answers to the spec-grill decisions") are likewise settled: **Q-A** (the product owns its cache-directory exclusion from staging and from the application's own backups/archives on every install — this spec depends on no personal machine configuration; §16 records the sweep), **Q-B** (watcher state excluded and purged on mailbox removal — w1/w5's surfaces, not touched here), **Q-C** (refresh-on-open keeps the design's stale-gating — out of this package's scope), **Q-D** (folder search: subject + sender/recipient, server-side, 25/200 bounds — w2's surface, not touched here), **Q-E** (saved mail file = ordinary workspace file; recorded in §5.1/§5.4). None is reopened by this spec. The five items below are **engineering** decisions, labelled **E-1…E-5** — deliberately not Q-*, because Q-A…Q-E above are the founder rulings' recorded labels, and an interview answer recorded as "Q-C = A" must mean the ruling, never the checkbox location (grill-2 F-7). Each has a status and owner; work proceeds on the stated default.
 
-**Q-A — The mailbox label inside `mail/<mailbox>/`.**
+**E-1 — The mailbox label inside `mail/<mailbox>/`.**
 Options: (a) sanitized mailbox address alone; (b) sanitized address + owning agent ID always; (c) address alone, agent-ID suffix only when two pairs would share a label.
 **Recommendation: (c)** — readable by default, disambiguated only on real collision, exactly the ADR's "sanitized mailbox address disambiguated by the validated owning agent ID" intent. The save service computes it once, server-side; never agent-supplied.
 **Status: open — owner: W7 implementer, architect sign-off at implementation start; default (c).**
 
-**Q-B — What `read_email_attachment` returns for images/documents.**
+**E-2 — What `read_email_attachment` returns for images/documents.**
 Options: (a) text-only first wave — binary formats return descriptor + explicit unsupported + the Save option; (b) full visual/document reader representation in the same wave.
 **Recommendation: (a) with (b) gated on the traced reader integration.** The ADR marks the visual/document tool-result adapter as Unknown-until-traced; shipping list+text+save with an honest unsupported outcome is reachable and safe immediately; the visual representation lands as a follow-up once the reader path is traced and demonstrated. No fake "read" for binary ever ships.
 **Status: open — owner: W10 implementer with architect; default (a), (b) gated on the traced reader path.**
 
-**Q-C — Where the per-file scripts checkbox lives.**
+**E-3 — Where the per-file scripts checkbox lives.**
 Options: (a) in the preview pane header (only visible when viewing the file); (b) in the Explorer's per-file action menu as well.
 **Recommendation: (a) for the first wave** — the decision is about *viewing* this file with scripts; keeping it at the point of viewing is the smaller, clearer surface. Adding it to the action menu later is additive.
 **Status: open — owner: W8 implementer under the design-system rules; default (a).**
 
-**Q-D — `<body>`-attribute honouring for saved/preview HTML.**
+**E-4 — `<body>`-attribute honouring for saved/preview HTML.**
 Options: (a) leave body-level `bgcolor`/`background`/`text` unreachable (fragment sanitization drops them); (b) `serveHTML` wraps the fragment in fixed boilerplate carrying the sanitized body values.
 **Recommendation: (b)** — the artefact holds the three attributes in the allow-list either way and names the wrapper as the only way to honour them; the boilerplate is fixed and carries only sanitized values. Small cost, visible fidelity win for real mail.
 **Status: open — owner: W9 implementer, confirmed inside the §12.2 security-lead CSS review; default (b).**
 
-**Q-E — Style-attribute and `<style>` size caps.**
+**E-5 — Style-attribute and `<style>` size caps.**
 Options: (a) 4 KB attribute / 16 KB block (Gmail-parity, artefact's suggestion); (b) tighter custom bounds.
 **Recommendation: (a)** — parity with the reference clients is the compatibility target; both sit well inside the existing 256 KB HTML cap.
 **Status: decided — the CSS authority (`receipts/css-allowlist.md`) is adopted as-is (see header), which fixes (a)'s numbers; there is no remaining choice.**
