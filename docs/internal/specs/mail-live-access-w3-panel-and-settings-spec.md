@@ -1045,3 +1045,155 @@ mail."
 *Traces to:* US-10 AS-3.
 
 ---
+## 8. TDD plan (tests designed from this spec, before implementation)
+
+qa-lead owns every file in this section (W5; the frontend rules forbid implementers from editing test
+files). Levels: Unit (vitest, node/DOM), Component (vitest + Testing Library), E2E (Playwright,
+`tests/e2e/`, 24-shard plan). New files land in CI groups automatically by path
+(`scripts/check-vitest-coverage.mjs` is the tripwire): `src/components/workspaces/**` rides
+`components-workspaces`, `src/components/connectors/**` rides `components-misc`.
+
+### 8.1 Unit — the cache-view adapter (`mailCacheView.ts`)
+
+| Order | Test (file `src/components/workspaces/mail/mailCacheView.test.ts`) | Proves |
+|---|---|---|
+| U1 | `one live refresh per eligible event` — drive open/switch/refresh/own-action events against a stubbed fetch; count `mode=live` calls | MC-W3-2: 0 or 1 live request per event, never 2+. |
+| U2 | `superseded revision is dropped` — resolve an older-`publication_revision` response after a newer one applied | MC-W3-3: no view mutation, no label change from the stale response. |
+| U3 | `revision advances on own mutation and invalidation` — mark-seen/send/refresh events advance the local revision | The ordering rule the panel obeys is the one W2/W4 define; the adapter never invents revisions. |
+| U4 | `failure preserves last-validated time` — fail the live refresh | The displayed time stays at the cache's value; retry state set; no timestamp advance. |
+| U5 | `source=none falls through once` | Exactly one follow-up live request; no loop. |
+
+### 8.2 Unit — presence adapter (`mailPanelPresence.ts`)
+
+| Order | Test (file `src/components/workspaces/mail/mailPanelPresence.test.ts`) | Proves |
+|---|---|---|
+| U6 | `open emits a minimal frame` — stub `WsConnection.send`; open the panel | MC-W3-5: exactly the four keys; fresh opaque id; workspace id present. |
+| U7 | `close on panel close, workspace switch, pagehide` | §7 scenario 5.2/5.3 sequences. |
+| U8 | `reconnect re-opens with a fresh id` — simulate drop + re-auth | §7 scenario 5.5; stale id never reused. |
+| U9 | `logout tears down with the socket` | §7 scenario 5.4; no frame after teardown. |
+| U10 | `unacknowledged presence does not block reads` | §7 scenario 5.7 — reads proceed; no presence-dependent gating. |
+
+### 8.3 Unit — freshness formatting (`mail-format.ts`)
+
+| Order | Test (file `src/components/workspaces/mail/mailFreshness.test.ts`) | Proves |
+|---|---|---|
+| U11 | `four sources label correctly` — live/memory/encrypted_disk/none × fresh/stale × null/valid `last_validated_at` | §7 scenarios 2.1/2.5; US-2's exact strings. |
+| U12 | `relative time vocabulary` — 30 s / 2 min / 7 min / 3 h / 2 d boundaries | Label rounding is stable and honest ("40 seconds ago", "2 minutes ago"). |
+| U13 | `nullable date renders No date everywhere` — list row, detail header, sent view, reply attribution input | F6: null/year-one/zero → "No date"; never "1 Jan 1", never blank in one surface and dated in another. |
+
+### 8.4 Component — the panel
+
+| Order | Test (file) | Proves |
+|---|---|---|
+| C1 | `MailPanel.cacheFirst.test.tsx` — warm open, stale-and-checking, failed-refresh, cache-unavailable | §7 scenarios 1.1, 2.1, 2.2, 2.4 end-to-end through the DOM, with request-count assertions on a stubbed `fetch`. |
+| C2 | `MailPanel.paging.test.tsx` — first page, Load more, ceiling, search reachable, empty search, stale-cursor reset, exit-releases | §7 scenarios 3.1–3.6; MC-W3-1 row-count ladder (0/25/175/200). |
+| C3 | `MailPanel.folderAvailability.test.tsx` — present/absent/unknown rail states; unknown ≠ 0; override warning mapping | §7 scenarios 2.3, 4.2, 4.3. |
+| C4 | `MailPanel.attachmentRows.test.tsx` — paperclip true/false; action names; over-cap copy; size unknown | §7 scenarios 6.1, 6.2, 6.4. |
+| C5 | `MailPanel.attachmentHandoff.test.tsx` — Open mints and hands the generated descriptor; Back focus order (action → row → folder) with announcements; save announcements without focus movement | §7 scenarios 6.3, 7.1–7.4; MC-W3-6/8. Assert the descriptor is the generated type shape — a hand-rolled parallel object fails the test. |
+| C6 | `MailPanel.noTimer.test.tsx` — advanced fake timers, 35 s + 70 s | MC-W3-10: zero folder/list timer requests; summary cadence unchanged. |
+| C7 | `MailPanel.refreshRetry.test.tsx` — Refresh vs Retry markers; busy reason copy | §7 scenarios 10.1–10.3; MC-W3-9 (request-builder assertion). |
+| C8 | `MailPanel.states.test.tsx` (existing file — qa-lead rewrites the D25 oracle, keeps every still-valid state assertion) | The retired 30 s cadence assertions become the §7 1.6 assertions; all other state texts keep their pins. |
+| C9 | `EmailMailboxPanel.folderOverrides.test.tsx` — fields, automatic semantics, round-trip through `saveAgentMailbox`'s generated request, legacy name shown as override | §7 scenarios 4.1, 4.4. |
+| C10 | `MailComposeDialog.replyContext.test.tsx` — Reply (sender only) and Reply all (To/Cc per F5) prefill from the generated reply-context response; quote escaped and editable; No date attribution | F5/F6 panel half. |
+
+### 8.5 E2E (Playwright, against the built SPA + gateway with the fake-IMAP fixture)
+
+| Order | Test (file) | Proves |
+|---|---|---|
+| E1 | `tests/e2e/mail-cache-first.spec.ts` — open panel (cached then live), folder switch, manual Refresh, retry on a forced failure | User-observable freshness behaviour; the fake server's command counters prove request counts, not stubs. |
+| E2 | `tests/e2e/mail-paging-search.spec.ts` — 130-message folder to the ceiling; search finds an older message | US-3 reachability with a real gateway. |
+| E3 | `tests/e2e/mail-attachment-open.spec.ts` — Open → viewer → Back (focus), Save success → Open in Library, over-cap Download-only | US-6/US-7 journeys with real focus/announcement observation (`aria-live` text, `document.activeElement`). |
+| E4 | `tests/e2e/mail-temporary-source-policy.spec.ts` — the I-04 dataset with browser request interception counters; workspace positive control | MC-W3-7 in a real browser. |
+| E5 | `tests/e2e/mail-presence.spec.ts` — open/close across two pages, reload, logout | §7 scenarios 5.1–5.6 against the real socket lifecycle. |
+
+### 8.6 Test datasets (boundary / error / happy rows; every row traces to a scenario)
+
+**D-1 — Freshness metadata matrix** (U11, C1; traces US-2):
+
+| Row | source | last_validated_at | stale | refresh_needed | total | Expected |
+|---|---|---|---|---|---|---|
+| 1 | live | now | false | false | 42 | "Checked just now"; count 42 |
+| 2 | memory | −2 min | false | false | 42 | "Checked 2 minutes ago" |
+| 3 | memory | −7 min | true | true | 40 | stale label + Checking… |
+| 4 | encrypted_disk | −26 h | true | true | null | stale label; count "—" |
+| 5 | none | null | false | true | null | loading → live fill; never "empty" |
+| 6 | live | null | — | — | 7 | stale presentation despite source=live (unknown time) |
+| 7 | memory | −2 min | false | false | 0 | legit zero renders `0` (distinct from row 4) |
+
+**D-2 — Paging ladder** (U-C2, E2; traces US-3): folders of 0, 1, 24, 25, 26, 199, 200, 201 messages.
+Boundaries: 24 → no Load more; 25 → exactly one page, Load more present iff `has_more`; 200 → ceiling
+copy + search; 201 → still 200 max rows ever displayed. Error rows: 409 stale cursor on page 2; cursor
+from a different folder replayed at the same view (must 409, not render).
+
+**D-3 — Folder availability** (C3; traces US-2/US-4): {present, override, special_use, fallback} ×
+{absent-confirmed, unknown-no-candidates, unknown-network-failure}; INBOX missing (account error —
+never an empty rail); inbox unread_count 0 vs null.
+
+**D-4 — Attachment descriptors** (C4/C5; traces US-6): sizes {0?, unknown(null), 1 B, 25 MiB − 1,
+25 MiB exactly, 25 MiB + 1, misreported-small-with-large-actual}; filenames {plain, spaces, unicode,
+hostile `../x`, empty-after-sanitize → `attachment`}; `has_attachments` true/false across 25 rows;
+`message_ref` present/absent (absent must never occur on a W0-regenerated build — the I-03 contract).
+
+**D-5 — Handoff focus dataset** (C5, E3; traces US-7): originating action present / message present
+row gone / folder changed / panel workspace switched while viewing; announcements asserted per §7 7.2
+and 7.3 texts.
+
+**D-6 — Resource-policy dataset** (U-C5, E4; traces US-8): image targets {same-origin Library
+download URL, same-origin API path, workspace embed, wikilink, remote https, data: URL, blob: URL, the
+preview's own byte URL, CID of same message, consented remote via proxy}; content {markdown img,
+markdown embed, HTML body img}; controls {same content as workspace file → requests observed}.
+
+**D-7 — Save outcomes** (C5/E3; traces US-6): {success, saved-with-audit-warning, refused-permission,
+refused-cap, over-cap-download-only, lost-response-unknown, retry-same-token → prior receipt,
+retry-different-token → new save, automatic-retry attempt → must never fire}.
+
+**D-8 — Presence lifecycle matrix** (U6–U10, E5; traces US-5): {open, close, workspace-switch,
+pagehide, logout, socket-drop-reconnect, two-tabs-one-closes, frame-lost-unacknowledged}.
+
+### 8.7 Counterexamples — tests a careless implementation must fail
+
+At least these mutations; each names the check that kills it:
+
+1. **Mutation: reuse the cache response as the refresh result.** An implementation that lets
+   `mode=live` fall through to the cache, or renders a second cache read as the refresh, survives all
+   happy paths. Killed by: C1's request-shape assertion (the live request URL/query differs) plus
+   scenario 2.2's timestamp-freeze assertion — a cache-as-refresh cannot produce a *new* failure
+   while keeping the old timestamp.
+2. **Mutation: keep a 30 s refetchInterval "just for safety".** Killed by C6 (MC-W3-10) asserting zero
+   timer requests and the absence of `FOLDERS_REFETCH_MS`.
+3. **Mutation: render `total ?? 0`.** Survives every success path. Killed by D-1 row 4 / C3 (the "—"
+   assertion) and D-3's null-unread row.
+4. **Mutation: `page_size=25` but append the same page twice** (cursor ignored). Killed by D-2's row
+   ladder (duplicates fail the newest-first + count assertions).
+5. **Mutation: focus returns to "somewhere in the list"** (e.g. `container.focus()`). Killed by C5/E3
+   asserting `document.activeElement` equals the specific originating control's accessible name, and
+   the two fallback announcements.
+6. **Mutation: resource policy enforced by CSS hiding or `loading="lazy"`** (requests still fire).
+   Killed by E4's interception counters (zero network events) — the observer sees requests CSS hides.
+7. **Mutation: presence frame carries the session id** (helpfully "for authorization"). Killed by U6's
+   exact-keys assertion (MC-W3-5).
+8. **Mutation: Save retry mints a fresh token.** Killed by D-7's retry-same-token row (prior receipt
+   expected; a fresh token produces a second file and fails the one-file assertion).
+9. **Mutation: unknown folder availability rendered as "No messages".** Killed by C3's unknown-vs-absent
+   copy assertions (M-01's distinction).
+10. **Mutation: paperclip derived from `attachments.length > 0` on cached rows lacking the flag.**
+    Killed by C4 asserting the indicator against `has_attachments` (not list length), including a row
+    with `has_attachments=true` and a cache row lacking an attachments array.
+
+### 8.8 Regression plan
+
+Preserved unchanged (existing tests keep passing): `src/lib/api/mail.message-ref.test.ts`,
+`mail.retry.test.ts` (the `retry=true` builder semantics do not change);
+`MailPanel.unsavedLeave.test.tsx` (discard guard); `MailPanel.markSeenLoop.test.tsx` (seen-once
+behaviour); `MailPanel.mailboxChooser.test.tsx` and the deep-link/intent tests (selection semantics are
+untouched by this spec except where a test asserts the retired cadence).
+
+qa-lead rewrites (legacy oracles contradicting this spec): the D25 cadence assertions inside
+`MailPanel.states.test.tsx` (becomes C8), and any `MailPanel.endlessLoading.test.tsx` /
+`MailPanel.listSkeleton.test.tsx` expectations that pin a full-list skeleton where the new design
+requires stale rows to stay visible — each rewrite cites the section of this spec that supersedes it.
+
+New regression seam: the workspace positive control in D-6/E4 (ordinary Library Markdown rendering)
+must be recorded once before the W8 renderer changes land, so a later regression has a baseline.
+
+---
