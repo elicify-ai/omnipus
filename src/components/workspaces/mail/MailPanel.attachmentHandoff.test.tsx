@@ -8,10 +8,12 @@
 // whole mailAttachmentHandoff module (mount seam, save controller,
 // announcer, focus resolver). Mocks sit at the network edge only
 // (@/lib/api/mail's mint/revoke/save); the W8 Library-side mount is a test
-// stub standing in for the consumer of W3's published seam.
+// stub standing in for the consumer of W3's published seam — EXCEPT the
+// scenario 7.5 journey, which registers no handler and drives the REAL
+// fallback host (MailAttachmentViewer) the panel wires.
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, act, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ApiError } from '@/lib/api-error'
 
@@ -62,6 +64,7 @@ vi.mock('@/lib/api/mail', async (importOriginal) => {
 })
 
 import {
+  hasMailAttachmentMountHandler,
   setMailAttachmentMountHandler,
   type MailAttachmentHandoff,
   type MailHandoffControls,
@@ -432,21 +435,104 @@ describe('MailPanel attachment handoff (C5: scenarios 6.3, 6.5–6.7, 7.1–7.5;
     expect(mounted.handoff).toBeNull()
   })
 
-  it('scenario 7.5 / S-20 — the temporary viewer’s disabled stored-file actions and their in-place explanation', async () => {
-    // BLOCKED: the W8-owned temporary viewer is not present in this tree —
-    // nothing registers the mount handler outside tests (grep evidence in
-    // the RED report), so no rendered surface carries the disabled stored-file
-    // actions or the in-place "Save to Library first." explanation. The seam
-    // constant the W8 side is specified to render from pins the spec's text;
-    // the rendered-surface assertions of scenario 7.5 stay blocked on that
-    // wave, and this test fails loudly rather than skipping.
-    const { MAIL_SAVE_FIRST_EXPLANATION } = await import('@/lib/mailAttachmentPreviewSource')
-    expect(MAIL_SAVE_FIRST_EXPLANATION).toBe('Save to Library first')
-    throw new Error(
-      'BLOCKED: the W8 temporary viewer (disabled stored-file actions with their in-place ' +
-      "'Save to Library first.' text, visible without hover, screen-reader exposed) is not " +
-      'implemented in this tree — required by W3 spec §4 US-7 AS-4, §11 S-20, §7 scenario 7.5. ' +
-      'No production code registers setMailAttachmentMountHandler.',
+  it('scenario 7.5 / S-20 journey — the REAL temporary viewer hosts the Open handoff: exact context bar, trusted-heading focus, in-place "Save to Library first." actions, Save → Open in Library, Back returns to mail', async () => {
+    // Precondition: no test stand-in owns the seam — the REAL fallback host
+    // (MailAttachmentViewer, wired into the panel) must be the one that
+    // registers and renders. A leaked handler from an earlier test would
+    // make this journey pass over a host that is not the production one.
+    expect(hasMailAttachmentMountHandler()).toBe(false)
+
+    const MailPanel = await loadPanel()
+    fetchMailMessages.mockResolvedValue({
+      messages: [summary()],
+      has_more: false, next_cursor: null, view_limit_reached: false, truncated: false, next_before_uid: null,
+      metadata: FRESH_META,
+    })
+    fetchMailMessage.mockResolvedValue(DETAIL)
+    mount(<MailPanel workspaceId="ws-1" />)
+    fireEvent.click(await screen.findByRole('button', { name: /Quarterly report/ }))
+    await waitFor(() => expect(screen.getByLabelText('Attachments')).toBeInTheDocument())
+
+    // ── The attachment row offers Open (US-6 AS-2) ──
+    const openButton = screen.getByRole('button', { name: 'Open report.pdf attachment' })
+    fireEvent.click(openButton)
+
+    // ── Open hands off to the REAL viewer (US-6 AS-3): the fallback host
+    //    mounted the temporary preview — never the mount-less
+    //    preview_unavailable failure row. ──
+    const viewer = await screen.findByRole('region', { name: 'Attachment preview' })
+    expect(screen.queryByTestId('mail-attachment-open-failed')).not.toBeInTheDocument()
+
+    // ── US-7 AS-1: focus moves to the context bar's trusted heading —
+    //    never into the rendered content. ──
+    const heading = within(viewer).getByRole('heading', { name: 'From mail: Quarterly report' })
+    expect(document.activeElement).toBe(heading)
+
+    // ── US-6 AS-3: the context bar reads EXACTLY the pinned text (§16
+    //    founder F1 format, US-1.AC-1's "reads exactly") — heading,
+    //    Back to mail, Save to Library, with the "·" separators — outside
+    //    the rendered content. ──
+    const bar = heading.closest('div') as HTMLElement
+    expect(bar.textContent).toBe('From mail: Quarterly report · Back to mail · Save to Library')
+
+    // ── The temporary content renders the preview's own MINTED byte
+    //    resource (US-8 AS-3) — never the authenticated download endpoint
+    //    (grill I-05: the preview role and the download role are distinct). ──
+    const content = within(viewer).getByTitle('report.pdf')
+    expect(content.tagName).toBe('EMBED')
+    expect(content).toHaveAttribute('src', '/mail-preview/part/pvw-1')
+    expect(content.getAttribute('src')).not.toContain('/library/download')
+
+    // ── S-18: the live region announced the open with the attachment's name. ──
+    await waitFor(() => expect(announcerText()).toBe('Opening report.pdf from mail.'))
+
+    // ── US-7 AS-4 / S-20 / scenario 7.5: the five stored-file actions are
+    //    discoverable with their explanation readable IN PLACE — associated
+    //    text (aria-describedby → a rendered paragraph), visible without
+    //    hover, screen-reader exposed, never a tooltip-only hint. ──
+    const explanation = within(viewer).getByTestId('mail-attachment-save-first-note')
+    expect(explanation).toBeVisible()
+    expect(explanation).toHaveTextContent('Save to Library first.')
+    for (const action of ['Edit', 'Rename', 'Move', 'Download', 'Fill & sign']) {
+      const control = within(viewer).getByRole('button', { name: action })
+      expect(control).toHaveAttribute('aria-disabled', 'true')
+      expect(control).toHaveAccessibleDescription('Save to Library first.')
+      // Scenario 7.5 says a keyboard user TABS to the disabled control, so
+      // it must stay in the tab order: aria-disabled, never the disabled
+      // attribute (which removes it), and focusable.
+      expect(control).not.toBeDisabled()
+      control.focus()
+      expect(document.activeElement).toBe(control)
+    }
+
+    // ── US-6 AS-5 / S-15 / US-7 AS-3: Save announces success without
+    //    moving focus, and "Open in Library" becomes available. ──
+    const saveButton = within(viewer).getByRole('button', { name: 'Save to Library' })
+    saveButton.focus() // jsdom does not focus on click; pin the pre-click focus.
+    fireEvent.click(saveButton)
+    await waitFor(() => expect(saveMailAttachmentToLibrary).toHaveBeenCalledTimes(1))
+    // The save carried the OPEN PANEL's route identity (the frozen descriptor
+    // carries none — §3.1) plus the client-generated M-02 token.
+    expect(saveMailAttachmentToLibrary).toHaveBeenCalledWith(
+      'ws-1', 'mia', 'inbox', 'uid:777:42', 1,
+      { save_operation_token: expect.any(String) },
     )
+    await waitFor(() => expect(announcerText()).toBe('Saved to Library as report.pdf.'))
+    expect(document.activeElement).toBe(saveButton)
+    const openInLibrary = within(viewer).getByRole('button', { name: 'Open in Library' })
+    expect(openInLibrary).toBeEnabled()
+    // The temporary view never pretends it was already saved (§6): the
+    // stored-file actions still explain in place after the save — the saved
+    // copy is reached through Open in Library.
+    expect(within(viewer).getByRole('button', { name: 'Edit' })).toHaveAttribute('aria-disabled', 'true')
+
+    // ── US-6 AS-4 / US-7 AS-2 / S-19: Back disposes the temporary source
+    //    (the grant is revoked) and returns to the mail context — focus on
+    //    the originating action with its announcement. ──
+    fireEvent.click(within(viewer).getByRole('button', { name: 'Back to mail' }))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Attachment preview' })).not.toBeInTheDocument())
+    await waitFor(() => expect(revokeMailAttachmentPreview).toHaveBeenCalledWith('pvw-1'))
+    expect(document.activeElement).toBe(openButton)
+    await waitFor(() => expect(announcerText()).toBe('Returned to report.pdf in INBOX.'))
   })
 })
