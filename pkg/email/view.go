@@ -208,6 +208,14 @@ func (c *Client) ReadFolderPage(ctx context.Context, slug string, limit int, bef
 	defer client.Close()
 	uidvalidity, _, err := c.selectFolder(ctx, client, name)
 	if err != nil {
+		// Confirmed-absent role (w2 spec §3.4): a structural [NONEXISTENT] on
+		// the resolved Sent or Drafts folder is genuine absence — the list
+		// face returns an EMPTY page rather than a mailbox-level failure.
+		// INBOX stays fatal: a mailbox without an inbox is a broken account,
+		// never a healthy empty one (§3.4).
+		if slug != FolderInbox && isNonexistentFolder(err) {
+			return []MailRow{}, 0, false, nil
+		}
 		return nil, 0, false, err
 	}
 
