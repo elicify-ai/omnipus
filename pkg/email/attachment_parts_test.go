@@ -120,6 +120,7 @@ func TestListAttachmentPartsClassifier(t *testing.T) {
 		redPart("application/pdf", `attachment; filename="q4 report.pdf"`, "", "base64", base64.StdEncoding.EncodeToString([]byte("%PDF-1.4\n"))),
 		redPart("image/png", "inline", "Content-ID: <img1@inline.test>\r\n", "base64", base64.StdEncoding.EncodeToString([]byte{0x89, 'P', 'N', 'G'})),
 		redPart("application/octet-stream", "attachment", "", "base64", base64.StdEncoding.EncodeToString([]byte("noname"))),
+		redPart("application/zip; name=\"archive.zip\"", "", "", "base64", base64.StdEncoding.EncodeToString([]byte("zipdata"))),
 	)
 	cl := startMemIMAP(t, [][]byte{msg}, nil)
 	ref := redInboxRef(t, cl)
@@ -128,8 +129,11 @@ func TestListAttachmentPartsClassifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAttachmentParts: %v", err)
 	}
-	if len(descs) != 4 {
-		t.Fatalf("classifier found %d leaves, want 4 (text leaf + named attachment + inline CID + noname attachment): %+v", len(descs), descs)
+	if len(descs) != 5 {
+		t.Fatalf("classifier found %d leaves, want 5 (text leaf + named attachment + inline CID + noname attachment + filename-only attachment): %+v", len(descs), descs)
+	}
+	if !descs[4].IsAttachment {
+		t.Fatalf("declared filename with no disposition not classified as attachment: %+v (classifier rule: disposition attachment OR declared filename)", descs[4])
 	}
 	if !descs[3].IsAttachment {
 		t.Fatalf("attachment disposition with no filename not classified as attachment: %+v (classifier rule: disposition attachment OR declared filename)", descs[3])
