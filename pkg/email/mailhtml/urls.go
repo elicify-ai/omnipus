@@ -7,12 +7,17 @@ package mailhtml
 // rewrite, the CSP would block it).
 //
 // The value shape is EXACTLY the one mailImageSrcRe already accepts for
-// <img>: a token-scoped /mail-preview/ path (post-rewrite), an eligible
-// https absolute URL (pre-rewrite, consent-gated at serve time), or an
-// inline data:image raster. Everything else is dropped — http:, //host,
-// relative, data:image/svg+xml (SVG smuggles a format the rest of the
-// pipeline deliberately excludes), every other data: type, and cid: inside
-// CSS (CID routing stays an HTML-src feature; artefact §3 row 8).
+// <img> — a token-scoped /mail-preview/ path (post-rewrite) or an inline
+// data:image raster. A raw remote https URL is deliberately NOT a serving
+// shape: the pin-then-rewrite pass runs BEFORE sanitisation, so any remote
+// URL still raw at check time is by definition unpinned (LoadRemote off, or
+// over the pin cap) and must be DROPPED, never served verbatim — a served
+// artifact that phones home on re-host (the F3 finding). Extraction and
+// rewrite themselves parse raw pre-rewrite HTML and do not use this
+// allowlist. Everything else is dropped — http:, https:, //host, relative,
+// data:image/svg+xml (SVG smuggles a format the rest of the pipeline
+// deliberately excludes), every other data: type, and cid: inside CSS (CID
+// routing stays an HTML-src feature; artefact §3 row 8).
 
 import (
 	"regexp"
@@ -27,10 +32,10 @@ import (
 //     this prefix),
 //   - "data:image/(png|gif|jpe?g|webp);base64," — the inline raster shape
 //     the CSP's img-src data: branch admits and the sanitizer therefore
-//     fully owns (P1: data:image/svg+xml must NOT match — it does not),
-//   - "https://" — the pre-rewrite eligible remote form; the proxy pins it
-//     at serve time and the consent gate guards it.
-var cssURLAllowedRe = regexp.MustCompile(`^(?:/mail-preview/(?:part|img)/|data:image/(?:png|gif|jpe?g|webp);base64,|https://)`)
+//     fully owns (P1: data:image/svg+xml must NOT match — it does not).
+// A raw remote URL is not a serving shape: the rewrite runs first, so one
+// still raw here is unpinned and the declaration drops (F3).
+var cssURLAllowedRe = regexp.MustCompile(`^(?:/mail-preview/(?:part|img)/|data:image/(?:png|gif|jpe?g|webp);base64,)`)
 
 // cssURLRe finds every url() token in a CSS value or stylesheet fragment:
 // url( optionally quoted, optionally whitespace-padded, case-insensitive
