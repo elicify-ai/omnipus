@@ -1,14 +1,19 @@
 # Feature Specification: Mail live access — W3 Mail panel and settings surface
 
 **Created**: 2026-10-02
-**Status**: Proposed — the one prescribed spec-correction round applied (2026-10-02). This is the W3
+**Status**: Proposed — the one prescribed spec-correction round applied (2026-10-02), then the **final
+Round-2 fix round applied (2026-10-02)**. This is the W3
 implementation specification for the founder-approved design in
 `docs/internal/architecture/ADR-20261001-mail-live-access-pooling-folder-discovery-and-cache.md`
 (cited below as "the ADR"). The correction round applies the grill report
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill-2.md` (findings F-1…F-12) and the
 landing-order interface register (`docs/internal/specs/mail-live-access-landing-order.md`, §2) row by
-row; the correction record and its evidence table are §18. Still not grilled-gate-passed, gated or
-approved for implementation.
+row; the correction record and its evidence table are §18. The Round 2 grill
+(`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill2-w3.md`) returned **PASS WITH
+FINDINGS** (3 Important, 4 Minor, 0 Critical); this final fix round applies all seven and re-aligns the
+contract sections to the landed W0 wave (commit `5f23ae8a0` on this branch, verified in this checkout) —
+the Round-2 record is also §18. Still not gated (the feature-size 5-reviewer gate) or approved for
+implementation.
 **Input**: the ADR (one prescribed grill round applied — findings I-01…I-06, M-01, M-02; founder answers
 Q1=A, Q2=B, Q3=A, Q4=A, Q5=A recorded 2026-10-02) and its review
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill-report.md`; the spec-set grill
@@ -61,7 +66,9 @@ In scope (all frontend, in the ADR's W3-owned files unless a boundary says other
 - Cache-first display and event-driven freshness for the folder rail, the message list and the reading
   pane — replacing the D25 30-second panel refetch (the ADR's Authority table supersedes it).
 - Freshness labelling and semantics for the four sources (`live`, `memory`, `encrypted_disk`, `none`),
-  each with a nullable last-validated time and a stale flag; unknown count never renders as zero.
+  each with a nullable last-validated time and a stale flag — in Phase 1 `encrypted_disk` reaches the
+  panel only as `MailFolder.mapping_metadata` (the landed `contracts/components/schemas/MailReadMetadata.yaml`
+  scoping: headers and counts are memory-only in Phase 1); unknown count never renders as zero.
 - Paging: 25 rows per page, Load more adds 25, a hard ceiling of 200 rows per folder per view, and a
   reachable folder-scoped search path beyond it.
 - The visible folder-name override surface, reusing the existing `sent_folder_name` / `drafts_folder_name`
@@ -86,8 +93,10 @@ Out of scope for this spec (owned elsewhere; boundaries in §3):
   (ADR-W8's renderer work, specified in the w4 file per the header's package mapping) — this spec
   publishes the handoff descriptor and the interaction contract both sides honour.
 - Contract YAML edits and regeneration (backend-lead in the ADR's W0 role, Wave B — register rows 1–8;
-  Hard Constraint #8) — this spec names the generated types W3 consumes and the ones the W0 wave must
-  add, and consumes nothing until regenerated.
+  Hard Constraint #8) — **that wave has landed** on this branch (commit `5f23ae8a0`, verified in this
+  checkout). This spec names the landed generated types W3 consumes by their schema names; the two
+  scheduled nullability amendments it still depends on (`MailFolder.total`,
+  `MailMessageSummary.date`/`MailMessage.date`) are named where they bite, never hand-written around.
 - Phase 2 JMAP transport selection UI, the Connectors transport-preference control (a later wave), the
   removal/cleanup-pending UX, and the summary screen (unchanged this phase except where the ADR says it
   stays independent).
