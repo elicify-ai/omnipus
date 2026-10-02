@@ -228,29 +228,34 @@ it never re-implements, parallel-types, stubs, or quietly extends any of them (r
 Priorities: P0 = the feature is dishonest or unusable without it; P1 = required for the founder-approved
 scope; P2 = required for coherence, deferrable only with a tracked issue.
 
-### US-1 — Cached rows immediately, one live refresh per event (P0)
+### US-1 — Cached rows immediately, refreshed only when stale (P0)
 
 A user opening Mail should see their messages straight away from the panel's cached view instead of
-staring at a spinner, and the panel should check the server once for fresher data — not repeatedly, and
-not at all while the panel is closed.
+staring at a spinner, and the panel should check the server once for fresher data **when the cached data
+is absent or older than five minutes** — not repeatedly, not again seconds after a check, and not at all
+while the panel is closed (founder ruling Q-C: the ADR P1.1 stale-gating stands; a prior draft's
+"exactly one live per event, even when fresh" wording is superseded).
 
 Why this priority: instant labelled display is the ADR's central promise (its "Visible cached refresh
-shape" recommendation); without the one-refresh rule the panel can either hammer the server or show a
+shape" recommendation); without the stale-gated refresh rule the panel can either hammer the server or show a
 finished-looking refresh that returned the same stale page.
 
 Independent test: with the gateway's cache endpoints stubbed, opening the panel issues exactly one
-cache-first read and at most one live read per event, and renders the cached rows before the live read
+cache-first read per event, plus **exactly one live read when the cache is absent or older than five
+minutes and zero live reads when it is younger**, and renders the cached rows before a live read
 settles.
 
 Acceptance scenarios:
 
-1. **Given** a mailbox whose folder metadata and headers are cached in memory with a fresh
-   last-validated time, **When** the user opens the Mail panel on that mailbox, **Then** rows render
-   from the cache-first response immediately (no full-list skeleton), the panel issues exactly one
-   `mode=live` refresh for that open event, and the rows update in place when it settles.
-2. **Given** the panel is open on a folder, **When** the user switches to another folder, **Then** the
-   same cache-first-then-one-live sequence runs for the new folder, and the previous folder's in-flight
-   live refresh, if any, is dropped rather than rendered into the wrong list.
+1. **Given** a mailbox whose folder metadata and headers are cached with a last-validated time older
+   than five minutes (or no cache at all), **When** the user opens the Mail panel on that mailbox,
+   **Then** rows render from the cache-first response immediately (no full-list skeleton), the panel
+   issues exactly one `mode=live` refresh for that open event, and the rows update in place when it
+   settles.
+2. **Given** the panel is open on a folder, **When** the user switches to another folder whose cached
+   data is absent or older than five minutes, **Then** the cache-first-then-one-live sequence runs for
+   the new folder (US-1 AS-8's zero-live rule applies when that folder's cache is younger), and the
+   previous folder's in-flight live refresh, if any, is dropped rather than rendered into the wrong list.
 3. **Given** the panel is closed, **When** the watcher cycles and new mail arrives, **Then** the panel
    performs no folder, count or header request until the next eligible event (badge polling continues
    against the saved-state summary endpoint only).
@@ -267,6 +272,9 @@ Acceptance scenarios:
 7. **Given** any panel state, **When** 30 seconds elapse repeatedly, **Then** the folder rail and the
    message list issue no timer-driven requests (the D25 cadence is gone); the watcher banner's
    saved-state summary poll is unchanged.
+8. **Given** a folder whose cached data was validated less than five minutes ago, **When** the user
+   opens the panel on it or switches to it, **Then** no `mode=live` request is issued for that event,
+   the rows render immediately with their fresh label, and a subsequent manual Refresh still refreshes.
 
 ### US-2 — Honest freshness: four sources, stale labels, unknown never zero (P0)
 
@@ -326,8 +334,9 @@ Acceptance scenarios:
    the message "You're viewing the newest 200 messages. Search to find older ones." with the search
    control focused or directly adjacent, and no further browse request is issued.
 4. **Given** the ceiling state, **When** the user searches, **Then** a folder-scoped search runs live
-   (never from cache), results render in the same 25-per-page / 200-ceiling discipline with their own
-   "Load more", and an exit ("Back to <folder>") restores the browse view.
+   (never from cache — matching subject plus sender/recipient substrings, server-side, within the
+   25/200 bounds; founder Q-D=A), results render in the same 25-per-page / 200-ceiling discipline with
+   their own "Load more", and an exit ("Back to <folder>") restores the browse view.
 5. **Given** a search with no matches, **When** it settles, **Then** the list area reads
    `No messages match "<query>".` and the browse view remains one control away.
 6. **Given** a stale or foreign cursor (409 typed result), **When** any paging action settles with it,
@@ -439,9 +448,15 @@ Acceptance scenarios:
    unavailable with the cap explanation accessible in place (§11 state S-13), while Download remains
    the browser action.
 7. **Given** the save response is lost after a possible commit (transport error), **When** the panel
-   shows the outcome, **Then** it shows the "Save result unknown" state (§11 state S-12); it never
+   shows the outcome, **Then** it shows the "Save result unknown" state (§11 state S-17); it never
    re-sends Save on its own, and an explicit user retry of the same save carries the same
    `save_operation_token` and resolves from the prior receipt.
+8. **Given** an Open/mint that fails — the transfer discovers real bytes over the 25 MB cap (the typed
+   late-failure error of the ADR's I-05 correction), the message reference went stale between list and
+   Open (the typed 409), or the mint call is refused busy (503) — **When** the failure settles, **Then**
+   the attachment row shows the matching pinned failure state (§11 states S-26/S-27/S-28), the Open
+   control is re-enabled so the user can retry or use Download, no partial preview mounts, and the
+   panel never spins silently or dumps a raw error string.
 
 ### US-7 — Handoff accessibility: focus, announcements, keyboard, reflow (P0)
 
@@ -508,7 +523,9 @@ Acceptance scenarios:
    consented load runs, **Then** it goes through the existing token-scoped proxy and nothing else.
 5. **Given** the identical Markdown content as an ordinary workspace Library file, **When** the normal
    viewer renders it, **Then** today's behaviour is unchanged (images and embeds resolve as before) —
-   the policy scopes the temporary mail source only.
+   the policy scopes the temporary mail source only. **A saved mail file is an ordinary workspace file**
+   (founder ruling Q-E): the mail-restricted resource policy applies to the temporary preview only,
+   while saved HTML keeps the decided scripts-off default with its per-file checkbox (US-9).
 6. **Given** any reused renderer (markdown, media, HTML iframe) in the temporary view, **When** it
    resolves a resource, **Then** it resolves through the source-scoped policy passed with the
    handoff — never through the workspace/Library resolver.
