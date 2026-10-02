@@ -715,27 +715,44 @@ func TestMidTurnBudget_C1_NotesStillTriggerEmptying(t *testing.T) {
 		// No-double-count discriminator (MAJ-CW-004 measurement rule + C1's
 		// own doc): the send-seam checkpoint sees the REAL assembled note in
 		// the payload, so re-adding the estimate would double-count it. Size
-		// the fixture so assembled(window+note) fits B but assembled+estimate
-		// again would not: a double count overflows the candidate, and the
-		// residue counter — which fires exactly when the candidate is over
-		// while the surviving live window fits — is the visible signal.
+		// the fixture so the ASSEMBLED payload fits both bounds but a DOUBLED
+		// count would not, with an eligible complete step present: a correct
+		// send seam sends the request unchanged, while a doubled count
+		// over-triggers relief and visibly slides the fitting payload away.
+		// (The residue counter is NOT the discriminator here — it re-measures
+		// the returned candidate, which stays fitting either way; the sent
+		// request itself is the observable.)
+		home := os.Getenv(config.EnvHome)
+		require.NotEmpty(t, home, "midTurnFixture must set OMNIPUS_HOME")
+		sendWS := "c1-sendseam-nodouble-ws"
+		sendWSDir := filepath.Join(home, "workspaces", sendWS)
+		require.NoError(t, os.MkdirAll(sendWSDir, 0o755))
+		// Note ~0.35B: assembled (window ~0.5B + note) fits B, but window +
+		// 2×note overflows.
+		sendMD := proseOfTokens(budget * 35 / 100)
+		require.NoError(t, os.WriteFile(filepath.Join(sendWSDir, "AGENT.md"), []byte(sendMD), 0o644))
+
 		key := "midturn-c1-sendseam-nodouble"
+		eligible := proseOfTokens(budget / 2)
 		window, ts := seedMidTurn(t, agent, key, []providers.Message{
-			{Role: "user", Content: "hello"},
-			{Role: "assistant", Content: "hi there"},
+			{Role: "user", Content: "first"},
+			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("e1", "a")}},
+			{Role: "tool", ToolCallID: "e1", Content: eligible},
+			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "b")}},
+			{Role: "tool", ToolCallID: "f1", Content: "tiny floor"},
 		})
-		ts.opts.WorkspaceID = wsID
+		ts.opts.WorkspaceID = sendWS
 		noteTokens := al.ephemeralSystemNoteTokens(ts)
 		require.Positive(t, noteTokens, "precondition: the workspace note exists")
-		// Reproduce prepareCallMessages' injection shape (same as the C1
-		// checkpointRequest subtest above): the assembled request carries the
-		// real note.
-		candidate := injectWorkspaceInstructions(window, buildWorkspaceInstructionsNote(wsID))
+		// Reproduce prepareCallMessages' injection shape: the assembled
+		// request carries the REAL note exactly once.
+		candidate := injectWorkspaceInstructions(window, buildWorkspaceInstructionsNote(sendWS))
 		assembled := requestTokens(candidate, nil)
 		require.LessOrEqual(t, assembled, budget,
 			"precondition: the ASSEMBLED payload (window + real note) fits B — a correct send seam sends it unchanged")
 		require.Greater(t, assembled+noteTokens, budget,
 			"precondition: re-adding the estimate on top of the assembled note would overflow — the discriminator")
+		require.Len(t, window, 5, "precondition: an eligible complete step (e1) is present for the over-trigger to slide")
 
 		rt := &agentLoopRunTurn{al: al, ts: ts, turnCtx: context.Background()}
 		rf := &agentLoopRunTurnFallbacks{rt: rt, callMessages: candidate}
@@ -747,9 +764,19 @@ func TestMidTurnBudget_C1_NotesStillTriggerEmptying(t *testing.T) {
 		err := rq.checkpointRequest(true)
 		require.NoError(t, err)
 		assert.Equal(t, residueBefore, ContextResidueOverflowsTotal(),
-			"the send seam must measure the already-assembled note exactly once — a doubled count would overflow the candidate and fire the residue counter")
+			"the sent candidate still fits — no residue overflow")
 		assert.Equal(t, emptiesBefore, ContextEmptiesTotal(),
 			"a fitting assembled payload must not stage any relief")
+		// candidate = window with the note system-message inserted at index 1
+		// (injectWorkspaceInstructions keeps msgs[0] and appends the rest) —
+		// so the assembled request is 6 items and the eligible result sits at
+		// index 3.
+		require.Len(t, rf.callMessages, 6,
+			"the send seam must measure the already-assembled note exactly once: a doubled count would "+
+				"over-trigger relief and trim this fitting request's eligible step away")
+		require.Equal(t, "tool", rf.callMessages[3].Role)
+		require.Len(t, rf.callMessages[3].Content, len(eligible),
+			"the eligible result reaches the provider untouched — no mark, no trim, no slide")
 	})
 }
 
