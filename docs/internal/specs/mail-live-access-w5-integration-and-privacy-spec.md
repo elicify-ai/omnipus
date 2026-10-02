@@ -946,20 +946,19 @@ All REST rows reference `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/
 
 ## 9. Explicit non-goals
 
-| Not in this package | Reason / owner |
+| Outside this package | Single owner / boundary |
 |---|---|
-| Pool/lease internals, coalescing identity, watcher scheduling | W1's implementation; this package wires and consumes |
-| Envelope crypto, folder discovery, header-cache internals | W2; security-lead reviews the crypto |
-| Any SPA file | W3 exclusively |
-| Every `contracts/` and generated-file edit | W0 exclusively; this package requests and consumes |
-| Attachment Transfer service, Library storage, saved-HTML provenance | W7 |
-| Agent attachment tools, policy catalog, `BuildReplyRecipients` | W10 |
-| Phase 2 JMAP transport, trusted-origin probing, on-disk header snapshots | W6, later wave — this package's location/gate/cascade design is Phase-2-ready but nothing Phase 2 ships here |
-| The data-dir ignore rule's *provisioning-script edit and machine re-run* | team-lead/founder ops (deployment); this package specifies, gates on, and verifies it |
-| Fixing the blocked backup job (30 gitleaks findings, unloaded launchd service) | Reported as a note by the trace; a human-runbook task outside this feature |
-| Remediation of already-tracked cache files (should any exist at rollout) | The runbook (US-4.3) documents it; execution is ops, history rewrite is a founder decision |
-| Any measurement run | The measurement plan's runs belong to the UAT/proof lanes; this package only guarantees the counters exist (US-6.5, MC-12) |
-| Credential-store, shell-policy or backup-model overhauls | ADR non-goal: only necessary Mail cache isolation lands here |
+| Pool/lease implementation, presence registry, coalescing/capture, watcher scheduling and watcher raw-error redaction | **W1**; w5 binds/injects the published capabilities, never patches W1's files |
+| Envelope crypto, discovery, memory cache/freshness, server search/cursor issuer, part reader/MIME classifier and same-lease validator | **W2**; w5 consumes the freeze and publishes the one gate/identity/revision/issuer halves assigned to it |
+| SPA implementation | **W3** Mail; **w4-features/ADR-W8** Library viewer; this package defines consumption/route obligations only |
+| Contract/generated edits | **Backend-lead as ADR-W0**, not a missing W0 spec; §8 requests and consumes the Wave B union |
+| Attachment Transfer/Save/receipt, Library storage/provenance/script allowance, parsed CSS policy, recipient rule and tool catalog | **w4-features (ADR-W7–W10)**; gateway Mail adapters remain exclusively w5's; no second service, scanner or approval layer |
+| Phase 2 JMAP, trusted-origin probes or encrypted disk headers | **ADR-W6 later transport wave**, not w6-proof. Phase-1 exclusions/cascades are compatible with it, but no Phase-2 capability is delivered here |
+| Executing history rewrite, index remediation or deleting external historical copies | This owner **must draft the product runbook** (US-4.3); execution requires explicit authorization through team-lead/founder. No side cleanup or assumed harmless exposure |
+| Tests, mutation/CHECK execution, measurements or UAT | **qa-lead/w6-proof** and independent UAT lanes. w5 implements the emitter/envelope and Windows evidence path; it does not redefine the record or claim runs happened |
+| Unrelated credential algorithms, shell/tool policy or backup-model changes | Preserve **Credential Boot Contract** and the two-layer tool model. The **necessary product-owned Mail staging/archive/restore exclusions are in scope**, not an outside deployment task |
+
+**Correction-task fence:** this round edits/commits only this specification. No production code, real contract/generated edit, test execution, measurement, push, merge, history repair or user-page edit is performed here. Future user-page updates are the same-change implementation obligations in §11.
 
 ---
 
