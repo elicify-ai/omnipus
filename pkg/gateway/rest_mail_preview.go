@@ -244,8 +244,37 @@ func (p *mailPreviewRoutes) handleSignatureMint(w http.ResponseWriter, r *http.R
 }
 
 // mailTokenPlaceholder stands in for the token inside sanitized HTML; it is
-// substituted with the real token only AFTER a successful mint.
+// substituted with the real token only AFTER a successful mint — and ONLY
+// inside the path shapes the pipeline itself minted (mailSubstitutePreviewToken):
+// the placeholder is a fixed literal, so a bare whole-document substitution
+// would also fire inside a sender-typed occurrence — an href carrying it to
+// a foreign host delivered the live bearer token to that host (the F2
+// finding).
 const mailTokenPlaceholder = "MAILPREVIEWTOKENPLACEHOLDER"
+
+// mailTokenPathRe matches exactly the two path forms mailRewritePreviewSources
+// mints around the placeholder — the token-scoped /mail-preview/part|img
+// index paths ("/PH/<i>" from the src rewrite, "PH<i>" from the CSS url()
+// rewrite). An href is never such a form, so the token substitution below
+// cannot fire inside any attribute a sender controls.
+var mailTokenPathRe = regexp.MustCompile(`(/mail-preview/(?:part|img)/)` + regexp.QuoteMeta(mailTokenPlaceholder) + `((?:/\d+|\d+))`)
+
+// mailSubstitutePreviewToken writes the live serve token into the preview
+// paths, and only there:
+//   - the shape-scoped replacement fires solely inside the minted
+//     /mail-preview/part|img path forms (their values are wholly
+//     pipeline-generated; the /mail-preview/img form without a slash before
+//     the index is the CSS url() rewrite's own emission);
+//   - every surviving literal is scrubbed, so a sender-typed placeholder —
+//     in an href, a class, a text node — never leaves the frame carrying
+//     the constant, with or without the token.
+func mailSubstitutePreviewToken(html, token string) string {
+	html = mailTokenPathRe.ReplaceAllStringFunc(html, func(m string) string {
+		i := strings.Index(m, mailTokenPlaceholder)
+		return m[:i] + token + m[i+len(mailTokenPlaceholder):]
+	})
+	return strings.ReplaceAll(html, mailTokenPlaceholder, "")
+}
 
 // mailSanitizePreviewHTML is the named inbound sanitizer (MC-10(5)/MC-40):
 // strips meta/base/forms/scripts/handlers, rewrites cid: and remote image
@@ -298,8 +327,13 @@ func mailSanitizePreviewHTML(raw string, inlines []email.MailPart, remoteURLs []
 	return html
 }
 
-// mailAnchorHrefRe allows only http/https/mailto anchors after rewrite.
-var mailAnchorHrefRe = regexp.MustCompile(`^(?:https?|mailto):`)
+// mailAnchorHrefRe allows only http/https/mailto anchors after rewrite, and
+// anchors the END too: a value that merely BEGINS with an allowed scheme used
+// to survive with arbitrary trailing content — the shape that carried the
+// token placeholder (and now meets the scrub instead) into a foreign host
+// (the F2 finding). A URL is scheme + whitespace-free remainder; malformed
+// whitespace-bearing values drop (fail-safe: the link vanishes).
+var mailAnchorHrefRe = regexp.MustCompile(`^(?:https?|mailto):\S*$`)
 
 // mailImageSrcRe allows data: images and the token-scoped preview paths.
 var mailImageSrcRe = regexp.MustCompile(`^(?:/mail-preview/(?:part|img)/|data:image/(?:png|gif|jpe?g|webp);base64,)`)
@@ -459,7 +493,7 @@ func (p *mailPreviewRoutes) serveHTML(w http.ResponseWriter, r *http.Request, to
 		return
 	}
 	if grantKindOf(g) == mailPreviewKindSignature {
-		html := strings.ReplaceAll(g.HTML, mailTokenPlaceholder, token)
+		html := mailSubstitutePreviewToken(g.HTML, token)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		if r.Method == http.MethodHead {
@@ -514,7 +548,7 @@ func (p *mailPreviewRoutes) fetchAndSanitizeMessageHTML(w http.ResponseWriter, r
 	// finishes the response it already authorized.
 	_ = p.tokens.recordRemoteURLs(token, remoteURLs)
 	html := mailSanitizePreviewHTML(v.HTMLBody, v.Inline, remoteURLs)
-	return strings.ReplaceAll(html, mailTokenPlaceholder, token), true
+	return mailSubstitutePreviewToken(html, token), true
 }
 
 // servePart serves one inline part by index. For a message grant the part
