@@ -108,9 +108,17 @@ export function createMailFolderView(): MailFolderViewState {
  * shouldIssueLive — the issuing rule for the events that CARRY a freshness
  * decision (open, folder_switch): live only when the surface's data is
  * absent (a source=none read) or its last validation is older than five
- * minutes (or unknown-but-labelled — an unknown age cannot be proven
- * young). manual_refresh, own_action and rediscovery always refresh and
+ * minutes. manual_refresh, own_action and rediscovery always refresh and
  * never consult this rule (FR-W3-2; US-1 AS-8).
+ *
+ * A null `last_validated_at` on data that IS present (live/memory/
+ * encrypted_disk) is neither absent nor KNOWN to be older than five
+ * minutes — §3.1's only-when rule says no live leg, and §7 scenario 2.6
+ * pins it ("(no refresh follows)"): re-dialing for data this same response
+ * just delivered would flash "· Checking…" for nothing (D-1 row 6's
+ * "· Checking…" label is scenario 2.5's ALREADY-in-flight Given, never a
+ * refresh this rule starts). An unparseable stamp stays a dial: it is
+ * malformed input, not a pinned wire state.
  *
  * A response carrying NO metadata object at all (the transitional
  * pre-producer wire window — the is_knowledge_base precedent) is NOT
@@ -128,7 +136,9 @@ export function shouldIssueLive(view: MailFolderViewState, event: MailCacheEvent
   const meta = view.meta
   if (meta === null) return false
   if (meta.source === 'none') return true
-  if (meta.last_validated_at === null) return true
+  // Present data with an unknown validation time: scenario 2.6's pin — no
+  // refresh follows. Only ABSENT data dials on a missing stamp.
+  if (meta.last_validated_at === null) return false
   const validatedAt = new Date(meta.last_validated_at)
   if (Number.isNaN(validatedAt.getTime())) return true
   return now.getTime() - validatedAt.getTime() > MAIL_STALE_AFTER_MS
