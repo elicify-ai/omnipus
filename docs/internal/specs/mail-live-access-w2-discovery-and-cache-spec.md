@@ -872,7 +872,7 @@ Format: Given/When/Then, one action per When; each scenario is typed **Happy / A
   **then** each carries W2's sub-fields of the w6-frozen shape (`source`, `hit`, `duration_ms`, `outcome`) and nothing owned by another layer, and the joined discovery records `socket_count=0` plus the shared-flight marker.
   Traces to: US-15.1, US-15.2.
 
-### 6.10 Folder search (US-11)
+### 6.10 Folder search and browse paging (US-11)
 
 - **Scenario S-1 — Subject substring, server-side.** **Happy.**
   **Given** messages whose subjects contain the query among 300 in the folder,
