@@ -636,3 +636,412 @@ Machine-verifiable constraints:
 | MC-W3-10 | Timer removal is real | A 35-second advanced-clock test asserts zero folder/list requests after mount, and `FOLDERS_REFETCH_MS` no longer exists in `MailPanel.tsx`. |
 
 ---
+## 7. BDD scenarios
+
+Conventions: one action per When; multiple assertions in Then/And; every scenario carries its category
+and a `Traces to:` line naming the US and acceptance-scenario number from §4.
+
+### US-1 — Cached rows, one live refresh per event
+
+**Scenario 1.1 — Warm open renders cached rows then validates once** *(Happy)*
+**Given** the folder cache for mailbox M holds headers validated 40 seconds ago with `stale=false`
+**And** the live data would return one newer message
+**When** the user opens the Mail panel on M
+**Then** the list renders the cached rows immediately with the freshness line "Checked 40 seconds ago"
+**And** exactly one `mode=cache_first` request and one `mode=live` request were issued
+**And** when the live response settles, the new message appears without a skeleton flash.
+*Traces to:* US-1 AS-1, US-2 AS-2.
+
+**Scenario 1.2 — Folder switch starts a fresh event** *(Happy)*
+**Given** the panel is open on Inbox with a live refresh in flight
+**When** the user selects Sent
+**Then** Sent renders from its own cache-first response
+**And** the in-flight Inbox refresh is discarded (its response, whenever it arrives, renders nothing).
+*Traces to:* US-1 AS-2, US-1 AS-5.
+
+**Scenario 1.3 — Closed panel never refreshes** *(Alternate)*
+**Given** the Mail panel is closed and the watcher detects new mail
+**When** five watcher cycles elapse
+**Then** no folder, list or header request is issued by the panel
+**And** the badge summary endpoint may be polled exactly on its existing 30-second cadence.
+*Traces to:* US-1 AS-3.
+
+**Scenario 1.4 — Cold cache falls through to one live read** *(Alternate)*
+**Given** no cached data exists for mailbox M (`source=none`)
+**When** the user opens Mail on M
+**Then** the loading state shows, exactly one `mode=live` request follows the cache-first read, and the
+list populates from it
+**And** `source=none` is never rendered as an empty folder.
+*Traces to:* US-1 AS-4.
+
+**Scenario 1.5 — Own action triggers exactly one affected-folder refresh** *(Happy)*
+**Given** the user marks an Inbox message read
+**When** the seen mutation settles successfully
+**Then** exactly one live refresh of Inbox follows
+**And** Sent and Drafts issue no request.
+*Traces to:* US-1 AS-6.
+
+**Scenario 1.6 — No timer refetches the list** *(Edge)*
+**Given** the panel stays open on Inbox
+**When** the clock advances 35 seconds, then 70 seconds
+**Then** no folder or list request fired after the open event's requests
+**And** the watcher banner refreshed on its 30-second cadence without dialling mail.
+*Traces to:* US-1 AS-7, MC-W3-10.
+
+### US-2 — Freshness semantics
+
+**Scenario 2.1 — Stale-and-checking keeps rows visible** *(Happy)*
+**Given** cached rows validated 7 minutes ago (`stale=true`, `refresh_needed=true`)
+**When** the folder opens
+**Then** the rows render immediately labelled "Last checked 7 minutes ago · Checking…"
+**And** no skeleton replaces them at any point
+**And** when the live refresh settles successfully the line becomes "Checked just now".
+*Traces to:* US-2 AS-3, US-2 AS-1.
+
+**Scenario 2.2 — Failed refresh preserves stale rows and the checked time** *(Error)*
+**Given** stale cached rows displayed with "Last checked 7 minutes ago · Checking…"
+**When** the live refresh fails with a timeout
+**Then** the rows remain unchanged
+**And** the line reads "Couldn't refresh — showing messages as of <original time>." with a Retry control
+**And** the displayed checked time equals the original last-validated time.
+*Traces to:* US-2 AS-4.
+
+**Scenario 2.3 — Unknown count never renders zero** *(Edge)*
+**Given** a folder response with `total=null` and an inbox `unread_count=null`
+**When** the rail renders
+**Then** both count slots show "—"
+**And** no screen shows `0` for either folder.
+*Traces to:* US-2 AS-5, MC-W3-4.
+
+**Scenario 2.4 — Cache-unavailable notice with live rows** *(Alternate)*
+**Given** metadata carries `notice_code=cache_unavailable` and `source=live`
+**When** rows render
+**Then** the notice "Mail cache unavailable; using live access." shows once and is dismissible
+**And** the freshness line reflects the live source.
+*Traces to:* US-2 AS-6.
+
+**Scenario 2.5 — Null last-validated time is stale, not fresh** *(Edge)*
+**Given** rows arrive with `source=memory` and `last_validated_at=null`
+**When** the list renders
+**Then** the freshness presentation is the stale one ("Last checked unknown · Checking…")
+**And** no "just checked" wording appears.
+*Traces to:* US-2 AS-7.
+
+### US-3 — Paging and search
+
+**Scenario 3.1 — First page and Load more** *(Happy)*
+**Given** a folder with 130 messages
+**When** the folder view opens and the user activates "Load more" once
+**Then** the list shows 50 rows in stable newest-first order
+**And** exactly two page requests were issued.
+*Traces to:* US-3 AS-1, US-3 AS-2.
+
+**Scenario 3.2 — Ceiling replaces Load more with search** *(Happy)*
+**Given** 200 rows displayed and `view_limit_reached=true`
+**When** the list renders
+**Then** "Load more" is absent
+**And** the message "You're viewing the newest 200 messages. Search to find older ones." shows with the
+search control adjacent
+**And** no further browse request fires.
+*Traces to:* US-3 AS-3, MC-W3-1.
+
+**Scenario 3.3 — Search reaches older messages** *(Happy)*
+**Given** the ceiling state
+**When** the user searches for a term matching a message older than the loaded 200
+**Then** live search results render under the same 25-per-page discipline with their own "Load more"
+**And** an exit "Back to Inbox" returns to the browse view with its loaded rows intact.
+*Traces to:* US-3 AS-4.
+
+**Scenario 3.4 — Search empty state** *(Alternate)*
+**Given** a search term matching nothing
+**When** the search settles
+**Then** the list area reads `No messages match "<term>".`
+**And** the browse view remains one control away.
+*Traces to:* US-3 AS-5.
+
+**Scenario 3.5 — Stale cursor resets visibly** *(Error)*
+**Given** a folder whose UIDVALIDITY changed after the panel captured a cursor
+**When** the next Load more settles with the typed 409
+**Then** the view resets to the folder's first page
+**And** the notice "The folder changed. Showing the newest messages." shows once
+**And** no automatic retry of the old cursor fires.
+*Traces to:* US-3 AS-6.
+
+**Scenario 3.6 — Working set released on exit** *(Edge)*
+**Given** 200 browse rows loaded and a search sequence run
+**When** the user switches to another folder and back
+**Then** the view starts again from the cache-first read
+**And** the previously loaded older rows are not silently merged into the new view.
+*Traces to:* US-3 AS-7.
+
+### US-4 — Folder overrides
+
+**Scenario 4.1 — Settings fields round-trip** *(Happy)*
+**Given** a configured mailbox with `sent_folder_name=""` and `drafts_folder_name="Odchozí"`
+**When** the user opens the mailbox settings
+**Then** "Sent folder name" shows the "Automatic" placeholder and "Drafts folder name" shows "Odchozí"
+**And** saving with Sent left empty clears the override while Drafts keeps its value.
+*Traces to:* US-4 AS-1, US-4 AS-2.
+
+**Scenario 4.2 — Unresolvable override shows unresolved, not absent** *(Error)*
+**Given** an override naming a folder the server does not have (`mapping_source=override`,
+`availability=unknown`)
+**When** the rail renders
+**Then** the role shows the unresolved state with the settings prompt
+**And** no screen claims the server has no such folder
+**And** the settings panel shows the warning on the exact field.
+*Traces to:* US-4 AS-4, US-4 AS-6.
+
+**Scenario 4.3 — Confirmed absence explains, never errors** *(Alternate)*
+**Given** discovery completed and every probe returned structural not-found
+(`availability=absent`)
+**When** the user selects Drafts
+**Then** the list shows "No messages" with the explanation
+"Your mail server has no Drafts folder. You can set the folder name in mailbox settings."
+**And** no error state or Retry appears.
+*Traces to:* US-4 AS-6, US-4 AS-3.
+
+**Scenario 4.4 — Legacy stored name survives as an override** *(Edge)*
+**Given** a mailbox whose stored `sent_folder_name` is the literal default "Sent" saved by an older
+build
+**When** settings render
+**Then** the field shows "Sent" as a deliberate override
+**And** no save, migration or render clears it without the user choosing Automatic.
+*Traces to:* US-4 AS-5.
+
+### US-5 — Presence
+
+**Scenario 5.1 — Open sends a minimal observer frame** *(Happy)*
+**Given** the user is authenticated and opens Mail in workspace W
+**When** the panel mounts with a resolved workspace
+**Then** one frame `{ type: "mail_panel_observer", action: "open", observer_id: <opaque>,
+workspace_id: W }` is sent on the authenticated socket
+**And** no user id, session id or mailbox id appears in the frame.
+*Traces to:* US-5 AS-1, MC-W3-5.
+
+**Scenario 5.2 — Close on every exit path** *(Happy)*
+**Given** an acknowledged observer
+**When** the user closes the panel via the tab strip, then reopens and navigates to another workspace
+with the panel open
+**Then** a close frame for the first observer was sent on the panel close
+**And** the workspace switch produced a close for the old workspace's observer and an open for the new.
+*Traces to:* US-5 AS-2, US-5 AS-8.
+
+**Scenario 5.3 — Tab close relies on socket loss** *(Edge)*
+**Given** Mail open in a browser tab
+**When** the tab is closed without a close frame
+**Then** the SPA made a best-effort `pagehide` close attempt
+**And** the design treats the observer as removed by socket teardown — no retained state depends on the
+frame arriving.
+*Traces to:* US-5 AS-3.
+
+**Scenario 5.4 — Logout clears observers** *(Alternate)*
+**Given** an open observer
+**When** the user logs out and later logs back in and reopens Mail
+**Then** the old connection's observers died with the socket at logout
+**And** the new session opens a fresh observer with a fresh id.
+*Traces to:* US-5 AS-4.
+
+**Scenario 5.5 — Reconnect re-opens with a fresh id** *(Error)*
+**Given** an acknowledged observer and the socket dropping
+**When** the connection re-authenticates with the panel still open
+**Then** a new open frame with a fresh `observer_id` is sent
+**And** the stale id is never reused.
+*Traces to:* US-5 AS-5.
+
+**Scenario 5.6 — Two tabs are independent** *(Edge)*
+**Given** Mail open in two browser tabs of the same workspace
+**When** one tab closes
+**Then** only that tab's observer closes
+**And** the surviving tab's reads and observer are unaffected.
+*Traces to:* US-5 AS-6.
+
+**Scenario 5.7 — Unacknowledged presence degrades safely** *(Error)*
+**Given** the open frame was lost (socket down) and the user opens a folder
+**When** the folder reads run
+**Then** they execute as ordinary request-scoped work and succeed on their own merits
+**And** the panel neither blocks nor retries because presence is missing.
+*Traces to:* US-5 AS-7.
+
+### US-6 — Attachment rows and the handoff
+
+**Scenario 6.1 — Paperclip indicator** *(Happy)*
+**Given** a list page where rows 2 and 5 have `has_attachments=true` and the rest `false`
+**When** the list renders
+**Then** exactly rows 2 and 5 show the paperclip with accessible text "Has attachments"
+**And** `has_attachments=false` renders no indicator at all.
+*Traces to:* US-6 AS-1.
+
+**Scenario 6.2 — Attachment rows name their actions** *(Happy)*
+**Given** an open message with attachments `report.pdf` (2.1 MB) and `data.bin` (size unknown)
+**When** the reading pane renders
+**Then** each row shows filename and size ("2.1 MB", "Size unknown")
+**And** each row carries Open, Save to Library and Download with accessible names
+"Open report.pdf attachment", "Save report.pdf to Library", "Download report.pdf" (likewise for
+data.bin).
+*Traces to:* US-6 AS-2.
+
+**Scenario 6.3 — Open mints and hands off, writing nothing** *(Happy)*
+**Given** the user activates Open on `report.pdf`
+**When** the mint settles
+**Then** the Library viewer shows the temporary preview with the exact context bar
+**And** the handoff payload was the generated descriptor only — no path, no `LibraryEntry`
+**And** Mail's panel state shows the message unchanged.
+*Traces to:* US-6 AS-3, MC-W3-6.
+
+**Scenario 6.4 — Over-cap attachment** *(Alternate)*
+**Given** an attachment whose actual size exceeds the 25 MB cap
+**When** the rows render
+**Then** Open and Save render unavailable with the explanation
+"This attachment is larger than the 25 MB preview limit. Use Download."
+**And** Download remains enabled and performs the browser download.
+*Traces to:* US-6 AS-6.
+
+**Scenario 6.5 — Save succeeds → Open in Library** *(Happy)*
+**Given** a temporary preview of `report.pdf`
+**When** the user activates "Save to Library" and the response confirms a real saved entry
+**Then** the status region announces "Saved to Library as report.pdf."
+**And** "Open in Library" becomes enabled and opens the real file
+**And** the temporary view never claimed a saved path before this point.
+*Traces to:* US-6 AS-5.
+
+**Scenario 6.6 — Lost save response shows unknown, retry reuses the token** *(Error)*
+**Given** a save whose response was lost after a possible commit
+**When** the panel renders the outcome
+**Then** the state reads "Save result unknown — checking whether it saved." with an explicit retry
+control, and no automatic retry fires
+**And** when the user retries, the same `save_operation_token` is sent and the prior receipt resolves
+the state to saved (or a visible failure) without a second file.
+*Traces to:* US-6 AS-7.
+
+### US-7 — Handoff accessibility
+
+**Scenario 7.1 — Focus lands on the context bar heading** *(Happy)*
+**Given** a keyboard user activated Open on "Open report.pdf attachment"
+**When** the viewer mounts
+**Then** document focus is on the "From mail: <subject>" heading
+**And** the live region announced "Opening report.pdf from mail."
+*Traces to:* US-7 AS-1, MC-W3-8.
+
+**Scenario 7.2 — Back restores the originating action** *(Happy)*
+**Given** the viewer opened from "Open report.pdf attachment" and the message still exists
+**When** the user activates Back (or presses Escape)
+**Then** focus returns to "Open report.pdf attachment"
+**And** the announcement names it: "Returned to report.pdf in Inbox."
+*Traces to:* US-7 AS-2.
+
+**Scenario 7.3 — Back falls back when the source is gone** *(Alternate)*
+**Given** the viewer open and the message deleted server-side during viewing
+**When** the user activates Back
+**Then** the fallback order applies: the message's list row if present, else the folder tab
+**And** the announcement states where focus landed and why
+("report.pdf's message is no longer in this folder. Focus moved to the Inbox folder tab.").
+*Traces to:* US-7 AS-2.
+
+**Scenario 7.4 — Save outcomes announce without moving focus** *(Happy)*
+**Given** focus resting on the context bar's Save control
+**When** the save settles (success, audit-warning success, or failure)
+**Then** the polite live region announces the outcome text from §11 (states S-12/S-13)
+**And** document focus did not move.
+*Traces to:* US-7 AS-3.
+
+**Scenario 7.5 — Disabled stored-file actions explain in place** *(Edge)*
+**Given** the temporary viewer
+**When** a keyboard user tabs to the disabled Edit control
+**Then** the control is discoverable and its associated text reads "Save to Library first."
+**And** the explanation is visible without hover and exposed to screen readers (not tooltip-only).
+*Traces to:* US-7 AS-4.
+
+**Scenario 7.6 — Keyboard loop and narrow width** *(Edge)*
+**Given** the viewer at 320 px width or 200 % zoom
+**When** the user tabs through the context bar and presses Escape
+**Then** Back, Save and Retry were each reachable in tab order
+**And** Escape returned to mail
+**And** every control and explanation remained visible and readable without horizontal clipping of
+interactive targets.
+*Traces to:* US-7 AS-5, US-7 AS-6.
+
+### US-8 — Resource policy
+
+**Scenario 8.1 — Same-origin Library path refused in temporary Markdown** *(Error)*
+**Given** a temporary mail Markdown attachment containing `![x](/api/v1/workspaces/W/library/download?path=secret.txt)`
+**When** the viewer renders the Markdown
+**Then** zero requests were issued to that URL
+**And** no `<img>` was mounted with that source (structural refusal).
+*Traces to:* US-8 AS-1, MC-W3-7.
+
+**Scenario 8.2 — Embed and remote targets refused** *(Error)*
+**Given** temporary Markdown with a workspace-embed syntax and a remote `https://` image
+**When** the viewer renders
+**Then** zero requests issued to the embed target and zero to the remote host.
+*Traces to:* US-8 AS-2.
+
+**Scenario 8.3 — Own resources and consented proxy load** *(Happy)*
+**Given** the temporary view of an attachment with a CID inline image, plus an eligible remote image
+**When** the CID image renders and the user clicks "Load images"
+**Then** the CID image loads through the preview's own minted resource
+**And** the remote image loads only through the token-scoped consent proxy.
+*Traces to:* US-8 AS-3, US-8 AS-4.
+
+**Scenario 8.4 — Workspace rendering unchanged (positive control)** *(Edge)*
+**Given** the identical Markdown saved as an ordinary workspace Library file
+**When** the normal Library viewer renders it
+**Then** images and embeds resolve exactly as they do today
+**And** the temporary-view refusals did not touch the workspace code path.
+*Traces to:* US-8 AS-5.
+
+**Scenario 8.5 — Every renderer resolves through the policy** *(Edge)*
+**Given** the temporary view exercising markdown, media and HTML renderers
+**When** each resolves a resource reference
+**Then** each resolved through the source-scoped policy passed with the handoff
+**And** none consulted the workspace/Library resolver.
+*Traces to:* US-8 AS-6.
+
+### US-9 — Saved mail-derived HTML
+
+**Scenario 9.1 — Scripts off by default with notice** *(Happy)*
+**Given** a saved HTML attachment with `preview_profile=mail_restricted`
+**When** the Library viewer opens it
+**Then** it renders with scripts off and the notice "Scripts are disabled because this file came from
+mail."
+*Traces to:* US-9 AS-1.
+
+**Scenario 9.2 — Per-file checkbox switches only that file** *(Happy)*
+**Given** that file and a second, ordinary workspace HTML file
+**When** the user enables "Allow scripts" on the mail-derived file
+**Then** only that file renders with the ordinary isolated script-permitting profile
+**And** the workspace file's rendering is unchanged and shows no checkbox.
+*Traces to:* US-9 AS-2, US-9 AS-3.
+
+**Scenario 9.3 — Missing marker fails safe** *(Error)*
+**Given** a mail-derived file whose marker is missing or unreadable
+**When** the viewer opens it
+**Then** scripts stay off (the restricted profile) and a safe warning shows
+**And** the file is never silently upgraded to script-permitting.
+*Traces to:* US-9 AS-4.
+
+### US-10 — Refresh and Retry
+
+**Scenario 10.1 — Refresh forces mapping validation once** *(Happy)*
+**Given** the panel open with a valid mapping
+**When** the user presses Refresh
+**Then** the folder-list request carries `mode=live` and `refresh_mapping=true`
+**And** the current folder gets exactly one live list refresh
+**And** no other folder was contacted.
+*Traces to:* US-10 AS-1.
+
+**Scenario 10.2 — Retry is human-only** *(Error)*
+**Given** a failed list fetch showing Retry
+**When** the user activates Retry
+**Then** that request carries `retry=true` and bypasses backoff only
+**And** the subsequent automatic event refreshes (if any) carry no retry marker.
+*Traces to:* US-10 AS-2, MC-W3-9.
+
+**Scenario 10.3 — Busy causes are distinguishable** *(Alternate)*
+**Given** a 503 with `reason=server_connection_limit`
+**When** the failure renders
+**Then** the panel shows "The mail server reached its connection limit. Try again shortly." with Retry
+**And** a generic `busy` shows "Mail is busy. Try again."
+*Traces to:* US-10 AS-3.
+
+---
