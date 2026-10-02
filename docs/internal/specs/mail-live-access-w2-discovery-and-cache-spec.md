@@ -1114,7 +1114,8 @@ Each row traces to its scenario; boundary values come from this spec's numbers (
 | whitelist-style repo | `.gitignore` = `*` + `!config.json` (+ whitelist additions); cache path not re-included | cache path **not excluded** — the naive "matched a deny rule ⇒ excluded" matcher fails here (CX-21) | G-1/G-2 (evaluator half) |
 | negation re-include | deny `mail-cache/` then `!mail-cache/keep.txt` deeper rule | evaluated with git's last-match-wins precedence; uninterpretable ⇒ fail closed | G-2 |
 | nested ignore files | shallower and deeper `.gitignore` disagreeing on the cache path | deeper file wins per git precedence | G-2 |
-| info/exclude + excludesFile | cache path denied only via `.git/info/exclude` (and via `core.excludesFile`) | rule sources honoured in git's order; denied ⇒ excluded | G-1 |
+| info/exclude | cache path denied only via the repository's own `.git/info/exclude` | honoured, since it belongs to the repository being protected | G-1 |
+| global `core.excludesFile` | cache path denied only by the operator's MACHINE-WIDE git excludes setting | **NOT honoured, by design (founder ruling 2026-10-02):** the guarantee must hold on every install and must not depend on personal machine configuration, so a machine-level exclude can neither establish nor withhold it. The product's own exclusion is what the gate evaluates; a machine-level rule is ignored, never trusted. | G-1 |
 | tracked cache path | cache file previously committed, deny rule present | **not excluded** (tracked-state precedence, E-3) | G-3 |
 | no repository | data directory with no version control | staging half holds trivially | G-1 |
 | unparseable rules | malformed/invented pattern syntax the evaluator cannot interpret | **fail closed**: not excluded, gate refuses | G-2 |
