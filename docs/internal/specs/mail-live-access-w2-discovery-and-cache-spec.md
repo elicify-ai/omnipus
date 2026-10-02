@@ -314,3 +314,33 @@ New diagnostics in this package are **operationally useful and content-free**:
 - Every log call in this package goes through the existing logging helpers with typed fields; no `fmt.Errorf`-built string carrying server data is ever logged or returned as user-visible text.
 
 ---
+
+## 4. Interfaces this package publishes and consumes
+
+These shapes are the parallel-build freeze: W1, W4 and W10 build against them without editing W2's files, and W2 builds against the consumed side without editing theirs. Method names below are the proposed Go surface in W2's new files (implementation-phase naming; the *shapes and semantics* are the binding part). Go type parameters and error semantics follow the existing `mail_budget.go` house style.
+
+### 4.1 PUBLISHED by W2 (other packages call these)
+
+| Interface (proposed home) | Consumed by | Contract |
+|---|---|---|
+| **Discovery service** — `pkg/email/folder_discovery.go::Discovery.Resolve(ctx, Scope, Overrides) (RoleMapping, error)` | W4 (gateway handlers), W1 (pool validation), W10 later if a tool ever needs a resolved folder | `Scope` carries the opaque pair ID, the configuration generation, and the injected pooled-session handle; `Overrides` carries the raw stored `sent_folder_name`/`drafts_folder_name` values (possibly empty). Returns the three-role mapping with `present/absent/unknown` outcomes, sources, UIDVALIDITY (nullable), and ambiguity lists exactly as §3.2–3.5 define. Idempotent; coalesced through the shared budget; never dials outside the injected handle. |
+| **Role mapping type** — `folder_discovery.go::RoleMapping` (per-role `RoleResolution`: name, source, uidvalidity `*uint32`, availability, ambiguity list, validated-at) | W0 (the values behind `MailFolder.availability` / `uidvalidity` / `mapping_source`), W4 (response mapping), W2-internal cache | The wire fields are W0's contract work; this type is the single producer of their values. `mapping_source` values: `override | special_use | fallback | saved | none`. |
+| **Encrypted folder snapshot store** — `pkg/email/cache_file.go::FolderSnapshotStore.Load(Scope) (Snapshot, Found, error)` and `.Save(Scope, Snapshot, derivedKey) error` (plus `.Delete(Scope) error`) | W4 (boot-time orphan reconciliation, removal cascade E-4, generation bumps), W2-internal refresh triggers | Takes **supplied** derived keys (the ADR's W2 row: "encrypted folder envelopes with supplied derived keys") — the store never touches the credential store itself; the caller (W4) resolves keys via `credentials.Store.DeriveSubkey` with the §3.7 purpose string. `Load` performs the full R-3.7-6/7 rejection ladder and the AAD/generation comparison (R-3.7-4); `Save` performs the runtime exclusion gate (§3.8) and the revision check (§3.10) before writing. |
+| **Header cache** — `pkg/email/header_cache.go::HeaderCache.Get(Scope, role) (Page, Metadata, bool)`, `.Put(Scope, role, revision, rows) error`, `.InvalidateFolder(Scope, role)`, `.MarkPairRemoved(Scope)`, `.PanelClosed(scope)`, `.PanelOpened(scope)` | W4 (gateway read handlers), W3 indirectly through response metadata | All §3.9 bounds enforced inside: 50/role, envelope+flags only, 4 MiB budget (overflow → typed `ErrCacheBudgetExceeded` → visible live-only), 30-minute retention, per-pair/generation keying. `Put` refuses to publish under a stale revision (R-3.10-3). |
+| **Cache metadata** — `header_cache.go::Metadata` (source `live|memory|none`, `last_validated_at *time.Time`, `stale`, `refresh_needed`, `publication_revision`, `notice_code`) | W0 (the generated `MailReadMetadata` fields' producer), W4, W3 | One producer for the freshness fields every Phase 1 read response carries; `encrypted_disk` appears in `source` only for the folder mapping (Phase 1), never for headers. |
+
+### 4.2 CONSUMED by W2 (other packages own; W2 edits none of them)
+
+| Interface / seam | Owned by | What W2 needs from it |
+|---|---|---|
+| **Pooled session + budget acquisition** — W1's pool/budget interfaces (frozen with the architect per the ADR's W0 row) | W1 | One exclusive leased session per discovery/probe/validation operation, acquired through the rewritten coalescing identity (pair + generation + operation + normalized args + purpose, I-01); W2 never dials privately and never constructs a `Client` pool. |
+| **Pair scope + configuration generation** — opaque pair ID, current generation token, generation-bump notifications | W4 | Stable per-pair identity for cache keying and AAD binding; a notification (or a checkable token) when the generation advances, so §3.11's credential/host/override/removal rows invalidate. The durable serialization of generation is W4's obligation (open question OQ-2) — W2 treats it as opaque. |
+| **Derived keys** — `credentials.Store.DeriveSubkey` with the §3.7 purpose strings; store lock/rotation notifications | W4 (injection), the credential store's own boot contract | 32 bytes per purpose at operation time; `ErrStoreLocked` handling per R-3.7-8. W2 holds keys only for the duration of an operation and wipes best-effort. |
+| **Folder publication revision** — the advancing counter and its advancement points | W4 (gateway), fed by mutation and invalidation events | The current revision value at read capture and publish time; the comparator `Put`/`Save` enforce. |
+| **Generated wire types** — `MailFolder`, `MailFolderList`, `MailMessagePage`, `MailReadMetadata` (W0's proposed schemas) | W0 → generated into `pkg/api/generated/` | The only cross-boundary types (Hard Constraint #8); W2 populates them, never hand-writes parallels. |
+| **Watcher dirt notifications** — "folder version changed while closed" | W1 (watcher), delivered to W4's integration | The dirty-mark signal only (§3.6: watcher marks dirty, never refreshes, never fetches headers). |
+| **Existing test harness** — `pkg/email/imapserver_test.go::startMemIMAP`, `view_test.go::startViewIMAP`/`::startViewIMAPRaw` | qa-lead's files (W5) | The real in-memory IMAP server and the capability-set seam for LIST-EXTENDED tests. |
+
+**Non-editing guarantees (the ADR's ownership rows, restated as this spec's boundary):** W2 owns every `pkg/email/view.go` change in this feature so pool and metadata writers never both patch it; W2 never edits `pkg/email/transport.go` (W1), any `contracts/` file (W0), any `pkg/gateway/` file (W4), or any test file (W5). If a W2 obligation seems to require editing one of those, that is a rule-15 stop-and-ask, not an edit.
+
+---
