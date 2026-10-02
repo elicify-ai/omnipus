@@ -257,3 +257,60 @@ Envelope rules (each is the ADR's §Security "What must be built" list, made che
 **The gate (hard, founder-briefed): enabling the disk cache is BLOCKED until E-1 and E-2 are deployed.** Concretely, W2's first-write path performs a runtime exclusion check before the very first write on any install: probe that the cache directory resolves as ignored by the data repository's ignore rules (the `git check-ignore` mechanism the trace used), and confirm the backup skip (E-2) is present in the running build. If either fails, the disk cache stays **disabled on that install**: the mailbox runs live-only with a visible `cache_unavailable` notice (the ADR's wire metadata `notice_code`), and nothing is written to disk. The check is cheap, runs once per process per pair, and fails visible — never a silent "skip the check, write anyway".
 
 ---
+
+### 3.9 The bounded in-memory header cache
+
+Phase 1's only message-adjacent cache is **memory only**: the newest fifty headers per folder role per mailbox, so an open panel redraws the list instantly instead of re-fetching envelopes. Everything about it is bounded; nothing about it reaches disk (the Phase 2 encrypted header cache is explicitly not this package — §8).
+
+**Content.** Exactly the envelope fields and flags the list rows already carry — the field set of `pkg/email/view.go::MailRow` (read this checkout): UID, UIDValidity, Seen, IsDraft, ReadByAgent, IsOmnipusDraft, MessageID (when present), From, FromName, To, Cc, Subject, Date. **No body text, no snippet, no MIME part, no attachment bytes, no attachment list** (the `has_attachments` indicator W0 adds to the wire is inside the allowed flag/metadata set once F7 lands; the bytes are not). There is no field in `MailRow` that could smuggle a body — verified — and the cache struct must be defined so none can be added by accident (a new field requires touching this spec's rule).
+
+**Bounds and freshness (each number is founder-set in the ADR's P1.1):**
+
+| Property | Rule |
+|---|---|
+| Cardinality | At most **50 newest headers per role per mailbox** (150 per mailbox). When a fresh snapshot has more, the *cache* keeps the newest 50 and nothing else; the live page is never silently shortened to fit (the ADR's P2.2 cardinality rule, applied to memory). |
+| Paging | Display pagination stays **25 rows per page, hard ceiling 200 per folder per view**. The cache serves only **newest unfiltered pages the snapshot actually covers** — pages past the cached 50, and every search, run live. **Loaded older pages are the active view's working set, released on view exit, never merged into the reusable cache** (the ADR's "active-view results must not enlarge the reusable cache"). |
+| Freshness | On folder open: display cached rows immediately (labelled); if absent, fetch once; if **older than 5 minutes**, run **one** background refresh. The stale label and `stale`/`refresh_needed` metadata ride W0's proposed `MailReadMetadata`; W2 supplies the timestamps. A failed refresh preserves labelled stale rows plus a visible error/Retry — it never resets the timestamp and never calls stale rows live (ADR P1.3 "stale cache" row). |
+| Retention | Memory entries are dropped **30 minutes after the panel was last open**; panel close starts that clock; reopening resets it. No refresh of any kind while the panel is closed; the retention sweep issues zero IMAP commands. |
+| Budget | The **4 MiB global reusable-metadata budget** (founder Q3=A, both phases) covers this cache plus the folder metadata held in memory. Overflow is a **visible live-only / cache-unavailable outcome** — never truncated fields, never silently omitted live rows, never evicting the current user's working response (ADR P2.2 memory row's eviction order: reusable headers first, live work last). |
+| Isolation | Cache entries are keyed by the full pair + configuration/folder-mapping generation + role — never by account alone. Two pairs on one account, or one pair across a reconfiguration, never see each other's rows (the cross-pair risk row; grill I-01's cache face). |
+| Purpose | Cached rows are reused **only** for newest-unfiltered page display. Search results and older pages never read from it, never write to it. |
+
+### 3.10 The folder publication revision (grill correction I-02)
+
+Every mailbox/folder carries a local, monotonically advancing **publication revision**, owned by the gateway/cache service (W4 owns advancement; W2 owns enforcement at every cache write). The rules, verbatim in obligation form:
+
+- **R-3.10-1.** A read **captures** the revision current when it starts — before any server work.
+- **R-3.10-2.** Successful mutations (this client's mark-read/send/draft) and every invalidation event in §3.11 **advance** the revision.
+- **R-3.10-3.** A read whose captured revision is no longer current when it finishes **publishes nothing**: no rows into the memory cache, no disk snapshot write, no `last_validated_at`/`saved_at` advance, no count update, no frontend state. Its data is discarded; the already-scheduled post-mutation refresh supplies truth.
+- **R-3.10-4.** A post-mutation refresh never joins a flight started under an older revision — the revision participates in the read-coalescing identity (I-01; W1's budget rewrite).
+- **R-3.10-5.** No new polling timer exists: the revision advances only on the listed events. (The I-02 test row: "Assert no new scheduled refresh timer was introduced.")
+
+The proposed wire exposes an opaque `publication_revision` on the response metadata so the SPA can drop an out-of-order response — W0's contract field; W2's obligation is that the value it returns is the revision the data was produced under, and that superseded values never reach the cache layers.
+
+### 3.11 Invalidation table — what each event must discard
+
+The ADR's P1.3 rows and P2.3 table, restricted to what exists in Phase 1 (memory headers/counts + encrypted folder metadata). "Both layers" = the memory cache and the encrypted folder file.
+
+| Event | Required invalidation |
+|---|---|
+| **UIDVALIDITY change** on a folder (folder recreated, server-side rebuild) | Discard **every** cached header, page cursor and count for that folder's old epoch before any new row is published; refresh the saved folder version **once** (trigger 4, §3.6). Never reuse an old UID against a new epoch; a UIDVALIDITY that has never been validated is stored as *unknown* (nullable), never a fabricated `0`. |
+| **Message moved or deleted by another client** | On the next successful refresh of membership/flags, the moved/deleted row leaves the cache and affected counts invalidate. A cached row the live check cannot find is shown as "changed or deleted" (W3's rendering of the typed 409/stale-ref result W0 defines) — never silently kept as fresh, and never mutated against (that deeper guarantee is W1/W4's reference-validation work; W2's duty is not to *serve* the stale row as current). |
+| **This client's own mark-read / send / draft action** | On confirmed success: patch known flags where safe, invalidate affected counts and list pages, advance the revision (R-3.10-2), and run **one** refresh while the panel is open. A failed or ambiguous action changes nothing and is never automatically repeated. |
+| **Pair disabled or removed; agent/workspace deleted; mailbox moved** | Advance/bump the pair's generation **first**, revoke ownership, cancel pair-owned work, delete both memory and disk caches, and prevent late completions from recreating files (tombstone/generation guard — W4 owns the cascade wiring; W2 supplies the delete primitive and honours the generation check on every write). On restart, orphan files are reconciled against live configured pairs. |
+| **Credential, host, port or override change** | Bump the configuration generation; **delete the disposable caches rather than migrating encrypted data under an uncertain key** (ADR P2.3 row). The old generation's file is unopenable anyway (AAD binding, R-3.7-4) — deletion makes that visible instead of leaving a decoy. |
+| **Corrupt ciphertext, schema mismatch, or expired snapshot** | Reject without plaintext salvage (R-3.7-7); surface a cache warning; use the budgeted live path. Never render unauthenticated bytes as folder state; never advance "last checked" on failure. |
+| **Expired retention** | Memory headers: dropped by the 30-minute post-close rule. A row's age is *displayed*, never hidden: **stale rows are shown labelled with their age, never as fresh** — "instant display" is not "fresh server data" (the ADR's staleness paragraph). |
+| **Key lock / rotation** | New cache operations require valid derived keys (R-3.7-8): locked ⇒ live-only + cache-unavailable; rotation/lock clears in-memory keys and cache data and removes disposable files; rebuild only after normal credential resolution. |
+
+Two standing rules bind the whole table: every event advances the publication revision (R-3.10-2), and none of them schedules background work while the panel is closed — the watcher may update its own metadata and mark panel caches dirty, nothing more.
+
+### 3.12 Logging rules
+
+New diagnostics in this package are **operationally useful and content-free**:
+
+- **May appear:** opaque pair identifiers, opaque generation identifiers, safe closed-class error codes (the §2.3 class enum family: `timeout | dns | connect_refused | auth_failed | tls | folder_missing | server_error`, plus the new safe discovery classes this package introduces — e.g. `discovery_unresolved`, `mapping_ambiguous`, `cache_unavailable`, `cache_corrupt`), durations, operation labels, and hit/miss/socket counts.
+- **Must never appear:** folder names, subjects, addresses, Message-IDs, credential values, raw upstream error text, full server responses or protocol transcripts. A raw upstream error is reduced to its safe class **at the boundary where it is caught**; the raw text stays in the server-side error path only where existing behaviour already puts it (and fixing the two known raw-text seams — `pkg/email/watcher.go::recordFailure` and the error argument in `pkg/gateway/rest_mail.go::mailErr502`, both read this checkout — belongs to W1/W4; W2's new code simply never adds a third).
+- Every log call in this package goes through the existing logging helpers with typed fields; no `fmt.Errorf`-built string carrying server data is ever logged or returned as user-visible text.
+
+---
