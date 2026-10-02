@@ -95,6 +95,14 @@ func DecodeStyleAttrProperties(html string) string {
 		for _, d := range decls {
 			parts = append(parts, decodeCSSIdent(d.Property)+": "+d.Value)
 		}
-		return prefix + `"` + strings.Join(parts, "; ") + `"`
+		// The re-emitted attribute is always double-quoted, so a decoded
+		// value carrying a double quote (from a single-quoted attribute, or
+		// a \22 identifier escape) must not terminate it — the raw re-emission
+		// truncated the attribute and the styling was lost (the F4 finding).
+		// &quot; re-decodes to the same byte when bluemonday parses the
+		// attribute, so the value it judges is exactly the browser's reading
+		// of the original. & is deliberately NOT escaped: bluemonday decodes
+		// entities once, exactly as the browser would on the original text.
+		return prefix + `"` + strings.ReplaceAll(strings.Join(parts, "; "), `"`, "&quot;") + `"`
 	})
 }
