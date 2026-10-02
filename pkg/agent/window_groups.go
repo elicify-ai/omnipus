@@ -93,7 +93,7 @@ func sameArchiveIdentity(a, b providers.Message) bool {
 // Align in archive order. Explicit indices include the anchor before the suffix;
 // tool ids are compared only at the next owned slot, never searched globally.
 func mapWindowMessages(snap memory.WindowSnapshot, msgs []providers.Message, recallAt, recallLen int) []int {
-	history, sourceLines := memory.WindowHistory(snap)
+	history, sourceLines := recoveryWindowHistory(snap)
 	lines := make([]int, len(msgs))
 	next := 0
 	for i, m := range msgs {
@@ -101,7 +101,9 @@ func mapWindowMessages(snap memory.WindowSnapshot, msgs []providers.Message, rec
 		if i >= recallAt && i < recallAt+recallLen {
 			continue
 		}
-		if next < len(history) && sameArchiveIdentity(m, history[next]) {
+		// An unchanged malformed archive entry still owns its original address.
+		// Mapping it does not authorize recovery or bypass group validation.
+		if next < len(history) && (sameArchiveIdentity(m, history[next]) || reflect.DeepEqual(m, history[next])) {
 			lines[i] = sourceLines[next]
 			next++
 		}

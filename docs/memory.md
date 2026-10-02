@@ -94,6 +94,16 @@ flowchart LR
 
 When the window fills, older turns or complete steps can leave the live view while their admitted source text stays available for recall. Aborted-turn rollback and session retention still apply.
 
+## After interrupted tool work
+
+If the gateway is killed before a tool-call group finishes, Omnipus checks for unfinished calls when the conversation is next used. It records restart cancellation rather than resuming that abandoned group. The original assistant calls, any partial tool results, and the cancellation records remain in the conversation archive, subject to normal retention. Only that canceled group and its recovery records are left out of the model's view; other messages, including steering instructions, remain. Reloading the conversation or shortening its context does not bring the canceled group back.
+
+Cancellation applies to one assistant step, not to every use of its tool-call ID. If a later interrupted step reuses that ID, it gets its own cancellation record; checking the same canceled step again does not add another. Users, completed steps, narration and unrelated controls stay in their original order, including controls after the interrupted step. Surviving results keep their original archive-line addresses for recall.
+
+Restart recovery is different from context pressure. An unfinished group in a running turn is not silently removed to make a request valid. Malformed cancellation records or invalid call/result structure do not authorize removal: those messages remain visible at their original archive addresses. Without a valid recorded cancellation, an incomplete group can still stop a model request with a visible error.
+
+Cancellation is not proof that an action never happened: a tool may have acted before the gateway stopped without saving its result. Before retrying work that changes something outside the conversation — such as sending a message or editing a file — check its actual state.
+
 ## Limits and things to watch
 
 | Limit | What it means for you |

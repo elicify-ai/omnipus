@@ -236,38 +236,158 @@ func TestRecovery_FindOrphans_MultipleOrphans(t *testing.T) {
 	assert.False(t, ids["tc-B"], "tc-B must NOT be in orphans (has a result)")
 }
 
-// --- stripOrphanedAssistantTurn unit tests ---
+// --- Public recovery regressions (legacy test names retained for selectors) ---
 
-// TestRecovery_StripOrphanedTurn_RemovesOrphanedAssistant verifies that
-// stripOrphanedAssistantTurn removes the last assistant message with unresolved tool calls.
+// TestRecovery_StripOrphanedTurn_RemovesOrphanedAssistant verifies that public
+// recovery excludes an unresolved assistant from context but preserves the
+// original transcript and appends its restart-cancellation record.
 //
-// Traces to: tool-registry-redesign-spec.md FR-088
+// Traces to: tool-registry-redesign-spec.md FR-069 / FR-088 and architect Option A.
 func TestRecovery_StripOrphanedTurn_RemovesOrphanedAssistant(t *testing.T) {
+	storage := t.TempDir()
+	store := session.NewSessionManager(storage)
+	const sessionKey = "test-public-orphaned-turn"
 	history := buildOrphanedHistory("tc-001", "exec")
-	cleaned := stripOrphanedAssistantTurn(history)
+	// Name is an in-memory convenience field; seed the canonical persisted form.
+	history[1].ToolCalls[0] = providers.ToolCall{ID: "tc-001", Type: "function",
+		Function: &providers.FunctionCall{Name: "exec", Arguments: `{}`}}
+	for _, msg := range history {
+		store.AddFullMessage(sessionKey, msg)
+	}
+	require.NoError(t, store.Save(sessionKey), "seed the real persisted session")
 
-	// Only the user message should remain.
+	cleaned := RecoverOrphanedToolCalls(store, sessionKey, nil)
+
+	// Only the original user message should remain in the recovered view.
 	require.Len(t, cleaned, 1, "cleaned history must have only the user message")
 	assert.Equal(t, "user", cleaned[0].Role)
+	assert.Equal(t, []providers.Message{history[0]}, cleaned, "recovery preserves the complete original user message")
+
+	// Reopen from disk: a cleaned context is not permission to erase the archive
+	// or to treat an in-memory-only cancellation as durable recovery.
+	persisted := session.NewSessionManager(storage).GetHistory(sessionKey)
+	require.Len(t, persisted, len(history)+1, "recovery appends exactly one cancellation to the original persisted transcript")
+	assert.Equal(t, history, persisted[:len(history)], "the orphaned assistant remains archived, unchanged")
+	assert.Equal(t, "system", persisted[len(history)].Role, "cancellation is a system record")
+	require.JSONEq(t, `{"type":"turn_canceled_restart","tool_call_id":"tc-001","reason":"ungraceful_shutdown_recovery"}`,
+		persisted[len(history)].Content, "architect Option A retains the exact one-l restart-record schema")
 }
 
-// TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls verifies that history
-// where the last assistant message has no tool_calls is left unchanged.
+// TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls verifies that public
+// recovery leaves ordinary assistant history unchanged. A resolved-call control
+// also proves that no unresolved calls means no recovery, not unconditional stripping.
 //
-// Note: stripOrphanedAssistantTurn strips the last assistant message IF it has tool
-// calls, regardless of whether a tool result follows. The caller (RecoverOrphanedToolCalls)
-// only invokes it when orphans are detected first. This test verifies the base no-op case.
-//
-// Traces to: tool-registry-redesign-spec.md FR-088
+// Traces to: tool-registry-redesign-spec.md FR-088 and architect Option A's completed-group preservation.
 func TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls(t *testing.T) {
-	// History where the last assistant message has NO tool calls.
-	history := []providers.Message{
-		{Role: "user", Content: "hello"},
-		{Role: "assistant", Content: "hello back", ToolCalls: nil},
+	completed := buildCleanHistory("tc-complete", "exec")
+	completed[1].ToolCalls[0] = providers.ToolCall{ID: "tc-complete", Type: "function",
+		Function: &providers.FunctionCall{Name: "exec", Arguments: `{}`}}
+	cases := []struct {
+		name    string
+		history []providers.Message
+	}{
+		{"no_tool_calls", []providers.Message{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "hello back", ToolCalls: nil},
+		}},
+		{"resolved_tool_call", completed},
 	}
-	cleaned := stripOrphanedAssistantTurn(history)
-	assert.Len(t, cleaned, len(history),
-		"history with no tool_calls in last assistant message must be unchanged")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := t.TempDir()
+			store := session.NewSessionManager(storage)
+			const sessionKey = "test-public-recovery-no-op"
+			history := tc.history
+			for _, msg := range history {
+				store.AddFullMessage(sessionKey, msg)
+			}
+			require.NoError(t, store.Save(sessionKey), "seed the real persisted session")
+
+			cleaned := RecoverOrphanedToolCalls(store, sessionKey, nil)
+			assert.Len(t, cleaned, len(history),
+				"history with no tool_calls in last assistant message must be unchanged")
+			assert.Equal(t, history, cleaned, "every message and field survives when no call is unresolved")
+			assert.Equal(t, history, store.GetHistory(sessionKey), "no-op recovery appends no in-memory cancellation")
+			assert.Equal(t, history, session.NewSessionManager(storage).GetHistory(sessionKey), "no-op recovery changes no persisted message")
+		})
+	}
+}
+
+// TestRecovery_RecoverOrphaned_ExistingMarkerNoNewOrphan_CleanViewNoNewRecord
+// closes independent-CHECK finding F1: no leaf exercised "history already
+// contains a supported turn_canceled_restart marker from an earlier recovery
+// AND no current orphan exists".
+//
+// Every expected value derives from the contract, never from the
+// implementation:
+//   - loop_run_turn.go::assembleInitialContext — recovery is idempotent on
+//     sessions where the synthetic turn_canceled_restart entry already
+//     exists, the on-disk transcript is preserved, and the returned
+//     LLM-context slice is cleaned so the provider never sees dangling
+//     unanswered tool_call entries (FR-088);
+//   - architect Option A — exclude only the locally bound canceled
+//     group/results/records; preserve the entire remaining sequence;
+//   - tests/plans/orphan-restart-recovery-acceptance.md — "repeated recovery
+//     does not duplicate the record" (position-scoped idempotency ruling).
+//
+// The store is deliberately checkpoint-less (*SessionManager implements no
+// session.ContextWindowStore): on that fallback path the returned slice is
+// authoritative downstream (assembleMessages uses it as-is), so a wrong
+// return reaches the provider.
+func TestRecovery_RecoverOrphaned_ExistingMarkerNoNewOrphan_CleanViewNoNewRecord(t *testing.T) {
+	storage := t.TempDir()
+	store := session.NewSessionManager(storage)
+	// Fixture property, not an oracle: the audited scenario is the
+	// no-checkpoint fallback path. Fails loudly if the store ever grows
+	// checkpoint support and this leaf silently stops covering that path.
+	var checkpointLess session.SessionStore = store
+	_, hasCheckpoints := checkpointLess.(session.ContextWindowStore)
+	require.False(t, hasCheckpoints, "fixture must stay checkpoint-less: only there is the returned slice the authority")
+
+	const sessionKey = "test-premarked-no-new-orphan"
+	// Session recovered once earlier (marker persisted), one clean turn after.
+	seed := []providers.Message{
+		{Role: "user", Content: "first question"}, // 0: unrelated valid context
+		{Role: "assistant", Content: "", ToolCalls: []providers.ToolCall{ // 1: canceled incomplete group
+			{ID: "call_old", Type: "function",
+				Function: &providers.FunctionCall{Name: "exec", Arguments: `{}`}},
+		}},
+		{Role: "system", Content: `{"type":"turn_canceled_restart","tool_call_id":"call_old","reason":"ungraceful_shutdown_recovery"}`}, // 2: marker from the FIRST recovery
+		{Role: "user", Content: "second question"},                    // 3: closes the segment after the marker
+		{Role: "assistant", Content: "second answer", ToolCalls: nil}, // 4: clean last assistant ⇒ no current orphan
+	}
+	for _, msg := range seed {
+		store.AddFullMessage(sessionKey, msg)
+	}
+	require.NoError(t, store.Save(sessionKey), "seed the real persisted session")
+	before := store.GetHistory(sessionKey)
+	require.Len(t, before, 5, "fixture precondition: pre-marked five-message transcript")
+	require.JSONEq(t, seed[2].Content, before[2].Content, "fixture precondition: the persisted marker from the earlier recovery")
+
+	cleaned := RecoverOrphanedToolCalls(store, sessionKey, nil)
+
+	// The last assistant declares no tool calls, so this recovery finds no new
+	// orphan — yet the earlier cancellation stays bound to its position: the
+	// dangling assistant and its marker record stay out of the LLM view while
+	// every unrelated message survives whole and in order.
+	require.Equal(t, []providers.Message{seed[0], seed[3], seed[4]}, cleaned,
+		"pre-marked history with no new orphan: view excludes the bound canceled group and its record, retains the rest in order")
+
+	// Idempotency: no new cancellation record in memory or on disk.
+	require.Equal(t, before, store.GetHistory(sessionKey),
+		"recovery appends no in-memory record when the marker already exists and no orphan exists")
+	persisted := session.NewSessionManager(storage).GetHistory(sessionKey)
+	require.Equal(t, before, persisted,
+		"recovery leaves the persisted transcript unchanged (same messages, no duplicate cancellation)")
+	markers := 0
+	for _, msg := range persisted {
+		if msg.Role == "system" && strings.Contains(msg.Content, "turn_canceled_restart") {
+			markers++
+			require.JSONEq(t, seed[2].Content, msg.Content, "the one cancellation record keeps its exact canonical schema")
+		}
+	}
+	require.Equal(t, 1, markers,
+		"repeated recovery must not duplicate the cancellation record (position-scoped idempotency ruling)")
 }
 
 // --- RecoverOrphanedToolCalls integration tests ---

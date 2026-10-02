@@ -37,6 +37,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // ============================================================================
@@ -142,6 +143,11 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 	// initialArchiveLen = total archive line count at turn start (after eviction,
 	// before any in-turn appends). This mirrors ts.initialArchiveLen in a real turn.
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk)
+	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
+	require.True(t, supportsWindow)
+	snapshot, snapshotErr := store.SnapshotWindow(context.Background(), sk)
+	require.NoError(t, snapshotErr)
+	start := snapshot.State.Clone()
 
 	// --- Phase 3: simulate in-turn message appends.
 	inTurnMsgs := []providers.Message{
@@ -156,12 +162,13 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 		"precondition: archive must grow by in-turn appends")
 
 	// --- Phase 4: trigger HardAbort.
-	// HardAbort (steering.go:613) reads ts.session and ts.initialArchiveLen
-	// then calls ts.session.RollbackAppended(sessionKey, ts.initialArchiveLen).
-	// Construct a minimal turnState that wires these two fields correctly.
+	// HardAbort calls restoreSession with ts.agent and rolls back to ts.initialWindow.
+	// Wire the captured turn-start snapshot and session into the minimal turnState.
 	// We also set cancelFunc so ts.Finish(true) does not call a nil cancel.
 	ctx, cancel := context.WithCancel(context.Background())
 	ts := &turnState{
+		agent:                agent,
+		initialWindow:        &start,
 		sessionKey:           sk,
 		session:              agent.Sessions,
 		initialArchiveLen:    initialArchiveLen,
@@ -239,7 +246,7 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 //	And windowTrim is called so meta.Skip > 0 (some turns are evicted),
 //	And the archive has A lines (all turns — evicted + window),
 //	When 3 additional messages are appended to simulate a running turn,
-//	And restoreSession is called with initialArchiveLen = A (turn-start snapshot),
+//	And restoreSession is called with the captured turn-start window snapshot,
 //	Then the archive has exactly A lines (the 3 appended lines are removed),
 //	And ReadArchive still returns the evicted turns (archive prefix unchanged),
 //	And the live window does not contain the aborted-turn sentinel messages.
@@ -286,6 +293,11 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 
 	// initialArchiveLen is what ts.initialArchiveLen captures at turn start.
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk)
+	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
+	require.True(t, supportsWindow)
+	snapshot, snapshotErr := store.SnapshotWindow(context.Background(), sk)
+	require.NoError(t, snapshotErr)
+	start := snapshot.State.Clone()
 
 	// --- Phase 3: simulate in-turn appends (3 messages: user + tool call + result).
 	inTurnMsgs := []providers.Message{
@@ -312,20 +324,17 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 		"precondition: archive must grow by in-turn appends")
 
 	// --- Phase 4: trigger restoreSession (the abortTurn path).
-	// Construct a minimal turnState with the fields restoreSession reads:
-	//   ts.initialArchiveLen → targetLen for RollbackAppended
-	//   ts.initialHistoryLength → used to derive targetSkip (round-2 fix)
-	//   ts.sessionKey → session key for the store calls
+	// Construct a minimal turnState with the captured starting window and agent.
+	// restoreSession restores the snapshot's archive count, Skip, anchor and projections.
 	ts := &turnState{
+		agent:                agent,
+		initialWindow:        &start,
 		sessionKey:           sk,
 		initialArchiveLen:    initialArchiveLen,
 		initialHistoryLength: len(windowAfterEvict),
 	}
 
-	// restoreSession (turn.go:721):
-	//   computes targetSkip = initialArchiveLen - initialHistoryLength
-	//   calls agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip)
-	//   calls agent.Sessions.Save(ts.sessionKey)
+	// restoreSession calls RollbackWindow with the full snapshot, then saves the session.
 	err := ts.restoreSession(agent)
 	require.NoError(t, err, "restoreSession must not error on an evicted session")
 
@@ -655,6 +664,12 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 	require.Equal(t, 8, len(windowAfterPreEvict))
 
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk) // 12
+	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
+	require.True(t, supportsWindow)
+	snapshot, snapshotErr := store.SnapshotWindow(context.Background(), sk)
+	require.NoError(t, snapshotErr)
+	start := snapshot.State.Clone()
+
 	initialHistoryLength := len(windowAfterPreEvict)          // 8
 	turnStartSkip := initialArchiveLen - initialHistoryLength // 4
 
@@ -675,6 +690,8 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 	// Phase 5: trigger restoreSession (abortTurn path).
 	// turnState mirrors what newTurnState captures at turn start.
 	ts := &turnState{
+		agent:                agent,
+		initialWindow:        &start,
 		sessionKey:           sk,
 		initialArchiveLen:    initialArchiveLen,
 		initialHistoryLength: initialHistoryLength,
@@ -713,9 +730,8 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 		}
 	}
 
-	// Verify that turnStartSkip is exactly what restoreSession computes
-	// (targetSkip = initialArchiveLen - initialHistoryLength). This proves
-	// the derivation is correct for the fix.
+	// Verify the fixture's pre-turn Skip is 4 (12 archive lines - 8 visible).
+	// restoreSession restores that value from the captured window snapshot.
 	assert.Equal(t, 4, turnStartSkip,
 		"turn-start Skip derivation: initialArchiveLen(12) - initialHistoryLength(8) = 4")
 }
