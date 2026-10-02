@@ -77,3 +77,126 @@ The proof package **edits test files only** (plus this spec). Blast radius there
 ### 2.4 Cluster placement
 
 This package spans the **Mail transport/pool** and **Mail cache** clusters on the Go side, the **workspace Mail panel / Library viewer** clusters on the frontend side, and the **E2E/UAT** harness. It publishes no production interfaces; it consumes every other package's (§17).
+
+---
+
+## 3. User stories and acceptance criteria
+
+Priorities: P0 = the gate cannot open without it; P1 = required before landing but parallelizable.
+
+### US-P1 — The instrument: mail operations become measurable, safely (P0)
+
+Today nothing times a mail operation (§2.1). The founder cannot be shown a before/after comparison, and the ADR's accepted bars (Q3=A) cannot be judged, until every mail operation records a timing record whose fields cannot leak mail content. The instrument is production code owned by W1/W2/W4; its record shape, safety rules and truth conditions are specified here and proven by this package's tests.
+
+**Why this priority**: every other proof and all five measurement arms depend on it; a silent instrument is the one defect that can manufacture a false green for the whole change.
+
+**Independent test**: exercise one operation against `startMemIMAP` with an injected recording sink; assert exactly one record with `operation`, `source`, `duration > 0`, `hit=false`, `socket_count ≥ 1` — and no sensitive marker anywhere in it (B-P1, B-P2).
+
+**Acceptance scenarios**:
+
+1. **Given** any successful mail operation (folders, list, open, summary, discovery, attachment read/save), **When** it completes, **Then** exactly one instrumentation record exists for it with a positive duration, the operation label, the source (`live|memory|encrypted_disk|none`), hit/miss, the socket count it used, and an outcome of `ok` or a safe class — even on the success paths that today log nothing.
+2. **Given** an operation whose synthetic subject, address and folder name are distinctive marker strings, **When** the record is emitted, **Then** no marker string appears in any field of the record (and a positive control proves the scan could have found the markers had they been present).
+3. **Given** a cache-first read that hits, **When** the record is emitted, **Then** `source=memory` (or `encrypted_disk`), `hit=true` and `socket_count=0` — a cache hit never dials, and the record says so.
+4. **Given** the fake server's accepted-connection counter, **When** N operations dial, **Then** the sum of the records' socket acquisitions equals the server's counter delta — the instrument agrees with an independent counter, not only with itself.
+5. **Given** an artificial delay injected at the fake server, **When** the operation completes, **Then** the recorded duration reflects the injected delay (the field measures the operation, not a constant).
+6. **Given** instrumentation disabled or a sink absent, **When** operations run, **Then** no records are produced — and a measurement run for an exercised operation that yields zero records is an **invalid run** (§8.3), never a pass.
+
+### US-P2 — The pooled runtime is proven under stress, not asserted (P0)
+
+The design's hardest corrections — read coalescing scoped by pair and generation (I-01), publication revision ordering (I-02), exclusive leases, poisoned-socket retirement, reservation release, the eight-socket ceiling with a typed busy result, and no leaks after panel close, logout or disconnect — are exactly the places a careless implementation passes every happy-path test. This package's runtime tests must be able to fail on each.
+
+**Why this priority**: cross-pair data leakage and stale-cache resurrection are the two failure modes with user-visible data-integrity consequences; the design's own risk table names them first.
+
+**Independent test**: drive `startMemIMAP` (plus its scripted fault extensions, §6.2) with concurrent panel/watcher/tool work across multiple pairs and generations; assert caps, isolation, retirement, release and publication ordering from server counters and manager state — never from returned rows alone (B-P3…B-P10).
+
+**Acceptance scenarios**:
+
+1. **Given** simultaneous panel, watcher and agent reads across 13 pairs on the fake server, **When** all work runs, **Then** concurrent established sockets never exceed 2 per mailbox and 8 globally, counting connecting reservations as well as established sockets.
+2. **Given** all eight global leases active and a ninth request arriving, **When** the bounded acquisition wait (5 s, inside the 45 s read budget) elapses, **Then** the ninth request receives a typed busy result (`pool_busy`) — no ninth socket is dialed (server counter proves it).
+3. **Given** two borrowers reading different folders concurrently while the server pauses one command mid-flight, **When** both complete, **Then** each result contains only its own folder's marker messages — SELECT state belongs to the lease, never to another simultaneous request — and PEEK reads preserve `\Seen`.
+4. **Given** a socket that suffers a timeout, a cancelled command, a server BYE or a protocol error, **When** the failure is handled, **Then** that socket is closed and retired — it never re-enters idle reuse; the next operation dials fresh (server login counter increments).
+5. **Given** the last panel observer closing (close frame, browser disconnect without a frame, logout, workspace exit), **When** cleanup runs, **Then** zero panel-retained sockets remain, an independent watcher/tool request in flight is **not** cancelled, and repeated open/close cycles leave goroutine and socket counts at baseline.
+6. **Given** a cancelled request that was the only waiter on a shared read, **When** cancellation completes, **Then** every reservation it held — global slot, account slot, mailbox lease — is released; a late completion of the detached flight publishes only under the current revision and never returns a socket to panel retention.
+7. **Given** two pairs sharing one `host:port|username` account but configured with different Sent mappings, **When** both issue the same concurrent `list folder=sent` request, **Then** each receives only its own mapping's results (per-pair markers) while the account's two-slot work gate still bounds total concurrent dials at two (I-01).
+8. **Given** an identical operation already in flight for a pair's old configuration generation, **When** the pair is reconfigured (generation bumps) and the same operation arrives, **Then** the new request never joins the old flight, the old flight's completion publishes nothing for the new generation, and one joiner cancelling mid-flight neither fails nor cancels the flight other waiters still depend on (I-01).
+9. **Given** a pre-mutation read paused after its server snapshot, **When** a mark-read mutation and its post-mutation refresh complete, **Then** the released old read publishes nothing — no memory rows, no disk snapshot, no last-validated timestamp advance, no UI/count update — and the post-mutation refresh never joined the superseded flight (I-02).
+
+### US-P3 — The caches are bounded, encrypted, invalidated and invisible to Git (P0)
+
+Phase 1 ships an encrypted per-mailbox folder-metadata file on disk and bounded memory-only headers; Phase 2 adds the bounded encrypted header snapshot. Every boundary — envelope authentication, UIDVALIDITY invalidation, stale-vs-fresh labelling, the 50-header and 4 MiB bounds, the 30-minute post-close drop, and the data-folder Git/backup exclusion — must have a test that fails when the boundary is missing.
+
+**Why this priority**: the cache is the change's main new stored-data surface; its failures are silent (stale presented as fresh) or permanent (sensitive names leaking into Git history).
+
+**Independent test**: round-trip an envelope, corrupt it, flip epochs on the fake server, overflow the bounds with synthetic folders, and diff the data folder's Git status before/after a cache write (B-P11…B-P15).
+
+**Acceptance scenarios**:
+
+1. **Given** a resolved folder mapping, **When** it is written to the encrypted folder file and read back, **Then** roles, names and UIDVALIDITY are identical, the file on disk is ciphertext (marker scan finds no plaintext, positive control proves the scan works), and the envelope binds purpose, schema version, pair and config generation as authenticated data.
+2. **Given** corrupt, truncated, foreign-key, wrong-pair or schema-mismatched ciphertext, **When** the cache reads it, **Then** it is rejected without plaintext salvage, a visible cache warning is surfaced, the live path is used, and no `last_validated` timestamp advances on the failure.
+3. **Given** a UIDVALIDITY change on the server, **When** any read/mutation exercises an old reference, **Then** every old cursor and row is discarded and the old reference is refused with a typed stale-reference error **before** any fetch or mutation — including the recreated-folder case where the numeric UID now denotes a different message.
+4. **Given** cached rows past the 5-minute threshold, **When** the panel displays them, **Then** they render labelled stale with a refresh indicator, never as fresh; a failed refresh preserves the labelled rows plus a visible error and does **not** reset the timestamp.
+5. **Given** folders of 500 synthetic messages and metadata exceeding the 4 MiB budget, **When** the caches fill, **Then** at most 50 reusable headers per role are retained, the active view's older pages do not enlarge the cache, search runs live, and overflow produces a visible cache-unavailable outcome — never truncated fields or silently omitted rows.
+6. **Given** the panel closed, **When** 30 minutes pass (fake clock), **Then** memory headers are dropped; reopening refetches (server fetch counter) — and a reopen before 30 minutes retains them.
+7. **Given** a cache write, **When** the data folder's Git status, the autocommit staging rules and the application backup archive are inspected, **Then** the cache file is untracked, unstaged and absent from the archive — with an ordinary allowed state file as positive control proving the inspection could have seen a write.
+
+### US-P4 — The founder features are proven as journeys, not unit shapes (P0)
+
+F1–F7 (Open-without-saving, Save-to-Library, agent attachment tools with the ask default, safe styling, Reply all, missing dates, paperclip indicator) each carry a founder decision. The proof is end-to-end: real files, real renderers, real tool outputs, real browser requests — with the counterexamples the grill demanded (I-03 reference journey, I-04 resource policy, I-05 byte-path split, I-06 handoff interaction).
+
+**Why this priority**: these are the user-visible deliverables; a green unit test beside a broken journey is exactly the false-completion pattern this repo's Definition of Done exists to stop.
+
+**Independent test**: each acceptance scenario below names its own observable end state — filesystem diff, request counter, landed file, recipient set, computed style, rendered date (B-P16…B-P22 plus the I-03/I-05/I-06 scenarios in §6.4).
+
+**Acceptance scenarios**:
+
+1. **Given** an attachment of every renderable kind (image, SVG, video, audio, PDF, markdown/code/text, restricted HTML), **When** the user Opens it and then goes Back/closes/navigates/reloads/logs out, **Then** the filesystem snapshot and the data folder's Git status are byte-identical before and after — Open writes nothing — while a positive-control Save of the same payload proves the instrument sees a write.
+2. **Given** a mail Markdown attachment containing `![x]` image syntax pointing at (a) a same-origin Library download/API path, (b) a workspace embed target, and (c) a remote image, **When** the temporary viewer renders it, **Then** the request counter observes **zero** requests for all three targets; the viewer's own minted resources load; and the positive control — the same Markdown opened as an ordinary workspace Library file — proves the observer would have seen the requests (I-04).
+3. **Given** a Save of an attachment with a hostile name (separators, control characters, dot names, Windows-invalid, case-colliding), **When** the save completes, **Then** the file lands only under the authorized `mail/<mailbox>/<UTC save-month>/` hierarchy with a sanitized, numbered-unique name, exact original bytes (Q5=A: original HTML bytes, scripts-off profile), and no path escape via symlink, mount or parent-file conflict; concurrent panel/agent saves never clobber.
+4. **Given** an agent invoking `download_email_attachment`, **When** the tool runs under each permission mode (Auto off with approval granted/declined, global deny, per-agent ask/allow, Auto on, God Mode), **Then** the shipped global default `ask` governs, a declined approval performs zero transfer/write, Auto-on runs through the existing workspace-path conditional class with no attachment-specific prompt (Q4=A), and a per-agent `allow` can never loosen the global `ask`.
+5. **Given** an original message From A, Reply-To R, To = self+X+duplicate R, Cc = Y + mixed-case X + self + display-name duplicate R, and a hidden Bcc, **When** Reply all is composed, **Then** To = R and Cc = X, Y once each — no self, no primary, no Bcc, no display-name duplicate — and plain Reply produces To = R with Cc/Bcc empty; the assertion reads the final send payload shape, not the displayed chips.
+6. **Given** a styled HTML mail with safe colour/font/table/media-query styling plus scripts, handlers, forms, `@import`, remote `url()`, `position:fixed` and `expression()`, **When** it renders, **Then** computed-style assertions prove the safe styling survives, the unsafe constructs are gone, zero remote loads occur by default (controlled endpoints), Load-images fetches only token-scoped proxy resources after explicit consent, and a stripped-style fallback stays readable.
+7. **Given** messages with (a) no Date header + valid internal date, (b) neither date, (c) a valid Date differing from received time, **When** list, detail, Sent and reply attribution render, **Then** the precedence Date → internal date → **No date** holds everywhere, absence never renders as year one, epoch or today, and list/detail agree.
+8. **Given** a message whose Message-ID header is absent, **When** the agent chains `read_message` → `list_email_attachments` → `read_email_attachment` → `download_email_attachment` using **only** returned references, **Then** every step succeeds with no Message-ID and no synthesized identity; references from a wrong pair, an old configuration generation and a recreated folder (new UIDVALIDITY, old numeric UID) are each refused with the typed stale-reference error before any fetch or mutation (I-03).
+
+### US-P5 — The measurement campaign is executable and honest (P0)
+
+The ADR's acceptance bars (Q3=A) are targets. Judging them requires the same 13 mailboxes, both clocks, cache-first display measured **separately** from live fetch, the six missing series, stated repetitions and an invalid-run rule — so a bad run is discarded and said so, never averaged into a pass.
+
+**Why this priority**: the founder approved specific numeric bars; a measurement that cannot fail, or that merges clocks, cannot honour them.
+
+**Independent test**: the harness produces per-sample receipts (both clocks, status, rows, n) and applies the invalid-run rule; a deliberately corrupted run (double request, browser-memory-served response) is discarded by the rule (B-P23, B-P24).
+
+**Acceptance scenarios**:
+
+1. **Given** the same 13 configured mailboxes from lane-M, **When** the candidate build is measured, **Then** every sample records both clocks — click→rendered (user clock) and request-start→response-end (request clock) — plus status, row count and sample count, with pair IDs opaque and no subjects/addresses/content in receipts.
+2. **Given** the panel open with a warm cache, **When** a cached-first display is measured, **Then** its time is reported in its own column, never mixed with live-fetch times; the live refresh is a separate sample with its own clock.
+3. **Given** the sampling rule (≥ 5 cold, ≥ 10 warm per applicable operation per pair, randomized pair order), **When** a series completes, **Then** the receipt reports n, median, p95, worst and all failures — an empty folder is *not applicable*, never 0 ms, and no missing sample is extrapolated.
+4. **Given** any of the invalid-run conditions (§8.3) — reload mid-op, double request, response served from browser memory, a second actor on the mailbox, gateway restart, build mismatch — **When** it occurs, **Then** the run is discarded, re-run, and the receipt says so.
+5. **Given** the completed series, **When** judged, **Then** each ADR bar is evaluated as stated: 5 s maximum acquisition wait inside the 45 s read budget; 4 MiB reusable metadata budget; cached display median ≤ 250 ms / p95 ≤ 500 ms; ≥ 50 % paired-median warm-live reduction where reuse is eligible; ≤ 10 % paired-median cold and body-open regression; summary p95 ≤ 1 s request-to-render with **zero** mail network calls; busy surfaced within the 5 s wait — with absolute bars named by clock and host, paired bars by exact percentile and opposing measurement.
+
+### US-P6 — The UAT campaign proves the live instance without touching its data (P1)
+
+Automated tests prove behaviour against the fake server and controlled cases; the live instance must show the real thing works there — reads, cache labels, preview, Save, agent tools — without sending, deleting, or changing keys on real mailboxes.
+
+**Why this priority**: Definition of Done requires reachability by a real user on a real instance; but the instance is shared state — one careless send or key rotation would damage the founder's data and invalidate the measurement series.
+
+**Independent test**: the campaign checklist executes on the live instance with the prohibitions enforced; every PASS row carries its named screenshot; an independent validator re-drives the critical rows (B-P25).
+
+**Acceptance scenarios**:
+
+1. **Given** the live instance and the 13 mailboxes, **When** the UAT rows execute, **Then** each claim (folder rail with counts, cached-first display with stale labelling, unknown-vs-absent folder states, busy/Retry surfaces, preview Open/Back, Save → Open in Library, paperclip indicator, Reply all composition without sending, No date rendering, agent list/read journey) has its named screenshot in the evidence pack.
+2. **Given** the campaign rules, **When** the tester works, **Then** no send is completed, no message or folder is deleted, no credential/key change is made, no server folder is created or renamed, and no UIDVALIDITY-inducing operation is performed — compose may be opened for the Reply-all rows but never sent.
+3. **Given** live mail content visible in screenshots, **When** the evidence pack is assembled, **Then** subjects and addresses are redacted before receipts leave the lane (the baseline receipt's privacy rule), and the redaction is noted per screenshot.
+
+### US-P7 — CHECK proves the tests can fail: mutations (P0)
+
+A test suite that cannot fail proves nothing (the repo's false-green rules; `docs/internal/false-green-patterns.md`). Before any green is trusted, the CHECK auditor runs a fixed mutation list — deliberate defects a careless implementation would survive — and each must kill its test.
+
+**Why this priority**: the design's eight named hazards each have a "careless implementation survives" shape; the mutation list is the audit trail that the suite actually detects them.
+
+**Independent test**: apply each mutation of §7 to the implementation, run its named test, confirm it fails, restore — one at a time, per the repo's one-narrow-run rule (B-P26).
+
+**Acceptance scenarios**:
+
+1. **Given** the mutation list applied one at a time to a green implementation, **When** each mutation's named test runs, **Then** the test fails — a mutation whose test still passes is a **CHECK BLOCK** naming both.
+2. **Given** a test that failed once and passed on re-run, **When** the suite is judged, **Then** the retry-pass counts as red: the test is investigated to a mechanism (and a second isolated failure is a defect, not a flake).
