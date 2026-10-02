@@ -580,10 +580,16 @@ func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
 // TARGET (the FR-032 amendment excludes them only from the thrash-guard's
 // fatal predicate, never from `total`/`fits`). An agent whose bare
 // `messages` comfortably fit B, but whose real request (messages + the
-// injected AGENT.md note) does not, must still empty the one ELIGIBLE tool
-// result it can reach — if noteTokens had been dropped from the trigger
-// instead of just the guard, `messages` alone already fits B and the check
-// would return at its very first comparison, emptying nothing.
+// injected AGENT.md note) does not, must still run a progressing relief op —
+// if noteTokens had been dropped from the trigger, `messages` alone already
+// fits B and the check would return at its very first comparison, relieving
+// nothing. Under the amended MAJ-CW-004 order the selected op is SLIDE-first
+// when a complete step is eligible (subtest 1: exact slide outcome, empties
+// unchanged); when the slide is legally blocked by an incomplete first step,
+// the same trigger must drive the D5 EMPTY of the older retained result
+// (subtest 2: exactly one empty); and the send seam must measure the
+// already-assembled note exactly once, never re-adding the estimate
+// (subtest 3: residue-counter discriminator).
 func TestMidTurnBudget_C1_NotesStillTriggerEmptying(t *testing.T) {
 	al, agent := midTurnFixture(t, 40_000, 0)
 	budget := agentContextBudget(agent)
@@ -621,14 +627,130 @@ func TestMidTurnBudget_C1_NotesStillTriggerEmptying(t *testing.T) {
 
 	before := ContextEmptiesTotal()
 	out, err := al.midTurnWindowCheck(ts, window, nil)
-	require.NoError(t, err, "the window (after emptying the one eligible result) fits B on its own; "+
-		"only the un-emptiable note pushes total over — not fatal per the FR-032 amendment")
-	assert.Greater(t, ContextEmptiesTotal(), before,
-		"C1 not regressed: the check must still have measured the note-inflated total and emptied "+
-			"the eligible result — proof that noteTokens still drive the trigger and target, not just "+
-			"logging")
-	assert.Contains(t, out[2].Content, `"content_state":"emptied"`, "the one eligible result was emptied")
-	assert.Equal(t, "tiny floor", out[4].Content, "the floor set is never touched")
+	require.NoError(t, err, "the window (after the slide) fits B on its own; "+
+		"only the un-emptiable note pushed the original total over — not fatal per the FR-032 amendment")
+	// Amended relief order (MAJ-CW-004, FR-032): the eligible e1 step is a
+	// COMPLETE step, so SLIDE-first relieves — the whole completed prefix
+	// (user "first" + the e1 group) leaves and Skip advances past it. The
+	// emptying pass never fires, so the empties counter must be UNCHANGED;
+	// the old oracle (empties +1, out[2] emptied) encoded the superseded
+	// empty-first contract.
+	assert.Equal(t, before, ContextEmptiesTotal(),
+		"C1 trigger proven by slide-first: the note-inflated total fired relief, and the selected "+
+			"op is the legal slide — no emptying happens (MAJ-CW-004 order), so the empties counter "+
+			"stays put")
+	require.Len(t, out, 2,
+		"slide-first: the completed e1 prefix (user 'first' + assistant e1 + tool e1) left the window")
+	assert.Equal(t, "assistant", out[0].Role, "the surviving window starts at the newest step")
+	require.Len(t, out[0].ToolCalls, 1)
+	assert.Equal(t, "f1", out[0].ToolCalls[0].ID, "the newest assistant (the floor) survives the slide")
+	assert.Equal(t, "tool", out[1].Role)
+	assert.Equal(t, "f1", out[1].ToolCallID)
+	assert.Equal(t, "tiny floor", out[1].Content, "the floor set is never touched (MAJ-CW-005)")
+	// C1's exact discriminator, kept: the bare window always fit B — relief
+	// happened only because the un-emptiable note rode the trigger. Assert
+	// the returned slice carries no note pollution (the note is request-only,
+	// never folded into the live window) and that the 4/5 target was reached
+	// WITH the note riding the measurement (FR-029's fired-bound hysteresis).
+	outOnly := requestTokens(out, nil)
+	assert.LessOrEqual(t, outOnly, budget,
+		"the returned window slice fits B on its own — the note estimate is never folded into the slice")
+	assert.LessOrEqual(t, outOnly+noteTokens, budget*4/5,
+		"FR-029: relief stopped at the 80% target of the fired total bound, measured with the note")
+
+	t.Run("slide legally blocked → the note trigger still empties the eligible older result", func(t *testing.T) {
+		// The companion proof this test always needed: when sliding is
+		// ILLEGAL, the same note-inflated trigger must drive the D5 EMPTY of
+		// an older retained result (MAJ-CW-004 op 3). Block the slide
+		// legitimately: an incomplete first step (assistant e0 declares a
+		// call whose result never arrived). FR-030/MAJ-CW-005 forbid cutting
+		// through an incomplete group, and every eviction endpoint sits after
+		// it, so slideOldest refuses every cut — emptying the older e1 result
+		// is the only progressing relief op.
+		key := "midturn-c1-slide-blocked"
+		eligible := proseOfTokens(budget / 2)
+		blockedWindow, blockedTS := seedMidTurn(t, agent, key, []providers.Message{
+			{Role: "user", Content: "first"},
+			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("e0", "orphan")}},
+			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("e1", "a")}},
+			{Role: "tool", ToolCallID: "e1", Content: eligible},
+			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "b")}},
+			{Role: "tool", ToolCallID: "f1", Content: "tiny floor"},
+		})
+		blockedTS.opts.WorkspaceID = wsID
+
+		blockedOnly := requestTokens(blockedWindow, nil)
+		require.LessOrEqual(t, blockedOnly, budget,
+			"precondition: the bare window fits B — the trigger is note-driven (C1)")
+		require.Greater(t, blockedOnly+al.ephemeralSystemNoteTokens(blockedTS), budget,
+			"precondition: window + the un-emptiable note exceeds B — the trigger fires")
+
+		emptiesBefore := ContextEmptiesTotal()
+		blockedOut, blockedErr := al.midTurnWindowCheck(blockedTS, blockedWindow, nil)
+		require.NoError(t, blockedErr, "post-relief the window fits; the note is un-emptiable — not fatal (FR-032)")
+		assert.Equal(t, emptiesBefore+1, ContextEmptiesTotal(),
+			"exactly one emptying op: the note-inflated trigger fired and the blocked slide forced the D5 empty")
+		require.Len(t, blockedOut, 6,
+			"no slide happened: the incomplete e0 step blocks every cut, so the window shape is intact")
+		assert.Equal(t, "user", blockedOut[0].Role)
+		assert.Equal(t, "first", blockedOut[0].Content, "the plain user line survives — no slide removed it")
+		require.Len(t, blockedOut[1].ToolCalls, 1)
+		assert.Equal(t, "e0", blockedOut[1].ToolCalls[0].ID,
+			"the incomplete group is a floor — untouched (FR-030: never cut through an incomplete group)")
+		assert.Equal(t, "tool", blockedOut[3].Role)
+		assert.Equal(t, "e1", blockedOut[3].ToolCallID)
+		assert.Contains(t, blockedOut[3].Content, `"content_state":"emptied"`,
+			"the note-driven trigger emptied the one eligible OLDER result")
+		assert.Equal(t, "assistant", blockedOut[4].Role)
+		assert.Equal(t, "tool", blockedOut[5].Role)
+		assert.Equal(t, "f1", blockedOut[5].ToolCallID)
+		assert.Equal(t, "tiny floor", blockedOut[5].Content, "the newest floor is never touched")
+		blockedAfter := requestTokens(blockedOut, nil)
+		assert.LessOrEqual(t, blockedAfter, budget, "the emptied window fits B on its own")
+		assert.LessOrEqual(t, blockedAfter+al.ephemeralSystemNoteTokens(blockedTS), budget*4/5,
+			"FR-029: relief stopped at the 80% target of the fired bound, measured with the note")
+	})
+
+	t.Run("send seam measures the assembled payload without re-adding the note estimate", func(t *testing.T) {
+		// No-double-count discriminator (MAJ-CW-004 measurement rule + C1's
+		// own doc): the send-seam checkpoint sees the REAL assembled note in
+		// the payload, so re-adding the estimate would double-count it. Size
+		// the fixture so assembled(window+note) fits B but assembled+estimate
+		// again would not: a double count overflows the candidate, and the
+		// residue counter — which fires exactly when the candidate is over
+		// while the surviving live window fits — is the visible signal.
+		key := "midturn-c1-sendseam-nodouble"
+		window, ts := seedMidTurn(t, agent, key, []providers.Message{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "hi there"},
+		})
+		ts.opts.WorkspaceID = wsID
+		noteTokens := al.ephemeralSystemNoteTokens(ts)
+		require.Positive(t, noteTokens, "precondition: the workspace note exists")
+		// Reproduce prepareCallMessages' injection shape (same as the C1
+		// checkpointRequest subtest above): the assembled request carries the
+		// real note.
+		candidate := injectWorkspaceInstructions(window, buildWorkspaceInstructionsNote(wsID))
+		assembled := requestTokens(candidate, nil)
+		require.LessOrEqual(t, assembled, budget,
+			"precondition: the ASSEMBLED payload (window + real note) fits B — a correct send seam sends it unchanged")
+		require.Greater(t, assembled+noteTokens, budget,
+			"precondition: re-adding the estimate on top of the assembled note would overflow — the discriminator")
+
+		rt := &agentLoopRunTurn{al: al, ts: ts, turnCtx: context.Background()}
+		rf := &agentLoopRunTurnFallbacks{rt: rt, callMessages: candidate}
+		ri := &agentLoopRunTurnIteration{rf: rf, messages: window}
+		rq := &agentLoopRunTurnRequest{ri: ri}
+
+		residueBefore := ContextResidueOverflowsTotal()
+		emptiesBefore := ContextEmptiesTotal()
+		err := rq.checkpointRequest(true)
+		require.NoError(t, err)
+		assert.Equal(t, residueBefore, ContextResidueOverflowsTotal(),
+			"the send seam must measure the already-assembled note exactly once — a doubled count would overflow the candidate and fire the residue counter")
+		assert.Equal(t, emptiesBefore, ContextEmptiesTotal(),
+			"a fitting assembled payload must not stage any relief")
+	})
 }
 
 // TestMidTurnBudget_ResidueRegression_NotesAloneDoNotEndTurn — direct

@@ -139,12 +139,30 @@ func TestRunTurn_GuardTest_2MBResultCompletes(t *testing.T) {
 	assert.True(t, found)
 }
 
-// TestRunTurn_LongTurn_50CallsAtCap_SmallWindow — spec test 31, B-33 / B-21
-// / B-36 / ADR §17.2 (SC-002, SC-011): a turn of 50 tool calls, each near
-// the cap, against a small window. Every request stays ≤ B at every
-// iteration, the most recent result is always intact (the floor), emptied
-// results carry marks, Skip never moves mid-turn, the check ran once per
-// admitted result (B-33) and no archive byte changed (B-23).
+// TestRunTurn_LongTurn_50CallsAtCap_SmallWindow — spec test 31, B-33 / B-54
+// / B-36 / ADR §17.2 (SC-002, SC-011 as amended 2026-09-30): a turn of 50
+// tool calls, each near the cap, against a small window. Every request stays
+// ≤ B at every iteration, the most recent result is always intact (the
+// floor), and FR-030's amended relief order runs: nothing injected is
+// recallable, so SLIDE-first relieves — whole oldest completed steps leave
+// the live slice and Skip genuinely advances (SC-011: "Mid-turn does
+// advance Skip"; the superseded pre-amendment B-35 row said "Skip
+// unchanged", and the old oracle here asserted exactly that). The emptying
+// pass never fires because each slide alone reaches the 4/5 target, so no
+// mark exists anywhere, and no archive byte changed (B-23).
+//
+// Check-count oracle: B-33 requires N admitted-result checks for N results;
+// MAJ-CW-004 requires the measurement "again after request-only notes are
+// assembled but before sending" — once per ACTUAL provider attempt, at the
+// callLLM closure (loop_run_turn_response.go), the only funnel every send
+// attempt passes through (first send, retries, fallbacks). Production
+// additionally measures the same assembled candidate at a prepare-side
+// checkpointRequest (loop_run_turn.go) before every attempt, so the
+// observable counter delta is N + 2(N+1), not the required N + (N+1). This
+// test asserts the REQUIRED formula and deliberately stays red on it: the
+// excess is a live production question (duplicate send-seam measurement
+// work inflating the shared B-33 counter), not an oracle to bless. See this
+// lane's report for the site-by-site derivation.
 func TestRunTurn_LongTurn_50CallsAtCap_SmallWindow(t *testing.T) {
 	const calls = 50
 	provider := testutil.NewScenario()
@@ -161,26 +179,52 @@ func TestRunTurn_LongTurn_50CallsAtCap_SmallWindow(t *testing.T) {
 	assert.Equal(t, "done", reply)
 	require.Equal(t, calls+1, h.provider.CallCount(), "50 tool steps + the final text; the guard never fired")
 
-	assert.Equal(t, checksBefore+calls, MidTurnBudgetChecksTotal(),
-		"B-33: the check runs once per admitted result — N results, N mid-turn checks")
-	assert.Greater(t, ContextEmptiesTotal(), emptiesBefore, "a 50-call turn against a small window must have emptied")
+	// B-33 + MAJ-CW-004: N admitted-result checks plus (N+1) post-assembly
+	// pre-send measurements — one per actual provider attempt. Production's
+	// prepare-side duplicate send-seam checkpoint makes the observed delta
+	// N + 2(N+1); asserted here at the REQUIRED count on purpose — see this
+	// test's doc comment.
+	assert.Equal(t, checksBefore+calls+(calls+1), MidTurnBudgetChecksTotal(),
+		"B-33/MAJ-CW-004: N admitted-result checks + (N+1) pre-send measurements; the observed "+
+			"excess is the prepare-side duplicate send-seam checkpoint — a production question, not an oracle")
+
+	// Slide-first (MAJ-CW-004 order): each admitted result is ~12,000
+	// estimator tokens (30,000 chars × 2/5), so the share bound S =
+	// 0.5 × 40,000 = 20,000 fires with two results retained; sliding ONE
+	// oldest complete step (−12,000) lands at 12,000 ≤ 16,000 = 4/5 × S —
+	// the FR-029 target. Emptying is never the selected op.
+	assert.Equal(t, emptiesBefore, ContextEmptiesTotal(),
+		"FR-030 amended/MAJ-CW-004: slide-first reaches the 4/5 target every time — zero empties is the amended-correct outcome")
 
 	assertEveryRequestUnderBudget(t, h)
 
-	// The floor: in every request after step k, result k (the newest) is
-	// intact. Request i+2 is the first carrying result i+1.
+	// Relief-action proof (the exact replacement for the old empties/marks
+	// expectations): from the first post-admission send on, every request
+	// carries EXACTLY ONE tool result — the newest (call-i) — intact
+	// (SC-011 floor), every older step already slid away: recorded next
+	// requests omit whole old steps (B-54).
 	for i, req := range h.provider.AllRequests() {
 		if i == 0 {
 			continue
 		}
 		newest := fmt.Sprintf("call-%d", i)
+		toolCount := 0
+		for _, m := range req {
+			if m.Role == "tool" {
+				toolCount++
+			}
+		}
+		require.Equal(t, 1, toolCount,
+			"request %d must carry exactly one result — the slide-first window keeps only the newest step", i+1)
 		byID := msgsByToolCallID(req)
 		require.Contains(t, byID, newest, "request %d must carry result %s", i+1, newest)
 		assert.True(t, strings.HasPrefix(byID[newest].Content, fmt.Sprintf("tag%d:", i)),
 			"SC-011: the most recent result is intact in request %d", i+1)
 	}
 
-	// Marks in the final request; Skip untouched (mid-turn never cuts).
+	// No emptying ⇒ no mark anywhere in the final request (the exact
+	// replacement for the old marks>0 expectation, which encoded the
+	// superseded pre-amendment empty-first contract).
 	final := h.provider.LastMessages()
 	marks := 0
 	for _, m := range final {
@@ -188,12 +232,36 @@ func TestRunTurn_LongTurn_50CallsAtCap_SmallWindow(t *testing.T) {
 			marks++
 		}
 	}
-	assert.Greater(t, marks, 0, "emptied results carry marks in the live request")
+	assert.Equal(t, 0, marks, "MAJ-CW-004 slide-first: no result was emptied, so no mark exists")
+
+	// FR-030/MAJ-CW-005: exactly one verbatim initiating-user anchor copy, as
+	// a user slot (the breadcrumb's 80-rune snippet of the evicted user line
+	// lives in the system stream and must not be mistaken for a second
+	// anchor).
+	anchor := "fill the window fifty times"
+	anchorCopies := 0
+	for _, m := range final {
+		if m.Role == "user" && m.Content == anchor {
+			anchorCopies++
+		}
+	}
+	assert.Equal(t, 1, anchorCopies, "FR-030/MAJ-CW-005: one verbatim anchor copy survives the slides, counted once")
+
+	// FR-030/SC-011 amended: Skip ADVANCED — the live slice omits whole old
+	// steps (only the newest step's result remains) while the archive keeps
+	// every byte (B-23 below).
+	live := h.agent.Sessions.GetHistory(h.sessionKey)
+	liveTools := 0
+	for _, m := range live {
+		if m.Role == "tool" {
+			liveTools++
+		}
+	}
+	assert.Equal(t, 1, liveTools,
+		"FR-030 amended: Skip advanced — the live slice retains only the newest step's result, not all 50")
 
 	archive, err := h.agent.Sessions.ReadArchive(context.Background(), h.sessionKey)
 	require.NoError(t, err)
-	assert.Len(t, h.agent.Sessions.GetHistory(h.sessionKey), len(archive),
-		"FR-030: Skip never moved — the pre-turn site saw an empty session and mid-turn never cuts")
 
 	// B-23: every archive tool line still holds its full bytes.
 	toolLines := 0
