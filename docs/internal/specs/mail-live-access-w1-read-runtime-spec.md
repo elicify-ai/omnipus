@@ -91,4 +91,46 @@ No CRITICAL blast radius: the `Transport` interface method set is unchanged (imp
 
 This work stays inside the **email transport/tools** cluster (`pkg/email`), with narrow consumed seams in the gateway/agent integration points W4 owns. No new product area, no wire change, no SPA file.
 
+---
+
+## 3. Published and consumed interfaces (parallel-work freeze)
+
+W2 (discovery/metadata), W4 (gateway/agent integration) and W5 (tests) build against the shapes below **without editing each other's files**. Interface names are indicative Go names; the *shape and semantics* are what is frozen — a rename during implementation is fine, a semantic change goes back through the architect.
+
+### 3.1 W1 publishes
+
+| Interface (indicative shape) | Consumed by | Semantics frozen here |
+|---|---|---|
+| `MailSessions` — the application-owned connection manager, one process-wide instance per data dir (the pool analogue of `email.SharedMailBudget(stateDir)`) | W2 (`view.go` rewiring), W4 (injection at `mailPairClient`, `registerEmailToolsForAgent`, watcher provider) | `Acquire(ctx, LeaseRequest) (Lease, error)` and `Lease.Release()`. Never constructed by a `Client`. `LeaseRequest` carries the operation's pool identity (§4.2), the requested folder (or none, for STATUS-style probes), and whether the caller may retain (`eligible` — panel-observer work) or never retains (tool/watcher work). |
+| `Lease` — exclusive borrower handle | W2 | Guarantees: sole ownership of the socket until `Release`; the requested folder SELECTed (or re-SELECTed) and validated before the first borrower command; SELECT data (`UIDValidity`, `NumMessages`) returned to the borrower for the epoch check; PEEK discipline on reads; release never expunges. A `Lease.SelectError` class distinguishes structural folder-absence from transport failure (W2's M-01 work depends on it). |
+| Session-source injection on the facade — `Client` gains an optional session source (option/setter; nil = legacy per-call dial, tests only) | W4 | The three production construction sites pass the shared manager. A production dial with a nil source in a process where the manager exists is a **typed, visible error** naming the missing wiring — never a silent uncounted dial (§4.1, MC-1). |
+| Extended `MailBudgetRequest` — `PairKey` (or reuse of existing `AgentID`+`WorkspaceID`), `Generation string`, `Purpose` (`read_live` \| `read_cache` \| `mutation` \| `watcher`), `TotalReadDeadline` | W4 (`mailBudgetWrap`), W10 (`gateMailDial`), W1's own watcher | The coalescing identity (§4.8) and the 45 s total-read-deadline plumbing (§4.4). `Retry` keeps its exact semantics: bypasses the backoff check only. |
+| Revision capture seam — `RevisionSource` (read current revision for a pair/folder; compare captured-vs-current) | W2 (cache layers), W4 (implements the advancing events) | W1 defines the accessor the read path calls to capture the revision **before server work** and to test freshness **before publishing**; W4 owns the counter and the events that advance it (successful mutations, invalidations). W1 does not store the revision (§4.9). |
+| Presence registry — `PanelPresence`: `Bind(connID, observerID, workspaceID)`, `Unbind(connID, observerID)`, `UnbindAll(connID)`, `Count(workspaceID)` | W4 (gateway socket handlers) | Observers bind to the **authenticated gateway connection's opaque ID issued by the gateway** — never a caller-supplied identity from REST bodies or query params. Until W4 registers the presence frame handlers, retention is structurally disabled (`RetentionEnabled() == false`) and every socket closes after its operation (§4.7). |
+| Typed pool errors — pool-busy and pool-identity error values | W0 (contract reason enum), W4 (mapping) | Distinct from `ErrMailBusy` (account-slot busy): a pool-capacity exhaustion that survived its bounded wait (§4.6). W0 maps both onto the 503 `MailUnavailableError` `reason` extension. |
+
+### 3.2 W1 consumes
+
+| Interface | Provided by | Use |
+|---|---|---|
+| Folder name resolution and per-folder SELECT semantics | W2 (`view.go` — `folderNameFor`, `selectFolder` remain the folder authority) | The lease takes a resolved folder name (or none); W1 never interprets slugs, overrides, or discovery. W1 only guarantees exclusive selected-state per lease. |
+| Generation values | W4 (`GenerationSource` — durable, restart-stable per §4.8) | W1 treats it as an opaque string participating in the coalescing identity; W1 never derives or stores it. |
+| Revision counter and advancing events | W4 | W1 only captures and compares (§4.9). |
+| Presence frames on the gateway WebSocket (`type=mail_panel_observer`, `action=open|close`) | W0 defines the contract; W4 implements | W1's registry is transport-agnostic; the WS integration is W4's. |
+| Existing seams kept: `imapDial` (tests), `dialResolver`, `LoadWatcherState`/`EffectiveState`, `fileutil.WriteFileAtomic` | in-tree | No new dial stack, no second backoff derivation, no second state file. |
+
+### 3.3 Files new and changed
+
+| File | Status | Owner wave | Contents |
+|---|---|---|---|
+| `pkg/email/pool.go` | **new** | W1 | The manager: identities, ceilings, reservations, leases, idle/LRU, retirement, presence registry, revision-capture seam, typed errors. |
+| `pkg/email/transport.go` | **changed** | W1 | `dialIMAP` split into session-establishment (dial+login, no INBOX SELECT) and lease-time folder selection; `Client` gains the optional injected session source; `AccountKey` untouched. |
+| `pkg/email/mail_budget.go` | **changed** | W1 | I-01 identity fields + new `flightKey`; total-read-deadline plumbing; revision capture hook. Semaphore, backoff gate, `TryCall` skip semantics, `Retry` bypass unchanged. |
+| `pkg/email/watcher.go` | **changed** | W1 | Probe path gains non-blocking pool acquisition (a pool-busy reservation attempt is a skip, like a slot skip); no retention; no cache interaction. Backoff/offset/state machine untouched. |
+| `pkg/email/watcher_set.go` | **changed** | W1 | Bounded fair scheduling replacing the sequential loop (§4.10). |
+| `pkg/email/view.go` | **changed — NOT by W1** | W2 | All lease call-site changes (`FolderCounts`, `ReadFolderPage`, `ReadView`, `MarkSeenIn`, `DeleteDraftStatus`, `ResolveRef` onto `MailSessions`). W1+W2 freeze the §3.1 lease shape first. |
+| `pkg/gateway/rest_mail*.go`, `rest_mailbox.go`, boot/reload wiring, `pkg/agent/email_tools.go` | **changed — NOT by W1** | W4 | Inject the shared manager + generation/revision sources; presence frame handlers; typed-error mapping; removal cascades. |
+| `contracts/*` + generated artifacts | **changed — NOT by W1** | W0 | 503 `reason` values, presence frames, `mode`/metadata fields. Nothing in W1 crosses the wire by itself. |
+| test files (`pkg/email/pool_test.go`, `pool_poison_test.go`, `mail_budget_identity_test.go`, `watcher_fair_test.go`, …) | **new** | W5 | §8 names them. Production owners never edit test files. |
+
 <!-- W1-SPEC-CONTINUES -->
