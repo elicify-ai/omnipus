@@ -461,3 +461,261 @@ Diagnostics must let an operator debug discovery and cache behaviour without eve
 2. **Given** a server error containing folder names or message data, **when** it is reduced at the boundary, **then** only the safe class survives into logs and state.
 
 ---
+
+## 6. BDD scenarios
+
+Format: Given/When/Then, one action per When; each scenario is typed **Happy / Alternate / Error / Edge** and carries its `Traces to` line (US-n, acceptance-scenario number). Feature: **Mail folder discovery and bounded cache**.
+
+### 6.1 Discovery (US-1)
+
+- **Scenario D-1 — Special-use resolution.** **Happy.**
+  **Given** a server advertising `LIST-EXTENDED` + `SPECIAL-USE` with one folder tagged `\Sent`,
+  **when** the sent role resolves,
+  **then** the resolved name is the tagged folder, source is `special_use`, its UIDVALIDITY is recorded, and no candidate fallback probe was needed.
+  Traces to: US-1.1.
+- **Scenario D-2 — Fallback probe without extensions.** **Alternate.**
+  **Given** a server without SPECIAL-USE whose folder is named `Sent Items`,
+  **when** the sent role resolves,
+  **then** the probe of the ordered candidate list succeeds at `Sent Items`, source is `fallback`, and the later candidates were not probed after the first success.
+  Traces to: US-1.2.
+- **Scenario D-3 — Unsupported extension is not a mailbox failure.** **Edge.**
+  **Given** a server that advertises `LIST-EXTENDED` but no `SPECIAL-USE`, or one whose capability detection fails mid-way,
+  **when** the mailbox resolves its roles,
+  **then** discovery degrades to the candidate list for the affected role(s), and every other role still resolves normally — the mailbox as a whole does not fail.
+  Traces to: US-1.1, US-1.4.
+- **Scenario D-4 — Localized folder outside the candidate list.** **Edge (the M-01 core).**
+  **Given** LIST succeeds, no special-use role is advertised, and an untagged folder named `Elementos-Enviados` exists that no candidate names,
+  **when** the sent role resolves,
+  **then** the outcome is `unknown` (`discovery_unresolved`), the response offers the per-mailbox setting, and nothing claims absence.
+  Traces to: US-1.3, US-3.1.
+- **Scenario D-5 — No folder is created.** **Edge.**
+  **Given** any resolution outcome including total absence,
+  **when** discovery completes,
+  **then** the command trace contains zero `CREATE` (and zero `SUBSCRIBE`) commands.
+  Traces to: US-1.4.
+
+### 6.2 Overrides and provenance (US-2)
+
+- **Scenario O-1 — Override outranks special-use.** **Happy.**
+  **Given** stored `sent_folder_name="Archive"` and a server whose `\Sent`-tagged folder is `Sent Items`,
+  **when** the sent role resolves,
+  **then** `Archive` is used (source `override`) and the special-use folder is not selected.
+  Traces to: US-2.1.
+- **Scenario O-2 — Stale override warns, never swaps.** **Error.**
+  **Given** stored `sent_folder_name="Archive"` and the server answering `[NONEXISTENT]` for it,
+  **when** the sent role resolves,
+  **then** the role is not silently remapped; the result carries the override-missing warning state, the setting is named as the remedy, and no candidate is auto-substituted.
+  Traces to: US-2.2.
+- **Scenario O-3 — Empty clears to automatic.** **Alternate.**
+  **Given** the settings form saved with `sent_folder_name=""`,
+  **when** the pair's config is persisted and the role next resolves,
+  **then** the stored key is gone (`persistConfig` deletes it), automatic discovery runs, and the special-use/fallback folder is used.
+  Traces to: US-2.3.
+- **Scenario O-4 — Omitted field preserves.** **Alternate.**
+  **Given** stored `drafts_folder_name="MyDrafts"` and an update request carrying no `drafts_folder_name` field,
+  **when** the config is persisted,
+  **then** `MyDrafts` remains stored and remains the override at the next resolution.
+  Traces to: US-2.4.
+- **Scenario O-5 — Legacy name shown as override.** **Edge.**
+  **Given** a stored value whose operator intent is unprovable (any non-empty value),
+  **when** settings render and the role resolves,
+  **then** the value is treated as an explicit override with an Automatic option — it is never silently discarded, and its content is never used to classify it.
+  Traces to: US-2.4.
+
+### 6.3 Unknown vs absent, INBOX (US-3)
+
+- **Scenario U-1 — Confirmed absence requires both proofs.** **Alternate.**
+  **Given** LIST answered successfully and every candidate probe returned `[NONEXISTENT]`,
+  **when** the sent role resolves,
+  **then** `availability=absent`, the list returns an empty array (not a 502), and the explanation states the server has no such folder.
+  Traces to: US-3.3.
+- **Scenario U-2 — Probe failure is unknown, not absent.** **Error.**
+  **Given** LIST succeeded but candidate probes failed with a timeout (not `[NONEXISTENT]`),
+  **when** the sent role resolves,
+  **then** the outcome is `unknown` — never `absent`, never empty-with-explanation.
+  Traces to: US-3.2.
+- **Scenario U-3 — Discovery-level failure is unknown (or the read's own failure).** **Error.**
+  **Given** auth fails (or DNS, TLS, permission, connection refused) during discovery,
+  **when** the mailbox read runs,
+  **then** the failure surfaces with its safe transport class; nothing renders as a healthy empty folder; the cache timestamp does not advance.
+  Traces to: US-3.2.
+- **Scenario U-4 — Missing INBOX is fatal.** **Error.**
+  **Given** a server whose INBOX SELECT returns `[NONEXISTENT]` (or any error),
+  **when** the mailbox opens,
+  **then** the read fails with the safe class; no "healthy empty account" rendering exists on any surface.
+  Traces to: US-3.4.
+- **Scenario U-5 — Unknown counts are null, not zero.** **Edge.**
+  **Given** a role in the `unknown` state,
+  **when** the folder list response is built,
+  **then** that role's total is `null` (W0's nullable field) — a fabricated `0` never masquerades as "checked, empty".
+  Traces to: US-3.1.
+
+### 6.4 Ambiguity (US-4)
+
+- **Scenario A-1 — Two special-use folders, no saved mapping.** **Error.**
+  **Given** two folders tagged `\Sent` and no still-valid saved mapping,
+  **when** the sent role resolves,
+  **then** the outcome is `unknown` with reason `mapping_ambiguous`, both candidate names are surfaced to the settings path only (never into logs), and no folder is chosen.
+  Traces to: US-4.1.
+- **Scenario A-2 — Saved mapping wins over fresh ambiguity.** **Alternate.**
+  **Given** a still-valid saved sent mapping and a fresh discovery finding two candidates,
+  **when** the role resolves,
+  **then** the saved mapping stands with no ambiguity surfaced.
+  Traces to: US-4.2.
+- **Scenario A-3 — Writes refuse to guess.** **Error.**
+  **Given** an ambiguous or unresolved sent role,
+  **when** a send (or draft save needing Sent) executes,
+  **then** it fails visibly with the actionable settings remedy and writes nothing anywhere.
+  Traces to: US-4.3.
+
+### 6.5 Encrypted folder file (US-5, US-6)
+
+- **Scenario F-1 — First open populates.** **Happy.**
+  **Given** no saved metadata for the pair,
+  **when** the panel first opens,
+  **then** one discovery runs, the file appears (0600 file in a 0700 directory), and it holds roles, sources, UIDVALIDITY, schema/generation, transport and the validation time.
+  Traces to: US-5.1.
+- **Scenario F-2 — Restart reuses the saved mapping.** **Alternate.**
+  **Given** a valid saved list younger than 24 h and a process restart,
+  **when** the panel reopens,
+  **then** zero discovery commands are issued and the roles resolve from the decrypted snapshot.
+  Traces to: US-5.2.
+- **Scenario F-3 — 24-hour refresh.** **Alternate.**
+  **Given** a saved list older than 24 h,
+  **when** the panel opens,
+  **then** exactly one discovery refreshes the file.
+  Traces to: US-5.3.
+- **Scenario F-4 — Closed panel never refreshes.** **Edge.**
+  **Given** the panel closed and a watcher-detected version change (and any elapsed time),
+  **when** the system is observed,
+  **then** zero IMAP commands run, no file is written, and only the dirty marker is set; the deferred refresh runs once at the next eligible panel event.
+  Traces to: US-5.4, US-5.5.
+- **Scenario F-5 — No timer exists.** **Edge.**
+  **Given** the panel open (or closed) for any duration,
+  **when** the process is observed,
+  **then** no repeating folder-metadata refresh timer exists; refreshes occur only at the four §3.6 triggers.
+  Traces to: US-5.3, US-5.4.
+- **Scenario F-6 — Bit flip refuses.** **Error.**
+  **Given** a stored envelope with one flipped bit,
+  **when** it loads,
+  **then** authentication fails, nothing decrypts, a `cache_corrupt` warning surfaces, and the live path continues normally.
+  Traces to: US-6.1.
+- **Scenario F-7 — Cross-pair copy refuses.** **Error.**
+  **Given** pair B's file copied to pair A's path,
+  **when** pair A loads it,
+  **then** the AAD/pair comparison refuses it before any plaintext exists.
+  Traces to: US-6.2.
+- **Scenario F-8 — Identical payloads, different ciphertexts.** **Edge.**
+  **Given** two consecutive writes of byte-identical payloads,
+  **when** both files are compared,
+  **then** the ciphertexts differ (fresh nonce per write).
+  Traces to: US-6.3.
+- **Scenario F-9 — Oversized/malformed rejected before allocation.** **Edge.**
+  **Given** envelopes that are truncated, bad-nonce-length, unsupported-version, or many times over the 64 KiB payload budget,
+  **when** each is offered for load,
+  **then** each is refused with the safe class, with no allocation proportional to its claimed size.
+  Traces to: US-6.4.
+- **Scenario F-10 — Locked store is live-only.** **Error.**
+  **Given** a locked credential store,
+  **when** any cache operation runs,
+  **then** the result is cache-unavailable + live-only; no key is minted over existing data and no plaintext fallback is written.
+  Traces to: US-6.5.
+- **Scenario F-11 — Crash mid-write leaves a complete file.** **Edge.**
+  **Given** a write interrupted by process death between the atomic write's start and completion,
+  **when** the file is next loaded,
+  **then** exactly one complete valid snapshot (old or new) opens.
+  Traces to: US-6.6.
+
+### 6.6 Exclusion gate (US-7)
+
+- **Scenario G-1 — Gate passes when deployed.** **Happy.**
+  **Given** the data-repo ignore rule (E-1) and the backup skip (E-2) deployed,
+  **when** the first cache write runs,
+  **then** it succeeds, and the deployed staging job + backup archive contain no cache file while a positive-control allowed file is captured.
+  Traces to: US-7.1, US-7.3.
+- **Scenario G-2 — Gate blocks when missing.** **Error.**
+  **Given** either exclusion absent on the machine,
+  **when** the first cache write runs,
+  **then** the write is refused, zero cache files exist, and the mailbox runs live-only with the visible `cache_unavailable` notice.
+  Traces to: US-7.2.
+- **Scenario G-3 — Pre-tracked file still blocks.** **Edge.**
+  **Given** a cache path that the data repo has already tracked (the trace's §5 mechanism),
+  **when** the gate probe runs,
+  **then** the gate reports not-excluded and refuses disk writes until the runbook remediation (E-3) lands.
+  Traces to: US-7.2.
+
+### 6.7 Header cache (US-8)
+
+- **Scenario H-1 — Warm open is instant and socket-free.** **Happy.**
+  **Given** newest-50 headers cached less than 5 minutes ago,
+  **when** the folder opens,
+  **then** rows render from memory with the recorded validation time, zero FETCH commands, and zero new socket acquisitions for the display read.
+  Traces to: US-8.1.
+- **Scenario H-2 — Stale open: labelled rows + exactly one refresh.** **Alternate.**
+  **Given** cached rows older than 5 minutes,
+  **when** the folder opens,
+  **then** stale rows render immediately and are labelled, exactly one live refresh runs, and on its failure the stale rows persist with a visible error/Retry and the timestamp is unchanged.
+  Traces to: US-8.2.
+- **Scenario H-3 — Cold open fetches once.** **Alternate.**
+  **Given** no cached rows,
+  **when** the folder opens,
+  **then** one live fetch populates page one and the cache.
+  Traces to: US-8.3.
+- **Scenario H-4 — Retention drop after 30 minutes closed.** **Edge.**
+  **Given** the panel closed and 30 minutes elapsed,
+  **when** the cache is inspected (and the panel reopens),
+  **then** the folder's headers were dropped, zero IMAP commands ran while closed, and the reopen fetches live.
+  Traces to: US-8.4.
+- **Scenario H-5 — Fifty-row cap never shortens the live list.** **Edge.**
+  **Given** a folder with 80 messages and a fresh 50-row snapshot,
+  **when** the list renders,
+  **then** the cache holds exactly the newest 50, the live page 1 (25 rows) renders normally, and no live row is omitted to fit the cache.
+  Traces to: US-8.5.
+- **Scenario H-6 — Older pages and search bypass the cache.** **Edge.**
+  **Given** a cached newest-50 snapshot,
+  **when** the user loads older pages (past 50) or runs a search,
+  **then** those reads run live, are never served from the cache, and never write their rows into it.
+  Traces to: US-8.5 (and the ADR's "never reused for search or older pages").
+
+### 6.8 Invalidation and ordering (US-9)
+
+- **Scenario V-1 — UIDVALIDITY change discards the epoch.** **Error.**
+  **Given** a folder whose UIDVALIDITY changed server-side,
+  **when** anything next reads it,
+  **then** every old-epoch header, cursor and count is discarded before new rows publish, the saved version refreshes once, and no old UID is used against the new epoch.
+  Traces to: US-9.1.
+- **Scenario V-2 — Superseded read publishes nothing (I-02).** **Error.**
+  **Given** a read that captured the pre-mutation revision and completed after a mark-read (and its post-mutation refresh) advanced the revision,
+  **when** the stale read finishes,
+  **then** it writes nothing anywhere — memory rows, disk snapshot, timestamps, counts — and the newer revision's data stands.
+  Traces to: US-9.2.
+- **Scenario V-3 — Late write after pair removal refuses.** **Error.**
+  **Given** the pair removed/disabled while a snapshot write is in flight,
+  **when** the write completes,
+  **then** the generation guard refuses it and no file exists (or reappears) for the removed pair.
+  Traces to: US-9.3.
+- **Scenario V-4 — Reconfiguration deletes rather than migrates.** **Alternate.**
+  **Given** a host, port, credential or override change,
+  **when** the pair is next used,
+  **then** the old generation's memory and disk caches are deleted, rediscovery runs under the new generation, and no encrypted data is migrated.
+  Traces to: US-9.4.
+- **Scenario V-5 — Stale rows wear their age.** **Edge.**
+  **Given** cached rows within retention but past freshness,
+  **when** they render,
+  **then** their age is visible and they are never presented as fresh.
+  Traces to: US-9.5.
+- **Scenario V-6 — External move/delete reflects at next validation.** **Alternate.**
+  **Given** another client moved or deleted a cached message,
+  **when** the next eligible refresh validates membership,
+  **then** the row leaves the cache, affected counts invalidate, and an open stale ref gets the visible changed-or-deleted outcome — never a served-as-fresh row.
+  Traces to: US-9.5 (and §3.11's move/delete row).
+
+### 6.9 Logging (US-10)
+
+- **Scenario L-1 — Marker-free logs.** **Error.**
+  **Given** synthetic folder names, subjects and addresses carrying distinctive leak markers, driven through every §6 scenario,
+  **when** all log sinks are examined,
+  **then** zero markers appear, while safe classes, durations and counts do appear.
+  Traces to: US-10.1, US-10.2.
+
+---
