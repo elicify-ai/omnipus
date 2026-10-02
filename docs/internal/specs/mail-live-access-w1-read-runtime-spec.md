@@ -133,4 +133,162 @@ W2 (discovery/metadata), W4 (gateway/agent integration) and W5 (tests) build aga
 | `contracts/*` + generated artifacts | **changed — NOT by W1** | W0 | 503 `reason` values, presence frames, `mode`/metadata fields. Nothing in W1 crosses the wire by itself. |
 | test files (`pkg/email/pool_test.go`, `pool_poison_test.go`, `mail_budget_identity_test.go`, `watcher_fair_test.go`, …) | **new** | W5 | §8 names them. Production owners never edit test files. |
 
+---
+
+## 4. Design — the read runtime
+
+The acquisition order below is normative and appears once here; every later section references it:
+
+```text
+operation start
+   |
+   |-- 1. backoff gate (unchanged: persisted watcher state; Retry bypasses ONLY this)
+   |-- 2. coalescing join under the FULL identity (I-01, §4.8) — no slot held while waiting
+   |-- 3. account slot: the existing 2-per-account semaphore (A8) — bounded by the total deadline
+   |-- 4. pool reservation: ≤2 per mailbox identity, ≤8 global — counts connecting, atomic (§4.2)
+   |       bounded wait ≤5 s; exhaustion → typed pool-busy, reservation released
+   |-- 5. lease: reuse healthy idle session OR establish (dial ≤30 s; failed dial releases everything)
+   |-- 6. exclusive selected state: re-SELECT/validate requested folder; borrower runs PEEK commands
+   |-- 7. release: healthy + retention eligible → idle pool (2-min clock); else close (LOGOUT, never expunge)
+   |       timeout / cancel / BYE / protocol failure → close AND retire, never reuse (§4.5)
+```
+
+### 4.1 One manager below the facade — no private pools
+
+**Decision.** One application-owned connection manager (`MailSessions`) lives below the `Client` facade. It is a process-wide singleton resolved from the data dir — the same resolution discipline as `email.SharedMailBudget(stateDir)`, verified in `pkg/email/mail_budget.go::SharedMailBudget` — and it is **injected** into every client-producing path:
+
+| Production construction site | Owner of the injection | Injects |
+|---|---|---|
+| `pkg/gateway/rest_mail.go::mailPairClient` (per-request client) | W4 | shared `MailSessions` |
+| `pkg/agent/email_tools.go::registerEmailToolsForAgent` (per-agent toolset clients) | W4 | shared `MailSessions` |
+| `pkg/gateway/gateway_boot.go` watcher provider (`buildMailboxes`) and the reload twin | W4 | shared `MailSessions` |
+
+**Rules.**
+
+1. A `Client` never constructs a manager. `NewClient` gains an optional injection; the client delegates session establishment to it.
+2. **A production dial with no injected source is a typed, visible error naming the missing wiring** — it must not silently fall back to an uncounted per-call dial, because a missed injection would otherwise become exactly the private dial path the design forbids. The nil-source path exists only for tests (same status as the `imapDial` reassignment seam: "production code never reassigns it").
+3. The budget counts **work** (account slots); the manager counts **sockets** (reservations + established). Neither replaces or subsumes the other.
+4. There is no per-path pool: panel, watcher and tools share one instance, so the two-per-mailbox and eight-global ceilings are honest process-wide counts.
+
+**Blast-radius note (Inferred):** the three injection sites are all in W4's ownership columns per the ADR's work-package table; W1 ships the manager and the injection seam, W4 wires it. Until W4's wave lands, W1's code compiles and the legacy per-call dial remains the behavior in production — the switch is W4's single integration wave, not a flag flip scattered across packages.
+
+### 4.2 Socket ceilings and reservation accounting
+
+| Ceiling | Value | Counts |
+|---|---|---|
+| Per mailbox identity | **2** | Reservations (dial/login in progress) **plus** established sockets, idle or active |
+| Global | **8** | Same — all mailboxes, all paths (panel, watcher, tools) |
+| Per account (existing, unchanged) | **2 work slots** | Concurrent operations via `mailBudgetSlotsPerAccount` — the A8 gate, not sockets |
+
+**Mailbox identity** (the pool key) binds, per the ADR's identity row: the agent/workspace **pair**, the configured endpoint (host:port) + TLS identity, and the **non-secret configuration/credential generation**. It never contains the password text. Two pairs that share `host:port|username` therefore hold **separate** pool identities and **never share a socket** — cross-pair socket, header or presence sharing is prohibited (ADR risk table, "Cross-pair reuse"); the account key keeps only its contention role. A generation change (reconfiguration, credential/endpoint change, removal) orphans the old identity's sockets: they are closed, and late completions cannot re-enter the new identity's pool.
+
+**Reservation discipline.**
+
+- The reservation is taken **atomically** against both ceilings before any dial begins (verified requirement, ADR P1.2 "Reserve global capacity atomically before dialing"). A test can only ever observe: reserved-but-connecting, established, or released — never an uncounted dial.
+- A **failed dial releases every reservation it holds** (per-mailbox and global) before the error propagates. No leak on the error path.
+- Connecting reservations count toward both ceilings: while a dial is in flight, that mailbox is at 1-of-2 and the process is 1-of-8, and subsequent acquisitions account for it.
+
+### 4.3 Exclusive mailbox leases
+
+**Decision.** One borrower owns a socket until its entire operation finishes. SELECT/EXAMINE state belongs to the lease, never to a simultaneous request.
+
+1. **Re-select and validate before use.** On every lease acquisition — reused or freshly established — the manager (re-)SELECTs the requested folder and returns the SELECT data (`UIDValidity`, message count) to the borrower for its epoch check. A reused socket carries the *previous* borrower's selected state; skipping the re-select would fetch one folder's messages under another folder's name. `dialIMAP`'s current unconditional SELECT INBOX (verified) disappears from session establishment: establishment is dial+login only; folder selection is lease work. STATUS-style probes (`watcher.go::probe` via `MailboxStatus`) take a no-folder lease — STATUS does not require a selected folder — which also removes today's wasteful SELECT INBOX inside the watcher's one-command probe.
+2. **PEEK preserves flags.** Every read on a lease fetches `BODY.PEEK` — already the invariant of `pkg/email/view.go`'s fetches ("the fetches behind them are all BODY.PEEK, so no flag is ever written", verified comment on `selectFolder`). The lease makes it structural: read commands on a lease must not write flags; only explicit mutation operations (`MarkSeenIn`, `DeleteDraftStatus`, draft APPEND, send-APPEND) write, and each goes through the budget as a mutation purpose (§4.8) with **no coalescing and no silent replay** (§4.5).
+3. **Structural folder absence is a select outcome, not a transport failure.** A SELECT answered with the server's structural not-found (`[NONEXISTENT]`, the class `pkg/email/view.go::isNonexistentFolder` detects) surfaces as a typed select-error on the lease; the socket stays healthy and returns to the idle pool. Network/timeout/auth failures during SELECT poison the socket (§4.5). W2's unknown-vs-absent classification (M-01) consumes this distinction.
+4. **Same-lease validation seam.** The lease exposes the selected folder's live epoch to the borrower *before* commands run, so W2 can compare a reference's embedded `uidvalidity` and generation on the same lease that performs the fetch or mutation — replacing the verified resolve-on-one-session/mutate-on-another split in `pkg/gateway/rest_mail_read.go::handleMailSeen`. W1 provides the capability; W2's spec owns rewiring the callers.
+
+### 4.4 Deadlines and lock order
+
+| Bound | Value | Applies to |
+|---|---|---|
+| Total read-work deadline | **45 s** | The whole pooled read: account-slot queue + pool wait + establish (if any) + all commands. Founder-accepted (recorded Q3=A). |
+| Pool-acquisition wait | **5 s maximum** | Waiting for a reservation inside the ceilings. Founder-accepted. Exhaustion → typed **pool-busy**, not a timeout. |
+| Dial ceiling (existing) | **30 s** (`dialTimeout`, verified) | Subordinate bound inside the total; the dial can never outlive the read it serves. |
+| Per-command bound (existing) | **45 s** (`commandTimeout` via `runIMAP`, verified) | Retained per command, but now subordinate to the remaining total — a command starts only if meaningful time remains, and its effective bound is min(45 s, remaining total). |
+| Watcher cycle | unchanged cadence/backoff; the STATUS probe rides the same per-command bound | The watcher is **not** a 45 s-deadline read; its bounds are cadence + backoff + per-command (§4.10). |
+
+**Lock order (normative):** coalesce **before** the account slot (a joiner holds nothing while waiting); the account slot **before** the pool reservation; the reservation **before** any dial. No manager lock is held during network I/O, and no socket borrower ever waits to acquire a second account slot (both verified requirements, ADR P1.2). This order is deadlock-free by construction: every lock is acquired in one direction, and the only waits (slot, reservation) happen while holding nothing but the caller's context.
+
+**Plumbing.** The budget layer stamps the total deadline on read-shaped operations (`TotalReadDeadline` on the request; REST's `r.Context()` carries no deadline today and an agent turn's context is the 30-minute turn — neither is a read deadline). A caller-supplied **shorter** deadline always wins; the 45 s is a ceiling, never an extension.
+
+**Failure mapping.** 5 s pool-wait exhaustion → typed pool-busy (distinct value, W0 maps to 503 `reason=pool_busy`). Total-deadline exhaustion while queued on the account slot → the existing `ErrMailBusy` shape (`reason=account_busy`). Deadline exhausted after dial → the existing timeout class. Cache timestamps never advance on any failure (verified requirement, ADR failure table).
+
+### 4.5 Poisoned connections
+
+**Decision.** A socket that experienced any of — command timeout, cancellation, server BYE, protocol failure — is **closed and retired**: it can never return to the idle pool for reuse.
+
+1. **Retire on the four causes.** Timeout and cancellation: the borrower's `runIMAP` deadline or context fires. Server BYE: the server ended the session. Protocol failure: an unexpected/malformed response, or a command that completes at the transport level while the session is no longer coherent. All four mark the socket poisoned; close is mandatory, reuse is forbidden.
+2. **Wait for command-reader termination before any reuse decision.** The go-imap client runs a command reader; a buffered goroutine completion is not proof of a healthy session (verified ADR wording). The retirement path must observe reader termination (library close acknowledgment) before the socket is counted as gone. The *test* for this is behavioral: no subsequent borrow may observe interleaved or stale responses (§8, BDD-15).
+3. **One dead-idle replacement for a read.** An idle socket that proves dead at borrow time (first command fails with a connection-class error) may be replaced **once** within the same read: retire the dead socket, acquire again under the same ceilings and the same remaining deadline — never a fresh 45 s — and retry the read. The retry budget is one replacement per read, inside the original total deadline and backoff rules (verified requirement, ADR failure table "Failed idle connection").
+4. **Never silently replay a mutation.** The dead-idle replacement applies to **reads only**. A mutation (`MarkSeenIn`, draft save/delete, send-APPEND) that hits a dead or poisoned socket fails visibly with a retryable transport error; the caller (human Retry, agent turn, explicit re-invoke) decides whether to repeat it. There is no automatic second attempt for any mutation, and no coalescing/replay of mutations as reads (verified: ADR P1.2 "mutations must not be coalesced/replayed as reads").
+5. **Poisoned ≠ folder-missing.** A `[NONEXISTENT]` SELECT answer (§4.3) does not poison: the session is healthy, the folder is absent. Only transport/protocol-level failure retires.
+
+### 4.6 Idle release, LRU eviction, and the all-busy case
+
+1. **Two-minute idle release.** A socket whose **last completed use** is older than ~2 minutes is closed. The clock is last-completed-use (the end of the last operation), not last-borrowed, so a long operation cannot see its socket expire underneath it. Founder rule; "approximately" — the check runs on the manager's expiry sweep, and the sweep is the only timer W1 introduces (a socket/resource timer, not a mail-data poll).
+2. **LRU eviction, never active.** When a new reservation needs capacity and no socket is free, the manager evicts the least-recently-completed **idle** socket (global LRU across mailbox identities). An active socket — reservation, lease, or command in flight — is never evicted "to warm another mailbox" (verified founder rule).
+3. **All eight active → bounded wait, then typed busy, never a ninth socket.** A request that cannot get a reservation waits up to 5 s (§4.4); if still nothing, it fails with typed pool-busy. No dial is ever attempted outside the ceilings, under any contention pattern.
+4. **Release never expunges.** Release, idle close and eviction tear the session down with LOGOUT-class semantics only. An IMAP CLOSE on a folder with pending `\Deleted` flags would expunge those messages — and `pkg/email/view.go::DeleteDraftStatus` deliberately *leaves* `\Deleted` set on servers without UIDPLUS (the draft old-copy stays hidden from listings until a later exact expunge). A pool close that issued CLOSE would silently expunge mail the design keeps. **Release/close/eviction must therefore never send CLOSE on a selected folder.** (MC-13 pins this server-side.)
+5. **Retention is observer-gated, never lease-gated.** Release logic: healthy socket + retention enabled + ≥1 eligible panel observer for the socket's workspace → return to idle pool; otherwise close immediately. A detached flight finishing after the last observer left closes its socket; it never returns a socket to retention (verified ADR rule).
+
+### 4.7 Panel-observer presence
+
+**Decision.** Panel-requested sockets may be retained only while at least one authenticated Mail panel observer for that workspace is open. Presence is a W1-published registry (§3.1); the WebSocket integration is W4's.
+
+1. **Bound to the authenticated connection, never a caller-supplied identity.** The registry keys observers by the **gateway-issued opaque connection ID** of the authenticated WebSocket + an opaque per-panel observer ID (one per tab). A REST request **cannot** claim ownership by presenting someone else's observer ID: REST carries no observer authority at all — observer association happens only through the authenticated socket's own frames, validated against that connection's session and workspace authorization. This is the verified ADR rule ("Bind observers to the authenticated connection, not a caller-supplied session identity"; "REST cannot claim ownership using another socket/user's ID").
+2. **Per-tab observers.** Two tabs = two observers. Closing one tab unbinds only its observer and cancels only its subscriptions; a shared read finishes for the remaining owners. The shared operation is cancelled only when **no** request/observer still depends on it.
+3. **What removes an observer:** explicit close frame; socket disconnect (the gateway's existing liveness teardown reaps lost connections — no new mail-data polling timer); logout; workspace exit. Any of these unbinds that connection's observers; when the last observer for a workspace goes, that workspace's **idle panel sockets close immediately** and active ones close when their operation completes (independent watcher/tool work is not interrupted).
+4. **Conservative default until acknowledged.** Until W4 registers the presence frame handlers, `RetentionEnabled()` is false and **every** socket closes after its operation — request-scoped connections are the default, exactly as the ADR prescribes ("Until presence is acknowledged, use conservative request-scoped connections"). Retention cannot exist before the contract does; there is no "assume the panel is open" mode.
+5. **No cache coupling in the registry.** Presence decides socket retention only. It does not refresh caches, does not extend the 30-minute header retention clock, and does not trigger discovery (W2/W3 own those, event-driven).
+
+### 4.8 Read-coalescing identity (grill correction I-01)
+
+**Decision.** The retained A8 singleflight layer shares results **only** between requests with the same **full coalescing identity**:
+
+| Component | Source | Role |
+|---|---|---|
+| Pair | `AgentID` + `WorkspaceID` (already on the request; **ignored by today's key** — verified) | Result sharing never crosses pairs |
+| Configuration/folder-mapping generation | W4's `GenerationSource` (opaque, restart-stable, changes on endpoint/credential/override change) | An old generation never joins or receives a new generation's flight |
+| Operation | existing `Operation` field | as today |
+| Normalized arguments | existing `Params` (JSON-marshaled; empty map = coalescing opt-out, preserved) | as today |
+| Live-versus-cache purpose | new `Purpose` (`read_live` / `read_cache` / `mutation` / `watcher`) | a `mode=cache_first` read and a `mode=live` refresh for the same folder are **different flights** — a live refresh can never be answered by joining a cache-shaped flight and reporting it as fresh (verified ADR "visible cached refresh shape" rule) |
+
+The new `flightKey` is the concatenation of all five. The **account key (`host:port|username`) keeps only its contention role**: it keys the two-slot semaphore (`gateFor(req.Account)`) and nothing else — it never decides result sharing. Mutations (`Purpose=mutation`) never coalesce at all, regardless of identity equality. Watcher cycles keep `TryCall`'s never-coalesce rule.
+
+**Cancellation and publication use the same identity.** A flight's completion can neither cancel nor publish for a different identity's request: joiners are matched by the full key (singleflight semantics on the new key give this), and the flight's captured revision (§4.9) travels with the same identity. Today's verified joiner rules are preserved: a joiner whose own context ends stops waiting without failing the flight; the flight runs on the detached `flightContext` so one tab's cancel cannot fail the others.
+
+### 4.9 Folder publication revision (grill correction I-02)
+
+**Decision.** Every mailbox/folder carries a local, monotonically advancing **publication revision**, owned by the gateway/cache service (W4 advances it; W1 captures and compares it; W2's caches obey it).
+
+1. **Capture before server work.** A read captures the revision current at operation start — in the budget layer, before any dial — and carries it with the flight.
+2. **Advance on the listed events only.** Successful mutations (own mark-read/send/draft changes) and every invalidation event the ADR enumerates (P1.3/P2.3 tables) advance the revision. No polling timer, no time-based advance.
+3. **A superseded read publishes nothing.** If the captured revision is no longer current when the read finishes, the result is discarded: no rows into any memory cache, no disk snapshot write, no last-validated/fetched timestamp advance, no frontend state or count update. The data is simply dropped; the already-scheduled post-mutation refresh supplies truth. This applies equally to memory cache, encrypted disk snapshots, and delayed frontend responses (the response's opaque `publication_revision` field lets the SPA drop an out-of-order response — W0's contract).
+4. **A post-mutation refresh never joins a superseded flight.** Because the generation participates in the coalescing identity and the revision is captured at flight start, a refresh issued after a revision-advancing event cannot share a flight that started under the older revision — I-01 and I-02 compose structurally, not by convention.
+5. **W1's obligation is the seam, not the store.** W1 defines `RevisionSource` (capture/compare, §3.1) and wires capture into the read path. W4 implements the counter and the advancing events. W2's caches and W3's UI consume the response metadata. W1 never stores or advances the revision itself.
+
+### 4.10 The watcher under the same caps
+
+**Decision.** The watcher keeps its independence, cadence and budget (verified: `watcherCycleInterval` 1 min, `WatcherBackoff` 60 s→15-min nominal cap ±20% jitter, `auth_failed` straight to cap; closed-panel new-mail notice preserved; no mail-triggered turn or task) and gains three changes:
+
+1. **Bounded fair scheduling replaces the sequential loop.** `CycleAll` runs due mailboxes with bounded parallelism — at most **one cycle in flight per mailbox** (a mailbox whose previous cycle is still running is not started again), and a global bound consistent with the account and pool ceilings (watcher cycles are non-blocking throughout, so the effective concurrency is capped by availability, not by a large worker pool). One stalled mailbox no longer delays the others' due checks — the verified gap in today's `for` loop. The first-cycle stagger (`WatcherInitialOffset`) and the `cycleIfDue` backoff gate are preserved exactly.
+2. **Foreground ahead of watcher, without starving due cycles.** Watcher work is optional and takes **only** what is free: it keeps `TryCall`'s non-blocking account acquisition, and its pool reservation attempt is likewise non-blocking — a watcher cycle that cannot get a slot or a reservation **skips** (recorded as a skip, never a failure: last-success time unchanged, backoff not advanced — verified `ErrMailSkipped` semantics). Foreground requests, which may wait up to 5 s, therefore always outrank watcher work under contention. Due watcher cycles are not starved *by design*: any cycle that finds capacity runs; sustained saturation shows up as honest skipped-and-dated state, which is the accepted posture (ADR failure table "Watcher has no free slot").
+3. **No socket retention, no cache fill.** A watcher cycle reuses a healthy **eligible** idle socket while a panel is open (sharing is fine; it is bounded by the same lease rules), but never causes retention: with no panel observer the cycle's socket is closed after the cycle, and 13 mailboxes can never hold 13 watcher sockets. Watcher activity never populates or refreshes panel folder/header/count caches and never prolongs their retention clock; a folder/version change observed by the watcher only marks panel metadata dirty for the next eligible panel event (W2/W4 consume that mark). A skipped cycle leaves the prior last-checked time unchanged — the badge cannot claim a fresh check that did not happen.
+
+**Explicit agent work while the panel is closed** (verified ADR P1.4): a tool-invoked read/write runs live under A8/pool, validates only what that operation needs, releases its request-owned resources, and never populates/refreshes panel caches or extends their retention. Closing Mail must not stop an agent turn or make an already-permitted tool depend on an open UI.
+
+### 4.11 Budget interplay — one owner per operation (no double acquisition)
+
+**Decision.** The A8 gate's ownership does not move. The **outer wrapper** of each path remains the single budget owner for its operations; the injected client/pool never acquires a second account slot for a dial the wrapper already gated:
+
+| Path | Budget owner (unchanged) | What the pool adds |
+|---|---|---|
+| REST panel reads | `pkg/gateway/rest_mail_budget.go::mailBudgetWrap` | Socket lease only, after the wrapper's account slot is held |
+| Agent tool reads | `pkg/tools/email.go::gateMailDial` (+ per-tool `SetMailBudget`) | Socket lease only |
+| Watcher cycle | `pkg/email/watcher.go::probe` via `Budget.TryCall` | Non-blocking reservation only |
+
+**Why this matters (the double-acquire failure):** if an injected client *also* called the budget internally, every panel read would consume two of the account's two slots for one operation — one self-deadlocking wrapper plus one innocent-looking "safety" gate — halving capacity and, in the worst interleaving, deadlocking against itself. The rule is structural: the session source's `Acquire` has **no budget parameter and performs no account-slot acquisition**; the type system makes a double acquire unwritable rather than merely forbidden by comment. Verified grounding: today's wrappers pass `client.AccountKey()` into the request and the client has no budget field at all — W1 preserves exactly that separation.
+
+**Retry semantics stay pinned:** `retry=true` bypasses only the backoff gate — never the semaphore, never the pool ceilings, never TLS validation, never mutation safeguards (verified in `backoffRefusal` and the ADR failure table). An automatic refresh never sets it. `Purpose=read_live` vs `read_cache` does not interact with `Retry` beyond that.
+
 <!-- W1-SPEC-CONTINUES -->
