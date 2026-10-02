@@ -281,26 +281,12 @@ func (c *Client) fetchPartIsDraftMarker(ctx context.Context, client *imapclient.
 		return false, nil
 	}
 	for _, sec := range bufs[0].BodySection {
-		if sec == nil {
-			continue
-		}
 		if strings.Contains(strings.ToLower(string(sec.Bytes)), draftBodyPartHeader+":") &&
 			strings.Contains(strings.ToLower(string(sec.Bytes)), draftBodyPartValue) {
 			return true, nil
 		}
 	}
 	return false, nil
-}
-
-// maxEncodedPartBytes bounds the RAW network read behind the decoded cap.
-// Every content transfer encoding the marker part family uses either
-// preserves size (7bit/8bit/binary) or expands (base64 4/3, quoted-printable
-// ≤2x on pathological input), so an encoded ceiling of cap + cap/2 + slack
-// can never truncate a part whose decoded bytes would have passed the cap.
-// The DECODED LimitReader below stays the actual authority.
-func maxEncodedPartBytes() int64 {
-	cap := int64(maxViewPartBytes)
-	return cap + cap/2 + 4096
 }
 
 // ReadAttachmentPart fetches EXACTLY one leaf part's decoded bytes — the
@@ -311,6 +297,37 @@ func maxEncodedPartBytes() int64 {
 // over-cap part fails with ErrMailPartTooLarge before any success state can
 // exist (grill I-05's late-failure ordering).
 func (c *Client) ReadAttachmentPart(ctx context.Context, slug, ref string, partIndex int) (*AttachmentPart, error) {
+	return c.readAttachmentPart(ctx, slug, ref, partIndex, true)
+}
+
+// ReadAttachmentPartFull is the browser-Download role of the same reader:
+// NO preview cap — the part streams to completion (grill I-05's two
+// distinct byte resources; the preview cap is never applied to this role).
+// The transfer is still one part-specific PEEK on the validated connection.
+func (c *Client) ReadAttachmentPartFull(ctx context.Context, slug, ref string, partIndex int) (*AttachmentPart, error) {
+	return c.readAttachmentPart(ctx, slug, ref, partIndex, false)
+}
+
+// ReadPartCapped adapts the reader to the shared transfer service's
+// PartReader interface.
+func (c *Client) ReadPartCapped(ctx context.Context, slug, ref string, partIndex int) (*AttachmentPart, error) {
+	return c.ReadAttachmentPart(ctx, slug, ref, partIndex)
+}
+
+// ReadPartFull adapts the uncapped download role to the service interface.
+func (c *Client) ReadPartFull(ctx context.Context, slug, ref string, partIndex int) (*AttachmentPart, error) {
+	return c.ReadAttachmentPartFull(ctx, slug, ref, partIndex)
+}
+
+// DescribeParts adapts the structure classifier to the service interface.
+func (c *Client) DescribeParts(ctx context.Context, slug, ref string) ([]AttachmentPartDescriptor, error) {
+	return c.ListAttachmentParts(ctx, slug, ref)
+}
+
+// readAttachmentPart is the shared core of the two roles; capped selects the
+// decoded-cap enforcement (viewer/save) or the completion guarantee
+// (browser download).
+func (c *Client) readAttachmentPart(ctx context.Context, slug, ref string, partIndex int, capped bool) (*AttachmentPart, error) {
 	if partIndex < 0 {
 		return nil, fmt.Errorf("%w: negative part index", ErrMailPartNotFound)
 	}
@@ -343,16 +360,14 @@ func (c *Client) ReadAttachmentPart(ctx context.Context, slug, ref string, partI
 	}
 	var raw []byte
 	for _, bsec := range bufs[0].BodySection {
-		if bsec != nil {
-			raw = bsec.Bytes
-		}
+		raw = bsec.Bytes
 	}
 	if len(raw) == 0 {
 		return &AttachmentPart{AttachmentPartDescriptor: sec.descriptor, DataUnavailable: true}, nil
 	}
 
 	part := &AttachmentPart{AttachmentPartDescriptor: sec.descriptor}
-	decoded, derr := decodePartBytes(io.LimitReader(bytes.NewReader(raw), maxEncodedPartBytes()), sec.encoding)
+	decoded, derr := decodePartBytes(io.LimitReader(bytes.NewReader(raw), maxEncodedPartBytes()), sec.encoding, capped)
 	if derr != nil {
 		// Over-cap and decode failures are BOTH honest unavailable outcomes
 		// carrying the typed error — never a silent empty read (the
@@ -365,6 +380,7 @@ func (c *Client) ReadAttachmentPart(ctx context.Context, slug, ref string, partI
 }
 
 // maxEncodedPartBytes bounds the RAW network read behind the decoded cap.
+// maxEncodedPartBytes bounds the RAW network read behind the decoded cap.
 // Every content transfer encoding this path decodes either preserves size
 // (7bit/8bit/binary) or expands (base64 4/3; quoted-printable at most 2x on
 // pathological input), so an encoded ceiling of cap + cap/2 + slack can
@@ -375,10 +391,13 @@ func maxEncodedPartBytes() int64 {
 	return capBytes + capBytes/2 + 4096
 }
 
-// decodePartBytes decodes one fetched section's transfer encoding with the
-// 25 MiB cap enforced on the DECODED stream — the actual decoded bytes are
-// always the cap authority, never the reported metadata (grill I-05).
-func decodePartBytes(r io.Reader, encoding string) ([]byte, error) {
+// decodePartBytes decodes one fetched section's transfer encoding. In the
+// capped role the 25 MiB cap is enforced on the DECODED stream — the actual
+// decoded bytes are always the cap authority, never the reported metadata
+// (grill I-05). In the uncapped (download) role no preview cap applies; the
+// raw read stays bounded by maxEncodedPartBytes, and the decoded length is
+// whatever the part actually is.
+func decodePartBytes(r io.Reader, encoding string, capped bool) ([]byte, error) {
 	var dec io.Reader
 	switch strings.ToLower(strings.TrimSpace(encoding)) {
 	case "base64":
@@ -388,11 +407,19 @@ func decodePartBytes(r io.Reader, encoding string) ([]byte, error) {
 	default:
 		dec = r
 	}
-	out, err := io.ReadAll(io.LimitReader(dec, int64(maxViewPartBytes)+1))
+	bound := int64(maxViewPartBytes) + 1
+	if !capped {
+		// No preview cap for the download role; keep a decoding-stream
+		// bound at the encoded ceiling's decoding size so a hostile
+		// quoted-printable bomb cannot expand unboundedly — the bound is
+		// the raw-read ceiling itself, never the 25 MiB preview number.
+		bound = maxEncodedPartBytes()
+	}
+	out, err := io.ReadAll(io.LimitReader(dec, bound))
 	if err != nil {
 		return nil, fmt.Errorf("email transport: decode part: %w", err)
 	}
-	if len(out) > maxViewPartBytes {
+	if capped && len(out) > maxViewPartBytes {
 		return nil, ErrMailPartTooLarge
 	}
 	return out, nil
