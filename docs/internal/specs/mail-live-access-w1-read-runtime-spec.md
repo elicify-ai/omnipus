@@ -340,6 +340,7 @@ Mail never opens more than two connections per mailbox or eight process-wide —
 2. **Given** eight operations in flight across mailboxes, **When** a ninth demand arrives anywhere (panel, tool, watcher), **Then** it waits its bounded window and then receives the typed busy outcome; total server connections never exceed eight.
 3. **Given** a dial that is still connecting (reservation held, no socket yet), **When** other demands are counted against the ceilings, **Then** the connecting reservation is counted — the ceilings are not fooled by "not yet established".
 4. **Given** a dial attempt that fails, **When** the failure is reported, **Then** every reservation that dial held has been released and later demands can acquire them.
+5. **Given** a client constructed without its injected session source in a process where the manager exists, **When** a read is attempted through it, **Then** it fails immediately with the typed missing-wiring error and zero server connections are attempted — an uncounted dial path is unreachable. (Anchors B-W1-34; added in the correction round, grill-1 M-6.)
 
 ### US-3 — One socket, one owner: selected state never leaks (P0)
 
@@ -371,6 +372,7 @@ A read either completes or fails with a named outcome within 45 seconds total �
 3. **Given** a server that stalls the handshake, **When** the dial is attempted, **Then** establishment ends within the 30-second dial ceiling, inside the total.
 4. **Given** an operation queued behind the account's two in-flight operations, **When** the total deadline expires first, **Then** the caller receives the existing busy outcome and never dialed.
 5. **Given** any interleaving of coalescing joins, account-slot waits and pool waits, **When** the system runs under load, **Then** no request waits for one resource while holding another in the opposite order (no deadlock is reachable).
+6. **Given** a mailbox in watcher backoff and all pool capacity held, **When** the human Retry fires, **Then** the backoff gate is bypassed but the request still waits and ends in the typed busy outcome — the semaphore and the pool ceilings are never bypassed. (Anchors B-W1-33; added in the correction round, grill-1 M-6.)
 
 ### US-5 — A poisoned connection poisons nothing else (P0)
 
@@ -436,6 +438,7 @@ The new-mail watcher keeps its one-minute cadence, its backoff, and its closed-p
 3. **Given** the account's slots and the pool are fully occupied by foreground work, **When** a watcher cycle becomes due, **Then** it skips without changing the last successful-check time and without advancing backoff.
 4. **Given** the panel closed, **When** watcher cycles run, **Then** their sockets close after each cycle (none retained), no folder/header/count cache is written or refreshed, and a folder change the watcher notices only marks panel metadata dirty for the next panel-open event.
 5. **Given** a watcher cycle, **When** it probes, **Then** it changes no message flags and starts no agent turn and creates no task.
+6. **Given** a probe failure whose raw error text carries server or folder detail, **When** the failure is recorded, **Then** the persisted watcher state holds only the safe classified error representation — the raw text appears nowhere in the state file. (Added in the correction round: grill-1 C-1, register row 19; §4.12.)
 
 ---
 
@@ -481,7 +484,7 @@ The system must not:
 8. **…introduce a mail-data polling timer.** The only new timer is the socket/idle sweep. No folder/count/header refresh timer exists — not from the pool, not from the watcher, not from presence.
 9. **…let watcher work displace or queue-block foreground reads.** Watcher acquisition is non-blocking everywhere; it takes only free capacity.
 10. **…let a UI disappearance cancel independent work.** Closing a tab/panel/browser never cancels an agent turn, a tool read, or another tab's work; only work owned by the departing observer stops.
-11. **…retain presence on the strength of a caller-supplied ID.** Observer authority comes from the authenticated gateway connection only; REST cannot declare a panel open.
+11. **…retain presence on the strength of a caller-supplied ID.** Observer authority comes from the authenticated gateway connection only; REST cannot declare a panel open. A REST read's `observer_id` query param (§4.7) only associates the read with an observer the gateway has already bound and validates — it never creates retention.
 12. **…preconnect or prewarm.** Sockets open only for work — never 13 mailboxes warmed at boot, never a speculative dial.
 13. **…key any pool/cache/flight identity by password text.** Identity binds endpoint/TLS + pair + non-secret generation only.
 14. **…add a parallel reconnect loop beside the watcher backoff.** The existing `WatcherBackoff` ladder is the only reconnect scheduler; the pool adds one in-bounds dead-idle replacement per read, nothing else.
@@ -507,26 +510,28 @@ The system must not:
 | MC-W1-14 | Release/eviction/idle-close never issues folder-CLOSE; a `\Deleted`-flagged message survives release | Set `\Deleted` without expunge; release; re-select; message still present server-side |
 | MC-W1-15 | Coalescing identity: same full identity → one dial; any component differs (pair, generation, purpose, args, operation) → separate dials, both served correctly | I-01 matrix (§8 DS-3) with per-identity result markers |
 | MC-W1-16 | Joiner cancellation isolation: one joiner's cancel neither fails nor cancels the flight others share | Three joiners; cancel one mid-flight; two succeed |
-| MC-W1-17 | Superseded read publishes nothing: no cache write, no timestamp advance, no response-embedded state change after a revision advance | Paused-read → mutate → resume ordering (§8 DS-4) |
+| MC-W1-17 | Superseded read publishes nothing **at W1's seam**: after a revision advance, the read's publish step is suppressed — the publish/commit path W1 invokes on the fresh path is not invoked, and the response carries the superseded determination. (The cache-row/disk/timestamp observables are W2-owned; their end-to-end oracle is W2's V-2 and w6-proof's T15 — register R-4, grill-1 I-4. W1's suite asserts the seam, not another package's files.) | Paused-read → mutate → resume ordering (§8 DS-4), observed at W1's publish seam |
 | MC-W1-18 | Post-mutation refresh never joins a pre-mutation flight | Refresh result reflects post-mutation server state |
 | MC-W1-19 | Presence: retention exactly while ≥1 observer; last-observer departure closes idle panel sockets immediately, active at completion; observer removal on close/disconnect/logout/workspace exit | Observer lifecycle matrix (§8 DS-5) with socket counters |
 | MC-W1-20 | Until presence is wired: zero retained sockets after any operation | All scenarios with retention disabled; post-operation counter at baseline |
 | MC-W1-21 | Watcher: bounded parallel due-cycle progress with one stalled mailbox (others complete within the pass); ≤1 cycle in flight per mailbox | 13-mailbox scripted stall; completion set + per-mailbox in-flight guard |
 | MC-W1-22 | Watcher skip: no slot/reservation → skip recorded, last-success unchanged, backoff unchanged, no dial | Saturated capacity; state file before/after |
-| MC-W1-23 | Watcher closed-panel: no retained sockets, no panel-cache writes/refreshes, dirty-mark only | Panel closed through ≥3 cycle intervals; cache/state assertions |
-| MC-W1-24 | One budget owner: under N concurrent operations per account, account-slot acquisitions per operation = 1 (no wrapper+client double take) | Instrumented slot counter (test seam) at the budget; total in-flight ≤2 |
+| MC-W1-23 | Watcher closed-panel, **W1-observably**: zero retained sockets (pool counter), and the watcher's only panel-metadata effect is the dirty-mark signal of §3.1 — no cache call exists on the watcher's path. (Server-side cache-file assertions are W2's and w6-proof's — register R-4.) | Panel closed through ≥3 cycle intervals; pool counter + dirty-mark observations at W1's seam |
+| MC-W1-24 | One budget owner: under N concurrent operations per account, account-slot acquisitions per operation = 1 (no wrapper+client double take). The instrument is a **test-owned** acquisition seam of the existing `imapDial` pattern — a package var the tests replace and production never assigns or reads (resolves grill-1 M-9 within DoD 5's no-production-test-hook rule; the structural half is that `Acquire`'s signature carries no budget parameter, so a double acquire is unwritable) | Test-owned acquisition seam at the budget; total in-flight ≤2 |
 | MC-W1-25 | `retry=true` bypasses backoff only: during pool/account saturation a retried request still waits/buses; it never bypasses ceilings | Backing-off + saturated scenario; retry outcome |
 | MC-W1-26 | Nil session source in production shape → typed visible error naming the missing wiring; no dial attempted | Construct client without source; operation fails with the wiring error; zero dials |
+| MC-W1-27 | `recordFailure` persists only the safe classified representation: after a scripted failure whose raw text carries folder/hostname/account detail, the state file's error field contains the closed class plus safe metadata — the raw string appears nowhere in the file (§4.12, FR-W1-23) | Scripted raw provider error; persisted state JSON inspected for the class and for the raw substring |
+| MC-W1-28 | Every pooled operation's instrument record carries W1's pool sub-fields — `acquire_wait_ms`, `socket_count`, pool outcome — populated to w6-proof §6.1's frozen shape; a coalesced joiner records `socket_count=0` plus the shared-flight marker (register row 17; the record shape's single publisher is w6-proof) | W1's emitter seam observed per operation across DS-1/DS-3 scenarios; joiner rule checked in the coalescing matrix |
 
 ### 6.4 Integration boundaries
 
 | External system / neighbor | Data flow | Contract | On failure |
 |---|---|---|---|
-| IMAP server (the only network peer W1 touches) | Dial/TLS/login/SELECT/STATUS/FETCH/STORE/APPEND via go-imap/v2 | Existing command semantics; structural `[NONEXISTENT]` for absence; session termination via logout-class close | Timeout/dial/protocol classes as today (`classifyMailError` stays the mapper); a server connection-limit response is recognized structurally (W0's typed class), the refused session retired, and the effective per-mailbox capacity for that server reduced in-process (see OQ-3) |
-| Gateway REST handlers (W4) | Typed outcomes (success / pool-busy / account-busy / backoff / transport class) + response revision metadata | §3.1 error values; W0 maps to 503 `reason` | Handlers render visible errors; cached rows stay, labelled (W2/W3) |
-| Gateway WebSocket (W4) | Observer bind/unbind events (transport-agnostic registry API) | §4.7 — authenticated-connection binding only | A dead connection's observers are reaped by the gateway's existing liveness teardown; the registry applies the same removal rules |
-| Agent tools (W4/W10) | Same session source injection; same typed outcomes | §4.11 — the tool wrapper keeps owning the budget | Tool result text unchanged in shape; transport failures visible per existing contract |
-| Watcher state file | Untouched by W1 beyond the skip/pool interplay | `LoadWatcherState`/`EffectiveState` remain the one derivation point | Unreadable state fails open with visible WARN (unchanged, verified) |
+| IMAP server (the only network peer W1 touches) | Dial/TLS/login/SELECT/STATUS/FETCH/STORE/APPEND via go-imap/v2 | Existing command semantics; structural `[NONEXISTENT]` for absence; session termination via logout-class close | Timeout/dial/protocol classes as today (`classifyMailError` stays the mapper); a server connection-limit response is recognized structurally (the W0 contracts wave's typed class, register row 7), the refused session retired, and the effective per-mailbox capacity for that server reduced in-process (see OQ-3) |
+| Gateway REST handlers (w5-integration) | Typed outcomes (success / pool-busy / account-busy / backoff / transport class) + response revision metadata; the validated `observer_id` query param on panel reads | §3.1 error values; the W0 contracts wave publishes the 503 `reason` enum (register row 7); w5-integration maps | Handlers render visible errors; cached rows stay, labelled (W2/W3) |
+| Gateway WebSocket (w5-integration) | Observer bind/unbind events (transport-agnostic registry API) | §4.7 — authenticated-connection binding only; the frames are the W0 wave's, the handlers w5-integration's | A dead connection's observers are reaped by the gateway's existing liveness teardown; the registry applies the same removal rules |
+| Agent tools (w5-integration injection; w4-features/W10 adapters) | Same session source injection; same typed outcomes | §4.11 — the tool wrapper keeps owning the budget | Tool result text unchanged in shape; transport failures visible per existing contract |
+| Watcher state file (`email-watch/`) | W1 writes the safe classified representation only (§4.12); the skip/pool interplay otherwise unchanged | `LoadWatcherState`/`EffectiveState` remain the one derivation point; the directory is excluded from staging/backups and purged on mailbox removal — product-owned guarantees (founder Q-A/Q-B; register row 18's gate: w5-integration decides, W2 enforces first write) | Unreadable state fails open with visible WARN (unchanged, verified) |
 | Credentials | Password resolution stays entirely outside W1 (callers pass `Account` as today) | ADR-004 boot contract unchanged | Unresolved password → the construction site's existing skip/404 behavior (verified) |
 
 ---
@@ -683,7 +688,8 @@ Scenario keys map as `B-W1-n`. Every scenario traces to its user story's accepta
 **Traces to**: US-6/AS-4 · **Category**: Error Path
 - **Given** a read paused after collecting its server data, its captured revision now superseded
 - **When** a successful mutation and the refresh it triggers complete, and only then the paused read resumes
-- **Then** the superseded read publishes nothing — no cache rows, no disk write, no timestamp advance, no state change
+- **Then** the read's publish step is suppressed at W1's revision seam — the publish/commit path is not invoked and the response carries the superseded determination
+- **And** the cache-row, disk-write and timestamp observables are asserted by W2's and w6-proof's end-to-end tests (register R-4: W1's suite asserts its seam; the cache-visible oracle lives with the publisher's package)
 - **And** the post-mutation refresh's data stands everywhere
 - **And** the refresh never joined the superseded flight
 
@@ -737,8 +743,8 @@ Scenario keys map as `B-W1-n`. Every scenario traces to its user story's accepta
 **Traces to**: US-8/AS-4 · **Category**: Edge Case
 - **Given** the panel closed through at least three watcher cycle intervals
 - **When** cycles run
-- **Then** each cycle's socket closes after the cycle, no folder/header/count cache is written or refreshed
-- **And** a folder-version change the watcher notices only marks panel metadata dirty for the next panel-open event
+- **Then** each cycle's socket closes after the cycle (the pool's open-connection counter returns to baseline), W1-observably
+- **And** the watcher's only panel-metadata effect is the dirty-mark signal of §3.1 — no cache call exists on the watcher's path; the server-side cache-file assertions are W2's and w6-proof's (register R-4)
 
 #### Scenario B-W1-31: Watcher never mutates
 **Traces to**: US-8/AS-5 · **Category**: Happy Path
@@ -754,17 +760,24 @@ Scenario keys map as `B-W1-n`. Every scenario traces to its user story's accepta
 - **And** under two concurrent operations per account, no third ever runs — no double acquisition is reachable from any path
 
 #### Scenario B-W1-33: Retry bypasses backoff only
-**Traces to**: US-4/AS-1 · **Category**: Alternate Path
+**Traces to**: US-4/AS-6 · **Category**: Alternate Path
 - **Given** a mailbox in watcher backoff and all pool capacity held
 - **When** the human Retry click fires
 - **Then** the backoff gate is bypassed but the request still waits and busies on capacity — ceilings are never bypassed
 
 #### Scenario B-W1-34: A client without its injection fails visibly
-**Traces to**: US-2/AS-4 · **Category**: Error Path
+**Traces to**: US-2/AS-5 · **Category**: Error Path
 - **Given** a client constructed without a session source in a process where the manager exists
 - **When** a read is attempted through it
 - **Then** the operation fails immediately with the typed missing-wiring error
 - **And** zero dials occurred
+
+#### Scenario B-W1-35: Watcher failure text is classified before it persists
+**Traces to**: US-8/AS-6 · **Category**: Error Path
+- **Given** a watcher cycle whose probe fails with a raw provider error embedding a folder name, a hostname and an account prefix
+- **When** the failure is recorded through `recordFailure`
+- **Then** the persisted watcher state contains only the safe classified error representation plus safe metadata
+- **And** the raw provider text appears nowhere in the state file (grill-1 C-1; §4.12, MC-W1-27)
 
 ---
 
