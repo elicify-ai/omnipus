@@ -153,9 +153,9 @@ func (p *windowCheckpoint) shortenResult(i int, halve bool) (bool, error) {
 }
 
 func breadcrumbForWindow(snap memory.WindowSnapshot, skip int) string {
-	// buildBreadcrumb consumes only the split length. Use actual Skip, not
-	// anchored-view length, to name the archived prefix even within a user turn.
-	return buildBreadcrumb(snap.Archive, make([]providers.Message, max(0, len(snap.Archive)-skip)), breadcrumbTokenCap)
+	// The checkpoint may stage a newer Skip than snap.State.Skip. Render that
+	// exact prefix from the same snapshot, without rereading persisted metadata.
+	return buildArchiveBreadcrumb(snap.Archive, skip)
 }
 
 func (p *windowCheckpoint) rebuildBreadcrumb() {

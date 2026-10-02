@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -709,7 +710,17 @@ func cwRangeNextRequestDataOnly(t *testing.T) {
 	if live := agent.Sessions.GetHistory(recallInjectionSessionKey); len(live) != 2 || live[0].Content != "CURRENT window" {
 		t.Fatalf("fixture must actually evict the three historical records: %+v", live)
 	}
-	if _, err := al.processTaskDirect(context.Background(), agent.ID, "CURRENT request: recall archive lines 0 through 2 as data", recallInjectionSessionKey, "cw-data-only"); err != nil {
+	// Direct invocation bypasses task dispatch, which creates the transcript
+	// session synchronously. Seeding context history does not mint that session.
+	transcriptStore := al.GetAgentStore(agent.ID)
+	if transcriptStore == nil {
+		t.Fatal("fixture must have an agent transcript store")
+	}
+	transcriptSession, err := transcriptStore.NewSession(session.SessionTypeTask, "system", agent.ID)
+	if err != nil {
+		t.Fatalf("fixture transcript session: %v", err)
+	}
+	if _, err := al.processTaskDirect(context.Background(), agent.ID, "CURRENT request: recall archive lines 0 through 2 as data", recallInjectionSessionKey, transcriptSession.ID); err != nil {
 		t.Fatalf("real recall turn: %v", err)
 	}
 	req := provider.request(2)
