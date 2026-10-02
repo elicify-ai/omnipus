@@ -85,14 +85,6 @@ type SteerBootRecovery struct {
 	Classifier     steer.RecordClassifier
 	Deliverer      steer.UpwardDeliverer
 	OperatorNotice func(message string)
-	// EndSessionGoal is the retired FD1=A pair-end hook (#947 defect 1,
-	// decision (e)three). MAJ-003 (sub-agent control plane) retires it: no
-	// session lifecycle transition — including this sweep's restart
-	// terminalisations — ends a session-owned goal any more, so nothing in
-	// this package fires it. The field is kept ONLY until the RED harness
-	// that asserts its non-firing is rewritten without it (QA-owned test
-	// files), then deleted outright.
-	EndSessionGoal func(sessionID string, reason string)
 }
 
 type bootSessionMessageEnvelope struct {
@@ -430,8 +422,6 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 		current.NeedsInput = nil
 		return nil
 	})
-	// MAJ-003: no pair-end here — this terminal write ends the TURN, never
-	// the session-owned goal (the FD1=A EndSessionGoal firing was removed).
 	return err
 }
 
@@ -454,8 +444,6 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		current.NeedsInput = nil
 		return nil
 	})
-	// MAJ-003: no pair-end here — this terminal write ends the TURN, never
-	// the session-owned goal (the FD1=A EndSessionGoal firing was removed).
 	return err
 }
 
@@ -862,9 +850,6 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 		return err
 	}
 	pe.reconcileUnifiedMetaStatus(&failed)
-	// MAJ-003: no pair-end here — the F3 steeredGoalEndHook firing was
-	// removed; this terminal write ends the TURN, never the session-owned
-	// goal. A restart keeps every goal open for its own adjudication.
 	// Fire the session.failed hook best-effort (FR-118 deliverable 3): a hook
 	// panic is recovered and LOGGED (the doc above promises "recovered and
 	// logged"), never blocking the sweep. The earlier `recover()` silently

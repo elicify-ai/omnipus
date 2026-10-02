@@ -1002,10 +1002,6 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 				OperatorNotice: func(message string) {
 					slog.Warn("gateway: ADR-091 boot recovery notice", "message", message)
 				},
-				// MAJ-003 (sub-agent control plane): no EndSessionGoal hook is
-				// wired — the FD1=A pair-end is retired, and a boot-recovery
-				// interruption (or any session lifecycle transition) keeps the
-				// session-owned goal record active.
 			}
 			return recovery.Run(ctx)
 		},
@@ -1099,9 +1095,6 @@ func (stg *setupAndStartServicesState) startPlanEngine() (*services, bool, error
 		planEngine.SetSessionFailedHook(func(sessionID, reason string) {
 			slog.Info("gateway: boot sweep: session.failed", "session_id", sessionID, "reason", reason)
 		})
-		// MAJ-003: no SetSteeredGoalEndHook wiring — the boot sweep's
-		// failed(interrupted) sweep of a steered record keeps its session-owned
-		// goal record active (the FD1=A pair-end is retired).
 		// These two exact call sites supply the real /goal and /loop
 		// active-loop counters (documented boot-ordering requirement on
 		// PlanEngine.RegisterActiveCounter's doc comment); "loop" counts

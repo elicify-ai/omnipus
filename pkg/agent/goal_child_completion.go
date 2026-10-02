@@ -48,14 +48,6 @@ const goalJudgeRedriveAttempts = 3
 // as it collapses the retries alone.
 var goalJudgeRedriveBackoff = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second} //nolint:gochecknoglobals
 
-// goalSessionEndedNotePrefix marked endActiveGoal's note-switch for the
-// RETIRED FD1=A pair-end: a session-owned goal that ended because its SESSION
-// ended. MAJ-003 stops every session-lifecycle goal ending, so nothing writes
-// the prefix any more; the prefix and endActiveGoal's matching case are kept
-// only until the pair-end helpers below are deleted with the RED harness
-// that still references them, then removed outright.
-const goalSessionEndedNotePrefix = "session ended: "
-
 // redriveGoalAdjudication is decision (c)'s bounded re-drive: it wraps the
 // single shared adjudication body (runGoalAdjudication) so a judge-unavailable
 // round no longer strands the pair. Each attempt is bounded by
@@ -140,66 +132,6 @@ func (al *AgentLoop) waitGoalRedriveBackoff(previousAttempt int) {
 		logger.InfoCF("agent", "goal: re-drive backoff did not run its course — retrying now",
 			map[string]any{"delay": delay.String()})
 	}
-}
-
-// endSessionOwnedGoalOnTerminal is the RETIRED FD1=A pair-end helper: it
-// used to end a steered child's ACTIVE session-owned goal when the child's
-// record landed terminal (founder decision FD1=A — "a session-owned goal
-// ends with its session"). MAJ-003 (sub-agent control plane) retires the
-// pair-end: no session lifecycle transition — completion, cancellation,
-// boot-recovery interruption — ends a goal, so NO production caller remains;
-// only the RED harness still references the exported wrapper. The helper is
-// kept ONLY until that harness is rewritten without it (QA-owned test
-// files), then deleted outright. It stays correct-by-construction while it
-// lingers: idempotent (no active goal, no action), session-owned only.
-//
-// Task-owned goals are out of scope ON PURPOSE: their single terminal writer
-// is tools.TerminateTaskGoalRecord (goal_outcome.go's header), and this
-// helper would otherwise become a second writer racing it. The session-level
-// cause travels as the note (prefix + reason) — endActiveGoal stores the note
-// as the record's TerminalReason — and the outcome line lands in the session
-// transcript like any other goal ending.
-func (al *AgentLoop) endSessionOwnedGoalOnTerminal(sessionID string, ending generated.GoalOutcomeEnding, reason string) {
-	if al == nil || sessionID == "" {
-		return
-	}
-	rec, err := activeGoalForSession(sessionID)
-	if err != nil {
-		al.reportGoalReadError(sessionID, "ending the session-owned goal", err)
-		return
-	}
-	if rec == nil {
-		// No active goal — the common case (most steered children have no
-		// goal, and an already-ended goal must not be re-ended). Idempotent.
-		return
-	}
-	if rec.OwnerKind != generated.GoalOwnerKindSession {
-		// A task-owned goal has its own single terminal writer; a session
-		// record ending never speaks for it.
-		return
-	}
-	in := goalOutcomeInput{
-		ending:     ending,
-		roundsUsed: rec.Round,
-		maxRounds:  rec.MaxRounds,
-		content: fmt.Sprintf("Goal %q ended with its session before reaching a MET verdict: %s.",
-			rec.Prompt, reason),
-	}
-	if _, ok := al.clearGoalWithOutcome(sessionID, al.GetSessionStore(), goalSessionEndedNotePrefix+reason, in); !ok {
-		logger.WarnCF("agent", "goal: pair-end deferred — the goal-record transition was refused; a later terminal path re-drives it",
-			map[string]any{"session_id": sessionID, "goal_id": rec.GoalID})
-	}
-}
-
-// EndSessionOwnedGoalOnTerminal is the RETIRED FD1=A pair-end's exported
-// boot-wiring seam (founder decision FD1=A — "a session-owned goal ends with
-// its session"). MAJ-003 retires the pair-end: no session lifecycle
-// transition ends a goal, so nothing binds this method any more — SteerBootRecovery's
-// EndSessionGoal hook is never fired (boot_sweep.go). The method is kept ONLY
-// until the RED harness referencing it is rewritten without it (QA-owned test
-// files), then deleted outright with the unexported helper below.
-func (al *AgentLoop) EndSessionOwnedGoalOnTerminal(sessionID, reason string) {
-	al.endSessionOwnedGoalOnTerminal(sessionID, generated.GoalOutcomeEndingOther, reason)
 }
 
 // goalParkUpwardText picks the parent-facing text for a park delivery

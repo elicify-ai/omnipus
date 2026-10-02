@@ -199,16 +199,6 @@ func (al *AgentLoop) endActiveGoal(sessionID string, store *session.UnifiedStore
 	case strings.HasPrefix(note, goalIdleExpiredNotePrefix):
 		pillState = goalPillExpired
 		goalState = generated.GoalStateExpired
-	case strings.HasPrefix(note, goalSessionEndedNotePrefix):
-		// FD1=A (#947 defect 1): a session-owned goal ends with its session.
-		// The note (prefix + the session-level cause, goal_child_completion.go::
-		// endSessionOwnedGoalOnTerminal) is stored as the record's
-		// TerminalReason, and the pill/state read `cleared` — an explicit
-		// ending, not an exhaustion-with-failed-pill. Without this case the
-		// default arm would classify a session cancel as EXHAUSTED and paint
-		// the failed pill over a goal the user did not see fail.
-		pillState = goalPillCleared
-		goalState = generated.GoalStateCleared
 	case strings.HasPrefix(note, goalAgentDeletedNotePrefix):
 		// UAT E-3 (goal_owner_deleted.go): the operator deleted the agent
 		// working this goal. That is an explicit operator action ending the

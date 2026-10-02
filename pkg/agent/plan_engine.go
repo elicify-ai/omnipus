@@ -275,15 +275,6 @@ type PlanEngine struct {
 	// session.failed event / drive recovery (FR-118 deliverable 3). Best-effort:
 	// a hook failure is logged, never blocks the sweep.
 	sessionFailedHook func(sessionID, reason string)
-	// steeredGoalEndHook is the RETIRED FD1=A pair-end for steered records
-	// the boot sweep lands on failed(interrupted) (F3, #984 founder-rule
-	// follow-up). MAJ-003 (sub-agent control plane) retires it: no session
-	// lifecycle transition — including this sweep — ends a session-owned
-	// goal, and sweepToFailedInterrupted no longer fires the hook. The field
-	// and setter are kept ONLY until the RED harness that installs the hook
-	// to assert its non-firing is rewritten without it (QA-owned test
-	// files), then deleted outright.
-	steeredGoalEndHook func(sessionID, reason string)
 	// goalSemanticsVersioner reports the recorded trigger-semantics version
 	// of a goal-bearing session (N-15 live-upgrade re-baseline). Wired by
 	// Phase-2-C; nil until then, which means "unversioned" -> no re-baseline.
@@ -586,20 +577,6 @@ func (pe *PlanEngine) SetAgentResolver(fn func(agentID string) bool) {
 func (pe *PlanEngine) SetSessionFailedHook(fn func(sessionID, reason string)) {
 	pe.mu.Lock()
 	pe.sessionFailedHook = fn
-	pe.mu.Unlock()
-}
-
-// SetSteeredGoalEndHook is the RETIRED FD1=A pair-end's installer (F3 #984
-// follow-up): it used to wire the hook fired for every STEERED record the
-// boot sweep landed on failed(interrupted)
-// (boot_sweep.go::sweepToFailedInterrupted). MAJ-003 retires the pair-end —
-// sweepToFailedInterrupted no longer fires the hook and no gateway wiring
-// remains — so the setter stays inert until the RED harness referencing it is
-// rewritten without it (QA-owned test files), then deleted outright with the
-// field. Nil-safe by construction.
-func (pe *PlanEngine) SetSteeredGoalEndHook(fn func(sessionID, reason string)) {
-	pe.mu.Lock()
-	pe.steeredGoalEndHook = fn
 	pe.mu.Unlock()
 }
 
