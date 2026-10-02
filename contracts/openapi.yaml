@@ -10594,6 +10594,13 @@ paths:
           Page size. Zero, negative or absent means the default 20; values
           above 100 are clamped to 100 (MC-6, mirrors clampLimit in
           pkg/email/transport.go). A non-integer value is rejected 400.
+          These 20/100 bounds are the pre-ADR-20261001 state and stay the
+          operative bounds until the consumer-timed W0 amendment raises
+          list paging to the ADR's 25-row page and 200-row view limits
+          (register row 4; lands in the same step as the cursor switch in
+          w3's consumer work) — the search parameter's "same 25-row page"
+          statement on this operation describes that amended state, not
+          this one.
         schema:
           type: integer
           default: 20
@@ -10671,10 +10678,12 @@ paths:
           search" row; register row 4). Starts a bounded search sequence
           under the same 25-row page and 200-row view limits, matched
           server-side — no local index, no full-text/offline search, and
-          never a whole-mailbox fetch. Exact supported matching fields and
-          bounds are fixed by the mail-live-access W2/W3 specs (founder
-          decision Q-D pending at the time of this contract). Presenting
-          search and cursor together is rejected 400.
+          never a whole-mailbox fetch. Matching fields and bounds are
+          founder-settled (decision Q-D answered 2026-10-02, option A):
+          subject plus sender/recipient substring matching, server-side
+          header search, the same 25/200 bounds; the mail-live-access
+          W2/W3 specs fix the exact search semantics within that decision.
+          Presenting search and cursor together is rejected 400.
         schema:
           type: string
           minLength: 1

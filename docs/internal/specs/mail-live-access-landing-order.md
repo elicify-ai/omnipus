@@ -165,4 +165,27 @@ Context: w3's UAT holdout 5 expects zero network requests from a **saved** mail 
 | Gateway Mail-route edits have one writer | ADR-20261001 W4 row ("W4 alone edits shared byte headers and Mail routes") read (this task); adr-grill-3 I-1 collision resolved in favour of w5-integration | Verified |
 | **Self-check** | Re-read this document end-to-end against the dispatch's seven required parts (bottom line ✓, register ✓ 24 rows with per-row citations, ownership rules ✓, waves ✓ named gates, deadlock ruling ✓ who/wave/no-stub, founder decisions ✓ 5 product-level, evidence table ✓). Re-ran the six load-bearing greps after drafting (rows 1/4/6/16/17 absences re-confirmed, exit codes captured). Every "Verified" row either cites a command run this task or a grill finding whose own evidence table shows the check; nothing is labelled Verified on recall. No production code, contract file or test was touched; the only file written is this one; commit will contain only this file, authored per the repo's human-authorship rule with no co-author trailer. Register counts re-derived from the table: 24 rows, 9 no-publisher, 6 conflicted. | Verified |
 
+---
+
+## 8. Recorded deferrals — W0 nullability amendment (backend-lead, 2026-10-02)
+
+Recorded in the ADR-W0 role after the independent contracts-wave check
+(`receipts/contracts-wave-check.md`, findings F2/F3) so the two deferred
+nullabilities cannot float. Both amendments execute **atomically with the
+Wave C/D consumer PRs, one commit** (the wave report's disclosed landing);
+the schemas accept this schedule explicitly here. Until an amendment
+merges, its schema cannot express the unknown state; from the amendment
+on, the value may be absent on responses until the producing wave
+supplies it, and **a consumer must treat an absent value as unknown —
+never as false or zero**:
+
+| Field | Schema (register row) | Deferred nullability | Producing wave | Consumer rule meanwhile |
+|---|---|---|---|---|
+| `total` | `MailFolder.yaml` (row 3) | Unknown/failed count reads null — today required, non-nullable | w2 discovery | Treat an absent/unknown count as unknown, never a fabricated 0 ("checked, empty") or false |
+| `date` | `MailMessageSummary.yaml` + `MailMessage.yaml` (row 8) | Founder #1175 "No date" state — today required, non-nullable | w4/w3 feature waves | Treat an absent date as unknown (no date), never false or a zero/epoch value |
+
+The same deferral note is embedded in each field's schema description
+(`contracts/components/schemas/MailFolder.yaml::total`,
+`MailMessageSummary.yaml::date`, `MailMessage.yaml::date`).
+
 *skills: omnipus-shared-rules, grill-spec*

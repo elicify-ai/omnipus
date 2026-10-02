@@ -88,7 +88,16 @@ properties:
   date:
     type: string
     format: date-time
-    description: Message date (RFC 3339).
+    description: >
+      Message date (RFC 3339). Deferred nullability (register row 8;
+      acceptance recorded in mail-live-access-landing-order §8,
+      2026-10-02): this schema cannot yet express the founder's #1175
+      "No date" state — date is required and non-nullable here — and the
+      W0 amendment that makes it nullable executes atomically with the
+      Wave C/D consumer PRs. From that amendment on, the value may be
+      absent on responses until the w4/w3 feature waves supply it; a
+      consumer must treat an absent date as unknown (no date) and never
+      as false or a zero/epoch value.
     example: "2026-09-26T10:30:00Z"
   seen:
     type: boolean

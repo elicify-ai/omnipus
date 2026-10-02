@@ -19062,7 +19062,7 @@ type MailFolder struct {
 	// Slug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
 	Slug MailFolderSlug `json:"slug"`
 
-	// Total Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation; an unknown or failed count is null — a fabricated 0 never masquerades as "checked, empty" (correction M-01; w2 spec §4.1).
+	// Total Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation (correction M-01; w2 spec §4.1). Deferred nullability (register row 3; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express an unknown or failed count — total is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w2 discovery producer supplies it; a consumer must treat an absent total as unknown and never as 0 or false — a fabricated 0 never masquerades as "checked, empty".
 	Total int `json:"total"`
 
 	// Uidvalidity IMAP UIDVALIDITY of the resolved folder — the epoch its UIDs (and any paging cursors) are valid in. Null before validation or when the role's mapping is unknown: unknown is represented as null, never a fabricated version (ADR P1.3 "UIDVALIDITY changes" row). A changed uidvalidity discards affected header entries and cursors before new rows are published.
@@ -19151,7 +19151,7 @@ type MailFolderList struct {
 		// Slug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
 		Slug MailFolderListFoldersSlug `json:"slug"`
 
-		// Total Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation; an unknown or failed count is null — a fabricated 0 never masquerades as "checked, empty" (correction M-01; w2 spec §4.1).
+		// Total Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation (correction M-01; w2 spec §4.1). Deferred nullability (register row 3; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express an unknown or failed count — total is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w2 discovery producer supplies it; a consumer must treat an absent total as unknown and never as 0 or false — a fabricated 0 never masquerades as "checked, empty".
 		Total int `json:"total"`
 
 		// Uidvalidity IMAP UIDVALIDITY of the resolved folder — the epoch its UIDs (and any paging cursors) are valid in. Null before validation or when the role's mapping is unknown: unknown is represented as null, never a fabricated version (ADR P1.3 "UIDVALIDITY changes" row). A changed uidvalidity discards affected header entries and cursors before new rows are published.
@@ -19272,7 +19272,7 @@ type MailMessage struct {
 	// Cc Cc addresses (D26).
 	Cc []string `json:"cc"`
 
-	// Date Message date (RFC 3339).
+	// Date Message date (RFC 3339). Deferred nullability (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express the founder's #1175 "No date" state — date is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w4/w3 feature waves supply it; a consumer must treat an absent date as unknown (no date) and never as false or a zero/epoch value.
 	Date time.Time `json:"date"`
 
 	// DraftCleanupWarning Set when the OLD draft copy could not be removed after a successful update-APPEND of the new copy (MAJ-009/MC-28 — the panel warns of a possible duplicate draft). Same underlying mechanism as the send path's draft_cleanup_warning (MailSendResponse), triggered by update instead of send. Null when cleanup succeeded, and always null on the read paths (GET message, list messages) — only the update endpoint can set it.
@@ -19349,7 +19349,7 @@ type MailMessagePage struct {
 		// Cc Cc addresses (D26 — recipient lists on every mail surface).
 		Cc []string `json:"cc"`
 
-		// Date Message date (RFC 3339).
+		// Date Message date (RFC 3339). Deferred nullability (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express the founder's #1175 "No date" state — date is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w4/w3 feature waves supply it; a consumer must treat an absent date as unknown (no date) and never as false or a zero/epoch value.
 		Date time.Time `json:"date"`
 
 		// Folder The folder slug the message was listed from (MC-5).
@@ -19443,7 +19443,7 @@ type MailMessageSummary struct {
 	// Cc Cc addresses (D26 — recipient lists on every mail surface).
 	Cc []string `json:"cc"`
 
-	// Date Message date (RFC 3339).
+	// Date Message date (RFC 3339). Deferred nullability (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express the founder's #1175 "No date" state — date is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w4/w3 feature waves supply it; a consumer must treat an absent date as unknown (no date) and never as false or a zero/epoch value.
 	Date time.Time `json:"date"`
 
 	// Folder The folder slug the message was listed from (MC-5).
@@ -28261,7 +28261,7 @@ type ListMailFoldersParamsMode string
 
 // ListMailMessagesParams defines parameters for ListMailMessages.
 type ListMailMessagesParams struct {
-	// Limit Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400.
+	// Limit Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400. These 20/100 bounds are the pre-ADR-20261001 state and stay the operative bounds until the consumer-timed W0 amendment raises list paging to the ADR's 25-row page and 200-row view limits (register row 4; lands in the same step as the cursor switch in w3's consumer work) — the search parameter's "same 25-row page" statement on this operation describes that amended state, not this one.
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// BeforeUid Cursor — list envelopes with uid lower than this value (from MailMessagePage.next_before_uid of the previous page).
@@ -28279,7 +28279,7 @@ type ListMailMessagesParams struct {
 	// ObserverId Opaque per-panel observer ID (register row 6; ADR-20261001 "Mail panel presence" row) — the read opts into panel semantics when the ID is bound to this authenticated connection/workspace. Absent or unknown observer = conservative request-scoped work.
 	ObserverId *string `form:"observer_id,omitempty" json:"observer_id,omitempty"`
 
-	// Search Folder-scoped server-side search query (ADR-20261001 "Paging and search" row; register row 4). Starts a bounded search sequence under the same 25-row page and 200-row view limits, matched server-side — no local index, no full-text/offline search, and never a whole-mailbox fetch. Exact supported matching fields and bounds are fixed by the mail-live-access W2/W3 specs (founder decision Q-D pending at the time of this contract). Presenting search and cursor together is rejected 400.
+	// Search Folder-scoped server-side search query (ADR-20261001 "Paging and search" row; register row 4). Starts a bounded search sequence under the same 25-row page and 200-row view limits, matched server-side — no local index, no full-text/offline search, and never a whole-mailbox fetch. Matching fields and bounds are founder-settled (decision Q-D answered 2026-10-02, option A): subject plus sender/recipient substring matching, server-side header search, the same 25/200 bounds; the mail-live-access W2/W3 specs fix the exact search semantics within that decision. Presenting search and cursor together is rejected 400.
 	Search *string `form:"search,omitempty" json:"search,omitempty"`
 
 	// Cursor Opaque continuation cursor from MailMessagePage.next_cursor (register row 4) — continues the browse or search sequence it was issued in. A stale or mismatched cursor (folder epoch changed, configuration generation changed, sequence mismatch) is refused with the typed 409 stale-cursor result — the client resets the view once. Supersedes before_uid, which is retained only until the panel consumer migration lands.

@@ -43,9 +43,16 @@ properties:
     type: integer
     description: >
       Live message count of the folder. A confirmed-absent optional role
-      reports 0 with its explanation; an unknown or failed count is null —
-      a fabricated 0 never masquerades as "checked, empty" (correction
-      M-01; w2 spec §4.1).
+      reports 0 with its explanation (correction M-01; w2 spec §4.1).
+      Deferred nullability (register row 3; acceptance recorded in
+      mail-live-access-landing-order §8, 2026-10-02): this schema cannot
+      yet express an unknown or failed count — total is required and
+      non-nullable here — and the W0 amendment that makes it nullable
+      executes atomically with the Wave C/D consumer PRs. From that
+      amendment on, the value may be absent on responses until the w2
+      discovery producer supplies it; a consumer must treat an absent
+      total as unknown and never as 0 or false — a fabricated 0 never
+      masquerades as "checked, empty".
     example: 42
   unread_count:
     type: integer

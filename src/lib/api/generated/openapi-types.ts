@@ -12514,7 +12514,7 @@ export interface components {
              */
             display_name: string;
             /**
-             * @description Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation; an unknown or failed count is null — a fabricated 0 never masquerades as "checked, empty" (correction M-01; w2 spec §4.1).
+             * @description Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation (correction M-01; w2 spec §4.1). Deferred nullability (register row 3; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express an unknown or failed count — total is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w2 discovery producer supplies it; a consumer must treat an absent total as unknown and never as 0 or false — a fabricated 0 never masquerades as "checked, empty".
              * @example 42
              */
             total: number;
@@ -12603,7 +12603,7 @@ export interface components {
             cc: string[];
             /**
              * Format: date-time
-             * @description Message date (RFC 3339).
+             * @description Message date (RFC 3339). Deferred nullability (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express the founder's #1175 "No date" state — date is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w4/w3 feature waves supply it; a consumer must treat an absent date as unknown (no date) and never as false or a zero/epoch value.
              * @example 2026-09-26T10:30:00Z
              */
             date: string;
@@ -12705,7 +12705,7 @@ export interface components {
             cc: string[];
             /**
              * Format: date-time
-             * @description Message date (RFC 3339).
+             * @description Message date (RFC 3339). Deferred nullability (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express the founder's #1175 "No date" state — date is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w4/w3 feature waves supply it; a consumer must treat an absent date as unknown (no date) and never as false or a zero/epoch value.
              * @example 2026-09-26T10:30:00Z
              */
             date: string;
@@ -24806,7 +24806,7 @@ export interface operations {
     listMailMessages: {
         parameters: {
             query?: {
-                /** @description Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400. */
+                /** @description Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400. These 20/100 bounds are the pre-ADR-20261001 state and stay the operative bounds until the consumer-timed W0 amendment raises list paging to the ADR's 25-row page and 200-row view limits (register row 4; lands in the same step as the cursor switch in w3's consumer work) — the search parameter's "same 25-row page" statement on this operation describes that amended state, not this one. */
                 limit?: number;
                 /** @description Cursor — list envelopes with uid lower than this value (from MailMessagePage.next_before_uid of the previous page). */
                 before_uid?: number;
@@ -24821,7 +24821,7 @@ export interface operations {
                  * @example obs_5f3a
                  */
                 observer_id?: string;
-                /** @description Folder-scoped server-side search query (ADR-20261001 "Paging and search" row; register row 4). Starts a bounded search sequence under the same 25-row page and 200-row view limits, matched server-side — no local index, no full-text/offline search, and never a whole-mailbox fetch. Exact supported matching fields and bounds are fixed by the mail-live-access W2/W3 specs (founder decision Q-D pending at the time of this contract). Presenting search and cursor together is rejected 400. */
+                /** @description Folder-scoped server-side search query (ADR-20261001 "Paging and search" row; register row 4). Starts a bounded search sequence under the same 25-row page and 200-row view limits, matched server-side — no local index, no full-text/offline search, and never a whole-mailbox fetch. Matching fields and bounds are founder-settled (decision Q-D answered 2026-10-02, option A): subject plus sender/recipient substring matching, server-side header search, the same 25/200 bounds; the mail-live-access W2/W3 specs fix the exact search semantics within that decision. Presenting search and cursor together is rejected 400. */
                 search?: string;
                 /**
                  * @description Opaque continuation cursor from MailMessagePage.next_cursor (register row 4) — continues the browse or search sequence it was issued in. A stale or mismatched cursor (folder epoch changed, configuration generation changed, sequence mismatch) is refused with the typed 409 stale-cursor result — the client resets the view once. Supersedes before_uid, which is retained only until the panel consumer migration lands.
