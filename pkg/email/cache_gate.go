@@ -216,7 +216,9 @@ func (r *gitRepo) pathIgnored(relDir string) (bool, error) {
 	// rules; a PRESENT source that cannot be parsed fails closed.
 	segs := strings.Split(relDir, string(filepath.Separator))
 	var sources []ruleSource
-	for i := len(segs) - 1; i >= 0; i-- {
+	// i counts segments of relDir BELOW the repo root: i == len(segs)-1 is the
+	// evaluated directory itself; i == -1 is the repo root's own .gitignore.
+	for i := len(segs) - 1; i >= -1; i-- {
 		dirElems := append([]string{r.root}, segs[:i+1]...)
 		rules, err := parseIgnoreFile(filepath.Join(append(dirElems, ".gitignore")...))
 		if err != nil {
