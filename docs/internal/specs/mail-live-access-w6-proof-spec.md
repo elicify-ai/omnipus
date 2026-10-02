@@ -841,9 +841,9 @@ Internal receipts (measurement, mutation logs, UAT evidence packs) are **not** u
 
 ---
 
-## 15. Open questions — all decided in the correction round
+## 15. Open questions — six decided in the correction round, one open with a named owner
 
-Every question below is **decided**; each row records the decision and its owner. None reopens a founder decision. A blocked implementation escalates through team-lead under rule 15 — never by reopening a settled row.
+Every question below is **decided** except **Q-P7**, which is open with its owner named; each row records the decision and its owner. None reopens a founder decision. A blocked implementation escalates through team-lead under rule 15 — never by reopening a settled row.
 
 | # | Question | Decision | Owner / authority |
 |---|---|---|---|
@@ -853,6 +853,7 @@ Every question below is **decided**; each row records the decision and its owner
 | Q-P4 | UAT instance | **Decided: (b)** — behavioural rows on the live instance under §9.2 prohibitions; induced-condition rows (U-3/U-4/U-5) on a scratch seeded mailbox against the fake server | Team-lead dispatch; this package plans the lanes |
 | Q-P5 | M-A repetitions vs thin live data | **Decided: (b)** — record the actual n; mark *not applicable* where the live data cannot support the bar; backfill the series from M-D's controlled folders; a bar impossible on the data is reported not-judgeable-with-evidence, never silently passed | This package; matches the baseline receipt's stated rule |
 | Q-P6 | Mutation pass mechanics | **Decided: (a) where the harness allows, (b) as fallback** — serialized either way; a saved log path + exit code per mutation | Team-lead runs the pass at CHECK |
+| Q-P7 | Tool-result schemas (register row 8's deferred half) | **Open — owner: the architect.** The landed contracts wave (`5f23ae8a0`) delivered every other consumed shape; the mail tool-result schemas were deliberately reported rather than invented, pending an architect decision on admitting concrete mail tool-result shapes to the `ToolCallResultFrame.result` oneOf (contracts check, row 8). No test of §6 binds a tool-result schema field (T29/T33 assert tool behaviour through the tool layer, not wire schemas), so no w6 test is blocked; until decided, the §4.4 and §16.2 W0 rows carry the deferral | Contracts-wave check (row 8: "tool-result schemas reported, not invented"); register row 8; register R-2.2 gives the architect the wire-shape decision |
 
 ---
 
