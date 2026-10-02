@@ -722,3 +722,170 @@ From `docs/internal/false-green-patterns.md` (read in full for this spec) and th
 8. **The generated validator can be weaker than the contract** (trap 8): where a test binds to generated types, the probe carries a passing control so a wrong-shape rejection is distinguishable from a validator that accepts anything.
 9. **Build configuration**: Go tests run with `CGO_ENABLED=0`, tags `goolm,stdjson`; the full suite never runs locally — CI is the authority (repo rule 2 and the OOM history behind it); at most one narrow local test at a time.
 10. **Bind verdicts to tree hashes**: a result from a tree that moved mid-run is meaningless; every receipt names its SHA (MC-P27 harness rule).
+
+---
+
+## 11. Explicit non-goals
+
+| Outside this package | Boundary / reason |
+|---|---|
+| Writing or fixing production code | The proof package owns tests only; findings route to the owning lead (rule 15 discipline). The instrument's *shape* is specified here; its *implementation* belongs to W1/W2/W4 |
+| Contract-file edits and regeneration | W0 alone (`contracts/` + generated artifacts); tests bind to generated types only |
+| Phase 2 (JMAP, encrypted disk headers) test implementation | This spec defines the Phase 1 proof; the Phase 2 arms (§8.2 note) are scheduled after separate Phase 1 evidence per the ADR's phase gate — their test files are a later wave under the same rules |
+| Sending-path, drainer or mail-as-chat testing | No send is exercised live (UAT prohibition); the retired drainer stays retired; Mail stays an agent tool + notice surface (ADR non-goals) |
+| Security certification | The tests *evidence* the security-relevant behaviours; the security pass remains security-lead's gate review. A green here is not a pentest |
+| Performance tuning | The measurement plan judges bars; it does not optimize code. A failed bar is a finding, not a tuning licence |
+| Re-opening founder decisions | Q1=A, Q2=B, Q3=A, Q4=A, Q5=A are settled; the grill's single round is spent; a blocking finding escalates to the founder, never re-grills |
+| Invented numbers | No measurement or test result exists in this spec. Every number cites the ADR (target) or the baseline receipt (measured) or a Verified code constant |
+
+---
+
+## 12. Traceability matrix
+
+| Requirement | User story | BDD scenario(s) | Test(s) |
+|---|---|---|---|
+| MC-P1 | US-P1 AC-1 | B-P1 | T1, T5 |
+| MC-P2 | US-P1 AC-2 | B-P2 | T2 |
+| MC-P3 | US-P1 AC-3 | B-P1 | T3 |
+| MC-P4 | US-P1 AC-4 | (B-P1) | T4 |
+| MC-P5 | US-P2 AC-1, AC-2 | B-P3 | T7, T8, T16 |
+| MC-P6 | US-P2 AC-4 | B-P5 | T10 |
+| MC-P7 | US-P2 AC-5 | B-P6 | T11 |
+| MC-P8 | US-P2 AC-6 | B-P7 | T12 |
+| MC-P9 | US-P2 AC-3 | B-P4 | T9 |
+| MC-P10 | US-P2 AC-7, AC-8 | B-P8, B-P9 | T13, T14 |
+| MC-P11 | US-P2 AC-9 | B-P10 | T15 |
+| MC-P12 | US-P3 AC-1 | B-P11 | T19 |
+| MC-P13 | US-P3 AC-2 | B-P11 | T20 |
+| MC-P14 | US-P3 AC-3 | B-P12 | T21 |
+| MC-P15 | US-P3 AC-4 | B-P13 | T22 |
+| MC-P16 | US-P3 AC-5 | B-P14 | T23 |
+| MC-P17 | US-P3 AC-6 | B-P14 | T24 |
+| MC-P18 | US-P3 AC-7 | B-P15 | T25 |
+| MC-P19 | US-P4 AC-1 | B-P16 | T26, T34 |
+| MC-P20 | US-P4 AC-2 | B-P17 | T27 |
+| MC-P21 | US-P4 AC-3 | B-P18 | T28 |
+| MC-P22 | US-P4 AC-4 | B-P19 | T29 |
+| MC-P23 | US-P4 AC-5 | B-P20 | T30 |
+| MC-P24 | US-P4 AC-6 | B-P21 | T31 |
+| MC-P25 | US-P4 AC-7 | B-P22 | T32 |
+| MC-P26 | US-P4 AC-8 | (T33 scope) | T33 |
+| MC-P27 | US-P5 AC-1…AC-4 | B-P23, B-P24 | T6, T37, §8.3 |
+| MC-P28 | US-P5 AC-5 | (§8.4) | T37, M-A…M-F |
+| MC-P29 | US-P6 AC-1, AC-2 | B-P25 | U-1…U-16, T35 |
+| MC-P30 | US-P7 AC-1 | B-P26 | §7 M-α1…M-α12 |
+
+Every MC-P traces to at least one story, scenario and test; every scenario traces to at least one story (its `Traces to` line) and one MC-P through this table; the seven user stories carry 34 numbered acceptance scenarios in §3, all covered above.
+
+---
+
+## 13. Definition of Done
+
+The repo's two never-merged lines, with the specific evidence each requires **for this package**:
+
+**Code correct and tested** — every test file of §6 exists, ran RED first (tests-only commit through CI, or the single permitted narrow local run, receipt kept), then GREEN on CI (go-build, go-vet, go-test, go-race, contracts, spa, typecheck all green on the feature branch — Hard Constraint #7: pre-existing failures are ours too); the CHECK audit ran §7's mutations with a saved log + exit code per mutation and zero surviving; no existing test was weakened, skipped or deleted (§6.7 fences green and unchanged); every measurement receipt names its build SHA, both clocks, n/median/p95/worst/failures, and its invalid-run discards; the §8.4 bars each judged or reported not-judgeable-with-evidence (a missing series is reported, never assumed).
+
+**Reachable by a user/agent** — the features the tests prove are invocable, not merely implemented:
+- **Hard Constraint #6**: each new tool (`list_email_attachments`, `read_email_attachment`, `download_email_attachment`) registered in the builtin catalog **and** carrying an explicit policy entry for every agent — `grep -rl '"list_email_attachments"' pkg/coreagent/ pkg/config/ pkg/tools/` returning nonzero per name, the shipped ceiling literal allow/allow/ask asserted effective per role (T29), not just present in defaults. Registration alone grants no access; policy and assignment checks both proven.
+- **A screen or component renders each feature**: the Mail panel (rail, list, reader, compose), the temporary Library viewer with its context bar, the Connectors mailbox settings — all exercised by the executed UAT rows U-1…U-16 with named screenshots, independently validated.
+- **The test plan EXECUTED, not written**: "written, not executed" is not testing — the UAT pack and the measurement receipts are artifacts from runs that happened, checked by an independent validator and by team-lead's output review.
+- **User-facing documentation** updated in the same change and audited (§14): docs-verifier compares every changed page against actual behaviour and the executed evidence.
+
+---
+
+## 14. User-facing documentation TODOs
+
+The ADR assigns the five user pages to the implementing leads (W3/W4/W8); this package's obligation is that **each documented claim lands only with its executed proof**, and docs-verifier audits the pages against the code in the same change:
+
+| Page (exact path) | What must be said (proof-linked) |
+|---|---|
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/mail.md` | Cached rows vs live validation and the visible age/stale label (U-2/U-3 evidence); unknown vs absent folder states and the name-setting prompt (U-4, M-01 wording); busy message and Retry rules (U-5); the 25/+25/200 paging and search reachability; paperclip indicator (U-10); Open as temporary viewing with no disk write, exit disposal, and the exact context bar (U-6); 25 MB preview/save cap and larger-files browser Download-only (T34-executed before the page claims it); Reply all recipient rule and No date (U-11/U-12); the Save-result-unknown state and its explicit-retry receipt (M-02 wording) |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/library.md` | A Mail Open is not a file/list entry and vanishes on exit; the mail bar and Back behaviour; Save-to-Library-first gating for edit/rename/move/PDF fill-sign; the mail → mailbox → UTC save-month hierarchy and sanitized numbered names (U-7); mail-derived HTML: original bytes, scripts off by default, per-file scripts checkbox (Q5=A wording, security-lead checks the page) |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/connectors.md` | Sent/Drafts override and Automatic-clear semantics; resolved-role status display; removal/cleanup-pending Retry; (Phase 2 later) Auto/IMAP/JMAP preference with visible fallback (Q2=B wording) |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/security.md` | What folder/header metadata is stored, that it is encrypted, key dependency, expiry/removal, Git/backup exclusions (T25-executed before "excluded" is claimed); no body cache (T26); the temporary source's resource policy (I-04 wording); ordinary tool ask/Auto vs the (non-existent) attachment-specific approval |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/troubleshooting.md` | Busy/backoff vs server connection limit; Refresh vs Retry; cache failure/key lock; missing vs unresolved folders (M-01); preview expiry/Back/reopen; over-cap Download-only vs refused Save; the Save-result-unknown state and what an explicit retry returns (M-02 wording); no credential/token-bearing logs or screenshots in support instructions |
+
+Internal receipts (measurement, mutation logs, UAT evidence packs) are **not** user documentation and stay out of `docs/` user pages.
+
+---
+
+## 15. Open questions (options + recommendation)
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| Q-P1 | **Instrument emission ownership.** One gateway-level emitter (W4) vs per-owner emission (W1 pool counters, W2 cache labels, W4 request envelope) | (a) W4 central middleware only; (b) split: W4 owns the request-scoped record envelope, W1/W2 supply pool/cache sub-fields | **(b)** — the fields live where the state lives, but one shared record shape (§6.1) and one sink interface prevent three half-instruments. The shape is frozen by this spec; implementers fill it |
+| Q-P2 | **Fault-injection harness shape.** Extend `startMemIMAP` in place vs a sibling wrapper file | (a) extend `pkg/email/imapserver_test.go` directly; (b) proposed `pkg/email/imapserver_faults_test.go` wrapper composing with `startMemIMAP` | **(b)** — `startMemIMAP` is load-bearing for existing tests; a wrapper keeps the existing harness untouched and makes fault usage explicit at each call site. Test code only, regardless |
+| Q-P3 | **Exclusion test before the autocommit job is traced.** The real data-repository autocommit job is unlocated (ADR E-Autocommit **Unknown**) | (a) mark the test skipped until W4 traces the job; (b) keep the test always-on and red until W4 lands the exclusion; (c) split: the `createTarGz`/Git-status half runs now, the staging-job half activates when W4 lands the trace | **(c)** — a skipped test is a silent gate (the false-green doc's trap 4 lesson); half-red still proves the archive/status halves while making the remaining gap visible in CI, and W4's trace remains the landing blocker for disk-cache activation |
+| Q-P4 | **UAT instance.** Live 13-mailbox instance for everything vs a separate seeded instance for the mutation-adjacent rows | (a) all rows on the live instance under §9.2 prohibitions; (b) behavioural rows on live, plus a scratch seeded mailbox (scratch `OMNIPUS_HOME`) for busy/stale/unknown states that need induced conditions | **(b)** — U-3/U-4/U-5 need induced failures that should not be provoked on the founder's live mailboxes; a scratch mailbox against the fake server keeps the live campaign read-only in spirit while the rows still execute end-to-end |
+| Q-P5 | **M-A repetitions vs thin live data.** ≥ 5 cold / ≥ 10 warm per message may exceed what 5 mailboxes holding 0–8 messages support | (a) hold the bar and report the shortfall as a failed bar; (b) record actual n, mark *not applicable* where the live data cannot support it, and backfill the series from M-D's controlled folders | **(b)** — matches the baseline receipt's already-stated rule ("record the actual n"); a bar impossible on the data is reported as not-judgeable-with-evidence, never silently passed; M-D provides the large-n companion series on the same clocks |
+| Q-P6 | **Mutation pass mechanics.** CHECK applies mutations via a scripted CI mutation job vs manual one-at-a-time local runs | (a) scripted mutation pass in CI (one job, serialized, log per mutation); (b) manual, dispatcher-owned narrow local runs only | **(a) where the harness allows, (b) as fallback** — serialized either way (the machine-load rule); scripted runs give a receipt per mutation without twelve round-trips through dispatch |
+
+---
+
+## 16. Interfaces — PUBLISHES and CONSUMES
+
+So the packages can be built in parallel without editing each other's files:
+
+### 16.1 PUBLISHES (this package is the source of truth for)
+
+| Artifact | Consumers |
+|---|---|
+| The instrumentation record shape and safety rules (§6.1, MC-P1/P2) — **the only normative definition** | W1/W2/W4 (implement emission), W0 (no contract impact — in-process/log surface), the measurement harness |
+| The assigned test-file names and their proof obligations (§6.2–§6.5) | qa-lead RED (author), the production owners (must make green without weakening), CHECK auditor |
+| The mutation list (§7) | CHECK auditor; the 5-reviewer gate's pr-test-analyzer |
+| The measurement procedures, invalid-run rule and bar judgements (§8) | The measurement lanes (uat-tester or a dedicated measurement dispatch), team-lead's landing gate |
+| The UAT row list, prohibitions and evidence rules (§9) | uat-tester lanes, uat-validator |
+| The test-integrity rules application (§10) | Every reviewer of this change's tests |
+
+### 16.2 CONSUMES (this package edits none of these; tests bind to their frozen shapes)
+
+| Producer | What is consumed | Freeze point |
+|---|---|---|
+| W0 | Generated contract types: `MailReadMetadata` (+ `publication_revision`), `mode=cache_first|live`, `availability`/`mapping_source`/nullable `total`, `MailUnavailableError` reasons, paging shapes, tool result schemas, `has_attachments`, nullable `date` | Contracts land/freeze before this package's GREEN; tests never hand-write wire types |
+| W1 | Pool/budget manager interfaces (acquire/release/leases/reservations), watcher scheduler seams | Interface freeze per the ADR's "freeze acquire/release … interface shapes with the architect" |
+| W2 | Discovery/absence/unknown classification, cache envelope + `Store.DeriveSubkey` usage, header/count cache surfaces | Same freeze |
+| W4 | Gateway wiring: observer presence, removal cascades, preview mint/byte-path split, backup/archive exclusion, `Cache-Control: no-store` serving | Same freeze |
+| W7 | Save service (`Transfer`), save-operation token reconciliation, sanitized naming | Feature tests written to the ADR's F2/M-02 rules before the service lands (RED) |
+| W8/W3 | Viewer source union, resource-policy pass-through, handoff focus/announcement contract | E2E journeys written to the ADR's F1/I-04/I-06 rules |
+| W9 | Sanitizer property/value table + parser behaviour | Style tests written to the ADR's F4 ban/survive lists |
+| W10 | Tool adapters, catalog/inventory/defaults, `BuildReplyRecipients` | Tool tests written to the ADR's F3 policy seams |
+| Baseline receipts | `baseline-series.md`, `lane-M.md`, `email-loading-rca.md` — every baseline number and missing-series gap | Read-only; never re-measured into this spec |
+
+**File-ownership fence:** this package writes only its own test files (§6 assignments) and this spec. No W0–W10 production file, contract file, or another package's spec is edited by the proof package — overlap is a rule-15 coordination finding, not a merge conflict to resolve quietly.
+
+---
+
+## 17. Assembly summary (plan-spec Phase 6)
+
+| Measure | Count |
+|---|---|
+| User stories | 7 (US-P1…US-P7) |
+| Acceptance scenarios | 34 numbered across the stories |
+| BDD scenarios | 26 (B-P1…B-P26) — Happy 7 · Alternate 7 · Error 9 · Edge 3 |
+| Machine-verifiable constraints | 30 (MC-P1…MC-P30) |
+| Test plan rows | 38 named tests (T1…T38) across instrument/runtime/cache/feature/E2E + 16 UAT rows + 12 mutations |
+| Test datasets | 8 (DS-P1…DS-P8) |
+| Measurement arms | 6 (M-A…M-F) + 9 judged bars |
+| Open questions | 6 (Q-P1…Q-P6), each with a recommendation |
+| Non-goals | 8 |
+| Founder questions opened | 0 (all decisions settled; open questions are engineering coordination for team-lead) |
+
+---
+
+## 18. Evidence table
+
+| Claim | Evidence | Certainty |
+|---|---|---|
+| The gateway log times no mail operation; every existing Mail timing is click-to-screen from lane-M | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/receipts/baseline-series.md` §1, §3 (628,457-line scan; per-operation counts; zero success-timing lines) | Verified (the receipt's scan); not re-run in this task |
+| Mail handlers log failures only in this checkout | `pkg/gateway/rest_mail.go::mailErr502` — `logsafeError("rest: mail upstream failure", …)` is the sole upstream-outcome call (read this session) | Verified |
+| The fake-IMAP harness and the three missing-folder regression tests exist as cited | `pkg/email/imapserver_test.go::startMemIMAP` (signature read); `pkg/email/view_missing_folder_test.go` (three `func Test` names read) | Verified |
+| Today's coalescing key excludes pair and generation | `pkg/email/mail_budget.go::MailBudgetRequest.flightKey` — `Account + "\x00" + Operation + "\x00" + json(Params)`, empty params opt out (read this session) | Verified |
+| Bounds and constants cited | `pkg/email/transport.go::dialTimeout` = 30 s, `::commandTimeout` = 45 s; `pkg/email/view.go::maxViewPartBytes` = `25 << 20`; `pkg/gateway/mail_preview_token.go::MailPreviewTokenTTL` = 15 min (all read this session) | Verified |
+| Panel query retry asymmetry and 30 s refetch | `src/components/workspaces/mail/MailPanel.tsx::FOLDERS_REFETCH_MS`/`::SUMMARY_REFETCH_MS` = 30 000; `retry: false` on folders/messages/detail; `src/lib/queryClient.ts::shouldRetryQuery` (read this session) | Verified |
+| Typed busy/backoff mapping exists | `pkg/gateway/rest_mail_budget.go::mailBudgetWrap` + generated `MailUnavailableError` `backoff`/`busy` codes (read this session) | Verified |
+| E2E harness files exist | `tests/e2e/setup.ts`, `tests/e2e/shards.json`, `tests/e2e/fixtures/gateway-process.ts` (listed this session) | Verified |
+| ADR bars, founder answers, corrections I-01…I-06/M-01/M-02 and work-package ownership | `docs/internal/architecture/ADR-20261001-mail-live-access-pooling-folder-discovery-and-cache.md` (full 807-line read); `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill-report.md` (full read) | Verified (as design record — targets, not results) |
+| Symbols cited "per ADR" but not re-read this session | `pkg/email/view.go::ReadView/ResolveRef/MarkSeenIn/fetchMailRows/SanitizeAttachmentName`; `pkg/email/watcher.go::WatcherBackoff`; `pkg/gateway/rest_settings.go::createTarGz`; `pkg/credentials/store.go::Store.DeriveSubkey`; `pkg/library/transfer.go::Root.CreateUnique`; `pkg/gateway/embed.go::spaBaseContentSecurityPolicy`; `src/lib/url-safe.ts::isDisplayableImageSrc`; `pkg/config/defaults.go::defaultToolPoliciesGeneral`; `pkg/config/validate.go::ReconcileToolPolicyCeiling`; `pkg/tools/compositor.go::resolveEffectivePolicyWith`; `pkg/tools/auto_approve.go::autoApproveClasses`; `pkg/coreagent/role_policies_adr090.go::ADR090RolePolicyInventory` — each carries the ADR's evidence label (E-* rows) | Inferred from the ADR's verified reads; not re-read here — flagged so reviewers know which citations are second-hand |
+| All proposed filenames (test files, fault wrapper, cache path examples) are future work, not existing files | §6/§9 naming labelled "assignments"; target spec path confirmed absent before writing (`ls` exit non-zero for the spec path pre-creation) | Verified (absence check) |
+| No measurement, test run, or benchmark performed by this task | Only reads, this spec's writes, and git commits; no Go/vitest/Playwright process started | Verified (session scope) |
+| **Self-check** | Re-read the assembled spec against the dispatch's nine mandatory sections and the "cover at least" list: instrument-first ✓ (§6.1), runtime list ✓ (§6.2), cache list ✓ (§6.3), feature list ✓ (§6.4), mutation list ≥ 8 ✓ (12, §7), executable measurement plan ✓ (§8), UAT coverage/prohibitions/screenshots ✓ (§9), integrity rules ✓ (§10), DoD two lines ✓ (§13), docs TODOs ✓ (§14), open questions ✓ (§15), PUBLISHES/CONSUMES ✓ (§16). Every code citation traced to a this-session read or labelled per-ADR; git log confirms nine single-file commits authored as Daniel Piatkowski with no co-author trailers; `git diff --check` clean | Verified |
