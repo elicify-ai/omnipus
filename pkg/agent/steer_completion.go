@@ -1072,9 +1072,10 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 // wholesale: the disposition derives the outcome from runErr (nil → the
 // child's answer as a normal final-answer completion; non-nil → a failed
 // child whose reason names the judge), Deliver runs first, the terminal
-// write carries the existing sentinels, and the Mutate-success path's
-// pair-end (e)① circled-one ends the goal when the write lands with the goal
-// still active.
+// write carries the existing sentinels, and the Mutate-success path ends
+// only the child's TURN: under MAJ-003 the terminal write never ends the
+// session-owned goal — only natural met/exhaustion adjudication or an
+// explicit clear (/goal clear, authorized clear_goal) does that.
 //
 // Every error here is logged and swallowed: the goal decision is already
 // settled at this point, so a delivery or persist failure is a repairable
@@ -1111,8 +1112,9 @@ func (al *AgentLoop) completeSteeredTurnAfterGoal(ctx context.Context, sessionID
 // on a turn exit or cancel, so without this call nothing re-enters it — the
 // child record stays `running` until the next boot sweep repairs it (architect
 // finding F4, #984 follow-up). The goal record itself is already ended by the
-// caller; the tail's Deliver + terminal write + pair-end (e)① then run with
-// the goal gone, so the (a) gate passes and nothing loops.
+// caller; the tail's Deliver + terminal write then run with the goal gone —
+// the write ends only the child's turn, never the goal — so the (a) gate
+// passes and nothing loops.
 //
 // A LIVE turn is deliberately left alone: its own exit re-runs the gate (the
 // goal is gone by then) and completes it through the same tail. NeedsInput
