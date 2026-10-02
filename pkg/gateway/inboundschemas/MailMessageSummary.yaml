@@ -101,3 +101,36 @@ properties:
       (D38, FR-039). Derived from the fetched flag list on every fetch —
       never stored by Omnipus (D6). When the mail server rejects custom
       keywords the value is false and nothing errors (MC-36).
+  message_ref:
+    type: string
+    minLength: 5
+    description: >
+      Gateway-issued opaque message reference for this message
+      (mail-live-access-landing-order register row 8; ADR correction I-03)
+      — bound to the authorized pair, folder and configuration generation,
+      carrying its folder epoch. Issued with the result that names the
+      message and consumed unchanged by every follow-up operation
+      (attachment preview, save, reply context, seen) — never a
+      model-synthesized identity, never dependent on the optional
+      Message-ID, and validated against the live folder epoch on the same
+      lease that serves the follow-up. A mismatched epoch, pair or
+      generation is the typed 409 stale-reference refusal, before any
+      fetch or mutation. Optional on the wire until the issuing gateway
+      work lands (the is_knowledge_base precedent); producers emit it
+      always once landed.
+    example: "uid:456:123"
+  has_attachments:
+    type: boolean
+    description: >
+      Paperclip indicator (F7, #1174 display half; register row 8) —
+      producers serialize it always once the MIME classifier lands; absent
+      on results predating it means not-yet-computed, and false (once
+      present) is confirmed absence, never an omitted or uncomputed value.
+      Derived from MIME structure/part headers in the bounded list fetch —
+      never by downloading message or attachment bodies. Actual
+      named/attachment parts count; inline CID resources alone and the
+      dedicated Omnipus draft-body marker do not, but a genuine user
+      message.md does. If metadata cannot be classified the read fails
+      visibly rather than fabricating false. The indicator is inside the
+      allowed header-cache field set; attachment bytes and lists are not.
+    example: true

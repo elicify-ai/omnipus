@@ -138,6 +138,26 @@ properties:
     description: Attachment descriptors (D28) — sanitized names, part indices.
     items:
       $ref: ./MailAttachment.yaml
+  message_ref:
+    type: string
+    minLength: 5
+    description: >
+      Gateway-issued opaque message reference (correction I-03; register
+      row 8) — same shape and rules as MailMessageSummary.message_ref. The
+      detail result's issued reference: every follow-up operation on this
+      message (attachment preview, save, reply context, seen) consumes it
+      unchanged, and the gateway validates its embedded folder epoch,
+      pair and configuration generation on the same lease that serves the
+      follow-up — a mismatch is the typed 409 stale-reference refusal
+      before any fetch or mutation.
+    example: "uid:456:123"
+  has_attachments:
+    type: boolean
+    description: >
+      Paperclip indicator (F7) — same derivation and semantics as
+      MailMessageSummary.has_attachments; carried consistently on the
+      detail shape (register row 8). False is confirmed absence.
+    example: true
   body_markdown:
     type: string
     nullable: true

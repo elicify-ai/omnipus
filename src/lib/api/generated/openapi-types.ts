@@ -1249,7 +1249,7 @@ export interface paths {
         post?: never;
         /**
          * Remove one (agent, workspace) email mailbox account (M11)
-         * @description Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent's email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched.
+         * @description Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent's email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched. The truthful removal discrimination (MailboxRemovalResult: removed versus removed_cleanup_pending with an opaque cleanup intent and the separately authorized Retry-cleanup operation, ADR-20261001 "Removal with incomplete cleanup" row) replaces this response body together with its cascade handler work — until then a cleanup failure here is not reported as a completed purge.
          */
         delete: operations["deleteAgentMailbox"];
         options?: never;
@@ -1271,6 +1271,26 @@ export interface paths {
         get: operations["listMailboxes"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/cleanup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry the pending cleanup of a removed mailbox (removal cascade)
+         * @description Separately authorized Retry-cleanup operation for a mailbox removal that ended removed_cleanup_pending (ADR-20261001 "Removal with incomplete cleanup" row; mail-live-access-landing-order register rows 5/22 — W0 is the single publisher). Keyed ONLY by the opaque cleanup_intent — it keeps working after the mailbox's config row is gone, because the intent is the sole address of the pending cleanup. Never reports success for a logged unlink failure: the truthful outcome discrimination (removed versus removed_cleanup_pending) returns again. An unknown, expired or already-completed intent is 404. The pair stays disabled and acquires nothing until this returns removed.
+         */
+        post: operations["retryMailboxCleanup"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3406,12 +3426,53 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Download one attachment part of one message
+         * Download one attachment part of one message (browser-Download byte path)
          * @description Streams one MIME attachment part (D28, email-mail-view-spec §2.3). Served with Content-Disposition: attachment always — an .html attachment is never inline (MC-42) — plus X-Content-Type-Options: nosniff, an extension-derived content type (extension decides, never the bytes nor the MIME part's self-declared type), and the RFC 6266 dual-encoded filename from the sanitized MailAttachment.filename. No CSP on attachment responses (Library MV-13 second half). The download never changes flags.
+         *     This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-order register rows 5/8; ADR correction I-05): attachment disposition, its existing filename/destination behaviour, and a streaming role that serves larger-than-preview files to the browser without ever becoming a preview source. The temporary viewer's bytes come from the SEPARATE preview-purpose resource carried by MailAttachmentPreviewResponse.content_source.byte_url — token-bound to the minted grant, inline-disposition, no-store, capped at 25 MiB actual decoded bytes. One unlimited path shared by both purposes is forbidden: this endpoint must never serve as the preview source, and the preview endpoint must never serve as a browser download.
          */
         get: operations["getMailAttachment"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}/save-to-library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save one attachment part into the workspace Library (F2)
+         * @description Explicit user-directed export of one attachment part into the workspace Library hierarchy mail → <mailbox> → <year-month> (ADR-20261001 "Save-to-workspace request/response (F2)" row; register rows 8/22 — W0 is the single publisher; correction M-02 reconciliation). The mailbox component, sanitized unique leaf name and save-time UTC month are SERVER-selected — no arbitrary save path and no overwrite switch; an existing name gets a numbered suffix, never an overwrite. This is NOT an attachment cache exception: the save is a normal Library write audited as mail.attachment_saved. The same save path serves the agent's download_email_attachment result (F3) under its normal tool permission. The save mutation is never coalesced or replayed; a lost response resolves ONLY via the explicit same-token retry, which returns the prior receipt for an already-committed save — exactly one file (correction M-02). Refusals are typed errors with a safe reason and no invented path: missing mailbox/workspace authority, permission refusal (effective deny or declined ask), stale/deleted message or part (typed 409), over-cap bytes (413), filesystem policy, unsafe path, missing/broken root, parent-file conflict, exhausted names, disk full or failed transfer. Browser Download is a separate action and never a synonym for Save.
+         */
+        post: operations["saveMailAttachmentToLibrary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/reply-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Assemble the reply/quote context for one message (F5)
+         * @description Session-authenticated message subresource assembling reply/recipients and the quoted original (ADR-20261001 "Reply / Reply all context (F5)" row; register row 8 — W0 is the single publisher). Gateway and agent adapter call the ONE shared recipient rule (BuildReplyRecipients); the SPA consumes the result and implements no second recipient algorithm. reply = sender/Reply-To only; reply_all = To plus Cc (original To + Cc minus own address and primary, deduplicated, never the original Bcc). Produces current-compose state ONLY — never a server draft, never a body cache, never a send; the existing generated send payload remains the final human-reviewed recipient/body source. A stale response for a different message/mailbox is discarded by the consumer.
+         */
+        post: operations["getMailReplyContext"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3519,6 +3580,46 @@ export interface paths {
          */
         post: operations["mintMailHtmlPreviewToken"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mail/attachment-preview-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a metadata-only preview grant for one attachment part (F1)
+         * @description Mints the temporary attachment-preview credential (ADR-20261001 "Temporary preview mint (F1)" row; mail-live-access-landing-order register rows 5/8 — the preview-versus-download wire split, correction I-05). Session-authenticated and STAYS in the API namespace, like the HTML preview mint; the byte serving route is the token-only non-API preview-purpose endpoint named by the response's content_source.byte_url (the serving-prefix family is deliberately not enumerated as operations in this document — §2.3a, Library serving-prefix precedent). Minting is metadata-only: it creates no file, retains no bytes and writes nothing to disk — the grant holds authorization/reference metadata only, and every byte read is a fresh request-scoped fetch through the preview-purpose endpoint (inline disposition, Cache-Control: no-store, the 25 MiB actual-decoded-byte cap enforced BEFORE any success state is committed; a mid-transfer size or decode failure aborts with a visible typed error, so a truncated stream can never render as a completed preview). This is the ONE live-IMAP fetch of the Open flow: only the selected part is fetched (part-specific PEEK — flags unchanged), never the whole message or an unrelated part. The grant dies on view exit, expiry, revoke and panel close. This mint is NEVER the browser-Download path — that remains getMailAttachment's exclusive role.
+         */
+        post: operations["mintMailAttachmentPreview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mail/attachment-preview-token/{previewId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke one attachment preview grant (F1 ownership lifecycle)
+         * @description Revokes one metadata-only preview grant (ADR-20261001 F1 lifecycle table: "Back, Close, another attachment/message, workspace navigation, Mail/Library panel close or logout — revoke its source token"). After a successful revoke the preview-purpose byte endpoint answers 404 only — expired/unknown/revoked are deliberately indistinguishable (MC-43/MC-45 convention). Revoking an unknown or already-expired grant is 404, not an error the client must distinguish; bounded token expiry remains the backstop when a close could not be delivered. The SPA calls this on every temporary-view exit path; a late mint's grant is discarded and revoked, never rendered.
+         */
+        delete: operations["revokeMailAttachmentPreview"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4915,6 +5016,17 @@ export interface components {
              * @example true
              */
             is_text_editable: boolean;
+            /**
+             * @description Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
+             * @example mail_restricted
+             * @enum {string}
+             */
+            preview_profile?: "workspace" | "mail_restricted";
+            /**
+             * @description The per-file scripts checkbox (founder Q5=A) — true only when the user explicitly allowed scripts for THIS one file, switching only its preview to the ordinary isolated script-permitting profile. Visible, per file, never silent and never global. Meaningful only with preview_profile=mail_restricted; on ordinary workspace files the isolated profile is the default state and this field is absent.
+             * @example false
+             */
+            preview_scripts_allowed?: boolean;
         };
         /**
          * LibraryEntryMount
@@ -12387,7 +12499,7 @@ export interface components {
         };
         /**
          * MailFolder
-         * @description One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox, as listed live from the mail server. Counts are live IMAP values at request time; the unread count exists for the Inbox only and is null everywhere else (round-1 MIN-005).
+         * @description One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox, as listed from the mail server (email-mail-view-spec D5; ADR-20261001 "Missing versus unknown folder/count" row; mail-live-access-landing-order register row 3 — W0 is the single publisher, w2's discovery is the only producer of the role fields' values). Counts and freshness are per role: mapping and count metadata are separate objects, and a confirmed-absent Sent/Drafts has total=0 with an explanation while an unknown or failed count has total=null — never an invented zero. Missing INBOX remains an account error, not an unknown folder. The role fields (availability, uidvalidity, mapping_source) and the two metadata objects are optional on the wire until the discovery producer lands — fixtures and builds predating them keep working (the is_knowledge_base precedent); producers emit them always once landed.
          */
         MailFolder: {
             /**
@@ -12402,7 +12514,7 @@ export interface components {
              */
             display_name: string;
             /**
-             * @description Live message count of the folder.
+             * @description Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation; an unknown or failed count is null — a fabricated 0 never masquerades as "checked, empty" (correction M-01; w2 spec §4.1).
              * @example 42
              */
             total: number;
@@ -12411,14 +12523,36 @@ export interface components {
              * @example 3
              */
             unread_count: number | null;
+            /**
+             * @description [Optional on the wire until the discovery producer lands — fixtures and builds predating this field keep working, the is_knowledge_base precedent; producers emit it always once landed.] Discovery outcome for this role (correction M-01). present = a resolved mapping was validated against the server. absent = discovery completed successfully AND every candidate probe returned the server's structural not-found — confirmed absence only; the role is shown empty with the server-folder-absent explanation. unknown = unresolved: discovery commands failed or timed out, an auth/TLS/DNS/ permission error occurred, LIST-EXTENDED was unsupported with no candidate probe succeeding, or the server simply holds an untagged, locally named folder outside the candidate list — from the client's seat that is indistinguishable from absence, so the role renders unresolved with the per-mailbox name setting offered. Absence is never inferred from a finite candidate list failing (w2 spec §4.1).
+             * @example present
+             * @enum {string}
+             */
+            availability?: "present" | "absent" | "unknown";
+            /**
+             * Format: int64
+             * @description IMAP UIDVALIDITY of the resolved folder — the epoch its UIDs (and any paging cursors) are valid in. Null before validation or when the role's mapping is unknown: unknown is represented as null, never a fabricated version (ADR P1.3 "UIDVALIDITY changes" row). A changed uidvalidity discards affected header entries and cursors before new rows are published.
+             * @example 456
+             */
+            uidvalidity?: number | null;
+            /**
+             * @description How this role's folder name was resolved (register row 3 settles the five values; the ADR's four-value proposal is superseded). override = the operator's explicit per-mailbox Sent/Drafts name setting wins. special_use = the server advertised the role (LIST-EXTENDED SPECIAL-USE). fallback = a common-name candidate probe succeeded without special-use support. saved = a still-valid previously saved mapping was reused. none = no recognized role and no successful candidate probe (availability=unknown), or the role is confirmed absent.
+             * @example special_use
+             * @enum {string}
+             */
+            mapping_source?: "override" | "special_use" | "fallback" | "saved" | "none";
+            mapping_metadata?: components["schemas"]["MailReadMetadata"];
+            count_metadata?: components["schemas"]["MailReadMetadata"];
         };
         /**
          * MailFolderList
-         * @description The three mail folders (D5) of one mailbox with live counts — the response of GET /workspaces/{id}/mail/{agentId}/folders.
+         * @description The three mail folders (D5) of one mailbox with counts and freshness — the response of GET /workspaces/{id}/mail/{agentId}/folders (mail-live-access-landing-order register rows 2/3; ADR-20261001 "Freshness metadata" row). The list-level metadata describes THIS read; each folder carries its own mapping and count metadata, because a mapping validation and a count fetch are separate successes with separate timestamps.
          */
         MailFolderList: {
             /** @description Exactly the three D5 folders (Inbox, Sent, Drafts). */
             folders: components["schemas"]["MailFolder"][];
+            /** @description Optional on the wire until the cache/read producers land (the is_knowledge_base precedent — pre-field fixtures keep working); producers emit it always once landed. Describes THIS read; each folder's mapping/count metadata are separate. */
+            metadata?: components["schemas"]["MailReadMetadata"];
         };
         /**
          * MailMessageSummary
@@ -12481,22 +12615,49 @@ export interface components {
             is_omnipus_draft: boolean;
             /** @description Whether the message's flag list carries the $OmnipusAgentRead keyword (D38, FR-039). Derived from the fetched flag list on every fetch — never stored by Omnipus (D6). When the mail server rejects custom keywords the value is false and nothing errors (MC-36). */
             read_by_agent: boolean;
+            /**
+             * @description Gateway-issued opaque message reference for this message (mail-live-access-landing-order register row 8; ADR correction I-03) — bound to the authorized pair, folder and configuration generation, carrying its folder epoch. Issued with the result that names the message and consumed unchanged by every follow-up operation (attachment preview, save, reply context, seen) — never a model-synthesized identity, never dependent on the optional Message-ID, and validated against the live folder epoch on the same lease that serves the follow-up. A mismatched epoch, pair or generation is the typed 409 stale-reference refusal, before any fetch or mutation. Optional on the wire until the issuing gateway work lands (the is_knowledge_base precedent); producers emit it always once landed.
+             * @example uid:456:123
+             */
+            message_ref?: string;
+            /**
+             * @description Paperclip indicator (F7, #1174 display half; register row 8) — producers serialize it always once the MIME classifier lands; absent on results predating it means not-yet-computed, and false (once present) is confirmed absence, never an omitted or uncomputed value. Derived from MIME structure/part headers in the bounded list fetch — never by downloading message or attachment bodies. Actual named/attachment parts count; inline CID resources alone and the dedicated Omnipus draft-body marker do not, but a genuine user message.md does. If metadata cannot be classified the read fails visibly rather than fabricating false. The indicator is inside the allowed header-cache field set; attachment bytes and lists are not.
+             * @example true
+             */
+            has_attachments?: boolean;
         };
         /**
          * MailMessagePage
-         * @description One page of mail message envelopes (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Truncation is explicit — the page never silently drops rows (mirrors pkg/email/transport.go::SearchResult's explicit-truncation contract).
+         * @description One page of mail message envelopes (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Paging is cursor-based and explicit (ADR-20261001 "Paging and search" row; mail-live-access-landing-order register row 4 — W0 is the single publisher): next_cursor is an opaque string binding the pair/config generation, folder version, query and number delivered in this browse/search sequence; has_more states whether a next page exists; view_limit_reached marks the 200-rows-per-folder-per-view hard ceiling, beyond which the user searches — no next browse cursor is issued at the ceiling. The page never silently drops rows. Legacy numeric paging (truncated / next_before_uid / the before_uid query parameter) is superseded by the cursor fields and is retained only until the panel's consumer migration lands (landing-order Wave C); it is then removed in one atomic contract step.
          */
         MailMessagePage: {
             /** @description The envelopes of this page, newest first. */
             messages: components["schemas"]["MailMessageSummary"][];
-            /** @description Whether more messages exist beyond this page. */
+            /** @description Legacy explicit-truncation flag (email-mail-view-spec §2.3) — superseded by has_more; retained only until the consumer migration lands, then removed. */
             truncated: boolean;
             /**
              * Format: int64
-             * @description The before_uid cursor for the next page when truncated is true; null when this page is the last one.
+             * @description Legacy numeric cursor — superseded by next_cursor; retained only until the consumer migration lands, then removed.
              * @example 87
              */
             next_before_uid: number | null;
+            /**
+             * @description Opaque cursor for the next page when has_more is true and the view limit is not reached; null on the last page or at the 200-row ceiling. Binds the pair/config generation, folder version (UIDVALIDITY), the browse/search query and the number of rows already delivered in this sequence. Presenting a stale or mismatched cursor returns the typed 409 stale-cursor result — the client resets the view once, never spins or replays. Optional on the wire until the cursor-issuing producer lands (the is_knowledge_base precedent); producers emit it always once landed.
+             * @example MWI6NDU2OjEyMztCMQ
+             */
+            next_cursor?: string | null;
+            /**
+             * @description Whether more messages exist beyond this page in this sequence. Optional on the wire until the cursor-issuing producer lands; the legacy truncated flag remains authoritative for pre-cursor consumers until the migration removes it.
+             * @example true
+             */
+            has_more?: boolean;
+            /**
+             * @description True when this page delivered up to the 200-rows-per-folder-per-view hard ceiling (ADR P1.1 "Display pagination") — no next browse cursor is issued; the panel offers the reachable folder-scoped search instead ("Search to find older messages"). Older loaded pages remain the active view's working set and are released on view exit; they never enlarge the reusable newest-50 cache. Optional on the wire until the producer lands.
+             * @example false
+             */
+            view_limit_reached?: boolean;
+            /** @description Optional on the wire until the cache/read producers land; producers emit it always once landed. */
+            metadata?: components["schemas"]["MailReadMetadata"];
         };
         /**
          * MailMessage
@@ -12570,6 +12731,16 @@ export interface components {
             bcc: string[] | null;
             /** @description Attachment descriptors (D28) — sanitized names, part indices. */
             attachments: components["schemas"]["MailAttachment"][];
+            /**
+             * @description Gateway-issued opaque message reference (correction I-03; register row 8) — same shape and rules as MailMessageSummary.message_ref. The detail result's issued reference: every follow-up operation on this message (attachment preview, save, reply context, seen) consumes it unchanged, and the gateway validates its embedded folder epoch, pair and configuration generation on the same lease that serves the follow-up — a mismatch is the typed 409 stale-reference refusal before any fetch or mutation.
+             * @example uid:456:123
+             */
+            message_ref?: string;
+            /**
+             * @description Paperclip indicator (F7) — same derivation and semantics as MailMessageSummary.has_attachments; carried consistently on the detail shape (register row 8). False is confirmed absence.
+             * @example true
+             */
+            has_attachments?: boolean;
             /** @description The draft's editable Markdown source: the stored text/markdown part of an Omnipus draft whose X-Omnipus-Render-Hash matches the rendered text part; otherwise the server-derived Markdown of a foreign draft (FR-030) with markdown_lossy=true. Null on non-draft messages without an editable source. */
             body_markdown: string | null;
             /** @description True when body_markdown was derived rather than read from a stored text/markdown part — editing such a draft may lose formatting (D24; the panel states the loss plainly). */
@@ -12598,10 +12769,16 @@ export interface components {
              */
             content_type: string;
             /**
-             * @description Decoded attachment size in bytes.
+             * @description Decoded attachment size in bytes (ADR-20261001 "Attachment metadata (F1/F3/F7)" row; register row 8). Metadata-only list/read results establish structure, not a decoded transfer, so a labelled reported_size_bytes may carry the server-reported transfer size instead — the decoded value is never silently substituted by IMAP structure octets (potentially encoded) and never by 0 for unknown. Becomes nullable (unknown honestly) together with its consumer changes per the landing order's Wave C/D sequencing; the actual decoded transfer remains the cap authority.
              * @example 1048576
              */
             size_bytes: number;
+            /**
+             * Format: int64
+             * @description Optional, labelled server-reported transfer size for the part — present only when the server reports one. Distinct from the decoded size_bytes: metadata-only reads may carry this without having decoded the part, and a false or unknown report is caught at actual transfer time (the preview contract aborts on a mid-transfer size or decode failure — correction I-05). Never substituted for size_bytes.
+             * @example 1049600
+             */
+            reported_size_bytes?: number;
         };
         /**
          * MailboxNewMailSummary
@@ -12904,6 +13081,311 @@ export interface components {
              * @description Present when code=backoff.
              */
             next_attempt_at?: string;
+            /**
+             * @description Safe refusal reason (mail-live-access-landing-order register row 7 — W0 is the single publisher; ADR-20261001 "Human Retry and upstream limits" row). pool_busy = the global eight-socket ceiling stayed exhausted past the bounded acquisition wait (distinct from an account-slot refusal — w1 spec §4.6). account_busy = the per-account two-slot work gate (the existing busy code's queue-timeout case). server_connection_limit = the server itself refused further connections and the response structurally established that limit — recognized only from the structural response, never promoted from unknown response text; the refused session is retired and the effective per-mailbox capacity for that server is reduced in-process. backoff = the watcher backoff gate. Present where applicable; absent = no more specific reason than code carries. Retry remains explicit and bounded: a human retry bypasses only backoff, never the semaphore, socket cap, TLS validation or mutation safeguards.
+             * @example pool_busy
+             * @enum {string}
+             */
+            reason?: "pool_busy" | "account_busy" | "server_connection_limit" | "backoff";
+        };
+        /**
+         * MailReadMetadata
+         * @description Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+         */
+        MailReadMetadata: {
+            /**
+             * @description Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+             * @example memory
+             * @enum {string}
+             */
+            source: "live" | "memory" | "encrypted_disk" | "none";
+            /**
+             * Format: date-time
+             * @description RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+             * @example 2026-10-02T09:15:00Z
+             */
+            last_validated_at: string | null;
+            /**
+             * @description True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+             * @example false
+             */
+            stale: boolean;
+            /**
+             * @description True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+             * @example false
+             */
+            refresh_needed: boolean;
+            /**
+             * @description Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+             * @example cache_unavailable
+             * @enum {string|null}
+             */
+            notice_code: "cache_unavailable" | null;
+            /**
+             * @description Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+             * @example m1f2-9c4e
+             */
+            publication_revision: string | null;
+        };
+        /**
+         * MailStaleReferenceError
+         * @description Typed 409 body for a stale Mail cursor or reference (mail-live-access-landing-order register row 4 — W0 is the single publisher; ADR-20261001 "Human Retry and upstream limits" row: "Use a typed 409 stale-cursor/reference result to request one view reset; never spin/reset/replay indefinitely"). code=stale_cursor: a paging/search cursor no longer matches the folder epoch (UIDVALIDITY), configuration generation or browse/search sequence it was issued in — the client restarts the list view once. code=stale_reference: a message reference's embedded folder epoch, pair or configuration binding no longer matches the live folder (correction I-03) — the client re-reads the list; the gateway refused the fetch/mutation BEFORE any server work. Never a best-effort result against whatever the folder now holds. Shares the error/code convention with ErrorResponse and MailUnavailableError.
+         */
+        MailStaleReferenceError: {
+            /**
+             * @description Human-readable message, safe to display.
+             * @example This message changed or was deleted. Refresh the list.
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminator. stale_cursor = the paging/search cursor is stale or mismatched — reset the view once. stale_reference = the message reference failed its epoch/pair/generation validation on the lease that would have served it — refresh the list. A client branches on it without string matching on the message.
+             * @example stale_reference
+             * @enum {string}
+             */
+            code: "stale_cursor" | "stale_reference";
+        };
+        /**
+         * MailAttachmentPreviewRequest
+         * @description Mint request for one attachment's temporary, metadata-only preview grant (ADR-20261001 "Temporary preview mint (F1)" row; w4 spec §2.3 — W0 is the single publisher). Carries no host path, arbitrary URL, destination, upload bytes or new approval: authorization binds to the current session, the exact pair/config/folder generation, the message and the selected part. Minting creates no file, retains no bytes and writes nothing to disk (F1 "No storage" row) — it is the metadata grant the temporary Library viewer consumes. Rate-limited by the existing dedicated preview-token limiter family.
+         */
+        MailAttachmentPreviewRequest: {
+            /**
+             * @description Workspace of the mailbox pair.
+             * @example ws_my_workspace
+             */
+            workspace_id: string;
+            /**
+             * @description ID of the mailbox-owning agent.
+             * @example mia
+             */
+            agent_id: string;
+            /**
+             * @description Folder slug — exactly inbox, sent or drafts (MC-5).
+             * @example inbox
+             * @enum {string}
+             */
+            folder: "inbox" | "sent" | "drafts";
+            /**
+             * @description The gateway-issued message reference from the list/read result that named this attachment (correction I-03) — consumed unchanged, never a model-synthesized identity and never dependent on the optional Message-ID. Bound to the authorized pair, folder and configuration generation; validated on the same lease that serves the preview.
+             * @example uid:456:123
+             */
+            message_ref: string;
+            /**
+             * @description Stable leaf index of the attachment part (MailAttachment.part_index) — resolved against MIME including nested parts, with the Omnipus draft-body marker excluded. Only this part is ever fetched (PEEK — flags unchanged).
+             * @example 2
+             */
+            part_index: number;
+            /**
+             * @description Opaque per-panel observer ID (mail_panel_observer frame) when the mint belongs to an open Mail panel — binds the grant's ownership lifecycle to that observer so panel close revokes it. Absent for non-panel (agent-tool) mints; the grant then lives for its bounded TTL only.
+             * @example obs_5f3a
+             */
+            observer_id?: string;
+        };
+        /**
+         * MailAttachmentPreviewResponse
+         * @description Metadata-only response of one attachment preview mint (ADR-20261001 "Temporary preview mint (F1)" row; w3 spec §2.4 and w5 spec §8 step 6 — W0 is the single publisher). Returns authorization/reference metadata for the temporary Library viewer — kind, display subject, the attachment descriptor, the text_readable classification hint, the content source and read-only capability — and NO cached payload: every byte read is a fresh request-scoped fetch through content_source.byte_url. This response is the temporary alternative of the F1 content-source union; it is never a LibraryEntry and carries no path, filesystem identity or stored-file capability.
+         */
+        MailAttachmentPreviewResponse: {
+            /**
+             * @description Fixed discriminator of the temporary (mail attachment) alternative of the Library content-source union — the SPA branches on it without string matching on any other field.
+             * @example mail_attachment
+             * @enum {string}
+             */
+            kind: "mail_attachment";
+            /**
+             * @description Opaque grant identifier — the revoke and lifecycle key of this preview. Server-issued; never synthesized by the client.
+             * @example at_9f2c1e
+             */
+            preview_id: string;
+            /**
+             * @description Decoded subject of the message the attachment belongs to (RFC 2047 decoded) — display metadata for the exact "From mail: <subject> · Back to mail · Save to Library" context bar (correction I-06).
+             * @example Quarterly report
+             */
+            subject: string;
+            attachment: components["schemas"]["MailAttachment"];
+            /**
+             * @description Classification hint for the Library viewer's text classifier (F1 "Renderer adapters" row) — whether the attachment is expected to render as readable text. It never grants editing, and actual text/decode/size is still validated at read time, independently of this hint.
+             * @example true
+             */
+            text_readable: boolean;
+            content_source: components["schemas"]["MailAttachmentContentSource"];
+            /**
+             * @description Always true — the temporary source is read-only by construction. No stored-file action (Library edit, rename, move/copy/delete, PDF fill/sign, Library download) is available until Save to Library succeeds; capability checks prevent the calls, they do not merely hide buttons.
+             * @example true
+             * @enum {boolean}
+             */
+            read_only: true;
+        };
+        /**
+         * MailAttachmentContentSource
+         * @description The server-issued content source of one metadata-only attachment preview grant (ADR-20261001 "Temporary preview mint (F1)" row, correction I-05; mail-live-access-landing-order register rows 5/8 — W0 is the single publisher). Carries authorization and reference metadata ONLY — never attachment bytes: the grant holds no payload, and every byte read is a fresh, request-scoped fetch through the preview-purpose endpoint. All URLs are server-issued, same-gateway and source-scoped — never caller-selected, never the authenticated download endpoint.
+         */
+        MailAttachmentContentSource: {
+            /**
+             * @description The dedicated preview-purpose byte endpoint for this grant (correction I-05) — token-scoped, bound server-side to the minted preview_id, the selected part_index and the grant's ownership lifecycle (view exit, expiry, revoke and panel close all kill it). Serves INLINE rendering disposition with Cache-Control: no-store, and enforces the 25 MiB actual-decoded-byte cap BEFORE any success state is committed — a size or decode failure discovered mid-transfer aborts the response with a visible typed error, so a truncated stream can never render as a completed preview. This is never the authenticated attachment-download resource.
+             * @example /mail-preview/attachment/at_9f2c1e
+             */
+            byte_url: string;
+            /**
+             * @description The token-scoped scriptless rendering projection of the same preview reader, present only when the attachment is renderable as isolated HTML — served with the Mail isolation policy (script-src 'none', no same-origin permission), never a raw HTML object URL, srcdoc or a Library bundle token. Null for every non-HTML attachment.
+             * @example /mail-preview/attachment/at_9f2c1e/html
+             */
+            isolated_html_url: string | null;
+            /**
+             * @description Opaque, metadata-only grant token — authorization/reference metadata for mint, revoke and byte-fetch binding. Holds no attachment bytes, no body text and no payload of any kind (the retained-payload preview grant shape is retired by the ADR's request-only body rule).
+             * @example at_9f2c1e
+             */
+            token: string;
+            /**
+             * @description Grant lifetime in seconds from mint, mirroring the existing preview token TTL rules (the token store holds authorization/reference metadata only; expiry is the backstop when a close could not be delivered).
+             * @example 900
+             */
+            expires_in_seconds: number;
+        };
+        /**
+         * MailAttachmentSaveRequest
+         * @description Request body of the save-to-library subresource for one attachment part (ADR-20261001 "Save-to-workspace request/response (F2)" row, correction M-02; w5 spec §8 — W0 is the single publisher). Source identity is in the route (pair, folder, message ref, part index); the body carries only the current view's optional observer and the save-operation token. There is no arbitrary save path, destination or overwrite switch: folder, leaf name and month hierarchy are server-selected. The human Save click (or the ask-approved agent download) is the explicit request — never a guarantee the server can write; refusals return typed errors, and a lost response resolves ONLY through the bounded same-token retry path.
+         */
+        MailAttachmentSaveRequest: {
+            /**
+             * @description Opaque per-panel observer ID (mail_panel_observer frame) when the save belongs to an open Mail panel — associates the work with that observer's retention semantics. Absent for agent-tool saves. Never grants access by itself: the route's pair authorization is checked independently.
+             * @example obs_5f3a
+             */
+            observer_id?: string;
+            /**
+             * @description Client-generated opaque token for THIS save attempt (correction M-02) — echoed by the response. An explicit user retry carrying the SAME token is answered with the prior save receipt when that save already committed — exactly one file exists, no second numbered duplicate — and only a genuinely uncommitted operation performs the save. A different token is a new user request. No automatic replay ever carries a token: reconciliation is bounded to this explicit retry path, not a general exactly-once framework.
+             * @example sv_77bd21aa
+             */
+            save_operation_token: string;
+        };
+        /**
+         * MailAttachmentSaveResponse
+         * @description Success response of an attachment save to the Library (panel Save and the agent download share this one shape — ADR-20261001 "Save-to-workspace request/response (F2)" and F3 rows; w3 spec §2.4, w4 spec §2.3 — W0 is the single publisher). Returned only for a completed save: the file is fully written under the mail → <mailbox> → <year-month> hierarchy with a sanitized, unique, suffixed name. Refusals are typed errors with no invented path — never a saved=true with a fabricated destination. A lost response resolves through the same-token retry, which returns THIS receipt again for the already-committed save (correction M-02). This is also the "shared Save response/path fields" of the agent download_email_attachment result (F3) — one shape, no second.
+         */
+        MailAttachmentSaveResponse: {
+            /**
+             * @description Always true on this shape — a response that did not save is a typed error, never a saved=false body. The visible "Save result unknown" state (lost response) resolves to this receipt via the same-token retry.
+             * @example true
+             * @enum {boolean}
+             */
+            saved: true;
+            /**
+             * @description Workspace the file was saved into.
+             * @example ws_my_workspace
+             */
+            workspace_id: string;
+            entry: components["schemas"]["LibraryEntry"];
+            /**
+             * @description Final workspace-relative path of the saved file — includes any numbered collision suffix; identical to entry.path. The actual saved name is entry.name.
+             * @example mail/dana@example.com/2026-10/report-q3.pdf
+             */
+            path: string;
+            /**
+             * @description Separately resolved absolute path of the saved file — the form the agent's normal file/document tools consume. The panel never needs it; the agent result carries it (F3). Server-resolved inside the authorized work root; never client-derived.
+             * @example /Users/example/.omnipus/workspaces/ws_my_workspace/work/mail/dana@example.com/2026-10/report-q3.pdf
+             */
+            absolute_path: string;
+            /**
+             * Format: int64
+             * @description Actual byte count of the committed file.
+             * @example 1048576
+             */
+            size_bytes: number;
+            /**
+             * @description Truthful audit outcome of the mail.attachment_saved event (ADR F2 "Audit" row). recorded = the audit entry was written; disabled = the operator's audit setting is off; failed = the audit write failed AFTER the file landed — the save stands (saved=true with the real path), this field and warning_code carry the visible warning, and no retry is invited (a retry would duplicate the file).
+             * @example recorded
+             * @enum {string}
+             */
+            audit_status: "recorded" | "disabled" | "failed";
+            /**
+             * @description Closed safe warning code accompanying audit_status, or null. The one Phase-1 warning: audit_write_failed — the file is saved and usable, but its audit event could not be recorded. Never carries raw error text, tokens or credentials.
+             * @example audit_write_failed
+             * @enum {string|null}
+             */
+            warning_code: "audit_write_failed" | null;
+        };
+        /**
+         * MailReplyContextRequest
+         * @description Request for one message's reply/quote context (ADR-20261001 "Reply / Reply all context (F5)" row; w3 spec §2.4 — W0 is the single publisher). Session-authenticated message subresource; the source pair/folder/ref is independently authorized. Assembles current-compose state only — never a server draft, never a body cache, never a send.
+         */
+        MailReplyContextRequest: {
+            /**
+             * @description reply = sender/Reply-To only (Cc/Bcc start empty). reply_all = To = eligible primary (Reply-To if present, else From); Cc = original To + original Cc minus the mailbox's own address and the primary, deduplicated. The original Bcc is never copied into a reply.
+             * @example reply_all
+             * @enum {string}
+             */
+            mode: "reply" | "reply_all";
+        };
+        /**
+         * MailReplyContextResponse
+         * @description Reply/quote context for the compose draft (ADR-20261001 "Reply / Reply all context (F5)" row; w3 spec §2.4 — W0 is the single publisher). Produced by the ONE shared recipient rule (BuildReplyRecipients) called by both the gateway and the agent reply adapter — the SPA implements no second recipient algorithm. Prefills user-requested compose state only: not a server draft, not a send. A delayed/stale context response for a different message or mailbox is discarded by the consumer; it never overwrites compose input.
+         */
+        MailReplyContextResponse: {
+            /**
+             * @description Primary recipients — the parsed Reply-To when present, otherwise From. Editable compose state: an invalid/missing eligible recipient is an actionable error or an editable empty set, never a silent replacement or a send to self.
+             * @example [
+             *       "dana@example.com"
+             *     ]
+             */
+            to: string[];
+            /**
+             * @description Cc — empty for plain reply; original To + original Cc minus the mailbox's own address and the primary, deduplicated, for reply_all. Never contains the original Bcc.
+             * @example [
+             *       "x@example.com",
+             *       "y@example.com"
+             *     ]
+             */
+            cc: string[];
+            /** @description Always empty — Bcc is never copied into an incoming reply. */
+            bcc: string[];
+            /**
+             * @description Subject for the compose draft — the original subject with the Re: prefix applied exactly once (no duplicate Re:, no signature duplication).
+             * @example Re: Quarterly report
+             */
+            subject: string;
+            /**
+             * @description Editable quoted original as a safe text/Markdown projection with escaped attribution (sender/date, or "No date" per F6) — the original text's Markdown/image/embed syntax is escaped so the quote cannot load remote images or workspace embeds inside Compose. Never raw active HTML; never the original's attachments.
+             * @example > On 2026-10-01, Dana wrote: …
+             */
+            body_markdown: string;
+            /**
+             * @description The original message's Message-ID for threading (RFC 5322 In-Reply-To), or null when the inbound mail carries none.
+             * @example <abc123@example.com>
+             */
+            in_reply_to: string | null;
+        };
+        /**
+         * MailboxRemovalResult
+         * @description Truthful outcome of a mailbox removal with cleanup (ADR-20261001 "Removal with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the single publisher). Distinguishes a fully removed pair from one whose cleanup did not fully complete, instead of an unconditional success=true over best-effort failures. Marking the pair disabled and preventing new acquisitions always happen FIRST; cleanup_pending never serves residual files. cleanup_intent keys the separately authorized Retry-cleanup operation and keeps working after the config row is gone; it carries no plaintext copy of anything cleaned.
+         */
+        MailboxRemovalResult: {
+            /**
+             * @description removed = the pair is gone and every cleanup step succeeded. removed_cleanup_pending = the pair is disabled, removed from config and acquires nothing, but at least one cleanup step (cache purge, credential deletion, reload) failed and is retried via Retry-cleanup.
+             * @example removed
+             * @enum {string}
+             */
+            outcome: "removed" | "removed_cleanup_pending";
+            /**
+             * @description Opaque retry key for the separately authorized Retry-cleanup operation, present exactly when outcome is removed_cleanup_pending — null when removed. Survives the config row's deletion so the retry path still works afterwards.
+             * @example cln_4b81
+             */
+            cleanup_intent: string | null;
+            /**
+             * @description Safe, closed-class cleanup failure code — present exactly when outcome is removed_cleanup_pending, null otherwise. No raw upstream error text, no paths, no credentials. A logged unlink failure is never reported as a successful purge.
+             * @example cache_cleanup_failed
+             */
+            cleanup_code: string | null;
+        };
+        /**
+         * MailboxCleanupRequest
+         * @description Request of the separately authorized Retry-cleanup operation (ADR-20261001 "Removal with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the single publisher). Keyed by the opaque cleanup_intent returned with a removed_cleanup_pending outcome; deliberately carries nothing else — the intent is the only address, so the retry keeps working after the mailbox's config row is gone.
+         */
+        MailboxCleanupRequest: {
+            /**
+             * @description Opaque cleanup intent from MailboxRemovalResult.cleanup_intent — server-issued, never synthesized. Unknown, expired or already completed intents are refused with 404, not silently treated as success.
+             * @example cln_4b81
+             */
+            cleanup_intent: string;
         };
         /**
          * BackupCreateResponse
@@ -20226,6 +20708,50 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    retryMailboxCleanup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailboxCleanupRequest"];
+            };
+        };
+        responses: {
+            /** @description Truthful cleanup outcome — removed when every pending step has now succeeded; removed_cleanup_pending again (with the same intent) when a step still failed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailboxRemovalResult"];
+                };
+            };
+            /** @description Malformed body. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown, expired or already-completed cleanup intent. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     rotateGatewayToken: {
         parameters: {
             query?: never;
@@ -24199,8 +24725,17 @@ export interface operations {
     listMailFolders: {
         parameters: {
             query?: {
-                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. */
+                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. Retry never bypasses capacity, security checks or mutation safeguards, and an automatic refresh never sets it (ADR-20261001 failure table). */
                 retry?: boolean;
+                /** @description Cache-first versus live read (ADR-20261001 "Cached read versus genuine refresh" row; register rows 2/6). Omitted or live = today's live read. cache_first = serve the labelled cached mapping/counts immediately without dialing; a cache hit consumes no A8 work slot and opens no socket. A cache-first response is metadata-labelled (MailFolderList.metadata) and is never evidence of a live success; on one eligible stale/dirty event the panel makes at most one separate mode=live request, which either returns validated data or a visible error — it can never return the same stale page as a successful refresh. A cache miss falls through once to live under the normal budget. Requests without valid panel presence may execute live request-scoped work but cannot start detached panel refreshes or retain sockets. */
+                mode?: "cache_first" | "live";
+                /** @description Force the folder-mapping validation on this read (ADR-20261001 cached-read row: "For the rail, add refresh_mapping Boolean"). false/absent = a normal live count refresh reuses a valid mapping. true = this read also validates the mapping — the panel-open with a missing/>24-hour mapping case, the manual Refresh click, and the one permitted rediscovery after a missing-folder failure or observed folder-version change set it explicitly. It is never turned on by the 5-minute count refresh. */
+                refresh_mapping?: boolean;
+                /**
+                 * @description Opaque per-panel observer ID (mail-live-access-landing-order register row 6; ADR-20261001 "Mail panel presence" row) from the mail_panel_observer WebSocket frame — the read opts into panel semantics when the ID is bound to this authenticated connection/workspace: the read may retain pooled sockets while that observer remains open, and its cache reads ride the panel's retention. Absent or unknown observer = conservative request-scoped work; REST can never claim another socket/user's observer. Never grants authorization by itself — the pair scope is checked independently.
+                 * @example obs_5f3a
+                 */
+                observer_id?: string;
             };
             header?: never;
             path: {
@@ -24219,7 +24754,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The mailbox's three folders with live counts. */
+            /** @description The mailbox's three folders with counts and freshness metadata. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -24236,6 +24771,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference/cursor — the typed MailStaleReferenceError body (code=stale_reference); the client refreshes the list view once. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
                 };
             };
             500: components["responses"]["500InternalServerError"];
@@ -24266,8 +24810,24 @@ export interface operations {
                 limit?: number;
                 /** @description Cursor — list envelopes with uid lower than this value (from MailMessagePage.next_before_uid of the previous page). */
                 before_uid?: number;
-                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. */
+                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. Retry never bypasses capacity, security checks or mutation safeguards, and an automatic refresh never sets it (ADR-20261001 failure table). */
                 retry?: boolean;
+                /** @description Cache-first versus live read (ADR-20261001 "Cached read versus genuine refresh" row; register rows 2/6). Omitted or live = today's live read. cache_first = serve the labelled cached newest page immediately without dialing; a cache hit consumes no A8 work slot and opens no socket, and the response's MailMessagePage.metadata states its source and age. A cache-first response is never evidence of a live success; on one eligible stale/dirty event the panel makes at most one separate mode=live request. Search sequences and pages beyond the cached newest window always run live. */
+                mode?: "cache_first" | "live";
+                /** @description Force the folder-mapping validation on this read (register rows 2/6; the list rides the same flag so a folder switch with its list can validate the mapping in one event). false/absent = a normal live refresh reuses a valid mapping. */
+                refresh_mapping?: boolean;
+                /**
+                 * @description Opaque per-panel observer ID (register row 6; ADR-20261001 "Mail panel presence" row) — the read opts into panel semantics when the ID is bound to this authenticated connection/workspace. Absent or unknown observer = conservative request-scoped work.
+                 * @example obs_5f3a
+                 */
+                observer_id?: string;
+                /** @description Folder-scoped server-side search query (ADR-20261001 "Paging and search" row; register row 4). Starts a bounded search sequence under the same 25-row page and 200-row view limits, matched server-side — no local index, no full-text/offline search, and never a whole-mailbox fetch. Exact supported matching fields and bounds are fixed by the mail-live-access W2/W3 specs (founder decision Q-D pending at the time of this contract). Presenting search and cursor together is rejected 400. */
+                search?: string;
+                /**
+                 * @description Opaque continuation cursor from MailMessagePage.next_cursor (register row 4) — continues the browse or search sequence it was issued in. A stale or mismatched cursor (folder epoch changed, configuration generation changed, sequence mismatch) is refused with the typed 409 stale-cursor result — the client resets the view once. Supersedes before_uid, which is retained only until the panel consumer migration lands.
+                 * @example MWI6NDU2OjEyMztCMQ
+                 */
+                cursor?: string;
             };
             header?: never;
             path: {
@@ -24288,7 +24848,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One explicit-truncation page of envelopes. */
+            /** @description One explicit page of envelopes with cursor paging and freshness metadata. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -24297,7 +24857,7 @@ export interface operations {
                     "application/json": components["schemas"]["MailMessagePage"];
                 };
             };
-            /** @description Unknown folder slug or malformed limit. */
+            /** @description Unknown folder slug, malformed limit, or search+cursor together. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -24314,6 +24874,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale cursor/reference — the typed MailStaleReferenceError body; code=stale_cursor restarts the list view once. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
                 };
             };
             500: components["responses"]["500InternalServerError"];
@@ -24395,6 +24964,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the ref's embedded folder epoch, pair or configuration generation no longer matches the live folder, refused on the same lease that would have served the fetch (correction I-03). The client refreshes the list once; the response never serves whatever the folder now holds under the old identity. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
             /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
             502: {
@@ -24469,6 +25047,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the ref failed its epoch/pair/generation validation on the same lease that would have performed the flag write (correction I-03 — the flag write never lands against a recreated folder under an old identity). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
             /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
             502: {
@@ -24541,6 +25128,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the ref failed its epoch/pair/generation validation on the same lease that would have streamed the part (correction I-03). No bytes are served against a recreated folder under an old identity. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
             /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
             502: {
@@ -24552,6 +25148,212 @@ export interface operations {
                 };
             };
             /** @description Not dialed: code=backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code=busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
+        };
+    };
+    saveMailAttachmentToLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /** @description Folder slug — exactly inbox, sent or drafts (MC-5). */
+                folder: "inbox" | "sent" | "drafts";
+                /**
+                 * @description Folder-scoped message reference — the gateway-issued MailMessageSummary.message_ref (correction I-03), validated on the same lease that performs the save.
+                 * @example uid:456:123
+                 */
+                ref: string;
+                /** @description Stable MIME leaf index from MailAttachment.part_index. */
+                partIndex: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailAttachmentSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved. The real Library entry, final path, actual size and truthful audit status; only this success enables Open in Library. The retry of an already-committed save returns this same receipt (correction M-02). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailAttachmentSaveResponse"];
+                };
+            };
+            /** @description Malformed ref, part index or body. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Permission refusal — effective tool deny, declined/unattended ask, or missing workspace authority. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Message or attachment part absent, or workspace root missing/broken. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the ref failed its epoch/pair/generation validation on the lease that would perform the save. Nothing is written against a recreated folder under an old identity. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            /** @description The part exceeds the 25 MiB decoded-byte cap — larger files are browser Download only. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Write/cleanup failure on the destination — no partial file is reported as saved; a cleanup failure after a refused write is surfaced, never logged away. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Mail server failure while refetching the part — sanitized error class in the body's code field (MC-8). A failed transfer leaves no partial file. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff or code=busy (same semantics as the read paths), with the optional typed reason field. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
+        };
+    };
+    getMailReplyContext: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /** @description Folder slug — exactly inbox, sent or drafts (MC-5). */
+                folder: "inbox" | "sent" | "drafts";
+                /**
+                 * @description Folder-scoped message reference — the gateway-issued MailMessageSummary.message_ref (correction I-03), validated on the same lease that assembles the context.
+                 * @example uid:456:123
+                 */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailReplyContextRequest"];
+            };
+        };
+        responses: {
+            /** @description Recipients, subject and editable quoted context. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailReplyContextResponse"];
+                };
+            };
+            /** @description Malformed ref, unknown mode, or failed Message-ID validation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Message not found in the addressed folder (no body or folder leakage). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the ref failed its epoch/pair/generation validation on the lease that would assemble the context. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure while reading the message — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff or code=busy (same semantics as the read paths), with the optional typed reason field. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -24927,6 +25729,124 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+        };
+    };
+    mintMailAttachmentPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailAttachmentPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Grant minted; the temporary Library viewer renders through content_source.byte_url. Metadata only — no payload. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailAttachmentPreviewResponse"];
+                };
+            };
+            /** @description Validation failure — unknown folder slug, malformed message_ref or part index. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Workspace, agent, mailbox pair, message, or attachment part not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the message_ref failed its epoch/pair/generation validation on the lease that would serve the preview fetch (correction I-03). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            /** @description The part exceeds the 25 MiB actual-decoded-byte preview cap — the larger-file path is the browser Download (getMailAttachment), never a truncated preview. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Upstream mail failure during the mint's one part fetch — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff or code=busy (same semantics as the read paths), with the optional typed reason field. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
+        };
+    };
+    revokeMailAttachmentPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Opaque grant identifier from MailAttachmentPreviewResponse.preview_id.
+                 * @example at_9f2c1e
+                 */
+                previewId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Grant revoked (or already gone). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationResult"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown or expired grant identifier. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
         };
     };
     mintMailSignaturePreviewToken: {
@@ -25819,6 +26739,17 @@ export type MailSignaturePreviewTokenRequest = components["schemas"]["MailSignat
 export type MailSignaturePreviewTokenResponse = components["schemas"]["MailSignaturePreviewTokenResponse"];
 export type CreateEmailDraftResult = components["schemas"]["CreateEmailDraftResult"];
 export type MailUnavailableError = components["schemas"]["MailUnavailableError"];
+export type MailReadMetadata = components["schemas"]["MailReadMetadata"];
+export type MailStaleReferenceError = components["schemas"]["MailStaleReferenceError"];
+export type MailAttachmentPreviewRequest = components["schemas"]["MailAttachmentPreviewRequest"];
+export type MailAttachmentPreviewResponse = components["schemas"]["MailAttachmentPreviewResponse"];
+export type MailAttachmentContentSource = components["schemas"]["MailAttachmentContentSource"];
+export type MailAttachmentSaveRequest = components["schemas"]["MailAttachmentSaveRequest"];
+export type MailAttachmentSaveResponse = components["schemas"]["MailAttachmentSaveResponse"];
+export type MailReplyContextRequest = components["schemas"]["MailReplyContextRequest"];
+export type MailReplyContextResponse = components["schemas"]["MailReplyContextResponse"];
+export type MailboxRemovalResult = components["schemas"]["MailboxRemovalResult"];
+export type MailboxCleanupRequest = components["schemas"]["MailboxCleanupRequest"];
 export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];
 export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusResponse"];
 export type OperationResult = components["schemas"]["OperationResult"];

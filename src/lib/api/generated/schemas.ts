@@ -384,6 +384,8 @@ type LibraryEntry = {
   mount?: LibraryEntryMount | undefined;
   is_knowledge_base?: boolean | undefined;
   is_text_editable: boolean;
+  preview_profile?: ("workspace" | "mail_restricted") | undefined;
+  preview_scripts_allowed?: boolean | undefined;
 };
 type LibraryEntryMount = {
   name: string;
@@ -1964,19 +1966,39 @@ type Mailbox = {
   sent_folder_name?: string | undefined;
   drafts_folder_name?: string | undefined;
 };
-type MailFolderList = {
-  folders: Array<MailFolder>;
-};
 type MailFolder = {
   slug: "inbox" | "sent" | "drafts";
   display_name: string;
   total: number;
   unread_count: number | null;
+  availability?: ("present" | "absent" | "unknown") | undefined;
+  uidvalidity?: (number | null) | undefined;
+  mapping_source?:
+    | ("override" | "special_use" | "fallback" | "saved" | "none")
+    | undefined;
+  mapping_metadata?: MailReadMetadata | undefined;
+  count_metadata?: MailReadMetadata | undefined;
+};
+type MailReadMetadata = {
+  source: "live" | "memory" | "encrypted_disk" | "none";
+  last_validated_at: string | null;
+  stale: boolean;
+  refresh_needed: boolean;
+  notice_code: "cache_unavailable" | null;
+  publication_revision: string | null;
+};
+type MailFolderList = {
+  folders: Array<MailFolder>;
+  metadata?: MailReadMetadata | undefined;
 };
 type MailMessagePage = {
   messages: Array<MailMessageSummary>;
   truncated: boolean;
   next_before_uid: number | null;
+  next_cursor?: (string | null) | undefined;
+  has_more?: boolean | undefined;
+  view_limit_reached?: boolean | undefined;
+  metadata?: MailReadMetadata | undefined;
 };
 type MailMessageSummary = {
   message_id: string | null;
@@ -1993,6 +2015,8 @@ type MailMessageSummary = {
   is_draft: boolean;
   is_omnipus_draft: boolean;
   read_by_agent: boolean;
+  message_ref?: string | undefined;
+  has_attachments?: boolean | undefined;
 };
 type MailMessage = {
   message_id: string | null;
@@ -2016,6 +2040,8 @@ type MailMessage = {
   has_html: boolean;
   bcc: Array<string> | null;
   attachments: Array<MailAttachment>;
+  message_ref?: string | undefined;
+  has_attachments?: boolean | undefined;
   body_markdown: string | null;
   markdown_lossy: boolean;
   draft_cleanup_warning?: (string | null) | undefined;
@@ -2025,6 +2051,7 @@ type MailAttachment = {
   filename: string;
   content_type: string;
   size_bytes: number;
+  reported_size_bytes?: number | undefined;
 };
 type MailSummaryList = {
   items: Array<MailboxNewMailSummary>;
@@ -2062,6 +2089,31 @@ type MailDraftUpdateRequest = {
   uid: number;
   attachments?: Array<MailAttachmentInput> | undefined;
   keep_attachment_parts: Array<number>;
+};
+type MailAttachmentPreviewResponse = {
+  kind: "mail_attachment";
+  preview_id: string;
+  subject: string;
+  attachment: MailAttachment;
+  text_readable: boolean;
+  content_source: MailAttachmentContentSource;
+  read_only: true;
+};
+type MailAttachmentContentSource = {
+  byte_url: string;
+  isolated_html_url: string | null;
+  token: string;
+  expires_in_seconds: number;
+};
+type MailAttachmentSaveResponse = {
+  saved: true;
+  workspace_id: string;
+  entry: LibraryEntry;
+  path: string;
+  absolute_path: string;
+  size_bytes: number;
+  audit_status: "recorded" | "disabled" | "failed";
+  warning_code: "audit_write_failed" | null;
 };
 type OperationResult = {
   success: boolean;
@@ -4313,6 +4365,14 @@ export const MailboxConfigureRequest = z.object({
 export const MailboxListResponse: z.ZodType<MailboxListResponse> = z.object({
   mailboxes: z.array(Mailbox),
 });
+export const MailboxCleanupRequest = z.object({
+  cleanup_intent: z.string().min(1),
+});
+export const MailboxRemovalResult = z.object({
+  outcome: z.enum(["removed", "removed_cleanup_pending"]),
+  cleanup_intent: z.string().nullable(),
+  cleanup_code: z.string().nullable(),
+});
 export const RotateTokenResponse: z.ZodType<RotateTokenResponse> = z.object({
   token: BearerToken.min(72)
     .max(81)
@@ -5297,6 +5357,8 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   mount: LibraryEntryMount.optional(),
   is_knowledge_base: z.boolean().optional(),
   is_text_editable: z.boolean(),
+  preview_profile: z.enum(["workspace", "mail_restricted"]).optional(),
+  preview_scripts_allowed: z.boolean().optional(),
 });
 export const LibraryContentResponse = z.object({
   path: z.string(),
@@ -5998,14 +6060,34 @@ export const RelationWriteResponse: z.ZodType<RelationWriteResponse> = z.object(
     warnings: z.array(z.string().min(1)),
   }
 );
+export const MailReadMetadata: z.ZodType<MailReadMetadata> = z.object({
+  source: z.enum(["live", "memory", "encrypted_disk", "none"]),
+  last_validated_at: z.string().datetime({ offset: true }).nullable(),
+  stale: z.boolean(),
+  refresh_needed: z.boolean(),
+  notice_code: z.literal("cache_unavailable").nullable(),
+  publication_revision: z.string().nullable(),
+});
 export const MailFolder: z.ZodType<MailFolder> = z.object({
   slug: z.enum(["inbox", "sent", "drafts"]),
   display_name: z.string(),
   total: z.number().int(),
   unread_count: z.number().int().nullable(),
+  availability: z.enum(["present", "absent", "unknown"]).optional(),
+  uidvalidity: z.number().int().gte(0).lte(4294967295).nullish(),
+  mapping_source: z
+    .enum(["override", "special_use", "fallback", "saved", "none"])
+    .optional(),
+  mapping_metadata: MailReadMetadata.optional(),
+  count_metadata: MailReadMetadata.optional(),
 });
 export const MailFolderList: z.ZodType<MailFolderList> = z.object({
   folders: z.array(MailFolder),
+  metadata: MailReadMetadata.optional(),
+});
+export const MailStaleReferenceError = z.object({
+  error: z.string(),
+  code: z.enum(["stale_cursor", "stale_reference"]),
 });
 export const MailUnavailableError = z.object({
   error: z.string(),
@@ -6022,6 +6104,9 @@ export const MailUnavailableError = z.object({
     ])
     .optional(),
   next_attempt_at: z.string().datetime({ offset: true }).optional(),
+  reason: z
+    .enum(["pool_busy", "account_busy", "server_connection_limit", "backoff"])
+    .optional(),
 });
 export const MailMessageSummary: z.ZodType<MailMessageSummary> = z.object({
   message_id: z.string().nullable(),
@@ -6038,17 +6123,24 @@ export const MailMessageSummary: z.ZodType<MailMessageSummary> = z.object({
   is_draft: z.boolean(),
   is_omnipus_draft: z.boolean(),
   read_by_agent: z.boolean(),
+  message_ref: z.string().min(5).optional(),
+  has_attachments: z.boolean().optional(),
 });
 export const MailMessagePage: z.ZodType<MailMessagePage> = z.object({
   messages: z.array(MailMessageSummary),
   truncated: z.boolean(),
   next_before_uid: z.number().int().gte(0).lte(4294967295).nullable(),
+  next_cursor: z.string().nullish(),
+  has_more: z.boolean().optional(),
+  view_limit_reached: z.boolean().optional(),
+  metadata: MailReadMetadata.optional(),
 });
 export const MailAttachment: z.ZodType<MailAttachment> = z.object({
   part_index: z.number().int(),
   filename: z.string(),
   content_type: z.string(),
   size_bytes: z.number().int(),
+  reported_size_bytes: z.number().int().gte(0).optional(),
 });
 export const MailMessage: z.ZodType<MailMessage> = z.object({
   message_id: z.string().nullable(),
@@ -6072,9 +6164,37 @@ export const MailMessage: z.ZodType<MailMessage> = z.object({
   has_html: z.boolean(),
   bcc: z.array(z.string()).nullable(),
   attachments: z.array(MailAttachment),
+  message_ref: z.string().min(5).optional(),
+  has_attachments: z.boolean().optional(),
   body_markdown: z.string().nullable(),
   markdown_lossy: z.boolean(),
   draft_cleanup_warning: z.string().nullish(),
+});
+export const MailAttachmentSaveRequest = z.object({
+  observer_id: z.string().optional(),
+  save_operation_token: z.string().min(1),
+});
+export const MailAttachmentSaveResponse: z.ZodType<MailAttachmentSaveResponse> =
+  z.object({
+    saved: z.literal(true),
+    workspace_id: z.string(),
+    entry: LibraryEntry,
+    path: z.string().min(1),
+    absolute_path: z.string().min(1),
+    size_bytes: z.number().int().gte(0),
+    audit_status: z.enum(["recorded", "disabled", "failed"]),
+    warning_code: z.literal("audit_write_failed").nullable(),
+  });
+export const MailReplyContextRequest = z.object({
+  mode: z.enum(["reply", "reply_all"]),
+});
+export const MailReplyContextResponse = z.object({
+  to: z.array(z.string()),
+  cc: z.array(z.string()),
+  bcc: z.array(z.string()),
+  subject: z.string(),
+  body_markdown: z.string(),
+  in_reply_to: z.string().nullable(),
 });
 export const MailboxNewMailSummary: z.ZodType<MailboxNewMailSummary> = z.object(
   {
@@ -6143,6 +6263,31 @@ export const MailHtmlPreviewTokenResponse = z.object({
   token: z.string().min(43).max(43),
   expires_in_seconds: z.number().int().gte(1),
 });
+export const MailAttachmentPreviewRequest = z.object({
+  workspace_id: z.string(),
+  agent_id: z.string(),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  message_ref: z.string().min(5),
+  part_index: z.number().int(),
+  observer_id: z.string().optional(),
+});
+export const MailAttachmentContentSource: z.ZodType<MailAttachmentContentSource> =
+  z.object({
+    byte_url: z.string().min(1),
+    isolated_html_url: z.string().nullable(),
+    token: z.string().min(1),
+    expires_in_seconds: z.number().int().gte(1),
+  });
+export const MailAttachmentPreviewResponse: z.ZodType<MailAttachmentPreviewResponse> =
+  z.object({
+    kind: z.literal("mail_attachment"),
+    preview_id: z.string().min(1),
+    subject: z.string(),
+    attachment: MailAttachment,
+    text_readable: z.boolean(),
+    content_source: MailAttachmentContentSource,
+    read_only: z.literal(true),
+  });
 export const MailSignaturePreviewTokenRequest = z.object({
   signature_html: z.string().min(1).max(16384),
 });
@@ -7648,7 +7793,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "delete",
     path: "/agents/:id/mailboxes/:workspaceId",
     alias: "deleteAgentMailbox",
-    description: `Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent&#x27;s email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched.
+    description: `Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent&#x27;s email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched. The truthful removal discrimination (MailboxRemovalResult: removed versus removed_cleanup_pending with an opaque cleanup intent and the separately authorized Retry-cleanup operation, ADR-20261001 &quot;Removal with incomplete cleanup&quot; row) replaces this response body together with its cascade handler work — until then a cleanup failure here is not reported as a completed purge.
 `,
     requestFormat: "json",
     parameters: [
@@ -10625,6 +10770,106 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
   },
   {
     method: "post",
+    path: "/mail/attachment-preview-token",
+    alias: "mintMailAttachmentPreview",
+    description: `Mints the temporary attachment-preview credential (ADR-20261001 &quot;Temporary preview mint (F1)&quot; row; mail-live-access-landing-order register rows 5/8 — the preview-versus-download wire split, correction I-05). Session-authenticated and STAYS in the API namespace, like the HTML preview mint; the byte serving route is the token-only non-API preview-purpose endpoint named by the response&#x27;s content_source.byte_url (the serving-prefix family is deliberately not enumerated as operations in this document — §2.3a, Library serving-prefix precedent). Minting is metadata-only: it creates no file, retains no bytes and writes nothing to disk — the grant holds authorization/reference metadata only, and every byte read is a fresh request-scoped fetch through the preview-purpose endpoint (inline disposition, Cache-Control: no-store, the 25 MiB actual-decoded-byte cap enforced BEFORE any success state is committed; a mid-transfer size or decode failure aborts with a visible typed error, so a truncated stream can never render as a completed preview). This is the ONE live-IMAP fetch of the Open flow: only the selected part is fetched (part-specific PEEK — flags unchanged), never the whole message or an unrelated part. The grant dies on view exit, expiry, revoke and panel close. This mint is NEVER the browser-Download path — that remains getMailAttachment&#x27;s exclusive role.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailAttachmentPreviewRequest,
+      },
+    ],
+    response: MailAttachmentPreviewResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — unknown folder slug, malformed message_ref or part index.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, mailbox pair, message, or attachment part not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the message_ref failed its epoch/pair/generation validation on the lease that would serve the preview fetch (correction I-03).
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 413,
+        description: `The part exceeds the 25 MiB actual-decoded-byte preview cap — the larger-file path is the browser Download (getMailAttachment), never a truncated preview.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Upstream mail failure during the mint&#x27;s one part fetch — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff or code&#x3D;busy (same semantics as the read paths), with the optional typed reason field.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/mail/attachment-preview-token/:previewId",
+    alias: "revokeMailAttachmentPreview",
+    description: `Revokes one metadata-only preview grant (ADR-20261001 F1 lifecycle table: &quot;Back, Close, another attachment/message, workspace navigation, Mail/Library panel close or logout — revoke its source token&quot;). After a successful revoke the preview-purpose byte endpoint answers 404 only — expired/unknown/revoked are deliberately indistinguishable (MC-43/MC-45 convention). Revoking an unknown or already-expired grant is 404, not an error the client must distinguish; bounded token expiry remains the backstop when a close could not be delivered. The SPA calls this on every temporary-view exit path; a late mint&#x27;s grant is discarded and revoked, never rendered.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "previewId",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: OperationResult,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Unknown or expired grant identifier.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
     path: "/mail/html-preview-token",
     alias: "mintMailHtmlPreviewToken",
     description: `Mints the mail HTML-preview credential (email-mail-view-spec §2.3, security sign-off C1) — session-authenticated and STAYS in the API namespace; the serve routes moved to the token-only non-API /mail-preview/ prefix (§2.3a) and are deliberately NOT in this document (Library serving-prefix precedent): /mail-preview/html/{token} serves the sanitized sandboxed HTML body with the MC-10 normative header set; /mail-preview/part/{token}/{index} serves one inline cid: image part within the same token scope; /mail-preview/img/{token}/{index} is the &quot;Load images&quot; proxy (D17/MC-10(6)) — https-only, private/ loopback refused at dial time, zero redirects, ≤ 5 MiB, image/* only, store-recorded URLs only (MC-41). Serve routes answer 404 only — expired/unknown/revoked deliberately indistinguishable, no frame-ancestors, no X-Frame-Options (MC-43/MC-45); the no-redirect tripwire covers the whole prefix (MC-10(1), T62).
@@ -10716,6 +10961,44 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/mailboxes/cleanup",
+    alias: "retryMailboxCleanup",
+    description: `Separately authorized Retry-cleanup operation for a mailbox removal that ended removed_cleanup_pending (ADR-20261001 &quot;Removal with incomplete cleanup&quot; row; mail-live-access-landing-order register rows 5/22 — W0 is the single publisher). Keyed ONLY by the opaque cleanup_intent — it keeps working after the mailbox&#x27;s config row is gone, because the intent is the sole address of the pending cleanup. Never reports success for a logged unlink failure: the truthful outcome discrimination (removed versus removed_cleanup_pending) returns again. An unknown, expired or already-completed intent is 404. The pair stays disabled and acquires nothing until this returns removed.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ cleanup_intent: z.string().min(1) }),
+      },
+    ],
+    response: MailboxRemovalResult,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed body.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Unknown, expired or already-completed cleanup intent.`,
         schema: ErrorResponse,
       },
       {
@@ -14828,6 +15111,21 @@ Returns HTTP 201 on success.
         type: "Query",
         schema: z.boolean().optional().default(false),
       },
+      {
+        name: "mode",
+        type: "Query",
+        schema: z.enum(["cache_first", "live"]).optional(),
+      },
+      {
+        name: "refresh_mapping",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+      {
+        name: "observer_id",
+        type: "Query",
+        schema: z.string().min(1).optional(),
+      },
     ],
     response: MailFolderList,
     errors: [
@@ -14840,6 +15138,12 @@ Returns HTTP 201 on success.
         status: 404,
         description: `Workspace, agent, or mailbox pair not found (getAgentMailbox precedent).`,
         schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference/cursor — the typed MailStaleReferenceError body (code&#x3D;stale_reference); the client refreshes the list view once.
+`,
+        schema: MailStaleReferenceError,
       },
       {
         status: 500,
@@ -14898,12 +15202,37 @@ Returns HTTP 201 on success.
         type: "Query",
         schema: z.boolean().optional().default(false),
       },
+      {
+        name: "mode",
+        type: "Query",
+        schema: z.enum(["cache_first", "live"]).optional(),
+      },
+      {
+        name: "refresh_mapping",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+      {
+        name: "observer_id",
+        type: "Query",
+        schema: z.string().min(1).optional(),
+      },
+      {
+        name: "search",
+        type: "Query",
+        schema: z.string().min(1).optional(),
+      },
+      {
+        name: "cursor",
+        type: "Query",
+        schema: z.string().min(1).optional(),
+      },
     ],
     response: MailMessagePage,
     errors: [
       {
         status: 400,
-        description: `Unknown folder slug or malformed limit.`,
+        description: `Unknown folder slug, malformed limit, or search+cursor together.`,
         schema: ErrorResponse,
       },
       {
@@ -14915,6 +15244,12 @@ Returns HTTP 201 on success.
         status: 404,
         description: `Workspace, agent, or mailbox pair not found.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale cursor/reference — the typed MailStaleReferenceError body; code&#x3D;stale_cursor restarts the list view once.
+`,
+        schema: MailStaleReferenceError,
       },
       {
         status: 500,
@@ -14987,6 +15322,12 @@ Returns HTTP 201 on success.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the ref&#x27;s embedded folder epoch, pair or configuration generation no longer matches the live folder, refused on the same lease that would have served the fetch (correction I-03). The client refreshes the list once; the response never serves whatever the folder now holds under the old identity.
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -15010,6 +15351,7 @@ Returns HTTP 201 on success.
     path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/attachments/:partIndex",
     alias: "getMailAttachment",
     description: `Streams one MIME attachment part (D28, email-mail-view-spec §2.3). Served with Content-Disposition: attachment always — an .html attachment is never inline (MC-42) — plus X-Content-Type-Options: nosniff, an extension-derived content type (extension decides, never the bytes nor the MIME part&#x27;s self-declared type), and the RFC 6266 dual-encoded filename from the sanitized MailAttachment.filename. No CSP on attachment responses (Library MV-13 second half). The download never changes flags.
+This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-order register rows 5/8; ADR correction I-05): attachment disposition, its existing filename/destination behaviour, and a streaming role that serves larger-than-preview files to the browser without ever becoming a preview source. The temporary viewer&#x27;s bytes come from the SEPARATE preview-purpose resource carried by MailAttachmentPreviewResponse.content_source.byte_url — token-bound to the minted grant, inline-disposition, no-store, capped at 25 MiB actual decoded bytes. One unlimited path shared by both purposes is forbidden: this endpoint must never serve as the preview source, and the preview endpoint must never serve as a browser download.
 `,
     requestFormat: "json",
     parameters: [
@@ -15062,6 +15404,12 @@ Returns HTTP 201 on success.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the ref failed its epoch/pair/generation validation on the same lease that would have streamed the part (correction I-03). No bytes are served against a recreated folder under an old identity.
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -15075,6 +15423,174 @@ Returns HTTP 201 on success.
       {
         status: 503,
         description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/attachments/:partIndex/save-to-library",
+    alias: "saveMailAttachmentToLibrary",
+    description: `Explicit user-directed export of one attachment part into the workspace Library hierarchy mail → &lt;mailbox&gt; → &lt;year-month&gt; (ADR-20261001 &quot;Save-to-workspace request/response (F2)&quot; row; register rows 8/22 — W0 is the single publisher; correction M-02 reconciliation). The mailbox component, sanitized unique leaf name and save-time UTC month are SERVER-selected — no arbitrary save path and no overwrite switch; an existing name gets a numbered suffix, never an overwrite. This is NOT an attachment cache exception: the save is a normal Library write audited as mail.attachment_saved. The same save path serves the agent&#x27;s download_email_attachment result (F3) under its normal tool permission. The save mutation is never coalesced or replayed; a lost response resolves ONLY via the explicit same-token retry, which returns the prior receipt for an already-committed save — exactly one file (correction M-02). Refusals are typed errors with a safe reason and no invented path: missing mailbox/workspace authority, permission refusal (effective deny or declined ask), stale/deleted message or part (typed 409), over-cap bytes (413), filesystem policy, unsafe path, missing/broken root, parent-file conflict, exhausted names, disk full or failed transfer. Browser Download is a separate action and never a synonym for Save.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailAttachmentSaveRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+      {
+        name: "partIndex",
+        type: "Path",
+        schema: z.number().int(),
+      },
+    ],
+    response: MailAttachmentSaveResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref, part index or body.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Permission refusal — effective tool deny, declined/unattended ask, or missing workspace authority.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message or attachment part absent, or workspace root missing/broken.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the ref failed its epoch/pair/generation validation on the lease that would perform the save. Nothing is written against a recreated folder under an old identity.
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 413,
+        description: `The part exceeds the 25 MiB decoded-byte cap — larger files are browser Download only.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Write/cleanup failure on the destination — no partial file is reported as saved; a cleanup failure after a refused write is surfaced, never logged away.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure while refetching the part — sanitized error class in the body&#x27;s code field (MC-8). A failed transfer leaves no partial file.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff or code&#x3D;busy (same semantics as the read paths), with the optional typed reason field.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/reply-context",
+    alias: "getMailReplyContext",
+    description: `Session-authenticated message subresource assembling reply/recipients and the quoted original (ADR-20261001 &quot;Reply / Reply all context (F5)&quot; row; register row 8 — W0 is the single publisher). Gateway and agent adapter call the ONE shared recipient rule (BuildReplyRecipients); the SPA consumes the result and implements no second recipient algorithm. reply &#x3D; sender/Reply-To only; reply_all &#x3D; To plus Cc (original To + Cc minus own address and primary, deduplicated, never the original Bcc). Produces current-compose state ONLY — never a server draft, never a body cache, never a send; the existing generated send payload remains the final human-reviewed recipient/body source. A stale response for a different message/mailbox is discarded by the consumer.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailReplyContextRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: MailReplyContextResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref, unknown mode, or failed Message-ID validation.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message not found in the addressed folder (no body or folder leakage).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the ref failed its epoch/pair/generation validation on the lease that would assemble the context.
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure while reading the message — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff or code&#x3D;busy (same semantics as the read paths), with the optional typed reason field.
 `,
         schema: MailUnavailableError,
       },
@@ -15125,6 +15641,12 @@ Returns HTTP 201 on success.
         status: 404,
         description: `Message not found in the addressed folder.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the ref failed its epoch/pair/generation validation on the same lease that would have performed the flag write (correction I-03 — the flag write never lands against a recreated folder under an old identity).
+`,
+        schema: MailStaleReferenceError,
       },
       {
         status: 500,
@@ -15716,7 +16238,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error"]);
 
 export const AuthFrame = z
   .object({
@@ -17004,6 +17526,34 @@ export const AgentCreatedFrame = z
   })
   .strict();
 
+export const MailPanelObserverFrame = z
+  .object({
+    type: z.literal("mail_panel_observer"),
+    action: z.enum(["open", "close"]),
+    observer_id: z.string().min(1),
+    workspace_id: z.string().min(1),
+  })
+  .strict();
+
+export const MailPanelObserverAckFrame = z
+  .object({
+    type: z.literal("mail_panel_observer_ack"),
+    action: z.enum(["open", "close"]),
+    observer_id: z.string().min(1),
+    workspace_id: z.string().min(1),
+  })
+  .strict();
+
+export const MailPanelObserverErrorFrame = z
+  .object({
+    type: z.literal("mail_panel_observer_error"),
+    observer_id: z.string().min(1),
+    workspace_id: z.string().min(1),
+    code: z.enum(["unauthorized_workspace", "malformed_frame"]),
+    error: z.string(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -17084,6 +17634,9 @@ export const WsFrame = z.discriminatedUnion("type", [
   CatchUpCompleteFrame,
   UserMessageFrame,
   AgentCreatedFrame,
+  MailPanelObserverFrame,
+  MailPanelObserverAckFrame,
+  MailPanelObserverErrorFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;
