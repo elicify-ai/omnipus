@@ -135,9 +135,12 @@ func NewHeaderCache(now func() time.Time, currentRev func(Scope) Revision) *Head
 
 // Put publishes the newest-unfiltered page for one role. The cache keeps
 // exactly the newest 50 rows (by UID, newest first) and nothing else; the
-// live page is the caller's business and is never shortened here. The whole
-// publication is refused (typed error, nothing stored) when the captured
-// revision is stale, the pair is removed, or the budget would overflow.
+// live page is the caller's business and is never shortened here. Rows are
+// ordered newest-first IN THE CALLER'S SLICE (Put may reorder it in place —
+// the caller's slice is the page's authoritative order afterwards; row
+// CONTENTS are never modified). The whole publication is refused (typed
+// error, nothing stored) when the captured revision is stale, the pair is
+// removed, or the budget would overflow.
 func (c *HeaderCache) Put(scope Scope, role string, captured Revision, rows []MailRow) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -147,9 +150,11 @@ func (c *HeaderCache) Put(scope Scope, role string, captured Revision, rows []Ma
 	if captured != c.currentRev(scope) {
 		return fmt.Errorf("%w: captured revision %d is no longer current (§3.10)", ErrStalePublication, captured)
 	}
+	// Newest-first ordering, in the caller's slice (see doc comment), then the
+	// stored copy is trimmed to the cache's own bound.
+	sort.Slice(rows, func(i, j int) bool { return rows[i].UID > rows[j].UID })
 	kept := make([]MailRow, len(rows))
-	copy(kept, rows) // never mutate the caller's slice
-	sort.Slice(kept, func(i, j int) bool { return kept[i].UID > kept[j].UID })
+	copy(kept, rows)
 	if len(kept) > headerCacheMaxRows {
 		kept = kept[:headerCacheMaxRows]
 	}
