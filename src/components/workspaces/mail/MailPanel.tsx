@@ -961,6 +961,11 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     const first = messagesQuery.data?.messages ?? []
     return [...first, ...loadedPages.pages.flatMap((page) => page.messages)]
   }, [messagesQuery.data, loadedPages.pages])
+  // A live fill with nothing to show yet (source=none's fall-through, or a
+  // refresh of an empty view) is a LOAD IN PROGRESS, not an empty mailbox —
+  // US-1 AS-4: source=none is never displayed as an empty mailbox, so the
+  // S-1 skeleton replaces the list until rows exist or the event settles.
+  const listCheckingEmpty = listView.checking && browseRows.length === 0
   const lastBrowsePage = loadedPages.pages.at(-1) ?? messagesQuery.data ?? null
   const browseHasMore = lastBrowsePage !== null
     && lastBrowsePage.has_more === true
@@ -1286,7 +1291,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                   </div>
                 ) : (
                   <>
-                    {messagesQuery.isPending && (
+                    {(messagesQuery.isPending || listCheckingEmpty) && (
                       <div className="flex-1 p-[var(--space-3)]" data-testid="mail-list-loading" aria-label="Loading messages">
                         <ListSkeleton />
                       </div>
@@ -1316,7 +1321,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                         </Button>
                       </div>
                     )}
-                    {(messagesQuery.isSuccess || (messagesQuery.isError && messagesQuery.data !== undefined)) && (
+                    {(messagesQuery.isSuccess || (messagesQuery.isError && messagesQuery.data !== undefined)) && !listCheckingEmpty && (
                       <>
                         <MailMessageList
                           messages={browseRows}
