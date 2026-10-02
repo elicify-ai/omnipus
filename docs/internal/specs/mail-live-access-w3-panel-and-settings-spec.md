@@ -1197,3 +1197,102 @@ New regression seam: the workspace positive control in D-6/E4 (ordinary Library 
 must be recorded once before the W8 renderer changes land, so a later regression has a baseline.
 
 ---
+## 9. Functional requirements and success criteria
+
+### Functional requirements
+
+- **FR-W3-1**: The panel MUST render a cache-first response's rows before any live request settles, for
+  the folder rail, the message list and the reading pane's metadata, on every eligible event.
+  (MUST; US-1)
+- **FR-W3-2**: The panel MUST issue at most one `mode=live` request per eligible event per surface, and
+  MUST drop any response whose `publication_revision` is older than the newest applied revision. (MUST;
+  US-1)
+- **FR-W3-3**: The panel MUST NOT contain a repeating timer that fetches folders, counts or headers;
+  the watcher banner's 30-second saved-state summary poll MAY remain. (MUST; US-1)
+- **FR-W3-4**: Every folder/list/detail response's `MailReadMetadata` MUST be rendered as its exact
+  freshness state; a cache hit MUST NOT be presented as a settled server check; a null
+  `last_validated_at` MUST present as unknown/stale. (MUST; US-2)
+- **FR-W3-5**: Unknown counts (`total: null`, `unread_count: null`) MUST render "—"; zero MUST render
+  only when the count is genuinely zero. (MUST; US-2)
+- **FR-W3-6**: A failed live refresh MUST preserve stale rows, their original checked time, and a
+  visible Retry; timestamps MUST NOT advance on failure. (MUST; US-2)
+- **FR-W3-7**: List paging MUST be 25 rows per page, +25 per Load more, with a hard ceiling of 200 rows
+  per folder per view; beyond the ceiling the search control MUST be offered and MUST work. (MUST; US-3)
+- **FR-W3-8**: Search MUST run live (never cache-served), under the same 25/200 discipline, with a
+  visible exit back to the browse view. (MUST; US-3)
+- **FR-W3-9**: A typed stale-cursor refusal MUST reset the view to the folder's first page with a
+  visible notice and no automatic replay. (MUST; US-3)
+- **FR-W3-10**: The mailbox settings surface MUST expose Sent/Drafts folder-name fields bound to the
+  existing wire fields; empty MUST clear to automatic with on-screen wording saying so; a saved value
+  MUST show as a deliberate override. (MUST; US-4)
+- **FR-W3-11**: The rail MUST distinguish present, confirmed-absent, and unknown folder availability;
+  unknown MUST offer the settings override and MUST NOT claim absence. (MUST; US-4)
+- **FR-W3-12**: The panel MUST emit `mail_panel_observer` open/close frames carrying only an opaque
+  `observer_id` and `workspace_id` on the authenticated socket, on the §4 US-5 lifecycle events. (MUST;
+  US-5)
+- **FR-W3-13**: Reads MUST succeed as ordinary request-scoped work without an acknowledged observer.
+  (MUST; US-5)
+- **FR-W3-14**: Message rows MUST carry `has_attachments` as a paperclip indicator with accessible
+  text; attachment rows MUST offer Open, Save to Library and Download with distinct accessible names.
+  (MUST; US-6)
+- **FR-W3-15**: Open MUST mint a preview and hand only the generated descriptor to the Library viewer;
+  context-bar text MUST be exactly "From mail: <subject> · Back to mail · Save to Library". (MUST; US-6)
+- **FR-W3-16**: The handoff MUST implement the I-06 focus/announcement/keyboard/reflow contract of §4
+  US-7, including the three-step focus fallback. (MUST; US-7)
+- **FR-W3-17**: Every reused renderer in a temporary view MUST resolve resources through the
+  source-scoped policy; unauthorized targets MUST be refused structurally (zero requests). (MUST; US-8)
+- **FR-W3-18**: Saved mail-derived HTML MUST render scripts-off by default with a visible per-file
+  scripts checkbox; the frontend MUST consume only the generated `preview_profile` and allowance
+  fields. (MUST; US-9)
+- **FR-W3-19**: Manual Refresh MUST set `refresh_mapping` (and `mode=live`); the human Retry marker
+  MUST appear only on failure-surface retries; automatic requests MUST never carry it. (MUST; US-10)
+- **FR-W3-20**: The panel SHOULD render the 503 `reason`-specific busy copy when the gateway provides
+  it, else the generic busy copy. (SHOULD; US-10)
+- **FR-W3-21**: The panel MAY keep the existing "Load images" consent affordance for HTML bodies
+  unchanged this phase (the broader F4 styling work is W9/W4's). (MAY)
+
+### Success criteria
+
+- **SC-W3-1**: On a warm cache, rows render before the live refresh settles in a scripted run, with
+  exactly one live request per event — measured by request-count assertions, not perceived speed.
+- **SC-W3-2**: Zero occurrences of unknown-as-zero across the D-1/D-3 matrices (each null row renders
+  "—").
+- **SC-W3-3**: The paging ladder D-2 passes: exactly 25/25/…/200 rows, ceiling copy at 200, search
+  returns the older synthetic message.
+- **SC-W3-4**: The presence matrix D-8 passes with frames carrying exactly the four allowed keys.
+- **SC-W3-5**: The I-04 dataset (D-6) shows zero unauthorized requests in a real browser, with the
+  workspace positive control showing the observer works.
+- **SC-W3-6**: The handoff journeys D-5/E3 pass with exact focus targets and announced announcements at
+  320 px and 200 % zoom.
+- **SC-W3-7**: All exact-text pins in §11 hold in component tests (one assertion per state).
+
+## 10. Traceability matrix
+
+| Requirement | User story | BDD scenario(s) | Test(s) |
+|---|---|---|---|
+| FR-W3-1 | US-1 | 1.1, 1.4 | U5, C1, E1 |
+| FR-W3-2 | US-1 | 1.2, 1.5 | U1, U2, U3 |
+| FR-W3-3 | US-1 | 1.3, 1.6 | C6, C8 |
+| FR-W3-4 | US-2 | 2.1, 2.5 | U11, U12, C1 |
+| FR-W3-5 | US-2 | 2.3 | C3 (D-1 row 4, D-3) |
+| FR-W3-6 | US-2 | 2.2 | U4, C1 |
+| FR-W3-7 | US-3 | 3.1, 3.2 | C2, E2 |
+| FR-W3-8 | US-3 | 3.3, 3.4 | C2, E2 |
+| FR-W3-9 | US-3 | 3.5, 3.6 | C2 |
+| FR-W3-10 | US-4 | 4.1, 4.4 | C9 |
+| FR-W3-11 | US-4 | 4.2, 4.3 | C3 |
+| FR-W3-12 | US-5 | 5.1, 5.2, 5.4, 5.5 | U6–U9, E5 |
+| FR-W3-13 | US-5 | 5.7 | U10 |
+| FR-W3-14 | US-6 | 6.1, 6.2, 6.4 | C4 |
+| FR-W3-15 | US-6 | 6.3, 6.5 | C5, E3 |
+| FR-W3-16 | US-7 | 7.1–7.6 | C5, E3 |
+| FR-W3-17 | US-8 | 8.1–8.5 | C5 (D-6), E4 |
+| FR-W3-18 | US-9 | 9.1–9.3 | E3 (saved-HTML leg), joint W8 viewer tests |
+| FR-W3-19 | US-10 | 10.1, 10.2 | C7 |
+| FR-W3-20 | US-10 | 10.3 | C7 |
+| FR-W3-21 | US-8 | 8.3 | existing Load-images tests (unchanged) |
+
+Every FR appears above; every scenario traces to at least one FR through its US. Datasets D-1…D-8 are
+referenced from §8 and inherit their rows' traces.
+
+---
