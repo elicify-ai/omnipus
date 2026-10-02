@@ -314,72 +314,88 @@ W0 publishes the wire fields; W2 alone searches, issues cursors, classifies atta
 
 | When | Then |
 |---|---|
-| Any mail path (panel, watcher, tool) resolves its runtime | It gets the same process-wide pool, budget and cache instances |
-| Two pairs share one account and run identical reads | Results never cross pairs; combined dials still respect the 2-slot account gate |
-| The last panel observer disappears (frame, socket death, logout) | Panel-owned idle sockets close; shared flights finish only for remaining real owners; nothing polls |
-| A cache write is attempted without proven Git-staging exclusion | The write is refused before file creation; the pair runs live-only with a visible `cache_unavailable` notice |
-| A cache file is written | It is ciphertext-only, atomically replaced, 0600 in a 0700 dir, at a stable per-pair path derived from the data root |
-| A tar backup is created or restored | `mail-cache` is skipped on archive and on restore — old archives included |
-| Any of the five removal triggers fires | Leases close, presence revokes, generation advances, cache purges; a failed purge yields `removed_cleanup_pending`, never silent success |
-| A cache write completes after its pair was removed | It is discarded by the tombstone/generation check — no resurrection, no polling |
-| A credential/endpoint/override change commits | The generation fingerprint changes; old snapshots are rejected and deleted, never migrated |
-| A preview is minted | No HTML/body/inline bytes enter any store; the grant is authorization/reference metadata only |
-| A preview or inline part is served | It live-fetches through the shared budget/pool, sanitizes in-request, serves `no-store`, drops bytes at request end |
-| A preview token is unknown, expired or revoked | The same 404 answer as today; cap-8 still refuses with 429; logout still revokes everything |
-| Any mail diagnostic is written | Only opaque ids, safe classes, durations and counts — never subjects, addresses, folder names or raw upstream text |
+| Panel, watcher or tool resolves the Mail runtime | It gets the one shared pool/budget/cache; two pairs on one account remain result-isolated under the existing two-slot account gate |
+| The last eligible observer closes/dies/logs out | Idle panel sockets close; shared work survives only for remaining independent owners; no panel-data polling continues |
+| A fresh install initializes Mail persistence | The **product itself** establishes staging **and** application backup/archive exclusions for cache and watcher state before sensitive writes |
+| Either exclusion genuinely fails/is unproven | No cache file is written; normal authorized live access remains available with visible `cache_unavailable` — this failure mode does not excuse missing product-owned exclusion |
+| A private cache file is written | It is complete ciphertext, atomically published under the random persisted pair ID with restrictive platform permissions |
+| Any application backup/archive or old-archive restore runs | Cache, watcher state and a repository-history bypass are excluded; ordinary state and saved workspace files/provenance remain eligible |
+| A removal/disable/reconfiguration/key event invalidates the pair | Identity/publication guards advance first, work/grants revoke, private cache/watcher state purges; any failed unlink is visible/retryable cleanup-pending |
+| Old work completes after removal or a revision advance | No file, cache row, count or validation timestamp is resurrected/published under the wrong identity |
+| Relevant settings/credentials are saved, including identical re-save | Persisted epoch and generation advance; the random pair ID stays stable for the same pair |
+| A list/detail or agent result names attachment metadata | It includes the one issuer's usable opaque reference, even without Message-ID; later actions validate on the same lease before content/mutation |
+| Browse/search reaches the view boundary | Pages remain 25/+25, at most 200; server-side subject/from/to search is reachable; a stale cursor produces the typed 409 |
+| Open/folder switch finds fresh headers/counts | No live refresh; absent or >5-minute data gets one eligible refresh. Manual Refresh always and confirmed own-action refresh remains unchanged |
+| A message preview is minted | It authorizes metadata only, makes no mail-network request and stores no HTML/body/part bytes |
+| A selected attachment is served | Only W2's targeted PEEK reader is used; preview is capped before success, Download remains a separate larger-file stream; no whole-message fallback |
+| Preview token cap/expiry/revocation is exercised | Existing cap-8-refuses 429, 404 parity, logout and separate signature discipline remain unchanged |
+| An operation completes or fails | One safe record in w6's single frozen shape is emitted; missing emission invalidates measurement, never a zero-duration green |
+| A temporary attachment is explicitly saved | It becomes an ordinary workspace file, not Mail cache; only saved HTML retains the settled original-byte/provenance/scripts-off/per-file-checkbox rule |
 
 ### 4.2 Explicit non-behaviors
 
-| The system must not… | Because |
+| The system must not… | Because / authority |
 |---|---|
-| …construct a second pool/budget/cache instance on any path | The founder's 2/mailbox and 8/global ceilings are unenforceable against a forked pool (ADR P1.2) |
-| …let the account key (`host:port|username`) decide result sharing or cache isolation | Two pairs on one account would read each other's data (grill I-01); the account key is contention-only |
-| …write any cache file before exclusion from Git staging is proven | The first unexcluded write is committed off-machine within 15 minutes and history retains it (trace §5) |
-| …fall back to a plaintext cache file, or to an unencrypted temp/journal file, when encryption or exclusion fails | A degraded cache is worse than no cache; the failure must be visible (ADR security section) |
-| …reuse the watcher's lossy `keyFor` sanitizer as the cache pair identifier | Two distinct pairs can produce the same sanitized name; the cache must be unambiguous |
-| …report a successful purge when an unlink failed | A false success orphans mail-derived files with no operator-visible trail (ADR cleanup-failure row) |
-| …poll, sleep or retry-loop to win the late-completion race | The generation/tombstone check is a correctness rule, not a timing heuristic (ADR: no new timers) |
-| …store HTML, body, attachment or inline bytes in any token grant, query cache or persistent store | The request-only body rule has no exceptions (founder brief; F1 "no storage" row) |
-| …let the preview mint dial IMAP | Mint is authorization; the serve request is the fetch — a validating mint doubles fetches and reintroduces eager work |
-| …loosen any existing preview control to make metadata-only grants easier | Every control (cap, revocation, 404 parity, proxy scoping, CSP) is preserved verbatim (US-6.4) |
-| …serve a restored cache snapshot from an old backup archive | Stale snapshots bypass every freshness rule (trace §3, restore row) |
-| …route agent file tools through the cache directory | A generic file tool must never become a decryption route (ADR filesystem row) |
-| …introduce a mail-data polling timer, panel-refresh heartbeat or IDLE subscription | Retired/forbidden surfaces (ADR P1.1, non-goals) |
-| …log or persist subjects, addresses, Message-IDs, server folder names, credentials or raw upstream error strings | Watcher state is Git-captured today; logs are durable; raw text is not a safe class (US-7) |
+| …build a second pool, budget, registry, cursor issuer, MIME walker, part reader, instrument shape, recipient rule or Save service | The register's single-publisher rules R-1/R-4 and §7 forbid parallel implementations, not just parallel wire types |
+| …create a stub or local wire type while W0 is missing | Contract-first Wave B is a named publisher boundary; missing fields are reported under R-3, never improvised |
+| …use account contention identity as result/cache ownership | Distinct pairs/config generations must not share data (ADR correction I-01) |
+| …make cache privacy conditional on external setup, or treat an ignore match alone as permission to write | **The product owns both staging and application archive exclusion on every install**; tracked state/history and archive paths are independent (founder Q-A; US-4) |
+| …spawn Git or another command to make a security-critical exclusion decision | Pure-Go enforcement and the register's self-evaluated effective-policy rule; QA's independent oracle is not product runtime |
+| …write plaintext fallback/temp/journal cache or use lossy/credential-derived path identity | Ciphertext-only private cache, random persisted pair ID and sanctioned encryption-key ownership (US-3/US-8) |
+| …return successful purge for failed cache/watcher cleanup, or rely on sleeps to prevent resurrection | Tombstone/epoch/publication ordering and visible Retry cleanup are correctness requirements (US-5) |
+| …retain reusable body/inline/attachment bytes, even in token grants or a recent-preview keep | Only request/current renderer buffers are allowed; explicit user Save is a separate ordinary file, not a byte-cache exception |
+| …dial at preview mint, or fetch a whole message/unrelated part as an attachment fallback | Mint is metadata authorization; attachment bytes come only from W2's selected-part PEEK reader (US-6; grill-3 I-5) |
+| …loosen preview cap, token revocation/404 parity, proxy consent, CSP or separate signature discipline | Existing security controls and the **25 MiB decoded** preview/read/Save limit stand; larger browser Download has its separate streaming role |
+| …restore disposable Mail state from old archives/history, or purge the user's saved files with mailbox cache | Cache/watcher exclusion and lifecycle are separate from ordinary workspace Save/backup/provenance (founder Q-B/Q-E) |
+| …claim unknown count is zero, Phase-1 memory headers came from disk, or a failed refresh validated data | W2's single metadata producer preserves nullability, source scoping and successful-validation timestamps (US-10) |
+| …refresh fresh headers/counts unconditionally on open/switch, or add a repeating panel timer/IDLE fill | Stale-gated eligible events only; manual Refresh and own successful actions are the explicit exceptions (founder Q-C) |
+| …invent/synthesize a message reference or validate it on a different lease from its action | First-phase gateway issuance and same-lease epoch/generation validation protect message identity (register row 16) |
+| …carry temporary Mail resource restrictions onto an ordinary saved non-HTML file | Temporary source authority ends at Save; saved HTML's scripts default/checkbox is the already-settled exception, not a new global policy (founder Q-E/Q5) |
+| …log raw provider text/content or call absent instrument records a valid campaign | Closed safe classes and real per-operation records are mandatory; emitters precede Wave E (US-7) |
 
 ### 4.3 Machine-verifiable constraints
 
+Technical enforcement detail belongs here and in the TDD/interface sections; all results below are **future test observables**, not measurements from this correction.
+
 | ID | Constraint | Test observable |
 |---|---|---|
-| MC-1 | Exactly one pool, one budget, one cache manager per process; all six wiring sites (§2.2) resolve pointer-identical instances | Pointer identity assertions at each site; second-construction returns the same instance |
-| MC-2 | Global concurrent IMAP sockets ≤ 8; per-mailbox ≤ 2; connecting reservations counted; a 9th demand gets the typed busy refusal within the 5 s acquisition window | Fake-server accepted/max counters; refusal latency ≤ acquisition bound |
-| MC-3 | Identical reads on two pairs of one account produce pair-correct results (no cross-pair flight sharing); combined dials ≤ 2 | Per-pair result markers on the fake server; dial counter |
-| MC-4 | Observer open → panel request may retain a socket; observer close, socket death, or logout → no panel-retained socket survives (server socket count returns to baseline) | Fake-server socket count before/after; independent tool request unaffected |
-| MC-5 | Cache path = `<data-root>/mail-cache/<opaque-pair-id>/…`; dir mode 0700, file mode 0600 (Unix); Windows current-user ACL; stable across restart; distinct for distinct pairs | Path/mode assertions; two-pair distinctness; restart stability |
-| MC-6 | Cache write refused with `cache_unavailable` when the exclusion rule is absent from both `<data-dir>/.gitignore` and `.git/info/exclude`; allowed when present in either; no file created on refusal | Flip the rule in a temp data dir; assert file existence and notice code both ways |
-| MC-7 | `createTarGz` skips top-level `mail-cache`; `extractTarGz` skips `mail-cache` members regardless of archive age | Archive member listing; restore-into-scratch assertion; positive control file present |
-| MC-8 | Removal of a pair with a failing unlink → response `removed_cleanup_pending` + safe code + Retry-cleanup succeeds later, including after the config row is gone; success path → subtree gone | Permission-blocked dir; retry assertions |
-| MC-9 | A cache write completing after removal writes nothing (tombstone/generation guard), deterministically, with the write paused mid-flight | Paused-write harness; disk assertion after release |
-| MC-10 | Credential/host/port/username/override change → old snapshot rejected (fingerprint mismatch), files deleted, leases closed; restart without change → snapshot still valid | Offline-edit-then-restart dataset; both directions asserted |
-| MC-11 | Minted preview grant contains zero bytes: no HTML string, no `Inline[].Data`, no attachment data; URL list permitted; expiry/session/identity fields as today | White-box store inspection + grant-size bound |
-| MC-12 | Preview serve fetches live through the budget: during backoff → typed refusal, zero dials; otherwise one gated fetch per serve request (counted) | Fake-server command counter; backoff-state serve attempt |
-| MC-13 | All existing preview controls hold: cap-8-refuses (429, no eviction), logout revocation, unknown/expired/revoked = one 404, signature kind replace-on-mint @ 2 min TTL and outside the message cap, remote images only from the grant-recorded list via the token-scoped proxy | The existing preview test families re-derived against the new grant shape — none weakened |
-| MC-14 | Preview-purpose responses carry `Cache-Control: no-store`; the new preview byte endpoint enforces the 25 MiB actual-decoded cap before success and inline disposition; the download endpoint keeps `applyMailByteHeaders` attachment disposition | Header assertions on both endpoints; over-cap refusal with false metadata |
-| MC-15 | Diagnostics contain zero leak markers (synthetic subject/address/folder-name markers) and do contain the safe class strings; `recordFailure` persists no raw text; `mailErr502` logs class + safe fields only | Marker-scan test with positive control |
-| MC-16 | Agent file/shell policy refuses any path under the cache directory | `ResolveTurnFSPolicy`/`ResolvePath`-level refusal test |
-| MC-17 | Pair identity is stable across restart and changes with endpoint/credential identity, via a purpose-keyed non-secret fingerprint over canonical identity + resolved credential material (DeriveSubkey seam); no password bytes in filenames, keys or logs | Restart-stability + change-rejection dataset; fingerprint never equals a password hash of the raw password alone |
+| MC-1 | One pool/budget/cache set per configured process data root; all six construction sites inject the same handles; no unmanaged production dial | Pointer identities and typed uninjected-client refusal; one account-slot acquire per operation |
+| MC-2 | Global open sockets/reservations ≤ **8**, per-mailbox ≤ **2**, existing per-account work slots ≤ **2**; ninth demand is busy within **5 s** inside the **45 s** overall read budget | Fake-server active/max/accepted counters plus pool reservations and fake-clock queue expiry; no cap/deadline widening |
+| MC-3 | Two pairs on the same account never share flight data, selected socket or cache identity | Pair-specific fake-server markers; combined account work remains bounded |
+| MC-4 | Only acknowledged, authorized REST observer association permits retention through **W1's one registry**; explicit close/death/logout removes its bindings and closes idle panel sockets | Real WS + both folder/list GETs; foreign/stale/absent observer controls; other tab/tool work unaffected |
+| MC-5 | Private cache layout under configured root/random persisted pair ID; Unix directory/file modes **0700/0600**; native Windows current-user access restriction | Distinct-root/path/mode tests; actual Windows ACL/denied-access execution, not compile-only proof |
+| MC-6 | **w5 publishes one gate; W2 enforces it.** `allowed` requires proven effective staging exclusion **AND** application backup/archive exclusion; product establishes both on every install, including watcher-state protection; genuine failure → `cache_unavailable`, no cache file | Product-only initialization control; independently break each condition, unreadable/negated policy and tracked-state conflict; subsequent write cannot bypass a regressed backup skip |
+| MC-7 | Every application backup/archive/restore skips cache/watcher current/temp/retired namespaces and repository objects that would reintroduce their history | Actual member/content/restore assertions with sensitive synthetic markers and ordinary-state/saved-file controls |
+| MC-8 | Cache **or watcher-state** unlink failure → truthful `removed_cleanup_pending` + safe code/opaque authorized Retry intent; config-row-gone retry succeeds later | Independently fault each purge target; no successful-purge assertion on failure |
+| MC-9 | Paused cache/watcher completions cannot recreate files after removal/disable/reconfiguration | Deterministic pre-publication/pre-write barriers, no sleeps or polling |
+| MC-10 | Relevant config/credential save, same-value re-save or stopped-process canonical-identity change invalidates old-generation work/snapshots; unchanged restart remains valid | Stable ID/no-change restart control; epoch-advancing same-reference credential replacement and canonical change rejection |
+| MC-11 | Message/attachment grant store has **no HTML/body/inline/attachment payload**; authorization/reference/URL metadata only, existing session/expiry/cap discipline | White-box grant inspection independent of served response; no invented size/performance measurement |
+| MC-12 | Metadata mint has **zero mail dials**; each serve runs through the shared budget and emits its own live-work outcome; backoff refusal has zero dials | Real command/dial counters and recording sink; no uncapped/unbudgeted path |
+| MC-13 | Existing token controls stand: message cap **8**, ninth mint **429/no eviction**, unknown/expired/revoked **404 parity**, logout revoke; signature replace-on-mint with **2-minute** TTL, outside message cap; consented remote resources token-scoped | Existing preview control assertions re-derived for metadata-only grants, **never weakened** |
+| MC-14 | Dedicated preview bytes = inline + `no-store` + **25 MiB actual-decoded cap before success**; Browser Download = separate attachment-disposition stream, including larger files | Exact cap−1/cap/cap+1, honest/unknown/lying metadata, decode/disconnect controls; incomplete streams never count as success |
+| MC-15 | Watcher persistence and gateway diagnostics contain **zero content/credential/raw-error markers** and visible safe classes | W1 `recordFailure` prerequisite plus w5 `mailErr502`/logging fix; real raw-failure propagation and positive detection controls |
+| MC-16 | Ordinary agent file/shell authority cannot read/write the private cache subtree | Existing filesystem-policy resolution refuses the path; authorized ordinary workspace-file control succeeds |
+| MC-17 | Pair ID = random persisted **128-bit** value, unchanged across restart/password rotation; generation = non-secret fingerprint of canonical pair identity + **persisted config epoch**, with one w5 implementation | W1/W2/gateway receive identical opaque values; same-value save advances epoch; no credential-material generation derivation or lossy path naming |
+| MC-18 | One complete safe record per gateway logical operation on success/failure, using **w6 §6.1 only**; W1/W2 provide owned fields; joiner `socket_count=0`, `shared_flight=true`; missing records invalidate Wave E | Injected sink + dedicated log assertions for mint/serve/summary/removal and normal reads; removal-member publisher gap §13 Q8 must be closed before its row goes green |
+| MC-19 | **w5 issues** usable opaque `message_ref` on list/detail/tool metadata without Message-ID; **W2 validates** pair/generation/epoch on the **same W1 selected lease before content/mutation** | Actual-output-only attachment journey; wrong pair, epoch and generation each typed stale-reference refusal; zero prohibited FETCH/STORE |
+| MC-20 | W0 generated paging/search/stale shapes reach handlers; **W2** alone issues cursors/searches SUBJECT/FROM/TO; **25/+25/200** per browse/search view, no full-body/local-index search | 201+ matches, field-isolated queries, query/cursor mismatch, typed stale-cursor **409**, no second issuer/cache growth |
+| MC-21 | Unknown count = **null**, confirmed absent optional role = **0**; mapping source has **five** values including `saved`; Phase-1 disk source = folder mapping only, headers/counts memory/live/none | `TestMailFolders_UnknownCountIsNull` and generated-schema positive/negative controls; no fabricated timestamps |
+| MC-22 | Open/switch live refresh only for absent or **>5-minute** header/count state; exactly 5 minutes is fresh; manual Refresh always; confirmed own-action invalidation/refresh unchanged | Fake-clock 5 min−1 s / 5 min / 5 min+1 s, command counts, no repeating timer or watcher fill; separate 24-hour mapping controls |
+| MC-23 | Watcher state is **excluded and purged**, orphan state cannot serve, saved workspace files survive mailbox cleanup; saved HTML preserves original bytes/provenance/scripts default/checkbox | Paused watcher-purge/restart tests plus saved-file/provenance controls; real Windows receipt for permission claims |
+| MC-24 | W1's `RevisionSource` captures once before server work; w5 counter advances on specified events; W2 `Put`/`PutCounts`/`Save` compare the **captured** value | A pre-mutation read released after newer success publishes no row/count/file/timestamp; response metadata retains correct revision and no older-flight join |
 
 ### 4.4 Integration boundaries
 
-| External system / package | Data in and out | Contract | Failure behaviour |
-|---|---|---|---|
-| **W0 (contracts)** | Schema/enum additions this package needs (§8) | This package never edits `contracts/` or generated artifacts; it requests, W0 defines and regenerates | A missing generated type blocks this package's handler work — declared, not improvised |
-| **W1 (read runtime)** | Pool/lease manager, budget internals, watcher scheduling; presence hooks and generation hooks it exposes | Frozen internal interfaces agreed with architect + W0 before parallel writers start (ADR sequencing) | Pool unavailable → requests take the typed busy/failure path, never bypass |
-| **W2 (discovery/cache service)** | Folder-mapping and header-cache services; the encrypted envelope writer | This package decides *where* files live, *whether* writes are gated, and *when* they are purged; W2 owns the envelope format and crypto | Cache service error → safe cache-health warning; live work continues (ADR failure table) |
-| **W7 (attachment service)** | Transfer service for Save mode | This package wires preview/download endpoints to it; it never edits Library files | Service refusal → typed error on the wire, no partial file |
-| **W3 (SPA)** | Generated REST/WS types only | Presence frames, metadata fields, cleanup-pending result — all via W0's generated types; no ad-hoc JSON | SPA missing → server behaviour unchanged (server never depends on UI) |
-| **Deployment (omnipus-agent-os, outside repo)** | The `mail-cache/` deny rule in the provisioning script's ignore template + idempotent re-run | Owned by team-lead/founder ops; this package specifies it (US-4) and consumes its evidence | Rule absent → the product-side gate keeps disk writes blocked (defence in depth) |
-| **launchd auto-commit job** | Reads whatever the deny-list allows | Not controllable by product code; the ignore rule is the only lever | Job blocked/unloaded (today's live state) does NOT weaken the gate — the gate is the rule + product check, not the job's health |
+| Boundary / single publisher | Data and consumption | Failure / gate |
+|---|---|---|
+| **Backend-lead as ADR-W0** | Publishes every §8 generated REST/WS/persisted-JSON shape in Wave B; there is no W0 spec file | Missing generated field blocks wire consumers under register R-3; no stub/parallel type |
+| **W1 read runtime** | Publishes pool/lease, **one presence registry**, revision-capture capability, dirty marks and safe watcher failures; w5 injects/binds only | Typed capacity/transport/wiring refusal; no private dial, second account acquire or watcher-file edit by w5 |
+| **W2 metadata** | Publishes discovery, snapshot/header/count service, **server SEARCH/cursor issuer**, **one part reader/MIME classifier**, same-lease validation and cache instrument fields | Visible unknown/stale/cache/fetch failure; no false zero/attachment flag or whole-message fallback |
+| **w5-owned data-root privacy boundary** | Product establishes its own effective staging and archive/restore exclusions for cache/watcher state on every install; w5 publishes the **one** allowed/refused decision and W2 enforces it | Both coverage conditions required before write; genuine failure is visible `cache_unavailable`, not an external-setup dependency |
+| **w4-features (ADR-W7–W10)** | Publishes Transfer/Save/receipt, Library provenance/script storage, CSS sanitizer and recipient/tool helpers; w5 is the **single Mail-route adapter writer**, never a Library-file writer | Safe typed service refusal, no partial saved file, no second service or extra approval mechanism |
+| **W3 panel** | Publishes presence and eligible refresh events, consumes generated pages/409/refs/cleanup outcomes; temporary source handoff then real-file Save | No UI connection is required for independent agent work; missing/stale observer permits request-scoped authorized work only |
+| **w6-proof** | Publishes the **sole internal instrument shape**, test/mutation plan and measurement oracle; W1/W2/w5 emit production records | Absent emitter/record/Windows execution path blocks proof; tests-only owner never implements a missing producer |
+| **Existing credential-store owner** | Sanctioned derived keys and lock/rotation state; **Credential Boot Contract** still governs | Locked/broken credentials are distinct from cache miss; no invented live authentication or replacement key |
 
 ---
 
