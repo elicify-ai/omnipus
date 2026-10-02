@@ -482,6 +482,20 @@ Every scenario carries its category (Happy / Alternate / Error / Edge) and trace
 - **When** the list is fetched and the paperclip indicator renders (the classifier is w2's single MIME structure walker — register row 15; this scenario's test consumes it)
 - **Then** only structure/part metadata was fetched — command capture proves no body bytes and no `\Seen` change; (a) and (d) are `true`, (b) and (c) are `false`; and an unclassifiable structure is a visible metadata failure — never a fabricated `false`
 
+#### Scenario B-P28: The agent reference journey works without a Message-ID
+**Traces to**: US-P4 AC-8 · **Category**: Error Path
+- **Given** a message whose Message-ID header is absent, and a fake server whose references are issued only by returned results (no test-fabricated refs, no UI side channel)
+- **When** the agent chains `read_message` → `list_email_attachments` → `read_email_attachment` → `download_email_attachment` using only returned references
+- **Then** every step succeeds with no Message-ID anywhere and no synthesized identity
+- **And** references from a wrong pair, an old configuration generation and a recreated folder (new UIDVALIDITY, old numeric UID) are each refused with the typed stale-reference error (`MailStaleReferenceError`) before any fetch or mutation — the I-03 counterexamples live at the scenario layer, not only as test rows (grill-2 F-1; executed by T33)
+
+#### Scenario B-P29: Each bar is judged exactly as its own stated measurement
+**Traces to**: US-P5 AC-5 · **Category**: Edge Case
+- **Given** the completed series (the §8.2 arms) with per-sample receipts carrying both clocks, status, rows and n
+- **When** each ADR bar is judged (§8.4)
+- **Then** every bar is evaluated as stated — absolute bars named by clock and host, paired bars by the exact percentile and the opposing measurement; cached-display samples never mix with live-fetch samples; the summary bar judges clock (c) with its zero-mail-calls condition; busy is judged within the 5 s wait
+- **And** a bar whose opposing series does not yet exist (message-open before M-A runs), a series with missing samples, or an empty folder is reported *not judgeable with evidence* / *not applicable* — never passed by absence and never filled with a fabricated 0 (grill-2 F-1 — the scenario layer for US-P5 AC-5; executed through T37 plus the §8 arm procedures)
+
 ---
 
 ## 6. TDD plan (tests designed before implementation)
