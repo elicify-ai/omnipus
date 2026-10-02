@@ -813,4 +813,87 @@ Scenario keys map as `B-W1-n`. Every scenario traces to its user story's accepta
 - The pooled path serving `FolderCounts`/`ReadFolderPage`/`ReadView` must reproduce today's success shapes byte-for-shape (same wire types, same nil-vs-empty slice handling — `mailNonNilSlice` contract) so W2's rewiring cannot silently change responses.
 - The `Transport` interface method set and `AccountKey` derivation (`host:port|username`) are pinned by existing tests; the spec adds the explicit assertion that `AccountKey` is unchanged after the rewrite (it is the contention key everything else keys from).
 
+---
+
+## 9. Counterexamples — what a careless implementation would survive
+
+Each row is a test that must **fail** against the named careless implementation. The first is the dispatch-mandated mutation case.
+
+| # | Careless implementation (the mutation) | Counterexample that kills it | Traces to |
+|---|---|---|---|
+| CX-1 | **Count only established sockets, not connecting reservations.** The ceiling check happens at borrow-of-established-socket time; a dial in progress is invisible to the counters. | B-W1-6: hold one dial at a greeting stall (reserved, not established); the second same-mailbox demand must wait/busy with exactly 1 accepted connection. The careless version dials a second socket — the accept counter and the waiter's outcome both expose it. | US-2/AS-3 |
+| CX-2 | **Skip re-select on lease reuse** (assume the last borrower left the right folder selected). | B-W1-2: after a Sent operation, borrow for Inbox; assert Inbox rows *and* a captured SELECT Inbox before the fetch. The careless version returns Sent rows labeled Inbox. | US-3/AS-1 |
+| CX-3 | **Return a timed-out socket to the idle pool** (close raced, poison flag missed on the cancellation path). | B-W1-12: after a total-deadline timeout mid-command, the next borrow must not observe that session; server-side session identity must differ. The careless version interleaves a stale reader's response into the next borrower's stream. | US-5/AS-1 |
+| CX-4 | **Double-acquire the account slot** (outer wrapper gates; the injected client "helpfully" gates again internally). | B-W1-32: instrument acquisitions at the budget; one panel read must show exactly 1 acquisition; two concurrent per account must admit exactly 2. The careless version shows 2 acquisitions for one operation and deadlocks or starves the second account user. | US-4/AS-5 |
+| CX-5 | **Coalesce on the old key** (account+operation+params) while carrying the new identity fields as unused metadata. | B-W1-19: two pairs/one account/different Sent mappings, concurrent identical requests — careless version serves the second pair the first pair's Sent rows (real per-identity server markers catch it). B-W1-21 catches the purpose dimension the old key cannot see. | US-6/AS-1, US-6/AS-3 |
+| CX-6 | **Let a superseded read publish** (validate only at request time, not at publication time). | B-W1-22: pause the read post-fetch; mutate + refresh; resume. Careless version repopulates unread flags and advances the last-validated timestamp — asserted unchanged across memory rows, disk file and the response the consumer saw. | US-6/AS-4 |
+| CX-7 | **Issue folder-CLOSE on release** (natural teardown habit) with `\Deleted` pending. | MC-W1-14: set `\Deleted` without expunge (non-UIDPLUS shape), release, re-select: the message must still exist. The careless version expunged it silently. | US-3 |
+| CX-8 | **Auto-retry a mutation on a fresh socket** after a mid-command session death (reconnection convenience). | B-W1-17: mutation on a session killed mid-command; careless version produces two server-side effects; the test asserts exactly one visible failure and no duplicate. | US-5/AS-4 |
+| CX-9 | **Watcher retains its socket "for efficiency"** when a panel happens to be open in another workspace, or fills the folder cache during a cycle. | B-W1-30 + B-W1-24: closed-panel intervals show zero retained sockets and zero cache writes; the independent-work scenario shows watcher completion never extends retention. | US-8/AS-4 |
+| CX-10 | **Sequential watcher loop kept** (bounded-fairness claimed in a comment, loop unchanged). | B-W1-27: 13 due mailboxes, one stalled server-side; careless version completes ≤2 within the pass window; the test requires the other 12 to progress. | US-8/AS-1 |
+| CX-11 | **Retention keyed by a caller-supplied observer ID** (REST param trusted). | DS-5 last row: a REST request presenting a foreign observer ID gains no retention and no authority; only the authenticated connection's own frames bind observers. | US-7 |
+| CX-12 | **Nil session source silently falls back to per-call dialing** (back-compatibility convenience). | B-W1-34: the operation must fail with the typed wiring error and zero dials; the careless version dials uncounted — the accept counter catches the dial the ceilings never saw. | US-2/AS-4 |
+
+---
+
+## 10. Functional requirements, success criteria, traceability
+
+### 10.1 Functional requirements
+
+| ID | Requirement |
+|---|---|
+| FR-W1-1 | The system MUST provide exactly one application-owned IMAP connection manager per data dir, injected into every client-producing path (panel, agent tools, watcher); a client MUST NOT construct a private manager. (§4.1) |
+| FR-W1-2 | A production dial through a client with no injected manager MUST fail with a typed, visible wiring error and MUST NOT fall back to an uncounted dial; the nil-source path exists for tests only. (§4.1, MC-W1-26) |
+| FR-W1-3 | The pool MUST cap concurrent sockets+reservations at 2 per mailbox identity and 8 globally, on every path and interleaving, counting connecting reservations. (§4.2, MC-W1-1/2) |
+| FR-W1-4 | The pool identity MUST bind pair + endpoint/TLS identity + non-secret generation, MUST NOT contain password text, and MUST NOT share sockets across pairs. (§4.2) |
+| FR-W1-5 | A failed dial MUST release every reservation it held before its error propagates. (§4.2, MC-W1-5) |
+| FR-W1-6 | Each operation MUST hold an exclusive lease for its socket's full duration; the requested folder MUST be (re-)selected and validated before the borrower's first command; SELECT data MUST be returned to the borrower for epoch checking. (§4.3, MC-W1-6) |
+| FR-W1-7 | Read commands on a lease MUST NOT write flags (PEEK discipline); only explicit mutation operations write, and they MUST NOT be coalesced or automatically replayed. (§4.3/§4.5, MC-W1-7/10) |
+| FR-W1-8 | A structural folder-absent SELECT answer MUST surface as a typed absence outcome with the session kept healthy; transport-class select failures MUST poison. (§4.3) |
+| FR-W1-9 | The acquisition order MUST be: backoff → coalesce → account slot → pool reservation → establish/reuse; no manager lock during network I/O; no borrower waits for a second account slot. (§4.4) |
+| FR-W1-10 | Every pooled read MUST carry a 45 s total deadline (queue+dial+commands; a shorter caller deadline wins), a ≤5 s pool-acquisition cap ending in the typed pool-busy outcome, and the 30 s dial ceiling as a subordinate bound. (§4.4, MC-W1-3/4) |
+| FR-W1-11 | Timeout, cancellation, server BYE and protocol failure MUST close and retire the socket; reader termination MUST be observed before reuse decisions. (§4.5, MC-W1-8) |
+| FR-W1-12 | A dead idle socket MAY be replaced exactly once per read, inside the original deadline and backoff rules; mutations MUST NOT be auto-retried. (§4.5, MC-W1-9/10) |
+| FR-W1-13 | Sockets idle past ~2 minutes since last completed use MUST be closed; eviction MUST select the least-recently-completed idle socket and MUST NOT evict active work; all-eight-active MUST end in bounded wait then typed busy, never a ninth socket. (§4.6, MC-W1-11/12/13) |
+| FR-W1-14 | Release, idle-close and eviction MUST NOT issue a folder-CLOSE; pending `\Deleted` messages MUST survive. (§4.6, MC-W1-14) |
+| FR-W1-15 | Panel sockets MAY be retained only while ≥1 authenticated-connection-bound observer for the workspace is open; per-tab observers; removal on close/disconnect/logout/workspace exit; detached flights close instead of retaining after the last observer. (§4.7, MC-W1-19) |
+| FR-W1-16 | Until the presence channel is registered, retention MUST be structurally disabled (request-scoped sockets everywhere). (§4.7, MC-W1-20) |
+| FR-W1-17 | Read coalescing MUST key on pair + generation + operation + normalized arguments + purpose; the account key MUST retain only its contention role; mutations and watcher cycles MUST NOT coalesce. (§4.8, MC-W1-15/16) |
+| FR-W1-18 | A read MUST capture the folder publication revision before server work; a read whose captured revision is superseded at completion MUST publish nothing (memory, disk, timestamps, response state); a post-mutation refresh MUST NOT join a superseded flight. (§4.9, MC-W1-17/18) |
+| FR-W1-19 | The watcher MUST run due cycles with bounded fairness (≤1 cycle in flight per mailbox; one stalled mailbox MUST NOT delay others), MUST acquire non-blockingly (skip on no capacity, last-checked unchanged, backoff not advanced), MUST NOT retain sockets or fill panel caches while no panel is open, and MUST keep its existing cadence/backoff/stagger/state machine. (§4.10, MC-W1-21/22/23) |
+| FR-W1-20 | Each path's outer wrapper MUST remain the single budget owner for its operations; the session source MUST NOT acquire account slots; `retry=true` MUST bypass only the backoff gate. (§4.11, MC-W1-24/25) |
+| FR-W1-21 | The watcher cycle's STATUS probe and reads MUST ride the same pool and lease rules as every other path (no uncounted dial path may exist). (§4.1/§4.10) |
+| FR-W1-22 | The pool MUST introduce no timer except socket/idle expiry, and no mail-data request of any kind while no request is in flight. (§4.6/§4.7) |
+
+### 10.2 Success criteria
+
+| ID | Criterion |
+|---|---|
+| SC-W1-1 | Every test in §8's plan passes on CI (`go`, `race` tiers) with red-before-green receipts for the new tests; the preserved regression set (§8.2) passes unchanged. |
+| SC-W1-2 | Under the DS-1 pressure matrix, the fake server's maximum observed accepted-connection count never exceeds 2 per mailbox / 8 global, with every refusal typed. |
+| SC-W1-3 | Under DS-7, no read outcome (success or failure) exceeds the 45 s total bound + scheduling slack; pool-busy arrives < 7 s. |
+| SC-W1-4 | The DS-3 identity matrix shows exactly one dial per identical identity and never a cross-pair/cross-generation/cross-purpose result. |
+| SC-W1-5 | The DS-4 ordering cases show zero superseded publications across memory, disk and response paths. |
+| SC-W1-6 | With the panel closed through ≥3 watcher intervals: zero open sockets, zero cache writes, watcher badge state honestly dated. |
+| SC-W1-7 | A user browsing folders/lists in the Mail panel completes every operation with correct data through the pooled path (UAT lane evidence); a second visit within the idle window issues measurably fewer server connections than operations (counter receipt). |
+| SC-W1-8 | No new footprint claim is made without measurement: the implementation reports pool overhead (goroutines + retained-socket ceiling) against the <10 MB security-feature envelope in its delivery receipt; the 8-socket × per-connection buffer bound is stated, not assumed. |
+
+### 10.3 Traceability matrix
+
+| Requirement | User story | BDD scenario(s) | Test(s) |
+|---|---|---|---|
+| FR-W1-1, FR-W1-2 | US-1 | B-W1-34 | T25, T2, T3 |
+| FR-W1-3, FR-W1-4, FR-W1-5 | US-2 | B-W1-4, B-W1-5, B-W1-6, B-W1-7 | T1, T2, T3; CX-1 |
+| FR-W1-6, FR-W1-7, FR-W1-8 | US-3 | B-W1-2, B-W1-8, B-W1-9, B-W1-10 | T4, T5, T6, T7; CX-2, CX-7 |
+| FR-W1-9, FR-W1-10 | US-4 | B-W1-11, B-W1-12, B-W1-13, B-W1-14, B-W1-32, B-W1-33 | T26, T23, T24; CX-4 |
+| FR-W1-11, FR-W1-12 | US-5 | B-W1-12, B-W1-15, B-W1-16, B-W1-17, B-W1-18 | T8, T9, T10, T11; CX-3, CX-8 |
+| FR-W1-17, FR-W1-18 | US-6 | B-W1-18, B-W1-19, B-W1-20, B-W1-21, B-W1-22 | T15, T16; CX-5, CX-6 |
+| FR-W1-15, FR-W1-16 | US-7 | B-W1-23, B-W1-24, B-W1-25, B-W1-26 | T17, T18; CX-11 |
+| FR-W1-19, FR-W1-21 | US-8 | B-W1-27, B-W1-28, B-W1-29, B-W1-30, B-W1-31 | T19, T20, T21, T22; CX-9, CX-10 |
+| FR-W1-13, FR-W1-14 | US-1, US-2 | B-W1-5, B-W1-11 | T12, T13, T14 |
+| FR-W1-20 | US-4, US-5 | B-W1-32, B-W1-33 | T23, T24; CX-4 |
+| FR-W1-22 | US-1, US-8 | B-W1-3, B-W1-30 | T3, T21 |
+
+(Test numbers reference §8's order column, e.g. T15 = `TestBudget_CoalescingIdentityMatrix`.)
+
 <!-- W1-SPEC-CONTINUES -->
