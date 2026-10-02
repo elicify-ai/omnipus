@@ -26,7 +26,7 @@ import (
 //
 // cfg.Mailboxes is agent ID → workspace ID → mailbox (pair-addressed 2026-07-03):
 // the same agent may own a different mailbox in each workspace it belongs to.
-func buildMailboxes(cfg *config.Config, store *credentials.Store) []email.Mailbox {
+func buildMailboxes(cfg *config.Config, store *credentials.Store, sessions *email.MailSessions, generationFor func(agentID, workspaceID string) (string, error)) []email.Mailbox {
 	if cfg == nil || len(cfg.Mailboxes) == 0 || store == nil {
 		return nil
 	}
@@ -54,6 +54,20 @@ func buildMailboxes(cfg *config.Config, store *credentials.Store) []email.Mailbo
 				slog.Warn("mailbox drain: transport construction failed — skipping mailbox",
 					"agent_id", agentID, "workspace_id", workspaceID, "error", err)
 				continue
+			}
+			// w5-integration (MC-1, wiring site 3): the watcher's client
+			// borrows sessions from THE shared pool under the pair's own
+			// identity scope. A scope failure skips the pair visibly — an
+			// unscooped watcher client would break pair isolation (MC-3).
+			if sessions != nil {
+				gen, gerr := generationFor(agentID, workspaceID)
+				if gerr != nil {
+					slog.Warn("mailbox drain: mail pair generation unavailable — skipping mailbox",
+						"agent_id", agentID, "workspace_id", workspaceID)
+					continue
+				}
+				client.SetSessionSource(sessions)
+				client.SetSessionScope(agentID+"/"+workspaceID, gen)
 			}
 			out = append(out, email.Mailbox{
 				AgentID:     agentID,

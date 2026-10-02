@@ -211,6 +211,10 @@ func (a *restAPI) mailPairClient(w http.ResponseWriter, agentID, workspaceID str
 		jsonErr(w, http.StatusNotFound, "no mailbox configured for this agent and workspace")
 		return nil
 	}
+	// w5-integration (MC-1, wiring site 5): the panel's per-request client
+	// borrows sessions from THE shared pool — never a private one — under
+	// the pair's own identity scope.
+	wireMailSessionSource(a.homePath, client, agentID, workspaceID, mb)
 	return client
 }
 

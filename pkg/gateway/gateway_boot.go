@@ -411,7 +411,9 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 	// cycle, so mailbox changes via the Connectors API need no restart.
 	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
-			return buildMailboxes(stg.agentLoop.GetConfig(), stg.credStore)
+			rt := gatewayMailRuntimeFor(stg.homePath)
+			return buildMailboxes(stg.agentLoop.GetConfig(), stg.credStore,
+				gatewayMailSessionsFor(stg.homePath), rt.mailGenerationForPair)
 		})
 		// A8 mail-operation budget: the watcher set gates its cycles through
 		// the SAME shared per-account gate the REST panel and the agent tools
@@ -1214,6 +1216,7 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		onboardingStateUnknown: stg.onboardingStateUnknown,
 		homePath:               stg.homePath,
 		mailBudget:             email.SharedMailBudget(stg.homePath), // A8: the shared per-account gate
+		mailSessions:           gatewayMailSessionsFor(stg.homePath), // w5 MC-1: the ONE shared pooled session manager
 		taskStore:              stg.tStore,
 		taskExecutor:           stg.tExecutor,
 		liveTaskActivity:       stg.tExecutor, // founder decision 2026-09-14: Task.last_activity_at

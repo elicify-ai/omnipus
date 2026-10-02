@@ -94,9 +94,18 @@ type restAPI struct {
 	// constructed restAPI (the unit-test literal) shares the same gate.
 	mailBudget     *email.MailBudget
 	mailBudgetOnce sync.Once
-	configMu       sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
-	taskStore      *task.Store         // unified task persistence
-	taskExecutor   *agent.TaskExecutor // task execution engine
+	// mailSessions is the restAPI's handle on the shared pooled session
+	// manager (w5-integration, MC-1): ONE process-wide instance per data
+	// root, injected at boot (gateway_boot.go) and resolved lazily — via the
+	// same state-dir-keyed email.SharedMailSessions — when a directly
+	// constructed restAPI omits it. Every client this restAPI constructs
+	// (mailPairClient) borrows sessions from THIS manager; a second pool
+	// cannot form below the facade.
+	mailSessions     *email.MailSessions
+	mailSessionsOnce sync.Once
+	configMu         sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
+	taskStore        *task.Store         // unified task persistence
+	taskExecutor     *agent.TaskExecutor // task execution engine
 
 	// limitAgentStore is the agent store the #904 global tool-iteration
 	// lowering (PUT /performance, D11) reads and writes. Nil in production
