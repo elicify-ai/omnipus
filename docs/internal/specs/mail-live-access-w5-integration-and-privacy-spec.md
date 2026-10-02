@@ -1005,19 +1005,33 @@ For **this correction**: **code correct and tested — not assessed/no tests run
 
 ## 12. Traceability matrix
 
-| Requirement (story) | BDD scenarios | Tests (§6) | Machine constraints |
-|---|---|---|---|
-| US-1 shared runtime | B-1…B-4 | 1–5 | MC-1, MC-2, MC-3 |
-| US-2 presence | B-5…B-8 | 6–9 | MC-4 |
-| US-3 cache placement + gate | B-9…B-13 | 10–13 | MC-5, MC-6, MC-16 |
-| US-4 deployment exclusion | B-14…B-16 | 14–16 | MC-7 + E1–E5 receipt |
-| US-5 removal cascades | B-17…B-21 | 17–20 | MC-8, MC-9 |
-| US-8 durable generation | B-22, B-23 | 21, 22 | MC-10 (+ MC-17 design rule) |
-| US-6 metadata-only previews | B-24…B-29 | 23–28 | MC-11…MC-14 |
-| US-7 redaction | B-30, B-31 | 29, 30 | MC-15 |
-| Cross-cutting (mutations) | — | 31 (X-1…X-10 embedded across) | — |
+**Planned coverage, not executed proof:** **10 stories / 58 numbered acceptance criteria / 45 BDD scenarios / 48 TDD rows / 12 datasets / 18 mandatory counterexamples**. This correction explicitly traces the formerly missing Windows, restart-orphan and remediation-runbook criteria (grill-3 M-7), and names the nullable-count mutation target (grill-4 I3). The counts were checked against the artifact; runtime attainment remains Unknown.
 
-Every story traces to at least one scenario, every scenario to at least one test, every test family to at least one machine-verifiable constraint. No gap row remains.
+| Story and numbered criteria | BDD scenarios | Named TDD rows (§6) | Machine constraints / gate |
+|---|---|---|---|
+| **US-1.1–US-1.4** — one shared runtime | B-1, B-2, B-3, B-4; B-41's cross-generation publication control | 1, 2, 3, 4, 5, 43 | MC-1, MC-2, MC-3, MC-24 |
+| **US-2.1–US-2.5** — authenticated presence and independent mail authority | B-5, B-6, B-7, B-8 | 6, 7, 8, 9, **47** (both REST params) | MC-4; W1 registry/W0 frame+param freezes |
+| **US-3.1–US-3.5** — private ciphertext placement, random pair ID, dual gate, escape/file authority | B-9, B-10, B-11, B-12, B-13, B-43 | 10, 11, 12, 13, 16, 21, 36 | MC-5, MC-6, MC-16, MC-17 |
+| **US-3.6** — **real Windows native permissions** | **B-32** | **32**, platform execution receipt | MC-5; register row 23 workflow/UAT evidence, never compile-only |
+| **US-4.1, US-4.2, US-4.4, US-4.5** — product-only establishment and actual staging/archive/restore proof | B-9, B-10, B-11, B-14, B-15, B-16 | 10, 11, 14, 15, 16 | MC-6, MC-7, MC-23; **E1–E5** fresh product receipts |
+| **US-4.3** — **audited tracked-state remediation runbook** | **B-34** | **34** plus docs-verifier audit | MC-6, MC-7; explicit §10 DoD obligation and §11 TODO |
+| **US-5.1–US-5.8** — both-target purge, all lifecycle triggers, truthful after-config Retry and late-writer rejection | B-17, B-18, B-19, B-20, B-21, B-22, B-42 | 17, 18, 19, 20, 21, **48** | MC-8, MC-9, MC-10, MC-17, MC-23 |
+| **US-5.9** — **restart orphan cache/watcher reconciliation** | **B-33** | **33** | MC-8, MC-9, MC-23; actual success/fault and no-serving controls |
+| **US-5.10** — saved user files/provenance survive Mail cleanup | B-17, B-45 | 17, 45 | MC-23; ordinary saved-file control |
+| **US-6.1–US-6.6** — metadata-only grants, no-dial mint, counted live serving, controls and split capped/Download bytes | B-24, B-25, B-26, B-27, B-28, B-29 | 23, 24, 25, 26, 27, 28, 35 | MC-11, MC-12, MC-13, MC-14, MC-18 |
+| **US-6.7** — selected PEEK reader/classifier only, **no whole-message fallback** | **B-44** | **46** | MC-14, MC-19; W2 publisher dependency is mandatory |
+| **US-6.8** — temporary authority ends at successful Save | **B-45** | **45** | MC-23; founder Q-E / original-byte scripts-off Q5 |
+| **US-7.1–US-7.5** — safe diagnostics and W1 watcher/gateway redaction split | B-30, B-31 | 29, 30 | MC-15; marker detection control, no second redactor |
+| **US-7.6–US-7.8** — mandatory per-operation envelope/instrument | **B-35** | **35** plus w6's T1–T6 instrument oracles | MC-18; **Q8 removal enum is publisher-owned and remains open**, not a traceability waiver |
+| **US-8.1–US-8.4** — one canonical+epoch generation, stable random ID and honest store state | B-22, B-23, B-43 | 21, 22, 36 | MC-10, MC-17 |
+| **US-9.1–US-9.3** — one issuer, no-Message-ID journey and same-lease refusal | B-36, B-38, B-44 | 37, 38, 46 | MC-19; w5 issuance / W1 capability / W2 validation split |
+| **US-10.1, US-10.2** — subject/from/to server search, 25/200 and stale cursor | B-37, B-38 | 39, 40 | MC-20; W0 shapes/W2 SEARCH+cursor issuer |
+| **US-10.3** — stale-gated events and revision-safe refresh | B-40, B-41 | 41, 43 | MC-22, MC-24 |
+| **US-10.4** — null/count/source/classifier metadata truth | **B-39** | **42, 44 (`TestMailFolders_UnknownCountIsNull`)** | MC-21; W6 M-α10 now has a named publisher-owned target |
+| **US-10.5** — real saved-entry/resource handoff | B-45 | 45 | MC-23; temporary-only resource policy, saved HTML scripts rule unchanged |
+| **X-1…X-18** — all careless-implementation counterexamples | Parent BDD scenarios named in §6; no separate invented requirement | Row 31 independent CHECK invokes the exact named tests in each X row | Every mutation must be killed/restored with a receipt; absent test blocks, never skips |
+
+The acceptance-to-BDD and BDD-to-named-TDD links were document-audited with negative controls (removing the Windows trace and nullable-count target was detected). **That is a check of this specification, not a test run or feature pass.** No coverage gap is silently waived; the one upstream shape request Q8 is explicitly owned and gated in §7/§10/§13.
 
 ---
 
