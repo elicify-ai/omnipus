@@ -1,6 +1,6 @@
 # ADR-091 WP-C — Steering surface, the `delegate` front, wait-inline removal, completion
 
-- **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D4, D5, D6, D10 (list_jobs, seeds, prompts)
+- **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D4, D5, D6, D10 (list_jobs, seeds, prompts) — D6's completion rule is read as amended by ADR-20260928 "The sub-agent control plane" D6b / F1011-Q4: a descendant parked with a question holds back its parent's completion, and a completed hand-back carries no `open_questions`
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — consumes I-1, I-2, I-3, I-5
 - **Owner files:** landing order §3, row C
 - **Status:** Draft rev 2 (consolidated after three grills; supersedes every earlier sentence of rev 1)
@@ -76,9 +76,9 @@
 
 ### US-4 — Done without ceremony; judged when asked (P0)
 
-1. **Given** a steered session launched without a goal, **When** its turn ends with a non-empty final answer and no descendant is `queued` or `running`, **Then** it is `completed` and its parent receives a `handback` (`mode: final`) with the answer.
-2. **Given** the same session ends with an empty answer, a parked question, an interruption, a timeout, or with a descendant still `queued` or `running`, **When** the turn ends, **Then** the outcome is persisted and delivered exactly per the I-5 table — **`failed` + `error empty_answer:`** (founder decision, round 10); `needs_input` + `question`; `cancelled` + `error interrupted:`; `timed_out` + `error timed_out:`; stays `running` with no entry until the subtree is quiet — never as done.
-3. **Given** a parent that answered while a child still runs, **When** the last such child completes and wakes the parent, **Then** the parent's own `handback` is written then, with any parked descendants' questions in `open_questions`.
+1. **Given** a steered session launched without a goal, **When** its turn ends with a non-empty final answer and no descendant is `queued`, `running`, or parked with a question, **Then** it is `completed` and its parent receives a `handback` (`mode: final`) with the answer.
+2. **Given** the same session ends with an empty answer, a parked question, an interruption, a timeout, or with a descendant still `queued`, `running`, or parked with a question, **When** the turn ends, **Then** the outcome is persisted and delivered exactly per the I-5 table — **`failed` + `error empty_answer:`** (founder decision, round 10); `needs_input` + `question`; `cancelled` + `error interrupted:`; `timed_out` + `error timed_out:`; stays `running` with no entry until the subtree is quiet — never as done.
+3. **Given** a parent that answered while a child still runs, **When** the last such child completes and wakes the parent, **Then** the parent's own `handback` is written then — but only if no descendant is parked with a question: a parked descendant holds the parent's completion back until it is answered and finished (F1011-Q4; control-plane D6b), and on the completed path `open_questions` is empty.
 4. **Given** a steered session launched with a goal (criteria + DoD in `create_task`'s shape), **When** it claims, **Then** the Judge adjudicates as for a task and a `goal_status` entry (direction `session_to_parent`, condition `met` or `not_met`, `evidence` per criterion — the existing kind, extended by WP-E) reaches the parent.
 5. **Given** an agent denied `goal_claim`, **When** it runs plain steered work, **Then** it can complete.
 6. **Given** the rendered delegation prompt, **When** an agent reads it, **Then** it finds one sentence saying when to set a goal on a delegate (multi-step or must-verify work) and when to leave it off (quick lookup, single action), and that no goal is the default (founder decision, round 8).
@@ -235,14 +235,22 @@ Feature: Delegate front and steering surface
       | empty     | quiet   | no     | failed      | error(fatal, empty_answer:) |
       | non-empty | running | no     | running     | nothing yet                 |
       | non-empty | queued  | no     | running     | nothing yet                 |
+      | non-empty | parked descendant | no | running  | nothing yet                 |
       | any       | any     | yes    | needs_input | question                    |
 
   # Alternate Path — Traces to: US-4 / AS-3
-  Scenario: The last child's completion completes the waiting parent
+  Scenario: A parked sibling holds back the waiting parent's completion
     Given B answered while C was still running and D is parked with a question
     When C completes and wakes B
+    Then B's state stays running — D's pending question holds B's completion back (F1011-Q4, control-plane D6b)
+    And A's inbox gains no handback for B
+
+  # Alternate Path — Traces to: US-4 / AS-3
+  Scenario: With no parked sibling, the last child's completion completes the waiting parent
+    Given B answered while C was still running and no descendant of B is parked with a question
+    When C completes and wakes B
     Then B's state becomes completed
-    And A's inbox gains B's handback with D's question in open_questions
+    And A's inbox gains B's handback with the answer and empty open_questions
 
   # Happy Path — Traces to: US-4 / AS-4
   Scenario: A goal-bearing delegation is judged
@@ -319,7 +327,7 @@ Implementers load the `test-driven-development` skill first.
 | C-1 | `async` ∈ {absent, true, false}; `allow_blocking_question` ∈ {absent, true} | ok / reject / reject / ok / reject | US-1/AS-2 |
 | C-2 | 8 actions × 5 principals | matrix | US-2 |
 | C-3 | steers at t, t+1 ms, t+10 ms from two sources | delivered in order | US-2 |
-| C-4 | answer len 0 / 1 / 10 kB; subtree quiet / running / queued; parked | disposition table; entry validates | US-4 |
+| C-4 | answer len 0 / 1 / 10 kB; subtree quiet / running / queued / parked descendant; parked | disposition table; entry validates | US-4 |
 | C-5 | depth 1 / ceiling / ceiling+1 self-delegation | ok / ok / refuse | US-3 |
 | C-6 | goal: 0 criteria / valid / unevaluable for agent | reject / judged / readiness reject | US-4/AS-4 |
 | C-7 | `list_jobs` limit 1 / 2 / 10 with one delegate child + one task child | 1 correctly classified row / each once / each once | US-5 |
@@ -340,7 +348,7 @@ Preserved: `verifyCallerOwnsSession` ancestor semantics; parked/respond lifecycl
 | FR-C-005 | Sessions created by `create_task` MUST expose the same steering actions; `buildTask` MUST record the creating session in `task.Task.OriginSessionID` and the creating tool call in the new disk-only `task.Task.OriginCallID`. |
 | FR-C-006 | External command-line sessions MUST reject steer and questions with a named error. |
 | FR-C-007 | Self-target launches MUST be permitted for both fronts and bounded only by depth and concurrency. |
-| FR-C-008 | A goal-less steered session MUST complete only with a non-empty final answer and a quiet subtree (no descendant `queued` or `running`); an empty answer MUST be persisted `failed` with an `error` `empty_answer:`; every outcome MUST be persisted and delivered exactly per the I-5 table; a waiting parent's `handback` MUST be written when its last running descendant completes, with parked descendants' questions in `open_questions`. |
+| FR-C-008 | A goal-less steered session MUST complete only with a non-empty final answer and a quiet subtree (no descendant `queued`, `running`, or parked with a question); an empty answer MUST be persisted `failed` with an `error` `empty_answer:`; every outcome MUST be persisted and delivered exactly per the I-5 table; a waiting parent's `handback` MUST be written when its last running descendant completes and no descendant is parked with a question — on this completed path `open_questions` is empty (F1011-Q4 / control-plane D6b supersede ADR-091 D6's parked-question exemption). |
 | FR-C-009 | A goal-bearing steered session MUST be adjudicated by the Judge exactly as a task and its verdict delivered upward as the extended `goal_status` kind (direction `session_to_parent`, `met` / `not_met`, `evidence`). |
 | FR-C-010 | `collectSubagentRows` MUST exclude records whose `Origin.Kind` is `task` before any result limit, MUST take actionability from the record's state and the label from its title, and MUST NOT read the live delegate index; every session appears exactly once. |
 | FR-C-011 | `delegate(status)` MUST answer from the lifecycle record and the inbox (state, last status line, age of the last entry, or "no message yet" with started-ago) and MUST NOT depend on streaming progress. |
