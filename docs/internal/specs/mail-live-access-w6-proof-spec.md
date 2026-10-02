@@ -312,7 +312,7 @@ Every scenario carries its category (Happy / Alternate / Error / Edge) and trace
 
 #### Scenario B-P3: The ninth socket is refused with a typed busy result
 **Traces to**: US-P2 AC-2 · **Category**: Error Path
-- **Given** eight leases held active by stalled (never-completing) fake-server responses and one reservation in the connecting state counted as active
+- **Given** all eight global leases held active by stalled (never-completing) fake-server responses — the cap counts connecting reservations as active, so the eight may include a connecting reservation (e.g. seven established + one connecting); the state is exactly **eight counted actives** before the next demand (grill-4 I2 arithmetic fix)
 - **When** a ninth read arrives
 - **Then** it waits at most the 5 s acquisition wait and receives the typed busy result (`pool_busy`) — and the fake server's connection counter shows **no ninth dial**
 
@@ -390,12 +390,14 @@ Every scenario carries its category (Happy / Alternate / Error / Edge) and trace
 - **When** the caches fill and the panel closes for 30 fake-clock minutes
 - **Then** at most 50 reusable headers per role are retained, active-view older pages did not enlarge the cache, search ran live, 4 MiB overflow produced a visible cache-unavailable outcome (no truncated fields, no silently omitted rows), and the memory headers were dropped after exactly the 30-minute threshold (a reopen inside 30 minutes retained them; the drop issued zero IMAP commands)
 
-#### Scenario B-P15: A cache write is invisible to Git and backups
+#### Scenario B-P15: A cache write is invisible to Git and backups — by the product's own exclusion
 **Traces to**: US-P3 AC-7 · **Category**: Edge Case
-- **Given** the data folder under Git with the autocommit job's staging rules and the application backup walker
-- **When** a cache write lands
-- **Then** `git status --porcelain` is unchanged, nothing is staged, and no archive member contains the cache file — while the positive control (an ordinary allowed state file) **is** staged and archived, proving the inspection could see a write
-- **And** until W4 traces and excludes the real deployed autocommit job, this test stays red — that red gates disk-cache activation
+- **Given** the product's own exclusion in force on a scratch data directory: w5-integration's published gate decision and w2's first-write enforcement (register row 18) — the Mail cache directory and, per founder Q-B=A, the watcher `email-watch/` state directory excluded from data-directory version-control staging AND from the application's own backup/archive walk, the exclusion proven with `git check-ignore`-equivalent semantics evaluated in-process before the first write
+- **When** a cache write lands, and again when a watcher cycle persists state
+- **Then** `git status --porcelain` is unchanged, nothing is staged, and no archive member contains the cache or watcher-state file — while the positive control (an ordinary allowed state file) **is** staged and archived, proving the inspection could see a write
+- **And** when the exclusion cannot be proven (simulated: the product's own ignore write absent or removed), the first write is refused — the cache stays live-only with the visible `cache_unavailable` notice, and that refusal is itself asserted; the notice excuses nothing (founder ruling 2026-10-02: the product owns the exclusion on every install, by its own means — no operator machine setup, launchd job, state-backup remote, gitleaks pass or personal ignore file is a dependency of this feature)
+- **And** purging `email-watch/` state on mailbox removal is asserted (founder Q-B=A)
+- **And** until w5-integration's gate decision and w2's first-write enforcement land (register row 18), this test stays red — that red gates disk-cache activation
 
 #### Scenario B-P16: Open writes nothing to disk
 **Traces to**: US-P4 AC-1 · **Category**: Happy Path
@@ -411,6 +413,7 @@ Every scenario carries its category (Happy / Alternate / Error / Edge) and trace
 - **Then** the counter records **zero** requests for all three targets; the viewer's own minted resources do load; a consented Load-images case loads only through the token-scoped proxy
 - **And** the positive control — the same Markdown opened as an ordinary workspace Library file — shows the counter firing, proving the observer works
 - **But** ordinary workspace rendering of the same file is unchanged
+- **And** the mail-restricted resource policy scopes the **temporary preview only**: after Save the file is an ordinary workspace file under ordinary workspace rules (founder Q-E=A); saved HTML keeps the already-decided scripts-off default with the per-file scripts checkbox (Q5=A)
 
 #### Scenario B-P18: Save lands confined, sanitized and unique
 **Traces to**: US-P4 AC-3 · **Category**: Happy Path / Error Path
@@ -473,6 +476,12 @@ Every scenario carries its category (Happy / Alternate / Error / Edge) and trace
 - **Then** the test fails; restoring the code returns it to green
 - **But** any mutation whose test still passes is a CHECK BLOCK naming both
 
+#### Scenario B-P27: The paperclip is a metadata-only structure fact
+**Traces to**: US-P4 AC-9 · **Category**: Edge Case
+- **Given** messages whose MIME structure carries (a) a genuine user `message.md`, (b) a CID-only inline part, (c) the dedicated draft-body marker, (d) an unavailable attachment part — and a command-capture harness on the fake server
+- **When** the list is fetched and the paperclip indicator renders (the classifier is w2's single MIME structure walker — register row 15; this scenario's test consumes it)
+- **Then** only structure/part metadata was fetched — command capture proves no body bytes and no `\Seen` change; (a) and (d) are `true`, (b) and (c) are `false`; and an unclassifiable structure is a visible metadata failure — never a fabricated `false`
+
 ---
 
 ## 6. TDD plan (tests designed before implementation)
@@ -483,13 +492,13 @@ Naming conventions observed in this tree: Go RED files carry a `_red_test.go` su
 
 **Problem:** mail operations are timed nowhere (§2.1) — not in the gateway log (failure counts only), not in tool results, not in the SPA. A measured comparison needs one record per operation, emitted by production code, with fields that cannot leak content.
 
-**Record shape (normative — production owners W1/W2/W4 implement; W0 contracts nothing here, this is in-process/structured-log, not wire):**
+**Record shape (the normative definition — frozen by this package, which the landing-order register row 17 names its single publisher; the emission obligations land as binding rows in the producers' specs: w5-integration owns the request-scoped envelope, w1 supplies the pool sub-fields, w2 the cache sub-fields; W0 contracts nothing here — this is in-process/structured-log, not wire. The emitter must exist before Wave E: a campaign run against a build without it produces zero records and is invalid by T6's rule):**
 
 | Field | Type | Rule |
 |---|---|---|
 | `operation` | closed enum | `folders`, `list`, `open`, `summary`, `discovery`, `attachment_metadata`, `attachment_read`, `attachment_save`, `seen` |
 | `pair_ref` | opaque string | The pair's opaque id + its configuration/folder-mapping generation. Never an email address, host:port with username, or folder name |
-| `source` | enum | `live` \| `memory` \| `encrypted_disk` \| `none` — mirrors the contract's `MailReadMetadata` source vocabulary |
+| `source` | enum | `live` \| `memory` \| `encrypted_disk` \| `none` — mirrors the contract's `MailReadMetadata` vocabulary with its scoping: `encrypted_disk` appears in Phase 1 only on folder-mapping records, never on header/list records (register row 2; the ADR's freshness-metadata row) |
 | `hit` | bool | Cache hit (`true`) or miss (`false`); a hit never dialed |
 | `duration_ms` | int | Operation end-to-end; > 0 on completion |
 | `acquire_wait_ms` | int | Queue/acquisition time inside the read budget — the 5 s wait is measured here, not inferred |
@@ -497,6 +506,7 @@ Naming conventions observed in this tree: Go RED files carry a `_red_test.go` su
 | `outcome` | enum | `ok` or a safe failure class from the existing closed class set — never a raw upstream error string |
 | `rows` | optional int | Row/message count where meaningful |
 | `revision` | optional opaque string | The publication revision the read captured — makes a superseded-publish diagnosable from receipts |
+| `shared_flight` | optional bool | True when this record joined an already-running coalesced flight (a joiner); a joiner records `socket_count=0` — the flight owner's record carries the socket — so MC-P4's sum stays comparable to the server's connection counter (register row 17's joiner rule; grill-4 I1) |
 
 **Emission rules:** emitted on **success and failure** alike (the inverse of today's failure-only logging); one record per operation; delivered through an injected sink interface (tests inject a recording sink) and mirrored to the structured gateway log under a dedicated message key so measurement receipts are auditable from logs. No new polling, no sampling timer — the record is written when the operation ends.
 
@@ -507,7 +517,7 @@ Naming conventions observed in this tree: Go RED files carry a `_red_test.go` su
 | 1 | `TestMailInstrument_SuccessPathEmitsRecord` | `startMemIMAP` + injected sink | B-P1 | The success-path gap is closed: an open (and each other operation) emits exactly one complete record — the test fails today's failure-only logging shape by construction |
 | 2 | `TestMailInstrument_NoSensitiveMarkers` | Unit (sink capture) | B-P2 | With marker subject/address/folder fixtures, zero markers in any field; the positive control asserts the markers ARE in the mail data, proving the scan works (trap 8 of the false-green doc: a probe without a control proves nothing) |
 | 3 | `TestMailInstrument_HitMissLabels` | `startMemIMAP` + warm cache | B-P1, (MC-P3) | Cache hit → `hit=true`, non-live source, `socket_count=0`; miss → `hit=false`, `source=live`, `socket_count≥1` |
-| 4 | `TestMailInstrument_SocketCounterAgreement` | `startMemIMAP` (counter) | (MC-P4) | The records' socket acquisitions sum to the server's accepted-connection delta — the instrument agrees with an independent counter |
+| 4 | `TestMailInstrument_SocketCounterAgreement` | `startMemIMAP` (counter) | (MC-P4) | The records' socket acquisitions sum to the server's accepted-connection delta **under coalescing**: a joiner records `socket_count=0` + `shared_flight=true`, the flight owner carries the socket — each dial counted exactly once (grill-4 I1's joiner rule) |
 | 5 | `TestMailInstrument_DurationReflectsInjectedDelay` | `startMemIMAP` (fault hold) | (MC-P1) | A scripted 2 s server hold appears in `duration_ms` within tolerance — the field measures the operation, not a constant |
 | 6 | `TestMailInstrument_DisabledProducesNoRecords_AndMeasurementRejects` | Unit + harness rule | (US-P1 AC-6) | Sink absent → no records; the measurement harness treats zero records for an exercised operation as an invalid run |
 
@@ -518,7 +528,7 @@ Harness note: `startMemIMAP` restores the `imapDial` seam and its dial seam is g
 | Order | Test name (file) | Level | Traces to BDD | What it proves |
 |---|---|---|---|---|
 | 7 | `TestPoolCaps_TwoPerMailboxEightGlobalUnderConcurrency` (`pkg/email/pool_caps_red_test.go`) | `startMemIMAP` + faults | B-P3, (MC-P5) | 13 pairs × concurrent panel/watcher/tool work: accepted-connection counter never exceeds 2/mailbox or 8/global, **counting connecting reservations**; the counter — not returned rows — is the oracle |
-| 8 | `TestPoolCeiling_TypedBusyNoNinthDial` (same file) | `startMemIMAP` + faults | B-P3 | Eight stalled leases + a connecting reservation → the ninth request gets typed `pool_busy` within the 5 s wait; server counter shows no ninth dial |
+| 8 | `TestPoolCeiling_TypedBusyNoNinthDial` (same file) | `startMemIMAP` + faults | B-P3 | Eight **counted-active** leases (connecting reservations count toward the eight, e.g. 7 established + 1 connecting) → the ninth request gets typed `pool_busy` within the 5 s wait; server counter shows no ninth dial (grill-4 I2 arithmetic fix) |
 | 9 | `TestPoolLease_ExclusiveFolderState` (`pkg/email/pool_lease_red_test.go`) | `startMemIMAP` + faults | B-P4 | Concurrent different-folder readers with a mid-command hold see only their own folder's markers; PEEK preserves `\Seen`; no release/eviction EXPUNGEs |
 | 10 | `TestPoolPoison_RetiredNotReused` (`pkg/email/pool_poison_red_test.go`) | `startMemIMAP` + faults | B-P5 | BYE / timeout / cancelled command / protocol error each retire the session; next operation dials fresh (login count); 20 cycles show bounded goroutine trend and no reuse |
 | 11 | `TestPoolPresence_LastObserverReleases` (`pkg/email/pool_presence_red_test.go`) | `startMemIMAP` + faults | B-P6 | Close frame / silent disconnect / logout / workspace exit each return panel sockets to zero; the in-flight watcher cycle and agent read complete; a detached flight never restores retention |
@@ -538,9 +548,11 @@ Harness note: `startMemIMAP` restores the `imapDial` seam and its dial seam is g
 | 20 | `TestCacheEnvelope_CorruptionRejectedNoSalvage` (same file) | Unit | B-P11 | Bit-flip / truncation / foreign key / wrong pair / schema mismatch → rejection + visible warning + live path + **no** `last_validated` advance; plaintext-salvage absence proven by marker scan with positive control |
 | 21 | `TestCacheEpoch_UIDValidityChangeDiscardsAll` (`pkg/email/cache_epoch_red_test.go`) | `startMemIMAP` + faults | B-P12 | Epoch change discards every cursor/row; old-ref exercise (read, mark-seen, attachment) refused pre-fetch **on the same selected lease**; the recreated-folder/UID-reuse case refuses; fresh refs work |
 | 22 | `TestCacheStale_LabelSurvivesFailedRefresh` (`pkg/email/cache_stale_red_test.go`) | `startMemIMAP` + faults | B-P13 | Rows past the 5-minute threshold render labelled stale; the single refresh failing keeps rows + visible error + Retry and never resets the timestamp |
-| 23 | `TestCacheBounds_FiftyHeadersFourMiB` (`pkg/email/cache_bounds_red_test.go`) | `startMemIMAP` | B-P14 | 500-message folder → exactly 50 reusable/role; active view doesn't grow the cache; search ran live (server command counters); 4 MiB overflow → visible cache-unavailable, no truncation/omission |
+| 23 | `TestCacheBounds_FiftyHeadersFourMiB` (`pkg/email/cache_bounds_red_test.go`) | `startMemIMAP` | B-P14 | 500-message folder → exactly 50 reusable/role; active view doesn't grow the cache; search ran live with the settled fields (subject + sender/recipient substring, server-side, 25/200 bounds — founder Q-D=A; server command counters); 4 MiB overflow → visible cache-unavailable, no truncation/omission |
 | 24 | `TestCacheRetention_ThirtyMinutePostCloseDrop` (`pkg/email/cache_bounds_red_test.go`) | Unit (fake clock) | B-P14 | 30 fake-clock minutes after panel close → memory headers gone, zero IMAP commands during the drop; reopen inside 30 min retains |
-| 25 | `TestCacheExclusion_GitStatusAndArchiveUnchanged` (`pkg/gateway/mail_cache_exclusion_red_test.go`) | Integration | B-P15 | Cache write → data-folder `git status --porcelain` unchanged, staging set unchanged, `createTarGz` archive contains no cache member; positive control (allowed state file) IS staged/archived. **Stays red until W4 lands the exclusion and traces the real autocommit job — that red is the activation gate, never skipped** |
+| 25 | `TestCacheExclusion_GitStatusAndArchiveUnchanged` (`pkg/gateway/mail_cache_exclusion_red_test.go`) | Integration | B-P15 | The product's own exclusion, proved: cache write → data-folder `git status --porcelain` unchanged, staging set unchanged, the archive walk contains no cache member; watcher state files (`email-watch/`) carry the same exclusion and are purged on mailbox removal (founder Q-B=A); the cannot-prove-exclusion case refuses the first write — live-only with the visible `cache_unavailable` notice (that refusal is asserted, never assumed); positive control (allowed state file) IS staged/archived. **Stays red until w5-integration publishes the gate decision and w2 enforces it at the first write (register row 18) — that red is the activation gate, never skipped; no operator machine setup is a dependency** |
+
+Windows ACL/permission evidence for the cache files rides the landing-order register's **row 23** instrument: w5-integration's wave extends the Windows CI workflow to run the `pkg/email` cache tests; the fallback evidence path is a founder-run/UAT Windows machine executing the ACL checks with a signed receipt. Where that instrument has not run, this package's Windows permission assertions are reported **not-judgeable-with-evidence** — never assumed from a Unix-only run.
 
 ### 6.4 Feature tests (F1–F7 journeys and the grill corrections)
 
@@ -556,7 +568,7 @@ Harness note: `startMemIMAP` restores the `imapDial` seam and its dial seam is g
 | 33 | `TestAttachmentRef_JourneyWithoutMessageID` (`pkg/tools/email_attachments_ref_red_test.go`) | `startMemIMAP` + tools | (MC-P26) | I-03: chain read_message → list → read → download using only returned refs on a Message-ID-less message; wrong-pair / old-generation / old-epoch refs each refused pre-fetch on the acting lease; no test-fabricated refs, no UI side channel |
 | 34 | `TestPreviewBytePath_CapAndDownloadSplit` (`pkg/gateway/mail_byte_paths_red_test.go`) | Integration | (MC-P19/21 wire) | I-05: preview-purpose endpoint refuses actual over-cap bytes even when reported metadata lies (below/at/above `maxViewPartBytes` dataset); the browser-Download path streams the same larger part to completion; a mid-stream disconnect/decode failure never satisfies a success assertion on either path |
 | 35 | `TestHandoff_FocusAnnouncementKeyboard` (`tests/e2e/mail-attachment-handoff.spec.ts`) | E2E | (MC-P29, I-06) | Keyboard-only Open → viewer → Save (success and failure) → Back; focus lands on the trusted context heading, returns to the originating action or the defined fallback with announcements; context bar reachable at 320 px and 200 % zoom; disabled actions carry the accessible "Save to Library first" explanation |
-| 36 | `TestPaperclip_MetadataOnlyIndicator` (`pkg/email/attachment_flag_red_test.go`) | `startMemIMAP` (command capture) | (MC-P21 scope) | F7: `has_attachments` derived from structure metadata — command capture proves no body bytes fetched and no `\Seen` change; CID-only and draft-marker parts produce false; a genuine `message.md` produces true; unavailable part still true; unclassifiable metadata is a visible failure, never fabricated false |
+| 36 | `TestPaperclip_MetadataOnlyIndicator` (`pkg/email/attachment_flag_red_test.go`) | `startMemIMAP` (command capture) | B-P27, MC-P31 | F7: `has_attachments` derived from structure metadata — command capture proves no body bytes fetched and no `\Seen` change; CID-only and draft-marker parts produce false; a genuine `message.md` produces true; unavailable part still true; unclassifiable metadata is a visible failure, never fabricated false. The classifier is **w2's** (register row 15 — one MIME walker, no second); this test consumes it (grill-4 I5's trace re-point — the draft's "(MC-P21 scope)" anchor was wrong: MC-P21 is the Save-confined constraint) |
 
 ### 6.5 E2E additions
 
@@ -570,7 +582,7 @@ Harness note: `startMemIMAP` restores the `imapDial` seam and its dial seam is g
 | Dataset | Rows (boundary → edge → error → happy) | Traces to |
 |---|---|---|
 | DS-P1 Instrument fixtures | marker subject/address/folder strings (positive control present in mail data, absent in records); operations: folders, list, open, summary, discovery, attachment_metadata/read/save, seen; success + one safe-class failure per operation; disabled sink | B-P1, B-P2 |
-| DS-P2 Concurrency shapes | 13 pairs × {panel, watcher, tool} reads; 8 stalled leases + 1 connecting reservation; 9th demand; two pairs one account (different Sent mappings); old-generation flight + reconfigured joiner; cancelled only-waiter; detached late completion | B-P3…B-P10 |
+| DS-P2 Concurrency shapes | 13 pairs × {panel, watcher, tool} reads; 8 counted-active leases (connecting reservations count toward the eight, e.g. 7 established + 1 connecting); 9th demand; two pairs one account (different Sent mappings); old-generation flight + reconfigured joiner; cancelled only-waiter; detached late completion; coalesced flight with 2 joiners (`shared_flight` accounting) | B-P3…B-P10 |
 | DS-P3 Poison/lease faults | server BYE; command timeout; cancelled command; protocol error; stalled greeting; stalled TLS/login; stalled SELECT; concurrent different-folder readers with mid-command hold; PEEK flag assertions | B-P4, B-P5 |
 | DS-P4 Envelope corruption | valid round-trip; bit-flip; truncation; foreign-purpose key; wrong-pair AAD; schema mismatch; oversized envelope (> allocation guard); same-plaintext-twice (nonce check); file moved between pairs | B-P11 |
 | DS-P5 Size/epoch boundaries | part bytes at `maxViewPartBytes - 1`, exactly, `+1`; false reported size (metadata lies, actual over/under); unknown size; encoded-vs-decoded inflation; UIDVALIDITY changed with numeric UID reused; UIDVALIDITY unchanged control | B-P12, T34 |
