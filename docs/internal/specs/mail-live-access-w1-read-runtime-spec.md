@@ -291,4 +291,134 @@ The new `flightKey` is the concatenation of all five. The **account key (`host:p
 
 **Retry semantics stay pinned:** `retry=true` bypasses only the backoff gate — never the semaphore, never the pool ceilings, never TLS validation, never mutation safeguards (verified in `backoffRefusal` and the ADR failure table). An automatic refresh never sets it. `Purpose=read_live` vs `read_cache` does not interact with `Retry` beyond that.
 
+---
+
+## 5. User stories and acceptance criteria
+
+### US-1 — Repeated reads stop repeating connection setup (P0)
+
+A user browsing their Mail panel clicks between folders and mailboxes. Today every click pays the full connection setup again — TLS handshake, login, folder select — before the first byte of data. After this work, a repeat read within the idle window reuses the still-healthy authenticated session, so the second and later reads skip the setup work; the *first* read still pays the server's own delay, and nothing is prewarmed or fetched while the panel is closed.
+
+**Why this priority:** this is the core of the founder's pooling decision and the only change that can move the supplied 2.5–22.8 s folder/list timings.
+
+**Independent test:** with one configured mailbox against the fake IMAP server (connection counters in test code), open folders, list, open a message, list again — assert the server accepted strictly fewer connections than operations and that every response is correct against server state.
+
+**Acceptance scenarios:**
+
+1. **Given** a configured mailbox and a completed first read, **When** a second read for the same mailbox runs within the idle window, **Then** it completes without the server accepting a new connection, and its results match server state.
+2. **Given** a pooled session that was just used, **When** the next operation is for a *different* folder of the same mailbox, **Then** the result reflects that folder — never the previously selected one.
+3. **Given** a first read that must establish a connection, **When** it completes, **Then** the server observed exactly one connection setup (dial + login) for that read, and later reads did not add more while reuse was possible.
+4. **Given** the panel closed and the idle window elapsed, **When** no request arrives, **Then** no mail server connection remains, and no mail-data request of any kind is issued while closed.
+
+### US-2 — The ceilings hold under any pressure (P0)
+
+Mail never opens more than two connections per mailbox or eight process-wide — including connections still being established — no matter how many tabs, mailboxes, agent tools and watcher cycles demand service. When capacity is gone, the requester gets a typed busy outcome within its bounded wait; a ninth socket is never created.
+
+**Why this priority:** the ceilings are founder-set resource limits (Hard-Constraint-adjacent: bounded footprint); exceeding them is a correctness failure, not a tuning issue.
+
+**Independent test:** fake-server connection counters under scripted concurrency (13 mailboxes, two configured pairs sharing one server account, delayed dials): assert the maximum simultaneously accepted connections is never above the ceilings and every refusal is the typed busy outcome.
+
+**Acceptance scenarios:**
+
+1. **Given** two reads already in flight for one mailbox, **When** a third read for that mailbox starts, **Then** it waits at most the bounded acquisition window and then receives a typed busy outcome — and the server never sees a third connection for that mailbox.
+2. **Given** eight operations in flight across mailboxes, **When** a ninth demand arrives anywhere (panel, tool, watcher), **Then** it waits its bounded window and then receives the typed busy outcome; total server connections never exceed eight.
+3. **Given** a dial that is still connecting (reservation held, no socket yet), **When** other demands are counted against the ceilings, **Then** the connecting reservation is counted — the ceilings are not fooled by "not yet established".
+4. **Given** a dial attempt that fails, **When** the failure is reported, **Then** every reservation that dial held has been released and later demands can acquire them.
+
+### US-3 — One socket, one owner: selected state never leaks (P0)
+
+Two simultaneous requests that borrow (different) sessions of the same mailbox — or the *same* session at different times — each see exactly the folder they asked for, with the read flags of messages untouched by reads. No request ever reads another's selected-folder state.
+
+**Why this priority:** cross-folder leakage returns wrong data silently — the worst failure class this design can ship.
+
+**Independent test:** two concurrent borrowers request different folders while the server pauses one command mid-flight; assert each borrower's rows come from its own folder and no flag changed on any fetched message.
+
+**Acceptance scenarios:**
+
+1. **Given** a session last used for Sent, **When** a new borrower leases it for Inbox, **Then** the Inbox rows returned are Inbox's, and the server was asked to select Inbox before the fetch.
+2. **Given** a pooled read of any folder, **When** its messages are fetched, **Then** no message's read/unread state changes on the server because of the read.
+3. **Given** two simultaneous borrowers on different sessions of one mailbox, **When** one is paused mid-command, **Then** the other completes with its own folder's correct data.
+4. **Given** a folder the server structurally reports as nonexistent, **When** a read targets it, **Then** the caller receives the structural absence outcome (not a transport error), the session stays healthy, and later reads still succeed.
+
+### US-4 — Every read finishes inside its stated bounds (P0)
+
+A read either completes or fails with a named outcome within 45 seconds total — including queueing for shared capacity — with connection establishment capped at 30 seconds and the wait for pool capacity capped at 5 seconds. A failed establishment releases everything it reserved. Locks are acquired in one direction only; nothing waits on a lock while holding the network.
+
+**Why this priority:** the founder accepted these numeric bounds (recorded Q3=A); "no silent multi-attempt query retry may turn a bounded failure into minutes of loading" is the surviving hotfix requirement.
+
+**Independent test:** fake server with controlled stalls at greeting, TLS/login, select and fetch; assert every outcome (success, typed busy, timeout class) arrives within its bound, and reservation counters return to baseline after failures.
+
+**Acceptance scenarios:**
+
+1. **Given** all pool capacity busy, **When** a read waits 5 seconds without acquiring, **Then** it returns the typed pool-busy outcome — not a timeout, not an indefinite wait.
+2. **Given** a server that accepts but never responds, **When** a read runs, **Then** it ends by the total deadline with the timeout class, and its socket is not reused afterwards.
+3. **Given** a server that stalls the handshake, **When** the dial is attempted, **Then** establishment ends within the 30-second dial ceiling, inside the total.
+4. **Given** an operation queued behind the account's two in-flight operations, **When** the total deadline expires first, **Then** the caller receives the existing busy outcome and never dialed.
+5. **Given** any interleaving of coalescing joins, account-slot waits and pool waits, **When** the system runs under load, **Then** no request waits for one resource while holding another in the opposite order (no deadlock is reachable).
+
+### US-5 — A poisoned connection poisons nothing else (P0)
+
+Timeouts, cancellations, server goodbyes and protocol failures retire the socket they happened on. A retired socket is closed, never silently reused, and its replacement obeys the same bounds. An idle socket that turns out dead may be replaced once for a read. A mutation is never automatically replayed.
+
+**Why this priority:** stale-session reuse produces mixed or wrong responses — the ADR's "dead socket reused" risk — and silent mutation replay can act twice.
+
+**Independent test:** scripted server sending BYE / stalling commands / closing idle sessions; assert retired sockets are closed, readers terminate, one replacement maximum per read, and a mutation on a dead session fails visibly without a second attempt.
+
+**Acceptance scenarios:**
+
+1. **Given** a command that times out, **When** the socket is examined afterwards, **Then** it is closed and can never be borrowed again; the next borrow establishes or reuses a *different* healthy session.
+2. **Given** the server sends BYE, **When** the affected operation ends, **Then** the outcome is a visible error of the right class and the socket is retired.
+3. **Given** an idle pooled session the server has silently closed, **When** a read borrows it and the first command fails with a connection-class error, **Then** the read replaces the dead session exactly once — inside the original bounds — and succeeds or fails visibly; never two replacements.
+4. **Given** a mutation (mark-read, draft save, send-copy) whose session proves dead mid-operation, **When** the failure surfaces, **Then** the mutation is reported as failed-and-retryable and no automatic second attempt is made.
+5. **Given** a cancellation of one waiting requester, **When** its shared read still has other live joiners, **Then** the read completes for them; only the cancelled requester's wait ends.
+
+### US-6 — Identical reads share; different-meaning reads never do (P0)
+
+Two requests share one server round-trip **only** when they come from the same agent/workspace pair, the same configuration generation, the same operation, the same normalized arguments, and the same live-versus-cache purpose. A read that was started before a change it cannot see (a mutation, an invalidation) publishes nothing anywhere when it finishes. And a refresh issued after a mutation never receives the pre-mutation flight's answer.
+
+**Why this priority:** these are grill corrections I-01 and I-02 — the two strongest findings against the approved design; shipping without them ships wrong-data-by-sharing and stale-data-by-publication.
+
+**Independent test:** two pairs configured on one server account with different Sent folder mappings, plus a scripted reconfiguration mid-flight and a paused-read/mutation/refresh ordering — assert separate results per identity, no cross-pair or cross-generation sharing, and no superseded publication to memory, disk or response.
+
+**Acceptance scenarios:**
+
+1. **Given** two pairs sharing one server account but configured with different Sent folder mappings, **When** both issue the same concurrent folder list, **Then** each receives its own mapping's result — and the account's two-operation cap still bounds their combined dials.
+2. **Given** an in-flight read under an older configuration generation, **When** the configuration changes (new generation) and the same read is issued again, **Then** the new read does not join, receive, or cancel the old flight, and both callers get their own generation's answer.
+3. **Given** a cache-shaped read and a live refresh for the same folder running concurrently, **When** both complete, **Then** the live response is labeled and *is* live data — it was never satisfied by the cache-shaped flight.
+4. **Given** a read paused after collecting its server data, **When** a successful mutation completes and advances the publication revision before the paused read resumes, **Then** the paused read publishes nothing — no rows, no timestamps, no state change anywhere — and the post-mutation refresh's data stands.
+5. **Given** a refresh requested after a mutation, **When** it starts, **Then** it does not join any flight started before the mutation (its identity differs by revision and purpose).
+
+### US-7 — Sockets stay only while a panel actually watches (P1)
+
+Panel-requested connections may be kept warm only while at least one authenticated Mail panel for that workspace is open. Presence is bound to the authenticated gateway connection — an ID the gateway issues per socket — with one observer per tab; closing a tab, closing the browser, logging out, leaving the workspace, or dying connection each remove that connection's observers, and the last observer's departure closes that workspace's idle panel sockets immediately (active ones when they finish). Until the presence channel exists, nothing is retained.
+
+**Why this priority:** the founder's "no panel-owned connections while the panel is closed" rule; P1 because it lands with the W4 integration wave.
+
+**Independent test:** scripted observer lifecycle (two tabs, close one, close both, drop the socket, logout) with socket counters: assert retention tracks the last observer exactly and tool/watcher work is never cancelled by UI disappearance.
+
+**Acceptance scenarios:**
+
+1. **Given** one open panel observer and completed reads, **When** the idle window has not elapsed, **Then** the panel's session may remain open for reuse.
+2. **Given** two tabs open and one closes, **When** the remaining tab still observes, **Then** retention continues and the closed tab's subscriptions alone are cancelled.
+3. **Given** the last observer for a workspace closes, **When** its reads have finished, **Then** its idle sockets close at once and no panel-owned connection survives.
+4. **Given** a shared read in flight when the last observer departs, **When** the read completes, **Then** its socket is closed, not retained; other owners' (tool/watcher) work is untouched.
+5. **Given** a browser that vanished without a close message, **When** the gateway notices the dead connection, **Then** its observers are removed and the same close rules apply.
+6. **Given** the presence channel not yet wired, **When** any read completes, **Then** its socket is closed — request-scoped behavior only, no retention anywhere.
+
+### US-8 — The watcher shares the pool without abusing it (P0)
+
+The new-mail watcher keeps its one-minute cadence, its backoff, and its closed-panel independence; it runs its due cycles with bounded fairness so one slow mailbox cannot stall the others; at most one cycle per mailbox runs at a time; under pressure it skips honestly (the last-checked time does not move); and it never keeps sockets without a panel, never fills panel caches, and never turns mail into an agent turn or task.
+
+**Why this priority:** the watcher is the only mail surface that works while the panel is closed — its honesty (badge, last-checked) and its non-interference with foreground reads are both founder-set.
+
+**Independent test:** 13 mailboxes with one stalled, scripted capacity saturation, and a closed panel through several intervals — assert other due mailboxes still progress, skips leave last-checked unchanged, no retained watcher sockets, no cache writes, and backoff/skip bookkeeping matches the existing rules.
+
+**Acceptance scenarios:**
+
+1. **Given** thirteen due mailboxes of which one stalls, **When** the cycle pass runs, **Then** the other twelve complete their checks within the pass — none is queued behind the stalled one.
+2. **Given** a mailbox whose previous cycle is still running, **When** its next due moment arrives, **Then** no second cycle for that mailbox starts.
+3. **Given** the account's slots and the pool are fully occupied by foreground work, **When** a watcher cycle becomes due, **Then** it skips without changing the last successful-check time and without advancing backoff.
+4. **Given** the panel closed, **When** watcher cycles run, **Then** their sockets close after each cycle (none retained), no folder/header/count cache is written or refreshed, and a folder change the watcher notices only marks panel metadata dirty for the next panel-open event.
+5. **Given** a watcher cycle, **When** it probes, **Then** it changes no message flags and starts no agent turn and creates no task.
+
 <!-- W1-SPEC-CONTINUES -->
