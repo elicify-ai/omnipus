@@ -47,7 +47,9 @@ Mail today makes the user wait for a live IMAP round trip before a single row re
 30-second timer that the new design retires, shows at most one 20-row page with no way forward, renders an
 unknown folder count as a bare `0`, and offers no attachment action except a browser download. This spec
 defines the panel half of the founder-approved fix: the Mail panel shows labelled cached rows immediately,
-validates them with **at most one** explicit live-refresh request per eligible event, distinguishes the
+validates them with an explicit live refresh **only when the data is absent or older than five minutes**
+(at most one live request per eligible event; manual Refresh and the panel's own successful actions always
+refresh — founder ruling Q-C, restoring the ADR's P1.1 stale-gating), distinguishes the
 four data sources honestly, pages 25 rows at a time to a 200-row ceiling with a reachable search path
 beyond it, exposes the existing per-mailbox Sent/Drafts folder-name settings, tells the gateway when a
 panel is open through authenticated presence frames, and hands attachments to the Library viewer as
@@ -77,11 +79,14 @@ In scope (all frontend, in the ADR's W3-owned files unless a boundary says other
 Out of scope for this spec (owned elsewhere; boundaries in §3):
 
 - Everything behind the gateway: pooling, budgets, the cache itself, discovery, the publication revision,
-  the preview byte endpoint, the Save service (W1/W2/W4/W7).
+  the preview byte endpoint, the Save service — the w1 and w2 files for runtime/discovery/cache; the w4
+  file's Save-service and agent-tool rows (ADR-W7/W10); the w5-integration file's gateway rows (ADR-W4).
 - The Library viewer's internal temporary-source implementation, renderer adapters and resource resolver
-  (W8) — this spec publishes the handoff descriptor and the interaction contract both sides honour.
-- Contract YAML edits and regeneration (W0, Hard Constraint #8) — this spec names the generated types W3
-  consumes and the ones W0 must add, and consumes nothing until regenerated.
+  (ADR-W8's renderer work, specified in the w4 file per the header's package mapping) — this spec
+  publishes the handoff descriptor and the interaction contract both sides honour.
+- Contract YAML edits and regeneration (backend-lead in the ADR's W0 role, Wave B — register rows 1–8;
+  Hard Constraint #8) — this spec names the generated types W3 consumes and the ones the W0 wave must
+  add, and consumes nothing until regenerated.
 - Phase 2 JMAP transport selection UI, the Connectors transport-preference control (a later wave), the
   removal/cleanup-pending UX, and the summary screen (unchanged this phase except where the ADR says it
   stays independent).
@@ -167,31 +172,44 @@ change to any Published row goes back through this spec and W0's contract set, n
 
 ### 3.1 W3 publishes
 
-| Interface | Consumer | Frozen shape |
-|---|---|---|
-| **Handoff trigger** — Mail → Library temporary viewer | W8 | W3 calls one seam in W8's mount with a payload of generated types only: `{ source: MailAttachmentPreviewResponse, context: { subject: string, returnFocus: { kind: 'attachment-action' \| 'message-row' \| 'folder', id: string } } }`. W3 guarantees the descriptor is freshly minted per Open, carries no workspace path, and is dropped on exit. W8 guarantees the context bar (exact strings §11) and the focus/announcement contract of §4 US-7. |
-| **Return path** — Library temporary viewer → Mail | W3 (consumed by W8 via callback) | `onBack(): void` — W8 calls it for Back/Escape; W3 then decides the landing surface per §4 US-7 AS-3 (fresh live read of the originating message if still available; changed/deleted notice otherwise). W8 never re-opens Mail's queries itself. |
-| **Save handoff** | W8 | W3's handoff module exposes `saveToLibrary(descriptor)` (wraps `MailAttachmentSaveRequest` + `save_operation_token`) and a status channel (`loading \| saved \| failed(reason) \| unknown`) W8 renders in the context bar. Only a `saved` status enables **Open in Library**. |
-| **Presence lifecycle** | W4 (gateway), W1 (socket retention) | The SPA emits `mail_panel_observer` open when a Mail panel becomes visible with a resolved workspace, and close on §4 US-5's lifecycle events; `observer_id` is a fresh opaque value per panel instance per connection. REST reads that opt into panel semantics carry the same `observer_id`. Until the gateway acknowledges an open, W3 assumes nothing is retained (request-scoped behaviour is always correct). |
-| **Cache-view semantics** | W5 (tests), W2 (metadata contract) | The panel performs at most one `mode=live` request per eligible event, keyed by `publication_revision`: a response older than the newest revision the panel has applied is dropped unrendered. Eligible events: panel open with a mailbox resolved, folder switch, manual Refresh, own successful action (mark-seen, send, draft save/discard), one rediscovery after missing-folder. No repeating panel timer exists. |
+Per the landing-order register, W3 is the single publisher of exactly two interfaces (register rows 20
+and the panel half of row 21's alignment). Each row below states the exact shape and the freeze point; a
+consumer binds to the frozen shape and never re-implements it.
+
+| Interface | Consumer | Frozen shape | Freeze point |
+|---|---|---|---|
+| **SPA presence lifecycle hooks** (register row 20 — W3 is the single publisher) | w5-integration (gateway binding), w1 (socket retention) | The SPA emits a `mail_panel_observer` frame with exactly the keys `{ type, action, observer_id, workspace_id }` — `action: open` when a Mail panel becomes visible with a resolved workspace, `close` on §4 US-5's lifecycle events; `observer_id` is a fresh opaque value per panel instance per connection. REST folder/list reads that opt into panel semantics carry the same `observer_id` as the query param of register row 6 (the param's schema is W0's, not re-declared here). Until the gateway acknowledges an open, W3 assumes nothing is retained (request-scoped behaviour is always correct). | After the W0 wave regenerates the presence frames (register row 5, Wave B step 3); ships in Wave C. |
+| **Cache-view semantics** (register row 21 — the panel-side alignment; w2 owns the normative freshness rule) | w2 (rule owner), w6 (measurement arms), qa-lead (panel tests) | The panel renders cache-first rows immediately and performs **at most one** `mode=live` request per eligible event, **and on panel open and folder switch it issues that live request only when the folder's data is absent or its last validation is older than five minutes** (the ADR P1.1 stale-gating; founder ruling Q-C — the design's conditional rule stands, superseding this spec's former "exactly one live per event, even when fresh" wording). Manual Refresh always refreshes; the panel's own successful actions always refresh the affected folder. Every refresh is keyed by `publication_revision`: a response older than the newest revision the panel has applied is dropped unrendered. Eligible events: panel open with a mailbox resolved, folder switch, manual Refresh, own successful action (mark-seen, send, draft save/discard), one rediscovery after missing-folder. No repeating panel timer exists. | Recorded in this correction round; built in Wave C against w2's Wave-C freshness rows. |
+| **Handoff trigger** — Mail → Library temporary viewer | ADR-W8's renderer work (w4 file) | W3 calls one seam in the Library mount with a payload of generated types only: `{ source: MailAttachmentPreviewResponse, context: { subject: string, returnFocus: { kind: 'attachment-action' \| 'message-row' \| 'folder', id: string } } }`. W3 guarantees the descriptor is freshly minted per Open, carries no workspace path, and is dropped on exit. The Library side guarantees the context bar (exact strings §11) and the focus/announcement contract of §4 US-7. | Frozen here (the ADR's "freeze the handoff callback with W3" row); changes return through this spec and the W0 wave, never a side edit. |
+| **Return path** — Library temporary viewer → Mail | W3 (consumed by the Library side via callback) | `onBack(): void` — the Library side calls it for Back/Escape; W3 then decides the landing surface per §4 US-7 AS-3 (fresh live read of the originating message if still available; changed/deleted notice otherwise). The Library side never re-opens Mail's queries itself. | Same as the handoff trigger. |
+| **Save handoff** | ADR-W8's renderer work (w4 file) | W3's handoff module exposes `saveToLibrary(descriptor)` (wraps the generated `MailAttachmentSaveRequest` + `save_operation_token`) and a status channel (`loading \| saved \| failed(reason) \| unknown`) the context bar renders. Only a `saved` status enables **Open in Library**. The token and response shapes are W0's (register row 22); the bounded prior-receipt reconciliation service is the w4 file's ADR-W7 implementation — W3 publishes only this SPA-side wrapper and status contract, never a second lookup. | Shapes in Wave B (register row 22); this SPA contract frozen here. |
 
 ### 3.2 W3 consumes
 
-| Interface | Provider | Dependence |
+Every row names the **single publisher** the landing-order register assigns. W3 consumes frozen shapes;
+it never re-implements, parallel-types, stubs, or quietly extends any of them (register rule R-1/R-4).
+
+| Interface | Publisher (register row) | Dependence |
 |---|---|---|
-| Generated REST/WS types listed in §2.3/§2.4 | W0 | Nothing ships before regeneration; frontend lands after the contract commit, in parallel with backend consumers of the same types. |
-| `mode=cache_first\|live`, `observer_id`, `refresh_mapping`, `search`, cursor + 409 semantics | W0/W2/W4 | §4 US-1/US-3 behaviour; an omitted `mode` stays live for existing callers (backward compatible by contract). |
-| `MailReadMetadata` on every folder/list response | W2/W4 | §4 US-2 labels. A response without metadata (pre-regeneration server) is a build-order violation, not a runtime fallback — no hand-written compat type. |
-| Temporary-source mount + context bar + resource policy enforcement | W8 | §4 US-6/US-7/US-8 acceptance criteria are joint; W3's journey tests treat the mount as the system under test's counterpart. |
+| Generated REST/WS types listed in §2.3/§2.4 | backend-lead in the ADR's W0 role, Wave B (row 1) | Nothing ships before Wave B's regeneration merges; frontend lands after the contract commit, in parallel with backend consumers of the same types. If Wave B has not started, W3's wire-consuming work reports blocked (register §5.3) — never a stub. |
+| `mode=cache_first\|live`, `search`, `next_cursor`/`has_more`/`view_limit_reached`, typed stale-cursor 409 | Shapes: W0, requested by w5-integration's amended §8 queue (row 4). Implementation of the folder-scoped server search and cursor issuance: **w2**, in its view file (the story its correction adds) | §4 US-3 behaviour; an omitted `mode` stays live for existing callers (backward compatible by contract). Search fields per founder Q-D=A: subject plus sender/recipient substring, server-side header search, within the 25/200 bounds. W3 builds none of this; it consumes the shapes and renders the states. |
+| REST `observer_id` query param on folder/list reads | W0 schemas it; w5-integration's §8 step 2 requests it (row 6) | §4 US-5's panel-semantics reads. Without the param every panel read stays request-scoped and the founder's warm-pool behaviour never activates — W3 sends it on every read that opts into panel semantics once regenerated. |
+| `MailReadMetadata` on every folder/list response | W0 defines (row 2); **w2 is the only value producer**; w5-integration attaches/advances in responses | §4 US-2 labels. A response without metadata (pre-regeneration server) is a build-order violation, not a runtime fallback — no hand-written compat type. The exact `source` enum scoping is W0's to schema from the ADR's freshness-metadata row (register row 2, adr-grill-4 m4); W3 consumes the generated union and tests only the values D-1 names. |
+| Temporary-source mount + context bar + resource policy enforcement | ADR-W8's renderer work, specified in the w4 file (header mapping) | §4 US-6/US-7/US-8 acceptance criteria are joint; W3's journey tests treat the mount as the system under test's counterpart. |
+| Targeted single-part reader (`pkg/email/attachment_parts.go`) and the MIME structure classifier deriving `has_attachments` | **w2** (rows 14/15 — new owner per the register; the ADR's feature-extension row assigns both to W2) | W3 consumes only the generated outputs: `has_attachments` on summaries and the minted preview response on Open. It derives neither, stubs neither, and asserts them only as generated inputs. |
+| `message_ref` on list/read results | **w5-integration mints it** in the gateway handlers; same-lease epoch/generation validation is w1's published capability plus w2's normative validation rules in its view file (row 16) | §4 US-6's Open handoff carries the reference opaquely from a list/read result into the mint request. W3 never constructs, validates, or re-issues it. |
+| Instrumentation emitter (per-operation record) | Shape frozen by w6; emission obligations on w5-integration (envelope), w1 and w2 (sub-fields) (row 17) | **None.** W3 defines no emitter and asserts no instrument records; W3's tests observe request counters and DOM state only. This row exists so no panel test is ever written against an emitter no package built. |
+| Raw-error redaction (`pkg/email/watcher.go::recordFailure`; the gateway's `mailErr502`) | **w1** fixes `recordFailure` in its own file; **w5-integration** fixes `mailErr502` (row 19) | W3 renders only sanitized class strings (§11 S-6/S-10) and never raw server error text; no panel surface depends on the raw payload surviving. |
+| Disk-cache exclusion / provenance gate | w5-integration publishes the gate decision; **w2 enforces it at the first write**; condition unified to the stricter form (row 18) | W3's only surface is the `cache_unavailable` notice (§11 S-12). Founder ruling Q-A: the **product owns** its cache directory's exclusion from data-directory staging and from the application's own backups/archives on every install, by its own means — no personal machine-setup dependency exists anywhere in this feature; the notice reports a genuine runtime failure only and never excuses a missing product-owned exclusion. |
 | `library_changed` notification | existing | Save success lets the normal Library change notification refresh lists; no second refresh protocol. |
-| Authenticated `WsConnection` | existing / W4 integration trace | Presence frames only; no new heartbeat, no cache-push frame (the ADR forbids one). |
+| Authenticated `WsConnection` + gateway presence handlers | Socket client: existing. Presence frames: W0 (row 5). Gateway handlers that bind/tear down observers: **w5-integration** (rows 5/11 — w1 publishes the registry, w5 consumes it) | Presence frames only; no new heartbeat, no cache-push frame (the ADR forbids one). The shared socket adapter hookup is traced with w5-integration — one writer — before the presence wave dispatches. |
 
 ### 3.3 Ownership guard-rails (from the ADR's package table, binding here)
 
-- W8 never edits `MailPanel.tsx`, `src/lib/api/mail.ts`, or any mail-owned file; W3 never edits
-  `LibraryExplorer.tsx`, `LibraryPreviewPane.tsx`, or `src/components/library/**`.
-- The socket adapter file (`src/lib/ws.ts`) gets one writer — the integration owner traces it with W4
-  before the presence wave dispatches.
+- The ADR-W8 renderer owner never edits `MailPanel.tsx`, `src/lib/api/mail.ts`, or any mail-owned file;
+  W3 never edits `LibraryExplorer.tsx`, `LibraryPreviewPane.tsx`, or `src/components/library/**`.
+- The socket adapter file (`src/lib/ws.ts`) gets one writer — traced with w5-integration before the
+  presence wave dispatches.
 - qa-lead owns every test-file edit, including rewriting the D25-era oracle tests this spec retires.
 
 ---
