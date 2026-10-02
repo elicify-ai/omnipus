@@ -317,6 +317,9 @@ type MailRow struct {
 func (c *Client) fetchMailRows(ctx context.Context, client *imapclient.Client, set imap.UIDSet) ([]MailRow, error) {
 	opts := &imap.FetchOptions{
 		UID: true, Flags: true, Envelope: true,
+		// US-6.AC-1's fallback source: the server's INTERNALDATE rides the
+		// same FETCH — no second round trip for the effective-date rule.
+		InternalDate: true,
 		BodySection: []*imap.FetchItemBodySection{{
 			Specifier:    imap.PartSpecifierHeader,
 			HeaderFields: []string{"X-Omnipus-Draft"},
@@ -353,7 +356,12 @@ func (c *Client) fetchMailRows(ctx context.Context, client *imapclient.Client, s
 			UID:       uint32(buf.UID),
 			MessageID: buf.Envelope.MessageID,
 			Subject:   strings.TrimSpace(buf.Envelope.Subject),
-			Date:      buf.Envelope.Date.UTC(),
+			// US-6.AC-1, applied ONCE here for every list surface (folder
+			// pages, Sent, drafts): a valid Date header wins, else the
+			// INTERNALDATE, else the zero time — which is the wire's "No
+			// date" state, never a fabricated date. EffectiveDate normalizes;
+			// a zero or unparsable envelope Date is ABSENCE (US-6.AC-2).
+			Date: effectiveRowDate(buf.Envelope.Date, buf.InternalDate),
 		}
 		if len(buf.Envelope.From) > 0 {
 			row.From = addressString(buf.Envelope.From[0])
@@ -383,6 +391,16 @@ func (c *Client) fetchMailRows(ctx context.Context, client *imapclient.Client, s
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].UID > rows[j].UID }) // newest first
 	return rows, nil
+}
+
+// effectiveRowDate applies the effective-date precedence (EffectiveDate, the
+// rule the transport owns) to one fetched envelope: a valid Date header
+// first, else the server's INTERNALDATE, else the zero time — the "No date"
+// state, never a fabricated date (US-6.AC-1/AC-2). One helper so every fetch
+// mapping site (list rows, the detail view) states the rule identically.
+func effectiveRowDate(headerDate, internalDate time.Time) time.Time {
+	d, _ := EffectiveDate(headerDate, internalDate)
+	return d
 }
 
 // searchDataUIDs extracts a search result's UIDs.
@@ -521,7 +539,7 @@ func (c *Client) ReadView(ctx context.Context, slug, ref string) (*MailView, err
 		}
 	}
 
-	opts := &imap.FetchOptions{UID: true, Flags: true, Envelope: true, BodySection: []*imap.FetchItemBodySection{{Peek: true}}}
+	opts := &imap.FetchOptions{UID: true, Flags: true, Envelope: true, InternalDate: true, BodySection: []*imap.FetchItemBodySection{{Peek: true}}}
 	fetched, ferr := runIMAP(ctx, "fetch view", func() ([]*imapclient.FetchMessageBuffer, error) {
 		return client.Fetch(imap.UIDSetNum(imap.UID(uid)), opts).Collect()
 	})
@@ -564,9 +582,10 @@ func (c *Client) ReadView(ctx context.Context, slug, ref string) (*MailView, err
 		}
 		view.To = splitAddressList(addressListString(buf.Envelope.To))
 		view.Cc = splitAddressList(addressListString(buf.Envelope.Cc))
-		if !buf.Envelope.Date.IsZero() {
-			view.Date = buf.Envelope.Date.UTC()
-		}
+		// The detail surface rides the SAME effective-date rule as the lists
+		// (US-6.AC-1: every surface): header date, else INTERNALDATE, else
+		// the zero time the "No date" renderers already guard on.
+		view.Date = effectiveRowDate(buf.Envelope.Date, buf.InternalDate)
 	}
 	if slug == FolderDrafts && view.MessageID != "" {
 		// A replacement APPEND may succeed while deleting its predecessor
