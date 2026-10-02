@@ -1025,13 +1025,16 @@ Format: Given/When/Then, one action per When; each scenario is typed **Happy / A
 | | `TestHeaderCache_LateWriteAfterRemovalRefuses` | Pair removed with a write in flight → generation guard refuses; no file reappears (V-3) | US-9.3 |
 | | `TestHeaderCache_ReconfigDeletesNotMigrates` | Host/port/credential/override change → old caches deleted, rediscovery under new generation (V-4) | US-9.4 |
 | `pkg/email/mail_search_test.go` (proposed) | `TestFolderSearch_SubjectAndAddressServerSide` / `..._Bounds25And200` / `..._StaleCursorTypedReset` / `..._NeverTouchesHeaderCache` | Server-side SUBJECT + FROM/TO substring search (founder Q-D=A); 25/page, 200 ceiling, `view_limit_reached` beyond; stale cursor → one typed 409 reset; zero cache reads or writes from any search (S-1..S-4; register row 4's added story) | US-11.1–11.4 |
+| `pkg/email/view_paging_test.go` (proposed — round-2 CRIT-1) | `TestBrowseCursor_IssuedWithBindingFields` / `..._HasMoreBeyondCacheWindowIsLive` / `..._Ceiling200ViewLimitReached` / `..._CrossSequenceAndStaleCursorRefused` / `..._LegacyNumericFieldsNotPopulated` | Browse pages carry cursors binding pair/generation/folder/epoch/`sequence=browse`/delivered-count, issued by this package; `has_more` and the ceiling are computed from the live sequence — never from the 50-row cache window (S-5..S-7); a cross-sequence or stale browse cursor gets one typed 409 reset; the legacy `truncated`/`next_before_uid` fields are never populated by the new path (S-8) | US-11.5–11.8 |
+| `pkg/email/view_date_test.go` (proposed — round-2 IMP-3) | `TestDateNormalization_HeaderPreferred` / `..._InternalDateFallbackNoSecondFetch` / `..._NeitherMeansNullEverywhere` / `..._NullSurvivesCache` | Date header (non-zero) → internal date (obtained from the existing fetches) → null; identical on list and detail; null preserved through the memory cache, never a fabricated zero time (N-1..N-3) | US-16.1–16.3 |
 | `pkg/email/attachment_parts_test.go` (proposed) | `TestPartReader_FetchesOnlyAddressedPart` / `..._DraftMarkerExcludedFromIndices` / `TestClassifier_HasAttachmentsEstablishedAbsence` / `..._DeterministicSameEpoch` | Only the addressed part transfers (partial for text, whole for image; zero flag changes; nothing server-side written or kept); the draft marker is excluded from leaf indices and classification, identical indices twice under one epoch; `false` is established absence; classification deterministic (P-1..P-3; register rows 14–15) | US-12.1–12.3 |
 | `pkg/email/view_ref_validation_test.go` (proposed) | `TestRefValidation_StaleEpochRefused` / `..._ForeignGenerationRefused` | A reference from another epoch or generation is refused with the typed stale-reference result before any server command acts on it; zero mint paths exist in this package (R-1, R-2; register row 16) | US-13.1–13.2 |
 | `pkg/email/instrument_emission_test.go` (proposed) | `TestInstrument_CacheAndDiscoverySubFields` / `TestInstrument_JoinerRecordsZeroSocketAndMarker` | W2's sub-fields of the w6-frozen record present on cache/discovery paths, no other layer's fields fabricated; a coalesced joiner records `socket_count=0` + shared-flight marker (L-2; register row 17) | US-15.1–15.2 |
 | `pkg/email/view_missing_folder_test.go` (existing — qa-lead extends) | `TestFolderCounts_UnknownRoleHasNullableTotal` / `TestFolderCounts_ConfirmedAbsentIsEmptyNotError` | The count-side faces of U-5/U-1: unknown → `total=null`; confirmed absent → empty array, not 502 | US-3.3, US-3.1 |
 | | (existing `TestFolderCounts_*` three) | **Regression**: must pass unchanged (§7.3) | — |
 | `pkg/email/logging_leak_test.go` | `TestW2Diagnostics_LeakMarkerSweep` | Drive every §6 scenario with leak-marker fixture data; sweep all sinks for markers (zero) while safe classes/counts present (L-1) | US-10.1–10.2 |
-| `pkg/email/` (gate unit/integration rows — **qa-lead/w6-owned**, register row 18; this table's former "W4-owned integration" label corrected, grill M-4) | `TestMailCacheExclusionGate_BlocksWhenMissing` / `..._PassesWhenProvable` / `..._DetectsPreTrackedFile` | G-1..G-3 against the product's in-process exclusion evaluator (§3.8 E-1, `git check-ignore`-equivalent semantics, no shell-out) and the backup-skip half (E-2): missing either → refuse + live-only + visible notice; both provable → write succeeds; pre-tracked path → not excluded | US-7.1–7.3 |
+| `pkg/email/` (gate enforcement rows — **qa-lead/w6-owned**, register row 18; this table's former "W4-owned integration" label corrected, grill M-4) | `TestMailCacheExclusionGate_BlocksWhenMissing` / `..._PassesWhenProvable` / `..._DetectsPreTrackedFile` | G-1..G-3 against **W2's enforcement of the published gate decision** (round-2 IMP-1: these tests inject the decision — absent / not-allowed / allowed — and assert the write path's refusal, live-only outcome and visible notice; they never re-implement the evaluation): missing or not-allowed decision → refuse + live-only + `cache_unavailable`; `allowed=true` → write succeeds; the pre-tracked case arrives as a not-allowed decision and is refused (E-3) | US-7.1–7.3 |
+| (evaluator conformance rows — gate **the publisher's evaluator**, w5-integration's package; qa-lead/w6-owned; **round-2 IMP-2**) | `TestExclusionEvaluator_WhitelistRepoIsNotExcluded` / `..._NegationReincludeRespected` / `..._NestedIgnorePrecedence` / `..._InfoExcludeAndExcludesFileHonoured` / `..._TrackedFileNotExcludedDespiteRule` / `..._UnparseableRulesFailClosed` | DT-6's conformance subset: the whitelist-style repo (`*` + `!config.json`) is **not** excluded (kills the naive matcher, CX-21); negation, nesting, `.git/info/exclude`/`core.excludesFile` precedence, tracked-state precedence, and the divergence rule (uninterpretable rules ⇒ not excluded ⇒ refuse) | US-7.1–7.2 (§3.8 conformance contract) |
 | | `TestMailStagingAndBackup_ContainNoCacheFiles` | **Wave E end-to-end proof, not repo CI** (grill I-5; register rows 18/23): on a machine where both exclusions provably hold, staging + the application backup archive contain no plaintext-or-ciphertext cache marker while a positive-control allowed file IS captured. Repo CI has no such machine; the evidence instrument is the Wave E gate, per the register | US-7.3 |
 
 ### 7.2 Test datasets
@@ -1100,6 +1103,31 @@ Each row traces to its scenario; boundary values come from this spec's numbers (
 | draft-marker structure | marker part + two attachments | marker excluded from indices and classification; identical resolution twice | P-2 |
 | established absence | zero attachment-classified parts | `has_attachments=false`, deterministic across runs | P-3 |
 | stale reference | ref minted at epoch N, live epoch N+1; ref from another generation | refused with the typed stale-reference result before any acting command | R-1, R-2 |
+| browse cursor issuance (round-2 CRIT-1) | folder of 80 messages, newest-50 cache warm; Load-more pages 1→4 | each page under a browse cursor binding pair/generation/folder/epoch/`sequence=browse`/delivered-count; pages past 50 run live | S-5, S-6 |
+| has_more / ceiling vs cache window (round-2 CRIT-1) | browse sequences of 199 / 200 / 201 delivered rows; cache window 50 | `has_more` true below 200 from live truth; at 200 `view_limit_reached` + no cursor; never computed from the cached rows | S-6, S-7 |
+| browse cursor staleness (round-2 CRIT-1) | browse cursor from epoch N / other generation; search cursor shown to the browse sequence | typed 409 reset once; legacy numeric fields never populated | S-8 |
+
+**DT-6 — Exclusion-evaluator conformance** (round-2 IMP-2; gates **the publisher's evaluator** — w5-integration's package — per §3.8's conformance contract)
+
+| Case | Repo/ruleset on the data directory | Expected evaluation | Traces to |
+|---|---|---|---|
+| whitelist-style repo | `.gitignore` = `*` + `!config.json` (+ whitelist additions); cache path not re-included | cache path **not excluded** — the naive "matched a deny rule ⇒ excluded" matcher fails here (CX-21) | G-1/G-2 (evaluator half) |
+| negation re-include | deny `mail-cache/` then `!mail-cache/keep.txt` deeper rule | evaluated with git's last-match-wins precedence; uninterpretable ⇒ fail closed | G-2 |
+| nested ignore files | shallower and deeper `.gitignore` disagreeing on the cache path | deeper file wins per git precedence | G-2 |
+| info/exclude + excludesFile | cache path denied only via `.git/info/exclude` (and via `core.excludesFile`) | rule sources honoured in git's order; denied ⇒ excluded | G-1 |
+| tracked cache path | cache file previously committed, deny rule present | **not excluded** (tracked-state precedence, E-3) | G-3 |
+| no repository | data directory with no version control | staging half holds trivially | G-1 |
+| unparseable rules | malformed/invented pattern syntax the evaluator cannot interpret | **fail closed**: not excluded, gate refuses | G-2 |
+
+**DT-7 — Date normalization** (round-2 IMP-3)
+
+| Case | Message fixture | Expected effective date | Traces to |
+|---|---|---|---|
+| valid header | Date header = known non-zero time | that time, RFC 3339, list and detail identical | N-1 |
+| zero header, internal present | Date header zero/unparsable; INTERNALDATE known | the internal date; no second fetch issued | N-2 |
+| neither | zero header; no internal date | null everywhere; never `1 Jan 1`/epoch/today | N-3 |
+| null through cache | neither-source message cached, then re-served | cached row preserves null; no fabricated zero on serve | N-3 (CX-22) |
+| boundary times | epoch-adjacent legitimate dates (1970s mail), far-future dates | normalized as-is — precedence never rewrites a valid date | N-1 |
 
 ### 7.3 Regression impact
 
