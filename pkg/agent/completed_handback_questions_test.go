@@ -99,22 +99,22 @@ func TestCompletion_CompletedHandbackWithStoppedChildQuestion_CarriesNoOpenQuest
 		At: time.Now().UTC(), By: "human:dan",
 		Seq: uint64(stoppedChild.Generation), Cause: session.StopCauseStop,
 	}
-	if err := al.GetSessionLifecycleStore().Persist(stoppedChild); err != nil {
-		t.Fatalf("Persist(stopped): %v", err)
+	if persistErr := al.GetSessionLifecycleStore().Persist(stoppedChild); persistErr != nil {
+		t.Fatalf("Persist(stopped): %v", persistErr)
 	}
 
 	// Stale content seeded into the parent's own transcript only; the
 	// hand-back must carry the parent's real result, never this.
 	const staleText = "STALE PARENT TEXT MUST NOT REACH ROOT"
-	if err := al.GetSessionStore().AppendTranscriptStrict(parent.SessionID, session.TranscriptEntry{
+	if transcriptErr := al.GetSessionStore().AppendTranscriptStrict(parent.SessionID, session.TranscriptEntry{
 		ID: "d6b-parent-stale", Role: "assistant", Content: staleText, Timestamp: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("AppendTranscriptStrict(stale): %v", err)
+	}); transcriptErr != nil {
+		t.Fatalf("AppendTranscriptStrict(stale): %v", transcriptErr)
 	}
 
 	const parentAnswer = "parent final answer for the completed-handback d6b proof"
-	if err := al.completeSteeredTurn(context.Background(), parent, turnResult{finalContent: parentAnswer}, nil); err != nil {
-		t.Fatalf("completeSteeredTurn(parent): %v", err)
+	if completeErr := al.completeSteeredTurn(context.Background(), parent, turnResult{finalContent: parentAnswer}, nil); completeErr != nil {
+		t.Fatalf("completeSteeredTurn(parent): %v", completeErr)
 	}
 
 	// The frontier cut at the stopped child, so the completed path was
