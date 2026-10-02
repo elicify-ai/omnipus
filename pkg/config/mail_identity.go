@@ -61,6 +61,13 @@ type MailPairIdentity struct {
 	// Revision is the per-pair publication-revision counter seed (>=1 for a
 	// freshly initialized pair).
 	Revision uint64 `json:"revision_counter"`
+	// AgentID / WorkspaceID record WHICH pair this file belongs to, so boot
+	// reconciliation can map an orphaned identity file (a removal that
+	// failed between the config delete and the identity delete) back to the
+	// pair whose cache subtree it names. Internal scalars — never served to
+	// the SPA (register row 12: any SPA-visible copy is W0's, not this).
+	AgentID     string `json:"agent_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // mailIdentityDirName is the sidecar namespace under the data root. Not a
@@ -152,6 +159,8 @@ func LoadOrMintMailPairIdentity(dataRoot, agentID, workspaceID string) (MailPair
 	id.PairID = hex.EncodeToString(buf)
 	id.Epoch = 1
 	id.Revision = 1
+	id.AgentID = agentID
+	id.WorkspaceID = workspaceID
 	if err := writeMailIdentityFile(path, id); err != nil {
 		return MailPairIdentity{}, err
 	}
@@ -199,6 +208,38 @@ func CurrentMailPairRevision(dataRoot, agentID, workspaceID string) (uint64, err
 	return id.Revision, nil
 }
 
+// ListMailPairIdentities reads every identity file under the data root.
+// Boot reconciliation uses it to detect orphaned identity state (a pair
+// removed while its identity delete failed). One malformed file is skipped
+// with its error rather than failing the whole listing — reconciliation
+// must see the readable majority — but the error is returned alongside so
+// the caller can surface it; unreadable files are never silently treated
+// as absent.
+func ListMailPairIdentities(dataRoot string) ([]MailPairIdentity, []error) {
+	dir := filepath.Join(dataRoot, mailIdentityDirName)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, []error{fmt.Errorf("mail identity: list: %w", err)}
+	}
+	var out []MailPairIdentity
+	var errs []error
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		id, rerr := readMailIdentityFile(filepath.Join(dir, e.Name()))
+		if rerr != nil {
+			errs = append(errs, fmt.Errorf("mail identity: %s: %w", mailIdentityDirName, rerr))
+			continue
+		}
+		out = append(out, id)
+	}
+	return out, errs
+}
+
 // DeleteMailPairIdentity removes the pair's identity state. Only the removal
 // cascade calls this (MC-24: identity state is deleted only by removal); a
 // missing file is already-clean, not an error.
@@ -243,6 +284,9 @@ func readMailIdentityFile(path string) (MailPairIdentity, error) {
 	}
 	if id.PairID == "" || id.Epoch == 0 || id.Revision == 0 {
 		return MailPairIdentity{}, errors.New("mail identity: incomplete identity file")
+	}
+	if id.AgentID == "" || id.WorkspaceID == "" {
+		return MailPairIdentity{}, errors.New("mail identity: identity file missing its pair record")
 	}
 	return id, nil
 }
