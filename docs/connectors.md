@@ -77,6 +77,10 @@ Each guide explains the credentials and platform-specific setup.
 
 Use **Configure** on a row to change its settings. The stored password is never shown; leave **Password** blank to keep it while editing the *same* agent and workspace. If you change either the owning agent or workspace, you must enter the password again because credentials do not transfer. A successful move can show **Mailbox saved, but the old mailbox could not be removed — delete it manually from the list.** if removal of the old row fails. **Remove Mailbox** asks for confirmation before deleting the saved configuration and credentials; a failed removal keeps the confirmation open and shows the error.
 
+### Email mailbox settings — folder names
+
+Under **Folder names**, **Sent folder name** and **Drafts folder name** tell Omnipus which folders to use for sent mail and drafts. Leave a field empty to let Omnipus find the folder automatically (the placeholder says **Automatic**); enter a value to use exactly that folder name on your mail server. Saving with a field cleared removes the override. A name Omnipus cannot confirm on your server shows a warning beside that field — check the spelling or clear the field back to automatic; the name is never silently ignored. A name saved by an older version stays as the field's value until you clear it yourself.
+
 Back in the workspace, select **Mail** to open the [mailbox panel](mail.md#set-up-and-open-mail) and choose the agent's address. Email is not set up through the chat-connector **Configure** flow above.
 
 ## Limits and things to watch

@@ -83,10 +83,16 @@ The preview pane picks its surface by file type.
 | Notes, records, views | The knowledge surface | See the knowledge base page |
 | Everything else | A details card | Download |
 
+## Mail attachments: temporary previews
+
+Opening an attachment from [Mail](mail.md#attachments) previews it here **temporarily**: no file is created, it has no path, and it vanishes when you go back, close the panel, or reload. A bar reading **From mail: \<subject\>** stays above the preview with **Back to mail** and **Save to Library**; stored-file actions (edit, rename, move, download) are disabled with **Save to Library first.** until you actually save. Saving puts a real copy in the workspace (mail → mailbox → month) and enables **Open in Library**.
+
 ## Limits and things to watch
 
 - **No Office preview.** Word, Excel, and PowerPoint files, and other binaries such as ZIP archives, show the download card; they open in the applications you already use.
 - **Chat attachments are capped** at 100 MB per file.
+- **Mail attachment previews are capped** at 25 MB per file; larger attachments download from Mail instead.
+- **Saved mail HTML keeps its guard.** An HTML file saved from mail keeps its original bytes and renders with scripts off, with a notice saying so; **Allow scripts** turns scripts on for that one file only. An ordinary workspace HTML file is unaffected.
 - **Mounts are real disk.** Edits inside a mounted folder change your actual files, the same ones your other apps open. Deleting one in the Library deletes the real file.
 - **A mount's location is recorded once.** If you move or rename the folder on your Mac, its contents disappear from the workspace. Unmount and add the folder again at its new location.
 - **Broad grants are wide.** Mounting your home folder gives every agent on the workspace write access to everything under it. The warning and the second click exist to catch exactly this mistake.
