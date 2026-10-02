@@ -513,4 +513,241 @@ The system must not:
 | Watcher state file | Untouched by W1 beyond the skip/pool interplay | `LoadWatcherState`/`EffectiveState` remain the one derivation point | Unreadable state fails open with visible WARN (unchanged, verified) |
 | Credentials | Password resolution stays entirely outside W1 (callers pass `Account` as today) | ADR-004 boot contract unchanged | Unresolved password → the construction site's existing skip/404 behavior (verified) |
 
+---
+
+## 7. BDD scenarios
+
+Scenario keys map as `B-W1-n`. Every scenario traces to its user story's acceptance scenario (`US-n/AS-m`).
+
+#### Scenario B-W1-1: Warm reuse skips connection setup
+**Traces to**: US-1/AS-1, US-1/AS-3 · **Category**: Happy Path
+- **Given** a configured mailbox on a counting fake IMAP server and one completed folder read
+- **When** a second read for the same mailbox runs within the idle window
+- **Then** the server's accepted-connection count is unchanged by the second read
+- **And** the second read's rows match the server's current folder state
+
+#### Scenario B-W1-2: A different folder on a reused session returns that folder's data
+**Traces to**: US-1/AS-2, US-3/AS-1 · **Category**: Happy Path
+- **Given** a pooled session whose last completed operation selected Sent
+- **When** a new borrower asks the same session's mailbox for Inbox
+- **Then** the returned rows are Inbox's
+- **And** a SELECT for Inbox was issued on that session before the fetch
+
+#### Scenario B-W1-3: No work, no sockets — closed panel stays dark
+**Traces to**: US-1/AS-4 · **Category**: Edge Case
+- **Given** the panel closed and the idle window elapsed
+- **When** several sweep intervals pass
+- **Then** zero mail connections are open and zero mail commands are issued
+
+#### Scenario B-W1-4: Third concurrent read for a capped mailbox waits, then busies
+**Traces to**: US-2/AS-1 · **Category**: Error Path
+- **Given** two operations in flight on one mailbox (both holding sessions)
+- **When** a third read for that mailbox starts
+- **Then** within the bounded acquisition window it receives the typed pool-busy outcome
+- **But** the server never accepted a third connection for that mailbox
+
+#### Scenario B-W1-5: Ninth global demand never creates a ninth socket
+**Traces to**: US-2/AS-2 · **Category**: Error Path
+- **Given** eight operations in flight across mailboxes
+- **When** a ninth demand arrives from any path (panel, tool, watcher)
+- **Then** it waits its bounded window and receives the typed busy outcome
+- **And** the process-wide accepted-connection maximum observed is exactly 8
+
+#### Scenario B-W1-6: A connecting reservation counts against the ceilings
+**Traces to**: US-2/AS-3 · **Category**: Edge Case
+- **Given** one dial for a mailbox blocked at the server greeting (reservation held, no established socket)
+- **When** a second read for that mailbox arrives
+- **Then** it waits rather than dialing a second socket, and on expiry receives the typed busy outcome
+- **And** the connection counter shows exactly one accepted connection
+
+#### Scenario B-W1-7: Failed dial releases its reservations
+**Traces to**: US-2/AS-4, US-4/AS-1 · **Category**: Error Path
+- **Given** a server that refuses connections
+- **When** a read attempt fails
+- **Then** the per-mailbox and global reservations return to baseline before the error reaches the caller
+- **And** an immediately following read can acquire normally
+
+#### Scenario B-W1-8: Concurrent borrowers never see each other's selected state
+**Traces to**: US-3/AS-3 · **Category**: Alternate Path
+- **Given** two borrowers on different sessions of one mailbox, one paused mid-command by the server
+- **When** both complete
+- **Then** each returned exactly its own requested folder's rows
+- **And** neither borrower's rows contain the other folder's messages
+
+#### Scenario B-W1-9: Reads preserve flags
+**Traces to**: US-3/AS-2 · **Category**: Happy Path
+- **Given** a folder with unread messages
+- **When** pooled reads list and open-detail-fetch that folder
+- **Then** every message's unread state is unchanged server-side
+- **And** no non-PEEK body fetch appears in the captured command trace
+
+#### Scenario B-W1-10: Structural folder absence is not a transport failure
+**Traces to**: US-3/AS-4 · **Category**: Alternate Path
+- **Given** a mailbox whose Sent folder does not exist and whose server answers the structural not-found
+- **When** a read targets the sent role
+- **Then** the caller receives the structural-absence outcome, not a transport error
+- **And** the session stays healthy — the next read on it succeeds
+
+#### Scenario B-W1-11: Pool-busy arrives within the acquisition bound
+**Traces to**: US-4/AS-1 · **Category**: Error Path
+- **Given** all of a mailbox's pool capacity held by slow operations
+- **When** a new read's acquisition wait elapses
+- **Then** the pool-busy outcome arrives within the 5-second acquisition bound (assert < 7 s)
+- **And** it is the pool-busy class, not the timeout class
+
+#### Scenario B-W1-12: Stalled server ends within the total deadline, socket retired
+**Traces to**: US-4/AS-2, US-5/AS-1 · **Category**: Error Path
+- **Given** a server that accepts and then never responds
+- **When** a read runs against it
+- **Then** the read ends by the 45-second total deadline with the timeout class
+- **And** the socket it used is retired — the next borrow does not reuse it
+
+#### Scenario B-W1-13: Handshake stall ends within the dial ceiling
+**Traces to**: US-4/AS-3 · **Category**: Error Path
+- **Given** a server that stalls during TLS/login
+- **When** establishment is attempted
+- **Then** it ends within the 30-second dial ceiling, inside the total read deadline
+
+#### Scenario B-W1-14: Queue-expiry never dials
+**Traces to**: US-4/AS-4 · **Category**: Error Path
+- **Given** both of an account's work slots held and a caller whose remaining deadline is short
+- **When** the deadline expires while queued
+- **Then** the caller receives the existing busy outcome and the server observes zero new commands
+
+#### Scenario B-W1-15: BYE retires; reader termination observed before counting the socket gone
+**Traces to**: US-5/AS-2 · **Category**: Error Path
+- **Given** a server that sends BYE mid-session
+- **When** the affected operation ends
+- **Then** the caller sees a visible transport-class error, the socket is closed and retired
+- **And** a subsequent borrow uses a different session — no interleaved or stale response is possible
+
+#### Scenario B-W1-16: One dead-idle replacement per read
+**Traces to**: US-5/AS-3 · **Category**: Alternate Path
+- **Given** an idle pooled session the server has silently closed
+- **When** a read borrows it and the first command fails with a connection-class error
+- **Then** the read replaces the dead session exactly once and completes inside the original deadline
+- **But** if the replacement also proves dead, the read fails visibly — never a second replacement
+
+#### Scenario B-W1-17: A mutation on a dead session fails visibly, once
+**Traces to**: US-5/AS-4 · **Category**: Error Path
+- **Given** a mark-read (or draft save, or send-copy) whose session proves dead mid-command
+- **When** the failure surfaces
+- **Then** the caller receives a retryable transport error
+- **And** no automatic second attempt occurs — the server shows no duplicate effect
+
+#### Scenario B-W1-18: One joiner's cancellation never fails the others
+**Traces to**: US-5/AS-5 · **Category**: Edge Case
+- **Given** three requests joined on one shared read flight
+- **When** one joiner's context is cancelled mid-flight
+- **Then** that joiner's wait ends with its own cancellation outcome
+- **And** the flight completes normally for the other two joiners
+
+#### Scenario B-W1-19: Two pairs, one account, different Sent mappings — separate results
+**Traces to**: US-6/AS-1 · **Category**: Error Path
+- **Given** two agent/workspace pairs configured on the same server account (same `host:port|username`) with different Sent folder mappings
+- **When** both issue the same concurrent Sent list request
+- **Then** each pair receives the result of its own mapping — real fake-server per-identity markers prove no result crossing
+- **And** the account's two-slot work gate still bounds their combined concurrent dials
+
+#### Scenario B-W1-20: A new generation never joins an old flight
+**Traces to**: US-6/AS-2 · **Category**: Error Path
+- **Given** an in-flight read under an older configuration/folder-mapping generation
+- **When** the configuration changes and the identical read is issued under the new generation
+- **Then** the new request does not join, receive, or cancel the old flight
+- **And** each caller receives its own generation's answer
+
+#### Scenario B-W1-21: A live refresh is never answered by a cache-shaped flight
+**Traces to**: US-6/AS-3 · **Category**: Error Path
+- **Given** a cache-shaped read and a live refresh for the same folder running concurrently
+- **When** both complete
+- **Then** the live response carries live server data and its live label
+- **And** the cache-shaped flight's data never satisfies the live request
+
+#### Scenario B-W1-22: Superseded read publishes nothing
+**Traces to**: US-6/AS-4 · **Category**: Error Path
+- **Given** a read paused after collecting its server data, its captured revision now superseded
+- **When** a successful mutation and the refresh it triggers complete, and only then the paused read resumes
+- **Then** the superseded read publishes nothing — no cache rows, no disk write, no timestamp advance, no state change
+- **And** the post-mutation refresh's data stands everywhere
+- **And** the refresh never joined the superseded flight
+
+#### Scenario B-W1-23: Observer lifecycle governs retention
+**Traces to**: US-7/AS-1, US-7/AS-2, US-7/AS-3 · **Category**: Happy Path
+- **Given** two panel tabs observing one workspace with completed reads (sessions warm)
+- **When** one tab closes
+- **Then** retention continues for the remaining tab and only the closed tab's subscriptions stop
+- **And when** the second tab closes too
+- **Then** the workspace's idle panel sockets close immediately, and no panel-owned connection survives
+
+#### Scenario B-W1-24: Last observer's departure during a shared read
+**Traces to**: US-7/AS-4 · **Category**: Edge Case
+- **Given** a shared panel read in flight when the last observer for its workspace departs
+- **When** the read completes
+- **Then** its socket closes instead of returning to retention
+- **And** an independent tool read and a watcher cycle running at that moment complete normally
+
+#### Scenario B-W1-25: Dead browser connection is reaped
+**Traces to**: US-7/AS-5 · **Category**: Error Path
+- **Given** a panel tab whose browser vanishes without a close message
+- **When** the gateway notices the dead connection
+- **Then** that connection's observers are removed and the standard last-observer close rules apply
+
+#### Scenario B-W1-26: Without the presence channel, nothing is retained
+**Traces to**: US-7/AS-6 · **Category**: Edge Case
+- **Given** the presence frame handlers not registered (retention structurally disabled)
+- **When** any read completes — panel-originated or not
+- **Then** its socket closes; the open-connection count returns to baseline after every operation
+
+#### Scenario B-W1-27: One stalled mailbox cannot stall the pass
+**Traces to**: US-8/AS-1 · **Category**: Alternate Path
+- **Given** thirteen due mailboxes of which one stalls at the server
+- **When** the cycle pass runs under the bounded scheduler
+- **Then** the other twelve complete their checks within the pass
+- **And** the stalled mailbox's cycle does not block a second cycle for any other mailbox
+
+#### Scenario B-W1-28: No second cycle while one is in flight
+**Traces to**: US-8/AS-2 · **Category**: Edge Case
+- **Given** a mailbox whose current cycle is still running at its next due moment
+- **When** the scheduler considers it
+- **Then** no second cycle for that mailbox starts
+
+#### Scenario B-W1-29: Watcher skips honestly under saturation
+**Traces to**: US-8/AS-3 · **Category**: Error Path
+- **Given** the account's work slots and pool capacity fully occupied by foreground reads
+- **When** a watcher cycle becomes due
+- **Then** it is recorded as a skip: no dial occurs, the last successful-check time is unchanged, and backoff is not advanced
+
+#### Scenario B-W1-30: Closed panel — watcher retains nothing and fills nothing
+**Traces to**: US-8/AS-4 · **Category**: Edge Case
+- **Given** the panel closed through at least three watcher cycle intervals
+- **When** cycles run
+- **Then** each cycle's socket closes after the cycle, no folder/header/count cache is written or refreshed
+- **And** a folder-version change the watcher notices only marks panel metadata dirty for the next panel-open event
+
+#### Scenario B-W1-31: Watcher never mutates
+**Traces to**: US-8/AS-5 · **Category**: Happy Path
+- **Given** a mailbox with new mail and a running watcher cycle
+- **When** the cycle completes
+- **Then** no flag was stored, no agent turn started, no task created — only the state file advanced
+
+#### Scenario B-W1-32: One budget owner per operation
+**Traces to**: US-4/AS-5 · **Category**: Edge Case
+- **Given** the outer wrapper gating an operation and the pool injected below the client
+- **When** the operation runs to completion
+- **Then** exactly one account slot was acquired for it (instrumented at the budget)
+- **And** under two concurrent operations per account, no third ever runs — no double acquisition is reachable from any path
+
+#### Scenario B-W1-33: Retry bypasses backoff only
+**Traces to**: US-4/AS-1 · **Category**: Alternate Path
+- **Given** a mailbox in watcher backoff and all pool capacity held
+- **When** the human Retry click fires
+- **Then** the backoff gate is bypassed but the request still waits and busies on capacity — ceilings are never bypassed
+
+#### Scenario B-W1-34: A client without its injection fails visibly
+**Traces to**: US-2/AS-4 · **Category**: Error Path
+- **Given** a client constructed without a session source in a process where the manager exists
+- **When** a read is attempted through it
+- **Then** the operation fails immediately with the typed missing-wiring error
+- **And** zero dials occurred
+
 <!-- W1-SPEC-CONTINUES -->
