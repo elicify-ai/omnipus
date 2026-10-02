@@ -18,6 +18,8 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/email"
 )
 
 func pointMailboxAt(t *testing.T, env *mailRedEnv, imapPort, smtpPort int) {
@@ -70,6 +72,52 @@ func appendRaw(t *testing.T, cl *imapclient.Client, mailbox string, raw []byte, 
 	require.NoError(t, cmd.Close())
 	_, err = cmd.Wait()
 	require.NoError(t, err)
+}
+
+// bootTestMailRuntime replays production's mail boot step
+// (gateway.go::loadConfigAndProvider) for a test env: the process-wide
+// runtime holder is pointed at THIS test's live config and unlocked
+// credential store, so the shared pool's establishment-time credential
+// resolver (mail_runtime.go::resolveCredentials) can resolve the env's
+// pairs. Without it the resolver answers "config not wired yet" and every
+// pooled dial fails. Both setters store unconditionally, so this is correct
+// even when an earlier test in the same binary already created the holder.
+func bootTestMailRuntime(t *testing.T, env *mailRedEnv) {
+	t.Helper()
+	rt := initGatewayMailRuntime(env.api.homePath, env.api.agentLoop.GetConfig(), env.api.credStore)
+	rt.setAgentLoop(env.api.agentLoop)
+	rt.setCredentialStore(env.api.credStore)
+}
+
+// mailWatcherTransportForPair builds a watcher transport the way production
+// builds every watcher transport (rest_mailbox.go::buildMailboxes — the
+// w5-integration wiring site 3): through THE shared pool under the pair's
+// own identity scope. A bare client in a manager-wired process is the typed
+// wiring error by design (FR-W1-2) — the moment any panel read has wired
+// the process-wide session manager, a source-less client refuses to dial,
+// so a test that drives a watcher MUST construct its transport here and not
+// through a bare email.NewClient. The pool's establishment dials the
+// endpoint the CLIENT carries (the fresh in-memory fixture below) with the
+// credentials the config row + credential store resolve, which the caller
+// must have seeded for agentID (pointMailboxAt + the credStore entry).
+func mailWatcherTransportForPair(t *testing.T, env *mailRedEnv, agentID, workspaceID string) *email.Client {
+	t.Helper()
+	imapPort, _ := startPlainIMAP(t)
+	smtpPort, _ := listenCount(t)
+	client, err := email.NewClient(email.Account{
+		IMAPHost: "127.0.0.1",
+		IMAPPort: imapPort,
+		SMTPHost: "127.0.0.1",
+		SMTPPort: smtpPort,
+		Username: "mailbox@test.local",
+		Password: "s3cret",
+	})
+	require.NoError(t, err)
+	generation, gerr := env.api.mailRuntimeFor().mailGenerationForPair(agentID, workspaceID)
+	require.NoError(t, gerr)
+	client.SetSessionSource(env.api.mailSessionsFor())
+	client.SetSessionScope(agentID+"/"+workspaceID, generation)
+	return client
 }
 
 func listenCount(t *testing.T) (int, *atomic.Int32) {
