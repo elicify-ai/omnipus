@@ -175,21 +175,43 @@ func (s *FolderSnapshotStore) snapshotPath(pairID string) (string, error) {
 	return filepath.Join(s.baseDir, "mail-cache", pairID, "folders.enc"), nil
 }
 
+// removeStaleTarget best-effort unlinks the pair's existing snapshot when a
+// payload-invalid Save refuses: the disposable cache must not keep serving
+// state this writer can no longer replace. Errors are swallowed by design —
+// the refusal error itself is what the caller sees; the next open rebuilds
+// live either way.
+func (s *FolderSnapshotStore) removeStaleTarget(scope Scope) {
+	if path, err := s.snapshotPath(scope.PairID); err == nil {
+		_ = os.Remove(path)
+	}
+}
+
 // Save seals snap and atomically replaces the pair's snapshot. Refusals, in
 // order: unsupported schema version; payload over the 64 KiB budget; a
 // superseded revision; an unusable key; the staging-exclusion gate (§3.8 —
 // evaluated BEFORE any filesystem effect, so a refusal leaves nothing
 // behind, not even the directory). A refusal never truncates, never writes a
 // plaintext fallback, and never leaves a torn file (R-3.7-5).
+//
+// A payload-INVALID snapshot (unsupported schema version, over-budget
+// payload) means this writer can no longer maintain the on-disk format: the
+// refusal also removes any stale snapshot already at the target, so the next
+// open takes the clean live-rebuild path instead of serving state an invalid
+// writer cannot replace. A revision-stale refusal is different: it happens
+// AFTER payload validation and leaves the previous complete snapshot standing
+// (§3.10 — the superseded read publishes nothing, including deletions).
 func (s *FolderSnapshotStore) Save(scope Scope, snap Snapshot, captured Revision, derivedKey []byte) error {
 	if snap.SchemaVersion != snapshotSchemaVersion {
+		s.removeStaleTarget(scope)
 		return fmt.Errorf("%w: unsupported snapshot schema version %d (this build writes version %d)", ErrCacheUnavailable, snap.SchemaVersion, snapshotSchemaVersion)
 	}
 	payload, err := json.Marshal(snap)
 	if err != nil {
+		s.removeStaleTarget(scope)
 		return fmt.Errorf("%w: snapshot payload could not be marshalled: %w", ErrCacheUnavailable, err)
 	}
 	if len(payload) > snapshotPayloadBudget {
+		s.removeStaleTarget(scope)
 		return fmt.Errorf("%w: snapshot payload is %d bytes, over the %d-byte budget — refused visibly, never truncated (§3.6)", ErrCacheUnavailable, len(payload), snapshotPayloadBudget)
 	}
 	if captured != s.currentRev(scope) {
