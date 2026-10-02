@@ -174,3 +174,86 @@ When more than one server folder could fill a role (two folders carry `\Sent`; o
 - **R-3.5-4.** The user's choice is expressed exactly one way: a non-empty value in the per-mailbox setting (R-3.3-1). There is no separate "chosen mapping" store, no second preference surface.
 
 ---
+
+### 3.6 The encrypted per-mailbox folder-metadata file
+
+One small encrypted file per mailbox holds the resolved folder state, so reopening a mailbox does not rediscover from scratch. It is **metadata, not mail content**: folder names, roles and server identity versions. The ADR's Phase 1 clarification is explicit that folder names are not mail content (D6 stands for this file) but *are* sensitive — names can reveal projects and people — which is precisely why the file is encrypted **and** excluded from version control and backups (§3.8).
+
+**Payload (the plaintext inside the envelope; never on disk in this form):**
+
+| Field | Content | Notes |
+|---|---|---|
+| `schema_version` | Integer, monotonically bumped on payload-shape change | An unknown version refuses the whole file (R-3.7-7) |
+| `pair_identity` | Opaque pair identifier | Must equal the requesting pair's opaque ID (R-3.7-6) |
+| `config_generation` | Opaque generation token supplied by the caller (W4's ownership; open question OQ-2) | The generation active when this snapshot was written |
+| `transport` | `"imap"` in Phase 1 | Room for Phase 2's JMAP without a format break |
+| `roles` | Per role (`sent`, `drafts`): resolved name, mapping source, UIDVALIDITY (nullable — unknown before first validation), availability (`present`/`absent`/`unknown`), ambiguity list when applicable | `inbox` participates but stores only its last validated UIDVALIDITY |
+| `last_validated_at` | RFC 3339 timestamp of the last **successful** server validation | Never advanced by a failure, a cache hit, or a superseded read (§3.10) |
+| `saved_at` | RFC 3339 write time | The 24-hour trigger (below) reads this |
+
+Boundaries already decided upstream and honoured here: **no header, subject, address or count data** enters this file (ADR P1.1 folder-list-cache row); the Phase 1 per-mailbox budget for it is **64 KiB** (founder Q1=A) — an oversized payload is a visible cache-unavailable outcome, never truncation.
+
+**Refresh triggers — exactly four, closed list** (ADR P1.1 folder-list-cache row; the ADR's P1.4 "first-open interpretation"):
+
+| # | Trigger | Behaviour |
+|---|---|---|
+| 1 | **First open of a mailbox** — the metadata file is missing, unreadable, or holds no validated mapping | One discovery populates it ("first-open" = populating a missing/never-validated mapping; a successfully saved list is *not* re-discovered on every reopen) |
+| 2 | **Panel open with a saved list older than 24 hours** | One discovery refreshes it before/alongside the panel's first read |
+| 3 | **Manual Refresh** (the user's explicit action; the contract's `refresh_mapping` flag — W0's proposed parameter) | One discovery, coalesced with concurrent identical refreshes |
+| 4 | **One immediate rediscovery** after a missing-folder failure or an observed folder-version change (UIDVALIDITY), while the panel is open | Exactly one; a failed rediscovery is reported as the failure it is, never retried in a loop |
+
+**Equally normative — when it must NOT refresh:**
+
+- **Never on a repeating timer.** No ticker, no periodic job, no 15-minute anything. Local housekeeping (retention cleanup of *this* file's expired siblings) is permitted while closed but issues zero IMAP commands (ADR P1.3/test strategy "local deletion … must not issue IMAP commands").
+- **Never while the panel is closed.** The watcher detecting a version change while the panel is closed marks the metadata **dirty only** (invalidation flag); the actual rediscovery waits for the next eligible panel event (ADR P1.3 "panel closed when watcher detects a version change" row).
+- **Panel close defers.** A panel close marks dirty and stops; it does not schedule work.
+
+### 3.7 The encryption envelope
+
+**Verified starting point:** `pkg/credentials/store.go` provides `Store.DeriveSubkey` — the sanctioned reusable key helper (HKDF-SHA256 over the master key with a caller info string, 32 bytes, `ErrStoreLocked` when locked, master key never exported) — and **nothing else W2 can reuse**: `encrypt`, `decrypt` and `aadFor` are **unexported credential-entry helpers** (all read this checkout), not an exported arbitrary-file encryption API. **A small cache-envelope wrapper must therefore be built in this package** (`cache_file.go`), reusing `DeriveSubkey` for keys and `fileutil.WriteFileAtomic` for writes. security-lead reviews the wrapper (ADR work-package table); the credential-store algorithm is not touched.
+
+Envelope rules (each is the ADR's §Security "What must be built" list, made checkable):
+
+- **R-3.7-1. Algorithm.** AES-256-GCM, authenticated encryption only. A reader that fails authentication returns failure — it never returns partial or unauthenticated plaintext, and there is **no plaintext fallback path** in either direction (write or read).
+- **R-3.7-2. Fresh nonce.** Every write draws a fresh cryptographically random nonce (the credential store's own `encrypt` uses 12 bytes from `crypto/rand` — same shape here). Two writes of identical plaintext MUST produce different ciphertexts; §7's dataset asserts this directly.
+- **R-3.7-3. Purpose-separated keys.** The file key is `Store.DeriveSubkey` with a stable, namespaced purpose string dedicated to folder metadata — e.g. `"omnipus-mail-folder-cache-v1"` — distinct from the Phase 2 headers/transport-state purpose and from every other subsystem's info string (the audit-chain precedent: `DeriveSubkey(audit.AuditChainKeyInfo)`). Distinct purposes get cryptographically independent keys, so one compromised purpose does not cross into the other. Bumping the version suffix is the supported rotation path for the *derivation* — never a silent change.
+- **R-3.7-4. AAD bindings.** The envelope's additional authenticated data binds, at minimum: the envelope purpose tag, the schema version, the opaque pair identity, the account/configuration generation, and the transport (`imap`). Effect: a file copied between pairs, across generations, or from another purpose fails authentication instead of decrypting into plausible-looking garbage. The reader **compares the authenticated identity against its independently resolved expected pair/generation** — the envelope's word is never accepted as its own authority (the grill's encryption disposition).
+- **R-3.7-5. Atomic ciphertext-only replacement.** Writes go through `pkg/fileutil/file.go::WriteFileAtomic` with the full new ciphertext; no plaintext temporary or journal file ever exists on disk. A crash mid-write leaves either the old complete file or the new complete file (both validly sealed), never a torn one.
+- **R-3.7-6. Reject before allocating.** A stored file that is oversized (beyond a small multiple of the 64 KiB payload budget), carries an unsupported schema version or envelope version, or is malformed (truncated, bad nonce length, base64 failure) is rejected **before unbounded allocation** — length caps are checked before reads that could materialize the bytes.
+- **R-3.7-7. Never salvage.** A corrupt, foreign, stale-generation, or expired snapshot is rejected outright: no best-effort partial import, no "most fields looked fine" recovery, and the failure surfaces as a **cache warning** with the live path still available — never as a silently empty mailbox and never as fabricated folder data.
+- **R-3.7-8. Key lifecycle.** New reads/writes require valid derived keys: a locked store yields `ErrStoreLocked` → the cache layer reports cache-unavailable and runs live-only; on unlock/rotation, in-memory keys and cached data are dropped and the file is rebuilt only after normal credential resolution succeeds. **A missing or wrong master key is never "fixed" by minting a new one over existing encrypted data** (the credential boot contract; ADR-004). A file that will not decrypt while credentials are otherwise valid is a cache warning + live rebuild, not a credential error.
+
+### 3.8 File location, permissions, and the exclusion gate (disk cache is BLOCKED until exclusions deploy)
+
+**Location.** The cache lives under the resolved application data root, derived through `pkg/config/home.go::OmnipusHomeDir()` — never an inline `~/.omnipus` join, never a hard-coded Mac path. Shape:
+
+```
+<OmnipusHomeDir()>/mail-cache/<opaque-pair-id>/folders.enc
+```
+
+- `<opaque-pair-id>` is an unambiguous opaque identifier for the (agent, workspace) pair — **not** an email address, **not** a folder name, **not** the watcher's lossy filename sanitizer (which can collide two pairs onto one file; ADR filesystem table). Who mints it is open question OQ-1; the interface (§4) treats it as an opaque string supplied by the caller.
+- Outside `workspaces/` and agent-visible mounts: a generic agent file tool must never become a decryption route (ADR filesystem table; the path joins existing agent filesystem/shell policy wiring — W4's integration).
+
+**Permissions.** The `mail-cache/` directory is created **0700** (owner-only) and every file **0600**, on Unix (Linux/macOS). On **Windows** there is no chmod: the equivalent is **current-user restrictive access** — the directory and files are created with ACLs granting access to the current user only (no inherited broad grants, no Everyone/Users entries). The claim in user docs is "restricted to the current user", never a chmod-only assertion; Windows behaviour needs its own executed proof (the ADR lists this as an explicit future-proof obligation — carried in §9's DoD as part of the gate evidence, not claimed here).
+
+**The exclusion gate — what the autocommit trace established (all verified in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/receipts/autocommit-trace.md`):**
+
+- The data-directory auto-commit job is **machine-level deployment, not product code**: a launchd agent (`com.omnipus.state-autocommit`, 15-minute interval) runs a bash script that stages with a **bare `git add -A`** in the data directory, commits, and pushes to a private GitHub backup remote. Nothing in the product repo installs or configures it.
+- Exclusion from that job is decided **solely** by the data repo's deny-list `.gitignore` (its own header: *"Everything not listed here IS committed"*), written by an external machine-deployment repo's script.
+- A new `mail-cache/` directory is **not** in that deny-list today: `git check-ignore` probes in the trace show `mail-cache/` unmatched, hence staged by the next `git add -A`.
+- The application's own tar backup captures it too: `pkg/gateway/rest_settings.go::createTarGz` skips only top-level `logs` and `backups` (verified this checkout), and `extractTarGz` would re-materialize it on restore.
+- Nothing deletes it: `deleteAgentMailbox` touches config + credentials only (verified this checkout); agent deletion removes entity + SOUL records only.
+- Current live state (the trace's caveat): the job is **unloaded** right now and its last run was blocked by a gitleaks pre-commit hook, with 22,239 dirty entries pending — but the plist and generator are present and idempotent, so `git add -A` staging remains the operative rule the design must satisfy. Bonus risk: **encrypted blobs are high-entropy**, exactly what secret scanners false-positive on — un-ignored cache files could freeze the whole backup job the way the current 30-finding block does.
+
+**The exact exclusion rules required (each before the first cache write ships on any install):**
+
+| # | Rule | Exact location |
+|---|---|---|
+| E-1 | Add a `mail-cache/` deny rule (a directory rule covers all nesting below it) to the data repo's `.gitignore` — in practice, to the `.gitignore` heredoc inside the generator script — and re-run that script on the machine (it refreshes the file idempotently): under its "regenerable / high-churn" section, the line `mail-cache/` (adjust to the final directory name if §3.8's name changes) | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-agent-os/scripts/35-omnipus-snapshot-repo.sh` (the `GITIGNORE` heredoc), which owns `/Users/danielpiatkowski/.omnipus/.gitignore` |
+| E-2 | Extend the backup walker's top-level skip to include `mail-cache`: `createTarGz`'s skip condition becomes `logs` ∪ `backups` ∪ `mail-cache`. Once new archives exclude the directory, restore is covered automatically for new archives (old archives are a §3.11 restore-restore decision, open question OQ-5) | `pkg/gateway/rest_settings.go::createTarGz` (W4's edit) |
+| E-3 | Verify cache files are not already **tracked** before relying on the ignore rule — ignoring a tracked file does not untrack it (the trace demonstrates the mechanism with a throwaway repo). If any install ever committed a cache file, remediation is a runbook (`git rm -r --cached` + commit; history rewrite is a founder decision), never a product-code fix | Deployment/runbook; verified at first-write time (the gate below) |
+| E-4 | The mailbox-removal cascade gains cache deletion (best-effort unlink, `logsafeError` + continue — the handler's existing orphan-tolerant pattern), so removal does not leave orphan files the way the existing `email-watch/` state does | `pkg/gateway/rest_mailbox.go::deleteAgentMailbox` (W4's edit; W2 supplies the delete primitive) |
+
+**The gate (hard, founder-briefed): enabling the disk cache is BLOCKED until E-1 and E-2 are deployed.** Concretely, W2's first-write path performs a runtime exclusion check before the very first write on any install: probe that the cache directory resolves as ignored by the data repository's ignore rules (the `git check-ignore` mechanism the trace used), and confirm the backup skip (E-2) is present in the running build. If either fails, the disk cache stays **disabled on that install**: the mailbox runs live-only with a visible `cache_unavailable` notice (the ADR's wire metadata `notice_code`), and nothing is written to disk. The check is cheap, runs once per process per pair, and fails visible — never a silent "skip the check, write anyway".
+
+---
