@@ -20,6 +20,8 @@ func TestContextOverflowRetryDoesNotPublishNormalChatNotice_Q33(t *testing.T) {
 		answer     = "Recovered answer for Q33"
 		sessionKey = "q33-context-overflow-session"
 		chatID     = "q33-context-overflow-chat"
+		seedMark1  = "SEEDMARK-Q33-ALPHA-7f3a"
+		seedMark2  = "SEEDMARK-Q33-BETA-7f3a"
 	)
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -34,7 +36,7 @@ func TestContextOverflowRetryDoesNotPublishNormalChatNotice_Q33(t *testing.T) {
 	// Same wide-window fixture as TestAgentLoop_EmitsContextCompressEventOnRetry:
 	// prevent proactive trimming from pre-empting the reactive overflow path.
 	cfg.Context.DefaultContextWindow = intPtr(131072)
-	provider := &failFirstMockProvider{
+	provider := &recordingFailFirstProvider{
 		failures:    1, // One provider rejection, then one recovered answer.
 		failError:   stringError("InvalidParameter: Total tokens of image and text exceed max message tokens"),
 		successResp: answer,
@@ -47,13 +49,30 @@ func TestContextOverflowRetryDoesNotPublishNormalChatNotice_Q33(t *testing.T) {
 	if defaultAgent == nil {
 		t.Fatal("fixture: expected the default agent")
 	}
-	defaultAgent.Sessions.SetHistory(sessionKey, []providers.Message{
-		{Role: "user", Content: "Old question one"},
-		{Role: "assistant", Content: "Old answer one"},
-		{Role: "user", Content: "Old question two"},
-		{Role: "assistant", Content: "Old answer two"},
-		{Role: "user", Content: "Continue the task"},
-	})
+	// Plain-history recovery fixture, repaired per the 2026-10-01 ruling §3
+	// row 1 + caveat E14 (same shape as the eventbus test): the old ~93-byte
+	// pair could never overcome the ≥254-byte breadcrumb framing. Two
+	// completed old plain exchanges with multi-KB deterministic text, seeded
+	// in THIS test's exact active scope (sessionKey is both the seed key and
+	// the runAgentLoop invocation key); each carries a unique seed marker the
+	// request assertions trace. Only exchange 1 is older than the newest
+	// plain assistant (exchange 2's assistant is the floor), so exactly one
+	// eligible eviction endpoint exists.
+	seedExchange := func(mark, word string) []providers.Message {
+		filler := strings.Repeat(word, 240) // ~2.6KB deterministic removable text per message
+		return []providers.Message{
+			// Marker AFTER the filler, beyond rune 80 — the eviction
+			// breadcrumb quotes the 80-rune head snippet of every evicted
+			// line (breadcrumb_archive.go::archiveBreadcrumbEntry), and a
+			// head-positioned marker would ride that snippet into the retry
+			// request even after its exchange legitimately slid away.
+			{Role: "user", Content: filler + " " + mark},
+			{Role: "assistant", Content: filler},
+		}
+	}
+	seed := append(seedExchange(seedMark1, "alpha lore "), seedExchange(seedMark2, "beta lore ")...)
+	seed = append(seed, providers.Message{Role: "user", Content: "Continue the task"})
+	defaultAgent.Sessions.SetHistory(sessionKey, seed)
 
 	var retryMu sync.Mutex
 	var retries []Event
@@ -72,8 +91,8 @@ func TestContextOverflowRetryDoesNotPublishNormalChatNotice_Q33(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fixture: overflow retry did not recover: %v", err)
 	}
-	if response != answer || provider.currentCall != 2 {
-		t.Fatalf("fixture: want recovered answer %q after exactly 2 calls; got %q after %d", answer, response, provider.currentCall)
+	if response != answer || provider.calls() != 2 {
+		t.Fatalf("fixture: want recovered answer %q after exactly 2 calls; got %q after %d", answer, response, provider.calls())
 	}
 	retryMu.Lock()
 	recordedRetries := append([]Event(nil), retries...)
@@ -84,6 +103,36 @@ func TestContextOverflowRetryDoesNotPublishNormalChatNotice_Q33(t *testing.T) {
 	retry, ok := recordedRetries[0].Payload.(LLMRetryPayload)
 	if !ok || retry.Reason != "context_limit" || retry.Attempt != 1 {
 		t.Fatalf("fixture: want context_limit attempt 1, got %#v", recordedRetries[0].Payload)
+	}
+
+	// Positive control (ruling §3 row 1): the first recorded provider request
+	// must actually carry both seed markers — the seeded history sat in the
+	// active scope and was really sent.
+	req1 := provider.request(1)
+	if !requestContains(req1, seedMark1) || !requestContains(req1, seedMark2) {
+		t.Fatalf("fixture positive control failed: the first provider request must carry both seed markers")
+	}
+	// MAJ-CW-012's serialization instrument: the retry's normalized retained
+	// payload must be STRICTLY smaller than the rejected one, and only the
+	// eligible prefix may leave (exchange 1's marker gone; exchange 2's
+	// marker still present — its assistant is the newest-plain floor).
+	req2 := provider.request(2)
+	size1, sizeErr := retainedPayloadSize(nil, req1)
+	if sizeErr != nil {
+		t.Fatalf("fixture: normalize request 1: %v", sizeErr)
+	}
+	size2, sizeErr := retainedPayloadSize(nil, req2)
+	if sizeErr != nil {
+		t.Fatalf("fixture: normalize request 2: %v", sizeErr)
+	}
+	if size2 >= size1 {
+		t.Fatalf("FR-032/MAJ-CW-012: the retry's retained payload must shrink strictly; req1=%d req2=%d normalized bytes", size1, size2)
+	}
+	if requestContains(req2, seedMark1) {
+		t.Fatal("fixture: the eligible oldest prefix (exchange 1) must be gone from the retry request")
+	}
+	if !requestContains(req2, seedMark2) {
+		t.Fatal("fixture: exchange 2 must survive the relief (newest plain assistant is the floor)")
 	}
 
 	// Publications complete synchronously before runAgentLoop returns. No

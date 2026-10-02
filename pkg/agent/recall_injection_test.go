@@ -288,10 +288,24 @@ func TestRunTurn_RecallNonFit_ToolResultStatesIt(t *testing.T) {
 	require.Contains(t, readLog(), "recall span refused", "FR-043: refusal must log at INFO")
 }
 
-// TestRunTurn_RecallNotDoubledOnReassembly — B-50 (test 51): after
-// injection, a trim-site reassembly (Site-4, provider context-overflow
-// retry) must carry the marker exactly once and still carry the nonce.
-func TestRunTurn_RecallNotDoubledOnReassembly(t *testing.T) {
+// TestRunTurn_RecallSpanDroppedFirstOnOverflowRejection — the overflow-path
+// companion to B-50 under the 2026-09-30 amendment (FR-032, MAJ-CW-012
+// order 1). After a recall span is injected, an ACTUAL provider context
+// rejection — even a locally fitting one (total ≤ B and share ≤ S) — enters
+// the forced relief pass, whose FIRST operation removes the ENTIRE injected
+// recall span and repairs its bookkeeping. The retry request therefore
+// carries ZERO recall markers and none of the recalled text; the span state
+// is cleared so the next assembly cannot re-inject it (no reinjection); and
+// only the recall tool's receipt — quoted archive data in turn history
+// (MAJ-CW-003), never part of the injected span — survives.
+//
+// The two contracts are distinct and both stay pinned: "exactly one marker
+// on reassembly" (the original B-50 no-double-injection target) holds on the
+// NON-overflow paths and is asserted by the passing
+// TestRunTurn_RecallInjected_NonceInSecondRequest and
+// TestRunTurn_RecallReplacedInSameTurn_OneMarker; on the overflow path the
+// amended forced order deliberately drops the span first.
+func TestRunTurn_RecallSpanDroppedFirstOnOverflowRejection(t *testing.T) {
 	const nonce = "N-7f3a-RECALL-NONCE-REASSEMBLY"
 	filler := strings.Repeat("x", 400)
 	turns := [][]providers.Message{makeTurn(filler+" "+nonce, filler)}
@@ -308,13 +322,24 @@ func TestRunTurn_RecallNotDoubledOnReassembly(t *testing.T) {
 	taskSessionID := newRecallInjectionTaskSession(t, al, agent)
 	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-2)
 
+	pressureBefore := RecallSpanDropCount("pressure")
 	_, err := al.processTaskDirect(context.Background(), agent.ID, "what was the nonce?", recallInjectionSessionKey, taskSessionID)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, provider.calls(), 3, "call 2 overflowed; call 3 is the post-reassembly retry")
+	require.NoError(t, err, "the forced relief recovers the turn: span dropped, retry succeeds")
+	require.GreaterOrEqual(t, provider.calls(), 3, "call 2 overflowed; call 3 is the post-relief retry")
 
 	req3 := provider.request(3)
-	require.Equal(t, 1, countMarkers(req3), "the marker must appear exactly once after a trim-site reassembly")
-	require.True(t, requestContains(req3, nonce), "the recalled text must survive the reassembly")
+	require.Equal(t, 0, countMarkers(req3),
+		"FR-032/MAJ-CW-012 order 1: the forced relief pass drops the ENTIRE injected recall span FIRST — "+
+			"the retry request carries no recall marker at all")
+	require.False(t, requestContains(req3, nonce),
+		"the recalled text left with the dropped span — it is never resent unchanged")
+	require.Nil(t, al.activeRecallSpan(recallInjectionSessionKey),
+		"the dropped span is cleared from the session, not left to resurface at the next assembly")
+	require.Equal(t, pressureBefore+1, RecallSpanDropCount("pressure"),
+		"FR-018: the drop is attributed to the pressure reason, exactly once")
+	_, receiptOK := toolMessageContent(req3, "call_recall_1")
+	require.True(t, receiptOK,
+		"the recall tool's receipt is quoted archive data in turn history (MAJ-CW-003), not the injected span — it survives the drop")
 }
 
 // TestRunTurn_RecallReplacedInSameTurn_OneMarker — E20 / DS-10 #4: two
@@ -422,10 +447,16 @@ func TestRunTurn_RecallByIdPageInjected(t *testing.T) {
 		nonce1 = "NONCE-PAGE-ONE-7f3a"
 		nonce2 = "NONCE-PAGE-TWO-b91c"
 	)
-	// The nonces live ONLY in the archived tool result, so neither the
-	// window nor the eviction breadcrumb (which quotes the user line) can
-	// put them in a request — only a real page splice can.
-	result := strings.Repeat("a", 50) + nonce1 + strings.Repeat("b", 100) + nonce2 + strings.Repeat("c", 50)
+	// The nonces live ONLY in the archived tool result. The eviction
+	// breadcrumb quotes the 80-rune HEAD SNIPPET OF EVERY EVICTED LINE —
+	// tool results included (breadcrumb_archive.go::archiveBreadcrumbEntry's
+	// truncateSnippet(…, 80)) — so the pre-nonce1 padding keeps BOTH nonces
+	// beyond rune 80: neither breadcrumb framing nor the window can put them
+	// in a request, and only a real page splice can. (The old 50-rune prefix
+	// left nonce1 inside the snippet, so request 1 legitimately carried it
+	// and the "request 1 must not carry the evicted result" oracle fired on
+	// legitimate framing, not on a defect.)
+	result := strings.Repeat("a", 100) + nonce1 + strings.Repeat("b", 100) + nonce2 + strings.Repeat("c", 50)
 	require.Greater(t, len(result), 200, "test setup")
 
 	firstTurn := []providers.Message{
@@ -442,7 +473,7 @@ func TestRunTurn_RecallByIdPageInjected(t *testing.T) {
 		turns = append(turns, makeTurn(fmt.Sprintf("turn %d %s", i+2, filler), filler))
 	}
 
-	page1Len := 50 + len(nonce1) + 20 // covers nonce1, stops well before nonce2
+	page1Len := 100 + len(nonce1) + 20 // covers nonce1 (now at rune 100), stops well before nonce2
 	provider := &recallInjectionProvider{
 		first: map[string]any{"tool_call_id": callID, "offset": 0, "length": page1Len},
 		script: []func() (*providers.LLMResponse, error){
@@ -476,6 +507,8 @@ func TestRunTurn_RecallByIdPageInjected(t *testing.T) {
 	require.GreaterOrEqual(t, provider.calls(), 3, "two recalls means three provider calls")
 
 	require.False(t, requestContains(provider.request(1), nonce1), "request 1 must not carry the evicted result")
+	require.False(t, requestContains(provider.request(1), nonce2),
+		"request 1 must not carry the evicted result: BOTH nonces sit beyond the breadcrumb's 80-rune snippet boundary")
 
 	// Page 1 — and ONLY page 1 — reaches the provider's second request.
 	req2 := provider.request(2)
