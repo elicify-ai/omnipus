@@ -19,6 +19,7 @@ import {
   type MailRecipientValue,
 } from './MailRecipientInput'
 import { setMailEditorDirty } from './mailUnsavedGuard'
+import type { MailReplyContextResponse } from '@/lib/api/generated/openapi-types'
 
 /** The compose send payload, as handed to `onSend`. Cc/Bcc ride the wire
  * too (D26) — the oracle pins the required fields via objectContaining. */
@@ -34,8 +35,17 @@ export interface MailComposeBody {
 
 export interface MailComposeDialogProps {
   open: boolean
-  mode: 'new' | 'reply'
+  mode: 'new' | 'reply' | 'reply_all'
   replyTo?: { from: string; subject: string; messageId: string }
+  /**
+   * The generated reply-context response (ADR-20261001 F5; W3 spec §2.4)
+   * fetched by the panel for the message being replied to. When present it
+   * prefills To/Cc (reply_all), the once-prefixed subject and the escaped,
+   * editable quoted body — replacing the legacy from/subject-only prefill.
+   * A stale context for a different message is discarded by the panel; the
+   * dialog applies whatever it is last given.
+   */
+  replyContext?: MailReplyContextResponse
   senderName?: string
   senderAddress?: string
   signatureHtml?: string
@@ -61,7 +71,7 @@ function recipientError(recipients: string[]): string | undefined {
     : undefined
 }
 
-export function MailComposeDialog({ open, mode, replyTo, senderName, senderAddress, signatureHtml, onSend, onClose }: MailComposeDialogProps) {
+export function MailComposeDialog({ open, mode, replyTo, replyContext, senderName, senderAddress, signatureHtml, onSend, onClose }: MailComposeDialogProps) {
   const [values, setValues] = useState<ComposeValues>({
     to: EMPTY_RECIPIENTS,
     cc: EMPTY_RECIPIENTS,
@@ -75,24 +85,38 @@ export function MailComposeDialog({ open, mode, replyTo, senderName, senderAddre
   const bodyRef = useRef('')
 
   // Fresh fields on every open; reply prefills To, the Re: subject and the
-  // In-Reply-To header carried through to sendMailMessage.
+  // In-Reply-To header carried through to sendMailMessage. When the panel
+  // supplied the generated reply-context response (F5), it prefills To/Cc
+  // (reply_all), the subject and the escaped, editable quoted body — the
+  // attribution inside the quote is server-built, "No date" included (F6).
   useEffect(() => {
     if (!open) return
-    const reply = mode === 'reply' && replyTo
+    const reply = mode !== 'new' && replyTo
+    const context = mode !== 'new' && replyContext
     setValues({
-      // Keep the reply address in the input until Enter/comma/send so the
-      // longstanding accessible textbox contract remains intact.
-      to: { recipients: [], draft: reply ? replyTo.from : '' },
-      cc: EMPTY_RECIPIENTS,
+      // Legacy prefill keeps the reply address in the input until
+      // Enter/comma/send so the longstanding accessible textbox contract
+      // remains intact; structured context recipients seed the chip list.
+      to: context
+        ? { recipients: [...replyContext.to], draft: '' }
+        : { recipients: [], draft: reply ? replyTo.from : '' },
+      cc: context && mode === 'reply_all'
+        ? { recipients: [...replyContext.cc], draft: '' }
+        : EMPTY_RECIPIENTS,
       bcc: EMPTY_RECIPIENTS,
-      subject: reply ? `Re: ${replyTo.subject}` : '',
-      body: '',
+      subject: context
+        ? replyContext.subject
+        : reply
+          ? `Re: ${replyTo.subject}`
+          : '',
+      body: context ? replyContext.body_markdown : '',
     })
+    if (context) bodyRef.current = replyContext.body_markdown
     setAttachments([])
     setErrors({})
     setAttachError(null)
-    bodyRef.current = ''
-  }, [open, mode, replyTo?.from, replyTo?.messageId, replyTo?.subject])
+    if (!context) bodyRef.current = ''
+  }, [open, mode, replyTo?.from, replyTo?.messageId, replyTo?.subject, replyContext])
 
   // CRIT-001: report unsaved compose text to the shared Mail leave guard
   // (mailUnsavedGuard.ts) — dirty only while open with a non-empty message,
@@ -139,7 +163,7 @@ export function MailComposeDialog({ open, mode, replyTo, senderName, senderAddre
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
       <DialogContent className="mail-compose-dialog flex h-[calc(100dvh-var(--space-5))] max-h-[calc(100dvh-var(--space-5))] w-[calc(100%-var(--space-5))] max-w-5xl flex-col gap-[var(--space-2)] overflow-y-auto p-[var(--space-3)]">
         <DialogHeader className="shrink-0 pr-[var(--space-6)]">
-          <DialogTitle>{mode === 'reply' ? 'Reply' : 'Compose message'}</DialogTitle>
+          <DialogTitle>{mode === 'reply' ? 'Reply' : mode === 'reply_all' ? 'Reply all' : 'Compose message'}</DialogTitle>
           <DialogDescription>
             Sent as formatted HTML plus a plain-text copy, with the mailbox signature appended.
           </DialogDescription>
