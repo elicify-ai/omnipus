@@ -544,3 +544,83 @@ The generation that invalidates caches and blocks late completions must survive 
 **Given** a watcher cycle failing against a raw-talking fake server,
 **When** the state file is written,
 **Then** the persisted error text is empty or class-derived, while the wire summary response is byte-identical in shape (it already carried only the class).
+
+---
+
+## 6. TDD plan (tests designed before implementation)
+
+All tests are written and owned by the proof package (qa-lead); this spec names them and derives each from the design above — never from the implementation. Go tests use the repo's pure-Go/tag configuration; the fake IMAP harness is the existing `pkg/email/imapserver_test.go::startMemIMAP` (global dial seam — no blind parallelism). Backend tests live beside the code under `pkg/gateway/` and `pkg/agent/`; the deployment-evidence checks (E1–E5) are a runbook script under `scripts/` or `deploy/`, executed on the target machine, not a Go unit test. Existing preview/budget/deletion test families are re-derived from this spec where the behaviour legitimately changes; none may be weakened to pass.
+
+| Order | Test name (indicative) | Level | Traces to | What it proves |
+|---|---|---|---|---|
+| 1 | `TestMailRuntime_SingleInstanceAcrossPaths` | Unit (wiring) | B-1, MC-1 | The six wiring sites resolve pointer-identical pool/budget/cache instances; boot-before-NewAgentLoop ordering holds |
+| 2 | `TestMailRuntime_WatcherSetSharesHandles` | Unit | B-1 | The watcher set's constructor receives the same instances (no second `New*`) |
+| 3 | `TestMailPairClient_CarriesInjectedHandles` | Integration | B-4 | A REST-resolved client holds the shared handles; an uninjected construction fails loudly |
+| 4 | `TestAccountPairs_NoCrossPairFlightSharing` | `startMemIMAP` (marked responses) | B-2 | Two pairs on one account get pair-correct results; account dial cap still 2 (grill I-01 at the wiring layer) |
+| 5 | `TestGlobalSocketCap_NinthDemandBusyWithinWindow` | `startMemIMAP` (counters, fake clock) | B-3, MC-2 | Eight active → ninth demand refuses with `pool_busy` inside the acquisition window; connecting reservations counted |
+| 6 | `TestPresence_OpenRetains_CloseRevokesOneObserver` | Integration (WS + fake server) | B-5, MC-4 | Open→retention; close→that socket closes, the other tab's observer unaffected |
+| 7 | `TestPresence_AbruptDisconnectRevokesViaTeardown` | Integration (kill socket) | B-6 | Deadline expiry → teardown hook revokes; idle panel sockets close; shared flight finishes for remaining owners; no timers introduced |
+| 8 | `TestPresence_UnknownObserverDegradesToRequestScoped` | Integration | B-7 | Unknown/stale/absent observer id → normal live/cache service, no retention, no presence-derived error |
+| 9 | `TestPresence_NeverGrantsAccess` | Integration | B-8 | Observer open on W1 does not authorize a W2 pair — pair authorization unchanged |
+| 10 | `TestMailCache_PathModesAndPairDistinction` | Unit (temp dir) | B-9, MC-5 | Path shape from the configured root; 0700/0600; two pairs distinct; stable across a simulated restart |
+| 11 | `TestMailCache_WriteGate_RefusesWithoutExclusionRule` | Unit (temp dir) | B-10, B-11, MC-6 | Rule absent → no file + `cache_unavailable`; rule in either ignore location → write proceeds |
+| 12 | `TestMailCache_SymlinkAtPathsRefused` | Unit (temp dir + symlink) | B-12 | Symlinked dir/file components refused, nothing written through the link |
+| 13 | `TestFSPolicy_RefusesCacheDirectory` | Unit (policy resolution) | B-13, MC-16 | Agent file tools cannot read/write/resolve any `mail-cache/` path |
+| 14 | `TestCreateBackupArchive_ExcludesMailCache_KeepsControl` | Integration (httptest) | B-14, MC-7 | Member listing: control present, no `mail-cache` |
+| 15 | `TestRestore_SkipsMailCacheMembers` | Integration (httptest) | B-15, MC-7 | Hand-built archive with a cache member → restore writes nothing there |
+| 16 | `TestDeploymentExclusionReceipt` | Runbook script (machine) | B-16 | E1–E5 executed fresh: check-ignore matches, nothing tracked-ignored, archive + restore clean, staging shows no cache paths — with positive controls |
+| 17 | `TestDeleteMailbox_RemovedPurge` | Integration | B-17 | Full removal → `removed`, subtree gone |
+| 18 | `TestDeleteMailbox_FailedUnlinkIsCleanupPending` | Integration (blocked dir) | B-18, MC-8 | Unlink failure → `removed_cleanup_pending` + safe code; Retry-cleanup works after config row gone; success never falsely claimed |
+| 19 | `TestRemoval_LateWriteCannotResurrect` | Integration (paused write) | B-19, MC-9 | Write completes after deletion → disk unchanged, deterministically (no sleeps) |
+| 20 | `TestAgentDelete_CascadesCacheSubtrees` / `TestWorkspaceDelete_CascadesCacheSubtrees` | Integration | B-20, B-21 | Both deletion paths purge every owned pair's subtree with truthful outcomes |
+| 21 | `TestConfigChange_GenerationInvalidatesSnapshot` | Unit + restart simulation | B-22, MC-10 | Offline password change → fingerprint mismatch → snapshot rejected+deleted+rebuilt live; no-change restart → still valid |
+| 22 | `TestStoreLocked_DistinctFromCacheMiss` | Unit | B-23 | Locked store reported distinctly; live-only service; no key regeneration |
+| 23 | `TestPreviewGrant_StoresMetadataOnly` | Unit (white-box) | B-24, MC-11 | Grant fields: identity/session/expiry only; zero bytes of any kind; URL list permitted |
+| 24 | `TestPreviewServe_LiveBudgetedFetch` | Integration (counters) | B-25, MC-12 | Per-serve gated fetch counted; `no-store` present; nothing persists post-request |
+| 25 | `TestPreviewMint_DialsNothing` | Integration (counters) | B-26 | Mint zero dials; missing-ref failure surfaces at first serve with the same safe 404 class |
+| 26 | `TestPreviewServe_BackoffTypedRefusal` | Integration | B-27 | Backoff pair → zero dials + typed budget refusal on the serve path |
+| 27 | `TestPreviewControls_Preserved` (family) | Integration | B-28, MC-13 | Cap-8-refuses 429; logout revocation; 404 parity; signature replace-on-mint @2 min outside the cap; consented proxy serves grant-recorded URLs only |
+| 28 | `TestPreviewByteEndpoint_CapAndDisposition_DownloadStreams` | Integration (false metadata) | B-29, MC-14 | Over-cap actual bytes with lying metadata → preview aborts pre-success; same part downloads fully with attachment disposition |
+| 29 | `TestMailDiagnostics_NoLeakMarkers` | `startMemIMAP` (marker server) + log capture | B-30, MC-15 | Zero markers in logs/state/audit/envelopes; class strings present; positive control proves the scan works |
+| 30 | `TestWatcherState_NoRawErrorText` | Unit (scripted failure) | B-31 | Persisted error text empty/class-derived; summary wire shape unchanged |
+| 31 | `TestRemovalMutation_*` (see counterexamples) | Unit | §6 counterexamples | The careless-implementation killers below |
+
+### Test datasets
+
+| Dataset | Rows / shape | Exercises | Traces to |
+|---|---|---|---|
+| DS-1 pairs | 3 pairs: two on one account (different Sent overrides), one unique | Cross-pair isolation, account contention | B-2, B-9 |
+| DS-2 exclusion rules | rule absent / in `.gitignore` / in `.git/info/exclude` / in both / stale name mismatch | Gate decision table, all four cells + mismatch | B-10, B-11, B-16 |
+| DS-3 permissions | 0700/0600 created; pre-existing 0755 dir (must be tightened); read-only dir (unlink fails); symlink at dir and at file | Creation, tightening, failure, escape | B-9, B-12, B-18 |
+| DS-4 archives | fresh archive (no cache member); hand-built old-style archive (with cache member); archive with control file only | Backup skip, restore skip, positive control | B-14, B-15 |
+| DS-5 removal states | pair live / tombstoned / config-row-gone; write in-flight paused at pre-publish and pre-write points | Cascade outcomes, late-completion guard at both pause points | B-17–B-21 |
+| DS-6 generation | same identity restart; password change; host change; port change; username change; override change; locked store | Fingerprint stability and change rejection, store-state distinctness | B-22, B-23 |
+| DS-7 previews | valid ref; missing ref; N-inline-part message (N=0,1,5); signature grant; 8 live grants (cap edge); 9th mint; expired token; revoked-by-logout token; over-cap part with lying metadata; backoff-state pair | Mint/serve lifecycle, cap edge, failure parity, byte-path split | B-24–B-29 |
+| DS-8 markers | fake server errors embedding `SUBJECT-MARKER-7f3a`, `addr-marker@example.invalid`, `FolderName-Marker` in greeting/SELECT/BYE responses | Redaction scan with guaranteed-detectable leaks | B-30 |
+| DS-9 boundaries | TTL at exactly `ExpiresAt` (refused); cap at 8th (allowed) and 9th (refused); idle retention at 2:00 vs 2:01; 24-hour mapping age ±1 min; 5-minute stale ±1 s | Time-boundary edges the constants name | B-5, B-28 |
+
+### Counterexamples a careless implementation would survive (mandatory)
+
+| # | The mutation (what a careless implementer does) | The test that kills it |
+|---|---|---|
+| X-1 | The write gate defaults to "allowed" when the ignore files are unreadable — silently permissive instead of conservative | `TestMailCache_WriteGate_*` DS-2 row: unreadable ignore file → must refuse (the gate's failure direction is refuse, never allow) |
+| X-2 | Removal reports `removed` without attempting the unlink (or logs the failure and returns success — today's `deleteAgentMailbox` shape) | `TestDeleteMailbox_FailedUnlinkIsCleanupPending` with the read-only-dir dataset: asserts the pending outcome exists and success is absent |
+| X-3 | The tombstone check happens at removal time only, not at write-publication time — late writes still land | `TestRemoval_LateWriteCannotResurrect` pauses the write **after** removal completes: only a publication-time check survives |
+| X-4 | The grant drops the HTML from the *serve* path but keeps storing it at mint ("we don't serve from it, so it's fine") | `TestPreviewGrant_StoresMetadataOnly` is white-box on the store, not the serve path — storage alone fails it |
+| X-5 | Presence teardown handles only explicit close frames; a crashed tab leaks retained sockets until process restart | `TestPresence_AbruptDisconnectRevokesViaTeardown` kills the socket without a close frame |
+| X-6 | The gate checks only `.gitignore`, missing `.git/info/exclude` (or vice versa) — false refusals that operators "fix" by disabling the cache | DS-2's either-location rows pass only with both checked |
+| X-7 | The exclusion scan greps for the literal directory name but not as a gitignore pattern (`mail-cache-backup/` would match a naive `strings.Contains`) | DS-2's stale-name-mismatch row + B-16's `git check-ignore` semantics-agreement assertion |
+| X-8 | Pool wiring done at four of the six sites; the watcher set keeps constructing its own handles (the easiest site to miss — it lives in a boot file far from the mail routes) | `TestMailRuntime_WatcherSetSharesHandles` exists precisely for that site |
+| X-9 | Redaction implemented as "log the error's `Error()` but truncated" — markers survive in the first N chars | DS-8 markers are placed at the *start* of server messages; the scan requires zero occurrences anywhere |
+| X-10 | The preview byte endpoint enforces the cap on *reported* size only — lying metadata admits an over-cap preview | `TestPreviewByteEndpoint_*` uses the false-metadata dataset and asserts abort before success, per grill I-05 |
+
+### Regression obligations (existing behaviour that must survive)
+
+| Existing test family | Why it must keep passing | Note |
+|---|---|---|
+| `pkg/gateway/mail_preview_*_test.go` families | Cap/revocation/404-parity/CSP controls are preserved by design | Re-derived where the grant shape changes (mint no longer 400s on size — the check moves to serve); never weakened |
+| `pkg/gateway/mail_budget_red_test.go` | The budget's backoff/busy/coalescing contract is unchanged at its own layer | Pool wiring sits beneath it |
+| `pkg/gateway/no_local_mail_store_test.go` | The no-mail-content-on-disk guarantee | Must keep passing with the cache directory present (folder metadata is not mail content) |
+| `pkg/gateway/rest_mailbox_test.go` | Config persistence semantics (E-Overrides) | Disable cascade adds behaviour; changes nothing about field handling |
+| `pkg/agent/email_tools_test.go`, `pkg/tools/email_no_retry_param_test.go` | Tool registration and the no-retry rule | Setter extension must not alter registration shape |
+| `pkg/email/view_missing_folder_test.go` | The count-side missing-folder hotfix | Named in the ADR's test strategy as preserved |
