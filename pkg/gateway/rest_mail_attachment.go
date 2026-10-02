@@ -692,3 +692,21 @@ func (a *restAPI) handleMailAttachmentSave(w http.ResponseWriter, r *http.Reques
 	}
 	jsonOK(w, out)
 }
+
+// invalidatePair kills every grant of one (agent, workspace) pair — the
+// removal/disable cascade's grant revocation (w5 US-5.1).
+func (s *mailAttachmentGrantStore) invalidatePair(agentID, workspaceID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for tok, g := range s.byToken {
+		if g.AgentID == agentID && g.WorkspaceID == workspaceID {
+			delete(s.byToken, tok)
+			if set := s.bySession[g.SessionKey]; set != nil {
+				delete(set, tok)
+				if len(set) == 0 {
+					delete(s.bySession, g.SessionKey)
+				}
+			}
+		}
+	}
+}

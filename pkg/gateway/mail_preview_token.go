@@ -231,3 +231,22 @@ func (s *mailPreviewTokenStore) revokeKindLocked(sessionKey, kind string) {
 		delete(s.bySession, sessionKey)
 	}
 }
+
+// invalidatePair kills every MESSAGE grant of one (agent, workspace) pair —
+// the removal/disable cascade's grant revocation (w5 US-5.1). Signature
+// grants carry no pair identity and are untouched.
+func (s *mailPreviewTokenStore) invalidatePair(agentID, workspaceID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for tok, g := range s.byToken {
+		if g.AgentID == agentID && g.WorkspaceID == workspaceID {
+			delete(s.byToken, tok)
+			if set := s.bySession[g.SessionKey]; set != nil {
+				delete(set, tok)
+				if len(set) == 0 {
+					delete(s.bySession, g.SessionKey)
+				}
+			}
+		}
+	}
+}

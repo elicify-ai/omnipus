@@ -1247,6 +1247,12 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		taskLock:               task.TaskFileLock,                   // shared striped lock for board task RMW
 	}
 	stg.api.cronService.Store(stg.runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	// w5-integration (US-5.9/B-33): boot reconciliation — orphan Mail cache
+	// subtrees, watcher state files and identity records (state whose pair
+	// is absent from the live config) are never servable, their deletion is
+	// attempted once here, and a failed deletion keeps a safe visible
+	// retryable cleanup intent instead of a log-only success.
+	stg.api.reconcileOrphanMailState()
 	// #904: a successful reload clears the Performance pending-apply state.
 	stg.runningServices.reloadOutcome.onSuccess = stg.api.pendingApply.clearAfterReload
 	// D-107: the Library REST write handlers broadcast a library_changed WS

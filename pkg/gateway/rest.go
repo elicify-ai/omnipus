@@ -257,6 +257,15 @@ type restAPI struct {
 	// it the same way. Nil until registered.
 	mailAttachmentTokens atomic.Pointer[mailAttachmentGrantStore]
 
+	// mailCleanupIntents holds the pending-cleanup intents of the Mail
+	// removal cascade (mail_cleanup.go, US-5.2): the opaque retry addresses
+	// POST /api/v1/mailboxes/cleanup consumes, kept so a truthful
+	// removed_cleanup_pending stays retryable after the mailbox config row
+	// is gone. Lazily built; a gateway restart drops intents BY DESIGN — the
+	// boot reconciler then owns the same state through the orphan sweep.
+	mailCleanupIntents *mailCleanupIntentStore
+	mailCleanupOnce    sync.Once
+
 	// mailSaveReceipts is the process-lifetime save-operation receipt store
 	// (rest_mail_attachment.go, correction M-02): one store per process,
 	// lazily built, no eviction — the restart is the only bound (grill-2
@@ -764,6 +773,11 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// M11: list all configured mailboxes (never 404s; empty list = none) so the
 	// SPA doesn't have to probe every agent's /agents/{id}/mailbox endpoint.
 	rae.cm.RegisterHTTPHandler("/api/v1/mailboxes", rae.a.withAuth(rae.a.listMailboxes))
+	// w5-integration (US-5.2/MC-8): the separately authorized Retry-cleanup
+	// operation for a mailbox removal that ended removed_cleanup_pending —
+	// keyed ONLY by the opaque cleanup intent, so it keeps working after the
+	// mailbox's config row is gone.
+	rae.cm.RegisterHTTPHandler("/api/v1/mailboxes/cleanup", rae.a.withAuth(rae.a.handleMailboxCleanup))
 	rae.cm.RegisterHTTPHandler("/api/v1/config/gateway/rotate-token", rae.a.withAuth(rae.a.rotateGatewayToken))
 	rae.cm.RegisterHTTPHandler("/api/v1/activity", rae.a.withAuth(rae.a.HandleActivity))
 }

@@ -234,6 +234,10 @@ type restAPISetAgentMailbox struct {
 	persistedRef       string
 	signatureProvided  bool
 	sanitizedSignature string
+	// prevEnabled is the mailbox's enabled state BEFORE this save, captured
+	// in persistConfig before the overwrite — the enabled→disabled
+	// transition signal the disable cascade consumes.
+	prevEnabled bool
 }
 
 // setAgentMailbox handles PUT /api/v1/agents/{id}/mailboxes/{workspaceId}.
@@ -392,6 +396,7 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 		// below needs; it must be read before existing["enabled"] is
 		// overwritten with the request's new value a few lines down.
 		wasEnabled, _ := existing["enabled"].(bool)
+		sm.prevEnabled = wasEnabled
 
 		existing["enabled"] = sm.req.Enabled
 		existing["workspace_id"] = sm.workspaceID
@@ -498,6 +503,20 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 
 // reloadAndPrepareResponse reloads agent tools and prepares the persisted mailbox representation.
 func (sm *restAPISetAgentMailbox) reloadAndPrepareResponse() {
+	// w5-integration (US-5.1/B-42): the enabled→disabled transition is the
+	// disable cascade's hook — the same honest invalidation as removal
+	// (epoch advance, grant revocation, cache + watcher-state purge), minus
+	// the identity/credential deletion a disable must preserve for
+	// re-enable. Runs after the reload-wait below begins producing the
+	// provider-rebuild barrier, before the response is written. The Mailbox
+	// wire shape cannot carry a cleanup outcome (a disclosed contract gap in
+	// the wave report): a failed purge step is logged with its safe code and
+	// stays retryable through the intent it keeps — never logged into a
+	// success.
+	wasEnabled := sm.prevEnabled
+	if !sm.req.Enabled && wasEnabled {
+		defer sm.a.runMailboxDisableCascade(sm.agentID, sm.workspaceID)
+	}
 	// Re-wire the agent's tools so the email tools are (de)registered to match
 	// the new mailbox state. triggerReloadAndWait (not a bare TriggerReload) —
 	// mirrors createAgent/updateAgent/updateAgentTools: registerEmailToolsForAgent
@@ -661,7 +680,27 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 		)
 	}
 
-	jsonOK(w, gen.OperationResult{Success: true})
+	// w5-integration (US-5/MC-8): the truthful removal cascade — advance the
+	// persisted epoch (old work can no longer publish as current), revoke
+	// the pair's preview grants, purge the private cache subtree AND the
+	// watcher state file (founder Q-B=A), and answer with the generated
+	// removed | removed_cleanup_pending discrimination. A failed unlink is
+	// NEVER reported as a completed purge: the pending outcome carries the
+	// opaque retry intent that POST /api/v1/mailboxes/cleanup consumes —
+	// including after this config row is now gone.
+	outcome, intent, code := a.runMailboxRemovalCascade(agentID, workspaceID)
+	if outcome == "removed" {
+		jsonOK(w, gen.MailboxRemovalResult{Outcome: gen.MailboxRemovalResultOutcomeRemoved})
+		return
+	}
+	result := gen.MailboxRemovalResult{
+		Outcome:     gen.MailboxRemovalResultOutcomeRemovedCleanupPending,
+		CleanupCode: &code,
+	}
+	if intent != "" {
+		result.CleanupIntent = &intent
+	}
+	jsonOK(w, result)
 }
 
 // listMailboxes handles GET /api/v1/mailboxes (M11). Returns every configured

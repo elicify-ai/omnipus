@@ -1209,6 +1209,17 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	// runs before the reload returns.
 	deletedName := found.Name
 	deletedType := string(found.Type)
+	// w5-integration (US-5.5/B-20): snapshot the agent's mailbox pairs BEFORE
+	// deletion — after the reload below, each pair's private Mail state gets
+	// the same truthful cascade a direct mailbox removal gets.
+	deletedMailboxPairs := make([]string, 0, len(cfg.Mailboxes[id]))
+	if byWorkspace, ok := cfg.Mailboxes[id]; ok {
+		for wsID, mb := range byWorkspace {
+			if mb.Enabled {
+				deletedMailboxPairs = append(deletedMailboxPairs, wsID)
+			}
+		}
+	}
 	// ADR-054 D2/D6 rule 5/§11 checklist item 2: remove the agent's entity
 	// record (entities/agents/<id>.json) FIRST — via the agent store, not by
 	// splicing config.json's agents.list — before any best-effort directory
@@ -1267,6 +1278,15 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 			"deleted agent may still be resolvable in the runtime registry", "agent_id", id)
 		activation = agentstore.ActivationFailed
 		activationMessage = "agent was deleted from storage but runtime activation was not confirmed"
+	}
+	// w5-integration (US-5.5/B-20): cascade every deleted pair's private
+	// Mail state — epoch advance, grant revocation, cache subtree + watcher
+	// state purge. The response shape (ConfigurationMutationState) cannot
+	// carry per-pair mail-cleanup outcomes — a disclosed contract gap in the
+	// wave report: a failed step is logged with its safe code and stays
+	// retryable through the intent it keeps, never logged into a success.
+	for _, wsID := range deletedMailboxPairs {
+		a.runMailboxRemovalCascade(id, wsID)
 	}
 	// Deny every tool approval the deleted agent is still waiting on. Left
 	// pending, each one keeps its turn blocked and its dialog open in every
