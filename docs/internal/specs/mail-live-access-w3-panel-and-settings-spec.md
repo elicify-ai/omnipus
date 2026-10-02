@@ -521,3 +521,118 @@ Acceptance scenarios:
    text where the reason is known.
 
 ---
+
+## 5. Behavioral contract (quick reference)
+
+When/Then statements summarising §4 — observable behaviour only:
+
+**Cache-first and freshness**
+
+- When a panel eligible event occurs, the system renders cache-first rows immediately and issues at most
+  one live refresh for that event.
+- When a live refresh settles under an older publication revision than the newest applied one, the
+  system drops it unrendered.
+- When the panel is closed, the system issues no folder/count/header requests of any kind.
+- When cached rows are stale, the system keeps them visible, labels their age, and shows a checking
+  indicator until the one refresh settles.
+- When the refresh fails, the system keeps the stale rows labelled with their original checked time and
+  shows an error with Retry — timestamps never advance on failure.
+- When a source or count is unknown, the system displays unknown ("—", stale presentation) and never a
+  fabricated zero or a fake "just checked".
+- When the folder rail and message list are idle, no repeating timer refetches them; the watcher banner's
+  saved-state poll is the only cadence and never dials mail.
+
+**Paging and search**
+
+- When a folder view opens, the system shows 25 rows and a Load more control when more exist.
+- When Load more is activated, the system appends exactly 25 rows, preserving prior rows.
+- When 200 rows are displayed, the system removes Load more, explains the ceiling, and offers a working
+  search control.
+- When search runs, the system fetches live results under the same 25/200 discipline with its own exit
+  back to the browse view.
+- When a stale cursor is refused, the system resets to the folder's first page with a visible notice —
+  never a spin, a silent retry, or a replay.
+- When the view is left, the system releases the working set beyond the reusable cache.
+
+**Folder overrides**
+
+- When mailbox settings render, the Sent/Drafts name fields show the saved override or "Automatic".
+- When a field is saved empty, the system clears the override and discovery applies.
+- When an override names an unfound folder, the system shows the unresolved state in the rail and an
+  actionable warning in settings — never silent use of another folder, never "no such folder" for an
+  unknown.
+
+**Presence**
+
+- When a Mail panel becomes visible with a resolved workspace, the system sends one observer open frame
+  carrying only an opaque observer id and the workspace id on the authenticated socket.
+- When the panel closes, the workspace changes, or the connection drops and returns, the system closes
+  or re-opens the observer accordingly — each tab's observer is its own.
+- When no observer is acknowledged, reads still work as ordinary request-scoped work.
+
+**Attachment handoff**
+
+- When a row has attachments, the system shows the paperclip indicator with accessible text.
+- When Open is activated, the system mints a preview and hands the generated descriptor to the Library
+  viewer with the exact context bar; focus lands on the context bar heading, announced.
+- When Back is activated, the system returns focus to the originating action, or to the message row,
+  or to the folder tab — each fallback announced.
+- When Save settles, the system announces the outcome without moving focus and enables Open in Library
+  only on a real saved receipt; a lost response shows "Save result unknown" until explicitly retried
+  with the same operation token.
+- When a temporary view renders, only resources belonging to that preview may load; the identical
+  workspace content keeps today's behaviour.
+
+**Saved mail-derived HTML**
+
+- When a mail-derived HTML file opens in the Library viewer, scripts are off by default with a visible
+  notice; a per-file checkbox allows scripts for that one file; a missing marker fails safe.
+
+---
+
+## 6. Explicit non-goals and safeguards (what this spec must NOT do)
+
+Qualitative prohibitions:
+
+- The system must not add any repeating panel refresh timer (folder, count or header) because the ADR's
+  founder-set refresh rules are event-only and the D25 30-second cadence is explicitly superseded; the
+  watcher's independent 60-second probe is the only background cadence and belongs to W1, not the panel.
+- The system must not treat a cache-first response as a completed refresh: a `mode=live` request is a
+  different request from a cache read, by contract, so the same stale page can never be mistaken for a
+  finished refresh.
+- The system must not render unknown counts as zero or absent folders as errors: `total: null` renders
+  "—"; `availability=unknown` renders the unresolved state; only structurally confirmed absence renders
+  "No messages" with the absence explanation; missing INBOX remains an account error.
+- The system must not fabricate a workspace path, `LibraryEntry`, or modification time for a temporary
+  attachment preview, because the viewer's stored-file machinery keys on real paths and a fabricated
+  entry would enable edit/move/download actions on something that does not exist.
+- The system must not let sender-authored markup inside a temporary preview reach any resource the
+  preview was not minted for — even same-origin ones — and must not weaken ordinary workspace rendering
+  to achieve it.
+- The system must not introduce a second discard guard, a second save protocol, a byte cache for
+  previews, a local mail index, a mail-push WebSocket frame, or an attachment approval/type scanner —
+  each is either already retired, owned by another package, or founder-rejected.
+- The system must not send any user, session or mailbox identity in presence frames: identity comes
+  from the authenticated connection; the frame carries an opaque observer id and workspace only.
+- The system must not implement the saved-HTML provenance marker, its survival proofs, or any byte- or
+  filename-based provenance heuristic: that is W7's storage proof; the frontend renders generated fields
+  only.
+- The system must not redesign layout, brand, or the compose flow beyond the named changes (reply
+  context, quote prefill); "Sovereign Deep" components as shipped.
+
+Machine-verifiable constraints:
+
+| # | Constraint | Testable form |
+|---|---|---|
+| MC-W3-1 | Page size is 25; Load more adds exactly 25; ceiling is 200 rows per folder per view | With stubbed pages, row counts after 0/1/7/8 loads are 0/25/175/200; the 8th Load more click is impossible — the control is gone at 200 and the search prompt is present. |
+| MC-W3-2 | At most one `mode=live` list request per eligible event | Network-log assertion per event across §4 US-1's scenarios: exactly 0 or 1 live requests, never 2+. |
+| MC-W3-3 | Superseded responses never render | A delayed response whose `publication_revision` is older than the newest applied renders nothing and mutates no view state. |
+| MC-W3-4 | Null counts render "—" | `total: null` and `unread_count: null` each render the unknown marker; `0` renders `0`. |
+| MC-W3-5 | Presence frames carry only `type`, `action`, `observer_id`, `workspace_id` | Serialized frame assertion on every emitted frame (no extra keys). |
+| MC-W3-6 | Context bar text is exact | The bar renders `From mail: <subject>` + `Back to mail` + `Save to Library` as named controls; snapshot/string assertions pin them. |
+| MC-W3-7 | Zero unauthorized resource loads from a temporary view | Request counters observe 0 requests to Library/API/embed/remote targets in the I-04 dataset; the positive control observes >0 for the same content as a workspace file. |
+| MC-W3-8 | Focus return order is attachment-action → message row → folder tab | Keyboard journey assertions over the three cases, each with its announcement text. |
+| MC-W3-9 | Automatic requests never carry `retry=true` | Contract-level assertion on the request builder: the retry marker is only settable from a failure-surface code path. |
+| MC-W3-10 | Timer removal is real | A 35-second advanced-clock test asserts zero folder/list requests after mount, and `FOLDERS_REFETCH_MS` no longer exists in `MailPanel.tsx`. |
+
+---
