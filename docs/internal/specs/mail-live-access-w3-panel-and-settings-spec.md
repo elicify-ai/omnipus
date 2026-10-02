@@ -655,6 +655,8 @@ When/Then statements summarising §4 — observable behaviour only:
   search control.
 - When search runs, the system fetches live results under the same 25/200 discipline with its own exit
   back to the browse view.
+- When a search exhausts its 200-match ceiling, the system replaces Load more with the search-ceiling
+  copy (§11 S-30) and keeps the browse exit available — never the browse-ceiling text.
 - When a stale cursor is refused, the system resets to the folder's first page with a visible notice —
   never a spin, a silent retry, or a replay.
 - When the view is left, the system releases the working set beyond the reusable cache.
@@ -876,6 +878,7 @@ search control adjacent
 **Given** the ceiling state
 **When** the user searches for a term matching a message older than the loaded 200
 **Then** live search results render under the same 25-per-page discipline with their own "Load more"
+**And** a search that exhausts 200 matches shows §11 state S-30's copy, never S-21's browse-ceiling text
 **And** an exit "Back to Inbox" returns to the browse view with its loaded rows intact.
 *Traces to:* US-3 AS-4.
 
