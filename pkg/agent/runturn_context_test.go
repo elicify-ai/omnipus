@@ -485,6 +485,10 @@ func TestRunTurn_InjectedSpanSubjectToD5(t *testing.T) {
 	// 60,000-char big_tool results still push the D6 total over B, so the
 	// injected span is still the first thing dropped under pressure.
 	al, agent := recallInjectionFixture(t, provider, 55_000, 1_000, turns)
+	// Real transcript session: processTaskDirect appends to the strict store
+	// under the taskChatID it is handed, so that ID must be a session the
+	// real creator minted (same prerequisite as the repaired recall tests).
+	taskSessionID := newRecallInjectionTaskSession(t, al, agent)
 	al.RegisterTool(&bigResultTool{size: 60_000})
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{
 		Policies: map[string]config.ToolPolicy{
@@ -504,7 +508,7 @@ func TestRunTurn_InjectedSpanSubjectToD5(t *testing.T) {
 	})
 	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-2)
 
-	_, err := al.processTaskDirect(context.Background(), agent.ID, "recall then work", recallInjectionSessionKey, "chat-50d")
+	_, err := al.processTaskDirect(context.Background(), agent.ID, "recall then work", recallInjectionSessionKey, taskSessionID)
 	require.NoError(t, err)
 	require.Equal(t, 5, provider.calls(), "recall + ToolSearch promotion + two big steps + the final answer")
 
