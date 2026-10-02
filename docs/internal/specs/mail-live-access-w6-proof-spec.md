@@ -791,8 +791,9 @@ From `docs/internal/false-green-patterns.md` (read in full for this spec) and th
 | MC-P28 | US-P5 AC-5 | (§8.4) | T37, M-A…M-F |
 | MC-P29 | US-P6 AC-1, AC-2 | B-P25 | U-1…U-16, T35 |
 | MC-P30 | US-P7 AC-1 | B-P26 | §7 M-α1…M-α12 |
+| MC-P31 | US-P4 AC-9 | B-P27 | T36 |
 
-Every MC-P traces to at least one story, scenario and test; every scenario traces to at least one story (its `Traces to` line) and one MC-P through this table; the seven user stories carry 34 numbered acceptance scenarios in §3, all covered above.
+Every MC-P traces to at least one story, scenario and test; every scenario traces to at least one story (its `Traces to` line) and one MC-P through this table; the seven user stories carry **41** numbered acceptance scenarios in §3, all covered above (the draft's "34" was a miscount — the pre-correction text held 40, grill-4 m1; this correction adds AC-9).
 
 ---
 
@@ -816,7 +817,7 @@ The ADR assigns the five user pages to the implementing leads (W3/W4/W8); this p
 
 | Page (exact path) | What must be said (proof-linked) |
 |---|---|
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/mail.md` | Cached rows vs live validation and the visible age/stale label (U-2/U-3 evidence); unknown vs absent folder states and the name-setting prompt (U-4, M-01 wording); busy message and Retry rules (U-5); the 25/+25/200 paging and search reachability; paperclip indicator (U-10); Open as temporary viewing with no disk write, exit disposal, and the exact context bar (U-6); 25 MB preview/save cap and larger-files browser Download-only (T34-executed before the page claims it); Reply all recipient rule and No date (U-11/U-12); the Save-result-unknown state and its explicit-retry receipt (M-02 wording) |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/mail.md` | Cached rows vs live validation and the visible age/stale label (U-2/U-3 evidence); unknown vs absent folder states and the name-setting prompt (U-4, M-01 wording); busy message and Retry rules (U-5); the 25/+25/200 paging and search reachability (search matches subject + sender/recipient substring server-side, founder Q-D=A); paperclip indicator (U-10); Open as temporary viewing with no disk write, exit disposal, and the exact context bar (U-6); 25 **MiB** preview/save cap (25 × 1,048,576 bytes — `pkg/email/view.go::maxViewPartBytes` = `25 << 20`; grill-4 m5 wording fix) and larger-files browser Download-only (T34-executed before the page claims it); Reply all recipient rule and No date (U-11/U-12); the Save-result-unknown state and what an explicit same-token retry returns (bounded reconciliation, M-02 — docs-verifier audits the page's wording against the landed behaviour, including the gateway-restart case, so the page never over-claims "never a duplicate") |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/library.md` | A Mail Open is not a file/list entry and vanishes on exit; the mail bar and Back behaviour; Save-to-Library-first gating for edit/rename/move/PDF fill-sign; the mail → mailbox → UTC save-month hierarchy and sanitized numbered names (U-7); mail-derived HTML: original bytes, scripts off by default, per-file scripts checkbox (Q5=A wording, security-lead checks the page) |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/connectors.md` | Sent/Drafts override and Automatic-clear semantics; resolved-role status display; removal/cleanup-pending Retry; (Phase 2 later) Auto/IMAP/JMAP preference with visible fallback (Q2=B wording) |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/security.md` | What folder/header metadata is stored, that it is encrypted, key dependency, expiry/removal, Git/backup exclusions (T25-executed before "excluded" is claimed); no body cache (T26); the temporary source's resource policy (I-04 wording); ordinary tool ask/Auto vs the (non-existent) attachment-specific approval |
