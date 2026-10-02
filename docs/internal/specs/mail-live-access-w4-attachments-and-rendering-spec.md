@@ -180,7 +180,7 @@ A user receives a message with an attachment and wants to look at it before deci
 1. **Given** a message with an image, video, audio, PDF, markdown, code and text attachment, **When** the user clicks Open on each, **Then** the Library viewer renders each with its existing renderer inside the Library panel, without any file being created, and the context bar reads exactly "From mail: \<subject\> · Back to mail · Save to Library".
 2. **Given** a temporary preview is open, **When** the user attempts Library edit/autosave, PDF fill/sign, rename, move/copy/delete or download-to-browser from the Library, **Then** every such action is disabled with a "Save to Library first" explanation that is visible without hover and readable by screen readers — and no mutation/API call fires even if the control is invoked programmatically.
 3. **Given** an HTML attachment, **When** it is opened, **Then** it renders through the token-scoped isolated Mail representation with scripts off entirely (`script-src 'none'`, sandbox without scripts), forms and event handlers dead, and never as a raw HTML object URL, `srcdoc`, or the authenticated download URL served as a document.
-4. **Given** an attachment over 25 MB actual decoded bytes, **When** the user tries Open (and Save), **Then** both are unavailable with the existing cap explanation, and **Download** remains the offered browser action.
+4. **Given** an attachment whose descriptor size — the honest, known-before-any-fetch metadata — exceeds the 25 MiB cap, **When** the user tries Open (and Save), **Then** both are unavailable with the existing cap explanation, and **Download** remains the offered browser action. A size that is absent or misreported is **not** upfront-refusable (sizing by fetching the part is forbidden); it aborts during the transfer per §5.2's late-failure ordering. The two forms are separate acceptance paths, never one scenario (grill-3 I-6).
 5. **Given** an open preview, **When** the user presses Back (or closes, navigates, reloads, logs out), **Then** that view's fetches abort, media detach, PDF/render tasks destroy, object URLs and the source token revoke, and a late mint/fetch cannot resurrect the view.
 6. **Given** the preview open, **When** the user navigates to a real Library file, **Then** the temporary source is disposed first and never becomes a breadcrumb, listing row or fallback file.
 7. **Given** an unsupported format, **When** opened, **Then** the Library's honest unsupported-format state shows with Mail Download available — no invented Office renderer, no fake zero-byte file.
@@ -291,6 +291,8 @@ These four are the design's hardest boundaries. Each is stated as a rule a rende
 
 Everything else is refused **structurally** — the policy's resolver never yields an authorized URL — even when same-origin, even when the ordinary renderer would display it: no arbitrary Library/API/workspace paths, no `libraryDownloadUrl` targets, no workspace embeds or wikilink resolution, no direct remote resources. The HTML iframe's CSP governs only the isolated HTML document; it does **not** govern the SPA-side Markdown/renderer path — which is exactly why this renderer-side policy exists separately. Ordinary workspace Library rendering keeps today's behaviour byte-for-byte; the policy scopes the temporary mail source, never the workspace source.
 
+**Founder settlement (2026-10-02, mail-feature-decisions.md, "Q-E — a saved mail file's resource policy": A).** This policy applies to the **temporary preview only**. After Save, a saved mail-derived file is an **ordinary workspace file** for resource-policy purposes — its Markdown, images and links follow the ordinary workspace Library behaviour; the positive control above is the same file's behaviour post-Save. The saved-HTML exception (§5.4: scripts off by default + per-file checkbox) stands as already decided and is a preview-profile rule, not an extension of this resource policy to saved files.
+
 | Reused renderer | What must route through the policy | Refusal shape |
 |---|---|---|
 | Markdown body (`KbMarkdownImage` et al.) | every image src, link href target resolution | image element never mounts; link renders inert |
@@ -346,6 +348,8 @@ Per the design system's accessibility release requirement (D16): focus visibilit
 **Marker unavailable — fail safe.** If a file's marker cannot be read (corrupt, absent on an operation that should have preserved it, or a pre-marker file that other evidence says was mail-derived), the preview **fails safe to the stricter profile** (scripts off). It never silently upgrades a known mail-derived file to the script-permitting profile. An ordinary workspace HTML file without a marker keeps today's ordinary profile unchanged.
 
 **No third profile exists.** The two profiles are the ordinary workspace one (`allow-scripts`, no `allow-same-origin`) and the mail-derived one (scripts off entirely, `script-src 'none'`). The checkbox switches between them for one file; nothing else.
+
+**Scope of the profile rule (founder Q-E=A, 2026-10-02).** This rule is about the **saved HTML preview**. A saved non-HTML mail file (markdown, text, image, PDF, …) is an ordinary workspace file: the §5.1 mail-restricted resource policy never follows the file after Save, and no mail-specific restriction attaches to it beyond this HTML profile.
 
 ---
 
