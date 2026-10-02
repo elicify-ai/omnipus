@@ -734,7 +734,7 @@ Machine-verifiable constraints:
 | MC-W3-1 | Page size is 25; Load more adds exactly 25; ceiling is 200 rows per folder per view | With stubbed pages, row counts after 0/1/7/8 loads are 0/25/175/200; the 8th Load more click is impossible — the control is gone at 200 and the search prompt is present. |
 | MC-W3-2 | At most one `mode=live` list request per eligible event, and none on an open/switch whose cache is younger than five minutes | Network-log assertion per event across §4 US-1's scenarios: exactly 0 or 1 live requests (0 for the fresh-cache events of US-1 AS-8, 1 for stale/absent), never 2+. |
 | MC-W3-3 | Superseded responses never render | A delayed response whose `publication_revision` is older than the newest applied renders nothing and mutates no view state. |
-| MC-W3-4 | Null counts render "—" | `total: null` and `unread_count: null` each render the unknown marker; `0` renders `0`. |
+| MC-W3-4 | Null counts render "—" | `unread_count: null` renders the unknown marker today (D-3's null-unread row); `total: null` renders it once the scheduled `MailFolder.total`-nullability amendment lands — until then no wire value can carry it, and the panel never improvises a sentinel; `0` renders `0`. |
 | MC-W3-5 | Presence frames carry only `type`, `action`, `observer_id`, `workspace_id` | Serialized frame assertion on every emitted frame (no extra keys). |
 | MC-W3-6 | Context bar text is exact | The bar renders `From mail: <subject>` + `Back to mail` + `Save to Library` as named controls; snapshot/string assertions pin them. |
 | MC-W3-7 | Zero unauthorized resource loads from a temporary view | Request counters observe 0 requests to Library/API/embed/remote targets in the I-04 dataset; the positive control observes >0 for the same content as a workspace file. |
@@ -1188,7 +1188,8 @@ mail."
 ---
 ## 8. TDD plan (tests designed from this spec, before implementation)
 
-qa-lead owns every file in this section (W5; the frontend rules forbid implementers from editing test
+qa-lead owns every file in this section (the proof lane — ADR letter W5, file
+`mail-live-access-w6-proof-spec.md`; the frontend rules forbid implementers from editing test
 files). Levels: Unit (vitest, node/DOM), Component (vitest + Testing Library), E2E (Playwright,
 `tests/e2e/`, 24-shard plan). New files land in CI groups automatically by path
 (`scripts/check-vitest-coverage.mjs` is the tripwire): `src/components/workspaces/**` rides
@@ -1218,7 +1219,7 @@ files). Levels: Unit (vitest, node/DOM), Component (vitest + Testing Library), E
 
 | Order | Test (file `src/components/workspaces/mail/mailFreshness.test.ts`) | Proves |
 |---|---|---|
-| U11 | `four sources label correctly` — live/memory/encrypted_disk/none × fresh/stale × null/valid `last_validated_at` | §7 scenarios 2.1/2.5; US-2's exact strings. |
+| U11 | `four sources label correctly` — live/memory/encrypted_disk/none × fresh/stale × null/valid `last_validated_at`; the `encrypted_disk` leg is scoped to the mapping-metadata display input (the formatter stays total — any source must label — but in Phase 1 the panel feeds it `encrypted_disk` only from `MailFolder.mapping_metadata`) | §7 scenarios 2.1/2.5; US-2's exact strings. |
 | U12 | `relative time vocabulary` — 30 s / 2 min / 7 min / 3 h / 2 d boundaries | Label rounding is stable and honest ("40 seconds ago", "2 minutes ago"). |
 | U13 | `nullable date renders No date everywhere` — list row, detail header, sent view, reply attribution input | F6: null/year-one/zero → "No date"; never "1 Jan 1", never blank in one surface and dated in another. |
 
@@ -1227,10 +1228,10 @@ files). Levels: Unit (vitest, node/DOM), Component (vitest + Testing Library), E
 | Order | Test (file) | Proves |
 |---|---|---|
 | C1 | `MailPanel.cacheFirst.test.tsx` — fresh-cache open (zero live), stale open (exactly one live), stale-and-checking label, failed-refresh, cache-unavailable | §7 scenarios 1.1, 1.7, 2.1, 2.2, 2.4 end-to-end through the DOM, with request-count assertions on a stubbed `fetch`. |
-| C2 | `MailPanel.paging.test.tsx` — first page, Load more, ceiling, search reachable, empty search, stale-cursor reset, exit-releases | §7 scenarios 3.1–3.6; MC-W3-1 row-count ladder (0/25/175/200). |
+| C2 | `MailPanel.paging.test.tsx` — first page, Load more, ceiling, search reachable, empty search, search ceiling (S-30's copy, not S-21's), stale-cursor reset, exit-releases | §7 scenarios 3.1–3.6; MC-W3-1 row-count ladder (0/25/175/200). |
 | C3 | `MailPanel.folderAvailability.test.tsx` — present/absent/unknown rail states; unknown ≠ 0; override warning mapping | §7 scenarios 2.3, 4.2, 4.3. |
 | C4 | `MailPanel.attachmentRows.test.tsx` — paperclip true/false; action names; over-cap copy; size unknown | §7 scenarios 6.1, 6.2, 6.4. |
-| C5 | `MailPanel.attachmentHandoff.test.tsx` — Open mints and hands the generated descriptor; Back focus order (action → row → folder) with announcements; save announcements without focus movement; failed-Open row states (S-26/S-27/S-28) | §7 scenarios 6.3, 6.7, 7.1–7.4; MC-W3-6/8. Assert the descriptor is the generated type shape — a hand-rolled parallel object fails the test. |
+| C5 | `MailPanel.attachmentHandoff.test.tsx` — Open mints and hands the generated descriptor; Back focus order (action → row → folder) with announcements; save announcements without focus movement; failed-Open row states (S-26/S-27/S-28); disabled stored-file actions discoverable with their in-place "Save to Library first." text, visible without hover and screen-reader exposed (7.5) | §7 scenarios 6.3, 6.7, 7.1–7.5; MC-W3-6/8. Assert the descriptor is the generated type shape — a hand-rolled parallel object fails the test. |
 | C6 | `MailPanel.noTimer.test.tsx` — advanced fake timers, 35 s + 70 s | MC-W3-10: zero folder/list timer requests; summary cadence unchanged. |
 | C7 | `MailPanel.refreshRetry.test.tsx` — Refresh vs Retry markers; busy reason copy | §7 scenarios 10.1–10.3; MC-W3-9 (request-builder assertion). |
 | C8 | `MailPanel.states.test.tsx` (existing file — qa-lead rewrites the D25 oracle, keeps every still-valid state assertion) | The retired 30 s cadence assertions become the §7 1.6 assertions; all other state texts keep their pins. |
@@ -1243,7 +1244,7 @@ files). Levels: Unit (vitest, node/DOM), Component (vitest + Testing Library), E
 |---|---|---|
 | E1 | `tests/e2e/mail-cache-first.spec.ts` — open panel (cached then live), folder switch, manual Refresh, retry on a forced failure | User-observable freshness behaviour; the fake server's command counters prove request counts, not stubs. |
 | E2 | `tests/e2e/mail-paging-search.spec.ts` — 130-message folder to the ceiling; search finds an older message | US-3 reachability with a real gateway. |
-| E3 | `tests/e2e/mail-attachment-open.spec.ts` — Open → viewer → Back (focus), Save success → Open in Library, over-cap Download-only | US-6/US-7 journeys with real focus/announcement observation (`aria-live` text, `document.activeElement`). |
+| E3 | `tests/e2e/mail-attachment-open.spec.ts` — Open → viewer → Back (focus), Save success → Open in Library, over-cap Download-only; plus the keyboard-only pass (tab order, Escape — 7.6), the 320 px / 200 % legibility pass, and the S-29 opening-state assertion (the Open control disabled reading `Opening <filename>…` with `aria-busy="true"`, and no second mint can start) | US-6/US-7 journeys with real focus/announcement observation (`aria-live` text, `document.activeElement`). |
 | E4 | `tests/e2e/mail-temporary-source-policy.spec.ts` — the I-04 dataset with browser request interception counters; workspace positive control | MC-W3-7 in a real browser. |
 | E5 | `tests/e2e/mail-presence.spec.ts` — open/close across two pages, reload, logout | §7 scenarios 5.1–5.6 against the real socket lifecycle. |
 | E6 | `tests/e2e/mail-saved-html-scripts.spec.ts` — save an HTML attachment, reopen it in the Library viewer: scripts-off with the mail-derived notice, the per-file "Allow scripts" checkbox flips only that file, an ordinary workspace HTML file is unaffected, a missing marker fails safe | US-9 scenarios 9.1–9.3 / FR-W3-18 executed end to end — the saved-HTML leg the first draft cited but never defined (grill finding F-7). |
@@ -1257,11 +1258,16 @@ files). Levels: Unit (vitest, node/DOM), Component (vitest + Testing Library), E
 | 1 | live | now | false | false | 42 | "Checked just now"; count 42 |
 | 2 | memory | −2 min | false | false | 42 | "Checked 2 minutes ago" |
 | 3 | memory | −7 min | true | true | 40 | stale label + Checking… |
-| 4 | encrypted_disk | −26 h | true | true | null | stale label; count "—" |
+| 4 | encrypted_disk *(mapping metadata only — Phase 1: headers and counts are memory-only, the landed `MailReadMetadata.source` scoping)* | −26 h | true | true | — *(count column not applicable; the null-count rendering this row formerly exercised lives in D-3's null-unread row and returns here when the scheduled `MailFolder.total`-nullability amendment lands)* | the rail's mapping-fed role display shows the stale label; never a list/count freshness line |
 | 5 | none | null | false | true | null | loading → live fill; never "empty" |
 | 6 | live | null | true | true | 7 | "Last checked unknown · Checking…" (unknown time, refresh in flight — scenario 2.5's pin) |
-| 7 | memory | −2 min | false | false | 0 | legit zero renders `0` (distinct from row 4) |
+| 7 | memory | −2 min | false | false | 0 | legit zero renders `0` (distinct from a null count) |
 | 8 | live | null | false | false | 7 | "Last checked unknown." with no "Checking…" indicator (scenario 2.6's pin) |
+
+Row 4 is the grill-Round-2 re-scope (R2-I3): the former row exercised `encrypted_disk` list rows with a
+null count — a combination no Phase-1 producer can send (headers are memory-only in Phase 1; the landed
+`MailFolder.total` is non-nullable pending its amendment), so a fixture of it could only ever be green
+against a value nothing emits.
 
 **D-2 — Paging ladder** (U-C2, E2; traces US-3): folders of 0, 1, 24, 25, 26, 199, 200, 201 messages.
 Boundaries: 24 → no Load more; 25 → exactly one page, Load more present iff `has_more`; 200 → ceiling
@@ -1308,8 +1314,9 @@ At least these mutations; each names the check that kills it:
    while keeping the old timestamp.
 2. **Mutation: keep a 30 s refetchInterval "just for safety".** Killed by C6 (MC-W3-10) asserting zero
    timer requests and the absence of `FOLDERS_REFETCH_MS`.
-3. **Mutation: render `total ?? 0`.** Survives every success path. Killed by D-1 row 4 / C3 (the "—"
-   assertion) and D-3's null-unread row.
+3. **Mutation: render `total ?? 0`.** Survives every success path. Killed by C3's "—" assertion
+   (D-3's null-unread row; D-1's null-count leg returns with the scheduled `total`-nullability
+   amendment) — a `?? 0` render fails both.
 4. **Mutation: `page_size=25` but append the same page twice** (cursor ignored). Killed by D-2's row
    ladder (duplicates fail the newest-first + count assertions).
 5. **Mutation: focus returns to "somewhere in the list"** (e.g. `container.focus()`). Killed by C5/E3
