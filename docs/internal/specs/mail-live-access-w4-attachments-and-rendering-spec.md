@@ -755,6 +755,15 @@ Scenario: Saved HTML marker survives Library operations (Edge)
 
 Owner: qa-lead (file **w6** = ADR-W5, the proof package — package mapping above) — RED first against this spec, independent CHECK after GREEN; production owners never weaken these tests. Harness: real in-memory IMAP (`pkg/email/imapserver_test.go::startMemIMAP`) with command/byte counters; browser scenarios in the E2E suite with request counters. Go tests run under the repo's required tags; no full local suite — CI is the authority. All filenames below are new unless noted; none exists today (checked). Per register R-4, the end-to-end oracle for a published interface lives with the publisher's package: the single-part reader's and MIME classifier's own deep tests are w2's (register rows 14/15); this package's tests assert the seam through the frozen interfaces.
 
+### 9.0 Plan of record and the w6 mapping (grill-2 F-4)
+
+The register's Wave C dispatches qa-lead's RED **per the w6 plan** — so **w6 §6's rows and filenames are the plan of record**, and the rows in §9.1 below are this package's **coverage requirements** (what must be proven), not a second test plan. Two rules make the two documents one plan:
+
+1. **Where a w6 §6 row covers the same oracle as a §9.1 row, the w6 file name is the one file that exists** (its `_red_test.go` name stays after green); the §9.1 filename for that row is the oracle's coverage description and must never be created as a second file (register R-4 — one test per oracle, no silent drift between two files asserting the same thing).
+2. **Where w6's plan carries no row for an oracle below, the §9.1 filename is the assignment**: the ADR's W5 rule assigns exact test filenames in the revised spec, and w6 T28 already delegates the save-service test pack to this spec ("owned by w4-features/ADR-W7"). qa-lead writes those RED rows from this spec.
+
+Mapping (§9.1 row → w6 §6 row(s), verified against w6 §6 this round): T1 → T26 + T28 + T34 (viewer-byte PEEK-only counters beyond those rows' aspects stay here); T2 → T28; T7 → T31; T9 → T30; T10 → T29 + T33 + T36 (list metadata-only/no-Seen rides T36's command capture; the read-outcome and missing-mailbox honest-result aspects stay here); T11 → T29 (the `allStaticToolNames` boot-panic guard stays here); T12 → T29; T13 → T32; T14 → T27; T17 → T35 + T38 + T31's browser leg. **Assigned here (no w6 row exists)**: T3 (save-token reconciliation), T4 (HTML-profile provenance), T5 (mint/binding/disposition/revoke beyond T26/T34's aspects), T6 (gateway save API end-to-end), T8 (gateway style-pipeline integration), T15 (pane integration; T35 covers the e2e keyboard/focus journey), T16 (panel attachment actions). §14's test IDs reference §9.1's numbering; each resolves through this mapping to its w6 row ID — the §10 DoD audit counts coverage on both documents' names and treats the w6-named file as satisfying the §9.1 row.
+
 ### 9.1 Test files and what each proves
 
 | Order | Test file | Level | Proves |
@@ -928,7 +937,7 @@ Options: (a) 4 KB attribute / 16 KB block (Gmail-parity, artefact's suggestion);
 | §5.3 handoff | Handoff (3) | T15, T17 |
 | §5.4 HTML profile | Saved-HTML marker | T4, T15 |
 
-Every FR-level statement in §§4–7 traces to a story above; every story has scenarios; every scenario names tests. Holdout checks (post-implementation, outside the matrix): (1) a colleague opens a real styled marketing mail and confirms it "looks like an email"; (2) a message with no Date shows "No date" everywhere including a reply quote; (3) a saved HTML attachment moved to another folder still opens scriptless with the checkbox working.
+Every FR-level statement in §§4–7 traces to a story above; every story has scenarios; every scenario names tests. Test IDs are §9.1's numbering, resolved to their w6 §6 row IDs (and to "assigned here") through the §9.0 mapping — a §14 anchor that resolves to a w6 row is satisfied by that w6-named file, never by creating §9.1's descriptive filename as a second file (grill-2 F-4). Holdout checks (post-implementation, outside the matrix): (1) a colleague opens a real styled marketing mail and confirms it "looks like an email"; (2) a message with no Date shows "No date" everywhere including a reply quote; (3) a saved HTML attachment moved to another folder still opens scriptless with the checkbox working.
 
 ---
 
