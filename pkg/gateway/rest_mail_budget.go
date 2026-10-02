@@ -111,6 +111,7 @@ func mailBudgetWrap[T any](
 	dial func(context.Context) (T, error),
 ) (T, bool) {
 	var zero T
+	started := time.Now()
 	budget := a.mailBudgetFor()
 	req := email.MailBudgetRequest{
 		Account:     client.AccountKey(),
@@ -121,6 +122,10 @@ func mailBudgetWrap[T any](
 		Retry:       mailRetryParam(r),
 	}
 	v, err := email.CallValue(budget, r.Context(), req, dial)
+	// w5 US-7.6/MC-18: exactly one safe record per operation, success and
+	// failure alike — emitted here, the single seam every panel read and
+	// preview serve passes through.
+	a.emitMailOperationTiming(op, agentID, workspaceID, started, err, "live", false)
 	if a.mailBudgetErr(w, err) {
 		return zero, true
 	}

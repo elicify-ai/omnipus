@@ -14,6 +14,7 @@ import (
 )
 
 func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	started := time.Now()
 	cfg := a.agentLoop.GetConfig()
 	// items is ALWAYS a JSON array: zero enabled mailboxes render [] — never
 	// null (MailSummaryList.yaml: items required, array, not nullable;
@@ -102,5 +103,9 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 			WatcherState: gen.MailSummaryListItemsWatcherState(row.WatcherState),
 		})
 	}
+	// w5 US-7.6/MC-18: the summary boundary emits its one record — zero mail
+	// commands by construction (saved watcher state only), so source "none"
+	// with no acquisition.
+	a.emitMailOperationTiming("summary", "", workspaceID, started, nil, "none", false)
 	jsonOK(w, out)
 }

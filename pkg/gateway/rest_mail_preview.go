@@ -140,6 +140,7 @@ func (p *mailPreviewRoutes) setMailPreviewSecurityHeaders(w http.ResponseWriter)
 // backoff, upstream error) now surfaces at the FIRST SERVE with the same
 // safe classes — the failure moved, it did not disappear.
 func (p *mailPreviewRoutes) handleMint(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -169,6 +170,10 @@ func (p *mailPreviewRoutes) handleMint(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: req.WorkspaceId, AgentID: req.AgentId,
 		Folder: string(req.Folder), Ref: req.MessageRef, LoadRemote: loadRemote,
 	})
+	// w5 US-7.6/MC-18, per the spec's frozen mint line: the metadata mint
+	// emits its record under the frozen "open" category with ZERO mail
+	// acquisition (source "none", socket_count 0 — the mint dialed nothing).
+	p.api.emitMailOperationTiming("open", req.AgentId, req.WorkspaceId, started, merr, "none", false)
 	if merr != nil {
 		// A full per-session token table is the caller's doing, not a server
 		// fault: refuse 429 with the actionable text and no ERROR log — the

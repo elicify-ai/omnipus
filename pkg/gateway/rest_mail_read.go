@@ -316,8 +316,10 @@ func (a *restAPI) handleMailSeen(w http.ResponseWriter, r *http.Request, workspa
 	if client == nil {
 		return
 	}
+	started := time.Now()
 	_, uid, err := client.ResolveRef(r.Context(), folder, ref)
 	if err != nil {
+		a.emitMailOperationTiming("seen", agentID, workspaceID, started, err, "live", false)
 		if errors.Is(err, email.ErrMailRefInvalid) {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 		} else {
@@ -326,9 +328,15 @@ func (a *restAPI) handleMailSeen(w http.ResponseWriter, r *http.Request, workspa
 		return
 	}
 	if err := client.MarkSeenIn(r.Context(), folder, uid); err != nil {
+		a.emitMailOperationTiming("seen", agentID, workspaceID, started, err, "live", false)
 		mailErr502(w, err)
 		return
 	}
+	// w5 US-7.6/MC-18: the confirmed own mutation emits its record — and the
+	// same event advances the pair's persisted publication-revision counter
+	// when a consumer is wired for it (the counter store is w5's; see the
+	// wave report for the consumer-seam status).
+	a.emitMailOperationTiming("seen", agentID, workspaceID, started, nil, "live", false)
 	w.WriteHeader(http.StatusNoContent)
 }
 

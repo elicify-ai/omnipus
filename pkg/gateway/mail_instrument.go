@@ -21,7 +21,65 @@ package gateway
 import (
 	"log/slog"
 	"sync"
+	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/email"
 )
+
+// mailInstrumentOperationOf maps the gateway's internal budget operation
+// names onto w6-proof §6.1's frozen operation enum. An operation with NO
+// frozen member maps to "": no record is emitted rather than a mislabeled
+// one (the §13-Q8 principle — removal's missing member is the named
+// publisher request; discovery has no gateway route yet). The map lives at
+// the single emission seam so the operation vocabulary has one definition.
+func mailInstrumentOperationOf(op string) string {
+	switch op {
+	case "listMailFolders":
+		return "folders"
+	case "listMailMessages":
+		return "list"
+	case "getMailMessage", "open":
+		return "open"
+	case "getMailAttachment", "mintMailAttachmentPreviewPart", "serveMailAttachmentPart":
+		return "attachment_read"
+	case "mintMailAttachmentPreviewMeta":
+		return "attachment_metadata"
+	case "saveMailAttachmentToLibrary":
+		return "attachment_save"
+	case "seen":
+		return "seen"
+	default:
+		return ""
+	}
+}
+
+// emitMailOperationTiming emits the one w6 §6.1 record for a completed
+// gateway Mail operation — success AND failure alike — with the real
+// duration and the safe outcome class. acquire_wait_ms/socket_count stay
+// at their zero values until W1's context-carrying Instrument seam lands
+// (see mail_runtime.go's Instrument paragraph): they are reported
+// truthfully as unknown-by-this-seam, never fabricated.
+func (a *restAPI) emitMailOperationTiming(op, agentID, workspaceID string, started time.Time, err error, source string, hit bool) {
+	member := mailInstrumentOperationOf(op)
+	if member == "" {
+		return
+	}
+	sample := MailOperationSample{
+		Operation:  member,
+		PairRef:    a.mailRuntimeFor().mailPairRef(agentID, workspaceID),
+		Source:     source,
+		Hit:        hit,
+		DurationMs: time.Since(started).Milliseconds(),
+		Outcome:    "ok",
+	}
+	if sample.DurationMs < 0 {
+		sample.DurationMs = 0
+	}
+	if err != nil {
+		sample.Outcome = email.ClassifyMailError(err)
+	}
+	emitMailOperation(sample)
+}
 
 // MailOperationSample is one complete per-operation record in w6-proof
 // §6.1's frozen shape (the envelope, not a second definition).

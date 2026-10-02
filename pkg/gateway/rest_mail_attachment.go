@@ -248,6 +248,7 @@ func mailAttachmentJSONStaleReference(w http.ResponseWriter) {
 // everything unknown to 502; the attachment contract carries typed 409/413
 // refusals that must never masquerade as upstream failures).
 func mailAttachmentPartFetch(a *restAPI, w http.ResponseWriter, r *http.Request, agentID, workspaceID string, client *email.Client, op string, params map[string]any, dial func(context.Context) (*email.AttachmentPart, error)) (*email.AttachmentPart, bool) {
+	started := time.Now()
 	req := email.MailBudgetRequest{
 		Account:     client.AccountKey(),
 		AgentID:     agentID,
@@ -257,6 +258,8 @@ func mailAttachmentPartFetch(a *restAPI, w http.ResponseWriter, r *http.Request,
 		Retry:       mailRetryParam(r),
 	}
 	v, err := email.CallValue(a.mailBudgetFor(), r.Context(), req, dial)
+	// w5 US-7.6/MC-18: the attachment part-fetch seam emits its own record.
+	a.emitMailOperationTiming(op, agentID, workspaceID, started, err, "live", false)
 	if a.mailBudgetErr(w, err) {
 		return nil, true
 	}
@@ -572,6 +575,7 @@ func (a *restAPI) mailMarkerStore(workspaceID string) *mailattachment.MarkerStor
 // reaches the fetch at all (the receipt store answers first). Returns
 // handled=true when the response was already written.
 func (a *restAPI) mailAttachmentSave(w http.ResponseWriter, r *http.Request, agentID, workspaceID string, client *email.Client, service *mailattachment.Service, folder, ref string, partIndex int, token string) (*mailattachment.SaveReceipt, bool) {
+	started := time.Now()
 	req := email.MailBudgetRequest{
 		Account:     client.AccountKey(),
 		AgentID:     agentID,
@@ -585,6 +589,8 @@ func (a *restAPI) mailAttachmentSave(w http.ResponseWriter, r *http.Request, age
 			Slug: folder, Ref: ref, PartIndex: partIndex, Token: token,
 		})
 	})
+	// w5 US-7.6/MC-18: the save seam emits its own record.
+	a.emitMailOperationTiming("saveMailAttachmentToLibrary", agentID, workspaceID, started, err, "live", false)
 	if a.mailBudgetErr(w, err) {
 		return nil, true
 	}
