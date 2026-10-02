@@ -1249,7 +1249,7 @@ export interface paths {
         post?: never;
         /**
          * Remove one (agent, workspace) email mailbox account (M11)
-         * @description Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent's email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched. The truthful removal discrimination (MailboxRemovalResult: removed versus removed_cleanup_pending with an opaque cleanup intent and the separately authorized Retry-cleanup operation, ADR-20261001 "Removal with incomplete cleanup" row) replaces this response body together with its cascade handler work — until then a cleanup failure here is not reported as a completed purge.
+         * @description Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent's email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched. The response is the truthful removal discrimination (MailboxRemovalResult: removed versus removed_cleanup_pending with an opaque cleanup intent and the separately authorized Retry-cleanup operation, ADR-20261001 "Removal with incomplete cleanup" row): the pair is always disabled and removed from config first — a removed_cleanup_pending outcome never serves residual files — and a failed cache/watcher-state cleanup step is NEVER reported as a completed purge.
          */
         delete: operations["deleteAgentMailbox"];
         options?: never;
@@ -20664,13 +20664,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Mailbox removed. */
+            /** @description Mailbox removed, or removed with cleanup pending — the truthful outcome discrimination with the opaque retry intent. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["OperationResult"];
+                    "application/json": components["schemas"]["MailboxRemovalResult"];
                 };
             };
             401: components["responses"]["401Unauthorized"];

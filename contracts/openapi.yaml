@@ -5117,12 +5117,14 @@ paths:
         and deletes its stored password from the credential store. The agent's
         email tools for this workspace are de-registered on the next reload;
         mailboxes the agent holds in OTHER workspaces are untouched. The
-        truthful removal discrimination (MailboxRemovalResult: removed versus
-        removed_cleanup_pending with an opaque cleanup intent and the
-        separately authorized Retry-cleanup operation, ADR-20261001
-        "Removal with incomplete cleanup" row) replaces this response body
-        together with its cascade handler work — until then a cleanup
-        failure here is not reported as a completed purge.
+        response is the truthful removal discrimination
+        (MailboxRemovalResult: removed versus removed_cleanup_pending with an
+        opaque cleanup intent and the separately authorized Retry-cleanup
+        operation, ADR-20261001 "Removal with incomplete cleanup" row): the
+        pair is always disabled and removed from config first — a
+        removed_cleanup_pending outcome never serves residual files — and a
+        failed cache/watcher-state cleanup step is NEVER reported as a
+        completed purge.
       tags:
       - Agents
       security:
@@ -5144,11 +5146,13 @@ paths:
         example: ws_my_workspace
       responses:
         '200':
-          description: Mailbox removed.
+          description: >
+            Mailbox removed, or removed with cleanup pending — the truthful
+            outcome discrimination with the opaque retry intent.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OperationResult'
+                $ref: '#/components/schemas/MailboxRemovalResult'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':

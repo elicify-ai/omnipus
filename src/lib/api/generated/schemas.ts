@@ -4362,16 +4362,16 @@ export const MailboxConfigureRequest = z.object({
   sent_folder_name: z.string().optional(),
   drafts_folder_name: z.string().optional(),
 });
+export const MailboxRemovalResult = z.object({
+  outcome: z.enum(["removed", "removed_cleanup_pending"]),
+  cleanup_intent: z.string().nullable(),
+  cleanup_code: z.string().nullable(),
+});
 export const MailboxListResponse: z.ZodType<MailboxListResponse> = z.object({
   mailboxes: z.array(Mailbox),
 });
 export const MailboxCleanupRequest = z.object({
   cleanup_intent: z.string().min(1),
-});
-export const MailboxRemovalResult = z.object({
-  outcome: z.enum(["removed", "removed_cleanup_pending"]),
-  cleanup_intent: z.string().nullable(),
-  cleanup_code: z.string().nullable(),
 });
 export const RotateTokenResponse: z.ZodType<RotateTokenResponse> = z.object({
   token: BearerToken.min(72)
@@ -7793,7 +7793,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "delete",
     path: "/agents/:id/mailboxes/:workspaceId",
     alias: "deleteAgentMailbox",
-    description: `Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent&#x27;s email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched. The truthful removal discrimination (MailboxRemovalResult: removed versus removed_cleanup_pending with an opaque cleanup intent and the separately authorized Retry-cleanup operation, ADR-20261001 &quot;Removal with incomplete cleanup&quot; row) replaces this response body together with its cascade handler work — until then a cleanup failure here is not reported as a completed purge.
+    description: `Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent&#x27;s email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched. The response is the truthful removal discrimination (MailboxRemovalResult: removed versus removed_cleanup_pending with an opaque cleanup intent and the separately authorized Retry-cleanup operation, ADR-20261001 &quot;Removal with incomplete cleanup&quot; row): the pair is always disabled and removed from config first — a removed_cleanup_pending outcome never serves residual files — and a failed cache/watcher-state cleanup step is NEVER reported as a completed purge.
 `,
     requestFormat: "json",
     parameters: [
@@ -7808,7 +7808,7 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.string(),
       },
     ],
-    response: OperationResult,
+    response: MailboxRemovalResult,
     errors: [
       {
         status: 401,
