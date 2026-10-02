@@ -270,3 +270,75 @@ A message without a usable Date header currently renders as "1 Jan 1" in detail 
 2. **Given** a message with neither a usable Date nor an internal date, **When** displayed anywhere, **Then** exactly "No date" appears — never "1 Jan 1", never the epoch, never today's date, never a silently blank cell in the detail view.
 3. **Given** a message with a valid Date, **When** displayed, **Then** the Date wins over the (possibly different) internal date, and the existing local display formatting is unchanged.
 4. **Given** the wire contract, **When** date is absent, **Then** `date` serializes as explicit null (required-but-nullable), the generated consumers are regenerated before the Go/TS formatting changes, and no Go zero time is ever serialized.
+
+---
+
+## 5. Cross-cutting contracts from the grill findings
+
+These four are the design's hardest boundaries. Each is stated as a rule a renderer, endpoint or migration must satisfy, with its falsification test named.
+
+### 5.1 The temporary-Mail resource policy (grill I-04) — binds every reused renderer
+
+**The rule.** A sender-authored URL is not trusted merely because it resolves to this same gateway. A temporary mail source carries an explicit, source-scoped resource allow-list passed into **every** reused renderer; only resources minted for that preview may load:
+
+1. the preview's own token-scoped byte/representation responses;
+2. CID inline parts of the **same message**, routed through the Mail preview prefix;
+3. eligible remote images **only after** the user's explicit Load-images consent, through the existing token-scoped proxy.
+
+Everything else is refused **structurally** — the policy's resolver never yields an authorized URL — even when same-origin, even when the ordinary renderer would display it: no arbitrary Library/API/workspace paths, no `libraryDownloadUrl` targets, no workspace embeds or wikilink resolution, no direct remote resources. The HTML iframe's CSP governs only the isolated HTML document; it does **not** govern the SPA-side Markdown/renderer path — which is exactly why this renderer-side policy exists separately. Ordinary workspace Library rendering keeps today's behaviour byte-for-byte; the policy scopes the temporary mail source, never the workspace source.
+
+| Reused renderer | What must route through the policy | Refusal shape |
+|---|---|---|
+| Markdown body (`KbMarkdownImage` et al.) | every image src, link href target resolution | image element never mounts; link renders inert |
+| Embed/wikilink handling | embed targets, wikilink resolution | never resolved against the workspace/Library index |
+| Media (video/audio) | media source URL | only the minted byte URL attaches |
+| Text/code (view mode) | none (transient decoded content) | — |
+| PDF | PDF source URL | only the minted byte URL loads |
+| HTML (isolated frame) | governed by the Mail CSP itself | script-less, connect-less, no same-origin |
+
+**Required counterexamples** (each a mail attachment's content; asserted with browser request counters — zero unauthorized requests, and refusals are structural, not hidden by CSS or an unmounted element):
+
+| # | Counterexample content | Must show |
+|---|---|---|
+| C-1 | Ordinary Markdown image syntax `![x](/api/v1/workspaces/<id>/library/download?path=<real file>)` — a same-origin Library URL | Zero requests to the Library path; the marker file behind that URL is never served |
+| C-2 | A wikilink (`[[some-note]]`) targeting a workspace note | Zero workspace resolution; inert rendering |
+| C-3 | An embed directive targeting a workspace/Library resource | Zero embed resolution |
+| C-4 | A remote image `![x](https://attacker.example/pixel)` without consent | Zero direct remote requests; loads only via the consent+proxy path |
+| **Positive control** | The **same Markdown file opened as an ordinary workspace Library file**, and one **consented** Load-images case | The observer sees those requests fire — proving the instrument could detect the failure — and the consented proxy image loads only after explicit consent |
+
+### 5.2 The byte-path distinction (grill I-05) — preview cap vs browser Download
+
+**The rule.** Two distinct, server-enforced wire resources; one unlimited path shared by both purposes is forbidden.
+
+| | Preview-purpose byte resource | Browser Download (existing endpoint, new streaming role) |
+|---|---|---|
+| Purpose | render inside the temporary viewer | save to the user's browser |
+| Cap | the existing 25 MiB cap on **actual decoded bytes**, enforced server-side before success is committed | no preview cap — streams the part to completion (today's 413 for over-cap is replaced for this role) |
+| Disposition | inline rendering projection, `Cache-Control: no-store` | `attachment` disposition, sanitized filename, existing header discipline |
+| Binding | server-side bound to the minted `preview_id`/token, the selected `part_index`, and the grant's ownership lifecycle (view exit, expiry, revoke, panel close all kill it) | bound to the authorized pair/folder/message/part of the request |
+| Issuer | URLs are server-issued, same-gateway, source-scoped — never caller-selected | unchanged request pattern |
+
+**Late-failure ordering (part of the contract, not an implementation detail).** A size or decode failure discovered **during** the transfer — including one caused by false or unknown reported metadata — aborts the response with a visible typed error **before any success state exists**: no completed preview, no saved file, no resolved "download complete" from a truncated stream. Reported metadata (`reported_size_bytes`) may lie or be absent; **actual decoded bytes are always the cap authority**. The frontend must not commit success until the underlying stream completes; an aborted transfer is shown as failed, and Save-after-failure re-runs the whole fetch.
+
+### 5.3 The handoff interaction contract (grill I-06) — focus, announcements, keyboard, reflow
+
+Per the design system's accessibility release requirement (D16): focus visibility/restoration, status announcement, keyboard operation and zoom/reflow are release requirements, not preferences. Catalogued controls only (`button.tsx`, `icon-button.tsx`, `tooltip.tsx`, `dialog.tsx`, `FormError.tsx`, `checkbox.tsx`); no visual redesign.
+
+| Moment | Required behaviour |
+|---|---|
+| Open (Mail → temporary viewer) | Focus moves to the viewer's trusted context heading — the "From mail: \<subject\>" bar — never into untrusted rendered content. The transition is announced so a screen-reader user knows the viewer opened and what it is. |
+| Back | Focus returns to the originating attachment action (the specific Open control). If it no longer exists (list refreshed, message moved/deleted, panel changed): the message's list row, else the containing folder — each with an explicit announcement of where focus landed and why. |
+| Save outcome | Loading, error and success (including the audit-warning save and the appearance of "Open in Library") are announced through a live status region **without moving focus**; success never silently steals focus to the Library panel. |
+| Disabled actions | Every disabled stored-file action stays keyboard-discoverable and carries its "Save to Library first" explanation accessibly — not a tooltip-only hint; readable by screen readers, visible without hover. |
+| Keyboard | Context bar, Save, Back and Retry reachable in a sensible tab order; Back/escape works from the keyboard alone; no focus trap escapes into browser chrome. |
+| Narrow screens / reflow | The context bar wraps or stacks; every control and explanation stays reachable and readable at 320 px width and 200% zoom; nothing depends on hover or a wide viewport. |
+
+### 5.4 The saved mail-derived HTML profile (founder Q5=A) — marker provenance
+
+**What is settled.** Save keeps the attachment's **original bytes**. The saved file is marked mail-derived (`LibraryEntry.preview_profile=mail_restricted` plus a persisted, non-byte Library origin marker written **only** on explicit Save — never by Open) and renders with **scripts off by default**. A per-file checkbox (`checkbox.tsx`) may allow scripts for that one file, switching only that file's preview to the ordinary isolated workspace profile (`libraryIsolationPolicyTemplate`); the choice is visible, per file, never silent, never global. Browser Download supplies the untouched original.
+
+**Marker provenance — the traced-and-proved obligation.** The marker must survive **move** (`Root.Rename`, `MoveInto`), **copy** (`CopyInto`), **rename** and **restore-from-backup** — the exact Library operations verified in this checkout. The backend Library owner traces each operation's implementation and proves marker survival before the behaviour is claimed; the test pack includes a restore-from-archive case.
+
+**Marker unavailable — fail safe.** If a file's marker cannot be read (corrupt, absent on an operation that should have preserved it, or a pre-marker file that other evidence says was mail-derived), the preview **fails safe to the stricter profile** (scripts off). It never silently upgrades a known mail-derived file to the script-permitting profile. An ordinary workspace HTML file without a marker keeps today's ordinary profile unchanged.
+
+**No third profile exists.** The two profiles are the ordinary workspace one (`allow-scripts`, no `allow-same-origin`) and the mail-derived one (scripts off entirely, `script-src 'none'`). The checkbox switches between them for one file; nothing else.
