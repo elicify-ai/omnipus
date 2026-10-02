@@ -421,12 +421,19 @@ Scenario: HTML attachment renders scriptless (Error)
   And the preview is never a raw HTML object URL, srcdoc, or the authenticated download URL served as a document
   Traces to: US-1.AC-3
 
-Scenario: Over-cap attachment is Download-only (Edge)
-  Given an attachment of 30 MiB actual decoded bytes with reported metadata claiming 1 MiB
+Scenario: Over-cap attachment with honest known size is Download-only (Edge)
+  Given an attachment whose descriptor size — the metadata known before any fetch — is 30 MiB, over the 25 MiB cap
   When the user views the attachment actions
-  Then Open and Save are unavailable with the cap explanation
+  Then Open and Save are unavailable with the cap explanation, decided without fetching any part bytes
   And Download remains available and streams the part to completion
-  Traces to: US-1.AC-4
+  Traces to: US-1.AC-4 (honest-size form)
+
+Scenario: Over-cap discovered mid-transfer is a typed failure, never a success (Error)
+  Given an attachment whose reported metadata claims 1 MiB (or is absent) while its actual decoded bytes are 30 MiB
+  When the user opens it
+  Then the preview transfer aborts mid-flight with the typed over-cap error before any success state exists
+  And the viewer shows the failure with Retry/Back — never a truncated render — and Download still streams to completion
+  Traces to: US-1.AC-4 (late-failure form), §5.2 late-failure ordering
 
 Scenario: Exit disposes everything; late completion is discarded (Edge)
   Given a preview is open and its byte stream is still in flight
@@ -448,6 +455,21 @@ Scenario: Resource-policy positive control (Edge)
   Then its same-origin image request IS observed by the counter — proving the instrument detects such requests
   And ordinary workspace rendering is unchanged from today
   Traces to: §5.1 positive control
+
+Scenario: Navigating to a real Library file disposes the temporary source (Edge)
+  Given a temporary preview is open
+  When the user navigates to a real Library file (listing click, search result or deep link)
+  Then the temporary source is disposed first — fetches aborted, source token revoked, media detached
+  And it never becomes a breadcrumb, a listing row, a persisted-store entry or a fallback file
+  And the real file renders with its full ordinary stored-entry capabilities
+  Traces to: US-1.AC-6
+
+Scenario: Unsupported format shows the honest state with Download available (Edge)
+  Given an attachment in a format no Library renderer supports (no invented Office rendering)
+  When the user opens it
+  Then the Library's honest unsupported-format state shows inside the mail context bar
+  And Mail Download remains available; no fake zero-byte file and no spool file is created
+  Traces to: US-1.AC-7
 ```
 
 ### Feature: Save to Library and browser Download
