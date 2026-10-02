@@ -600,7 +600,7 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryContextOverflow(retry
 	before := rq.ri.rf.callMessages
 	candidate, progress, reliefErr := rt.al.checkpointWindow(rt.turnCtx, rt.ts, before, rq.ri.rf.providerToolDefs, true)
 	if reliefErr != nil {
-		rq.ri.rf.err = reliefErr
+		rq.ri.rf.err = errors.Join(rq.ri.rf.err, reliefErr)
 		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 	}
 	if !progress {
