@@ -896,6 +896,10 @@ Each row is a test that must **fail** against the named careless implementation.
 | FR-W1-20 | Each path's outer wrapper MUST remain the single budget owner for its operations; the session source MUST NOT acquire account slots; `retry=true` MUST bypass only the backoff gate. (§4.11, MC-W1-24/25) |
 | FR-W1-21 | The watcher cycle's STATUS probe and reads MUST ride the same pool and lease rules as every other path (no uncounted dial path may exist). (§4.1/§4.10) |
 | FR-W1-22 | The pool MUST introduce no timer except socket/idle expiry, and no mail-data request of any kind while no request is in flight. (§4.6/§4.7) |
+| FR-W1-23 | `recordFailure` MUST persist only the safe classified error representation (the closed class plus safe metadata) and MUST NOT persist raw server error text; the same closed classes are what W1 supplies for the typed 503 `reason` mapping. The gateway `mailErr502` half of the redaction obligation belongs to w5-integration (register row 19). (§4.12, MC-W1-27) |
+| FR-W1-24 | The lease MUST expose the selected folder's live epoch (`UIDValidity`) and the pair's generation to the borrower before its first command, enabling same-lease validation of a gateway-issued `message_ref`; W1 provides the capability only — validation is W2's (`view.go`), issuance is w5-integration's. (§3.1/§4.3, register row 16) |
+| FR-W1-25 | The pool MUST populate its sub-fields (`acquire_wait_ms`, `socket_count`, pool outcome) of the instrument record whose shape w6-proof §6.1 freezes, for every pooled operation, including the coalesced-joiner rule (`socket_count=0` + shared-flight marker); W1 MUST NOT define a second record shape. (§3.1, register row 17, MC-W1-28) |
+| FR-W1-26 | The watcher MUST signal panel-metadata dirtiness only through the published dirty-mark interface (§3.1, register row 13) and MUST make no other panel-cache interaction; the signal MUST be transport-agnostic and carry no mail data. (§4.10, MC-W1-23) |
 
 ### 10.2 Success criteria
 
@@ -914,17 +918,22 @@ Each row is a test that must **fail** against the named careless implementation.
 
 | Requirement | User story | BDD scenario(s) | Test(s) |
 |---|---|---|---|
-| FR-W1-1, FR-W1-2 | US-1 | B-W1-34 | T25, T2, T3 |
+| FR-W1-1 | US-1 | B-W1-34 (US-1's warm-reuse premise needs the injected manager; the wiring-error scenario itself anchors US-2/AS-5) | T25, T2, T3 |
+| FR-W1-2 | US-2 | B-W1-34 | T25; CX-12 |
 | FR-W1-3, FR-W1-4, FR-W1-5 | US-2 | B-W1-4, B-W1-5, B-W1-6, B-W1-7 | T1, T2, T3; CX-1 |
 | FR-W1-6, FR-W1-7, FR-W1-8 | US-3 | B-W1-2, B-W1-8, B-W1-9, B-W1-10 | T4, T5, T6, T7; CX-2, CX-7 |
 | FR-W1-9, FR-W1-10 | US-4 | B-W1-11, B-W1-12, B-W1-13, B-W1-14, B-W1-32, B-W1-33 | T26, T23, T24; CX-4 |
 | FR-W1-11, FR-W1-12 | US-5 | B-W1-12, B-W1-15, B-W1-16, B-W1-17, B-W1-18 | T8, T9, T10, T11; CX-3, CX-8 |
 | FR-W1-17, FR-W1-18 | US-6 | B-W1-18, B-W1-19, B-W1-20, B-W1-21, B-W1-22 | T15, T16; CX-5, CX-6 |
 | FR-W1-15, FR-W1-16 | US-7 | B-W1-23, B-W1-24, B-W1-25, B-W1-26 | T17, T18; CX-11 |
-| FR-W1-19, FR-W1-21 | US-8 | B-W1-27, B-W1-28, B-W1-29, B-W1-30, B-W1-31 | T19, T20, T21, T22; CX-9, CX-10 |
+| FR-W1-19, FR-W1-21, FR-W1-26 | US-8 | B-W1-27, B-W1-28, B-W1-29, B-W1-30, B-W1-31 | T19, T20, T21, T22; CX-9, CX-10 |
 | FR-W1-13, FR-W1-14 | US-1, US-2 | B-W1-5, B-W1-11 | T12, T13, T14 |
 | FR-W1-20 | US-4, US-5 | B-W1-32, B-W1-33 | T23, T24; CX-4 |
 | FR-W1-22 | US-1, US-8 | B-W1-3, B-W1-30 | T3, T21 |
+| FR-W1-23 | US-8 | B-W1-35 | T29; CX-13 |
+| FR-W1-24 | US-3, US-6 | B-W1-2, B-W1-19 (the lease rows the validation rides) | T4, T15 (capability half; the validation FRs themselves are W2's, register row 16) |
+| FR-W1-25 | US-2, US-4 | (cross-spec oracle: w6-proof T1–T6; W1's half has no separate BDD — the record's shape is w6-proof's published interface) | T30 |
+| FR-W1-26 | US-8 | B-W1-30 | T21 |
 
 (Test numbers reference §8's order column, e.g. T15 = `TestBudget_CoalescingIdentityMatrix`.)
 
@@ -935,15 +944,16 @@ Each row is a test that must **fail** against the named careless implementation.
 | Outside this work package | Boundary / reason |
 |---|---|
 | Folder discovery, overrides, unknown-vs-absent classification, the folder-mapping file, header cache, and every `pkg/email/view.go` edit | W2's package (§3.3). W1 consumes resolved folder names and publishes the lease; W2 never edits `transport.go`. |
-| Wire contracts, generated types, the presence WebSocket frames, the 503 `reason` enum, `mode=cache_first|live`, `publication_revision` response metadata | W0's contract wave; W4's handler work. W1 produces the typed error values and revision-capture seam only. |
-| Gateway/agent injection call sites, boot/reload wiring, removal cascades, backup/Git-exclusion work, watcher-provider re-injection | W4's package. W1 ships the seams; §4.1's switch is W4's integration wave. |
-| All test files | W5's package. This spec names them (§8); production owners never edit tests. |
+| Wire contracts, generated types, the presence WebSocket frames, the 503 `reason` enum, `mode=cache_first|live`, `publication_revision` response metadata | The W0 contracts wave publishes them (backend-lead; register rows 1/2/5/7); w5-integration's handlers consume/map. W1 produces the typed error values and revision-capture seam only. |
+| Gateway/agent injection call sites, boot/reload wiring, removal cascades, watcher-provider re-injection | w5-integration's package (ADR-W4). W1 ships the seams; §4.1's switch is w5-integration's integration wave. |
+| Data-directory and backup exclusion enforcement | **Product-owned, no operator-machine dependency** (founder ruling Q-A, 2026-10-02): the product itself guarantees its Mail cache directory and its `email-watch/` state directory are excluded from data-directory version-control staging and from the application's own backups/archives on every install, by its own means — with watcher state files also purged on mailbox removal (founder ruling Q-B). Ownership per register row 18: w5-integration publishes the gate decision; W2 enforces the first-write refusal; the gate fails closed to live-only with the visible `cache_unavailable` notice. No personal machine-setup repository, launchd job, backup remote or ignore file appears anywhere in this design; W1's own contribution is the `recordFailure` redaction (§4.12). |
+| All test files | w6-proof's package (qa-lead; ADR-W5). This spec names them (§8); production owners never edit tests. |
 | JMAP transport selection, encrypted disk header cache, persisted JMAP state, Phase 2 invalidation events | W6/later waves after separate Phase 1 evidence. Plain IMAP only here. |
 | SMTP pooling or any send-path change | SMTP stays request-scoped outside the read pool (verified ADR boundary). |
 | IDLE / server-push subscriptions | Deferred by the ADR (13 rotating IDLE subscriptions exceed the 8-socket ceiling; confounds the plain-IMAP benchmark). |
 | Mail-driven agent turns, tasks, or a drainer reintroduction | Retired surfaces; the watcher stays metadata-only. |
 | Performance tuning to hit the accepted latency bars | The bars (Q3=A) are *targets* judged by the separate measurement plan; W1 delivers correct bounded mechanics, not a benchmark result. |
-| Sanitizing watcher error text and the raw-error logging seams | W4's logging policy; the ADR records the seams (verified: `recordFailure` accepts raw text) without making them W1's task. |
+| ~~Sanitizing watcher error text~~ — **no longer a non-goal** (correction round) | The watcher half is **W1-owned** (§4.12, FR-W1-23): `recordFailure` persists only the safe classified representation. The earlier refusal ("W4's logging policy, not W1's task") is corrected per grill-1 C-1 and register row 19. The gateway's `mailErr502` raw-error log remains outside W1 — it is w5-integration's file and its obligation. |
 
 ---
 
@@ -954,14 +964,14 @@ Each row is a test that must **fail** against the named careless implementation.
 1. **RED before green:** every new test in §8 first ran and failed against the pre-change code — proven by CI on a tests-only commit or by the one dispatcher-owned narrow local run (`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^<Name>$' -p 1 ./pkg/email/`, one at a time) — then passed on the implementation branch, with receipts (log path + exit code) per claim.
 2. **CI green on the full gate set** for the branch: `gofmt go-build go-vet lint go-test go-race` (Go tier) — race is mandatory: this package is concurrency-first. No pre-existing failure is waved through ("ours to fix", Hard Constraint #7).
 3. **Preserved regressions:** the §8.2 set passes unchanged; `TestMailBudget_SingleflightKeyIncludesParams` updated only to the new identity shape, never weakened; W5's CHECK audit (mutation check + test-integrity-audit) returns PASS on the new suite.
-4. **Counterexamples demonstrably kill:** at minimum CX-1 (reservation counting) and CX-6 (superseded publication) shown failing against a deliberately mutated implementation in W5's CHECK receipt.
-5. **No test hook in production code:** grep-verifiable — no pool/budget/revision flag, global or setter exists that production sets for tests.
+4. **Counterexamples demonstrably kill:** at minimum CX-1 (reservation counting), CX-6 (superseded publication) and CX-13 (raw watcher error text) shown failing against a deliberately mutated implementation in w6-proof's CHECK receipt.
+5. **No test hook in production code:** grep-verifiable — no pool/budget/revision flag, global or setter exists that production sets for tests. The only permitted test seams are test-owned package vars of the existing `imapDial` pattern (`pkg/email/transport.go::imapDial`: tests reassign, production never does), which resolves grill-1 M-9's tension with MC-W1-24's acquisition counter without weakening this rule.
 
 **Reachable by a user/agent** — evidenced by all of:
 
 1. **Panel path:** a real user opens the Mail panel on a configured mailbox and reads folders/lists/messages served through the pooled path — UAT lane evidence (executed, not written), with the counter receipt showing fewer server connections than operations on the warm pass (SC-W1-7).
 2. **Agent path:** `read_inbox` / `search_email` / `read_message` — the existing registered tools — run through the same pool; registration is unchanged by W1 (no new tool; the Hard Constraint #6 check — `grep -rl '"read_inbox"' pkg/coreagent/ pkg/config/ pkg/tools/` non-empty — passes as today, re-run and recorded).
-3. **Watcher path:** the badge advances on real mail with the panel closed, and the state file's last-checked honestly reflects skips (executed watcher scenario).
+3. **Watcher path:** the badge advances on real mail with the panel closed, the state file's last-checked honestly reflects skips, and a forced failure leaves only the safe classified error in the state file — no raw provider text (executed watcher scenario, §4.12).
 4. **No dead-end configuration:** every new behavior (busy outcomes, retention) is observable through existing surfaces — the busy outcome renders through the panel's existing 503 handling; retention needs no user action.
 5. **User-facing documentation updated in the same change** (§13) and audited by `docs-verifier` against actual behavior.
 
