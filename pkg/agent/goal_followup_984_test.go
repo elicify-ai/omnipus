@@ -194,12 +194,13 @@ func assertGoal984OneParentWakeVerdictAcked(t *testing.T, inbox *session.Message
 // lifecycle/outbox outcome cannot repair a working lifecycle record —
 // "finishFromFinal is replaced by commit-based reconciliation, not an
 // inbox-first promotion" (D8.5). The record stays non-terminal for the
-// ordinary boot stop to land stopped(restart) (D8.3), its session-owned
-// goal is untouched (D6: no stop of any kind ends a goal), and the FD1=A
-// EndSessionGoal pair-end hook is gone (MIN-001: remove every
-// restart/terminal-triggered session-goal ending).
+// ordinary boot stop to land stopped(restart) (D8.3), and its session-owned
+// goal is untouched (D6: no stop of any kind ends a goal) — asserted against
+// the STORED goal record, the oracle that survives the FD1=A hook's removal.
 func TestBoot984_FinishFromFinal_InboxFinalAloneCannotPromoteOrEndGoal(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	// The loop itself is unused; newGoalLoopTestLoop provides the isolated
+	// OmnipusHome the goal-record store below writes into.
+	_, _ = newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	h := newBootRecoveryHarness(t)
 	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
@@ -207,12 +208,7 @@ func TestBoot984_FinishFromFinal_InboxFinalAloneCannotPromoteOrEndGoal(t *testin
 	h.persist(t, rec)
 	goalID := activateTestGoalRecord(t, child, "boot final reconciliation")
 
-	var hooked []string
 	recovery := h.recovery()
-	recovery.EndSessionGoal = func(sid, reason string) {
-		hooked = append(hooked, sid)
-		al.EndSessionOwnedGoalOnTerminal(sid, reason)
-	}
 	msg := bootHandback(t, child, parent, "boot-final-pairend")
 	if err := recovery.finishFromFinal(rec, msg); err != nil {
 		t.Fatalf("finishFromFinal: %v", err)
@@ -234,8 +230,13 @@ func TestBoot984_FinishFromFinal_InboxFinalAloneCannotPromoteOrEndGoal(t *testin
 	if g.State != generated.GoalStateActive {
 		t.Errorf("session-owned goal state = %q after the boot repair — D6: no stop of any kind ends a goal; only clear_goal does", g.State)
 	}
-	if len(hooked) != 0 {
-		t.Errorf("EndSessionGoal pair-end hook fired %v — MIN-001: every restart/terminal-triggered session-goal ending is removed", hooked)
+	if g.ActiveSessionID != child {
+		t.Errorf("goal's active session binding = %q, want the original %q — the boot repair must not "+
+			"re-bind or un-bind the record (D6)", g.ActiveSessionID, child)
+	}
+	if g.TerminalReason != "" {
+		t.Errorf("goal carries TerminalReason %q after the boot repair — no adjudication was made, so "+
+			"no reason may be recorded (D6)", g.TerminalReason)
 	}
 }
 
@@ -244,13 +245,15 @@ func TestBoot984_FinishFromFinal_InboxFinalAloneCannotPromoteOrEndGoal(t *testin
 // formerly ...SweepPairEndsSteeredGoal; changed-test list entry 4):
 // "PlanEngine.bootSweep still leaves steered records to SteerBootRecovery
 // (avoids a second writer racing the same record)." The sweep must not land
-// a steered record on failed(interrupted) and must not fire
-// steeredGoalEndHook — the record stays for SteerBootRecovery to land
-// stopped(restart) with its direct-parent notice, goal untouched (D6).
+// a steered record on failed(interrupted) — the record stays for
+// SteerBootRecovery to land stopped(restart) with its direct-parent notice,
+// goal untouched (D6, asserted against the stored goal records).
 // Task-origin records keep the sweep's ordinary behaviour with their goal
 // active, and standing roots stay exempt.
 func TestBoot984_SweepLeavesSteeredRecordsToBootRecovery(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	// The loop itself is unused; newGoalLoopTestLoop provides the isolated
+	// OmnipusHome the goal-record store below writes into.
+	_, _ = newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	h := newBootSweepHarness(t)
 
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
@@ -276,11 +279,6 @@ func TestBoot984_SweepLeavesSteeredRecordsToBootRecovery(t *testing.T) {
 	taskSessionGoal := activateTestGoalRecord(t, "sess-task-origin", "task session goal stays")
 	rootGoal := activateTestGoalRecord(t, "sess-standing-root", "standing root goal stays active")
 
-	var pairEnded []string
-	h.pe.SetSteeredGoalEndHook(func(sid, reason string) {
-		pairEnded = append(pairEnded, sid)
-		al.EndSessionOwnedGoalOnTerminal(sid, reason)
-	})
 	res := h.pe.runBootSweep(context.Background())
 	_ = res
 
@@ -292,10 +290,6 @@ func TestBoot984_SweepLeavesSteeredRecordsToBootRecovery(t *testing.T) {
 		t.Fatalf("steered record state after the Plan Engine sweep = %q, want running — "+
 			"D8.3: PlanEngine.bootSweep leaves steered records to SteerBootRecovery; "+
 			"no second writer races the same record", steered.State)
-	}
-	if len(pairEnded) != 0 {
-		t.Errorf("steeredGoalEndHook fired %v — MIN-001: the plan-sweep session-goal ending is removed; "+
-			"the steered record's goal is untouched (D6)", pairEnded)
 	}
 	sg, err := resolveGoalRecordStore().Get(steeredGoal)
 	if err != nil {
@@ -791,11 +785,13 @@ func TestGoal984_BlockedParkDeliversBlockerUpward(t *testing.T) {
 // interrupted-terminal recovery becomes an ordinary stop — the child lands
 // `stopped` (non-terminal) with a stop note cause "restart", never
 // failed(interrupted) (F0929-3). No goal-ending step exists in the
-// restart-stop path: the child's session-owned goal stays active (D6) and
-// the EndSessionGoal hook is removed (MIN-001). The ancestor's goal was
-// never in scope and stays active.
+// restart-stop path: the child's session-owned goal stays active (D6,
+// asserted against the stored goal record). The ancestor's goal was never
+// in scope and stays active.
 func TestBoot984_FailInterruptedLandsStoppedRestartKeepsGoal(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	// The loop itself is unused; newGoalLoopTestLoop provides the isolated
+	// OmnipusHome the goal-record store below writes into.
+	_, _ = newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	h := newBootRecoveryHarness(t)
 	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
@@ -804,12 +800,7 @@ func TestBoot984_FailInterruptedLandsStoppedRestartKeepsGoal(t *testing.T) {
 	childGoal := activateTestGoalRecord(t, child, "failInterrupted restart keep")
 	parentGoal := activateTestGoalRecord(t, parent, "ancestor goal untouched")
 
-	var hooked []string
 	recovery := h.recovery()
-	recovery.EndSessionGoal = func(sid, reason string) {
-		hooked = append(hooked, sid)
-		al.EndSessionOwnedGoalOnTerminal(sid, reason)
-	}
 	if err := recovery.failInterrupted(rec); err != nil {
 		t.Fatalf("failInterrupted: %v", err)
 	}
@@ -825,9 +816,6 @@ func TestBoot984_FailInterruptedLandsStoppedRestartKeepsGoal(t *testing.T) {
 	}
 	if loaded.StopNote == nil || loaded.StopNote.Cause != session.StopCauseRestart {
 		t.Fatalf("stop note after failInterrupted = %+v, want cause %q (D8.3: cause restart, not a restart_interrupt note)", loaded.StopNote, session.StopCauseRestart)
-	}
-	if len(hooked) != 0 {
-		t.Errorf("EndSessionGoal hook fired %v — MIN-001/D8.3: no goal-ending step exists in the restart-stop path", hooked)
 	}
 	cg, err := resolveGoalRecordStore().Get(childGoal)
 	if err != nil {

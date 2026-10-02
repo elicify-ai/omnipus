@@ -414,8 +414,7 @@ func TestBoot_ClassifiesAllClasses(t *testing.T) {
 // LifecycleTimedOut case of terminalErrorBootMessage did. The merged
 // "stopped" state deliberately erased the cancelled/timed-out state
 // distinction (founder ruling: timed out = stopped); the RETAINED stop_note
-// cause is what keeps the two apart for the parent, the same distinction
-// goal_child_completion.go::goalEndingForTerminalState keeps live.
+// cause is what keeps the two apart for the parent.
 func TestBoot_TimeoutStoppedRecoversAsTimedOut(t *testing.T) {
 	h := newBootRecoveryHarness(t)
 	parent := h.rootSession(t)

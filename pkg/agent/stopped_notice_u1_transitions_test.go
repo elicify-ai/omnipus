@@ -150,9 +150,11 @@ func u1BootRecovery(t *testing.T, al *AgentLoop, operatorNotices *[]string) *Ste
 	inbox := al.GetMessageInboxStore()
 	return &SteerBootRecovery{
 		Lifecycle: lifecycle, Sessions: al.GetSessionStore(), Inbox: inbox,
-		Classifier:     NewSteerRecordClassifier(lifecycle, al.GetSessionStore()),
-		Deliverer:      al.getUpwardDeliverer(),
-		EndSessionGoal: al.EndSessionOwnedGoalOnTerminal,
+		Classifier: NewSteerRecordClassifier(lifecycle, al.GetSessionStore()),
+		Deliverer:  al.getUpwardDeliverer(),
+		// No EndSessionGoal: MAJ-003 — boot recovery never ends a
+		// session-owned goal. The field itself is retired and removed by the
+		// backend's Commit B.
 		OperatorNotice: func(message string) {
 			*operatorNotices = append(*operatorNotices, message)
 		},
