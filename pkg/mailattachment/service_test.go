@@ -440,6 +440,25 @@ func TestDifferentTokenIsANewSave(t *testing.T) {
 	}
 }
 
+// US-2.AC-7: a save whose part fetch fails with a typed refusal surfaces
+// that refusal verbatim — permission/size refusals never masquerade as
+// network errors — and no destination work or audit happens.
+func TestSaveTypedRefusalSurfacesVerbatim(t *testing.T) {
+	w := newWSRoot(t)
+	audit := &fakeAudit{status: "recorded"}
+	reader := &fakePartReader{part: textPart("big.pdf", "x"), cappedErr: mailattachment.ErrOverCap}
+	svc := newService(t, w, reader, audit)
+	before := snap(t, w)
+	_, err := svc.Save(context.Background(), mailattachment.SaveRequest{Slug: "inbox", Ref: "uid:1:1", PartIndex: 1, Token: "tok-overcap"})
+	if !errors.Is(err, mailattachment.ErrOverCap) {
+		t.Fatalf("Save over-cap refusal = %v, want the typed cap error (US-2.AC-7: refusals never masquerade as network errors)", err)
+	}
+	assertNoWrites(t, before, snap(t, w))
+	if len(audit.fields) != 0 {
+		t.Fatalf("a refused save produced %d audit events", len(audit.fields))
+	}
+}
+
 func TestSaveWithoutTokenIsRefusedAndWritesNothing(t *testing.T) {
 	w := newWSRoot(t)
 	reader := &fakePartReader{part: textPart("x.txt", "x")}
