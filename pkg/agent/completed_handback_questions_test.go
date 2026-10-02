@@ -43,7 +43,15 @@ import (
 // D6b — never from observed behavior — that the hand-back persisted in the
 // root's inbox carries zero open questions, exactly the parent's genuine
 // final answer, and none of the stale content seeded into the parent's
-// transcript.
+// transcript. It further asserts, from the same authorities: the empty
+// open_questions is NON-NIL — the contract makes open_questions a required,
+// non-nullable array (SessionMessageHandback.yaml), and the decode ran
+// through the real persisted round-trip where nil and empty stay
+// distinguishable; and the relayed question SURVIVES completion — after the
+// turn lands, the parent's inbox still holds exactly the seeded question,
+// unacked and unchanged (id, sender, source session, text), because Drain
+// returns only unacked entries and nothing on the completed path may
+// consume the question's D1 home.
 func TestCompletion_CompletedHandbackWithStoppedChildQuestion_CarriesNoOpenQuestions(t *testing.T) {
 	al, cleanup := newSteerALWithProvider(t, &depthEchoProvider{})
 	defer cleanup()
@@ -158,6 +166,22 @@ func TestCompletion_CompletedHandbackWithStoppedChildQuestion_CarriesNoOpenQuest
 			"open_questions is empty; parkedQuestions stays only for a non-completion hand-back "+
 			"(stopped-child report), excluding relayed questions (MIN-006)", hb.OpenQuestions)
 	}
+	// Emptiness alone does not certify the wire shape: the contract makes
+	// open_questions a REQUIRED, NON-NULLABLE array
+	// (contracts/components/schemas/SessionMessageHandback.yaml — listed in
+	// `required`, `type: array`, no `nullable`, unlike parent_session_id),
+	// and the generated field carries json:"open_questions" without
+	// omitempty (pkg/api/generated). nil marshals `null` and would fail the
+	// SPA's required z.array(z.string()) parse. This decode came through the
+	// real persisted round-trip — FromSessionMessageHandback and the inbox
+	// store both marshal to JSON bytes, and Drain reads entries unmarshaled
+	// back from those bytes — where nil and empty stay distinguishable, so
+	// asserting non-nil here pins the exact `[]` wire shape.
+	if hb.OpenQuestions == nil {
+		t.Fatalf("completed hand-back open_questions = nil, want non-nil empty [] — the contract requires a " +
+			"non-null array (SessionMessageHandback.yaml: required, type array, no nullable); nil marshals " +
+			"null and would fail the generated Zod parse, and emptiness alone does not certify the wire shape")
+	}
 
 	// Genuine final result, no stale content.
 	if hb.ResultSoFar != parentAnswer {
@@ -165,5 +189,44 @@ func TestCompletion_CompletedHandbackWithStoppedChildQuestion_CarriesNoOpenQuest
 	}
 	if strings.Contains(hb.ResultSoFar, staleText) {
 		t.Fatalf("handback result_so_far contains stale seeded text %q — stale content must never travel", staleText)
+	}
+
+	// Retention (D6b + the D1 relay): the completed path must leave the
+	// parked question exactly where it was. Drain returns only UNACKED
+	// entries and writes no acks (pkg/session contract), so a hit here is
+	// itself the unacked proof. Re-drain AFTER completeSteeredTurn and the
+	// decoded hand-back, and assert the EXACT seeded question — same
+	// message id, same sender, same source session, same text — not merely
+	// the same count: a regression that acks or drains-and-discards the
+	// parent's inbox on the completed path would silently drop a user's
+	// outstanding question, and the child is already stopped, so nobody
+	// would ever answer it.
+	postMsgs, _, _, postDrainErr := al.GetMessageInboxStore().Drain(parent.SessionID, stoppedChild.SessionID, "", 10)
+	if postDrainErr != nil {
+		t.Fatalf("Drain(parent) after completion: %v", postDrainErr)
+	}
+	if len(postMsgs) != 1 {
+		t.Fatalf("parent inbox messages after completion = %d, want 1 — the relayed question must survive "+
+			"the completed path parked and unacked at its D1 home (the parent's inbox)", len(postMsgs))
+	}
+	postKind, postKindErr := postMsgs[0].Discriminator()
+	if postKindErr != nil || postKind != "question" {
+		t.Fatalf("parent inbox message kind after completion = %q (err %v), want \"question\"", postKind, postKindErr)
+	}
+	postQ, postQErr := postMsgs[0].AsSessionMessageQuestion()
+	if postQErr != nil {
+		t.Fatalf("AsSessionMessageQuestion(post-completion): %v", postQErr)
+	}
+	if postQ.MessageId != "q-d6b-completed-1" {
+		t.Fatalf("post-completion question message_id = %q, want %q — the seeded question's id must survive unchanged", postQ.MessageId, "q-d6b-completed-1")
+	}
+	if postQ.SenderIdentity != stoppedChild.AgentID {
+		t.Fatalf("post-completion question sender_identity = %q, want %q — the sender must survive unchanged", postQ.SenderIdentity, stoppedChild.AgentID)
+	}
+	if postQ.SessionId != stoppedChild.SessionID {
+		t.Fatalf("post-completion question session_id = %q, want %q — the source session must survive unchanged", postQ.SessionId, stoppedChild.SessionID)
+	}
+	if postQ.Text != questionText {
+		t.Fatalf("post-completion question text = %q, want %q — the payload must survive unchanged", postQ.Text, questionText)
 	}
 }
