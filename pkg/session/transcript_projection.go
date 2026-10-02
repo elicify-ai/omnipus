@@ -45,7 +45,7 @@ func (us *UnifiedStore) UpdateToolCallProjections(sessionID string, updates []To
 				} else if tc.Result == nil && (tc.Error != "" || tc.Status == "error") {
 					tc.Error = *u.Text
 				} else {
-					result := make(map[string]any, len(tc.Result)+1)
+					result := make(map[string]any)
 					for k, v := range tc.Result {
 						result[k] = v
 					}

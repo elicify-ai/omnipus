@@ -80,7 +80,7 @@ func (ex *agentLoopRunTurnToolsExecute) projectRecordedResult() {
 	if ex.toolResult.IsError && ex.tcRecord.Result == nil {
 		ex.tcRecord.Error = text
 	} else {
-		result := make(map[string]any, len(ex.tcRecord.Result)+1)
+		result := make(map[string]any)
 		for k, v := range ex.tcRecord.Result {
 			result[k] = v
 		}
