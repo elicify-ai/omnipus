@@ -344,3 +344,120 @@ These shapes are the parallel-build freeze: W1, W4 and W10 build against them wi
 **Non-editing guarantees (the ADR's ownership rows, restated as this spec's boundary):** W2 owns every `pkg/email/view.go` change in this feature so pool and metadata writers never both patch it; W2 never edits `pkg/email/transport.go` (W1), any `contracts/` file (W0), any `pkg/gateway/` file (W4), or any test file (W5). If a W2 obligation seems to require editing one of those, that is a rule-15 stop-and-ask, not an edit.
 
 ---
+
+## 5. User stories and acceptance criteria
+
+Priorities: P0 = the package's reason to exist; P1 = required for correctness/trust but not the headline. Every story names its independent test; BDD scenarios in §6 trace to these numbers.
+
+### US-1 — Roles resolve by discovery, not by assumed names (P0)
+
+A user connects a mailbox whose server names its folders differently — `Sent Items`, `[Gmail]/Sent Mail`, or a special-use-advertising server — and the Mail panel's Sent and Drafts tabs must work: the right folder is found and its real messages are listed, instead of today's 502 `folder_missing` (the supplied 13-mailbox evidence: all 13 Sent lists failed). The three tabs themselves never change.
+
+**Independent test:** against the fake IMAP server configured with a `[Gmail]/Sent Mail` folder and SPECIAL-USE attributes, the sent role resolves to that folder; with attributes removed, the candidate fallback finds it; the panel's sent list returns its messages.
+
+1. **Given** a server that advertises SPECIAL-USE and marks one folder `\Sent`, **when** the sent role resolves, **then** the resolved name is that folder, the mapping source is `special_use`, and the folder's messages list successfully.
+2. **Given** a server with no SPECIAL-USE support whose folder is named `Sent Items`, **when** the sent role resolves, **then** the fallback probe finds `Sent Items` with source `fallback`.
+3. **Given** a server whose Sent folder is named outside the candidate list (e.g. `Archivo-Enviados`) and that advertises no special-use role, **when** the sent role resolves, **then** the outcome is `unknown` (never `absent`, never an error page, never a false empty folder claiming absence), and the override setting is offered.
+4. **Given** any resolution outcome, **when** any folder-addressed request runs, **then** only the slugs `inbox|sent|drafts` are accepted, and no server folder is ever created (zero `CREATE` commands observed).
+
+### US-2 — The operator's explicit setting outranks discovery, and clearing it restores automatic (P0)
+
+An operator who types a Sent folder name in the mailbox settings must get exactly that folder — even if the server advertises a different special-use folder — and must be able to return to automatic discovery by clearing the field, using the settings form that already exists.
+
+**Independent test:** configure `sent_folder_name=Custom`, resolve (override wins over a `\Sent`-tagged folder); save with an empty value (field cleared → automatic resumes → special-use folder resolves); save with the field omitted entirely (stored value unchanged).
+
+1. **Given** a stored non-empty `sent_folder_name` that probes successfully, **when** the sent role resolves, **then** the override folder is used with source `override`, regardless of any special-use or fallback candidate.
+2. **Given** a stored override whose folder does not exist on the server (`[NONEXISTENT]`), **when** the sent role resolves, **then** the role reports the override as an actionable settings warning — the folder is not silently swapped for another candidate, and the warning names the setting (without leaking the name into logs).
+3. **Given** the settings form saved with an explicitly empty `sent_folder_name`, **when** the sent role next resolves, **then** automatic discovery runs (no stored value remains — verified semantics of `persistConfig`), and the special-use/fallback folder is used.
+4. **Given** a stored non-empty value of unknown provenance (any value an operator or an older flow may have saved), **when** the role resolves and the settings render, **then** the value is presented as an explicit override with an Automatic option — never silently discarded or reclassified by inspecting the string.
+
+### US-3 — Unknown is never reported as absent, and missing INBOX is an error (P0 — the M-01 correction)
+
+When Omnipus cannot prove where Sent lives, the user must be told *that*, honestly — not "the server has no such folder", which sends them hunting for a server setting that may not be the problem. And a mailbox whose INBOX cannot be selected is a broken account, never a healthy empty one.
+
+**Independent test:** fake server with LIST succeeding, no special-use role, no candidate folder matching, but an unrelated folder present: the sent role reports `unknown` with the setting offered; a server without INBOX fails the mailbox read with the transport class.
+
+1. **Given** successful LIST and zero successful candidate probes, **when** the role resolves, **then** `availability=unknown` with a `discovery_unresolved`-class reason — the UI shows the unresolved state and the override prompt, never "no such folder".
+2. **Given** a network, timeout, auth, TLS or permission failure at any point in discovery or probing, **when** the role resolves, **then** the outcome is `unknown` (or the read's own failure for a whole-operation failure), never `absent` and never invented zero counts.
+3. **Given** successful LIST **and** every applicable candidate probe returning the structural `[NONEXISTENT]` response, **when** the role resolves, **then** — and only then — `availability=absent` with an empty message list and the server-folder-absent explanation.
+4. **Given** an INBOX whose SELECT fails for any reason including `[NONEXISTENT]`, **when** the mailbox is opened, **then** the read fails loudly with the safe transport class and no per-folder empty rendering is produced.
+
+### US-4 — Ambiguous folders ask, never guess (P0)
+
+A server that offers more than one plausible Sent folder (or whose saved mapping now disagrees with what discovery finds) must not have one picked for the user — mail could land in the wrong place.
+
+**Independent test:** fake server with two `\Sent`-tagged folders and no saved mapping: the role resolves ambiguous, compose-to-sent fails visibly with the settings remedy; after the operator sets an override, sending targets the override.
+
+1. **Given** multiple special-use `\Sent` folders and no still-valid saved mapping, **when** the role resolves, **then** the outcome is the ambiguity variant of `unknown` (reason class `mapping_ambiguous`) and no folder is auto-selected.
+2. **Given** a still-valid saved mapping for the role, **when** a fresh discovery also finds candidates, **then** the saved mapping stands and no ambiguity surfaces.
+3. **Given** an unresolved or ambiguous sent role, **when** a send or draft-APPEND needs the Sent/Drafts folder, **then** the operation fails with a visible actionable settings error — it never writes into an arbitrarily chosen folder.
+
+### US-5 — Folder metadata survives restart, encrypted, and refreshes only on its four triggers (P0)
+
+Reopening a mailbox after a gateway restart should not re-run full discovery, and the resolved folder names — which can reveal projects and people — must never sit on disk in plaintext. The saved list refreshes only on: first open; panel open with a list older than 24 hours; manual Refresh; or the single post-failure/version-change rediscovery.
+
+**Independent test:** resolve a mapping (file appears, 0600, ciphertext-only); restart the process, reopen (no discovery commands on the wire — saved mapping used); age the file past 24h and reopen (one discovery); close the panel and let the watcher detect a version change (file marked dirty, zero IMAP commands until the next panel event).
+
+1. **Given** a first open of a mailbox with no saved metadata, **when** the panel loads, **then** one discovery runs and the encrypted file appears with the resolved roles, UIDVALIDITY, schema/generation and validation time.
+2. **Given** a valid saved mapping younger than 24 hours, **when** the panel reopens (including after a process restart), **then** no discovery command is issued; the mapping is validated lazily per §3.2 step 2 and used.
+3. **Given** a saved list older than 24 hours, **when** the panel opens, **then** exactly one discovery refreshes it.
+4. **Given** the panel closed, **when** any amount of time passes (including watcher version changes and retention housekeeping), **then** zero IMAP commands run and no cache file is written; the dirty flag alone is set.
+5. **Given** the panel closed, **when** it reopens, **then** the deferred refresh (if any was marked) runs once as part of the eligible event.
+
+### US-6 — The cache file is sealed: authenticated, bound, atomic, reject-before-allocate (P0)
+
+The folder file must resist tampering, swapping, cross-pair copying and stale-generation replay, and must never yield unauthenticated plaintext — even to a crash.
+
+**Independent test:** write a snapshot; flip one ciphertext bit (read refuses); copy another pair's file over it (read refuses via AAD); rewrite with a bumped generation (old file refuses); write twice with identical payload (ciphertexts differ); kill mid-write (old or new complete file readable, never a torn one).
+
+1. **Given** a stored envelope with one flipped bit anywhere, **when** it is loaded, **then** authentication fails, nothing decrypts, a cache-corrupt warning surfaces, and the live path proceeds.
+2. **Given** pair B's file copied onto pair A's path (or any AAD-bound field altered), **when** pair A loads it, **then** the read refuses — the reader compared the authenticated identity against its independently resolved pair/generation.
+3. **Given** two consecutive writes of byte-identical payloads, **when** both ciphertexts are examined, **then** they differ (fresh random nonce per write).
+4. **Given** a malformed, truncated or oversized envelope (beyond the small multiple of the 64 KiB budget), **when** it is offered for load, **then** it is rejected before any allocation proportional to its claimed contents.
+5. **Given** a locked credential store, **when** any cache operation runs, **then** the package returns cache-unavailable and the mailbox runs live-only — no key is minted, no plaintext is written as fallback.
+6. **Given** a write interrupted by process death, **when** the file is next read, **then** exactly one complete valid snapshot (old or new) is readable — never a torn or unauthenticated one.
+
+### US-7 — Nothing reaches Git or backups: the exclusion gate (P0)
+
+The first cache write on any install must be impossible until the machine's data-repository staging job and the application backup can never capture the file — the folder names are sensitive and the encrypted blobs would also freeze the gitleaks-guarded backup job on false positives.
+
+**Independent test:** on a build with the gate: with exclusions deployed, the first write succeeds; with the ignore rule absent (or `createTarGz` unpatched), the write refuses and the mailbox runs live-only with a visible `cache_unavailable` notice; an end-to-end run of the deployed staging job and a backup archive proves neither contains any cache file (positive control: an ordinary allowed state file IS captured by the same instrument).
+
+1. **Given** a machine where the data-repo ignore rule and the backup skip are both deployed, **when** the first cache write runs, **then** it succeeds and `git check-ignore` on the data repo reports the cache directory ignored.
+2. **Given** a machine missing either exclusion, **when** the first cache write runs, **then** the write is refused, zero cache files exist, and the mailbox works live-only with the visible notice.
+3. **Given** cache files on disk and exclusions deployed, **when** the deployed auto-commit job stages and the application backup runs, **then** no cache file (plaintext marker **or** ciphertext marker) appears in the staged set, any commit, or any archive member — while a positive-control allowed file does.
+
+### US-8 — Instant, honestly-labelled folder lists from the memory header cache (P0)
+
+Opening a folder shows its newest messages immediately from memory when they were recently fetched, each view honestly labelled with its age, with exactly one live refresh when the data is stale — and never a background refresh while the panel is closed.
+
+**Independent test:** open a folder (live fetch, cached); switch away and back within 5 minutes (instant display from cache, source=memory, zero new FETCH commands); age past 5 minutes (instant stale display + exactly one background live refresh); close the panel for an hour (cache dropped; zero commands while closed).
+
+1. **Given** a folder whose newest-50 headers were fetched less than 5 minutes ago, **when** the folder is opened, **then** rows render immediately with source `memory` and the recorded validation time, and no FETCH command is issued.
+2. **Given** cached rows older than 5 minutes, **when** the folder is opened, **then** the stale rows render immediately (labelled), and **exactly one** live refresh runs for that event — a failed refresh keeps the labelled stale rows plus a visible error/Retry and does not reset the timestamp.
+3. **Given** no cached rows, **when** the folder is opened, **then** one live fetch populates page one and the cache.
+4. **Given** the panel closed, **when** 30 minutes pass, **then** the folder's cached headers are dropped; no refresh, fetch or any IMAP command occurred while closed.
+5. **Given** a fresh snapshot with more than 50 messages, **when** the cache is examined, **then** it holds exactly the newest 50 and the live list is not shortened to match.
+
+### US-9 — Invalidation keeps the cache honest (P0)
+
+Every §3.11 event must actually discard what it says — a stale cache that lies about freshness or identity is worse than no cache.
+
+**Independent test:** drive each event against the fake server (UIDVALIDITY reset; external delete; own mark-read; override change; pair removal with an in-flight write; corrupt file; retention expiry) and assert the §3.11 discards.
+
+1. **Given** a folder's UIDVALIDITY changed, **when** anything next reads it, **then** every old-epoch header, cursor and count is gone, the saved version refreshes once, and no old UID is ever used against the new epoch.
+2. **Given** the user marked a message read (or sent/drafted), **when** a read that started before that action finishes afterward, **then** it publishes nothing — not into memory, not to disk, not as a timestamp — and the post-mutation refresh's data stands (the I-02 ordering rule).
+3. **Given** the pair is removed while a snapshot write is in flight, **when** the write completes, **then** no file is (re)created — the generation guard refuses it.
+4. **Given** the operator changes the host, port, credential or folder override, **when** the pair is next used, **then** the old generation's caches are deleted (not migrated) and rediscovery runs under the new generation.
+5. **Given** stale rows within their retention window, **when** they are rendered, **then** their age is visible (labelled) — they are never presented as fresh.
+
+### US-10 — Logs say what happened, never what the mail says (P1)
+
+Diagnostics must let an operator debug discovery and cache behaviour without ever recording a folder name, subject, address, Message-ID or raw server text.
+
+**Independent test:** run the full §6 suite with a leak-marker instrument (synthetic folder names/subjects containing distinctive markers); grep every log sink for the markers — zero hits — while the safe classes and counts ARE present.
+
+1. **Given** any operation in this package (success, unknown, ambiguous, failure), **when** its diagnostics are written, **then** they carry only opaque pair/generation IDs, safe classes, durations and counts.
+2. **Given** a server error containing folder names or message data, **when** it is reduced at the boundary, **then** only the safe class survives into logs and state.
+
+---
