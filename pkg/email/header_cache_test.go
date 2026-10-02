@@ -294,7 +294,7 @@ func TestHeaderCache_UidValidityChangeDiscardsEpoch(t *testing.T) {
 	if page, _, found := hc.Get(scope, FolderSent); found || len(page) != 0 {
 		t.Fatalf("old-epoch headers must be discarded (V-1): found=%v rows=%d", found, len(page))
 	}
-	if _, found := hc.GetCounts(scope); found {
+	if _, _, found := hc.GetCounts(scope); found {
 		t.Fatal("old-epoch counts must be discarded with the headers (V-1: 'every cached header, page cursor and count')")
 	}
 
