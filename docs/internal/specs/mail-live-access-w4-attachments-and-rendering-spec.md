@@ -784,3 +784,159 @@ A careless implementation would survive ordinary happy-path tests. These must di
 ### 9.4 Regression impact
 
 Existing behaviour that must keep passing unchanged: the current attachment Download UX and headers (`handleMailAttachment`'s disposition/filename discipline); ordinary workspace Library rendering (stored entries, edit/rename/move, HTML `allow-scripts` profile); the existing six email tools' policies and `read_message`'s Seen behaviour; existing Mail panel list/detail rendering for dated messages; `pkg/email/view_missing_folder_test.go` suites; existing signature/outbound policies. New regression tests: ordinary-workspace-Markdown rendering unchanged under the resource-policy work (positive control lives in the suite permanently); Download role preserved for under-cap parts; existing reply tool behaviour unchanged after the `BuildReplyRecipients` extraction (same outputs on the existing test corpus).
+
+---
+
+## 10. Reachability — Definition of Done
+
+Stated in this repo's two never-merged lines, with the specific evidence each requires:
+
+**Line 1 — code correct and tested.** Every RED test from §9 shown failing on pre-change code (tests-only CI commit or the one dispatcher-owned narrow local run), then green in CI; the mutation probes of §9.3 executed and killed (at minimum M1–M5); `make verify-contracts` green on the W0 contract commits; design-system and budget gates green for the frontend slices; security review passed (§12).
+
+**Line 2 — reachable by a user/agent.** Evidence that a real user and a real agent can invoke every feature, not that a library exists:
+
+| Reachability claim | Required evidence |
+|---|---|
+| A user can Open/Save/Download from the Mail panel | Executed E2E (`tests/e2e/mail-attachments.spec.ts`) + a UAT lane against the real UI; screenshots with workspace badge visible |
+| A user reaches the saved file in the Library | Executed Open-in-Library journey on the real file; Library list shows it |
+| An agent can list/read/save | A real agent turn invoking all three tools against a configured mailbox, with the transcript showing tool results and the file readable by ordinary file tools |
+| Every new tool is invocable (Hard Constraint #6) | `grep -rl '"list_email_attachments"' pkg/coreagent/ pkg/config/ pkg/tools/` non-zero across **all** registration points (§12 table); effective policy resolved `allow`/`allow`/`ask` for a seeded role asserted behaviorally (registry + policy resolution), not by grep alone |
+| The renderer seats exist | `LibraryPreviewPane` mounts the temporary source in the running SPA (component test + E2E), not only in stories |
+| The test plan was **executed**, not written | CI receipts attached per gate; "written, not executed" is not testing |
+
+---
+
+## 11. User-facing documentation TODOs (same change, drafted by the implementing lead, audited by docs-verifier)
+
+| Page and section (verified in this checkout) | What must be said |
+|---|---|
+| `docs/mail.md` → **Read messages** | The paperclip list behaviour's sibling: the attachment name/size list; **Open** opens a temporary Library view (no file created, vanishes on exit/reload); the exact context bar and Back behaviour; scriptless HTML/SVG-as-static-image behaviour; the 25 MB preview/save cap with larger-files Download-only; Save vs Download distinction; the "Save result unknown" state after a lost response and what an explicit retry returns (the prior receipt, never a duplicate); what "Save to Library first" means for the disabled actions. |
+| `docs/mail.md` → **Compose and send** | Reply vs Reply all recipient rules (Reply all keeps original To+Cc minus you, no duplicates, never the Bcc; plain Reply goes to the sender only); the quoted original is editable; Reply-To preference; Date → received date → "No date". |
+| `docs/mail.md` → **If something goes wrong** | Refused Save causes (permission, size, path); saved-but-audit-warning is still saved; over-cap Download-only; agent attachment tools: list/read freely, save asks with the normal Auto-approve caveat; stripped-styling notice and remote images blocked until "Load images". |
+| `docs/library.md` → **What the preview shows** | A Mail Open is not a file/list entry, bookmark or offline copy; no workspace path; vanishes on exit/reload; renderer support and unsupported formats; temporary read-only controls; Library Download/edit/rename/move/PDF fill-sign need Save first; the mail bar. |
+| `docs/library.md` → **How to add files** | The `mail → mailbox → UTC month` hierarchy from Save; sanitized, numbered saved names; saved attachments are normal shared workspace files (mailbox deletion does not remove them; ordinary backup rules apply); the 100 MB chat-upload limit stays separate from Mail's 25 MB. |
+| `docs/library.md` → **How to fill in and sign a PDF** | A temporary mail PDF must be saved first. |
+| `docs/library.md` → **Limits and things to watch** | Mail-derived HTML: original bytes, scripts off by default, the per-file scripts checkbox (that one file only), marker survives move/copy/rename/restore, missing-marker fails safe. |
+| `docs/security.md` | Temporary Open's no-disk/no-byte-cache rule; metadata-only token revocation; the temporary source's resource policy (sender content cannot fetch same-origin gateway resources); safe CSS/remote-resource limits and explicit image consent; scripts-off mail HTML vs workspace HTML isolation plus the per-file allowance; user-saved attachments vs the disposable Mail cache; ordinary tool ask/Auto/deny — there is no attachment-specific approval. |
+| `docs/troubleshooting.md` | Preview expiry/Back/reopen; over-cap Download-only vs refused Save; the "Save result unknown" state and its receipt-retry; saved-but-audit-warning must not advise re-saving; directory/path/disk errors; agent permission refusals; stripped styling and "No date" explanations. |
+
+docs-verifier audits every claim against the actual UI/handlers; security-lead checks the security wording before landing.
+
+---
+
+## 12. Hard Constraint #6 registration points (exact seams) and the required security review
+
+### 12.1 Every touch point for the three new tools (all required; any missed point = unreachable or boot-breaking)
+
+| # | Touch point | Change |
+|---|---|---|
+| 1 | `pkg/config/defaults.go::defaultToolPoliciesGeneral` (+ the ceiling composition) | Literal `list_email_attachments: allow`, `read_email_attachment: allow`, `download_email_attachment: ask` |
+| 2 | `pkg/config/validate.go::ReconcileToolPolicyCeiling` | Additive self-heal for old installs; never overwrites operator values; no per-agent backfill (guard: `scripts/check-no-fail-closed-backfill.sh` stays green) |
+| 3 | `pkg/coreagent/seed.go::allStaticToolNames` | The three names added (an override key absent here panics at boot via `validateOverrideKeys`) |
+| 4 | `pkg/coreagent/role_policies_adr090.go::ADR090RolePolicyInventory` | list/read join `commonWork` (same grants as `read_message`); save granted `ask` to mail-reading roles; admin/hidden roles keep their narrower mail authority; sparse tightening preserved |
+| 5 | `pkg/tools/auto_approve.go::autoApproveClasses` | list/read alongside the read tools; save → the existing workspace-path conditional class (Q4=A — no exception, no new mechanism) |
+| 6 | `pkg/tools/email.go::EmailToolset` | Tool structs + set construction (permissions screen and tests follow) |
+| 7 | `pkg/agent/email_tools.go::registerEmailToolsForAgent` | Live wiring to the shared service (metadata-only registration is not execution) |
+| 8 | `pkg/tools/general_builtin_catalog.go::GeneralBuiltinMetadata` | Catalog entries (policy parity with the ceiling) |
+| 9 | `pkg/gateway/gateway_sandbox.go::buildKnownBuiltinToolNames` + `::repairAndValidateToolPolicyCoverage` | Normal reconciliation/validation flow (no special case) |
+| 10 | Tool descriptions | Text supplied by prometheus-prompt-engineer to W10's file — not a second editor |
+
+### 12.2 Security review this package requires (in addition to the standard 5-reviewer gate)
+
+1. **CSS parser/policy review (security-lead, before the styling wave lands):** the checked-in property/value table against the artefact; the `<style>`-block emitter (hand-rolled from parsed nodes — the artefact flags its serialiser absence as Inferred/medium, to confirm at implementation); parser resource exhaustion; nested-rule and escape bypasses; the CSS `url()` pin-then-rewrite extension's token binding; proxy no-redirect discipline.
+2. **Saved-HTML provenance proof:** the marker's survival across `Root.Rename`/`CopyInto`/`MoveInto`/restore traced and proved; the fail-safe-on-missing-marker rule reviewed.
+3. **Preview grant lifecycle:** metadata-only grants, same-lease reference validation, token revocation/expiry indistinguishability on the new preview prefix; no byte payload retention anywhere.
+4. **Agent save path:** final-path authorization through `ResolveTurnFSPolicy`/`ResolvePath` before the authorized writer opens; no unconfined write of a checked string.
+
+---
+
+## 13. Open questions (with options and recommendations)
+
+No founder-level question remains open (Q1–Q5 answered and recorded). These are engineering decisions to settle at implementation start; each has a recommendation so the team can proceed on the default and revisit if the founder disagrees.
+
+**Q-A — The mailbox label inside `mail/<mailbox>/`.**
+Options: (a) sanitized mailbox address alone; (b) sanitized address + owning agent ID always; (c) address alone, agent-ID suffix only when two pairs would share a label.
+**Recommendation: (c)** — readable by default, disambiguated only on real collision, exactly the ADR's "sanitized mailbox address disambiguated by the validated owning agent ID" intent. The save service computes it once, server-side; never agent-supplied.
+
+**Q-B — What `read_email_attachment` returns for images/documents.**
+Options: (a) text-only first wave — binary formats return descriptor + explicit unsupported + the Save option; (b) full visual/document reader representation in the same wave.
+**Recommendation: (a) with (b) gated on the traced reader integration.** The ADR marks the visual/document tool-result adapter as Unknown-until-traced; shipping list+text+save with an honest unsupported outcome is reachable and safe immediately; the visual representation lands as a follow-up once the reader path is traced and demonstrated. No fake "read" for binary ever ships.
+
+**Q-C — Where the per-file scripts checkbox lives.**
+Options: (a) in the preview pane header (only visible when viewing the file); (b) in the Explorer's per-file action menu as well.
+**Recommendation: (a) for the first wave** — the decision is about *viewing* this file with scripts; keeping it at the point of viewing is the smaller, clearer surface. Adding it to the action menu later is additive.
+
+**Q-D — `<body>`-attribute honouring for saved/preview HTML.**
+Options: (a) leave body-level `bgcolor`/`background`/`text` unreachable (fragment sanitization drops them); (b) `serveHTML` wraps the fragment in fixed boilerplate carrying the sanitized body values.
+**Recommendation: (b)** — the artefact holds the three attributes in the allow-list either way and names the wrapper as the only way to honour them; the boilerplate is fixed and carries only sanitized values. Small cost, visible fidelity win for real mail.
+
+**Q-E — Style-attribute and `<style>` size caps.**
+Options: (a) 4 KB attribute / 16 KB block (Gmail-parity, artefact's suggestion); (b) tighter custom bounds.
+**Recommendation: (a)** — parity with the reference clients is the compatibility target; both sit well inside the existing 256 KB HTML cap.
+
+---
+
+## 14. Traceability matrix (story → scenarios → tests)
+
+| Story | BDD scenarios (§8 feature) | Tests (§9) |
+|---|---|---|
+| US-1 Open without saving | Temporary preview (all 8) | T1, T5, T14, T15, T17 |
+| US-2 Save + Download | Save/Download (8) | T2, T3, T4, T6, T16, T17 |
+| US-3 Agent tools | Agent tools (6) | T10, T11, T12, T1 (shared service), T17 |
+| US-4 Styling | Styling (4) | T7, T8, T17 |
+| US-5 Reply all | Reply (5) | T9, T16 (compose integration) |
+| US-6 Date fallback | Date (2) | T13 |
+| §5.1 resource policy | C-1..C-4 + positive control | T14, T17 |
+| §5.2 byte paths | Byte-path (4) | T1, T5 |
+| §5.3 handoff | Handoff (3) | T15, T17 |
+| §5.4 HTML profile | Saved-HTML marker | T4, T15 |
+
+Every FR-level statement in §§4–7 traces to a story above; every story has scenarios; every scenario names tests. Holdout checks (post-implementation, outside the matrix): (1) a colleague opens a real styled marketing mail and confirms it "looks like an email"; (2) a message with no Date shows "No date" everywhere including a reply quote; (3) a saved HTML attachment moved to another folder still opens scriptless with the checkbox working.
+
+---
+
+## 15. Implementation sequence within this package
+
+1. **W0 contract freeze first** (preview mint/response, save subresource + token, tool results, `message_ref` on descriptor outputs, nullable date, `preview_profile`/allowance field) — regenerated and committed before any handler/consumer.
+2. **W7 service + token reconciliation + marker storage** against tests 1–4.
+3. **W8 viewer source union + resource policy + handoff freeze with W3** against tests 14–15; I-06 interaction contract in the same slice.
+4. **W10 tools + policy catalog + `BuildReplyRecipients`** against tests 9–12; `read_message` descriptor extension rides it.
+5. **W9 CSS policy** behind its security-lead review against tests 7–8 — the sequence keeps the founder's quick wins (reply, dates) and the attachment flow ahead of full styling.
+6. **Dates (transport → contract consumers → display)** — small, independent, land early per the founder's ordering.
+7. **E2E + docs + docs-verifier + UAT** close the package.
+
+---
+
+## 16. Evidence table (spec-writing claims)
+
+| Claim | Evidence | Certainty |
+|---|---|---|
+| Design authority read in full | ADR-20261001 (807 lines, two reads), `adr-grill-report.md` (183 lines), `receipts/css-allowlist.md` (241 lines) — all read this session | Verified |
+| `SanitizeAttachmentName` exists and behaves as described | `grep -n "func SanitizeAttachmentName" pkg/email/view.go` → line 970, wraps `sanitizeMailPartName` (line 812); body read | Verified |
+| 25 MiB cap constant | `pkg/email/view.go`: `const maxViewPartBytes = 25 << 20` | Verified |
+| Library primitives exist as cited | `grep -n "^func "` on `pkg/library/transfer.go`, `mkdir.go`, `root.go` → `CreateUnique` (transfer:151), `Mkdir` (mkdir:28), `CleanRelPath` (root:384), `ValidateCreateName` (root:490), `MountAt` (root:299), `resolve` (root:264), `HostPath` (root:310), `Rename` (transfer:56), `CopyInto` (transfer:196), `MoveInto` (transfer:279) | Verified |
+| Today's single byte path + 413 | `pkg/gateway/rest_mail_read.go::handleMailAttachment` (line 324) read: whole-message `ReadView` → `mailPartByStableIndex` → 413 on `DataUnavailable` → `SanitizeAttachmentName` → extension-derived type | Verified |
+| Epoch hazard symbols | `parseMailRef` (view:140), `ReadView` (view:486), `ResolveRef` (view:935), `MarkSeenIn` (view:849), `handleMailSeen` (rest_mail_read:265) located | Verified |
+| No internal-date fallback today | `view.go:348` `Date: buf.Envelope.Date.UTC()`; `view.go:559` zero-Date omit; no `InternalDate` hit in view.go/transport.go | Verified |
+| Panel drops Cc / no quote | `MailPanel.tsx:549` `replyTarget = { from, subject, messageId }`; `MailComposeDialog.tsx` `to/cc/bcc: EMPTY_RECIPIENTS` | Verified |
+| Agent reply-all rule already merges To+Cc | `pkg/tools/email_compose.go::parseReplyRecipients` (line 490) read in full; `replyAllArg` (line 548) | Verified |
+| `sigStyleAttrRe` is character-class-only | `pkg/email/compose.go:209` regex read | Verified |
+| Sanitizer strips styling today; pin-then-rewrite is img-only | `rest_mail_preview.go`: `mailSanitizePreviewHTML` (267), `mailImageSrcRe` (287), `mailRewritePreviewSources` (297), `mailImgTagRe` (351), `mailExtractRemoteImageURLs` (358), `mailPreviewMaxHTMLBytes = 256 << 10` | Verified |
+| CSP and Library template as described | `mail_isolation_policy.go::mailIsolationPolicy` (32); `library_isolation_policy.go::libraryIsolationPolicyTemplate` (136, `allow-scripts`); `MailHtmlFrame.tsx::MAIL_HTML_FRAME_SANDBOX` (27); `LibraryPreviewPane.tsx` `sandbox="allow-scripts"` (580) | Verified |
+| Preview grant retains bytes / 15 min | `mail_preview_token.go`: `MailPreviewTokenTTL` (24), `mailPreviewGrant` (69) | Verified |
+| I-04 frontend seams | `url-safe.ts::isDisplayableImageSrc` (32); `KbMarkdownImage.tsx` imports it (51), gates (88), mounts (97/102); `library.ts::libraryDownloadUrl` (1190); `embed.go::spaBaseContentSecurityPolicy` (188) | Verified |
+| Policy/registration seams | `defaults.go::defaultToolPoliciesGeneral` (188) with email entries (300–304); `validate.go::ReconcileToolPolicyCeiling` (841); `compositor.go::resolveEffectivePolicyWith` (163); `auto_approve.go::autoApproveClasses` (140), `AutoWorkspacePath` (389); `role_policies_adr090.go::ADR090RolePolicyInventory` + `commonWork` (29); `seed.go::allStaticToolNames` (80, email names 141); `registerEmailToolsForAgent`/`SetSharedMailBudget` (email_tools.go 63/61); `gateway_sandbox.go` (123/256) | Verified |
+| Audit vocabulary gate | `audit.go::IsValidEventName` (403); `events.go` mail constants (401–416); no `mail.attachment_saved` exists | Verified |
+| Contract baselines | `MailAttachment.yaml` required fields (9–13); `MailMessageSummary.yaml` `date` required + `format: date-time` (10/20/81–84); `LibraryEntry.yaml` path required (12–14); `openapi.yaml::getMailAttachment` (10712) | Verified |
+| Viewer/Explorer seams | `LibraryPreviewPaneProps` (108), `LibraryTextBody` (623), `LibraryHtmlFrame` (438); `LibraryExplorer` selection (429–451), `handleDownload` (894), `renameMutation` (689), `transferMutation` (721); `libraryPreviewKind.ts::classifyLibraryEntry` (74) | Verified |
+| UI catalog present | `ls src/components/ui/` → button/checkbox/dialog/FormError/icon-button/tooltip (all with tests/stories) | Verified |
+| Date formatter asymmetry | `mail-format.ts` read (formatters reject NaN, not year one) | Verified |
+| Test harness | `imapserver_test.go::startMemIMAP` (35) | Verified |
+| Proposed files do not exist yet | `mailAttachmentPreviewSource.ts`, `pkg/mailattachment/`, `pkg/email/reply.go`, `pkg/tools/email_attachments.go`, `pkg/email/mailhtml/` — each checked absent | Verified |
+| docs sections named for TODOs | `grep '^## '` on `docs/mail.md`, `docs/library.md` | Verified |
+| Worktree/commit state | Branch `docs/adr-mail-live-access`; spec committed in 6 commits, author `Daniel Piatkowski <10800669+daniel-piatkowski-ai@users.noreply.github.com>`, no co-author trailers | Verified |
+| **Self-check** | Re-read the assembled spec against the dispatch brief's nine required elements + cover-at-least list; every `file::symbol` cited was opened this session (list above); certainty labels applied; no test/build/browser run performed; GitNexus unavailable → impact rows labelled Inferred per shared rule 9; plan-spec interactive gates satisfied by the approved ADR + founder answers + dispatch brief, with remaining ambiguities carried as §13 open questions with recommendations | Verified (scope/artifact); implementation outcomes Unknown |
+
+---
+
+*Spec ends. Skills: omnipus-shared-rules, plan-spec, omnipus-frontend-rules (register), omnipus-backend-rules (register).*
