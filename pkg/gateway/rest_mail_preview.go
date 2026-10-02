@@ -280,6 +280,10 @@ func mailSanitizePreviewHTML(raw string, inlines []email.MailPart, remoteURLs []
 	// over-cap style attributes (bounded work, P8).
 	prepared, blocks := mailhtml.ExtractStyleBlocks(rewritten, mailhtml.StyleMaxBlockBytes)
 	prepared = mailhtml.StripOversizedStyleAttrs(prepared)
+	// P4 decode-before-check on the attribute path: identifier escapes are
+	// decoded through the declaration parser, so the browser's reading of
+	// the property name is what the policy judges.
+	prepared = mailhtml.DecodeStyleAttrProperties(prepared)
 	sanitizedBlocks := make([]string, len(blocks))
 	for i, b := range blocks {
 		sanitizedBlocks[i] = mailhtml.SanitizeStylesheet(b, mailhtml.StyleMaxBlockBytes)

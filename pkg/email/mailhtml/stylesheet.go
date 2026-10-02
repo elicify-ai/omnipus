@@ -42,7 +42,9 @@ func stripVendorPrefix(property string) string {
 // closed set; else the bounded deny-screen). The value is screened in its
 // lowercased form, matching bluemonday's own handler input.
 func declarationAllowed(property, value string) bool {
-	prop := stripVendorPrefix(property)
+	// P4: decode identifier escapes BEFORE lookup - the browser reads
+	// col-backslash-6fr as "color"; the policy must judge the same truth.
+	prop := stripVendorPrefix(decodeCSSIdent(property))
 	if !IsAllowedProperty(prop) {
 		return false
 	}
