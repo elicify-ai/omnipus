@@ -591,7 +591,9 @@ When/Then statements summarising §4 — observable behaviour only:
 **Cache-first and freshness**
 
 - When a panel eligible event occurs, the system renders cache-first rows immediately and issues at most
-  one live refresh for that event.
+  one live refresh for that event — none at all when the event is an open or folder switch whose data was
+  validated within the last five minutes, exactly one when the data is absent or older; manual Refresh
+  and the panel's own successful actions always refresh.
 - When a live refresh settles under an older publication revision than the newest applied one, the
   system drops it unrendered.
 - When the panel is closed, the system issues no folder/count/header requests of any kind.
@@ -687,7 +689,7 @@ Machine-verifiable constraints:
 | # | Constraint | Testable form |
 |---|---|---|
 | MC-W3-1 | Page size is 25; Load more adds exactly 25; ceiling is 200 rows per folder per view | With stubbed pages, row counts after 0/1/7/8 loads are 0/25/175/200; the 8th Load more click is impossible — the control is gone at 200 and the search prompt is present. |
-| MC-W3-2 | At most one `mode=live` list request per eligible event | Network-log assertion per event across §4 US-1's scenarios: exactly 0 or 1 live requests, never 2+. |
+| MC-W3-2 | At most one `mode=live` list request per eligible event, and none on an open/switch whose cache is younger than five minutes | Network-log assertion per event across §4 US-1's scenarios: exactly 0 or 1 live requests (0 for the fresh-cache events of US-1 AS-8, 1 for stale/absent), never 2+. |
 | MC-W3-3 | Superseded responses never render | A delayed response whose `publication_revision` is older than the newest applied renders nothing and mutates no view state. |
 | MC-W3-4 | Null counts render "—" | `total: null` and `unread_count: null` each render the unknown marker; `0` renders `0`. |
 | MC-W3-5 | Presence frames carry only `type`, `action`, `observer_id`, `workspace_id` | Serialized frame assertion on every emitted frame (no extra keys). |
@@ -703,16 +705,26 @@ Machine-verifiable constraints:
 Conventions: one action per When; multiple assertions in Then/And; every scenario carries its category
 and a `Traces to:` line naming the US and acceptance-scenario number from §4.
 
-### US-1 — Cached rows, one live refresh per event
+### US-1 — Cached rows, refreshed only when stale
 
-**Scenario 1.1 — Warm open renders cached rows then validates once** *(Happy)*
+**Scenario 1.1 — Fresh open renders cached rows without dialling** *(Happy)*
 **Given** the folder cache for mailbox M holds headers validated 40 seconds ago with `stale=false`
 **And** the live data would return one newer message
 **When** the user opens the Mail panel on M
 **Then** the list renders the cached rows immediately with the freshness line "Checked 40 seconds ago"
-**And** exactly one `mode=cache_first` request and one `mode=live` request were issued
-**And** when the live response settles, the new message appears without a skeleton flash.
-*Traces to:* US-1 AS-1, US-2 AS-2.
+**And** exactly one `mode=cache_first` request and **no** `mode=live` request were issued
+**And** the newer message appears after the next stale-gated refresh or manual Refresh, not during this
+open event.
+*Traces to:* US-1 AS-8, US-2 AS-2.
+
+**Scenario 1.7 — Stale open dials exactly once** *(Happy)*
+**Given** the folder cache for mailbox M holds headers validated 7 minutes ago (`stale=true`,
+`refresh_needed=true`)
+**When** the user opens the Mail panel on M
+**Then** the cached rows render immediately and exactly one `mode=live` request follows the cache-first
+read
+**And** the rows update in place when the refresh settles, without a skeleton flash.
+*Traces to:* US-1 AS-1, MC-W3-2.
 
 **Scenario 1.2 — Folder switch starts a fresh event** *(Happy)*
 **Given** the panel is open on Inbox with a live refresh in flight
@@ -782,20 +794,32 @@ list populates from it
 **And** the freshness line reflects the live source.
 *Traces to:* US-2 AS-6.
 
-**Scenario 2.5 — Null last-validated time is stale, not fresh** *(Edge)*
-**Given** rows arrive with `source=memory` and `last_validated_at=null`
+**Scenario 2.5 — Null last-validated time, refresh in flight** *(Edge)*
+**Given** rows arrive with `source=memory`, `last_validated_at=null`, and a refresh in flight
+(`refresh_needed=true`)
 **When** the list renders
-**Then** the freshness presentation is the stale one ("Last checked unknown · Checking…")
+**Then** the freshness line reads exactly "Last checked unknown · Checking…" (§11 S-5's unknown-time
+variant — the string is a pin, not an improvisation)
 **And** no "just checked" wording appears.
+*Traces to:* US-2 AS-7.
+
+**Scenario 2.6 — Unknown time, no refresh in flight** *(Edge)*
+**Given** rows arrive with `source=live`, `last_validated_at=null`, and `refresh_needed=false` (no
+refresh follows)
+**When** the list renders
+**Then** the freshness line reads exactly "Last checked unknown." with no "Checking…" indicator
+**And** the rows and counts render normally otherwise.
 *Traces to:* US-2 AS-7.
 
 ### US-3 — Paging and search
 
 **Scenario 3.1 — First page and Load more** *(Happy)*
-**Given** a folder with 130 messages
+**Given** a folder with 130 messages whose cache was validated moments ago (the open event issues no
+live refresh — scenario 1.1)
 **When** the folder view opens and the user activates "Load more" once
 **Then** the list shows 50 rows in stable newest-first order
-**And** exactly two page requests were issued.
+**And** the open event's cache-first read was the only page-1 request and "Load more" issued exactly one
+additional request carrying page 2 — no page-1 re-fetch on Load more.
 *Traces to:* US-3 AS-1, US-3 AS-2.
 
 **Scenario 3.2 — Ceiling replaces Load more with search** *(Happy)*
@@ -970,11 +994,22 @@ data.bin).
 **Scenario 6.6 — Lost save response shows unknown, retry reuses the token** *(Error)*
 **Given** a save whose response was lost after a possible commit
 **When** the panel renders the outcome
-**Then** the state reads "Save result unknown — checking whether it saved." with an explicit retry
-control, and no automatic retry fires
+**Then** the state reads "Save result unknown — checking whether it saved." (§11 state S-17) with an
+explicit retry control, and no automatic retry fires
 **And** when the user retries, the same `save_operation_token` is sent and the prior receipt resolves
 the state to saved (or a visible failure) without a second file.
 *Traces to:* US-6 AS-7.
+
+**Scenario 6.7 — Failed Open shows a pinned row state** *(Error)*
+**Given** the user activated Open on an attachment whose real bytes exceed the 25 MB cap while its
+reported metadata said smaller
+**When** the mint aborts with the typed late-failure error
+**Then** the attachment row shows "This attachment is larger than the 25 MB preview limit. Use
+Download." (§11 state S-26) and the Open control is re-enabled
+**And** no partial preview mounted and the reading pane is unchanged
+**And** a stale-reference (typed 409) mint failure shows S-27 and a busy (503) mint failure shows S-28
+likewise — never a spinner, a raw error string, or a silent return to the list.
+*Traces to:* US-6 AS-8.
 
 ### US-7 — Handoff accessibility
 
@@ -1003,7 +1038,7 @@ the state to saved (or a visible failure) without a second file.
 **Scenario 7.4 — Save outcomes announce without moving focus** *(Happy)*
 **Given** focus resting on the context bar's Save control
 **When** the save settles (success, audit-warning success, or failure)
-**Then** the polite live region announces the outcome text from §11 (states S-12/S-13)
+**Then** the polite live region announces the outcome text from §11 (states S-15/S-16/S-17)
 **And** document focus did not move.
 *Traces to:* US-7 AS-3.
 
@@ -1119,7 +1154,7 @@ files). Levels: Unit (vitest, node/DOM), Component (vitest + Testing Library), E
 
 | Order | Test (file `src/components/workspaces/mail/mailCacheView.test.ts`) | Proves |
 |---|---|---|
-| U1 | `one live refresh per eligible event` — drive open/switch/refresh/own-action events against a stubbed fetch; count `mode=live` calls | MC-W3-2: 0 or 1 live request per event, never 2+. |
+| U1 | `live refresh is stale-gated` — drive open/switch with a fresh cache (expect 0 live) and with an absent or 5-minutes-stale cache (expect exactly 1), then refresh/own-action events, against a stubbed fetch; count `mode=live` calls | MC-W3-2: 0 or 1 live request per event per the conditional, never 2+; a fresh-cache open or switch never dials (US-1 AS-8). |
 | U2 | `superseded revision is dropped` — resolve an older-`publication_revision` response after a newer one applied | MC-W3-3: no view mutation, no label change from the stale response. |
 | U3 | `revision advances on own mutation and invalidation` — mark-seen/send/refresh events advance the local revision | The ordering rule the panel obeys is the one W2/W4 define; the adapter never invents revisions. |
 | U4 | `failure preserves last-validated time` — fail the live refresh | The displayed time stays at the cache's value; retry state set; no timestamp advance. |
@@ -1147,11 +1182,11 @@ files). Levels: Unit (vitest, node/DOM), Component (vitest + Testing Library), E
 
 | Order | Test (file) | Proves |
 |---|---|---|
-| C1 | `MailPanel.cacheFirst.test.tsx` — warm open, stale-and-checking, failed-refresh, cache-unavailable | §7 scenarios 1.1, 2.1, 2.2, 2.4 end-to-end through the DOM, with request-count assertions on a stubbed `fetch`. |
+| C1 | `MailPanel.cacheFirst.test.tsx` — fresh-cache open (zero live), stale open (exactly one live), stale-and-checking label, failed-refresh, cache-unavailable | §7 scenarios 1.1, 1.7, 2.1, 2.2, 2.4 end-to-end through the DOM, with request-count assertions on a stubbed `fetch`. |
 | C2 | `MailPanel.paging.test.tsx` — first page, Load more, ceiling, search reachable, empty search, stale-cursor reset, exit-releases | §7 scenarios 3.1–3.6; MC-W3-1 row-count ladder (0/25/175/200). |
 | C3 | `MailPanel.folderAvailability.test.tsx` — present/absent/unknown rail states; unknown ≠ 0; override warning mapping | §7 scenarios 2.3, 4.2, 4.3. |
 | C4 | `MailPanel.attachmentRows.test.tsx` — paperclip true/false; action names; over-cap copy; size unknown | §7 scenarios 6.1, 6.2, 6.4. |
-| C5 | `MailPanel.attachmentHandoff.test.tsx` — Open mints and hands the generated descriptor; Back focus order (action → row → folder) with announcements; save announcements without focus movement | §7 scenarios 6.3, 7.1–7.4; MC-W3-6/8. Assert the descriptor is the generated type shape — a hand-rolled parallel object fails the test. |
+| C5 | `MailPanel.attachmentHandoff.test.tsx` — Open mints and hands the generated descriptor; Back focus order (action → row → folder) with announcements; save announcements without focus movement; failed-Open row states (S-26/S-27/S-28) | §7 scenarios 6.3, 6.7, 7.1–7.4; MC-W3-6/8. Assert the descriptor is the generated type shape — a hand-rolled parallel object fails the test. |
 | C6 | `MailPanel.noTimer.test.tsx` — advanced fake timers, 35 s + 70 s | MC-W3-10: zero folder/list timer requests; summary cadence unchanged. |
 | C7 | `MailPanel.refreshRetry.test.tsx` — Refresh vs Retry markers; busy reason copy | §7 scenarios 10.1–10.3; MC-W3-9 (request-builder assertion). |
 | C8 | `MailPanel.states.test.tsx` (existing file — qa-lead rewrites the D25 oracle, keeps every still-valid state assertion) | The retired 30 s cadence assertions become the §7 1.6 assertions; all other state texts keep their pins. |
@@ -1167,6 +1202,7 @@ files). Levels: Unit (vitest, node/DOM), Component (vitest + Testing Library), E
 | E3 | `tests/e2e/mail-attachment-open.spec.ts` — Open → viewer → Back (focus), Save success → Open in Library, over-cap Download-only | US-6/US-7 journeys with real focus/announcement observation (`aria-live` text, `document.activeElement`). |
 | E4 | `tests/e2e/mail-temporary-source-policy.spec.ts` — the I-04 dataset with browser request interception counters; workspace positive control | MC-W3-7 in a real browser. |
 | E5 | `tests/e2e/mail-presence.spec.ts` — open/close across two pages, reload, logout | §7 scenarios 5.1–5.6 against the real socket lifecycle. |
+| E6 | `tests/e2e/mail-saved-html-scripts.spec.ts` — save an HTML attachment, reopen it in the Library viewer: scripts-off with the mail-derived notice, the per-file "Allow scripts" checkbox flips only that file, an ordinary workspace HTML file is unaffected, a missing marker fails safe | US-9 scenarios 9.1–9.3 / FR-W3-18 executed end to end — the saved-HTML leg the first draft cited but never defined (grill finding F-7). |
 
 ### 8.6 Test datasets (boundary / error / happy rows; every row traces to a scenario)
 
@@ -1179,22 +1215,27 @@ files). Levels: Unit (vitest, node/DOM), Component (vitest + Testing Library), E
 | 3 | memory | −7 min | true | true | 40 | stale label + Checking… |
 | 4 | encrypted_disk | −26 h | true | true | null | stale label; count "—" |
 | 5 | none | null | false | true | null | loading → live fill; never "empty" |
-| 6 | live | null | — | — | 7 | stale presentation despite source=live (unknown time) |
+| 6 | live | null | true | true | 7 | "Last checked unknown · Checking…" (unknown time, refresh in flight — scenario 2.5's pin) |
 | 7 | memory | −2 min | false | false | 0 | legit zero renders `0` (distinct from row 4) |
+| 8 | live | null | false | false | 7 | "Last checked unknown." with no "Checking…" indicator (scenario 2.6's pin) |
 
 **D-2 — Paging ladder** (U-C2, E2; traces US-3): folders of 0, 1, 24, 25, 26, 199, 200, 201 messages.
 Boundaries: 24 → no Load more; 25 → exactly one page, Load more present iff `has_more`; 200 → ceiling
 copy + search; 201 → still 200 max rows ever displayed. Error rows: 409 stale cursor on page 2; cursor
 from a different folder replayed at the same view (must 409, not render).
 
-**D-3 — Folder availability** (C3; traces US-2/US-4): {present, override, special_use, fallback} ×
+**D-3 — Folder availability** (C3; traces US-2/US-4): {present, override, special_use, fallback, saved} ×
 {absent-confirmed, unknown-no-candidates, unknown-network-failure}; INBOX missing (account error —
-never an empty rail); inbox unread_count 0 vs null.
+never an empty rail); inbox unread_count 0 vs null. `mapping_source=saved` renders as an ordinary
+override (the register row 3 five-value enum).
 
 **D-4 — Attachment descriptors** (C4/C5; traces US-6): sizes {0?, unknown(null), 1 B, 25 MiB − 1,
 25 MiB exactly, 25 MiB + 1, misreported-small-with-large-actual}; filenames {plain, spaces, unicode,
 hostile `../x`, empty-after-sanitize → `attachment`}; `has_attachments` true/false across 25 rows;
 `message_ref` present/absent (absent must never occur on a W0-regenerated build — the I-03 contract).
+The misreported-small-with-large-actual size row expects the typed late-failure abort with §11 state
+S-26 on the attachment row (scenario 6.7), never a mounted preview; the 409/503 mint-failure rows live
+in D-7 and scenario 6.7.
 
 **D-5 — Handoff focus dataset** (C5, E3; traces US-7): originating action present / message present
 row gone / folder changed / panel workspace switched while viewing; announcements asserted per §7 7.2
@@ -1241,6 +1282,12 @@ At least these mutations; each names the check that kills it:
 10. **Mutation: paperclip derived from `attachments.length > 0` on cached rows lacking the flag.**
     Killed by C4 asserting the indicator against `has_attachments` (not list length), including a row
     with `has_attachments=true` and a cache row lacking an attachments array.
+11. **Mutation: live refresh on every open/switch regardless of freshness.** A panel that dials the
+    server even when the cache is seconds old survives every render assertion — it only shows in request
+    counts. Killed by U1/C1's fresh-cache zero-live assertion and scenario 1.1 (US-1 AS-8, MC-W3-2).
+12. **Mutation: a failed Open/mint left spinning or silently dismissed.** Survives every success-path
+    journey. Killed by C5/E3's failed-mint rows asserting the pinned S-26/S-27/S-28 row states and that
+    no partial preview mounted (US-6 AS-8, FR-W3-23).
 
 ### 8.8 Regression plan
 
@@ -1254,6 +1301,13 @@ qa-lead rewrites (legacy oracles contradicting this spec): the D25 cadence asser
 `MailPanel.states.test.tsx` (becomes C8), and any `MailPanel.endlessLoading.test.tsx` /
 `MailPanel.listSkeleton.test.tsx` expectations that pin a full-list skeleton where the new design
 requires stale rows to stay visible — each rewrite cites the section of this spec that supersedes it.
+Also in the rewrite list: **`MailPanel.staleDraft.test.tsx` and `MailPanel.staleDraftRetry.test.tsx`**
+(grill finding F-4). They pin verbatim, five times over, the drafts-only string `This draft was changed
+or deleted elsewhere. The list has been refreshed.` (Verified:
+`src/components/workspaces/mail/MailPanel.tsx::MailPanel`) — §11 S-11 generalizes that surface to all
+folders with new text, so these oracles change with it; qa-lead re-pins them to the S-11 string with
+that citation. They were absent from this section's first-draft preserve and rewrite lists — the exact
+surprise-red the regression plan exists to prevent.
 
 New regression seam: the workspace positive control in D-6/E4 (ordinary Library Markdown rendering)
 must be recorded once before the W8 renderer changes land, so a later regression has a baseline.
@@ -1266,9 +1320,11 @@ must be recorded once before the W8 renderer changes land, so a later regression
 - **FR-W3-1**: The panel MUST render a cache-first response's rows before any live request settles, for
   the folder rail, the message list and the reading pane's metadata, on every eligible event.
   (MUST; US-1)
-- **FR-W3-2**: The panel MUST issue at most one `mode=live` request per eligible event per surface, and
-  MUST drop any response whose `publication_revision` is older than the newest applied revision. (MUST;
-  US-1)
+- **FR-W3-2**: The panel MUST issue at most one `mode=live` request per eligible event per surface — on
+  panel open and folder switch it MUST issue one only when the folder's data is absent or its last
+  validation is older than five minutes, while manual Refresh and the panel's own successful actions
+  always refresh (founder Q-C) — and MUST drop any response whose `publication_revision` is older than
+  the newest applied revision. (MUST; US-1)
 - **FR-W3-3**: The panel MUST NOT contain a repeating timer that fetches folders, counts or headers;
   the watcher banner's 30-second saved-state summary poll MAY remain. (MUST; US-1)
 - **FR-W3-4**: Every folder/list/detail response's `MailReadMetadata` MUST be rendered as its exact
@@ -1280,8 +1336,9 @@ must be recorded once before the W8 renderer changes land, so a later regression
   visible Retry; timestamps MUST NOT advance on failure. (MUST; US-2)
 - **FR-W3-7**: List paging MUST be 25 rows per page, +25 per Load more, with a hard ceiling of 200 rows
   per folder per view; beyond the ceiling the search control MUST be offered and MUST work. (MUST; US-3)
-- **FR-W3-8**: Search MUST run live (never cache-served), under the same 25/200 discipline, with a
-  visible exit back to the browse view. (MUST; US-3)
+- **FR-W3-8**: Search MUST run live (never cache-served), matching subject plus sender/recipient
+  substrings server-side within the same 25/200 discipline (founder Q-D=A), with a visible exit back to
+  the browse view. (MUST; US-3)
 - **FR-W3-9**: A typed stale-cursor refusal MUST reset the view to the folder's first page with a
   visible notice and no automatic replay. (MUST; US-3)
 - **FR-W3-10**: The mailbox settings surface MUST expose Sent/Drafts folder-name fields bound to the
@@ -1312,6 +1369,15 @@ must be recorded once before the W8 renderer changes land, so a later regression
   it, else the generic busy copy. (SHOULD; US-10)
 - **FR-W3-21**: The panel MAY keep the existing "Load images" consent affordance for HTML bodies
   unchanged this phase (the broader F4 styling work is W9/W4's). (MAY)
+- **FR-W3-22**: An explicit retry of a save whose result is unknown MUST carry the same
+  `save_operation_token` and MUST resolve from the prior receipt; the panel MUST never re-send Save
+  automatically and MUST NOT mint a fresh token on retry. (MUST; US-6 AS-7; the M-02 correction — this
+  requirement now owns the behaviour the first draft left only in scenarios and datasets, grill finding
+  F-8)
+- **FR-W3-23**: A failed Open/mint MUST render its matching pinned failure state (§11 S-26/S-27/S-28) on
+  the attachment row, MUST NOT mount a partial preview or leave the row spinning, and MUST leave the
+  user a visible next action (retry, or Download where applicable). (MUST; US-6 AS-8; the I-05
+  late-failure ordering, grill finding F-3)
 
 ### Success criteria
 
@@ -1349,10 +1415,12 @@ must be recorded once before the W8 renderer changes land, so a later regression
 | FR-W3-15 | US-6 | 6.3, 6.5 | C5, E3 |
 | FR-W3-16 | US-7 | 7.1–7.6 | C5, E3 |
 | FR-W3-17 | US-8 | 8.1–8.5 | C5 (D-6), E4 |
-| FR-W3-18 | US-9 | 9.1–9.3 | E3 (saved-HTML leg), joint W8 viewer tests |
+| FR-W3-18 | US-9 | 9.1–9.3 | E6 (saved-HTML E2E), joint ADR-W8 viewer component tests |
 | FR-W3-19 | US-10 | 10.1, 10.2 | C7 |
 | FR-W3-20 | US-10 | 10.3 | C7 |
 | FR-W3-21 | US-8 | 8.3 | existing Load-images tests (unchanged) |
+| FR-W3-22 | US-6 | 6.6, 7.4 | C5, E3 (D-7 retry rows) |
+| FR-W3-23 | US-6 | 6.7 | C5, E3 |
 
 Every FR appears above; every scenario traces to at least one FR through its US. Datasets D-1…D-8 are
 referenced from §8 and inherit their rows' traces.
