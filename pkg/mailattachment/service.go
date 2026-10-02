@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"mime"
 	"path"
 	"strings"
 	"time"
@@ -244,10 +245,11 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (*SaveReceipt, erro
 	}
 
 	// The saved mail-derived HTML profile (Q5=A): original bytes, marker
-	// written only here. An HTML file whose marker cannot be written fails
-	// the save (fail-closed): an unmarkable mail-derived HTML file must
-	// never land scripts-capable.
-	if s.writer.MarkerStore() != nil && strings.EqualFold(path.Ext(finalRel), ".html") {
+	// written only here. The gate decides on what the content IS, not only
+	// the name: the part's declared content type or an html-ish saved
+	// extension both make it an HTML document (the F7 finding — a .htm
+	// attachment is the same HTML surface and used to save unmarked).
+	if mailDerivedHTMLDocument(finalRel, part.ContentType) {
 		if merr := s.writer.MarkerStore().Mark(finalRel); merr != nil {
 			s.cleanupAfterRefusal(finalRel, nil)
 			return nil, fmt.Errorf("%w: could not record the mail-derived marker for the saved HTML file: %v", ErrDestinationWrite, merr)
@@ -294,6 +296,26 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (*SaveReceipt, erro
 		return nil, err
 	}
 	return &receipt, nil
+}
+
+// mailDerivedHTMLDocument reports whether a saved part is an HTML document —
+// the class the §5.4 scripts-off profile exists for. The part's declared
+// content type decides first (text/html is HTML whatever the file is named);
+// the saved name's extension decides independently (mail mislabels parts,
+// and the Library serves by name). The extension set matches the serve
+// side's HTML-document set (gateway::libraryExtIsHTMLDocument) so a saved
+// file can never be an HTML document to one side and not the other; a
+// content-type-marked file whose extension is not html-ish is inertly
+// marked — the over-strict, safe direction.
+func mailDerivedHTMLDocument(finalRel, contentType string) bool {
+	if mt, _, err := mime.ParseMediaType(contentType); err == nil && strings.EqualFold(mt, "text/html") {
+		return true
+	}
+	switch strings.ToLower(path.Ext(finalRel)) {
+	case ".html", ".htm", ".xhtml":
+		return true
+	}
+	return false
 }
 
 // cleanupAfterRefusal removes a partial/unwanted output and REPORTS a
