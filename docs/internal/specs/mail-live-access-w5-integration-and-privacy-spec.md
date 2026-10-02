@@ -340,3 +340,207 @@ The generation that invalidates caches and blocks late completions must survive 
 | **W3 (SPA)** | Generated REST/WS types only | Presence frames, metadata fields, cleanup-pending result — all via W0's generated types; no ad-hoc JSON | SPA missing → server behaviour unchanged (server never depends on UI) |
 | **Deployment (omnipus-agent-os, outside repo)** | The `mail-cache/` deny rule in the provisioning script's ignore template + idempotent re-run | Owned by team-lead/founder ops; this package specifies it (US-4) and consumes its evidence | Rule absent → the product-side gate keeps disk writes blocked (defence in depth) |
 | **launchd auto-commit job** | Reads whatever the deny-list allows | Not controllable by product code; the ignore rule is the only lever | Job blocked/unloaded (today's live state) does NOT weaken the gate — the gate is the rule + product check, not the job's health |
+
+---
+
+## 5. BDD scenarios
+
+### Feature: One shared mail runtime
+
+#### Scenario B-1: All three paths resolve one runtime
+**Happy** · Traces to: US-1.1, MC-1
+**Given** a booted gateway with a configured mailbox,
+**When** the panel handler, an agent tool and a watcher cycle each resolve their mail runtime handles,
+**Then** all three hold the same pool instance, the same budget instance and the same cache-manager instance.
+
+#### Scenario B-2: Two pairs, one account, no shared flight data
+**Alternate** · Traces to: US-1.2, MC-3
+**Given** pairs P1 and P2 configured on the same `host:port|username` account with different Sent folder mappings,
+**When** both issue the same folder-list request concurrently against a fake server whose responses are marked per pair,
+**Then** P1 receives only P1's mapping result and P2 only P2's, while the fake server never sees more than two concurrent dials for the account.
+
+#### Scenario B-3: Ninth socket demand is refused visibly
+**Error** · Traces to: US-1.3, MC-2
+**Given** eight global sockets active on the fake server,
+**When** a ninth read arrives and waits out the 5-second acquisition window,
+**Then** the caller receives the typed busy refusal carrying `pool_busy`, and the fake server's accepted-connection count never exceeds eight.
+
+#### Scenario B-4: No unmanaged client construction
+**Edge** · Traces to: US-1.4, MC-1
+**Given** any REST route, tool registration or watcher cycle,
+**When** it constructs its mail client,
+**Then** the client carries the injected shared handles, and a client built without them is a construction error surfaced in tests — never a silently unmanaged dialer.
+
+### Feature: Panel presence lifecycle
+
+#### Scenario B-5: Open frame grants retention; close frame revokes one observer
+**Happy** · Traces to: US-2.1, US-2.2, MC-4
+**Given** an authenticated WebSocket with an acknowledged mail observer,
+**When** a panel list request retains its socket past request end and then the same connection sends the observer's close frame,
+**Then** the retained socket closes and the server's socket count returns to baseline, while a second tab's observer on another connection keeps its own retained socket.
+
+#### Scenario B-6: Abrupt socket death revokes observers
+**Error** · Traces to: US-2.3, MC-4
+**Given** a live observer whose client crashes without sending close,
+**When** the pong-wait read deadline expires and teardown runs,
+**Then** the observer is revoked by the teardown hook, idle panel-owned sockets close, and a shared in-flight read completes only for its remaining real owners — with no polling or timer introduced.
+
+#### Scenario B-7: Requests without presence degrade, never fail
+**Alternate** · Traces to: US-2.4
+**Given** a mailbox request carrying an unknown or stale observer id (or none at all),
+**When** the handler executes it,
+**Then** the request performs live request-scoped work (or serves cache per its mode), retains no socket, and returns success or its own genuine failure — presence absence is never itself an error.
+
+#### Scenario B-8: Presence never grants access
+**Edge** · Traces to: US-2.5
+**Given** an authenticated connection with an open observer for workspace W1,
+**When** a mailbox request addresses a pair in workspace W2 the connection is not authorized for,
+**Then** the existing pair authorization refuses it exactly as it would without any presence — observer association adds retention, never access.
+
+### Feature: Encrypted cache placement and the write gate
+
+#### Scenario B-9: First cache write lands correctly
+**Happy** · Traces to: US-3.1, US-3.2, MC-5
+**Given** a temp data directory whose ignore file matches the cache directory,
+**When** a pair's folder metadata is written,
+**Then** the file exists at `<data-root>/mail-cache/<opaque-pair-id>/folders.enc`, the directory is 0700, the file 0600, the content is ciphertext (no plaintext marker survives), and a second pair's path differs.
+
+#### Scenario B-10: Unexcluded directory blocks writes
+**Error** · Traces to: US-3.3, MC-6
+**Given** a temp data directory whose ignore files do NOT match the cache directory,
+**When** the first cache write is attempted,
+**Then** no file or directory is created, the pair serves live-only, and the surfaced cache state carries the `cache_unavailable` notice code.
+
+#### Scenario B-11: Rule present in either location allows writes
+**Alternate** · Traces to: US-3.3, MC-6
+**Given** the rule present in `.git/info/exclude` but not `.gitignore` (and the mirror case),
+**When** a cache write is attempted,
+**Then** the write proceeds — either location satisfies the conservative gate.
+
+#### Scenario B-12: Symlink at the cache path is refused
+**Error** · Traces to: US-3.4
+**Given** a symlink placed at the cache directory path pointing outside the data root,
+**When** the manager resolves or writes,
+**Then** the operation is refused with a safe class and nothing is written through the link.
+
+#### Scenario B-13: File tools cannot reach the cache
+**Error** · Traces to: US-3.5, MC-16
+**Given** an agent holding normal workspace file authority,
+**When** it resolves a path under `mail-cache/` for read or write,
+**Then** the filesystem policy refuses the path — the cache is never agent-reachable regardless of workspace grants.
+
+### Feature: Backup, restore and the deployment exclusion
+
+#### Scenario B-14: Tar backup skips the cache, keeps the control
+**Happy** · Traces to: US-4.2, MC-7
+**Given** a data directory containing `mail-cache/x.enc` and an ordinary allowed state file,
+**When** a backup archive is created,
+**Then** the member listing contains the control file and no `mail-cache` member.
+
+#### Scenario B-15: Restore never resurrects cache members
+**Alternate** · Traces to: US-4.2, MC-7
+**Given** a hand-built archive that (like an old pre-fix archive could) contains a `mail-cache` member,
+**When** it is restored into a scratch directory,
+**Then** no cache file materializes, while ordinary members extract normally.
+
+#### Scenario B-16: The exclusion gate matches the deployed deny-list semantics
+**Edge** · Traces to: US-4.1, US-4.4
+**Given** the live provisioning-script ignore template with the `mail-cache/` rule added,
+**When** the product gate evaluates exclusion,
+**Then** the gate's rule-match semantics agree with `git check-ignore` on the deployed rules — the gate is conservative (refuses on doubt), and E1–E5 of US-4 all pass on the deployment receipt.
+
+### Feature: Removal cascades
+
+#### Scenario B-17: Mailbox removal with successful cleanup
+**Happy** · Traces to: US-5.2
+**Given** a configured pair with a cache subtree,
+**When** the mailbox is deleted,
+**Then** the response is full `removed`, the config entry and credentials are gone, and the pair's cache subtree no longer exists on disk.
+
+#### Scenario B-18: Failed unlink is cleanup-pending, never success
+**Error** · Traces to: US-5.2, US-5.3, MC-8
+**Given** a pair whose cache directory is made unwritable (unlink will fail),
+**When** the mailbox is deleted,
+**Then** the response is `removed_cleanup_pending` with a safe cleanup code, the pair remains tombstoned, no success is claimed, and the Retry-cleanup operation — invoked after the config row is gone — completes the purge and reports success truthfully.
+
+#### Scenario B-19: Late cache write cannot resurrect a removed pair
+**Error** · Traces to: US-5.4, MC-9
+**Given** a cache write paused mid-flight when the mailbox is deleted,
+**When** the paused write resumes and completes,
+**Then** the tombstone/generation check discards it: no file exists, no cache state advances, and the deletion outcome is unchanged.
+
+#### Scenario B-20: Agent deletion cascades all its pairs
+**Alternate** · Traces to: US-5.5
+**Given** an agent with mailboxes in three workspaces and cache subtrees for each,
+**When** the agent is deleted,
+**Then** all three subtrees are purged (best-effort, truthful outcome), and any failed purge surfaces the pending-cleanup state rather than a clean success.
+
+#### Scenario B-21: Workspace deletion purges pairs it cascades
+**Alternate** · Traces to: US-5.6
+**Given** a workspace with two mailbox pairs and cache subtrees,
+**When** the workspace is deleted,
+**Then** each cascaded pair's subtree is purged during `releaseRuntimeResources`, and the wholesale workspace-directory wipe's success is not mistaken for cache cleanup (the cache lives outside `workspaces/<id>/`).
+
+#### Scenario B-22: Credential change invalidates and rebuilds
+**Error** · Traces to: US-5.7, US-8.3, MC-10
+**Given** a pair with a valid encrypted snapshot,
+**When** its password is changed in config (offline, then process restart),
+**Then** the old snapshot is rejected by fingerprint mismatch, deleted without plaintext salvage, leases from the old identity are closed, and the pair rebuilds live on next open.
+
+#### Scenario B-23: Key lock is distinct from cache miss
+**Edge** · Traces to: US-8.4
+**Given** a locked credential store,
+**When** a cache read is attempted,
+**Then** the manager reports the store-locked state distinctly (not a cache miss, not corruption), serves live-only per the budget, and shows the safe cache warning — and never creates or regenerates a key over existing data.
+
+### Feature: Metadata-only preview grants
+
+#### Scenario B-24: Mint stores metadata only
+**Happy** · Traces to: US-6.1, MC-11
+**Given** an authenticated session and a valid message reference,
+**When** the preview mint completes,
+**Then** the grant in the token store contains the pair/folder/ref/load-remote identity, session binding and expiry — and zero HTML string, zero inline part bytes, zero attachment data (white-box inspection).
+
+#### Scenario B-25: Serve fetches live through the budget
+**Happy** · Traces to: US-6.2, MC-12
+**Given** a minted grant,
+**When** the SPA serves the preview HTML and one inline part,
+**Then** each serve request performs its own budget-gated live fetch (fake-server command counter increments per request), the response carries `Cache-Control: no-store`, and no bytes persist after the request ends.
+
+#### Scenario B-26: Mint dials nothing; failures surface at serve
+**Alternate** · Traces to: US-6.3
+**Given** a mint request naming a nonexistent message reference,
+**When** the mint completes (no dial — counter unchanged),
+**Then** the first serve attempt fetches, receives not-found, and surfaces the same safe 404 class the eager mint used to produce — the failure moved, it did not disappear.
+
+#### Scenario B-27: Backoff blocks preview fetches with the typed refusal
+**Error** · Traces to: US-6.2, MC-12
+**Given** a pair inside its watcher backoff window,
+**When** a preview serve request arrives,
+**Then** no dial occurs and the serve path returns the typed budget refusal (the same class mapping the panel GETs use) — the preview shows its error state, never a stale cached body.
+
+#### Scenario B-28: Every existing preview control still holds
+**Edge** · Traces to: US-6.4, MC-13
+**Given** the metadata-only grant shape,
+**When** each legacy control is exercised — a ninth concurrent message mint (429, no eviction), logout (all session tokens revoked), an unknown/expired/revoked token (one 404 answer), a second signature mint (replaces the first, outside the message cap), and a Load-images consent (only grant-recorded URLs, token-scoped proxy) —
+**Then** every control behaves exactly as it does today.
+
+#### Scenario B-29: The preview byte endpoint and the download endpoint stay distinct
+**Alternate** · Traces to: US-6.6, MC-14
+**Given** an attachment part whose real decoded size exceeds 25 MiB while its reported metadata claims less,
+**When** the preview-purpose byte endpoint serves it and, separately, the download endpoint streams it,
+**Then** the preview endpoint aborts with the typed over-cap error before any success state exists, and the download endpoint completes the stream with attachment disposition and its existing headers — one capped preview path, one unlimited download path, never shared.
+
+### Feature: Redaction
+
+#### Scenario B-30: Leak markers never reach durable state
+**Error** · Traces to: US-7.1, US-7.2, MC-15
+**Given** a fake IMAP server whose failure responses embed synthetic markers (a distinctive subject, address and folder name),
+**When** failures flow through watcher recording, budget refusals, cache warnings and gateway logs,
+**Then** a scan of logs, watcher state, audit entries and cache envelopes finds zero markers and finds the safe class strings — with the scan's positive control (a deliberately recorded class string) proving it could have seen a leak.
+
+#### Scenario B-31: Watcher state stops carrying raw error text
+**Alternate** · Traces to: US-7.3
+**Given** a watcher cycle failing against a raw-talking fake server,
+**When** the state file is written,
+**Then** the persisted error text is empty or class-derived, while the wire summary response is byte-identical in shape (it already carried only the class).
