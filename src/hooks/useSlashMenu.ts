@@ -89,15 +89,16 @@ export interface UseSlashMenuParams {
    * `attachToSession`), never from client-side guessing. Fail-closed by
    * construction (seam ruling §3.2): any unresolvable or non-helper identity
    * — a fresh "/new" chat (null), a root chat/ task / channel session — is
-   * `false`, so `/stop-redirect` takes the root-style refusal there.
+   * `false` AT THE CALLER, so `/stop-redirect` takes the root-style refusal
+   * there.
    *
-   * Optional with a `false` default (fail-closed): a caller that omits it is
-   * treated as the root chat, which is exactly the "Unknown → root refuses"
-   * D9 ruling. The live caller (OmnipusComposer) always passes the real
-   * identity; pre-existing callers (the older test packs' `baseParams`)
-   * omit it and get root behavior without needing edits in QA-owned files.
+   * Required, per the endorsed D9 seam shape (architect adjudication F2,
+   * 2026-10-02): a caller that forgets to wire the helper identity must fail
+   * at compile time, not silently get root behavior — the "Unknown → root
+   * refuses" default belongs to the caller's resolution (ChatScreen), never
+   * to this hook. The live caller always passes the resolved value.
    */
-  isHelperSession?: boolean
+  isHelperSession: boolean
   /**
    * D9: sends the dedicated generated RedirectFrame
    * `{type:'redirect', session_id, instruction}` to the server over the WS
@@ -108,13 +109,14 @@ export interface UseSlashMenuParams {
    * The hook only constructs the frame (exact generated shape, no extra
    * properties) after its own helper/root and usage gates pass.
    *
-   * Optional in the type only because pre-existing callers (the older test
-   * packs' `baseParams`) never reach the send path. The send line calls it
-   * DIRECTLY — not `?.` — so a caller that claims `isHelperSession: true`
-   * while omitting the transport fails loudly instead of silently dropping
-   * the frame; the live caller always provides it.
+   * Required, consistent with its sibling transport `cancelIfStreaming`
+   * (architect adjudication F2, 2026-10-02): one required and one optional
+   * transport in the same command family is arbitrary, and requiredness
+   * means a caller that omits the wiring fails at compile time. The send
+   * line still calls it DIRECTLY — not `?.` — and the runtime guard below
+   * stays as a defensive invariant for malformed untyped runtime calls.
    */
-  sendRedirectFrame?: (frame: RedirectFrame) => void
+  sendRedirectFrame: (frame: RedirectFrame) => void
 }
 
 export interface UseSlashMenuResult {
@@ -488,11 +490,11 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
     // The caller's sendRedirectFrame owns the transport and surfaces a
     // visible error if the send fails — nothing here swallows one.
     //
-    // The transport callback is optional only so pre-existing callers that
-    // never reach this line type-check. A caller that claims a helper
-    // session here but passed no transport is broken — fail LOUDLY (never
-    // `?.`; a silently dropped redirect would leave the helper's turn
-    // running while the UI pretends it redirected).
+    // Required in the type, but kept as a defensive runtime invariant: a
+    // malformed untyped runtime call (plain JS) can still reach this line
+    // with no transport — fail LOUDLY (never `?.`; a silently dropped
+    // redirect would leave the helper's turn running while the UI pretends
+    // it redirected).
     if (!sendRedirectFrame) {
       throw new Error(
         'useSlashMenu: /stop-redirect reached the send path with no sendRedirectFrame transport — the caller claimed isHelperSession but provided no frame sender.',
@@ -534,9 +536,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     appendMessage,
     startNewSession,
     cancelIfStreaming,
-    // Fail-closed default: an omitted identity is the root chat (D9 —
-    // "Unknown → root refuses"), never a helper.
-    isHelperSession = false,
+    isHelperSession,
     sendRedirectFrame,
   } = params
 
