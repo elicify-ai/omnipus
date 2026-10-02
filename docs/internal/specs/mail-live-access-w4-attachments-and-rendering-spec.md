@@ -342,3 +342,379 @@ Per the design system's accessibility release requirement (D16): focus visibilit
 **Marker unavailable — fail safe.** If a file's marker cannot be read (corrupt, absent on an operation that should have preserved it, or a pre-marker file that other evidence says was mail-derived), the preview **fails safe to the stricter profile** (scripts off). It never silently upgrades a known mail-derived file to the script-permitting profile. An ordinary workspace HTML file without a marker keeps today's ordinary profile unchanged.
 
 **No third profile exists.** The two profiles are the ordinary workspace one (`allow-scripts`, no `allow-same-origin`) and the mail-derived one (scripts off entirely, `script-src 'none'`). The checkbox switches between them for one file; nothing else.
+
+---
+
+## 6. Behavioral contract (quick reference)
+
+- When Open is clicked on a supported attachment, the Library viewer shows it as a temporary read-only entry with the exact mail context bar — and writes nothing anywhere.
+- When any stored-file action is attempted on a temporary preview, it is refused before any call leaves the SPA, with the "Save to Library first" explanation.
+- When a preview's owner view exits (Back, close, navigate, reload, logout), its fetches abort, its token revokes, and a late completion is discarded.
+- When Save to Library succeeds, exactly one new Library file exists under `mail/<mailbox>/<UTC month>/` with a sanitized, numbered-if-clashing name, an audit entry, and Open in Library available.
+- When the Save response is lost, the client shows "Save result unknown", never auto-retries; an explicit same-token retry returns the prior receipt — exactly one file.
+- When Download is clicked, the browser downloads exactly as today; no Library file, no preview cap.
+- When an agent lists/reads attachments, only metadata/selected-part content moves — no file, no extra Seen; when it saves, the ordinary `ask` policy and Auto classification govern, and the result carries the real absolute workspace path.
+- When sender markup in a temporary preview references anything but the preview's own minted resources, the resolver refuses structurally — zero requests.
+- When mail HTML/CSS is sanitized, parsed-allow-listed styling survives (browser-verified), every deny-listed construct is dropped, and the two data:-URI paths are stopped by the sanitizer alone.
+- When Reply all runs, the recipient set is original To+Cc minus self/primary, de-duplicated, never Bcc; plain Reply is sender-only; the quote is editable escaped Markdown.
+- When a message has no usable Date, surfaces show the internal date or "No date" — never year one.
+
+## 7. Explicit non-goals
+
+| Non-goal | Reason |
+|---|---|
+| Save-a-temporary-file-before-Open | Violates the founder's option B / no-disk Open; would expose edit/path/download actions before consent. |
+| A second preview implementation or a fake `LibraryEntry` path | Duplicates renderer/security behaviour and routes untrusted mail into workspace-lookup or script-permitting code paths never audited for it. |
+| A recent-preview byte cache (encrypted or not) | Conflicts with the direct no-byte-cache rule and the request-only bodies/parts decision; the current-view rendering buffer is the only transient exception. |
+| An attachment type blocklist, antivirus scanner, or attachment-specific approval | Founder F3: normal-download `ask` + no blocklist/scanner; a third policy layer contradicts the two-layer tool-policy model. |
+| Reusing `sigStyleAttrRe` (or any character-class regex) for inbound styling | It admits `position:fixed`/`z-index` and bans parens, so it both under- and over-blocks; inbound needs declaration-level parsing (§7 of the CSS artefact). |
+| Widening `signaturePolicy`/`outboundBodyPolicy` as a side effect | Outbound mail and stored signatures have their own attacker==victim posture; inbound work must not loosen them. |
+| Plain Reply keeping the other recipients | Would make Reply indistinguishable from Reply all and risks disclosing a private response to a group (§4 US-5 position). |
+| A new Office-document renderer, a new preview route/screen, or any visual redesign | Founder option B reuses the Library viewer inside its existing panel; unsupported formats keep the honest unsupported state. |
+| Touching W1/W2/W3-core surfaces (pool, discovery, cache, refresh, paperclip) | Other package; this spec consumes their frozen interfaces only. |
+| JMAP transport identity work | Phase 2; this package consumes the first-phase `message_ref` only. |
+
+---
+
+## 8. BDD scenarios
+
+Conventions: one action per When; Type ∈ Happy / Alternate / Error / Edge; each scenario carries `Traces to:` naming its acceptance criterion. Backend scenarios run against the real in-memory IMAP harness (`startMemIMAP`); UI scenarios run in the component/E2E harnesses.
+
+### Feature: Temporary attachment preview (Open without saving)
+
+```gherkin
+Scenario: Open a PDF attachment and view it (Happy)
+  Given a message in the inbox with a 2 MB PDF attachment
+  When the user clicks Open on that attachment
+  Then the Library viewer renders the PDF inside the Library panel using the existing SPA renderer
+  And the context bar reads exactly "From mail: <subject> · Back to mail · Save to Library"
+  And no file exists anywhere under the workspace work root or any temp spool
+  Traces to: US-1.AC-1
+
+Scenario: Open writes nothing while Save's positive control writes (Edge)
+  Given request/write observation is active on the server data directory and temp paths
+  When the user opens an image, an SVG, a video, an audio file, a PDF, a markdown file and a text file in turn, then presses Back
+  Then zero attachment-file, directory, spool or persistent-byte writes are observed for all opens
+  And a positive-control Save of the same payload is observed by the same instrument
+  Traces to: US-1.AC-1, US-1.AC-5
+
+Scenario: Stored-file actions are dead, not hidden (Error)
+  Given a temporary preview is open
+  When the user attempts Library edit, PDF fill/sign, rename, move, copy, delete and Library-side download — including programmatic invocation
+  Then each control is disabled with the visible "Save to Library first" explanation
+  And zero mutation or API calls fire
+  Traces to: US-1.AC-2
+
+Scenario: HTML attachment renders scriptless (Error)
+  Given an HTML attachment containing a script tag, an inline event handler, a form and a same-origin API fetch
+  When the user opens it
+  Then it renders through the token-scoped isolated Mail representation
+  And no script executes, no form submits, no API call fires (browser counters)
+  And the preview is never a raw HTML object URL, srcdoc, or the authenticated download URL served as a document
+  Traces to: US-1.AC-3
+
+Scenario: Over-cap attachment is Download-only (Edge)
+  Given an attachment of 30 MiB actual decoded bytes with reported metadata claiming 1 MiB
+  When the user views the attachment actions
+  Then Open and Save are unavailable with the cap explanation
+  And Download remains available and streams the part to completion
+  Traces to: US-1.AC-4
+
+Scenario: Exit disposes everything; late completion is discarded (Edge)
+  Given a preview is open and its byte stream is still in flight
+  When the user presses Back, then a slow fetch completes afterward
+  Then the view's fetches aborted on Back, object URLs and the source token were revoked
+  And the late completion resurrects nothing (no render, no state, no socket retained)
+  Traces to: US-1.AC-5
+
+Scenario: Markdown attachment with hostile same-origin references (Error)
+  Given a Markdown attachment containing the I-04 counterexamples C-1..C-4 (Library URL image, wikilink, embed, remote pixel)
+  When the temporary preview renders it
+  Then zero unauthorized resource requests fire (browser request counters)
+  And the preview's own minted resources still load
+  Traces to: US-1.AC-1, §5.1
+
+Scenario: Resource-policy positive control (Edge)
+  Given the same Markdown file stored as an ordinary workspace Library file
+  When it is opened in the ordinary Library viewer
+  Then its same-origin image request IS observed by the counter — proving the instrument detects such requests
+  And ordinary workspace rendering is unchanged from today
+  Traces to: §5.1 positive control
+```
+
+### Feature: Save to Library and browser Download
+
+```gherkin
+Scenario: Save lands the file with sanitized name and audit (Happy)
+  Given a preview or attachment row for "Q4 report.pdf" (2 MB) in mailbox user@ex.com, October 2026
+  When the user clicks Save to Library
+  Then the file exists at <work-root>/mail/user_at_ex.com/2026-10/Q4 report.pdf with byte-identical content
+  And a mail.attachment_saved audit entry records actor, pair, folder/message reference, part index, original and final names, path and byte count — and no bytes, subject or token
+  And Open in Library opens that stored entry with full stored-file capabilities
+  Traces to: US-2.AC-1, US-2.AC-4
+
+Scenario: Name clash gets a numbered suffix, never overwrite (Alternate)
+  Given "report.pdf" and "report (1).pdf" already exist in the target month directory
+  When the user saves an attachment named "report.pdf" (and its case-folded twin "Report.PDF")
+  Then the saved files are "report (2).pdf" and "report (3).pdf" respectively
+  And the final suffixed candidates each passed Library create-name validation
+  Traces to: US-2.AC-2
+
+Scenario: Hostile declared filename is sanitized then validated (Error)
+  Given an attachment whose declared filename is "../../..\\evil:name?.pdf"
+  When Save runs
+  Then the stored name contains no separators, colons, control characters or dot-name segments (SanitizeAttachmentName output)
+  And the final candidate passes Library path validation independently — sanitization is not the authorization
+  Traces to: US-2.AC-3
+
+Scenario: Audit failure after commit is saved-with-warning (Error)
+  Given audit logging is enabled and the audit write fails after the file committed
+  When Save completes
+  Then the response is saved=true with an explicit audit warning and the real path
+  And the UI shows the warning without advising a retry that would duplicate the file
+  Traces to: US-2.AC-5
+
+Scenario: Lost response then explicit same-token retry returns the prior receipt (Error)
+  Given the server committed the unique file but the response was lost before the client read it
+  When the client shows "Save result unknown" and the user explicitly retries the same save carrying the same save_operation_token
+  Then the server returns the prior receipt — the original numbered name, path, size and audit status
+  And exactly one file exists; no second numbered file was created
+  Traces to: US-2.AC-6
+
+Scenario: Different token is a new request; automatic replay never fires (Edge)
+  Given a prior save whose outcome is unknown to the client
+  When the user saves the same attachment again as a deliberate new action with a fresh token — and, separately, no automatic/background retry is triggered by the unknown state
+  Then the new token performs a normal save (numbered suffix if the prior file exists)
+  And no automatic replay request was observed at any point
+  Traces to: US-2.AC-6
+
+Scenario: Refusals name their cause and leave no partial file (Error)
+  Given in turn: effective deny, declined ask, over-cap bytes, a parent path occupied by a file, a symlink/mount escape target, and a simulated disk-full
+  When Save is attempted in each case
+  Then each shows "Could not save to Library" with a safe specific reason (never a generic network error for permission/size)
+  And no partial or incomplete file remains in any case (a cleanup failure is itself reported)
+  Traces to: US-2.AC-7
+
+Scenario: Browser Download is unchanged by Save work (Edge)
+  Given any attachment, over-cap or not
+  When the user clicks Download
+  Then the browser download behaves exactly as today (destination, disposition, sanitized filename)
+  And no Library file, listing entry or change notification results
+  Traces to: US-2.AC-8
+```
+
+### Feature: Byte-path distinction (I-05)
+
+```gherkin
+Scenario: Over-cap part previews are refused even when metadata lies (Error)
+  Given an attachment with actual decoded bytes of 26 MiB whose reported size claims 1 MiB
+  When the preview-purpose byte resource serves the request
+  Then the transfer aborts with the typed over-cap error before any success state is committed
+  And the viewer shows the failure with Retry/Back — never a truncated render
+  Traces to: §5.2, US-1.AC-4
+
+Scenario: The same part downloads fully via the Download role (Happy)
+  Given the same over-cap attachment
+  When browser Download streams it
+  Then the browser receives all 26 MiB under attachment disposition with the sanitized filename
+  And the preview cap is not applied to this role
+  Traces to: §5.2, US-1.AC-4, US-2.AC-8
+
+Scenario: Mid-stream disconnect never reads as success (Error)
+  Given a preview or download transfer in flight
+  When the connection drops mid-stream
+  Then the client shows a failed transfer for both roles
+  And no completed preview render, saved file or download-complete state exists for the aborted stream
+  Traces to: §5.2 late-failure ordering
+
+Scenario: Preview grant dies with its view (Edge)
+  Given a minted preview grant bound to a part
+  When the view exits / the token expires / revoke is called / the panel closes
+  Then the byte resource refuses with its indistinguishable not-available response
+  And a replayed byte URL yields the same refusal
+  Traces to: §5.2 binding row
+```
+
+### Feature: Agent attachment tools
+
+```gherkin
+Scenario: Full journey with no Message-ID (Happy)
+  Given a message whose Message-ID header is absent, with two attachments
+  When the agent chains read_message → list_email_attachments → read_email_attachment → download_email_attachment using only returned values
+  Then every step succeeds; the reference was issued in read_message output and consumed unchanged
+  And no step required or synthesized a Message-ID
+  Traces to: US-3.AC-4
+
+Scenario: Stale references are refused before fetch (Error)
+  Given in turn: a reference from a wrong pair, from an old configuration/mapping generation, and from a recreated folder (old UID vs new UIDVALIDITY)
+  When each is presented to an attachment tool (and to seen)
+  Then each is refused with the typed stale-reference error before any fetch or mutation
+  And the check ran on the same selected lease that would have performed the action
+  Traces to: US-3.AC-4
+
+Scenario: Listing fetches no bodies and no Seen (Alternate)
+  Given a message with attachments and body bytes observable via server command counters
+  When list_email_attachments runs
+  Then only structure/part-header metadata was fetched (no body bytes)
+  And the message's Seen state is unchanged by the listing alone
+  Traces to: US-3.AC-1
+
+Scenario: Policy ceiling self-heals; operator values survive (Edge)
+  Given an install whose config predates the new tools (keys absent), and a second install with an operator-set download_email_attachment: deny
+  When both configs load
+  Then the first gains the literal allow/allow/ask entries additively
+  And the operator's deny survives untouched; no per-agent deny backfill appears anywhere
+  Traces to: US-3.AC-5
+
+Scenario: Save under every permission mode (Alternate)
+  Given Auto off, then an approval granted, declined; an explicit global deny; an agent ask/allow; God Mode
+  When download_email_attachment is invoked in each mode
+  Then Auto-off and declined ask perform zero transfer and zero write with the normal refusal
+  And granted ask / God Mode save exactly as the panel does (same service, cap, naming, audit)
+  And an agent allow never loosens the global ask; Auto-on runs via the ordinary workspace-path class
+  Traces to: US-3.AC-6, US-3.AC-7
+
+Scenario: Agent save result is a real file the agent's tools can read (Happy)
+  Given an allowed agent save
+  When the tool returns
+  Then the result carries the workspace-relative path and the absolute path of the actual saved file
+  And the agent's ordinary file tools read that exact path in the same turn
+  Traces to: US-3.AC-7
+```
+
+### Feature: Styling (parsed CSS policy)
+
+```gherkin
+Scenario Outline: Deny-list constructs are dropped, safe siblings survive (Error)
+  Given mail HTML containing "<case>" per the artefact's deny list
+  When the preview renders
+  Then the denied construct produces no effect (browser-verified where applicable)
+  And unrelated safe content still renders
+  Examples:
+    | case |
+    | style attribute with position:fixed;top:0;z-index:9999 alongside color:red |
+    | the same declarations inside an @media block |
+    | @import url("https://evil/x.css") alongside p{color:red} |
+    | @font-face with a remote src and a data:font src |
+    | background-image:url(data:image/svg+xml;base64,...) |
+    | url("ht\\74 tps://evil/p") (escaped URL scheme) |
+    | style="col\\6fr:red" (escaped property that decodes to a safe one) |
+    | p{/**/position:fixed} (comment-spliced denied property) |
+    | <img style="width:10px" onerror="..."> (style kept, handler gone) |
+    | unclosed <style>p{color:red |
+  Traces to: US-4.AC-1..US-4.AC-6
+
+Scenario: Positive styling fixture renders styled (Happy)
+  Given the artefact's positive fixture: colour, font, table/cell, border, spacing, class + style block, responsive @media
+  When the preview renders in the browser
+  Then computed-style assertions prove the safe styling survived
+  And the founder-probe categories (4 style attributes, 1 style block, 1 class, 1 bgcolor, 1 <font> tag) all survive sanitisation
+  Traces to: US-4.AC-1
+
+Scenario: CSS url() backgrounds render only through the pinned proxy (Alternate)
+  Given mail with background-image:url("https://good/img.png")
+  When the mail is minted without, then with, explicit Load-images consent
+  Then without consent: zero requests for the remote URL
+  And with consent: exactly one request, to the token-scoped /mail-preview/img/... path carrying the pinned token — never the raw https URL
+  Traces to: US-4.AC-2
+
+Scenario: Sanitizer-only gates hold where the CSP would admit content (Edge)
+  Given a data:-font @font-face and a data:image/svg+xml CSS url() in otherwise-safe mail
+  When sanitized and rendered
+  Then both are stripped — the CSP alone would have admitted both (font-src data:, img-src ... data:)
+  And the served artifact is safe detached from any header
+  Traces to: US-4.AC-3
+
+Scenario: Bounded work under hostile CSS (Edge)
+  Given an unclosed style block, a 1 MB style attribute and 100 nested @media blocks (within the 256 KB HTML cap)
+  When sanitized
+  Then no panic, bounded time/output, the oversize/parse-failed attribute dropped entirely
+  Traces to: US-4.AC-6
+```
+
+### Feature: Reply all, plain Reply and quote
+
+```gherkin
+Scenario: Reply all merges and cleans the recipient set (Happy)
+  Given original From A, Reply-To R, To = self+X+duplicate-R, Cc = Y+mixed-case-X+self+display-name-duplicate-R, hidden Bcc
+  When the user clicks Reply all
+  Then To = R; Cc = X and Y exactly once each (case-insensitive, display-name aware)
+  And self and the primary appear nowhere in Cc; the original Bcc is absent
+  And the final composed/send payload carries exactly this set — not just the displayed chips
+  Traces to: US-5.AC-1
+
+Scenario: Plain Reply keeps only the sender (Alternate)
+  Given the same original message
+  When the user clicks plain Reply
+  Then To = R (Reply-To preferred), Cc/Bcc empty
+  Traces to: US-5.AC-2
+
+Scenario: Quote is editable and inert (Alternate)
+  Given an original HTML-only body with images and embed syntax
+  When Reply or Reply all opens compose
+  Then the draft contains an editable quoted projection with escaped attribution (sender/date or "No date")
+  And the quote cannot load remote images or resolve workspace embeds; no raw HTML is pasted; the original's files are not auto-attached
+  Traces to: US-5.AC-4
+
+Scenario: One shared rule; stale context cannot hijack compose (Edge)
+  Given the panel and the agent adapter computing recipients for the same original
+  When both resolve
+  Then both used BuildReplyRecipients — identical sets, one implementation
+  And a delayed reply-context response arriving after a mailbox/message change does not overwrite the now-open compose for a different message
+  Traces to: US-5.AC-5
+
+Scenario: No eligible primary after self-exclusion (Edge)
+  Given a message whose only recipients are the mailbox's own address
+  When Reply all opens
+  Then editable empty recipients are shown — no send-to-self, no guessed replacement
+  Traces to: US-5.AC-3
+```
+
+### Feature: Message-date fallback
+
+```gherkin
+Scenario Outline: Date precedence across surfaces (Happy / Edge)
+  Given a message fixture "<fixture>"
+  When it is displayed in the list row, detail header, Sent copy, agent result and reply attribution
+  Then every surface shows "<expected>"
+  Examples:
+    | fixture | expected |
+    | valid Date 2026-03-05T10:00:00Z, internal date differs | the Date value on every surface |
+    | unparsable Date, internal date 2026-03-05 | 5 Mar 2026 (the internal date) |
+    | missing Date, internal date present | the internal date |
+    | zero Date, internal date present | the internal date — never "1 Jan 1" |
+    | neither usable | "No date" — never year one, epoch or today |
+  Traces to: US-6.AC-1..US-6.AC-3
+
+Scenario: Null date is explicit on the wire (Edge)
+  Given a message with neither date source
+  When its summary/detail is served
+  Then date serializes as explicit null (required-but-nullable), with generated consumers regenerated before the formatting change
+  And no Go zero time ever serializes
+  Traces to: US-6.AC-4
+```
+
+### Feature: Handoff interaction (I-06)
+
+```gherkin
+Scenario: Keyboard journey with focus restoration (Alternate)
+  Given a keyboard-only user on an attachment row
+  When they activate Open, then Save (once succeeding, once failing), then Back — including the case where the source message was deleted mid-view
+  Then focus landed on the context heading at Open (announced), Save outcomes were announced without focus movement
+  And Back restored the originating action, or fell back to the message row else the folder — each with an explicit announcement of where focus landed and why
+  Traces to: §5.3
+
+Scenario: Context bar at narrow width and zoom (Edge)
+  Given the temporary viewer open
+  When the viewport is 320 px wide and zoom is 200%
+  Then the context bar wraps/stacks; every control and the Save-first explanation remain reachable and readable; nothing depends on hover
+  Traces to: §5.3
+
+Scenario: Saved HTML marker survives Library operations (Edge)
+  Given a saved mail-derived HTML file, scripts off by default
+  When it is renamed, moved, copied and restored from a backup archive, then reopened after reload
+  Then it renders scripts-off after every one of those paths (provenance traced and proved, not assumed)
+  And the per-file checkbox switches only that file to the isolated script-permitting profile — visible, per file, never global
+  And a corrupt/missing marker fails safe to the stricter profile
+  Traces to: §5.4, US-2.AC-1
+```
