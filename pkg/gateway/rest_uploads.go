@@ -599,7 +599,10 @@ func (a *restAPI) cleanupWorkspaceUploads(resp *gen.UploadFilesResponse, lib *li
 
 // HandleServeUpload serves uploaded files for display in chat.
 // GET /api/v1/uploads/{session_id}/{filename}
-// Authentication is optional — browsers must be able to load image URLs directly.
+// Registered with withAuth (issue #716): the route requires the same login as
+// every other API route — an unauthenticated fetch is a 401 — while a signed-in
+// session still loads image URLs through the omnipus-session cookie the browser
+// auto-attaches on same-origin requests.
 func (a *restAPI) HandleServeUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -784,11 +787,13 @@ func (a *restAPI) serveMedia(
 	}
 
 	// ADR-067 FR-008b, and this is the round-4 LIVE exposure, not a preview
-	// feature: this route is registered withOptionalAuth and used to serve
+	// feature: this route WAS registered withOptionalAuth and served
 	// workspace-library bytes with a bare "inline" disposition, the media
 	// entry's own recorded ContentType, and NO policy — so an .html entry
 	// (pkg/library/entries.go types it text/html) rendered as a real document
-	// on the gateway origin, same-origin with the session cookie.
+	// on the gateway origin, same-origin with the session cookie. (The route is
+	// registered with withAuth since issue #716; the header rules below are
+	// unchanged.)
 	//
 	// meta.ContentType is deliberately no longer consulted. It is the type an
 	// UPSTREAM claimed — a channel, an MCP server, an upload form — and

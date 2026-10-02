@@ -94,6 +94,47 @@ async function authHeaders(page: import('@playwright/test').Page): Promise<Recor
   };
 }
 
+/**
+ * Read the admin reload bearer from the sidecar file global-setup.ts wrote at
+ * suite start and return the Authorization header value for it. The /reload
+ * endpoint on the health server accepts ONLY a bearer matching a Gateway.Users
+ * account or Gateway.CLIToken (issues #276/#640) — never the omnipus-session
+ * cookie, never dev_mode_bypass — and the only non-rotating such bearer this
+ * suite has is the one minted by global-setup.ts's own sanctioned login
+ * (HandleLogin appends account tokens, so it stays valid until the
+ * MaxUserTokens cap evicts it — which needs 11 mints — or logout, which no
+ * spec ever calls).
+ *
+ * NEVER mint a fresh one here: every POST /api/v1/auth/login re-mints the
+ * SINGLE-SLOT session_token_hash (pkg/gateway/rest_auth.go::HandleLogin),
+ * invalidating the omnipus-session cookie in the shared storageState for every
+ * spec after this one — the exact crosstalk
+ * scripts/check-e2e-login-crosstalk.sh exists to prevent (the 2026-09-27
+ * ui-heavy incident: this spec's login-minted reload bearers — specifically
+ * the one the config-restore finally issued AFTER restoring originalRaw, whose
+ * session_token_hash still held the suite-start session — killed the shared
+ * cookie and failed settings-memory.spec.ts 4/4 at its banner assert).
+ */
+function storedReloadBearer(): string {
+  const bearerFile = path.join(path.dirname(AUTH_FILE), 'admin-reload-bearer.txt');
+  if (!fs.existsSync(bearerFile)) {
+    throw new Error(
+      `storedReloadBearer: no admin reload bearer at ${bearerFile}. ` +
+        'global-setup.ts writes it next to the storageState at suite start ' +
+        '(OMNIPUS_AUTH_FILE overrides the directory). Do NOT fall back to ' +
+        'POST /api/v1/auth/login here — that rotates the shared session.',
+    );
+  }
+  const token = fs.readFileSync(bearerFile, 'utf-8').trim();
+  if (!token) {
+    throw new Error(
+      `storedReloadBearer: ${bearerFile} is empty — rerun the suite so ` +
+        'global-setup.ts re-mints it.',
+    );
+  }
+  return `Bearer ${token}`;
+}
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
@@ -292,8 +333,11 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
   // §"Defense-in-depth contract") which returns 503 when dev_mode_bypass=true.
   // The global test gateway boots with bypass=true; we flip it off for this
   // test only, run the sweep, then restore so the rest of the suite is
-  // unaffected. The /reload endpoint on the health server requires no auth
-  // and triggers an in-place config reload via the health-server reload hook.
+  // unaffected. The /reload endpoint requires a Gateway.Users bearer (issues
+  // #276/#640 — it accepts no cookie and no bypass), so each /reload below
+  // sends the non-rotating bearer global-setup.ts stored at suite start; see
+  // storedReloadBearer() for why a fresh login here would break every later
+  // spec in the shard.
   const configPath = path.join(OMNIPUS_HOME, 'config.json');
   // config.json may not exist when the gateway was started with in-memory defaults
   // (e.g., started via env-only config without a persistent config file).
@@ -326,6 +370,7 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
     cfgObj.gateway.dev_mode_bypass = false;
     fs.writeFileSync(configPath, JSON.stringify(cfgObj, null, 2));
     const reloadResp = await page.request.post(`${BASE_URL}/reload`, {
+      headers: { Authorization: storedReloadBearer() },
       failOnStatusCode: false,
     });
     expect(
@@ -336,41 +381,23 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
     // to drain and the config-snapshot pointer to swap.
     await page.waitForTimeout(500);
 
-    // ADR-044 / US-5 (cookie-auth cutover, 2026-07-15): auth is the
-    // omnipus-session HttpOnly cookie, not a JS-visible bearer token —
-    // getStoredAuthToken() above is legacy dead code (global-setup.ts no
-    // longer writes omnipus_auth_token to localStorage at all; see its own
-    // doc comment). The cookie captured by global-setup at SUITE START is
-    // what every other spec in this shard reuses via storageState — that's
-    // safe everywhere else because dev_mode_bypass=true short-circuits
-    // checkBearerAuth before the cookie is ever consulted. This is the ONE
-    // test in the whole suite that flips bypass off, so it is the only
-    // place a long-lived session cookie's fate is actually observable.
-    // Rather than assume that suite-start cookie is still the one the
-    // server expects, re-authenticate HERE with a real login so the
-    // browser context is guaranteed to carry a cookie minted seconds ago
-    // against the config that was JUST reloaded. POST /api/v1/auth/login's
-    // Set-Cookie headers (omnipus-session + CSRF) are parsed into
-    // page.context()'s cookie jar automatically — the same mechanism
-    // global-setup.ts's own doc comment describes — so no manual cookie
-    // plumbing is needed; authHeaders() below will also pick up the fresh
-    // CSRF cookie it reads live from page.context().cookies().
-    const reLoginResp = await page.request.post(`${BASE_URL}/api/v1/auth/login`, {
-      data: { username: 'admin', password: 'admin123' },
-      failOnStatusCode: false,
-    });
-    expect(
-      reLoginResp.ok(),
-      `POST /api/v1/auth/login (re-auth after bypass flip) returned ${reLoginResp.status()} ` +
-        `${await reLoginResp.text()}`,
-    ).toBeTruthy();
+    // NO re-login here. Nothing in this spec mints a session any more, so the
+    // suite-start omnipus-session cookie is still the hash the server expects
+    // when the sweep below runs under bypass=false — and the finally block
+    // below restores originalRaw, whose session_token_hash IS that same
+    // suite-start session, so the shared cookie stays valid for every spec
+    // after this one. Any POST /api/v1/auth/login here (this block used to
+    // have one) would overwrite the single-slot session_token_hash
+    // (pkg/gateway/rest_auth.go::HandleLogin) and kill the shared cookie for
+    // the rest of the shard — the 2026-09-27 ui-heavy crosstalk incident.
   }
 
   try {
     // Trigger a retention sweep via the REST API.
     // Correct endpoint: POST /api/v1/security/retention/sweep (pkg/gateway/rest_retention.go:163).
-    // Auth is the omnipus-session cookie (re-minted just above); authHeaders()
-    // also attaches the matching CSRF header when a CSRF cookie is present.
+    // Auth is the suite-start omnipus-session cookie — still valid, because no
+    // code path in this spec mints a login any more; authHeaders() also
+    // attaches the matching CSRF header when a CSRF cookie is present.
     const sweepResp = await page.request.post(`${BASE_URL}/api/v1/security/retention/sweep`, {
       headers: await authHeaders(page),
       failOnStatusCode: false,
@@ -430,6 +457,7 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
         fs.writeFileSync(configPath, originalRaw);
       }
       const reloadResp = await page.request.post(`${BASE_URL}/reload`, {
+        headers: { Authorization: storedReloadBearer() },
         failOnStatusCode: false,
       });
       // Best-effort restore: if reload fails here, surface a warning but do

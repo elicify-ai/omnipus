@@ -660,9 +660,10 @@ func withRateLimit(limiter *apiRateLimiter, handler http.HandlerFunc) http.Handl
 // B1.1 backend half: every route wrapped here gets a 1 MiB body cap so an
 // anonymous client cannot pin the gateway with an unbounded POST body. All
 // routes registered with withOptionalAuth are JSON or GET-only (state,
-// providers, media-serve, uploads-serve, onboarding, login) — none legitimately
-// exceed 1 MiB. Routes that need a larger body (binary uploads) use
-// withUploadAuth instead.
+// providers, onboarding, login, and the legacy media:// global route) — none
+// legitimately exceed 1 MiB. Routes that need a larger body (binary uploads) use
+// withUploadAuth instead. The workspace-media and chat-upload serving routes
+// left this wrapper for withAuth in issue #716.
 func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 	const optionalAuthBodyLimit int64 = 1 << 20 // 1 MiB
 	return func(w http.ResponseWriter, r *http.Request) {

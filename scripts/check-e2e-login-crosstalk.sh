@@ -75,16 +75,6 @@ SANCTIONED_FILES=(
   "tests/e2e/setup.ts"
   # (b) runs its own isolated gateway; test.use sets a BLANK storageState.
   "tests/e2e/hot-reload.spec.ts"
-  # (c) KNOWN, ACCEPTED EXCEPTION — not (a) or (b). retention.spec.ts is the one
-  #     test that flips dev_mode_bypass OFF, which is the only moment the shared
-  #     cookie's validity is observable, so it deliberately re-logins to get a
-  #     cookie minted against the just-reloaded config. It does NOT refresh
-  #     storageState afterwards, so it leaves the same latent staleness this
-  #     guard exists to prevent for the specs after it in the `ui-heavy` shard
-  #     (settings-memory, tool-order). Those tolerate it today only because
-  #     MemorySection falls back to free-text entry on a providers error.
-  #     Tracked for follow-up; do NOT copy this pattern.
-  "tests/e2e/retention.spec.ts"
 )
 
 # scan <dir> <label> -> prints offenders, returns 0 clean / 1 offenders found
