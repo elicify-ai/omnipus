@@ -719,3 +719,110 @@ Format: Given/When/Then, one action per When; each scenario is typed **Happy / A
   Traces to: US-10.1, US-10.2.
 
 ---
+
+## 7. TDD plan (tests designed from this specification, before implementation)
+
+**Owner and order:** qa-lead (W5) authors all test files (RED), driven by this section; production owners never edit them. Order: unit tests for the pure pieces (mapping/state machines, envelope codec, cache bounds) → package-integration tests against the real in-memory IMAP server → the exclusion-gate integration checks. Command shapes follow `CLAUDE.md`/`omnipus-backend-rules` (tags `goolm,stdjson`, `CGO_ENABLED=0`, one narrow local test at a time; CI owns the suites). Harness: `pkg/email/imapserver_test.go::startMemIMAP` and `view_test.go::startViewIMAP`/`::startViewIMAPRaw` (the capability-set variant drives D-1/D-3); the global `imapDial` seam forbids blind parallelism.
+
+### 7.1 Named test files and what each test proves
+
+| Test file (new unless named) | Test (proposed names) | Proves (oracle derived from this spec, never from the implementation) | Traces to |
+|---|---|---|---|
+| `pkg/email/folder_discovery_test.go` | `TestDiscovery_SpecialUseResolvesBeforeFallback` | SPECIAL-USE-tagged folder wins with source `special_use`; zero fallback probes after success (D-1) | US-1.1 |
+| | `TestDiscovery_FallbackOrderedProbeStopsAtFirstSuccess` | Candidate order `Sent → Sent Items → Sent Messages → [Gmail]/Sent Mail`; the first success ends probing (D-2) | US-1.2 |
+| | `TestDiscovery_UnsupportedExtensionDegradesPerRole` | LIST-EXTENDED absent / SPECIAL-USE absent / partial advertisement → fallback path, other roles unaffected, mailbox succeeds (D-3) | US-1.1, US-1.4 |
+| | `TestDiscovery_NoCandidatesIsUnknownNeverAbsent` | LIST OK, zero candidate hits, unrelated folders present → `unknown` + `discovery_unresolved`, setting offered (D-4) — **the careless-implementation killer, see §11 CX-1** | US-1.3, US-3.1 |
+| | `TestDiscovery_ProbeTimeoutIsUnknownNotAbsent` | Candidate probe times out (stalled fake server) → `unknown`, not `absent` (U-2) | US-3.2 |
+| | `TestDiscovery_MissingInboxIsFatalEvenForNonExistent` | INBOX `[NONEXISTENT]` → whole-read failure with safe class; no per-role empty rendering (U-4) | US-3.4 |
+| | `TestDiscovery_AmbiguousSpecialUseAsks` | Two `\Sent` tags, no saved mapping → `mapping_ambiguous`, nothing auto-picked (A-1) | US-4.1 |
+| | `TestDiscovery_SavedMappingBeatsFreshAmbiguity` | Valid saved mapping + fresh ambiguity → saved stands, no prompt (A-2) | US-4.2 |
+| | `TestDiscovery_OverrideBeatsSpecialUse` / `..._StaleOverrideWarnsNotSwaps` / `..._EmptyClearsToAutomatic` / `..._OmittedKeeps` | O-1..O-4, including that the *reader* (not the setter) honours the semantics — the setter behaviour is pinned by existing tests | US-2.1–2.3 |
+| | `TestDiscovery_NeverCreatesFolders` | Command trace over every resolution outcome contains zero CREATE/SUBSCRIBE (D-5) | US-1.4 |
+| | `TestDiscovery_UnresolvedWriteDestinationRefuses` | send/draft path with unresolved/ambiguous role → visible settings error, zero writes (A-3) | US-4.3 |
+| `pkg/email/cache_file_test.go` | `TestCacheFile_RoundTripPreservesAllFields` | Save→load preserves roles, sources, UIDVALIDITY (incl. nil = unknown), schema/generation, transport, timestamps (F-1) | US-5.1, US-6 |
+| | `TestCacheFile_BitFlipRefusesWithoutPlaintext` | Single-bit flip anywhere → auth failure, zero plaintext, `cache_corrupt` class (F-6) | US-6.1 |
+| | `TestCacheFile_ForeignPairRefuses` / `..._ForeignGenerationRefuses` / `..._ForeignPurposeRefuses` | Cross-pair copy, old generation, wrong purpose string → all refuse via AAD comparison (F-7) | US-6.2 |
+| | `TestCacheFile_FreshNoncePerWrite` | Identical payloads written twice → different ciphertexts **and** different nonces (F-8) | US-6.3 |
+| | `TestCacheFile_RejectsBeforeAllocation` | Truncated / bad nonce length / unsupported version / oversized (claim ≫ 64 KiB budget) envelopes → refused with no allocation proportional to claimed size (F-9; dataset DT-2) | US-6.4 |
+| | `TestCacheFile_LockedStoreIsLiveOnlyNoMint` | Locked store → cache-unavailable; no key file appears; no plaintext fallback written (F-10) | US-6.5 |
+| | `TestCacheFile_AtomicReplaceCrashConsistency` | Injected mid-write failure (parked `WriteFileAtomic`, the `pkg/credentials` sidecar-lock precedent) → next load opens old-or-new complete snapshot (F-11) | US-6.6 |
+| | `TestCacheFile_PermissionsUnix` | Created dir 0700, file 0600 (Unix; Windows restrictive-access proof runs in CI's Windows leg, §9) | US-6 (envelope rules) |
+| | `TestCacheFile_TriggersExactlyFour` | Trigger matrix: first open populates; <24 h reopen = zero discovery; >24 h reopen = one; manual = one; post-failure = exactly one; **no ticker exists** (F-2–F-5) | US-5.1–5.5 |
+| | `TestCacheFile_ClosedPanelNeverTouchesServerOrDisk` | Panel closed + watcher version change + elapsed time → zero IMAP commands, zero writes, dirty flag only; deferred refresh fires once at next open (F-4) | US-5.4, US-5.5 |
+| `pkg/email/header_cache_test.go` | `TestHeaderCache_WarmHitServesNewestFifty` | Fresh snapshot → memory hit with recorded validation time; ≤50 rows; source `memory` (H-1, H-5) | US-8.1, US-8.5 |
+| | `TestHeaderCache_StaleTriggersExactlyOneRefresh` | >5 min age → labelled rows + exactly one background live refresh; failing refresh keeps rows+error, timestamp unchanged (H-2) | US-8.2 |
+| | `TestHeaderCache_RetentionDropsAfterThirtyMinutesClosed` | Fake clock: 30 min post-close → dropped; zero commands while closed; reopen fetches live (H-4) | US-8.4 |
+| | `TestHeaderCache_BudgetOverflowIsVisibleNotTruncated` | Fill to the 4 MiB budget → typed budget error, live-only outcome, no truncated fields, no silently omitted rows (dataset DT-3) | US-8 (budget rule) |
+| | `TestHeaderCache_SearchAndOlderPagesBypass` | Search + page-beyond-50 → live reads, never served from nor written to the cache (H-6) | US-8.5 |
+| | `TestHeaderCache_CrossPairIsolation` | Two pairs, one account, different folders → neither sees the other's rows (I-01's cache face) | US-9 (isolation rule) |
+| | `TestHeaderCache_UidValidityChangeDiscardsEpoch` | UIDVALIDITY bump → old-epoch rows/cursors/counts gone before new rows publish; version saved once (V-1) | US-9.1 |
+| | `TestHeaderCache_SupersededReadPublishesNothing` | Pause a pre-mutation read after its server snapshot; complete mark-read + post-refresh; release the old read → nothing published anywhere; **and no new timer was introduced** (V-2 — the I-02 oracle) | US-9.2 |
+| | `TestHeaderCache_LateWriteAfterRemovalRefuses` | Pair removed with a write in flight → generation guard refuses; no file reappears (V-3) | US-9.3 |
+| | `TestHeaderCache_ReconfigDeletesNotMigrates` | Host/port/credential/override change → old caches deleted, rediscovery under new generation (V-4) | US-9.4 |
+| `pkg/email/view_missing_folder_test.go` (existing — qa-lead extends) | `TestFolderCounts_UnknownRoleHasNullableTotal` / `TestFolderCounts_ConfirmedAbsentIsEmptyNotError` | The count-side faces of U-5/U-1: unknown → `total=null`; confirmed absent → empty array, not 502 | US-3.3, US-3.1 |
+| | (existing `TestFolderCounts_*` three) | **Regression**: must pass unchanged (§7.3) | — |
+| `pkg/email/logging_leak_test.go` | `TestW2Diagnostics_LeakMarkerSweep` | Drive every §6 scenario with leak-marker fixture data; sweep all sinks for markers (zero) while safe classes/counts present (L-1) | US-10.1–10.2 |
+| `pkg/gateway/` (W4-owned integration; named here for the gate) | `TestMailCacheExclusionGate_BlocksWhenMissing` / `..._PassesWhenDeployed` / `..._DetectsPreTrackedFile` | G-1..G-3 against the real check-ignore mechanism and a stubbed/staged `createTarGz` walk | US-7.1–7.3 |
+| | `TestMailStagingAndBackup_ContainNoCacheFiles` | End-to-end: deployed staging job + backup archive contain no plaintext-or-ciphertext cache marker; positive control IS captured (G-1's instrument check) | US-7.3 |
+
+### 7.2 Test datasets
+
+Each row traces to its scenario; boundary values come from this spec's numbers (50, 150, 25, 200, 5 min, 24 h, 30 min, 4 MiB, 64 KiB), never from the implementation.
+
+**DT-1 — Discovery inputs** (for `folder_discovery_test.go`)
+
+| Case | Server setup | Expected outcome | Traces to |
+|---|---|---|---|
+| special-use sent+drafts | tags `\Sent`, `\Drafts` | both `special_use` | D-1 |
+| special-use inbox only | tag `\Sent` only; Drafts named `Drafts` | sent `special_use`; drafts `fallback`("Drafts") | D-1, D-2 |
+| gmail naming | folders `[Gmail]/Sent Mail`, `[Gmail]/Drafts`, no tags | both `fallback` at the 4th/3rd candidate | D-2 |
+| localized none-of-the-list | folder `Elementos-Enviados`, no tags | sent `unknown` (`discovery_unresolved`) | D-4 |
+| genuinely empty | LIST OK; zero candidates exist | both `absent` (both proofs met) | U-1 |
+| probe stall | candidates exist but SELECT stalls past deadline | `unknown`, not absent | U-2 |
+| two sent tags | two `\Sent` folders | `mapping_ambiguous` | A-1 |
+| override present+valid / +missing / empty / omitted | stored override variants | override wins / warns / automatic / preserved | O-1..O-4 |
+| no INBOX | INBOX removed server-side | fatal safe-class failure | U-4 |
+
+**DT-2 — Envelope codec boundaries** (for `cache_file_test.go`)
+
+| Case | Input | Expected | Traces to |
+|---|---|---|---|
+| minimal payload | one role resolved, nil UIDVALIDITY | round-trips; nil stays nil (never fabricated 0) | F-1, R-3.11 unknown-epoch rule |
+| max normal payload | 3 roles incl. ambiguity lists, ≈ budget boundary | round-trips under the 64 KiB budget | F-1 |
+| budget+1 | payload just over 64 KiB target | refused or visible cache-unavailable — never truncated | F-9 |
+| 10× oversized claim | header claims ≫ actual, or huge body | refused **before** allocation proportional to the claim | F-9 |
+| truncated / bad nonce / bad version / bad base64 | mutated envelopes | each refused with its safe class | F-9 |
+| flipped bit (several positions: nonce, ciphertext head/tail) | 1-bit mutations | auth failure every time, zero plaintext | F-6 |
+| identical double-write | same payload ×2 | different nonce + ciphertext | F-8 |
+| crash points | write interrupted at fraction f ∈ {25%, 50%, 90%} | old-or-new complete file loads | F-11 |
+
+**DT-3 — Header-cache bounds** (for `header_cache_test.go`)
+
+| Case | Input | Expected | Traces to |
+|---|---|---|---|
+| exactly 50 / 51 / 5000 messages | fresh snapshots | cache holds exactly newest 50; live list never shortened | H-5 |
+| 25/200 pagination | page requests at the boundaries | page = 25 rows; 200-row view ceiling; beyond-200 → search remedy; cache unaffected | H-6 |
+| freshness boundary | age 4:59 vs 5:01 (fake clock) | hit-without-refresh vs stale+one refresh | H-1, H-2 |
+| retention boundary | closed 29:59 vs 30:01 | retained vs dropped; zero commands while closed | H-4 |
+| budget boundary | rows sized to just-under/just-over 4 MiB total | kept vs visible budget refusal | US-8 budget rule |
+| oversized subject/address envelope | one row with a pathological subject | visible per-data cache-unavailable outcome, never truncation | US-8 budget rule |
+| leak-marker rows | markers in names/subjects/addresses | markers in rows OK (memory, not logs); logs clean | L-1 |
+
+**DT-4 — Invalidation ordering** (for the V-scenarios)
+
+| Case | Sequence | Expected | Traces to |
+|---|---|---|---|
+| pause-and-release (I-02) | read captures rev N → mark-read (rev N+1) + refresh → release read | nothing published by the stale read | V-2 |
+| UIDVALIDITY mid-read | epoch bumps between SEARCH and FETCH | old rows discarded; new epoch saved once | V-1 |
+| removal race | pair removed while write paused | write refused; no file | V-3 |
+| reconfig race | override change while read paused | stale read publishes nothing under old generation | V-4 |
+
+### 7.3 Regression impact
+
+The feature modifies existing behaviour (`FolderCounts` semantics, `folderNameFor`), so:
+
+1. **Must keep passing unchanged:** the three existing tests in `pkg/email/view_missing_folder_test.go` (named in §2.1), the existing `pkg/email/view_test.go` page/read tests, the mail-budget singleflight tests in `pkg/email/mail_budget_test.go` (they pin coalescing shapes W2 consumes), and the credentials package's tests (W2 touches nothing there, but the `DeriveSubkey` contract must not drift).
+2. **Behaviour deliberately changed, needing NEW regression tests:** missing Sent/Drafts previously produced zero counts via a literal-name STATUS; now the count depends on the resolved mapping. The new count-side tests in §7.1 (unknown → null, absent → empty-not-error) protect the new semantics; the old tests keep passing because a literally-named missing folder remains the absent case's simplest instance.
+3. **Seam tests:** the discovery service and snapshot store are consumed through interfaces (§4) — integration seam tests inject fakes for W4's handlers without a live server, proving the boundary compile-breaks rather than silently drifting.
+
+---
