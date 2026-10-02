@@ -36,9 +36,9 @@ func orphanACFirstRecovery(t *testing.T) {
 	after := orphanACSnapshot(t, h)
 	require.Len(t, after.Archive, 4, "one durable cancellation record, no invented tool result")
 	require.Equal(t, before.Archive, after.Archive[:3], "all original records remain byte-for-field intact")
-	require.Equal(t, "system", after.Archive[3].Message.Role, "marker is a system record")
+	require.Equal(t, "system", after.Archive[3].Role, "marker is a system record")
 	var marker map[string]any
-	require.NoError(t, json.Unmarshal([]byte(after.Archive[3].Message.Content), &marker))
+	require.NoError(t, json.Unmarshal([]byte(after.Archive[3].Content), &marker))
 	require.Equal(t, map[string]any{"type": "turn_canceled_restart", "reason": "ungraceful_shutdown_recovery", "tool_call_id": "first-orphan"}, marker, "existing cancellation shape is sufficient")
 	require.Equal(t, before.State.Skip, after.State.Skip, "recovery is not cursor eviction")
 	require.Equal(t, before.State.AnchorLine, after.State.AnchorLine, "recovery is not an anchor replacement")

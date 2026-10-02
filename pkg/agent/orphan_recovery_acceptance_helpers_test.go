@@ -73,14 +73,6 @@ func orphanACSnapshot(t *testing.T, h *cwR1Harness) memory.WindowSnapshot {
 	return snap
 }
 
-func orphanACArchiveMessages(snap memory.WindowSnapshot) []providers.Message {
-	out := make([]providers.Message, len(snap.Archive))
-	for i, m := range snap.Archive {
-		out[i] = m.Message
-	}
-	return out
-}
-
 func orphanACArchiveBytes(t *testing.T, h *cwR1Harness) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(h.dir, h.key+".jsonl"))

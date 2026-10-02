@@ -25,7 +25,8 @@ func orphanACAssertUnsupported(t *testing.T, raw []providers.Message, wantErr st
 	before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
 	ts := h.turn("")
 	out := orphanACAssertView(t, h, ts, raw)
-	lines := []int{-1}
+	lines := make([]int, 0, 1+len(raw))
+	lines = append(lines, -1)
 	for i := range raw {
 		lines = append(lines, i)
 	}
