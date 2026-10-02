@@ -77,7 +77,7 @@ This is a pre-start refusal, not a failure after tools or an external command ha
 
 ## The provider rejects your model requests
 
-**"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then an eligible complete old step; if neither can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.
+**"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then removes the oldest eligible whole piece — a complete old step (assistant calls plus all their matching results), or an older assistant reply that made no tool calls, whichever comes first in the conversation; if nothing can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.
 
 This is an internal retry notice, not a data-loss event: relief changes the model's view, not the admitted archive text. It keeps the original user message and media, instructions, call/result structure and unconsumed steering. If those required parts still do not fit, Omnipus returns the last real provider rejection when no further reduction is possible or the retry limit is reached. It does not stop merely because a local size estimate says the immutable remainder is too large.
 
