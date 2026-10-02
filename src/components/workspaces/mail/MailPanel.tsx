@@ -1524,6 +1524,16 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                           subject={detail.subject ?? ''}
                           attachments={detail.attachments}
                           presenceRef={presenceRef}
+                          onRefreshList={() => {
+                            // S-27's in-place recovery, mirroring the reading
+                            // pane's S-11 control: drop the unresolvable
+                            // selection and pull the folder's newest rows.
+                            setSelectedRow(null)
+                            setSelectedRef(null)
+                            messagesEventRef.current = { kind: 'own_action' }
+                            messagesModeRef.current = 'live'
+                            void messagesQuery.refetch()
+                          }}
                         />
                       </div>
                     )}
@@ -1584,13 +1594,16 @@ interface AttachmentListProps {
   subject: string
   attachments: MailMessage['attachments']
   presenceRef: React.RefObject<MailPanelPresence>
+  /** S-27's in-place recovery for a stale-reference Open failure: the
+   * panel's list refresh (the row's own "Refresh list" control). */
+  onRefreshList: () => void
 }
 
 /** Attachments of an open message (D28 + W3 US-6/US-7): filename, size
  * ("Size unknown" never "0 B"), and three actions — Open (mint + handoff),
  * Save to Library (M-02 token), Download (browser) — each with a distinct
  * accessible name including the filename (the focus-return target). */
-function AttachmentList({ workspaceId, agentId, folder, folderName, messageRef, subject, attachments, presenceRef }: AttachmentListProps) {
+function AttachmentList({ workspaceId, agentId, folder, folderName, messageRef, subject, attachments, presenceRef, onRefreshList }: AttachmentListProps) {
   const addToast = useUiStore((s) => s.addToast)
   const saveController = useMemo(() => createMailAttachmentSaveController(), [])
   const saveStatus = useSyncExternalStore(saveController.subscribe, saveController.getStatus)
@@ -1719,7 +1732,16 @@ function AttachmentList({ workspaceId, agentId, folder, folderName, messageRef, 
             {failedOutcome !== null && (
               <p role="alert" data-testid="mail-attachment-open-failed" className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">
                 {openFailureText(failedOutcome)}
-                {failedOutcome.stage !== 'over-cap' && failedOutcome.stage !== 'stale-reference' && (
+                {failedOutcome.stage === 'stale-reference' ? (
+                  /* S-27: the stale-reference row carries the pinned
+                     "Refresh list" control beside the explanation. */
+                  <>
+                    {' '}
+                    <Button variant="link" size="sm" onClick={onRefreshList}>
+                      Refresh list
+                    </Button>
+                  </>
+                ) : failedOutcome.stage !== 'over-cap' && (
                   <>
                     {' '}
                     <Button variant="link" size="sm" onClick={() => void handleOpen(attachment.part_index, filename)}>
