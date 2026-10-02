@@ -200,3 +200,90 @@ A test suite that cannot fail proves nothing (the repo's false-green rules; `doc
 
 1. **Given** the mutation list applied one at a time to a green implementation, **When** each mutation's named test runs, **Then** the test fails — a mutation whose test still passes is a **CHECK BLOCK** naming both.
 2. **Given** a test that failed once and passed on re-run, **When** the suite is judged, **Then** the retry-pass counts as red: the test is investigated to a mechanism (and a second isolated failure is a defect, not a flake).
+
+---
+
+## 4. Behavioral contract (quick reference)
+
+### 4.1 When/Then summary
+
+- When a mail operation completes, the system has one instrumentation record for it — success paths included.
+- When a record is written, it carries no subject, address, folder name, message content, credential or raw upstream error text.
+- When all leases are active and a ninth request arrives, the system answers with a typed busy result inside the 5 s acquisition wait and dials nothing.
+- When a socket fails (timeout, cancel, BYE, protocol error), the system retires it — it is never reused.
+- When the last panel observer leaves, the system releases every panel socket and leaves independent work untouched.
+- When two pairs share an account or a generation changes, the system never shares a read result across the boundary.
+- When a read is superseded by a mutation or invalidation, the system publishes nothing from it.
+- When ciphertext is corrupt, foreign or oversized, the system rejects it, warns visibly, and never salvages plaintext or advances a freshness timestamp.
+- When UIDVALIDITY changes, the system refuses every old reference before any fetch or mutation.
+- When a cached row is stale, the system labels it stale and keeps the label through a failed refresh.
+- When Open displays an attachment, the system writes nothing to disk.
+- When a temporary mail source renders, sender-authored markup can reach only that source's own authorized resources.
+- When Save runs, the file lands in the authorized hierarchy under a sanitized unique name — or a visible refusal with a safe reason.
+- When an agent save runs, the ordinary `ask` default and standard Auto rules govern — no extra mechanism.
+- When Reply all composes, the recipient set is exactly To = primary, Cc = original To+Cc minus self/primary, deduplicated — never Bcc.
+- When a message has no usable date, the system shows **No date** — never year one, epoch or today.
+- When a measurement run violates its conditions, the system's receipts discard it as invalid.
+- When a mutation from the CHECK list is applied, the matching test fails.
+
+### 4.2 Explicit non-behaviors (the proof package must not…)
+
+1. …write production code, contract files, or any file outside its own test pack and this spec (dispatch restriction; W0 owns contracts, W1–W10 own production).
+2. …weaken, skip or delete an existing test to get green — the three `view_missing_folder` tests and every currently passing suite are regression fences (§6.7).
+3. …accept a timing number from the gateway's historical log: it times nothing (§2.1); only instrument records and browser-network clocks are evidence.
+4. …merge the click clock with the request clock, or cached-display times with live-fetch times, in any receipt, table or bar.
+5. …report a measurement pass from a run that violated §8.3's conditions, or extrapolate a missing sample (empty folder = not applicable).
+6. …run the full Go test suite locally, or two local test processes at once — CI is the authority for Go results (repo rule 2; the OOM history behind it).
+7. …introduce test hooks, flags or globals into production code to make a test pass — instrumentation is production code with a real purpose, never a test-only branch.
+8. …let the UAT campaign send, delete, rename server folders, or change credentials/keys on the live instance (US-P6 AC-2).
+9. …treat a test that passed on retry as a pass, or a twice-failing test as a flake (§10).
+10. …claim reachability from registration/policy greps alone — a screen or component that renders the feature and an executed journey are required (repo Definition of Done).
+
+### 4.3 Machine-verifiable constraints
+
+Each MC-P is testable as stated; the right-hand column names the primary proof.
+
+| ID | Constraint | Primary proof |
+|---|---|---|
+| MC-P1 | Every mail operation emits exactly one record with fields `operation` (closed enum), `pair_ref` (opaque pair id + config generation), `source` (`live|memory|encrypted_disk|none`), `hit` (bool), `duration_ms` (int > 0 on completion), `acquire_wait_ms` (int), `socket_count` (int), `outcome` (`ok` or safe class), optional `rows` (int) and optional `revision` (opaque publication-revision id) | P-inst-1…P-inst-3 |
+| MC-P2 | No record field contains a message subject, an email address, a folder name, a Message-ID, a credential value, a full URL or a raw upstream error string — proven with distinctive synthetic markers plus a positive control | P-inst-2 |
+| MC-P3 | A cache-first hit record shows `hit=true`, `source∈{memory,encrypted_disk}`, `socket_count=0`; a live record shows `hit=false`, `source=live`, `socket_count≥1` | P-inst-3 |
+| MC-P4 | Sum of records' socket acquisitions equals the fake server's accepted-connection counter delta over the same window | P-inst-4 |
+| MC-P5 | Concurrent established sockets ≤ 2 per mailbox and ≤ 8 globally, counting connecting reservations; a 9th demand yields typed busy (reason `pool_busy`) within ≤ 5 s acquisition wait and zero extra dials | P-rt-1, P-rt-2 |
+| MC-P6 | A retired socket is never reused: after poison, the next operation's record shows a fresh dial (server login count +1); reader goroutines terminate (bounded goroutine trend over 20 cycles) | P-rt-3 |
+| MC-P7 | Last observer exit (close, disconnect, logout) leaves 0 panel-retained sockets; in-flight watcher/tool work completes; 20 open/close cycles return socket and goroutine counts to baseline | P-rt-4 |
+| MC-P8 | Cancelling a request releases its global reservation, account slot and mailbox lease before returning; a detached completion never restores panel retention | P-rt-5 |
+| MC-P9 | Two concurrent reads of different folders on one mailbox never observe each other's SELECT state; PEEK preserves `\Seen`; no eviction/release performs EXPUNGE | P-rt-6 |
+| MC-P10 | The read-sharing identity is (pair, config/folder-mapping generation, operation, normalized arguments, live/cache purpose); the account key decides contention only. Same-account/different-mapping and old-generation/new-generation concurrency produce separate results; account dials stay ≤ 2 | P-rt-7, P-rt-8 |
+| MC-P11 | A read captured under an older publication revision publishes nothing on completion — memory rows, disk snapshot, timestamps, UI state and counts unchanged; a post-mutation refresh never joins a superseded flight; a delayed frontend response carrying an older `publication_revision` is dropped | P-rt-9 |
+| MC-P12 | Cache envelope: AES-256-GCM with fresh random nonce per write, keys only via `Store.DeriveSubkey` purpose separation, AAD = purpose + schema version + pair + config generation (+ transport in Phase 2); ciphertext-only atomic replacement; oversized/malformed envelopes rejected before unbounded allocation | P-ca-1, P-ca-2 |
+| MC-P13 | Corrupt/foreign/truncated ciphertext → visible cache warning + live path + no timestamp advance + no plaintext salvage; a marker scan with positive control proves no plaintext persisted | P-ca-2 |
+| MC-P14 | UIDVALIDITY change discards every old cursor/row/ref; any old-ref exercise (read, mark-seen, attachment) is refused with the typed stale-reference error on the same selected lease that would have acted — before fetch or mutation | P-ca-3 |
+| MC-P15 | Stale rows render labelled stale with a refresh indicator; a failed refresh preserves them plus a visible error and never resets `last_validated` | P-ca-4 |
+| MC-P16 | Reusable headers ≤ 50 per role (150/mailbox); active-view pages never enlarge the cache; search runs live; 4 MiB global reusable-metadata overflow → visible cache-unavailable outcome, never truncation or silent omission | P-ca-5 |
+| MC-P17 | Memory headers drop 30 minutes after the panel was last open (fake clock); a reopen inside 30 minutes retains them; drop issues zero IMAP commands | P-ca-6 |
+| MC-P18 | A cache write leaves the data folder's `git status --porcelain` unchanged, adds nothing to the autocommit staging set, and appears in no backup archive member — with an allowed state file as positive control | P-ca-7 |
+| MC-P19 | Open (temporary preview) performs zero attachment-file, directory, spool or persistent-byte writes — filesystem snapshot + Git status identical before/after — while a positive-control Save shows a write; responses carry `Cache-Control: no-store`; token/preview/inline caches hold no body or part bytes (today's 15-minute `MailPreviewTokenTTL` body retention must be gone) | P-ft-1 |
+| MC-P20 | The temporary mail source's renderer resource policy refuses every sender-authored reference except the source's own minted resources and consent-gated token-scoped proxy images — same-origin Library/API paths, workspace embeds and remote URLs each produce zero requests, with the workspace-file positive control proving the observer | P-ft-2 |
+| MC-P21 | Save lands only under `mail/<mailbox-label>/<UTC save-month>/` with the sanitized unique name (existing sanitizer + Library validation + `CreateUnique` numbering, final candidate validated); refusals (parent-file conflict, symlink/mount escape, disk full, vanished part) are visible with safe reasons; exact bytes saved | P-ft-3 |
+| MC-P22 | Agent save tools ride the two-layer policy: shipped ceiling literal `list_email_attachments: allow`, `read_email_attachment: allow`, `download_email_attachment: ask`; `ReconcileToolPolicyCeiling` adds missing keys without overwriting operator values; effective policy per role grants list/read as that role's `read_message` and download `ask`; Auto-on uses the existing workspace-path conditional class (Q4=A); declined/failed approval → zero transfer and zero write | P-ft-4 |
+| MC-P23 | Reply-all recipient set from the fixture (From A, Reply-To R, To = self+X+dup-R, Cc = Y+mixed-case-X+self+display-name-dup-R, hidden Bcc) is exactly To=[R], Cc=[X, Y]; plain Reply To=[R], Cc/Bcc empty; asserted on the final send payload shape | P-ft-5 |
+| MC-P24 | Styled mail: computed style keeps safe colour/font/table/media-query presentation; scripts, event handlers, forms, `@import`, remote `url()`, `position:fixed`/`absolute`, `behavior`/`expression()` produce zero effects and zero default remote loads; Load-images loads only token-scoped proxy resources after consent; stripped fallback readable with one plain notice | P-ft-6 |
+| MC-P25 | Date precedence Date → internal date → null renders as **No date** in list, detail, Sent and reply attribution; never year one, epoch, today or a list/detail discrepancy | P-ft-7 |
+| MC-P26 | The agent reference journey (no Message-ID anywhere) succeeds end-to-end from returned references; wrong-pair, old-generation and old-epoch references each refuse with the typed stale-reference error before fetch/mutation | P-ft-8 |
+| MC-P27 | Every measurement sample carries both clocks (click→rendered, request-start→response-end), status, rows, n; cached-display and live-fetch columns never mix; invalid-run conditions (§8.3) discard and re-run | P-ms-1…P-ms-3 |
+| MC-P28 | Bars judged as stated (Q3=A): 5 s max acquisition inside 45 s read budget; 4 MiB metadata budget; cached display median ≤ 250 ms / p95 ≤ 500 ms; warm-live ≥ 50 % paired-median reduction where eligible; cold ≤ 10 % and body-open ≤ 10 % paired-median regression; summary p95 ≤ 1 s request-to-render with zero mail calls; busy within 5 s | P-ms-4, §8.4 |
+| MC-P29 | UAT live-instance rows carry their named screenshots; prohibitions (no send, no delete, no key change, no server folder create/rename, no epoch-inducing op) hold; subjects/addresses redacted in receipts | P-uw-1, P-uw-2 |
+| MC-P30 | Every mutation in §7, applied alone to a green implementation, makes its named test fail; a surviving mutation is a CHECK BLOCK | P-ck-1 |
+
+### 4.4 Integration boundaries
+
+| External system / producer | What this package consumes | Failure behaviour when unavailable |
+|---|---|---|
+| W0's generated contracts (`MailReadMetadata`, `publication_revision`, `mode=cache_first|live`, `MailUnavailableError` reasons, tool result shapes) | Tests bind to generated types only — never hand-written parallels | Tests stay red until contracts land; that is the correct RED state, not a workaround trigger |
+| W1's pool/budget interfaces | The injected manager seams the runtime tests drive | Tests written against the frozen interface shapes from §17's PUBLISHES/CONSUMES exchange; interface drift = coordination finding, not a test edit |
+| W2's cache envelope + `Store.DeriveSubkey` | Envelope round-trip/corruption tests | Same red-until-landed rule |
+| W4's gateway wiring, preview endpoints, exclusion of the cache dir | Endpoint tests, exclusion test | The exclusion test stays red until W4 lands the exclusion — that red gates disk-cache activation (landing blocker, not a skipped test) |
+| W7's save service, W8's viewer source union, W9's sanitizer table, W10's tools/catalog | Feature journey tests | Feature tests red until each lands; sequenced per the ADR (date/reply wins first, then attachments, CSS after security review) |
+| Fake IMAP server + its fault-injection extensions (test code only) | Every runtime/cache test | A harness fault that cannot be injected becomes a coordination question — never a production hook |
+| The live instance + the 13 mailboxes | Measurement arms and UAT rows | An unavailable pair is reported *not applicable*/unavailable — never silently replaced with a convenient provider (ADR measurement rule) |
