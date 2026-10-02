@@ -316,7 +316,7 @@ func sealSnapshot(payload []byte, purpose string, snap Snapshot, scope Scope, ke
 	if len(snap.Transport) > 255 {
 		return nil, fmt.Errorf("%w: transport marker too long", ErrCacheUnavailable)
 	}
-	aad := envelopeAAD(purpose, snap.SchemaVersion, scope.PairID, scope.ConfigGeneration, snap.Transport)
+	aad := envelopeAAD(purpose, snap.SchemaVersion, scope.PairID, scope.Generation, snap.Transport)
 	ct := gcm.Seal(nil, nonce, payload, aad)
 
 	var out bytes.Buffer
@@ -378,7 +378,7 @@ func openSnapshot(raw []byte, purpose string, scope Scope, key []byte) (Snapshot
 	nonce := raw[pos : pos+nonceLen]
 	pos += nonceLen
 	ct := raw[pos:]
-	aad := envelopeAAD(purpose, schema, scope.PairID, scope.ConfigGeneration, transport)
+	aad := envelopeAAD(purpose, schema, scope.PairID, scope.Generation, transport)
 	payload, err := gcm.Open(nil, nonce, ct, aad)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("%w: authentication failed (wrong key, bit flip, or a foreign pair/generation/purpose)", ErrCacheCorrupt)
