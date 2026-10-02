@@ -73,7 +73,8 @@ In scope (all frontend, in the ADR's W3-owned files unless a boundary says other
   finding I-06).
 - The temporary-source resource policy the handoff carries (grill finding I-04) and the scripts-off
   default with per-file checkbox for saved mail-derived HTML (founder Q5=A) — as requirements and
-  acceptance criteria; the renderer-side implementation belongs to W8's owned files.
+  acceptance criteria; the renderer-side implementation belongs to the ADR-W8 renderer owner's files,
+  specified in the w4 file (header package mapping).
 - Every user-visible state of the above with its exact text.
 
 Out of scope for this spec (owned elsewhere; boundaries in §3):
@@ -1438,14 +1439,14 @@ verified)* and must not drift.
 | S-2 | Loading detail | Reading pane | Existing spinner, `aria-label="Loading message"` *(existing — verified)*. |
 | S-3 | Fresh live rows | List + rail | Freshness line: `Checked just now` (or `Checked <relative time>`); no stale marker. |
 | S-4 | Cached rows, fresh | List + rail | `Checked <relative time>` — e.g. `Checked 2 minutes ago`. |
-| S-5 | Stale-and-checking | List header line | `Last checked <relative time> · Checking…` — rows stay visible; a subtle inline spinner rides the line; no skeleton. |
+| S-5 | Stale-and-checking | List header line | `Last checked <relative time> · Checking…` — rows stay visible; a subtle inline spinner rides the line; no skeleton. Unknown-time variants (nullable `last_validated_at`): `Last checked unknown · Checking…` while a refresh is in flight; `Last checked unknown.` when none is (scenarios 2.5/2.6 — both strings are pins). |
 | S-6 | Refresh failed, stale rows kept | List header line + notice | `Couldn't refresh — showing messages as of <time>.` + a `Retry` button. Connection-failure classes additionally show `Can't connect to this mailbox · <class>` in the watcher banner's existing shape. |
 | S-7 | Folder confirmed absent | Rail + list | Rail: role visible with count `0`; list: `No messages` + `Your mail server has no <Sent|Drafts> folder. You can set the folder name in mailbox settings.` with `Open mailbox settings` link. Never an error surface. |
 | S-8 | Folder unresolved (unknown) | Rail + list | Rail: role visible with count `—`; list: `Couldn't confirm the <Sent|Drafts> folder on this server.` + `Set the folder name in mailbox settings.` + the settings link. Never claims absence; never `No messages`. |
 | S-9 | Busy (capacity) | Failure surface | Generic: `Mail is busy. Try again.` + `Retry`. With reason: `pool_busy`/`account_busy` → `Mail is busy. Try again.`; `server_connection_limit` → `The mail server reached its connection limit. Try again shortly.`; `backoff` → existing banner text *(existing — verified: "Can't connect to this mailbox · <class> — retrying at <time>")*. |
 | S-10 | Connection failure, no cache | List / detail | `Can't connect to this mailbox` + `Error class: <class>` + `Retry` *(existing — verified)* + existing `Open mailbox settings` affordance. |
-| S-11 | Message changed or deleted | Reading pane | `This message changed or was deleted. Refresh the list.` *(existing — verified for drafts)* generalized to all folders + `Refresh list` button. A stale row click can never render as a successful open. |
-| S-12 | Cache unavailable | Dismissible notice | `Mail cache unavailable; using live access.` |
+| S-11 | Message changed or deleted | Reading pane | `This message changed or was deleted. Refresh the list.` + `Refresh list` button — **new text** (correction F-4: the first draft mislabelled this as existing; the real drafts-era string is `This draft was changed or deleted elsewhere. The list has been refreshed.`, Verified at `src/components/workspaces/mail/MailPanel.tsx::MailPanel`, which S-11 replaces and generalizes to all folders; the `MailPanel.staleDraft*.test.tsx` oracles are re-pinned by qa-lead, §8.8). A stale row click can never render as a successful open. |
+| S-12 | Cache unavailable | Dismissible notice | `Mail cache unavailable; using live access.` Reports a genuine runtime failure of the product-owned exclusion or cache path only (founder Q-A: the product owns its cache directory's exclusion from data-directory staging and from the application's own backups/archives on every install, by its own means; this notice never excuses a missing product-owned exclusion — register row 18). |
 | S-13 | Over-cap attachment | Attachment row | Open and Save unavailable with `This attachment is larger than the 25 MB preview limit. Use Download.` (associated text, not tooltip-only). |
 | S-14 | Unsaved-Compose discard prompt | ConfirmDialog | Title `Discard unsaved changes?` · body `You have unsaved changes in Mail. Leaving now will discard them. Continue?` · confirm `Discard` *(existing — verified; unchanged)*. |
 | S-15 | Save succeeded | Viewer status region (announced, no focus move) | `Saved to Library as <final name>.` + `Open in Library` enabled; audit-warning variant prepends the safe warning code text from the response. |
@@ -1459,6 +1460,10 @@ verified)* and must not drift.
 | S-23 | Stale cursor reset | Notice (once) | `The folder changed. Showing the newest messages.` |
 | S-24 | Scripts-off mail HTML | Library viewer notice | `Scripts are disabled because this file came from mail.` + per-file `Allow scripts` checkbox with helper `Applies to this file only.` |
 | S-25 | Unknown attachment size | Attachment row | `Size unknown` (never `0 B`). |
+| S-26 | Open failed — over cap at transfer | Attachment row | Same text as S-13: `This attachment is larger than the 25 MB preview limit. Use Download.`; the Open control re-enables; no preview mounts (the ADR I-05 typed late-failure error — correction F-3). |
+| S-27 | Open failed — message reference stale | Attachment row | `This message changed or was deleted. Refresh the list.` (S-11's text, row-scoped) + `Refresh list`; no preview mounts; no silent return to the list. |
+| S-28 | Open failed — busy | Attachment row | S-9's busy copy for the returned `reason` + `Retry`; no preview mounts. |
+| S-29 | Open in flight | Attachment row | The row's Open control is disabled reading `Opening <filename>…` with `aria-busy="true"`; a second mint cannot start from the same row while one is in flight. |
 
 ## 12. Components: reuse the catalogue, justify anything new
 
@@ -1494,11 +1499,11 @@ where applicable rather than bespoke focus code.
 
 | Page | Section | What must be said |
 |---|---|---|
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/mail.md` | *Reading mail* (or equivalent) | Cached rows appear instantly and are labelled with when they were last checked; the panel checks the server once when you open a folder, switch folders, press Refresh, or act on a message; closing the panel stops all checking. Stale rows stay visible with their age while a check runs, and a failed check says so with Retry. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/mail.md` | *Reading mail* (or equivalent) | Cached rows appear instantly and are labelled with when they were last checked; on open or folder switch the panel checks the server only if the data is missing or older than five minutes, while a manual Refresh or an action on a message always checks; closing the panel stops all checking. Stale rows stay visible with their age while a check runs, and a failed check says so with Retry. |
 | `docs/mail.md` | *Folders* | Inbox/Sent/Drafts are roles; Omnipus finds the real folders automatically; you can set exact names per mailbox in Connectors (empty = automatic). A folder the server truly doesn't have shows as empty with an explanation; one we couldn't confirm shows "couldn't confirm" and the setting prompt — not "no such folder". |
 | `docs/mail.md` | *Long folders* | 25 rows per page; Load more adds 25; the view caps at the newest 200 per folder; Search finds older messages live on the server — there is no offline copy of your mailbox. |
 | `docs/mail.md` | *Attachments* | The paperclip marks messages with attachments; Open previews in the Library viewer without saving anything (context bar "From mail: <subject>", Back to mail, Save to Library); over 25 MB only Download works; a saved file lands in mail → mailbox → month with a numbered name if one exists; if a save's result is lost the panel says "result unknown" and an explicit retry resolves it without duplicating. |
-| `docs/mail.md` | *If something goes wrong* | Busy vs connection-limit vs backoff copies (S-9); "This message changed or was deleted"; cache-unavailable notice; unknown counts show "—". |
+| `docs/mail.md` | *If something goes wrong* | Busy vs connection-limit vs backoff copies (S-9); "This message changed or was deleted" (S-11); cache-unavailable notice (S-12); unknown counts show "—"; a failed attachment Open names the cause on its row (S-26–S-28) and never leaves a spinner. |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/library.md` | *Preview / Mail attachments* | Opening from mail is temporary: no file, no path, vanishes on exit/reload; stored-file actions explain "Save to Library first"; saved mail-derived HTML keeps original bytes, renders scripts-off with a per-file "Allow scripts" checkbox (that file only). |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/connectors.md` | *Email mailbox settings* | Sent/Drafts folder names: empty = automatic (we discover), a value = use exactly this folder; a name we can't find warns in settings; legacy saved names stay until you clear them. |
 
@@ -1519,8 +1524,10 @@ test:
    in mail → mailbox → month.
 4. *(Error)* Delete a message in another mail client, click its stale row in Omnipus; the panel says it
    changed or was deleted — it does not open something else silently.
-5. *(Error)* Point a saved mail attachment's markdown at a Library file path you own; no request for it
-   leaves the browser (browser dev tools network tab as the oracle).
+5. *(Error)* In an **unsaved** temporary preview of a mail attachment, point its markdown at a Library
+   file path you own; no request for it leaves the browser (browser dev tools network tab as the
+   oracle). The same content **saved** as a real workspace file loads per ordinary workspace rules —
+   founder ruling Q-E; the mail-restricted policy scopes the temporary view only (correction F-5).
 6. *(Edge)* Open Mail in two tabs, close one; the other keeps working; a gateway operator observing
    sockets sees retention match the surviving tab only.
 7. *(Edge)* Set your Sent folder name to something your server doesn't have; the panel tells you it
@@ -1537,37 +1544,37 @@ test:
   connections, each with its own observers (consistent with the existing per-tab socket and the
   cross-tab duplicate-panel prevention in `src/lib/panelTabPresence.ts`, which stays browser-local).
 - **A-4**: The summary endpoint's 30-second SPA poll is untouched this phase (saved-state only).
-- **A-5**: Search matching fields are SUBJECT + FROM/TO substring (IMAP-native header fields), defined
-  here as the recommendation in §16 Q1; W0's contract text is authoritative once landed.
+- **A-5 (decided)**: Search matching fields are subject plus sender/recipient substring, server-side
+  IMAP header search, within the 25/200 bounds — **decided, founder Q-D=A (2026-10-02)**; no longer an
+  assumption or a recommendation. W0's schema text is authoritative once landed (register row 4).
 - **A-6**: The existing `retry=true` wire marker keeps its current meaning (bypass backoff only) —
   verified in `src/lib/api/mail.ts::retryQs` and the gateway's budget wrapper; this spec adds nothing to
   it.
 - **A-7**: qa-lead, not the implementer, rewrites the retired D25 oracle tests (frontend rules; §8.8).
 
-## 16. Open questions (options + recommendation; answers go to team-lead, not silent choices)
+## 16. Open questions — all resolved (no silent choices; each names its decider)
 
-**Q1 — Search matching fields.** Context: the ADR requires "exact supported matching fields and limits"
-in the revised spec, and forbids promising full-text/offline search. Options: (A) SUBJECT + FROM/TO
-substring, server-side IMAP header search — matches the panel's mental model ("find that message from
-that person"), no body exposure, cheap to bound; (B) SUBJECT only — smallest surface but fails the
-common "who sent this?" case; (C) defer search and ship the dead-end — forbidden by the dispatch.
-**Recommendation: A**, with the empty-query and over-long-query bounds in W0's schema.
+**Q1 — Search matching fields.** **DECIDED — founder Q-D=A (2026-10-02).** Subject plus
+sender/recipient substring, server-side IMAP header search, within the 25/200 bounds. Option C (defer
+search and ship the dead-end) was forbidden by the dispatch and never reconsidered. The empty-query and
+over-long-query bounds are W0's schema rows (register row 4, via w5-integration's queue). Recorded as
+A-5 (decided); applied in US-3 AS-4 and FR-W3-8.
 
-**Q2 — Freshness line placement.** Context: every list needs the label; the rail also shows counts.
-Options: (A) one status line above the list + rail count markers, per-folder; (B) per-row badges —
-noisy and duplicative. **Recommendation: A** (matches §11's S-3..S-6 pins).
+**Q2 — Freshness line placement.** **DECIDED — option A; owner: this spec** (a w3 design choice, no
+founder decision required). One status line above the list plus rail count markers, per folder; the pins
+are §11 S-3…S-6. Per-row badges rejected as noisy and duplicative.
 
-**Q3 — Search view model.** Options: (A) search results replace the list with a "Back to <folder>"
-exit, browse rows preserved underneath (what §7 3.3 pins); (B) append results to the browse list —
-conflates sources and breaks the ceiling discipline. **Recommendation: A.**
+**Q3 — Search view model.** **DECIDED — option A; owner: this spec.** Search results replace the list
+with a "Back to <folder>" exit, browse rows preserved underneath (§7 scenario 3.3 pins it). Appending
+results to the browse list rejected: it conflates sources and breaks the ceiling discipline.
 
-**Q4 — Observer id on workspace switch.** Options: (A) close old + open new with fresh ids (what §7 5.2
-pins); (B) one observer per panel instance forever — leaks across workspaces and complicates the
-gateway's per-workspace retention. **Recommendation: A.**
+**Q4 — Observer id on workspace switch.** **DECIDED — option A; owner: this spec.** Close the old
+observer and open a new one with fresh ids (§7 scenario 5.2 pins it). One observer per panel instance
+forever rejected: it leaks across workspaces and complicates the gateway's per-workspace retention.
 
-**Q5 — Panel search input vs the agent's `search_email` tool.** The panel control is folder-scoped UI
-over the new REST search param; the agent tool is unchanged. No shared client code beyond the generated
-types. Stated to pre-empt a "reuse the tool" misread; no decision needed from the founder.
+**Q5 — Panel search input vs the agent's `search_email` tool.** **No decision needed (informational).**
+The panel control is folder-scoped UI over the REST search param; the agent tool is unchanged; no shared
+client code beyond the generated types. Stated to pre-empt a "reuse the tool" misread.
 
 ## 17. Reachability — Definition of Done (the two never-merged lines)
 
@@ -1577,14 +1584,20 @@ types. Stated to pre-empt a "reuse the tool" misread; no decision needed from th
   CHECK (mutation audit) passed on the panel suites; the §8.7 counterexample mutations were each shown
   to kill at least one test.
 - `npm run typecheck` green (the only meaningful TS gate); `npm run lint:design-system-locks` green for
-  the touched trees; generated-types only — `make verify-contracts` green proves no hand-written wire
-  type slipped in.
+  the touched trees; generated types only — **`scripts/check-no-handwritten-wire-types.sh` green proves
+  no hand-written parallel wire type slipped in, and `make verify-contracts` green proves the committed
+  generated artifacts are not stale** (correction F-12: verify-contracts catches staleness, not
+  hand-written types — the dedicated guard is the instrument for that class, and both gates run).
+- Wave order per the landing-order register §4: this spec's wire-consuming code lands only after Wave B
+  (the W0 contracts wave, backend-lead) merges its regenerated artifacts; this file is Wave A's
+  correction for w3 and merges first.
 - The D25-era oracle rewrites (§8.8) landed through qa-lead with citations to this spec.
 
 **Reachable by a user/agent** — evidence required before this line may be stated:
-- A real user opening the built SPA reaches every §11 state through real clicks: cached-then-live open,
-  paging to 200 and search (E2), attachment Open → Library viewer → Back/Save (E3), the scripts-off
-  saved HTML (E3 leg), Refresh/Retry/Busy (E1) — executed, with screenshots, not written-only plans.
+- A real user opening the built SPA reaches every §11 state through real clicks: cached-then-live open
+  (E1), paging to 200 and search (E2), attachment Open → Library viewer → Back/Save (E3), the
+  scripts-off saved HTML with its per-file checkbox (E6), Refresh/Retry/Busy (E1) — executed, with
+  screenshots, not written-only plans.
 - No new tool registration is implicated (this package is panel UI; the Hard Constraint #6 catalog check
   applies to W10's tools, not here) — stated so the check is not silently skipped: the reachable-by-an-
   agent half of this feature lives in W3's sibling packages and their own DoD.
@@ -1595,5 +1608,51 @@ types. Stated to pre-empt a "reuse the tool" misread; no decision needed from th
 
 ---
 
-*Spec ends. Prepared by the architect for team-lead's grill dispatch; nothing in this file is
-implementation approval.*
+## 18. Correction-round record (2026-10-02)
+
+The one prescribed spec-correction round, applied from the grill report
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill-2.md` and the landing-order interface
+register (`docs/internal/specs/mail-live-access-landing-order.md`, §2/§4/§5). Every finding that names
+this spec is applied in the text above; the founder rulings of 2026-10-02
+(`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/mail-feature-decisions.md`) are applied and
+none is reopened.
+
+| Finding / ruling | Resolution in this spec |
+|---|---|
+| F-1 (Critical — paging/search/409 consumed by nobody's implementation) | Publishers named per register row 4 (§2.4/§3.2): W0 schemas via w5-integration's amended §8 queue; **w2 implements the IMAP SEARCH and cursor issuance in its view file**; W3 consumes and builds neither. No stub, no second declaration. |
+| F-2 (Important — refresh contradiction) | Founder Q-C=A applied: the ADR's stale-gating stands. US-1 rewritten (AS-1 stale→one live; new AS-8 fresh→zero live), scenarios 1.1/1.7, §3.1 cache-view row, §5, MC-W3-2, FR-W3-2, and the §13 docs wording all aligned to the conditional rule. |
+| F-3 (Important — failed Open/mint stateless) | US-6 AS-8, scenario 6.7, §11 states S-26/S-27/S-28/S-29, FR-W3-23, C5/D-4 rows and counterexample mutation 12 added (grill Q5 adopted as recommended). |
+| F-4 (Important — S-11 text wrong; two oracle tests unlisted) | §11 S-11 corrected with the real drafts string cited (`src/components/workspaces/mail/MailPanel.tsx::MailPanel`); `MailPanel.staleDraft.test.tsx` / `MailPanel.staleDraftRetry.test.tsx` added to §8.8's qa-lead rewrite list with the citation. |
+| F-5 (Important — holdout 5 contradicted the policy scope) | Founder Q-E=A applied: §14 holdout 5 rewritten to target the unsaved temporary view; US-8 AS-5 states the saved-file rule; saved-HTML Q5=A wording in US-9 unchanged. |
+| F-6 (Minor — save-state miscitations) | §2.4 Save row, US-6 AS-7 and scenario 7.4 now cite S-15/S-16/S-17 (S-12/S-13 keep their own meanings). |
+| F-7 (Minor — FR-W3-18's named test did not exist) | E6 (`tests/e2e/mail-saved-html-scripts.spec.ts`) added to §8.5; §10 and §17 cite E6. |
+| F-8 (Minor — no FR owned the M-02 retry) | FR-W3-22 added (same token, prior receipt, never automatic); §10 row added; scenario 6.6 cites S-17. |
+| F-9 (Minor — mixed numbering schemes) | Header package-mapping line (register row 24); §1/§3/§3.3 name real files (w1–w6); ADR letters W7–W10 mapped to the w4 file; W0 stated as a role, not a spec. |
+| F-10 (Minor — ambiguous request-count oracle) | Scenario 3.1 rewritten: the open event's cache-first read is the only page-1 request; Load more issues exactly the page-2 request. |
+| F-11 (Minor — unknown-time presentation unpinned) | §11 S-5 gains the two pinned variants; scenarios 2.5/2.6 and D-1 rows 6/8 pin each string. |
+| F-12 (Minor — wrong DoD instrument) | §17 cites `scripts/check-no-handwritten-wire-types.sh` for hand-written types and `make verify-contracts` for staleness; both run. |
+| Register rows 1–24 (w3-relevant) | Rows 1–8 in §2.4/§3.2 with single publishers; rows 14/15/16/17/19 as consumption contracts (no stub, no second implementation); row 18 with the founder-Q-A product terms; rows 20/21 in §3.1 (W3 as publisher, with freeze points and the conditional); row 22 via FR-W3-22; row 24 in the header. |
+| Founder Q-A | The product owns its cache-directory exclusion from staging and backups on every install, by its own means; no machine-setup dependency appears anywhere in this spec (verified by grep, evidence below); S-12 restricted to genuine runtime failure. |
+| Founder Q-B | Out of this spec's surfaces (w1/w2/w5 files own the watcher state file); no w3 text contradicts exclude-and-purge. |
+| Founder Q-C | Applied throughout (US-1, §1, §3.1, §5, MC-W3-2, FR-W3-2, §13 docs row). |
+| Founder Q-D | Applied (US-3 AS-4, FR-W3-8, A-5 decided, §16 Q1). |
+| Founder Q-E | Applied (US-8 AS-5, §14 holdout 5; saved-HTML scripts-off + per-file checkbox stands per Q5=A). |
+
+Evidence table (this correction round):
+
+| Claim | Evidence (command + exit code + key output, or file::symbol) | Certainty |
+|---|---|---|
+| Real drafts-era string location | `grep -rn "changed or deleted" src/components/workspaces/mail/MailPanel.tsx` → exit 0; `MailPanel.tsx:342: throw new Error('This draft was changed or deleted elsewhere. The list has been refreshed.', ...)` — cited in-text as `src/components/workspaces/mail/MailPanel.tsx::MailPanel` | Verified |
+| staleDraft oracle tests exist | `ls src/components/workspaces/mail/ \| grep -i staleDraft` → exit 0; `MailPanel.staleDraft.test.tsx`, `MailPanel.staleDraftRetry.test.tsx` | Verified |
+| Hand-written-type guard exists | `ls scripts/ \| grep -i handwrit` → exit 0; `check-no-handwritten-wire-types.sh` (+ `.test.sh`) | Verified |
+| No machine-setup dependency in this spec | `grep -n -i "omnipus-agent-os\|launchd\|gitleaks\|backup remote\|state-backup\|machine-setup\|personal ignore" docs/internal/specs/mail-live-access-w3-panel-and-settings-spec.md` → no matches (exit 1), run before and re-run after all edits | Verified |
+| Sibling spec file names | `ls docs/internal/specs/ \| grep -i mail` → exit 0; `mail-live-access-w1-read-runtime-spec.md` … `w6-proof-spec.md` + `mail-live-access-landing-order.md`; no `w0` file | Verified |
+| ADR stale-gating rule (founder Q-C basis) | `docs/internal/architecture/ADR-20261001-mail-live-access-pooling-folder-discovery-and-cache.md` Counts/Headers rows: "Refresh on panel open if absent or **older than 5 minutes** … No repeating timer" (read this round) | Verified |
+| Five-value `mapping_source` supersedes the ADR's four | ADR "Missing versus unknown folder/count" row (four values) vs landing-order register row 3 ("W0 adopts the producer's five-value enum … ADR's four-value proposal is superseded") — both read this round | Verified |
+| Founder rulings applied, none reopened | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/mail-feature-decisions.md` read in full this round (Q-A…Q-E table) | Verified |
+| **Self-check** | Re-read the corrected file end-to-end after the final edit: every §11 cross-reference in §2.4/§4/§7 resolves to a defined state (S-15/S-16/S-17 for save outcomes; S-26–S-29 now exist; scenario 2.5's string is pinned in S-5); every register row touching W3 names its single publisher in §2.4/§3.2; §10's traceability covers all 23 FRs including the two new ones; §16 has no open question left unmarked. Forbidden moves checked: no test weakened (the only test-plan changes add oracles — E6, scenario 6.7, U1's fresh-cache case, mutations 11–12, D-1 row 8); no limit widened (25/25/200, 25 MB, 5-minute threshold, four frame keys, 30-minute retention all restated at founder-set values); no stub type created (every consumed interface names its publisher instead); no silent scope change (the only scope wording changes restate founder rulings; the one superseded behaviour — refresh-even-when-fresh — is founder-ruled, not quietly dropped). The only file in every commit of this round is this spec, authored as Daniel Piatkowski with no co-author trailer. | Verified |
+
+---
+
+*Spec ends. Prepared by the architect for team-lead's grill dispatch; corrected once per the
+spec-process rule; nothing in this file is implementation approval.*
