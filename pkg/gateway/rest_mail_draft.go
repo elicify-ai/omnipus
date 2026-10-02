@@ -240,11 +240,16 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		if mailViewDraftBodyPart(p) {
 			continue
 		}
+		// reported_size_bytes stays unset: the listing is parsed from the
+		// just-composed bytes, which carry only the decoded size — never a
+		// server-reported transfer size, and the contract keeps the two
+		// distinct (decoded must not be duplicated into reported).
 		resp.Attachments = append(resp.Attachments, struct {
-			ContentType string `json:"content_type"`
-			Filename    string `json:"filename"`
-			PartIndex   int    `json:"part_index"`
-			SizeBytes   int    `json:"size_bytes"`
+			ContentType       string `json:"content_type"`
+			Filename          string `json:"filename"`
+			PartIndex         int    `json:"part_index"`
+			ReportedSizeBytes *int64 `json:"reported_size_bytes,omitempty"`
+			SizeBytes         int    `json:"size_bytes"`
 		}{ContentType: p.ContentType, Filename: p.Filename, PartIndex: p.PartIndex, SizeBytes: p.SizeBytes})
 	}
 	resp.Attachments = mailNonNilSlice(resp.Attachments)

@@ -53,15 +53,47 @@ func (a *restAPI) handleMailFolders(w http.ResponseWriter, r *http.Request, work
 			u := s.Unseen
 			unread = &u
 		}
+		// UIDVALIDITY is a true value only when this request's STATUS returned
+		// one — the missing-Sent/Drafts fallback leaves it 0, and unknown is
+		// null on the wire, never a fabricated epoch (ADR P1.3).
+		// availability, mapping_source and the mapping/count metadata stay
+		// unset: their producer (folder discovery) has not landed, and the
+		// contract keeps them optional until it does — absent means
+		// not-yet-computed, the is_knowledge_base precedent.
+		var uidvalidity *int64
+		if s.UIDValidity != 0 {
+			uv := mailUIDToWire(s.UIDValidity)
+			uidvalidity = &uv
+		}
 		out.Folders = append(out.Folders, struct {
-			DisplayName string                        `json:"display_name"`
-			Slug        gen.MailFolderListFoldersSlug `json:"slug"`
-			Total       int                           `json:"total"`
-			UnreadCount *int                          `json:"unread_count"`
+			Availability  *gen.MailFolderListFoldersAvailability `json:"availability,omitempty"`
+			CountMetadata *struct {
+				LastValidatedAt     *time.Time                                        `json:"last_validated_at"`
+				NoticeCode          *gen.MailFolderListFoldersCountMetadataNoticeCode `json:"notice_code"`
+				PublicationRevision *string                                           `json:"publication_revision"`
+				RefreshNeeded       bool                                              `json:"refresh_needed"`
+				Source              gen.MailFolderListFoldersCountMetadataSource      `json:"source"`
+				Stale               bool                                              `json:"stale"`
+			} `json:"count_metadata,omitempty"`
+			DisplayName     string `json:"display_name"`
+			MappingMetadata *struct {
+				LastValidatedAt     *time.Time                                          `json:"last_validated_at"`
+				NoticeCode          *gen.MailFolderListFoldersMappingMetadataNoticeCode `json:"notice_code"`
+				PublicationRevision *string                                             `json:"publication_revision"`
+				RefreshNeeded       bool                                                `json:"refresh_needed"`
+				Source              gen.MailFolderListFoldersMappingMetadataSource      `json:"source"`
+				Stale               bool                                                `json:"stale"`
+			} `json:"mapping_metadata,omitempty"`
+			MappingSource *gen.MailFolderListFoldersMappingSource `json:"mapping_source,omitempty"`
+			Slug          gen.MailFolderListFoldersSlug           `json:"slug"`
+			Total         int                                     `json:"total"`
+			Uidvalidity   *int64                                  `json:"uidvalidity,omitempty"`
+			UnreadCount   *int                                    `json:"unread_count"`
 		}{
 			DisplayName: s.DisplayName,
 			Slug:        gen.MailFolderListFoldersSlug(s.Slug),
 			Total:       s.Total,
+			Uidvalidity: uidvalidity,
 			UnreadCount: unread,
 		})
 	}
@@ -117,15 +149,23 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 		if fn != "" {
 			fnPtr = &fn
 		}
+		// has_attachments stays unset: the list fetch carries envelopes and
+		// flags only — the MIME classifier that could answer it has not
+		// landed, and absent means not-yet-computed (false is confirmed
+		// absence, never fabricated). message_ref stays unset too: no
+		// gateway ref issuer exists yet; both fields are optional on the wire
+		// until their producers land (the is_knowledge_base precedent).
 		out.Messages = append(out.Messages, struct {
 			Cc             []string                          `json:"cc"`
 			Date           time.Time                         `json:"date"`
 			Folder         gen.MailMessagePageMessagesFolder `json:"folder"`
 			From           string                            `json:"from"`
 			FromName       *string                           `json:"from_name"`
+			HasAttachments *bool                             `json:"has_attachments,omitempty"`
 			IsDraft        bool                              `json:"is_draft"`
 			IsOmnipusDraft bool                              `json:"is_omnipus_draft"`
 			MessageId      *string                           `json:"message_id"`
+			MessageRef     *string                           `json:"message_ref,omitempty"`
 			ReadByAgent    bool                              `json:"read_by_agent"`
 			Seen           bool                              `json:"seen"`
 			Subject        string                            `json:"subject"`
@@ -246,11 +286,16 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 			// attachment and stays listed.
 			continue
 		}
+		// reported_size_bytes stays unset: this listing comes from decoded
+		// view parts, which carry no server-reported transfer size — and the
+		// decoded size_bytes must never be duplicated into it (the contract
+		// keeps the two distinct).
 		out.Attachments = append(out.Attachments, struct {
-			ContentType string `json:"content_type"`
-			Filename    string `json:"filename"`
-			PartIndex   int    `json:"part_index"`
-			SizeBytes   int    `json:"size_bytes"`
+			ContentType       string `json:"content_type"`
+			Filename          string `json:"filename"`
+			PartIndex         int    `json:"part_index"`
+			ReportedSizeBytes *int64 `json:"reported_size_bytes,omitempty"`
+			SizeBytes         int    `json:"size_bytes"`
 		}{
 			ContentType: p.ContentType,
 			Filename:    p.Filename,

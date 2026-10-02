@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -859,7 +860,49 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 			jsonErr(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
-		resp.Entries = append(resp.Entries, library.EntryFromInfo(finalRel, fi))
+		// The upload response's inline entries element mirrors gen.LibraryEntry
+		// in every field but the preview_profile enum's named type (oapi-codegen
+		// names each inline enum after its response), so the entry is copied
+		// field by field — both sides are generated types, nothing hand-written.
+		// Uploads are ordinary workspace files today, so preview_profile is nil
+		// here; the conversion still carries it should EntryFromInfo ever set
+		// one.
+		entry := library.EntryFromInfo(finalRel, fi)
+		uploaded := struct {
+			IsDir           bool      `json:"is_dir"`
+			IsHidden        bool      `json:"is_hidden"`
+			IsKnowledgeBase *bool     `json:"is_knowledge_base,omitempty"`
+			IsTextEditable  bool      `json:"is_text_editable"`
+			Mime            *string   `json:"mime,omitempty"`
+			ModifiedAt      time.Time `json:"modified_at"`
+			Mount           *struct {
+				Broad    bool   `json:"broad"`
+				HostPath string `json:"host_path"`
+				Name     string `json:"name"`
+			} `json:"mount,omitempty"`
+			Name                  string                                          `json:"name"`
+			Path                  string                                          `json:"path"`
+			PreviewProfile        *gen.LibraryUploadResponseEntriesPreviewProfile `json:"preview_profile,omitempty"`
+			PreviewScriptsAllowed *bool                                           `json:"preview_scripts_allowed,omitempty"`
+			Size                  int64                                           `json:"size"`
+		}{
+			IsDir:                 entry.IsDir,
+			IsHidden:              entry.IsHidden,
+			IsKnowledgeBase:       entry.IsKnowledgeBase,
+			IsTextEditable:        entry.IsTextEditable,
+			Mime:                  entry.Mime,
+			ModifiedAt:            entry.ModifiedAt,
+			Mount:                 entry.Mount,
+			Name:                  entry.Name,
+			Path:                  entry.Path,
+			PreviewScriptsAllowed: entry.PreviewScriptsAllowed,
+			Size:                  entry.Size,
+		}
+		if entry.PreviewProfile != nil {
+			pp := gen.LibraryUploadResponseEntriesPreviewProfile(*entry.PreviewProfile)
+			uploaded.PreviewProfile = &pp
+		}
+		resp.Entries = append(resp.Entries, uploaded)
 	}
 
 	if len(resp.Entries) == 0 {
