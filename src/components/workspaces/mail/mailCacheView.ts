@@ -107,22 +107,45 @@ export function createMailFolderView(): MailFolderViewState {
 /**
  * shouldIssueLive — the issuing rule for the events that CARRY a freshness
  * decision (open, folder_switch): live only when the surface's data is
- * absent (never read, or a source=none read) or its last validation is
- * older than five minutes (or unknown — an unknown age cannot be proven
+ * absent (a source=none read) or its last validation is older than five
+ * minutes (or unknown-but-labelled — an unknown age cannot be proven
  * young). manual_refresh, own_action and rediscovery always refresh and
  * never consult this rule (FR-W3-2; US-1 AS-8).
+ *
+ * A response carrying NO metadata object at all (the transitional
+ * pre-producer wire window — the is_knowledge_base precedent) is NOT
+ * "absent data": the gateway had no cache to serve from, so its cache-first
+ * read already ran live server-side, and a second live request would double
+ * the open event's dial for no information. The presentation still renders
+ * the unknown state ("Last checked unknown." — see
+ * MAIL_UNKNOWN_PROVENANCE_META); only the issuance stays silent. Once the
+ * producers land, metadata is always present and this branch is dead.
  */
 export function shouldIssueLive(view: MailFolderViewState, event: MailCacheEvent, now: Date): boolean {
   if (event.kind === 'manual_refresh' || event.kind === 'own_action' || event.kind === 'rediscovery') {
     return true
   }
   const meta = view.meta
-  if (meta === null) return true
+  if (meta === null) return false
   if (meta.source === 'none') return true
   if (meta.last_validated_at === null) return true
   const validatedAt = new Date(meta.last_validated_at)
   if (Number.isNaN(validatedAt.getTime())) return true
   return now.getTime() - validatedAt.getTime() > MAIL_STALE_AFTER_MS
+}
+
+/** The presentation fallback for a response with no metadata object
+ * (transitional window): renders the unknown/stale presentation — "Last
+ * checked unknown." — never "just checked", never a fabricated zero
+ * (US-2 AS-7). not-wire-format: a display fill, not a claim about the
+ * data's origin. */
+export const MAIL_UNKNOWN_PROVENANCE_META: MailViewMeta = {
+  source: 'memory',
+  last_validated_at: null,
+  stale: true,
+  refresh_needed: false,
+  notice_code: null,
+  publication_revision: null,
 }
 
 /**

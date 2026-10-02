@@ -82,6 +82,7 @@ import {
   onLiveSettled,
   onLiveFailed,
   markLocalMutation,
+  MAIL_UNKNOWN_PROVENANCE_META,
   type MailCacheEvent,
   type MailFolderViewState,
 } from './mailCacheView'
@@ -945,12 +946,14 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
 
   // Freshness line inputs (US-2 / S-3..S-6): the list read's metadata, the
   // in-flight checking indicator and the failed-refresh state. The LOCAL
-  // rule governed issuing already; these flags only decide presentation.
-  const listFreshness = listView.meta === null
-    ? null
-    : listView.refreshFailed
-      ? formatMailRefreshFailedLine(listView.meta.last_validated_at)
-      : formatMailFreshnessLine(listView.meta, listView.checking)
+  // rule governed issuing already; these flags only decide presentation. A
+  // metadata-less response (transitional window) presents as unknown via
+  // MAIL_UNKNOWN_PROVENANCE_META — never "just checked", never a fabricated
+  // zero.
+  const listMeta = listView.meta ?? MAIL_UNKNOWN_PROVENANCE_META
+  const listFreshness = listView.refreshFailed
+    ? formatMailRefreshFailedLine(listMeta.last_validated_at)
+    : formatMailFreshnessLine(listMeta, listView.checking)
   const showCacheNotice = listView.meta?.notice_code === 'cache_unavailable' && !cacheNoticeDismissed
 
   // Browse rows: page 1 + appended pages (US-3).
