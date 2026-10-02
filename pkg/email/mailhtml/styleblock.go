@@ -3,44 +3,37 @@ package mailhtml
 // <style>-block extraction for the HTML pipeline. bluemonday sanitizes
 // element CONTENT only under AllowUnsafe — which must never be enabled for
 // attacker-authored mail (artefact §6). The pipeline therefore lifts each
-// <style> block's content out BEFORE bluemonday runs, sanitizes it with
-// SanitizeStylesheet, and re-inserts the sanitized CSS after sanitization —
-// the same placeholder-then-substitute pattern the preview pipeline already
-// uses for its token-scoped image paths.
+// <style> block out BEFORE bluemonday runs, sanitizes it with
+// SanitizeStylesheet, and re-inserts the sanitized CSS AFTER sanitization.
+//
+// Why re-insertion carries no placeholder: an earlier revision marked each
+// lifted block with a fixed literal ("MAILSTYLEBLOCK<i>PLACEHOLDER") and
+// re-inserted it with strings.ReplaceAll over the whole sanitized document.
+// The literal was typable by any sender: planted inside an attribute value it
+// met the post-sanitise substitution, the sanitized CSS — quotes included —
+// was written INTO that attribute, its quotes terminated the value, and the
+// attacker's trailing text became fresh attributes the sanitiser never saw
+// (a style="position:fixed" the 73-property allowlist never judged). The
+// placeholder no longer exists: extraction REMOVES the element, and
+// re-insertion PREPENDS the sanitized blocks at the top of the sanitized
+// fragment. There is nothing to predict, plant or collide with, and no
+// substitution ever fires inside a position mail content chose.
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 )
 
-// styleBlockRe matches one <style> element's content. Case-insensitive,
+// styleBlockRe matches one <style> element's span. Case-insensitive,
 // dot-all; the open tag's attributes are tolerated (mail emits <style
 // type="text/css">).
 var styleBlockRe = regexp.MustCompile(`(?is)(<style\b[^>]*>)(.*?)(</style>)`)
 
-// StyleBlockPlaceholder renders the placeholder token for block i. It is
-// plain ASCII text (no HTML punctuation) so bluemonday passes it through
-// untouched, and it is namespaced so real mail content cannot collide.
-//
-// It stands for the WHOLE <style> element, not for content inside one:
-// bluemonday discards a style element's text content unconditionally unless
-// AllowUnsafe is set (its sanitize.go carries an explicit case "style" that
-// writes content only under allowUnsafe) — AllowUnsafe must never be enabled
-// for attacker-authored mail (artefact §6). A placeholder left INSIDE the
-// element is therefore dropped with the element and the block is lost. The
-// placeholder travels as bare document text, which bluemonday always keeps
-// (it is never in an element whose content is skipped), and the sanitized
-// CSS is re-inserted wrapped in a fresh <style> element after sanitization.
-func StyleBlockPlaceholder(i int) string {
-	return fmt.Sprintf("MAILSTYLEBLOCK%dPLACEHOLDER", i)
-}
-
-// ExtractStyleBlocks replaces every <style> element with its bare
-// placeholder token and returns the rewritten HTML plus the RAW block
-// contents in order. A block already over blockMaxBytes is replaced with an
-// empty content here (the caller's sanitize pass would refuse it anyway) —
-// the bounded-work guarantee applies before parsing, not after (P8).
+// ExtractStyleBlocks removes every <style> element from the HTML and returns
+// the rewritten HTML plus the RAW block contents in order. A block already
+// over blockMaxBytes is removed with empty content (the caller's sanitize
+// pass would refuse it anyway) — the bounded-work guarantee applies before
+// parsing, not after (P8).
 func ExtractStyleBlocks(html string, blockMaxBytes int) (string, []string) {
 	blocks := make([]string, 0, 4)
 	out := styleBlockRe.ReplaceAllStringFunc(html, func(tag string) string {
@@ -50,20 +43,32 @@ func ExtractStyleBlocks(html string, blockMaxBytes int) (string, []string) {
 			content = ""
 		}
 		blocks = append(blocks, content)
-		return StyleBlockPlaceholder(len(blocks) - 1)
+		return ""
 	})
 	return out, blocks
 }
 
-// ReplaceStyleBlocks swaps each placeholder back for the block's sanitized
-// CSS wrapped in a fresh <style> element (an empty sanitized CSS re-inserts
-// an empty element — the block existed, it just carries nothing safe).
+// ReplaceStyleBlocks prepends the sanitized CSS — each block as a fresh
+// <style> element, in the original block order — at the very top of the
+// sanitized fragment. The position is the pipeline's own choice inside
+// already-sanitized output, never one mail content influenced. Styling is
+// unchanged by the move: block rules apply document-wide wherever they sit,
+// their relative order to each other is preserved, and inline style
+// attributes beat block rules regardless of position. An empty sanitized CSS
+// re-inserts an empty element (the block existed, it just carries nothing
+// safe).
 func ReplaceStyleBlocks(html string, sanitized []string) string {
-	for i, css := range sanitized {
-		html = strings.ReplaceAll(html, StyleBlockPlaceholder(i),
-			"<style>"+css+"</style>")
+	if len(sanitized) == 0 {
+		return html
 	}
-	return html
+	var b strings.Builder
+	for _, css := range sanitized {
+		b.WriteString("<style>")
+		b.WriteString(css)
+		b.WriteString("</style>")
+	}
+	b.WriteString(html)
+	return b.String()
 }
 
 // StyleMaxAttrBytes is the style-attribute cap (E-5/artefact §5: 4 KB,
