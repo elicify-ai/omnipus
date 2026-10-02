@@ -87,8 +87,9 @@ Back in the workspace, select **Mail** to open the [mailbox panel](mail.md#set-u
 
 - A saved secret is not shown again. Leave its field blank when editing if you want to keep the stored value.
 - A connector can show **Failed to start** when its credentials or connection fail. Open **Configure** to correct it.
-- **Disable** stops a connected account without deleting its configuration.
-- Deleting an account removes its configuration, credentials, and stored state.
+- **Disable** stops a connected account without deleting its configuration. Disabling also erases the mailbox's cached mail metadata and its new-mail watching state, and revokes its open previews; re-enabling starts fresh. The configuration and stored password are kept, and the mailbox keeps the same private storage name it had.
+- Deleting an account removes its configuration, credentials, cached mail metadata, and new-mail watching state. The removal result says which of the two happened: **removed** (everything succeeded) or **removed, cleanup pending** (the account is gone and can no longer be used, but erasing its cached files did not fully finish). Cleanup pending is never shown as a full success; the response carries a retry key, and the separately authorized cleanup operation (`POST /api/v1/mailboxes/cleanup` with that key) finishes the job — it keeps working after the mailbox row is gone. Deleting an agent or a workspace runs the same erase for every mailbox it held.
+- Omnipus keeps the mailbox's cached mail metadata in its own private storage under the data directory, and the application makes sure its own backups and restores never copy that storage or the new-mail watching state. A **cache unavailable** warning means Omnipus could not prove that protection on your install — a genuine failure such as a disk or permission problem — not missing external setup. Mail keeps working live while the warning shows; only the cached metadata is off.
 - A workspace-bound connector cannot fall back to another agent if its selected agent is later deleted or becomes ineligible. Update the connector's routing choice.
 - WhatsApp may be unavailable in a lite build.
 - LINE and Google Chat webhook mode need a public HTTPS address.
