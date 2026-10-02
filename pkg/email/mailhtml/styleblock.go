@@ -22,15 +22,25 @@ var styleBlockRe = regexp.MustCompile(`(?is)(<style\b[^>]*>)(.*?)(</style>)`)
 // StyleBlockPlaceholder renders the placeholder token for block i. It is
 // plain ASCII text (no HTML punctuation) so bluemonday passes it through
 // untouched, and it is namespaced so real mail content cannot collide.
+//
+// It stands for the WHOLE <style> element, not for content inside one:
+// bluemonday discards a style element's text content unconditionally unless
+// AllowUnsafe is set (its sanitize.go carries an explicit case "style" that
+// writes content only under allowUnsafe) — AllowUnsafe must never be enabled
+// for attacker-authored mail (artefact §6). A placeholder left INSIDE the
+// element is therefore dropped with the element and the block is lost. The
+// placeholder travels as bare document text, which bluemonday always keeps
+// (it is never in an element whose content is skipped), and the sanitized
+// CSS is re-inserted wrapped in a fresh <style> element after sanitization.
 func StyleBlockPlaceholder(i int) string {
 	return fmt.Sprintf("MAILSTYLEBLOCK%dPLACEHOLDER", i)
 }
 
-// ExtractStyleBlocks replaces every <style> block's content with its
-// placeholder and returns the rewritten HTML plus the RAW block contents in
-// order. A block already over blockMaxBytes is replaced with an empty
-// content here (the caller's sanitize pass would refuse it anyway) — the
-// bounded-work guarantee applies before parsing, not after (P8).
+// ExtractStyleBlocks replaces every <style> element with its bare
+// placeholder token and returns the rewritten HTML plus the RAW block
+// contents in order. A block already over blockMaxBytes is replaced with an
+// empty content here (the caller's sanitize pass would refuse it anyway) —
+// the bounded-work guarantee applies before parsing, not after (P8).
 func ExtractStyleBlocks(html string, blockMaxBytes int) (string, []string) {
 	blocks := make([]string, 0, 4)
 	out := styleBlockRe.ReplaceAllStringFunc(html, func(tag string) string {
@@ -40,16 +50,18 @@ func ExtractStyleBlocks(html string, blockMaxBytes int) (string, []string) {
 			content = ""
 		}
 		blocks = append(blocks, content)
-		return m[1] + StyleBlockPlaceholder(len(blocks)-1) + m[3]
+		return StyleBlockPlaceholder(len(blocks) - 1)
 	})
 	return out, blocks
 }
 
-// ReplaceStyleBlocks swaps the placeholders back for their sanitized
-// contents (block i's sanitized CSS, or "" to leave the element empty).
+// ReplaceStyleBlocks swaps each placeholder back for the block's sanitized
+// CSS wrapped in a fresh <style> element (an empty sanitized CSS re-inserts
+// an empty element — the block existed, it just carries nothing safe).
 func ReplaceStyleBlocks(html string, sanitized []string) string {
 	for i, css := range sanitized {
-		html = strings.ReplaceAll(html, StyleBlockPlaceholder(i), css)
+		html = strings.ReplaceAll(html, StyleBlockPlaceholder(i),
+			"<style>"+css+"</style>")
 	}
 	return html
 }
