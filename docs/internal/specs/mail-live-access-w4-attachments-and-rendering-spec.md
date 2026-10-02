@@ -753,7 +753,7 @@ Scenario: Saved HTML marker survives Library operations (Edge)
 
 ## 9. TDD plan (tests designed from the DESIGN, before implementation)
 
-Owner: qa-lead (W5) — RED first against this spec, independent CHECK after GREEN; production owners never weaken these tests. Harness: real in-memory IMAP (`pkg/email/imapserver_test.go::startMemIMAP`) with command/byte counters; browser scenarios in the E2E suite with request counters. Go tests run under the repo's required tags; no full local suite — CI is the authority. All filenames below are new unless noted; none exists today (checked).
+Owner: qa-lead (file **w6** = ADR-W5, the proof package — package mapping above) — RED first against this spec, independent CHECK after GREEN; production owners never weaken these tests. Harness: real in-memory IMAP (`pkg/email/imapserver_test.go::startMemIMAP`) with command/byte counters; browser scenarios in the E2E suite with request counters. Go tests run under the repo's required tags; no full local suite — CI is the authority. All filenames below are new unless noted; none exists today (checked). Per register R-4, the end-to-end oracle for a published interface lives with the publisher's package: the single-part reader's and MIME classifier's own deep tests are w2's (register rows 14/15); this package's tests assert the seam through the frozen interfaces.
 
 ### 9.1 Test files and what each proves
 
@@ -773,9 +773,9 @@ Owner: qa-lead (W5) — RED first against this spec, independent CHECK after GRE
 | 12 | `pkg/tools/auto_approve_mail_test.go` (extends existing) | Unit | Auto classification: list/read follow read tools; save resolves via the existing workspace-path conditional class; Auto-off/denied/God-Mode behaviour unchanged; agent allow cannot loosen global ask. |
 | 13 | `pkg/gateway/rest_mail_date_test.go` (extends gateway mail tests) | Unit/Integration | Effective-date normalization: Date → internal date → null; explicit null serialization; no zero time on the wire; fixtures for unparsable/zero/missing. |
 | 14 | `src/lib/mailAttachmentPreviewSource.test.tsx` (W5 frontend) | Component | Temporary source adapter: classifier feeding (extension-derived type, `text_readable` hint), capability flags, resource-policy resolver refusals (C-1..C-4 structural), minted-resource allow, object-URL/token disposal on unmount. |
-| 15 | `src/components/library/LibraryPreviewPane.mailsource.test.tsx` | Component | Viewer integration: context bar exact text, all renderers mount from the temporary source, stored actions disabled with accessible explanation, HTML scripts-off profile, per-file checkbox behaviour, focus/announcement contract (I-06), 320 px/200% reflow. |
+| 15 | `src/components/library/LibraryPreviewPane.mailsource.test.tsx` | Component | Viewer integration: context bar exact text, all renderers mount from the temporary source, stored actions disabled with accessible explanation, HTML scripts-off profile, per-file checkbox behaviour, focus/announcement contract (I-06), 320 px/200% reflow; **US-1.AC-6 disposal-on-navigation** (navigating to a real Library file disposes the temporary source — it never becomes a breadcrumb, listing row, persisted-store entry or fallback file). |
 | 16 | `src/components/workspaces/mail/MailPanel.attachments.test.tsx` | Component | Attachment list: Open/Save/Download actions with accessible names; over-cap Open/Save unavailable with cap explanation; failed save keeps the row; "Save result unknown" state and explicit retry flow. |
-| 17 | `tests/e2e/mail-attachments.spec.ts` | E2E | Real browser journeys: Open→view→Back (focus restoration), Save→Open in Library, Download unchanged, keyboard-only journey, request-counter assertions for I-04 and styling remote-load checks, screen-reader announcement smoke. |
+| 17 | `tests/e2e/mail-attachments.spec.ts` | E2E | Real browser journeys: Open→view→Back (focus restoration), Save→Open in Library, Download unchanged, keyboard-only journey, request-counter assertions for I-04 and styling remote-load checks, screen-reader announcement smoke; **US-1.AC-7 unsupported-format honest state** (no renderer → honest state inside the mail context bar, Download available, no fake file written). |
 
 **Order**: 1–4 (service primitives) → 5–6 (gateway) → 7–8 (CSS) → 9–12 (reply/tools/policy) → 13 (dates) → 14–16 (components) → 17 (E2E). Each RED run is proven failing on the pre-change code (tests-only CI commit or the single dispatcher-owned narrow local run), then green.
 
@@ -821,7 +821,7 @@ Existing behaviour that must keep passing unchanged: the current attachment Down
 
 Stated in this repo's two never-merged lines, with the specific evidence each requires:
 
-**Line 1 — code correct and tested.** Every RED test from §9 shown failing on pre-change code (tests-only CI commit or the one dispatcher-owned narrow local run), then green in CI; the mutation probes of §9.3 executed and killed (at minimum M1–M5); `make verify-contracts` green on the W0 contract commits; design-system and budget gates green for the frontend slices; security review passed (§12).
+**Line 1 — code correct and tested.** Every RED test from §9 shown failing on pre-change code (tests-only CI commit or the one dispatcher-owned narrow local run), then green in CI; the mutation probes of §9.3 executed and killed — **all of M1–M10, none optional at the gate** (M-5: M6–M10 guard the marker mechanism, the SPA reply rule, the wire null date, the type-confusion rule and the no-whole-message-fetch rule; M9/M10 guard P0 stories); `make verify-contracts` green on the ADR-W0 role's Wave B contract commits; design-system and budget gates green for the frontend slices; security review passed (§12).
 
 **Line 2 — reachable by a user/agent.** Evidence that a real user and a real agent can invoke every feature, not that a library exists:
 
