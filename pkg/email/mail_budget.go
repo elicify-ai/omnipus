@@ -2,8 +2,9 @@ package email
 
 // mail_budget.go — the A8 mail-operation budget (spec §2.3/A8, MC-33, MIN-003,
 // edge 16): ONE per-account shared gate for the REST panel path, the agent-tool
-// path and the watcher cycles, keyed by account = "host|username". Three
-// layers, in order:
+// path and the watcher cycles, keyed by account = "host:port|username"
+// (Client.AccountKey — the port is part of the key; the account's role after
+// the W1 identity correction is contention only). Three layers, in order:
 //
 //  1. backoff-no-dial: reads the SAME persisted watcher state both paths
 //     already read (LoadWatcherState + EffectiveState — the ONE derivation
@@ -11,14 +12,15 @@ package email
 //     never disagree (founder agreement requirement). retry=true bypasses
 //     ONLY this check (the human Retry click); the tool path structurally
 //     cannot set it (pkg/tools guard).
-//  2. singleflight coalescing keyed by (account, operation, normalized
-//     params): identical concurrent refreshes share ONE dial (N tabs = 1
-//     login, D29/R2-9). Coalescing requires a NON-EMPTY params map — the RED
-//     oracle pins that two identical PARAMLESS calls dial independently
-//     (TestMailBudget_WatcherTryAcquireSkipsNonBlocking's holders and
-//     TestMailBudget_WatcherBackoffAndCallersAgree's ErrMailBusy subtest both
-//     need inFlight==2 for identical paramless ops), so a paramless op cannot
-//     coalesce by construction. Production callers always pass a params map.
+//  2. singleflight coalescing keyed by the FULL read-coalescing identity
+//     (W1 §4.8, grill I-01): pair + generation + operation + normalized
+//     params + purpose. Identical concurrent refreshes share ONE dial
+//     (N tabs = 1 login, D29/R2-9); different pairs, generations, purposes
+//     or arguments never share. Coalescing requires a NON-EMPTY params map —
+//     the RED oracle pins that two identical PARAMLESS calls dial
+//     independently — and Purpose "mutation" opts out entirely (identical
+//     mutations are two operations). Production callers always pass a params
+//     map.
 //  3. a 2-per-account semaphore: overflow queues under the caller's context
 //     deadline, then fails with ErrMailBusy — never dials.
 //
@@ -41,24 +43,57 @@ import (
 
 // MailBudgetRequest describes one gated mail operation.
 type MailBudgetRequest struct {
-	// Account is the per-account key: "host|username" (AccountKey on
-	// *Client). REST/tool/watcher callers all use the same derivation, so
-	// the cap and the coalescing are shared across the paths.
+	// Account is the per-account contention key: "host:port|username"
+	// (Client.AccountKey). REST/tool/watcher callers all use the same
+	// derivation, so the 2-per-account cap is shared across the paths. After
+	// the W1 identity correction (§4.8, grill I-01) the account key has ONLY
+	// this contention role — it never decides result sharing.
 	Account string
 	// AgentID and WorkspaceID select the watcher state file for the backoff
-	// check (the same file the watcher itself reads and writes).
+	// check (the same file the watcher itself reads and writes) and form the
+	// PAIR component of the read-coalescing identity: results never share
+	// across pairs.
 	AgentID     string
 	WorkspaceID string
 	// Operation is a stable op name (e.g. listMailFolders, read_inbox,
-	// watcher_cycle); part of the coalescing key.
+	// watcher_cycle); part of the coalescing identity.
 	Operation string
 	// Params are the operation's normalized arguments; part of the
-	// coalescing key. An EMPTY map opts the call out of coalescing (see the
-	// file header) — pass a real params map for refresh-shaped ops.
+	// coalescing identity. An EMPTY map opts the call out of coalescing (see
+	// the file header) — pass a real params map for refresh-shaped ops.
 	Params map[string]any
 	// Retry is the REST-only human bypass: it skips the backoff check and
-	// nothing else. The tool path never sets it.
+	// nothing else (never the semaphore, never the pool ceilings). The tool
+	// path never sets it.
 	Retry bool
+	// Generation is the non-secret configuration/folder-mapping generation
+	// (W1 §4.8 identity component). w5-integration implements the source
+	// (register row 12); W1 treats it as opaque. An old generation never
+	// joins or receives a new generation's flight.
+	Generation string
+	// Purpose is the live-versus-cache purpose of the operation: "read_live",
+	// "read_cache", "mutation" or "watcher". A cache-shaped read and a live
+	// refresh for the same folder are DIFFERENT flights — a live refresh can
+	// never be answered by joining a cache-shaped flight (grill I-01).
+	// Purpose "mutation" opts the call out of coalescing entirely.
+	Purpose string
+	// TotalReadDeadline bounds the whole pooled read — account-slot queue +
+	// pool wait + establish + commands (§4.4; the founder-accepted 45 s is
+	// the ceiling). Zero keeps today's bounds; a shorter caller deadline
+	// always wins.
+	TotalReadDeadline time.Duration
+	// Revision, when set, captures the folder publication revision BEFORE
+	// any server work and gates the result's publication on freshness
+	// (§4.9): a read whose captured revision is no longer current at
+	// completion fails with ErrRevisionSuperseded and publishes nothing.
+	// The captured revision also rides the flight identity, so a refresh
+	// issued after a revision-advancing event never joins a superseded
+	// flight (§4.9.4).
+	Revision RevisionSource
+	// Publish, when set (with Revision), receives the flight's value exactly
+	// once — only when the captured revision is still current at completion.
+	// It is the publication seam the superseded determination guards.
+	Publish func(value any)
 }
 
 // ErrMailBusy is the semaphore-deadline refusal: the operation queued past
@@ -218,19 +253,68 @@ func CallValue[T any](b *MailBudget, ctx context.Context, req MailBudgetRequest,
 	return call(b, ctx, req, fn)
 }
 
-// call is the shared core of Call and both CallValue forms.
+// call is the shared core of Call and both CallValue forms. Order (FR-W1-9):
+// backoff gate → total-read-deadline bound → revision capture (before any
+// server work, §4.9.1) → coalescing join under the FULL identity → account
+// slot.
 func call[T any](b *MailBudget, ctx context.Context, req MailBudgetRequest, fn func(context.Context) (T, error)) (T, error) {
 	if bf := b.backoffRefusal(req); bf != nil {
 		var zero T
 		return zero, bf
 	}
+	ctx, cancelTotal := boundTotalReadDeadline(ctx, req)
+	defer cancelTotal()
+
+	// Capture the publication revision BEFORE any server work (§4.9.1). The
+	// captured value rides the flight identity, so a refresh issued after a
+	// revision-advancing event cannot join a flight captured earlier
+	// (§4.9.4) — I-01 and I-02 compose structurally.
+	var (
+		ref      RevisionRef
+		captured string
+	)
+	if req.Revision != nil {
+		ref = revisionRefFor(req)
+		c, cerr := req.Revision.Capture(ctx, ref)
+		if cerr != nil {
+			var zero T
+			return zero, fmt.Errorf("mail budget: capture publication revision: %w", cerr)
+		}
+		captured = c
+	}
+
+	// exec wraps the executor with the publication gate: the value is
+	// published (once) only when the captured revision is still current at
+	// completion; a superseded read publishes nothing anywhere and returns
+	// the superseded determination instead of its stale rows (§4.9.3).
+	exec := func(c context.Context) (T, error) {
+		v, err := fn(c)
+		if err != nil {
+			var zero T
+			return zero, err
+		}
+		if req.Revision != nil {
+			if !req.Revision.IsCurrent(c, ref, captured) {
+				var zero T
+				return zero, fmt.Errorf("mail budget: %w", ErrRevisionSuperseded)
+			}
+			if req.Publish != nil {
+				req.Publish(v)
+			}
+		}
+		return v, nil
+	}
+
 	gate := b.gateFor(req.Account)
 	key := req.flightKey()
 	if key == "" {
-		// Paramless op: coalescing opt-out (file header). Straight to the
-		// semaphore — unshared, so the caller's OWN context is the correct
-		// bound.
-		return runDialValue(gate, ctx, fn)
+		// Paramless op or mutation: coalescing opt-out (file header). Straight
+		// to the semaphore — unshared, so the caller's OWN context is the
+		// correct bound.
+		return runDialValue(gate, ctx, exec)
+	}
+	if req.Revision != nil {
+		key = key + "\x00" + captured
 	}
 	resCh := gate.flights.DoChan(key, func() (any, error) {
 		// The flight is SHARED: it must never be hostage to the first
@@ -243,7 +327,7 @@ func call[T any](b *MailBudget, ctx context.Context, req MailBudgetRequest, fn f
 		// its own independent bail-out in the select below.
 		flightCtx, cancel := flightContext(ctx)
 		defer cancel()
-		return runDialValue(gate, flightCtx, fn)
+		return runDialValue(gate, flightCtx, exec)
 	})
 	select {
 	case res := <-resCh:
@@ -274,6 +358,41 @@ func call[T any](b *MailBudget, ctx context.Context, req MailBudgetRequest, fn f
 		var zero T
 		return zero, fmt.Errorf("%w: %w", ErrMailBusy, ctx.Err())
 	}
+}
+
+// totalReadDeadline is the founder-accepted total read-work ceiling (§4.4):
+// the whole pooled read — account-slot queue, pool wait, establish, and all
+// commands — finishes inside it. Numerically it coincides with the existing
+// per-command commandTimeout; the two are distinct clocks and keep distinct
+// names.
+const totalReadDeadline = 45 * time.Second
+
+// boundTotalReadDeadline applies the request's total read deadline as a
+// ceiling: a caller-supplied shorter deadline always wins, and the founder
+// bound is never an extension. Zero keeps today's bounds (watcher cycles and
+// callers that do not stamp it are unchanged).
+func boundTotalReadDeadline(ctx context.Context, req MailBudgetRequest) (context.Context, context.CancelFunc) {
+	if req.TotalReadDeadline <= 0 {
+		return ctx, func() {}
+	}
+	bound := req.TotalReadDeadline
+	if bound > totalReadDeadline {
+		bound = totalReadDeadline
+	}
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) <= bound {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, bound)
+}
+
+// revisionRefFor derives the seam's reference from the request: pair plus
+// folder (the folder parameter when the operation carries one).
+func revisionRefFor(req MailBudgetRequest) RevisionRef {
+	folder := ""
+	if f, ok := req.Params["folder"].(string); ok {
+		folder = f
+	}
+	return RevisionRef{PairKey: req.AgentID + "/" + req.WorkspaceID, Folder: folder}
 }
 
 // flightContext detaches the shared flight from the first caller's
@@ -325,17 +444,31 @@ func runDialValue[T any](g *mailAccountGate, ctx context.Context, fn func(contex
 	}
 }
 
-// flightKey builds the coalescing key: (account, operation, normalized
-// params). Empty params → "" — the coalescing opt-out.
+// ErrRevisionSuperseded is the superseded-read determination (§4.9.3): the
+// read's captured publication revision was no longer current at completion,
+// so its result is discarded — no rows into any memory cache, no disk
+// snapshot write, no timestamp advance, no frontend state update.
+var ErrRevisionSuperseded = errors.New("mail budget: read superseded by a newer publication revision")
+
+// flightKey builds the read-coalescing identity (W1 §4.8, grill correction
+// I-01): the agent/workspace PAIR, the configuration generation, the
+// operation, the normalized (JSON-marshaled) arguments, and the live-versus-
+// cache purpose. The account key ("host:port|username") is deliberately
+// ABSENT: it keys the two-slot semaphore — its contention role — and never
+// decides result sharing, so two pairs on one account can never share one
+// flight. Empty params → "" (the coalescing opt-out, preserved); Purpose
+// "mutation" → "" (identical mutations are two operations, never one shared
+// flight — §4.8). JSON object marshaling sorts map keys, so argument
+// insertion order does not change identity.
 func (r MailBudgetRequest) flightKey() string {
-	if len(r.Params) == 0 {
+	if len(r.Params) == 0 || r.Purpose == "mutation" {
 		return ""
 	}
 	raw, err := json.Marshal(r.Params)
 	if err != nil {
 		return ""
 	}
-	return r.Account + "\x00" + r.Operation + "\x00" + string(raw)
+	return r.AgentID + "\x00" + r.WorkspaceID + "\x00" + r.Generation + "\x00" + r.Operation + "\x00" + r.Purpose + "\x00" + string(raw)
 }
 
 // AccountKeyer is the optional capability exposing an account's per-account
