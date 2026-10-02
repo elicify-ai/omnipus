@@ -80,6 +80,11 @@ export interface MailPanelPresence {
   /** Best-effort close on `pagehide` — same frame as close(); correctness
    * never depends on it arriving. */
   handlePagehide(): void
+  /** The observer id issued for the CURRENT connection's open frame, or
+   * null while closed/unbound — the id REST reads (observer_id query param)
+   * and mint/save requests carry so their panel semantics ride the same
+   * observer as the frames (register row 6). */
+  currentObserverId(): string | null
   /** Stops listening; called on panel unmount after the close frame. */
   dispose(): void
 }
@@ -151,6 +156,9 @@ export function createMailPanelPresence(deps: MailPanelPresenceDeps): MailPanelP
     },
     handlePagehide(): void {
       sendClose()
+    },
+    currentObserverId(): string | null {
+      return observerId
     },
     dispose(): void {
       unsubscribe()

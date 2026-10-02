@@ -314,6 +314,10 @@ const FIELD_ROW_ID: Record<keyof FieldErrors, string> = {
   imap_host: 'mailbox-imap-host',
   smtp_host: 'mailbox-smtp-host',
   signature_html: 'mailbox-signature',
+  // US-4: the folder-name fields carry no validation errors today — the
+  // mapping exists so the Record stays total if one is ever added.
+  sent_folder_name: 'mailbox-sent-folder',
+  drafts_folder_name: 'mailbox-drafts-folder',
 }
 const FIELD_VISUAL_ORDER: (keyof FieldErrors)[] = [
   'workspace_id',
