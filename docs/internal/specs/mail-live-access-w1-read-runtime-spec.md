@@ -421,4 +421,96 @@ The new-mail watcher keeps its one-minute cadence, its backoff, and its closed-p
 4. **Given** the panel closed, **When** watcher cycles run, **Then** their sockets close after each cycle (none retained), no folder/header/count cache is written or refreshed, and a folder change the watcher notices only marks panel metadata dirty for the next panel-open event.
 5. **Given** a watcher cycle, **When** it probes, **Then** it changes no message flags and starts no agent turn and creates no task.
 
+---
+
+## 6. Behavioral contract and boundaries
+
+### 6.1 When/Then quick reference
+
+| When | Then |
+|---|---|
+| A pooled read completes within the idle window and a same-mailbox read follows | The second read reuses the session; no new server connection is accepted |
+| A third concurrent read targets a mailbox already at its two-socket ceiling | It waits ≤5 s, then fails with the typed pool-busy outcome; no third socket |
+| Nine operations are in flight process-wide and a tenth demand arrives | It waits ≤5 s, then fails typed-busy; total connections never exceed 8 |
+| A dial is connecting | Its reservation counts against both ceilings |
+| A dial fails | All reservations it held are released before the error propagates |
+| A session is borrowed | The requested folder is (re-)selected and validated before the borrower's first command |
+| A read fetches messages | No flag changes server-side (PEEK discipline) |
+| A command times out / is cancelled / the server says BYE / the protocol breaks | The socket closes and is retired — never borrowed again |
+| An idle session proves dead on borrow (read) | Exactly one in-bounds replacement, inside the original 45 s |
+| A mutation hits a dead/poisoned session | Visible retryable failure; no automatic second attempt |
+| Total deadline (45 s) expires | Named outcome (busy if queued; timeout class if dialing/running); no cache timestamp advances |
+| Two identical reads share one flight | Only when pair + generation + operation + normalized args + purpose all match |
+| Two pairs on one account issue the same read | Two flights, two results; the account's two-slot cap still bounds combined dials |
+| A read finishes after its captured revision was superseded | It publishes nothing anywhere (memory, disk, timestamps, response state) |
+| A mutation or invalidation occurs | The folder's publication revision advances; no timer is involved |
+| The last panel observer for a workspace departs | Idle panel sockets close immediately; active ones close when their operation ends |
+| The presence channel is not wired | Every socket closes after its operation (request-scoped only) |
+| A watcher cycle cannot get a slot or reservation | It skips; last-checked unchanged; backoff not advanced |
+| A mailbox's previous cycle is still running | No second cycle for that mailbox starts |
+| The panel is closed | Watcher cycles still run (independence), retain nothing, fill nothing |
+| A socket is released, idled out, or evicted | It is torn down without a folder-CLOSE — pending `\Deleted` messages are never expunged by release |
+
+### 6.2 Explicit non-behaviors and safeguards
+
+The system must not:
+
+1. **…construct a second pool.** A REST-created or tool-registered client must not build a private connection manager — one process-wide instance per data dir, injected at three named sites (§4.1), because N private pools would multiply the ceilings by N and make the founder's two/eight limits fiction.
+2. **…count work as sockets or sockets as work.** The account slot bounds concurrent *operations*; the pool bounds *sockets*. Merging them (e.g., holding the account slot for the socket's whole retained life) would pin slots for idle sockets and starve other accounts' work.
+3. **…coalesce or replay mutations.** Two identical mark-read requests are two operations; a failed send-copy is never re-attempted automatically — replaying a mutation can act twice on the user's mailbox.
+4. **…share results across pairs, generations or purposes.** Sharing a Sent list configured for one pair with its sibling pair, or an old generation's answer with a new one, or a cache answer with a live refresh request, is wrong data delivered confidently (I-01's exact defect).
+5. **…publish a superseded read.** After a mutation/invalidation advanced the revision, the older read's data must not reach memory, disk, timestamps or the user's screen — not even as "successful-looking" rows (I-02's exact defect).
+6. **…evict or expire an active socket, or expire a socket mid-operation.** The idle clock runs from last completed use precisely so a long operation cannot lose its socket.
+7. **…send a folder-CLOSE on release.** Pending `\Deleted` messages must survive release/eviction/idle-close (the non-UIDPLUS draft-delete design depends on it).
+8. **…introduce a mail-data polling timer.** The only new timer is the socket/idle sweep. No folder/count/header refresh timer exists — not from the pool, not from the watcher, not from presence.
+9. **…let watcher work displace or queue-block foreground reads.** Watcher acquisition is non-blocking everywhere; it takes only free capacity.
+10. **…let a UI disappearance cancel independent work.** Closing a tab/panel/browser never cancels an agent turn, a tool read, or another tab's work; only work owned by the departing observer stops.
+11. **…retain presence on the strength of a caller-supplied ID.** Observer authority comes from the authenticated gateway connection only; REST cannot declare a panel open.
+12. **…preconnect or prewarm.** Sockets open only for work — never 13 mailboxes warmed at boot, never a speculative dial.
+13. **…key any pool/cache/flight identity by password text.** Identity binds endpoint/TLS + pair + non-secret generation only.
+14. **…add a parallel reconnect loop beside the watcher backoff.** The existing `WatcherBackoff` ladder is the only reconnect scheduler; the pool adds one in-bounds dead-idle replacement per read, nothing else.
+15. **…change folder resolution semantics.** Slug→name resolution, overrides, discovery, unknown-vs-absent stay in W2's files; the pool carries resolved names only.
+
+### 6.3 Machine-verifiable constraints
+
+| ID | Constraint | How a test checks it |
+|---|---|---|
+| MC-W1-1 | Per-mailbox concurrent sockets+reservations ≤ 2; global ≤ 8, on every path and every interleaving | Fake-server accept counter sampled continuously during scripted concurrency; max observed ≤ ceilings |
+| MC-W1-2 | A connecting reservation is counted: with one dial in flight (blocked at greeting), the next demand for that mailbox waits/busy rather than dialing a second socket | Blocked-greeting server; second borrower's outcome + accept counter |
+| MC-W1-3 | Pool-acquisition wait ≤ 5 s (±scheduling slack, assert < 7 s); pool exhaustion → the distinct pool-busy typed outcome, never the timeout class | All-reservations-held scenario; outcome class + elapsed |
+| MC-W1-4 | Total read deadline 45 s: every read outcome (success/failure) arrives ≤ 45 s + scheduling slack; dial ≤ 30 s subordinate | Stalled-server matrix (greeting/TLS/login/select/fetch); per-stage elapsed |
+| MC-W1-5 | Failed dial releases its per-mailbox and global reservation before returning | Post-failure acquire succeeds immediately; counters at baseline |
+| MC-W1-6 | Reuse requires re-select: after a borrower used folder A, the next borrower of the same session sees folder B's data when asking for B, with a SELECT for B observed before its fetch | Protocol command trace (test-side capture) |
+| MC-W1-7 | No non-PEEK body fetch on any read path (existing invariant, now structural) | Command capture: zero non-peek FETCH on reads |
+| MC-W1-8 | Poison causes (timeout, cancel, BYE, protocol failure) each retire: the socket is closed and a subsequent borrow never reuses it | Scripted cause per case; identity of sessions used (server-side session IDs) |
+| MC-W1-9 | Dead-idle replacement: at most one per read; total elapsed stays inside the original 45 s; a second dead replacement fails visibly | Idle-session killed server-side; read outcome + replacement count |
+| MC-W1-10 | Mutations are never auto-retried and never coalesced | Mutation on dead session → single visible failure; two identical mutations → two server-side effects |
+| MC-W1-11 | Idle release after ~2 min of last completed use (assert closed within 2 min + sweep slack; never closed before 1.5 min while healthy-idle) | Fake clock across the threshold; socket state sampled |
+| MC-W1-12 | Eviction picks the least-recently-completed idle socket and never an active one | Three idles with distinct last-use; fourth demand; evicted identity asserted |
+| MC-W1-13 | All-eight-active → bounded wait → typed busy; no ninth dial under any scripted pressure | 8 held leases + 9th demand; outcome + accept counter |
+| MC-W1-14 | Release/eviction/idle-close never issues folder-CLOSE; a `\Deleted`-flagged message survives release | Set `\Deleted` without expunge; release; re-select; message still present server-side |
+| MC-W1-15 | Coalescing identity: same full identity → one dial; any component differs (pair, generation, purpose, args, operation) → separate dials, both served correctly | I-01 matrix (§8 DS-3) with per-identity result markers |
+| MC-W1-16 | Joiner cancellation isolation: one joiner's cancel neither fails nor cancels the flight others share | Three joiners; cancel one mid-flight; two succeed |
+| MC-W1-17 | Superseded read publishes nothing: no cache write, no timestamp advance, no response-embedded state change after a revision advance | Paused-read → mutate → resume ordering (§8 DS-4) |
+| MC-W1-18 | Post-mutation refresh never joins a pre-mutation flight | Refresh result reflects post-mutation server state |
+| MC-W1-19 | Presence: retention exactly while ≥1 observer; last-observer departure closes idle panel sockets immediately, active at completion; observer removal on close/disconnect/logout/workspace exit | Observer lifecycle matrix (§8 DS-5) with socket counters |
+| MC-W1-20 | Until presence is wired: zero retained sockets after any operation | All scenarios with retention disabled; post-operation counter at baseline |
+| MC-W1-21 | Watcher: bounded parallel due-cycle progress with one stalled mailbox (others complete within the pass); ≤1 cycle in flight per mailbox | 13-mailbox scripted stall; completion set + per-mailbox in-flight guard |
+| MC-W1-22 | Watcher skip: no slot/reservation → skip recorded, last-success unchanged, backoff unchanged, no dial | Saturated capacity; state file before/after |
+| MC-W1-23 | Watcher closed-panel: no retained sockets, no panel-cache writes/refreshes, dirty-mark only | Panel closed through ≥3 cycle intervals; cache/state assertions |
+| MC-W1-24 | One budget owner: under N concurrent operations per account, account-slot acquisitions per operation = 1 (no wrapper+client double take) | Instrumented slot counter (test seam) at the budget; total in-flight ≤2 |
+| MC-W1-25 | `retry=true` bypasses backoff only: during pool/account saturation a retried request still waits/buses; it never bypasses ceilings | Backing-off + saturated scenario; retry outcome |
+| MC-W1-26 | Nil session source in production shape → typed visible error naming the missing wiring; no dial attempted | Construct client without source; operation fails with the wiring error; zero dials |
+
+### 6.4 Integration boundaries
+
+| External system / neighbor | Data flow | Contract | On failure |
+|---|---|---|---|
+| IMAP server (the only network peer W1 touches) | Dial/TLS/login/SELECT/STATUS/FETCH/STORE/APPEND via go-imap/v2 | Existing command semantics; structural `[NONEXISTENT]` for absence; session termination via logout-class close | Timeout/dial/protocol classes as today (`classifyMailError` stays the mapper); a server connection-limit response is recognized structurally (W0's typed class), the refused session retired, and the effective per-mailbox capacity for that server reduced in-process (see OQ-3) |
+| Gateway REST handlers (W4) | Typed outcomes (success / pool-busy / account-busy / backoff / transport class) + response revision metadata | §3.1 error values; W0 maps to 503 `reason` | Handlers render visible errors; cached rows stay, labelled (W2/W3) |
+| Gateway WebSocket (W4) | Observer bind/unbind events (transport-agnostic registry API) | §4.7 — authenticated-connection binding only | A dead connection's observers are reaped by the gateway's existing liveness teardown; the registry applies the same removal rules |
+| Agent tools (W4/W10) | Same session source injection; same typed outcomes | §4.11 — the tool wrapper keeps owning the budget | Tool result text unchanged in shape; transport failures visible per existing contract |
+| Watcher state file | Untouched by W1 beyond the skip/pool interplay | `LoadWatcherState`/`EffectiveState` remain the one derivation point | Unreadable state fails open with visible WARN (unchanged, verified) |
+| Credentials | Password resolution stays entirely outside W1 (callers pass `Account` as today) | ADR-004 boot contract unchanged | Unresolved password → the construction site's existing skip/404 behavior (verified) |
+
 <!-- W1-SPEC-CONTINUES -->
