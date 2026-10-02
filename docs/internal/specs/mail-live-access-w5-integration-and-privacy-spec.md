@@ -119,3 +119,149 @@ No HIGH-or-CRITICAL risk *widenings* are introduced by wiring itself; the two HI
 ### 2.5 Cluster placement
 
 This package sits in the **gateway / HTTP shell** cluster and the **agent runtime** cluster's tool-wiring edge. It owns no transport or discovery logic (W1/W2 clusters) and no UI (W3). It is the only package allowed to edit the gateway Mail routes during this feature wave, per the ADR's one-writer-per-file rule.
+
+---
+
+## 3. User stories and acceptance criteria
+
+### US-1 — One shared pool, budget and cache instance for panel, watcher and tools (P0)
+
+The founder set hard ceilings — two connections per mailbox, eight open globally — that only hold if every mail path draws from the same pool. Today the budget is already shared (every site resolves `email.SharedMailBudget`), but each path builds its own connectionless client, and the pooling design introduces real state (leases, caches) that would silently fork if any construction site built a second manager. This story pins the wiring so that no code path can exist that doesn't share.
+
+**Why this priority**: every other story (presence, cache, preview, removal) calls through this shared runtime; if the wiring forks, the ceilings and the cache bounds are unenforceable.
+
+**Independent test**: with a fake IMAP server counting accepted sockets, drive a panel request, an agent-tool request and a watcher cycle against the same pair concurrently; assert all three resolved the same manager instance (pointer identity at the wiring sites) and the server never saw more than the configured caps.
+
+**Acceptance scenarios**:
+
+1. **Given** the gateway booted normally, **When** the panel, a tool and the watcher each resolve their mail runtime handles, **Then** all three hold the same pool, budget and cache instances (one process-wide set, keyed by the data dir).
+2. **Given** a pair whose account is also configured on a second (agent, workspace) pair, **When** both pairs run identical reads concurrently, **Then** the two results never share flight data with each other (separate coalescing identities per grill I-01) while their combined concurrent dials still respect the shared 2-slot account gate.
+3. **Given** a request that arrives while all eight global sockets are active, **When** it waits past the founder-accepted 5-second acquisition window, **Then** it receives the typed busy refusal (503 with `reason=pool_busy`) and no ninth socket is ever dialed.
+4. **Given** any code path that constructs a mail client (REST route, tool registration, watcher cycle), **When** it builds its client, **Then** the client carries the injected shared handles — a construction without the injected handles fails loudly in tests rather than silently dialing unmanaged.
+
+### US-2 — Mail panel presence on the authenticated WebSocket (P0)
+
+Panel-owned connections may be retained only while at least one authenticated Mail panel observer is open (founder close rule). The ADR proposed presence frames over the gateway WebSocket and left the lifecycle integration to this package; §2.3 traced the hooks. This story defines the observable behaviour of open, close and death.
+
+**Why this priority**: without presence, the pool cannot know when to release panel sockets — either it leaks them after the panel closes or it closes them under an active user. Both violate founder-set rules.
+
+**Independent test**: open a real authenticated WebSocket, send the observer-open frame, verify a panel-scoped request retains its socket past request end; send close (then separately: kill the socket abruptly), verify the retained socket closes and a subsequent request is request-scoped.
+
+**Acceptance scenarios**:
+
+1. **Given** an authenticated WebSocket connection, **When** the SPA sends `mail_panel_observer` open with a fresh opaque observer id and its workspace, **Then** the server acknowledges binding that observer to *this connection* (not to any caller-supplied session string) and panel requests presenting that observer id may retain sockets while it lives.
+2. **Given** a live observer, **When** the same connection sends close for that observer id, **Then** only that observer is dropped; another tab's observer on a different connection is unaffected.
+3. **Given** a live observer and its connection dies abruptly (no close frame — read deadline expires), **When** teardown runs, **Then** the observer is revoked by the teardown hook and idle panel-owned sockets close; a shared read in flight finishes only for its remaining real owners.
+4. **Given** a request whose observer id is unknown, stale (its connection died), or owned by a different connection, **When** the request executes, **Then** it performs live request-scoped work (or serves from cache per its mode) — it never retains a socket and never fails *because* presence is missing.
+5. **Given** a mailbox request on a connection, **When** the pair is authorized (existing `mailPairClient` checks), **Then** authorization remains independent of presence: presence only ever *extends* what may be retained, never *grants* access to mail data.
+
+### US-3 — Encrypted cache location, permissions and the write gate (P0)
+
+The encrypted folder-metadata file (Phase 1) and later the header snapshot (Phase 2) live under the data directory. Folder names can reveal sensitive projects and people, so the ADR requires encryption, restrictive permissions, and exclusion from every capture path *before the first write*. This story defines the on-disk contract and the product-side gate that refuses to write when exclusion cannot be confirmed.
+
+**Why this priority**: the first cache write on an unexcluded install commits mail-derived metadata to an off-machine Git backup within 15 minutes (the trace's verified mechanism), and Git history retains it regardless of later cleanup.
+
+**Independent test**: with the exclusion rule present in a temp data dir, write a cache file and assert its path, permissions and ciphertext-only content; remove the rule and assert the write is refused with a visible cache-unavailable outcome and no file created.
+
+**Acceptance scenarios**:
+
+1. **Given** a configured data directory, **When** the cache writes a pair's folder metadata, **Then** the file lands at `<data-dir>/mail-cache/<opaque-pair-id>/folders.enc` (path derived from the configured data root, never hard-coded), inside a `0700` directory as a `0600` file, replaced atomically as complete ciphertext via the existing atomic-write primitive.
+2. **Given** two distinct (agent, workspace) pairs, **When** both write cache files, **Then** each pair's path is unambiguous and stable across restarts — the identifier is an opaque stable derivation of the pair identity, never the watcher's lossy filename sanitizer (`keyFor`) and never an email address or folder name.
+3. **Given** an install whose data-directory `.gitignore` (or `.git/info/exclude`) does not match the cache directory, **When** the first cache write is attempted, **Then** the write is refused before any file is created, the pair runs live-only, and the surfaced cache state carries the safe `cache_unavailable` notice — never a silent skip and never a plaintext fallback.
+4. **Given** a cache path where any component is (or becomes) a symlink, **When** the manager resolves or writes, **Then** it refuses the operation rather than following the link out of the cache directory.
+5. **Given** the agent filesystem/shell policy surface, **When** a file tool resolves any path under the cache directory, **Then** it is refused — a generic file tool must never become a decryption route.
+6. **Given** Windows, **When** the cache directory is created, **Then** access is restricted to the current user by the platform's own mechanism (ACL), not by a chmod call that has no effect there.
+
+### US-4 — The data-folder exclusion deployment change (P0 — blocks US-3's disk writes)
+
+The auto-commit job is machine-level deployment, not product code: a launchd agent runs a generated bash script that stages with bare `git add -A` in the data directory, gated by a gitleaks pre-commit, and pushes to an off-machine backup remote. Exclusion is decided **solely** by the deny-list `.gitignore` that an external provisioning script writes; the product writes no ignore file today (all verified in the trace receipt). The tar backup has the same hole with a different seam. This story specifies the exact deployment change and the evidence that proves it, and makes disk-cache activation **blocked** until that evidence exists.
+
+**Why this priority**: the ignore rule must land before the first cache write ships *on any install* — ignoring a file after it is tracked removes nothing, and the backup remote's history keeps every prior blob.
+
+**Independent test**: on a machine with the deployed job's staging rules, create a synthetic `mail-cache/` file plus one ordinary allowed state file, run the job's staging (or its exact `git add -A` semantics), and assert the cache file is untracked while the control file is staged; separately list the members of a fresh tar backup and assert the same split.
+
+**Acceptance scenarios**:
+
+1. **Given** the provisioning script's ignore-file template, **When** the deployment change is applied, **Then** the template carries a `mail-cache/` deny rule (adjusted to the final directory name) and the script's idempotent refresh has been re-run on this machine, so the live `<data-dir>/.gitignore` matches the rule.
+2. **Given** the tar backup path, **When** `createTarGz` walks the data directory, **Then** top-level `mail-cache` is skipped exactly as `logs` and `backups` are — and the same skip makes fresh archives safe to restore, since restore only materializes what archives contain.
+3. **Given** an install where a cache file has already been committed (tracked), **When** the ignore rule lands, **Then** a documented remediation runbook exists (`git rm -r --cached mail-cache/` + commit per install), and the runbook names the history question (whether the backup remote's history is rewritten) as an explicit founder decision — never silently skipped.
+4. **Given** the whole gate, **When** the product decides whether disk cache writes are enabled, **Then** the gate is the product-side check of US-3 scenario 3 **plus** the deployment evidence below — deployment change without the product gate, or the gate without the deployment change, does not unblock.
+5. **Given** the trace's live-state caveats (job currently unloaded; last run blocked by 30 gitleaks findings; 22,239 dirty entries pending), **When** this feature claims the exclusion is real, **Then** the claim cites fresh evidence gathered after the job is reloaded and unblocked — never the trace's snapshot alone.
+
+**Evidence that proves the exclusion is real** (all five required; this is the US-3/US-4 unblock receipt):
+
+| # | Evidence | Passes when |
+|---|---|---|
+| E1 | `git -C <data-dir> check-ignore -v mail-cache/ mail-cache/x.enc` | Both paths match a rule naming the cache directory |
+| E2 | `git -C <data-dir> ls-files -i -c --exclude-standard` | Empty — nothing cache-related is already tracked |
+| E3 | `POST /api/v1/backup` archive member listing | No `mail-cache` member; a positive-control ordinary state file **is** present (proves the listing instrument sees members) |
+| E4 | Restore of that archive into a scratch dir | No cache file materializes |
+| E5 | Staging run with the deployed job's rules after a real cache write | `git status --porcelain` shows no cache paths staged; the positive control appears |
+
+### US-5 — Removal cascades with truthful cleanup outcomes (P0)
+
+Five events must end a pair's cached identity: mailbox disable, mailbox removal, agent deletion, workspace deletion, and credential/endpoint change — plus key rotation and store lock from the credential side. Today none of them touch the filesystem (verified §2.1), and the one handler that comes closest (`deleteAgentMailbox`) reports unconditional success even when its best-effort steps fail. This story defines the cascade and its honesty rule.
+
+**Why this priority**: resurrection is the failure mode — a late cache write or a failed unlink that still reports success leaves mail-derived files (or retained sockets, or live presence) behind a removed pair, and the operator has no way to know.
+
+**Independent test**: for each trigger, remove a pair with a cache subtree present and a paused in-flight cache write; assert leases close, presence revokes, files disappear (or the outcome says cleanup-pending), and the paused write cannot recreate anything.
+
+**Acceptance scenarios**:
+
+1. **Given** a mailbox save that flips `enabled` true→false, **When** the save commits, **Then** the pair's cache subtree is purged, its leases are closed and its presence is revoked — the same transition detection the existing `wasEnabled` capture already provides, mirrored for the disable direction.
+2. **Given** mailbox removal (`deleteAgentMailbox`), **When** config and credentials are removed, **Then** the cache purge runs best-effort, and the response distinguishes full `removed` from `removed_cleanup_pending` (with a safe cleanup code) instead of unconditional success; the separately authorized Retry-cleanup operation works **after** the config row is gone, keyed by the pair's opaque cleanup intent.
+3. **Given** an unlink that fails (permissions, AV hold, platform lock), **When** the removal handler responds, **Then** it never reports a successful purge: the pair stays tombstoned, the cleanup-pending outcome is visible, and no plaintext copy of anything is created as a workaround.
+4. **Given** a cache write that was in flight when removal happened, **When** the write completes, **Then** a generation/tombstone check at publication time discards it — no file is (re)created after removal, on any trigger, without polling or sleeps.
+5. **Given** agent deletion, **When** the agent's records are removed, **Then** every pair the agent owned is cascaded through the same cache purge (best-effort, same truthful-outcome rule) — the deletion response carries the same pending-cleanup discrimination when any purge fails.
+6. **Given** workspace deletion, **When** `releaseRuntimeResources` cascades its mailboxes, **Then** each removed pair's cache subtree is purged in the same step (the wholesale directory wipe does not cover the cache, which lives outside `workspaces/<id>/`).
+7. **Given** a credential, host, port, username or folder-override change on an existing pair, **When** the save commits, **Then** the pair's generation advances before any older completion can publish, old disposable caches are deleted (never migrated under an uncertain key), and the pair's leases are closed.
+8. **Given** credential-store lock or key rotation, **When** the cache manager notices, **Then** in-memory derived keys and cached plaintext are cleared, disposable files are removed, and rebuild happens only after normal credential resolution succeeds — a missing/wrong master key is never "fixed" by creating a new one over existing data.
+9. **Given** a gateway restart with orphan cache files (pair no longer configured), **When** boot reconciliation runs, **Then** orphans whose pair no longer exists are deleted best-effort, with failures logged as safe classes — never rendered as usable state.
+
+### US-6 — Metadata-only preview grants (P0)
+
+Today a mail HTML preview grant carries the entire fetched payload — sanitized HTML, every inline part's bytes, the remote-image URL list — for fifteen minutes (`mailPreviewGrant`, `MailPreviewTokenTTL`). That is a body cache by another name and breaks the request-only body rule. This story converts grants to authorization/reference metadata: every preview serve request fetches and sanitizes within its own request, through the shared budget and pool, and holds bytes only for that request. The ADR explicitly permits keeping the remote-image **URL list** in the grant (source-URL metadata is not bytes).
+
+**Why this priority**: it is the one place the current code durably holds message bodies outside a request, and the design marks it a violation to be removed as part of this package — not a Phase 2 item.
+
+**Independent test**: mint a preview, inspect the token store (no HTML/inline bytes present), serve the preview and count IMAP commands (serve fetches live), then assert every existing token control still holds: session cap, logout revocation, 404 parity, signature-token discipline, remote-image consent.
+
+**Acceptance scenarios**:
+
+1. **Given** a minted message-preview grant, **When** the token store is inspected, **Then** it contains authorization/reference metadata only — no HTML string, no inline part bytes, no attachment data — and expiry, session binding and the pair/folder/ref/load-remote identity as today.
+2. **Given** a minted grant, **When** the SPA serves the preview, **Then** the serve path performs a live, budget-gated fetch (the four-GET budget wrapper's rules apply to preview fetches too), sanitizes within the request, serves with `Cache-Control: no-store`, and holds bytes only for that request's lifetime.
+3. **Given** the mint request itself, **When** it is processed, **Then** it dials nothing: mint authorizes the pair and issues the ref-bound token; the first serve performs the fetch and surfaces 404 (missing), 400 (bad ref), or the size/decode failure — a mint that would have failed under today's eager fetch now fails at serve with the same safe classes.
+4. **Given** every existing preview security control, **When** the grant shape changes, **Then** all of them still hold: per-session cap 8 refuses (429) with no eviction, logout revocation via `invalidateSession`, unknown/expired/revoked all one 404 answer, signature tokens replace-on-mint at their own 2-minute TTL and never counted against the message cap, remote images only from the grant-recorded URL list through the token-scoped bounded proxy, and the Mail CSP unchanged on the isolated document.
+5. **Given** a message with N inline images, **When** the SPA renders the preview, **Then** the part requests each fetch through the shared pool — the added live fetches are counted and reported (the ADR's measurement obligation), never hidden; the design accepts the cost and this package surfaces it to the measurement plan.
+6. **Given** the new preview-purpose byte endpoint (grill I-05's wire split, defined by W0), **When** it serves an attachment part for Open, **Then** it enforces inline disposition, `no-store`, the unchanged 25 MiB actual-decoded-byte cap checked before success, and the grant's ownership lifecycle (view exit, expiry, revoke, panel close all end it) — while the existing attachment endpoint keeps its browser-Download role and disposition via the unchanged `applyMailByteHeaders`.
+
+### US-7 — Redaction: what pool, cache and probe diagnostics may record (P1)
+
+New pool/cache/probe diagnostics are mandatory for the measurement plan, and they sit next to two existing seams that pass raw upstream text into durable state (`recordFailure` persists `LastErrorText`) or logs (`mailErr502` logs the raw error). This story draws the line.
+
+**Why this priority**: the watcher state file is captured by the Git backup today (un-ignored, per the trace) — raw server error text landing there is a real disclosure path, not a style concern. The wire is already safe: the summary serves only the class, so removing raw text has no UI impact (verified §2.1).
+
+**Independent test**: drive a fake IMAP server whose error strings contain distinctive synthetic markers (a fake subject, address and folder name); assert the markers appear nowhere in logs, watcher state, audit entries or cache envelopes, while the safe class strings do appear.
+
+**Acceptance scenarios**:
+
+1. **Given** any pool, cache, probe or watcher diagnostic write, **When** it records, **Then** it records only: opaque pair identifiers, generation identifiers, operation labels, safe error classes, durations, and counts (dials, commands, sockets, hit/miss, refusals).
+2. **Given** the same writes, **When** inspected, **Then** they never contain: subjects, addresses, Message-IDs, server folder names (role slugs `inbox`/`sent`/`drafts` are fine), credential values, full JMAP URLs, raw protocol transcripts, response bodies, or any raw upstream error string passed through as if it were safe.
+3. **Given** `recordFailure(errClass, errText)` (W1's file, this package's requirement), **When** a failure is recorded, **Then** the raw `errText` no longer enters the persisted state file — the field receives either empty or a class-derived safe message; the summary wire contract is unchanged (it already serves only the class).
+4. **Given** `mailErr502` and the mail-path `logsafeError`/`logsafeWarn` sites, **When** they log, **Then** they log the class plus safe fields — not the raw error value.
+5. **Given** an error that leaves its trust boundary (into a 5xx detail, a cleanup-pending code, a cache notice), **When** it is rendered, **Then** it is a closed safe class; URL-bearing values are redacted before crossing.
+
+### US-8 — Durable generation across restarts (P0)
+
+The generation that invalidates caches and blocks late completions must survive restarts: a process that restarts after an offline endpoint/password edit must not reconstruct a generation that makes old encrypted snapshots look applicable to the new account (the ADR's "stable generation incorrectly rebuilt" risk). This package decides the mechanism (W0 contracts the wire-visible parts; W1/W2 consume it).
+
+**Why this priority**: without durable generation, every other invalidation rule can be silently undone by a restart — the tombstone holds but the snapshot still decrypts.
+
+**Independent test**: configure a pair, write a snapshot, stop the process, change the pair's password in config offline, restart, and present the old snapshot — assert it is rejected without plaintext salvage and the pair rebuilds live.
+
+**Acceptance scenarios**:
+
+1. **Given** a pair's canonical identity (endpoint host/port, username, credential reference binding) resolved at runtime, **When** the cache writes or reads a snapshot, **Then** the snapshot's envelope carries a purpose-keyed, non-secret fingerprint of that identity (derived via the sanctioned `DeriveSubkey` seam over the canonical identity and the resolved credential material — never the password bytes themselves in key names, files or logs), recomputed and compared on every load.
+2. **Given** a restart without any credential change, **When** the cache loads a snapshot, **Then** the fingerprint matches and the snapshot is usable — pair identity is stable across normal restarts.
+3. **Given** any relevant identity change (password, host, port, username, folder-override), **When** the next load compares fingerprints, **Then** the old snapshot is rejected as foreign — deleted, rebuilt live, never salvaged, never displayed.
+4. **Given** the locked-store case, **When** a cache read is attempted, **Then** the manager reports the store state distinctly (locked ≠ cache miss ≠ corrupt) and serves live-only with the safe warning — a broken credential store is never misreported as a cache problem.
