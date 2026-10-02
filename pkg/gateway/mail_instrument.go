@@ -48,6 +48,14 @@ func mailInstrumentOperationOf(op string) string {
 		return "attachment_save"
 	case "seen":
 		return "seen"
+	case "summary":
+		// w6 §6.1's frozen enum names summary (its §6.1 operation row), and
+		// w5's emission obligation (US-7.6/MC-18, register row 17) names the
+		// summary boundary. Dropping it silently emitted zero summary
+		// records — the exact missing-record failure US-7.8 invalidates a
+		// campaign over. The map carries every frozen member the gateway
+		// actually emits; removal stays absent (§13 Q8, publisher-owned).
+		return "summary"
 	default:
 		return ""
 	}
