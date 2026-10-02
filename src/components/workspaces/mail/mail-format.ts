@@ -8,15 +8,18 @@
  * formatMailTime — list-row timestamps: "14:32" for today, "Sep 27" for
  * this year, "2 Jan 2006" for older years. en-GB day-first style. A null or
  * absent date (the scheduled `date` nullability amendment's unknown state)
- * renders "No date" — never blank and never a zero/epoch value (F6). An
- * empty, malformed or year-one/zero date stays omitted (the F8 pins).
+ * renders "No date" — never blank and never a zero/epoch value (F6); the
+ * year-one/zero Go time renders "No date" too (W3 §2.1: "year-one/zero →
+ * No date", U13's never-blank pin). An empty or malformed string stays
+ * omitted. Surfaces that must OMIT the date entirely (the draft header's
+ * F8 pins) gate on hasMailDate, which stays false for year-one.
  */
 export function formatMailTime(iso: string | null | undefined): string {
   if (iso === null || iso === undefined) return 'No date'
   if (iso === '') return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  if (d.getUTCFullYear() <= 1) return ''
+  if (d.getUTCFullYear() <= 1) return 'No date'
   const now = new Date()
   const sameDay =
     d.getFullYear() === now.getFullYear() &&
@@ -33,24 +36,25 @@ export function formatMailTime(iso: string | null | undefined): string {
 
 /**
  * formatMailDate — the sent-copy's date line (US-4 AS-4): "2 Jan 2006".
- * Null/absent → "No date" (F6, post-amendment unknown state); empty,
- * malformed and year-one/zero values stay omitted (the F8 draft-header
- * pins — see the flagged spec/test disagreement in the wave report).
+ * Null/absent → "No date" (F6, post-amendment unknown state) and
+ * year-one/zero → "No date" (W3 §2.1/U13's never-blank pin); empty and
+ * malformed strings stay omitted. The draft header's F8 omission gates on
+ * hasMailDate, which stays false for year-one — the two pins reconcile.
  */
 export function formatMailDate(iso: string | null | undefined): string {
   if (iso === null || iso === undefined) return 'No date'
   if (iso === '') return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  if (d.getUTCFullYear() <= 1) return ''
+  if (d.getUTCFullYear() <= 1) return 'No date'
   return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(d)
 }
 
 /**
  * hasMailDate — true when the date carries a displayable value (not
- * null/absent/empty/malformed/year-one). The list row and detail header use
- * it to omit the timestamp for the F8 pinned cases; null (post-amendment)
- * is handled by the formatters' "No date" render instead.
+ * null/absent/empty/malformed/year-one). The reading-pane detail header
+ * uses it to omit the date line entirely for the F8 pinned cases (the
+ * list row instead renders the formatters' "No date" per W3 §2.1).
  */
 export function hasMailDate(iso: string | null | undefined): boolean {
   if (iso === null || iso === undefined || iso === '') return false
