@@ -1,6 +1,6 @@
 # ADR-091 WP-C — Steering surface, the `delegate` front, wait-inline removal, completion
 
-- **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D4, D5, D6, D10 (list_jobs, seeds, prompts) — D6's completion rule is read as amended by ADR-20260928 "The sub-agent control plane" D6b / F1011-Q4: a descendant parked with a question holds back its parent's completion, and a completed hand-back carries no `open_questions`
+- **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D4, D5, D6, D10 (list_jobs, seeds, prompts) — D6's completion rule is read as amended by ADR-20260928 "The sub-agent control plane" D6b / F1011-Q4 / F0929-7: a descendant parked with a question holds back its parent's completion, a `stopped` node does not block and cuts its whole subtree from the check until an explicit resume, and a completed hand-back carries no `open_questions`
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — consumes I-1, I-2, I-3, I-5
 - **Owner files:** landing order §3, row C
 - **Status:** Draft rev 2 (consolidated after three grills; supersedes every earlier sentence of rev 1)
@@ -76,9 +76,9 @@
 
 ### US-4 — Done without ceremony; judged when asked (P0)
 
-1. **Given** a steered session launched without a goal, **When** its turn ends with a non-empty final answer and no descendant is `queued`, `running`, or parked with a question, **Then** it is `completed` and its parent receives a `handback` (`mode: final`) with the answer.
-2. **Given** the same session ends with an empty answer, a parked question, an interruption, a timeout, or with a descendant still `queued`, `running`, or parked with a question, **When** the turn ends, **Then** the outcome is persisted and delivered exactly per the I-5 table — **`failed` + `error empty_answer:`** (founder decision, round 10); `needs_input` + `question`; `cancelled` + `error interrupted:`; `timed_out` + `error timed_out:`; stays `running` with no entry until the subtree is quiet — never as done.
-3. **Given** a parent that answered while a child still runs, **When** the last such child completes and wakes the parent, **Then** the parent's own `handback` is written then — but only if no descendant is parked with a question: a parked descendant holds the parent's completion back until it is answered and finished (F1011-Q4; control-plane D6b), and on the completed path `open_questions` is empty.
+1. **Given** a steered session launched without a goal, **When** its turn ends with a non-empty final answer and no descendant reachable without crossing a stopped node is `queued`, live `running`, or parked with a question, **Then** it is `completed` and its parent receives a `handback` (`mode: final`) with the answer. A `stopped` node is not a blocker and cuts its whole subtree out of the check — `B → stopped C → needs_input D` does not hold `B` (control-plane D6/D6b, F0929-7).
+2. **Given** the same session ends with an empty answer, a parked question, an interruption, a timeout, or with a descendant still reachable without crossing a stopped node and `queued`, live `running`, or parked with a question, **When** the turn ends, **Then** the outcome is persisted and delivered exactly per the I-5 table — **`failed` + `error empty_answer:`** (founder decision, round 10); `needs_input` + `question`; `cancelled` + `error interrupted:`; `timed_out` + `error timed_out:`; stays `running` with no entry until the subtree is quiet in AC-1's sense (a stopped node's subtree is cut from the check) — never as done.
+3. **Given** a parent that answered while a child still runs, **When** the last such child completes and wakes the parent, **Then** the parent's own `handback` is written then — but only if no descendant reachable without crossing a stopped node is parked with a question: a parked descendant holds the parent's completion back until it is answered and finished, until a stop cuts that branch out of the check, until the question's 24-hour expiry ends the wait by a visible failure, or until the question is withdrawn (F1011-Q4; control-plane D6b). Those bounds are the control plane's, not new design: a stop of the holding branch removes it from the completion check but does **not** close the question — it stays open on its original 24-hour clock (a stop is not a withdrawal); the expiry fails the asker visibly `failed(owner_unreachable)` (owner-required) or `failed(answer_timeout)`; only a parent `redirect`/RESUME withdraws the question, closing it `superseded`. On the completed path `open_questions` is empty.
 4. **Given** a steered session launched with a goal (criteria + DoD in `create_task`'s shape), **When** it claims, **Then** the Judge adjudicates as for a task and a `goal_status` entry (direction `session_to_parent`, condition `met` or `not_met`, `evidence` per criterion — the existing kind, extended by WP-E) reaches the parent.
 5. **Given** an agent denied `goal_claim`, **When** it runs plain steered work, **Then** it can complete.
 6. **Given** the rendered delegation prompt, **When** an agent reads it, **Then** it finds one sentence saying when to set a goal on a delegate (multi-step or must-verify work) and when to leave it off (quick lookup, single action), and that no goal is the default (founder decision, round 8).
@@ -236,6 +236,7 @@ Feature: Delegate front and steering surface
       | non-empty | running | no     | running     | nothing yet                 |
       | non-empty | queued  | no     | running     | nothing yet                 |
       | non-empty | parked descendant | no | running  | nothing yet                 |
+      | non-empty | parked descendant behind a stopped child | no | completed | handback(final, answer)     |
       | any       | any     | yes    | needs_input | question                    |
 
   # Alternate Path — Traces to: US-4 / AS-3
@@ -247,10 +248,20 @@ Feature: Delegate front and steering surface
 
   # Alternate Path — Traces to: US-4 / AS-3
   Scenario: With no parked sibling, the last child's completion completes the waiting parent
-    Given B answered while C was still running and no descendant of B is parked with a question
+    Given B answered while C was still running and no descendant of B reachable without crossing a stopped node is parked with a question
     When C completes and wakes B
     Then B's state becomes completed
     And A's inbox gains B's handback with the answer and empty open_questions
+
+  # Alternate Path — Traces to: US-4 / AS-3
+  Scenario: A stopped node cuts its subtree out of the completion check, and an explicit resume blocks the branch again
+    Given B answered while its child C was still running and C's own child D is parked with a question
+    When C is stopped and B's quiet-subtree completion check runs
+    Then B is completed — D does not hold B back, because the check reaches no descendant through the stopped C (control-plane D6/D6b, F0929-7)
+    And B's handback carries empty open_questions
+    And C's stop has not closed D's question: it stays open on its original 24-hour clock, ending in a visible failed(owner_unreachable) or failed(answer_timeout) if it expires — a stop is not a withdrawal
+    When C is explicitly resumed while D is still parked
+    Then C is working again and its branch blocks completion anew — the check no longer prunes C, C cannot complete while D waits, and a parent that has not yet completed is held by C again
 
   # Happy Path — Traces to: US-4 / AS-4
   Scenario: A goal-bearing delegation is judged
@@ -327,7 +338,7 @@ Implementers load the `test-driven-development` skill first.
 | C-1 | `async` ∈ {absent, true, false}; `allow_blocking_question` ∈ {absent, true} | ok / reject / reject / ok / reject | US-1/AS-2 |
 | C-2 | 8 actions × 5 principals | matrix | US-2 |
 | C-3 | steers at t, t+1 ms, t+10 ms from two sources | delivered in order | US-2 |
-| C-4 | answer len 0 / 1 / 10 kB; subtree quiet / running / queued / parked descendant; parked | disposition table; entry validates | US-4 |
+| C-4 | answer len 0 / 1 / 10 kB; subtree quiet / running / queued / parked descendant / parked descendant behind a stopped child; parked | disposition table; entry validates | US-4 |
 | C-5 | depth 1 / ceiling / ceiling+1 self-delegation | ok / ok / refuse | US-3 |
 | C-6 | goal: 0 criteria / valid / unevaluable for agent | reject / judged / readiness reject | US-4/AS-4 |
 | C-7 | `list_jobs` limit 1 / 2 / 10 with one delegate child + one task child | 1 correctly classified row / each once / each once | US-5 |
@@ -348,7 +359,7 @@ Preserved: `verifyCallerOwnsSession` ancestor semantics; parked/respond lifecycl
 | FR-C-005 | Sessions created by `create_task` MUST expose the same steering actions; `buildTask` MUST record the creating session in `task.Task.OriginSessionID` and the creating tool call in the new disk-only `task.Task.OriginCallID`. |
 | FR-C-006 | External command-line sessions MUST reject steer and questions with a named error. |
 | FR-C-007 | Self-target launches MUST be permitted for both fronts and bounded only by depth and concurrency. |
-| FR-C-008 | A goal-less steered session MUST complete only with a non-empty final answer and a quiet subtree (no descendant `queued`, `running`, or parked with a question); an empty answer MUST be persisted `failed` with an `error` `empty_answer:`; every outcome MUST be persisted and delivered exactly per the I-5 table; a waiting parent's `handback` MUST be written when its last running descendant completes and no descendant is parked with a question — on this completed path `open_questions` is empty (F1011-Q4 / control-plane D6b supersede ADR-091 D6's parked-question exemption). |
+| FR-C-008 | A goal-less steered session MUST complete only with a non-empty final answer and a quiet subtree — no descendant reachable without crossing a stopped node is `queued`, live `running`, or parked with a question; a `stopped` node MUST NOT block and MUST cut its whole subtree from the check (`B → stopped C → needs_input D` does not hold `B`), and an explicit resume MUST make the branch block again while it is working or waiting. A stop MUST NOT close the stopped branch's open question — the original 24-hour clock continues while stopped, expiring visibly `failed(owner_unreachable)` / `failed(answer_timeout)`; only a parent `redirect`/RESUME withdraws the question as `superseded` (a stop is not a withdrawal). An empty answer MUST be persisted `failed` with an `error` `empty_answer:`; every outcome MUST be persisted and delivered exactly per the I-5 table; a waiting parent's `handback` MUST be written when its last running descendant completes and no descendant reachable without crossing a stopped node is parked with a question — on this completed path `open_questions` is empty, and parked questions ride only non-completion hand-backs (e.g. a stopped-child report), excluding open-relay questions (MIN-006) (F1011-Q4 / control-plane D6b / F0929-7 supersede ADR-091 D6's parked-question exemption). |
 | FR-C-009 | A goal-bearing steered session MUST be adjudicated by the Judge exactly as a task and its verdict delivered upward as the extended `goal_status` kind (direction `session_to_parent`, `met` / `not_met`, `evidence`). |
 | FR-C-010 | `collectSubagentRows` MUST exclude records whose `Origin.Kind` is `task` before any result limit, MUST take actionability from the record's state and the label from its title, and MUST NOT read the live delegate index; every session appears exactly once. |
 | FR-C-011 | `delegate(status)` MUST answer from the lifecycle record and the inbox (state, last status line, age of the last entry, or "no message yet" with started-ago) and MUST NOT depend on streaming progress. |
@@ -378,7 +389,7 @@ Preserved: `verifyCallerOwnsSession` ancestor semantics; parked/respond lifecycl
 | FR-C-005 | US-2 | authority outline (task-created) | 6 |
 | FR-C-006 | US-2 | external worker | 10 |
 | FR-C-007 | US-3 | self-delegation | 11 |
-| FR-C-008 | US-4 | disposition outline; last child | 12, 13, 15 |
+| FR-C-008 | US-4 | disposition outline; last child; stopped cut and resume | 12, 13, 15 |
 | FR-C-009 | US-4 | judged | 14 |
 | FR-C-010 | US-5 | listed once | 17 |
 | FR-C-011 | US-6 | status outline | 18 |
