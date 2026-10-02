@@ -6,10 +6,17 @@ package gateway
 // REFUSES never evicts, logout revocation, unknown/expired/revoked all one
 // answer (404 on the wire).
 //
-// The mail store differs from the Library store in one structural way: a
-// mail grant carries the ALREADY-FETCHED sanitized payload (HTML, inline
-// cid parts, and the mint-time-recorded remote-image URL list), so the
-// /mail-preview/ serve routes never dial IMAP (spec 2.3a).
+// Since the w5-integration wave the store's MESSAGE grants carry
+// authorization and reference metadata ONLY (US-6/MC-11: no fetched Mail
+// HTML, no inline part bytes, no attachment data — the request-only body
+// rule). Each preview serve fetches and sanitizes within its own request
+// through the shared pool and budget. The remote-image URL list is
+// source-URL METADATA the ADR explicitly permits; it is recorded by
+// authorized server processing at the first live serve (§13 Q5's settled
+// timing), never from client-trusted body bytes, and the serve-time proxy
+// dials only entries of that recorded list (MC-41). SIGNATURE grants keep
+// their already-sanitized payload: the draft signature is operator-
+// supplied input, not mail content, and its controls are unchanged.
 
 import (
 	"crypto/rand"
@@ -61,11 +68,14 @@ type mailPreviewInline struct {
 	Data        []byte
 }
 
-// mailPreviewGrant is what a mail preview token buys: the sanitized HTML,
-// the inline parts and - only when load_remote was minted true - the
-// remote-image URL list recorded AT MINT TIME (MC-41: the proxy serves
-// store-recorded URLs only). Bound to the (pair, folder, ref, load_remote)
-// identity (MC-43).
+// mailPreviewGrant is what a mail preview token buys: authorization and
+// reference metadata bound to the (pair, folder, ref, load_remote) identity
+// (MC-43) — and NOTHING else for a message grant (US-6.1/MC-11: zero HTML
+// string, zero inline part bytes, zero attachment data). The remote-image
+// URL list is metadata, recorded by server processing at the first live
+// serve; the proxy dials recorded URLs only (MC-41). Signature-kind grants
+// keep their operator-supplied sanitized HTML: that is not mail content,
+// and their existing controls are unchanged.
 type mailPreviewGrant struct {
 	// Kind is the grant's purpose (mailPreviewKind*): it selects the TTL and
 	// the per-session cap discipline (message: cap-8-refuses; signature:
@@ -78,9 +88,11 @@ type mailPreviewGrant struct {
 	LoadRemote  bool
 	SessionKey  string
 	ExpiresAt   time.Time
-	HTML        string
-	Inline      []mailPreviewInline
-	RemoteURLs  []string
+	// HTML/Inline carry ONLY the signature kind's operator-supplied preview.
+	// A message grant leaves both nil forever (MC-11's zero-payload rule).
+	HTML       string
+	Inline     []mailPreviewInline
+	RemoteURLs []string
 }
 
 // ErrMailPreviewEntropy is the fail-closed mint refusal (MC-43): entropy
@@ -230,6 +242,26 @@ func (s *mailPreviewTokenStore) revokeKindLocked(sessionKey, kind string) {
 	if set := s.bySession[sessionKey]; len(set) == 0 {
 		delete(s.bySession, sessionKey)
 	}
+}
+
+// recordRemoteURLs overwrites the grant's recorded remote-image URL list
+// with the list the CURRENT serve's authorized fetch produced (serve-time
+// recording, §13 Q5). A dead token records nothing and reports false — the
+// caller still finishes its own response; the list only matters for later
+// proxy requests, which a dead token no longer serves.
+func (s *mailPreviewTokenStore) recordRemoteURLs(token string, urls []string) bool {
+	if token == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, ok := s.byToken[token]
+	if !ok || !s.now().Before(g.ExpiresAt) {
+		return false
+	}
+	g.RemoteURLs = urls
+	s.byToken[token] = g
+	return true
 }
 
 // invalidatePair kills every MESSAGE grant of one (agent, workspace) pair —

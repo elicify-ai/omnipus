@@ -1,10 +1,13 @@
 package gateway
 
-// rest_mail_preview.go - the Mail HTML preview (spec 2.3a, MC-10). The mint
-// (POST /api/v1/mail/html-preview-token) is the ONE live-IMAP fetch: it
-// fetches the message, sanitizes the HTML, records the inline parts and the
-// remote-image URL list in the token store, and mints the token. The
-// /mail-preview/ serve routes never dial IMAP and answer 404-only.
+// rest_mail_preview.go - the Mail HTML preview (spec 2.3a, MC-10; w5
+// US-6/MC-11/MC-12: metadata-only grants). The mint
+// (POST /api/v1/mail/html-preview-token) DIALS NOTHING: it authorizes the
+// pair and issues the ref-bound token (US-6.3). Every serve request fetches
+// and sanitizes within its own request through the shared pool and budget,
+// and holds bytes only for that request's lifetime (US-6.2). Signature
+// preview grants keep their operator-supplied sanitized HTML at mint —
+// that is not mail content, and their controls are unchanged.
 
 import (
 	"context"
@@ -130,8 +133,12 @@ func (p *mailPreviewRoutes) setMailPreviewSecurityHeaders(w http.ResponseWriter)
 	h.Set("Cache-Control", "no-store")
 }
 
-// handleMint implements POST /api/v1/mail/html-preview-token (D13/D17):
-// decode, resolve the pair, ONE live fetch, sanitize, record, mint.
+// handleMint implements POST /api/v1/mail/html-preview-token (D13/D17; w5
+// US-6.3/MC-12: mint dials nothing). It authorizes the pair, validates the
+// folder slug, and issues the ref-bound metadata token. Every failure the
+// old eager mint produced at mint time (missing message, oversized body,
+// backoff, upstream error) now surfaces at the FIRST SERVE with the same
+// safe classes — the failure moved, it did not disappear.
 func (p *mailPreviewRoutes) handleMint(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -152,41 +159,15 @@ func (p *mailPreviewRoutes) handleMint(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	client := p.api.mailPairClient(w, req.AgentId, req.WorkspaceId)
-	if client == nil {
-		return
-	}
-	v, err := client.ReadView(r.Context(), string(req.Folder), req.MessageRef)
-	if err != nil {
-		if errors.Is(err, email.ErrMailRefInvalid) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
-			mailErr502(w, err)
-		}
-		return
-	}
-	if mailViewHidden(v) {
-		jsonErr(w, http.StatusNotFound, "message not found")
-		return
-	}
-	html := v.HTMLBody
-	if len(html) > mailPreviewMaxHTMLBytes {
-		jsonErr(w, http.StatusBadRequest, "html body too large")
+	// Authorization only: the pair must resolve to an authenticated client.
+	// NewClient dials nothing (US-6.3) — the counter stays at zero here.
+	if p.api.mailPairClient(w, req.AgentId, req.WorkspaceId) == nil {
 		return
 	}
 	loadRemote := req.LoadRemote != nil && *req.LoadRemote
-	inlineParts := make([]mailPreviewInline, 0, len(v.Inline))
-	for _, part := range v.Inline {
-		inlineParts = append(inlineParts, mailPreviewInline{ContentType: part.ContentType, Data: part.Data})
-	}
-	remoteURLs := []string(nil)
-	if loadRemote {
-		remoteURLs = mailExtractRemoteImageURLs(v.HTMLBody)
-	}
 	token, merr := p.tokens.mint(sessionKey, mailPreviewGrant{
 		WorkspaceID: req.WorkspaceId, AgentID: req.AgentId,
 		Folder: string(req.Folder), Ref: req.MessageRef, LoadRemote: loadRemote,
-		HTML: mailSanitizePreviewHTML(v.HTMLBody, v.Inline, remoteURLs), Inline: inlineParts, RemoteURLs: remoteURLs,
 	})
 	if merr != nil {
 		// A full per-session token table is the caller's doing, not a server
@@ -460,15 +441,32 @@ func (p *mailPreviewRoutes) handleServe(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// serveHTML serves the sanitized HTML with the real token substituted for
-// the placeholder in the token-scoped image paths.
+// serveHTML serves the preview HTML. A signature grant serves its
+// operator-supplied sanitized HTML exactly as before (no dial). A message
+// grant performs its OWN budget-gated live fetch and sanitizes within this
+// request (US-6.2/MC-12) — the grant never carried the payload — records
+// the freshly extracted remote-image URL list (serve-time recording, §13
+// Q5), and serves with the real token substituted for the placeholder.
 func (p *mailPreviewRoutes) serveHTML(w http.ResponseWriter, r *http.Request, token string) {
 	g, ok := p.tokens.lookup(token)
 	if !ok {
 		mailPreviewNotFound(w)
 		return
 	}
-	html := strings.ReplaceAll(g.HTML, mailTokenPlaceholder, token)
+	if grantKindOf(g) == mailPreviewKindSignature {
+		html := strings.ReplaceAll(g.HTML, mailTokenPlaceholder, token)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodHead {
+			return
+		}
+		_, _ = w.Write([]byte(html))
+		return
+	}
+	html, ok := p.fetchAndSanitizeMessageHTML(w, r, token, g)
+	if !ok {
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {
@@ -477,25 +475,84 @@ func (p *mailPreviewRoutes) serveHTML(w http.ResponseWriter, r *http.Request, to
 	_, _ = w.Write([]byte(html))
 }
 
-// servePart serves one mint-time inline part by index. Only image parts are
-// served: the sandboxed iframe can reference them solely through img-src
-// (the CSP names the part path under img-src only), so anything else has no
-// rendering path and is refused as a bare 404.
+// fetchAndSanitizeMessageHTML is the message-preview serve: one live,
+// budget-gated ReadView through the SAME shared pool and budget the panel
+// GETs use, the same 256 KB served-HTML cap (moved here from the mint —
+// US-6.3), sanitize within the request, and the remote-image URL list
+// recorded for the proxy. The bytes live only for this request.
+func (p *mailPreviewRoutes) fetchAndSanitizeMessageHTML(w http.ResponseWriter, r *http.Request, token string, g mailPreviewGrant) (string, bool) {
+	client := p.api.mailPairClient(w, g.AgentID, g.WorkspaceID)
+	if client == nil {
+		return "", false
+	}
+	v, handled := mailBudgetWrap(p.api, w, r, g.AgentID, g.WorkspaceID, client, "open",
+		map[string]any{"folder": g.Folder, "ref": g.Ref}, func(c context.Context) (*email.MailView, error) {
+			return client.ReadView(c, g.Folder, g.Ref)
+		})
+	if handled {
+		return "", false
+	}
+	if mailViewHidden(v) {
+		jsonErr(w, http.StatusNotFound, "message not found")
+		return "", false
+	}
+	if len(v.HTMLBody) > mailPreviewMaxHTMLBytes {
+		jsonErr(w, http.StatusBadRequest, "html body too large")
+		return "", false
+	}
+	remoteURLs := []string(nil)
+	if g.LoadRemote {
+		remoteURLs = mailExtractRemoteImageURLs(v.HTMLBody)
+	}
+	// Serve-time recording (§13 Q5): the proxy's later requests dial only
+	// entries of THIS fetch's list. Best-effort — an expired token still
+	// finishes the response it already authorized.
+	_ = p.tokens.recordRemoteURLs(token, remoteURLs)
+	html := mailSanitizePreviewHTML(v.HTMLBody, v.Inline, remoteURLs)
+	return strings.ReplaceAll(html, mailTokenPlaceholder, token), true
+}
+
+// servePart serves one inline part by index. For a message grant the part
+// bytes are fetched LIVE within this request (US-6.2 — the grant never
+// carried them; the added live fetches are the ADR's recorded measurement
+// item). Only image parts are served: the sandboxed iframe can reference
+// them solely through img-src (the CSP names the part path under img-src
+// only), so anything else has no rendering path and is refused as a bare
+// 404. Signature grants have no inline parts and stay 404 here.
 func (p *mailPreviewRoutes) servePart(w http.ResponseWriter, r *http.Request, token string, idx int) {
 	g, ok := p.tokens.lookup(token)
-	if !ok || idx >= len(g.Inline) {
+	if !ok {
 		mailPreviewNotFound(w)
 		return
 	}
-	part := g.Inline[idx]
+	if grantKindOf(g) == mailPreviewKindSignature {
+		mailPreviewNotFound(w)
+		return
+	}
+	client := p.api.mailPairClient(w, g.AgentID, g.WorkspaceID)
+	if client == nil {
+		return
+	}
+	v, handled := mailBudgetWrap(p.api, w, r, g.AgentID, g.WorkspaceID, client, "open",
+		map[string]any{"folder": g.Folder, "ref": g.Ref, "part": idx}, func(c context.Context) (*email.MailView, error) {
+			return client.ReadView(c, g.Folder, g.Ref)
+		})
+	if handled {
+		return
+	}
+	if mailViewHidden(v) || idx >= len(v.Inline) {
+		mailPreviewNotFound(w)
+		return
+	}
+	part := v.Inline[idx]
 	if mt, _, perr := mime.ParseMediaType(part.ContentType); perr != nil || !strings.HasPrefix(mt, "image/") {
 		mailPreviewNotFound(w)
 		return
 	}
 	if len(part.Data) == 0 {
-		// Round-8 F7: an inline part whose bytes are absent at mint (over
+		// Round-8 F7: an inline part whose bytes are absent at fetch (over
 		// the 25 MiB per-part fetch cap, or a decode failure at view time —
-		// the transport leaves Data nil and the mint boundary carries that
+		// the transport leaves Data nil and the serve boundary carries that
 		// as empty Data) must refuse like the attachment download
 		// (rest_mail_read.go's 413), never serve 200 with zero bytes — a
 		// broken image indistinguishable from a corrupt one.
