@@ -469,3 +469,122 @@ Every scenario carries its category (Happy / Alternate / Error / Edge) and trace
 - **When** each mutation is applied alone and its named test runs
 - **Then** the test fails; restoring the code returns it to green
 - **But** any mutation whose test still passes is a CHECK BLOCK naming both
+
+---
+
+## 6. TDD plan (tests designed before implementation)
+
+Naming conventions observed in this tree: Go RED files carry a `_red_test.go` suffix (e.g. `pkg/email/mail_budget_red_test.go`); frontend component tests are `*.test.tsx`; Playwright specs are `*.spec.ts` assigned to exactly one shard in `tests/e2e/shards.json`. All filenames below are **assignments** (the ADR leaves exact test filenames to this spec), and all are **test files** — the proof package writes nothing else. Every test is derived from the ADR's design rules, never from an implementation's current behaviour: a test whose expectation was read off the code it tests is an oracle violation, not a proof.
+
+### 6.1 The instrument, specified first
+
+**Problem:** mail operations are timed nowhere (§2.1) — not in the gateway log (failure counts only), not in tool results, not in the SPA. A measured comparison needs one record per operation, emitted by production code, with fields that cannot leak content.
+
+**Record shape (normative — production owners W1/W2/W4 implement; W0 contracts nothing here, this is in-process/structured-log, not wire):**
+
+| Field | Type | Rule |
+|---|---|---|
+| `operation` | closed enum | `folders`, `list`, `open`, `summary`, `discovery`, `attachment_metadata`, `attachment_read`, `attachment_save`, `seen` |
+| `pair_ref` | opaque string | The pair's opaque id + its configuration/folder-mapping generation. Never an email address, host:port with username, or folder name |
+| `source` | enum | `live` \| `memory` \| `encrypted_disk` \| `none` — mirrors the contract's `MailReadMetadata` source vocabulary |
+| `hit` | bool | Cache hit (`true`) or miss (`false`); a hit never dialed |
+| `duration_ms` | int | Operation end-to-end; > 0 on completion |
+| `acquire_wait_ms` | int | Queue/acquisition time inside the read budget — the 5 s wait is measured here, not inferred |
+| `socket_count` | int | Sockets/leases this operation used (0 for cache hits) |
+| `outcome` | enum | `ok` or a safe failure class from the existing closed class set — never a raw upstream error string |
+| `rows` | optional int | Row/message count where meaningful |
+| `revision` | optional opaque string | The publication revision the read captured — makes a superseded-publish diagnosable from receipts |
+
+**Emission rules:** emitted on **success and failure** alike (the inverse of today's failure-only logging); one record per operation; delivered through an injected sink interface (tests inject a recording sink) and mirrored to the structured gateway log under a dedicated message key so measurement receipts are auditable from logs. No new polling, no sampling timer — the record is written when the operation ends.
+
+**Instrument truth tests — what a test must prove so a silent instrument cannot produce a false green:**
+
+| Order | Test name | Level | Traces to BDD | What it proves |
+|---|---|---|---|---|
+| 1 | `TestMailInstrument_SuccessPathEmitsRecord` | `startMemIMAP` + injected sink | B-P1 | The success-path gap is closed: an open (and each other operation) emits exactly one complete record — the test fails today's failure-only logging shape by construction |
+| 2 | `TestMailInstrument_NoSensitiveMarkers` | Unit (sink capture) | B-P2 | With marker subject/address/folder fixtures, zero markers in any field; the positive control asserts the markers ARE in the mail data, proving the scan works (trap 8 of the false-green doc: a probe without a control proves nothing) |
+| 3 | `TestMailInstrument_HitMissLabels` | `startMemIMAP` + warm cache | B-P1, (MC-P3) | Cache hit → `hit=true`, non-live source, `socket_count=0`; miss → `hit=false`, `source=live`, `socket_count≥1` |
+| 4 | `TestMailInstrument_SocketCounterAgreement` | `startMemIMAP` (counter) | (MC-P4) | The records' socket acquisitions sum to the server's accepted-connection delta — the instrument agrees with an independent counter |
+| 5 | `TestMailInstrument_DurationReflectsInjectedDelay` | `startMemIMAP` (fault hold) | (MC-P1) | A scripted 2 s server hold appears in `duration_ms` within tolerance — the field measures the operation, not a constant |
+| 6 | `TestMailInstrument_DisabledProducesNoRecords_AndMeasurementRejects` | Unit + harness rule | (US-P1 AC-6) | Sink absent → no records; the measurement harness treats zero records for an exercised operation as an invalid run |
+
+### 6.2 Runtime tests (pool, leases, coalescing, publication)
+
+Harness note: `startMemIMAP` restores the `imapDial` seam and its dial seam is global — runtime tests must not run in parallel (existing test-suite constraint, verified file). A **test-only** fault-injection wrapper is added — proposed `pkg/email/imapserver_faults_test.go` — providing scripted command holds, stalled greeting/TLS/login, BYE injection, connection-limit replies and per-pair result markers. It is test code only; no production flag, hook or branch may exist for it (repo integrity rule).
+
+| Order | Test name (file) | Level | Traces to BDD | What it proves |
+|---|---|---|---|---|
+| 7 | `TestPoolCaps_TwoPerMailboxEightGlobalUnderConcurrency` (`pkg/email/pool_caps_red_test.go`) | `startMemIMAP` + faults | B-P3, (MC-P5) | 13 pairs × concurrent panel/watcher/tool work: accepted-connection counter never exceeds 2/mailbox or 8/global, **counting connecting reservations**; the counter — not returned rows — is the oracle |
+| 8 | `TestPoolCeiling_TypedBusyNoNinthDial` (same file) | `startMemIMAP` + faults | B-P3 | Eight stalled leases + a connecting reservation → the ninth request gets typed `pool_busy` within the 5 s wait; server counter shows no ninth dial |
+| 9 | `TestPoolLease_ExclusiveFolderState` (`pkg/email/pool_lease_red_test.go`) | `startMemIMAP` + faults | B-P4 | Concurrent different-folder readers with a mid-command hold see only their own folder's markers; PEEK preserves `\Seen`; no release/eviction EXPUNGEs |
+| 10 | `TestPoolPoison_RetiredNotReused` (`pkg/email/pool_poison_red_test.go`) | `startMemIMAP` + faults | B-P5 | BYE / timeout / cancelled command / protocol error each retire the session; next operation dials fresh (login count); 20 cycles show bounded goroutine trend and no reuse |
+| 11 | `TestPoolPresence_LastObserverReleases` (`pkg/email/pool_presence_red_test.go`) | `startMemIMAP` + faults | B-P6 | Close frame / silent disconnect / logout / workspace exit each return panel sockets to zero; the in-flight watcher cycle and agent read complete; a detached flight never restores retention |
+| 12 | `TestPoolCancel_ReleasesEveryReservation` (same file) | `startMemIMAP` | B-P7 | Cancelling the only waiter frees the global reservation, account slot and mailbox lease before returning; late detached completion publishes only under the current revision |
+| 13 | `TestCoalescingIdentity_SameAccountDifferentMapping` (`pkg/email/coalescing_identity_red_test.go`) | `startMemIMAP` + faults | B-P8 | I-01, case 1: per-pair Sent markers stay separate; account gate still bounds dials at 2 |
+| 14 | `TestCoalescingIdentity_OldGenerationNeverJoined` (same file) | `startMemIMAP` + faults | B-P9 | I-01, case 2: new generation never joins/receives the old flight; old flight publishes nothing for the new generation; a joiner's cancel harms no survivor |
+| 15 | `TestPublicationRevision_SupersededReadPublishesNothing` (`pkg/email/publication_revision_red_test.go`) | `startMemIMAP` + faults | B-P10 | I-02 main case + siblings (cache-first overtaken; UIDVALIDITY mid-read; delayed frontend response with older `publication_revision` dropped) — memory, disk, timestamps, UI state all unchanged |
+| 16 | `TestPoolWarmReuse_LoginCountUnchanged` (`pkg/email/pool_caps_red_test.go`) | `startMemIMAP` | (MC-P5 converse) | The converse guard: a second read inside the idle window reuses the session (login count unchanged) — a pool that never reuses passes every cap test silently, so the reuse property needs its own test |
+| 17 | `TestWatcher_FairUnderOneStalledMailbox` (`pkg/email/watcher_fairness_red_test.go`) | `startMemIMAP` + faults | (US-P2 scope) | One mailbox stalls; the other twelve due cycles still progress under bounds; a skipped cycle leaves `last_success_at` unchanged (a skip is never "checked just now") |
+| 18 | `TestMailEndpoints_TypedBusyAndBackoffReasons` (`pkg/gateway/mail_busy_result_red_test.go`) | Integration (httptest) | B-P3 (wire) | The gateway maps an exhausted pool to the generated 503 with safe `reason=pool_busy` (and existing `busy`/`backoff`), upstream failure to 502 — the typed surface the SPA and Retry rules depend on |
+
+### 6.3 Cache tests (envelope, invalidation, bounds, exclusion)
+
+| Order | Test name (file) | Level | Traces to BDD | What it proves |
+|---|---|---|---|---|
+| 19 | `TestCacheEnvelope_RoundTripFreshNonce` (`pkg/email/cache_envelope_red_test.go`) | Unit | B-P11 | Write→read byte-faithful; AAD binding (purpose, schema version, pair, generation) verified — a file moved between pairs/purposes is rejected; fresh nonce per write (two writes of the same plaintext differ); keys obtained only via `Store.DeriveSubkey` purpose separation |
+| 20 | `TestCacheEnvelope_CorruptionRejectedNoSalvage` (same file) | Unit | B-P11 | Bit-flip / truncation / foreign key / wrong pair / schema mismatch → rejection + visible warning + live path + **no** `last_validated` advance; plaintext-salvage absence proven by marker scan with positive control |
+| 21 | `TestCacheEpoch_UIDValidityChangeDiscardsAll` (`pkg/email/cache_epoch_red_test.go`) | `startMemIMAP` + faults | B-P12 | Epoch change discards every cursor/row; old-ref exercise (read, mark-seen, attachment) refused pre-fetch **on the same selected lease**; the recreated-folder/UID-reuse case refuses; fresh refs work |
+| 22 | `TestCacheStale_LabelSurvivesFailedRefresh` (`pkg/email/cache_stale_red_test.go`) | `startMemIMAP` + faults | B-P13 | Rows past the 5-minute threshold render labelled stale; the single refresh failing keeps rows + visible error + Retry and never resets the timestamp |
+| 23 | `TestCacheBounds_FiftyHeadersFourMiB` (`pkg/email/cache_bounds_red_test.go`) | `startMemIMAP` | B-P14 | 500-message folder → exactly 50 reusable/role; active view doesn't grow the cache; search ran live (server command counters); 4 MiB overflow → visible cache-unavailable, no truncation/omission |
+| 24 | `TestCacheRetention_ThirtyMinutePostCloseDrop` (`pkg/email/cache_bounds_red_test.go`) | Unit (fake clock) | B-P14 | 30 fake-clock minutes after panel close → memory headers gone, zero IMAP commands during the drop; reopen inside 30 min retains |
+| 25 | `TestCacheExclusion_GitStatusAndArchiveUnchanged` (`pkg/gateway/mail_cache_exclusion_red_test.go`) | Integration | B-P15 | Cache write → data-folder `git status --porcelain` unchanged, staging set unchanged, `createTarGz` archive contains no cache member; positive control (allowed state file) IS staged/archived. **Stays red until W4 lands the exclusion and traces the real autocommit job — that red is the activation gate, never skipped** |
+
+### 6.4 Feature tests (F1–F7 journeys and the grill corrections)
+
+| Order | Test name (file) | Level | Traces to BDD | What it proves |
+|---|---|---|---|---|
+| 26 | `TestTemporaryOpen_WritesNothing` (`pkg/gateway/mail_preview_nowrite_red_test.go`) | Integration + fs snapshot | B-P16 | Every renderable kind opened then dismissed by all five exit paths → filesystem + Git status identical; mid-stream close and mid-preview mailbox removal included; token dead after exit; positive-control Save shows exactly one write; `Cache-Control: no-store` asserted; today's 15-minute body retention in `mail_preview_token.go` must be gone (its retention test, if any remains, must fail) |
+| 27 | `TestTemporarySource_ResourcePolicyRefusals` (`src/components/library/preview/__tests__/mailAttachmentPreviewSource.test.tsx`) | Component (request counter) | B-P17 | I-04: zero requests for same-origin Library/API, workspace embed, remote; own minted resources load; workspace-file positive control fires the counter; ordinary workspace rendering unchanged |
+| 28 | `TestAttachmentSave_ConfinedSanitizedUnique` (`pkg/mailattachment/service_red_test.go` — via the W7 service's test pack) | Integration | B-P18 | Hostile names sanitized + numbered unique under the authorized hierarchy; escape attempts (symlink, mount, parent-file conflict) refused visibly with zero partial files; concurrent panel+agent saves produce two files; exact-bytes positive control; over-cap refuse before any write |
+| 29 | `TestAgentSaveAsk_ShippedDefaultAndModes` (`pkg/tools/email_attachments_ask_red_test.go`) | Unit + Integration | B-P19 | Shipped ceiling literal allow/allow/ask; Reconcile adds missing keys without overwriting operator values; effective policy per role matches `read_message` grants + ask; declined approval → zero transfer/write; Auto-on rides the existing workspace-path conditional class (Q4=A); per-agent allow never loosens global ask; result carries the real absolute path |
+| 30 | `TestReplyAll_ExactRecipientSet` (`pkg/email/reply_recipients_red_test.go` + `src/components/workspaces/mail/__tests__/MailComposeDialog.reply.test.tsx`) | Unit + Component | B-P20 | One shared helper yields the exact fixture set on the final payload shape (backend) and the compose dialog renders/consumes it without a second algorithm (frontend); plain Reply = To only; quote editable/escaped; stale context can't overwrite another compose |
+| 31 | `TestMailCSS_SafeStylesSurviveUnsafeRemoved` (`pkg/email/mailhtml/sanitize_red_test.go` + `mail-html-styling.spec.ts` browser assertions) | Unit + E2E | B-P21 | Computed style keeps safe colour/font/table/media-query presentation; scripts/handlers/forms/`@import`/remote `url()`/`position:fixed`/`expression()` → zero effects, zero default remote loads (controlled endpoints + uncontained positive control); Load-images only via token-scoped proxy after consent; stripped fallback readable |
+| 32 | `TestMailDate_MissingNeverYearOne` (`pkg/email/mail_date_red_test.go` + `src/components/workspaces/mail/__tests__/mail-format.date.test.tsx`) | Unit + Component | B-P22 | Precedence Date → internal date → null; **No date** in list, detail, Sent, attribution; never year one/epoch/today; list/detail agree; the generated `date` field is required-but-nullable (a Go zero date serialization fails this) |
+| 33 | `TestAttachmentRef_JourneyWithoutMessageID` (`pkg/tools/email_attachments_ref_red_test.go`) | `startMemIMAP` + tools | (MC-P26) | I-03: chain read_message → list → read → download using only returned refs on a Message-ID-less message; wrong-pair / old-generation / old-epoch refs each refused pre-fetch on the acting lease; no test-fabricated refs, no UI side channel |
+| 34 | `TestPreviewBytePath_CapAndDownloadSplit` (`pkg/gateway/mail_byte_paths_red_test.go`) | Integration | (MC-P19/21 wire) | I-05: preview-purpose endpoint refuses actual over-cap bytes even when reported metadata lies (below/at/above `maxViewPartBytes` dataset); the browser-Download path streams the same larger part to completion; a mid-stream disconnect/decode failure never satisfies a success assertion on either path |
+| 35 | `TestHandoff_FocusAnnouncementKeyboard` (`tests/e2e/mail-attachment-handoff.spec.ts`) | E2E | (MC-P29, I-06) | Keyboard-only Open → viewer → Save (success and failure) → Back; focus lands on the trusted context heading, returns to the originating action or the defined fallback with announcements; context bar reachable at 320 px and 200 % zoom; disabled actions carry the accessible "Save to Library first" explanation |
+| 36 | `TestPaperclip_MetadataOnlyIndicator` (`pkg/email/attachment_flag_red_test.go`) | `startMemIMAP` (command capture) | (MC-P21 scope) | F7: `has_attachments` derived from structure metadata — command capture proves no body bytes fetched and no `\Seen` change; CID-only and draft-marker parts produce false; a genuine `message.md` produces true; unavailable part still true; unclassifiable metadata is a visible failure, never fabricated false |
+
+### 6.5 E2E additions
+
+| Order | Test name (file) | Level | Traces to BDD | What it proves |
+|---|---|---|---|---|
+| 37 | `tests/e2e/mail-live-access.spec.ts` — full panel journey against the fake IMAP server via the `GatewayProcess` fixture (own port, own `OMNIPUS_HOME`) | E2E | B-P1, B-P13, B-P23 | Cached-first display then live refresh as separate visible phases; stale label + Retry; busy result surfaces; folder rail with counts; assigned to exactly one shard in `tests/e2e/shards.json` (`scripts/e2e-shards.sh check` enforces) |
+| 38 | `tests/e2e/mail-attachment-handoff.spec.ts` (T35) + `tests/e2e/mail-temporary-open.spec.ts` — Open/Back/Save/Open-in-Library, no-write browser check | E2E | B-P16, B-P18 | The user journeys in a real browser: Open renders via the Library viewer, Save lands and enables Open in Library, Download stays a browser download; the no-write claim re-verified at the process level (fixture workspace sweep) |
+
+### 6.6 Test datasets
+
+| Dataset | Rows (boundary → edge → error → happy) | Traces to |
+|---|---|---|
+| DS-P1 Instrument fixtures | marker subject/address/folder strings (positive control present in mail data, absent in records); operations: folders, list, open, summary, discovery, attachment_metadata/read/save, seen; success + one safe-class failure per operation; disabled sink | B-P1, B-P2 |
+| DS-P2 Concurrency shapes | 13 pairs × {panel, watcher, tool} reads; 8 stalled leases + 1 connecting reservation; 9th demand; two pairs one account (different Sent mappings); old-generation flight + reconfigured joiner; cancelled only-waiter; detached late completion | B-P3…B-P10 |
+| DS-P3 Poison/lease faults | server BYE; command timeout; cancelled command; protocol error; stalled greeting; stalled TLS/login; stalled SELECT; concurrent different-folder readers with mid-command hold; PEEK flag assertions | B-P4, B-P5 |
+| DS-P4 Envelope corruption | valid round-trip; bit-flip; truncation; foreign-purpose key; wrong-pair AAD; schema mismatch; oversized envelope (> allocation guard); same-plaintext-twice (nonce check); file moved between pairs | B-P11 |
+| DS-P5 Size/epoch boundaries | part bytes at `maxViewPartBytes - 1`, exactly, `+1`; false reported size (metadata lies, actual over/under); unknown size; encoded-vs-decoded inflation; UIDVALIDITY changed with numeric UID reused; UIDVALIDITY unchanged control | B-P12, T34 |
+| DS-P6 Save names | `a/b.txt`, `..`, `.`, control-char name, `CON`/`NUL` (Windows-invalid), existing name, case-folded collision, unicode name, empty-after-sanitize (→ `attachment`), concurrent same-name saves, symlink parent, mount-redirect parent, disk-full | B-P18 |
+| DS-P7 Reply fixtures | From A / Reply-To R / To = self+X+dup-R / Cc = Y+mixed-case-X+self+display-name-dup-R / hidden Bcc; self-is-primary; no eligible primary; already-`Re:` subject; text-only and HTML-only bodies | B-P20 |
+| DS-P8 Style/date fixtures | safe colour/font/table/media-query mail; each banned construct in isolation (`position:fixed`, `expression()`, `@import`, remote `url()`, handlers, forms); stripped-style fallback content; dates: valid Date ≠ received, no Date + internal date, neither, unparsable, zero | B-P21, B-P22 |
+
+### 6.7 Regression impact
+
+Existing behaviour the change must preserve, with the existing tests that guard it — all must keep passing **unchanged** (weakening any of them is a CHECK BLOCK):
+
+| Existing test / behaviour | Why it must survive |
+|---|---|
+| `pkg/email/view_missing_folder_test.go::TestFolderCounts_MissingSentFolderStillOpensMailbox`, `::TestFolderCounts_MissingDraftsFolderStillOpensMailbox`, `::TestFolderCounts_CancelledRequestStillFails` | The hotfix's count-path behaviour; the new discovery/page negative controls extend, never replace, them |
+| `pkg/email/imap_peek_red_test.go`, `pkg/email/imapserver_test.go` | PEEK-only fetch discipline and the real-protocol harness itself |
+| `pkg/email/mail_budget_red_test.go`, `pkg/email/mail_budget_failopen_red_test.go` | Existing two-slot account budget and coalescing behaviour that the new identity layers beneath — not replaces |
+| `pkg/email/watcher_backoff_red_test.go`, `pkg/email/watcher_budget_red_test.go`, `pkg/email/watcher_flags_red_test.go`, `pkg/email/watcher_state_test.go` | Watcher independence: backoff shape (±20 % jitter), budget participation, no flag mutation, saved-state honesty |
+| `pkg/email/dial_timeout_classification_test.go`, `pkg/email/append_timeout_red_test.go` | The 30 s dial / 45 s command bounds and timeout classification the pool must respect as subordinate bounds |
+| `pkg/email/compose_readback_signature_test.go`, `pkg/email/decode_test.go`, `pkg/email/view_test.go` | Compose/decode/view behaviour outside this change's scope |
+| Frontend: existing `MailPanel`/`mail-format`/query-client suites | The panel's current contracts (retry asymmetry, 30 s refetch while mounted) until W3's event-driven refresh lands — then the new tests replace the timer assertions deliberately, never silently |
