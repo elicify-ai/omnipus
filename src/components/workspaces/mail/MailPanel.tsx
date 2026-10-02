@@ -1287,7 +1287,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                 ) : (
                   <>
                     {messagesQuery.isPending && (
-                      <div className="flex-1 p-[var(--space-3)]" data-testid="mail-list-loading">
+                      <div className="flex-1 p-[var(--space-3)]" data-testid="mail-list-loading" aria-label="Loading messages">
                         <ListSkeleton />
                       </div>
                     )}
