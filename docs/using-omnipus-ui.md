@@ -74,6 +74,17 @@ While a turn is running, the message box stays yours:
 | **Stop** or **Escape** | Asks the agent to halt. The button shows a stopping state, then the turn ends as cancelled. |
 | Activity pill | Below the message box: shows running background work. Select it to open the Activity panel with running and finished items, including any that failed. |
 
+### Stop and redirect commands
+
+Two slash commands in the message box control a running turn directly:
+
+| Command | Where it works | What it does |
+|---|---|---|
+| `/stop` | Any chat | Stops only this conversation's current turn — the same as one press of **Stop**. It never stops other sessions or their turns. |
+| `/stop-redirect <instruction>` | A helper's chat (a delegated agent's own conversation) | Stops that helper's current turn and continues it with your instruction — for example `/stop-redirect focus on the failing tests`. The helper's own chat is what redirects that helper. |
+
+In any other chat — a new conversation, a root conversation, a task or channel — `/stop-redirect` refuses with guidance to open the helper session you want to redirect, and points at `/stop` for the current one. `/stop-redirect` without an instruction (or with only spaces) replies with usage and changes nothing. The instruction is sent as typed after the command, and it is required. If the connection is down, the redirect cannot be sent: a visible error says so, the helper's turn keeps running, and you can run the command again once you are reconnected.
+
 ### If the first message loses its connection
 
 Your first message is kept in the open tab while Omnipus checks delivery. If loading a saved chat's history fails, the message list may temporarily show **Could not load messages.** instead; select that screen's **Retry** to reload the history. Reconnecting does not resend the message automatically. **Retry** is available only while connected; delivery Retry uses the original message and delivery ID, not the current agent, model, attachment or Auto-approve choices.
