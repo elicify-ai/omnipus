@@ -1360,3 +1360,110 @@ management uses the existing panel-shell focus utilities (`src/components/panel-
 where applicable rather than bespoke focus code.
 
 ---
+## 13. User-facing documentation TODOs (same change, drafted by the implementing lead, audited by docs-verifier)
+
+| Page | Section | What must be said |
+|---|---|---|
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/mail.md` | *Reading mail* (or equivalent) | Cached rows appear instantly and are labelled with when they were last checked; the panel checks the server once when you open a folder, switch folders, press Refresh, or act on a message; closing the panel stops all checking. Stale rows stay visible with their age while a check runs, and a failed check says so with Retry. |
+| `docs/mail.md` | *Folders* | Inbox/Sent/Drafts are roles; Omnipus finds the real folders automatically; you can set exact names per mailbox in Connectors (empty = automatic). A folder the server truly doesn't have shows as empty with an explanation; one we couldn't confirm shows "couldn't confirm" and the setting prompt — not "no such folder". |
+| `docs/mail.md` | *Long folders* | 25 rows per page; Load more adds 25; the view caps at the newest 200 per folder; Search finds older messages live on the server — there is no offline copy of your mailbox. |
+| `docs/mail.md` | *Attachments* | The paperclip marks messages with attachments; Open previews in the Library viewer without saving anything (context bar "From mail: <subject>", Back to mail, Save to Library); over 25 MB only Download works; a saved file lands in mail → mailbox → month with a numbered name if one exists; if a save's result is lost the panel says "result unknown" and an explicit retry resolves it without duplicating. |
+| `docs/mail.md` | *If something goes wrong* | Busy vs connection-limit vs backoff copies (S-9); "This message changed or was deleted"; cache-unavailable notice; unknown counts show "—". |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/library.md` | *Preview / Mail attachments* | Opening from mail is temporary: no file, no path, vanishes on exit/reload; stored-file actions explain "Save to Library first"; saved mail-derived HTML keeps original bytes, renders scripts-off with a per-file "Allow scripts" checkbox (that file only). |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/connectors.md` | *Email mailbox settings* | Sent/Drafts folder names: empty = automatic (we discover), a value = use exactly this folder; a name we can't find warns in settings; legacy saved names stay until you clear them. |
+
+Dependency note: the `docs/mail.md` attachment wording and the `docs/library.md` saved-HTML wording
+depend on the cache-and-provenance work's landed proof (W7's marker survival, W0's generated fields);
+docs-verifier audits them against executed behaviour before landing, per the root Definition of Done.
+
+## 14. Holdout evaluation scenarios (post-implementation only; excluded from §8 and §10)
+
+Evaluated by a human or an external script against a built instance — not referenced by any development
+test:
+
+1. *(Happy)* Open Mail on a warm mailbox, then pull the network cable; the panel shows rows with their
+   checked time and a clear "couldn't refresh" — nothing spins, nothing claims freshness.
+2. *(Happy)* In a 300-message folder, click Load more six times; the eighth attempt is impossible; search
+   for a message you know is old; it appears; press "Back to Inbox"; the newest 200 are still there.
+3. *(Happy)* Open an attachment, save it, reopen it from the Library; it is a real file with a real name
+   in mail → mailbox → month.
+4. *(Error)* Delete a message in another mail client, click its stale row in Omnipus; the panel says it
+   changed or was deleted — it does not open something else silently.
+5. *(Error)* Point a saved mail attachment's markdown at a Library file path you own; no request for it
+   leaves the browser (browser dev tools network tab as the oracle).
+6. *(Edge)* Open Mail in two tabs, close one; the other keeps working; a gateway operator observing
+   sockets sees retention match the surviving tab only.
+7. *(Edge)* Set your Sent folder name to something your server doesn't have; the panel tells you it
+   couldn't confirm it and points at the setting — it never shows an empty folder or an error.
+
+## 15. Assumptions (explicit, challengeable)
+
+- **A-1**: The gateway's generated `MailReadMetadata` rides the existing 200 responses (no new endpoint
+  for cached reads) — the ADR's `mode` parameter proposal, assumed unchanged by W0.
+- **A-2**: `observer_id` is generated client-side per panel instance (`crypto.randomUUID()`), opaque to
+  the gateway's authorization logic (identity = authenticated connection). Authorization for mailbox
+  work stays exactly where it is today (pair + session); presence never grants anything.
+- **A-3**: Each browser tab runs its own `WsConnection`, so "several tabs" means several authenticated
+  connections, each with its own observers (consistent with the existing per-tab socket and the
+  cross-tab duplicate-panel prevention in `src/lib/panelTabPresence.ts`, which stays browser-local).
+- **A-4**: The summary endpoint's 30-second SPA poll is untouched this phase (saved-state only).
+- **A-5**: Search matching fields are SUBJECT + FROM/TO substring (IMAP-native header fields), defined
+  here as the recommendation in §16 Q1; W0's contract text is authoritative once landed.
+- **A-6**: The existing `retry=true` wire marker keeps its current meaning (bypass backoff only) —
+  verified in `src/lib/api/mail.ts::retryQs` and the gateway's budget wrapper; this spec adds nothing to
+  it.
+- **A-7**: qa-lead, not the implementer, rewrites the retired D25 oracle tests (frontend rules; §8.8).
+
+## 16. Open questions (options + recommendation; answers go to team-lead, not silent choices)
+
+**Q1 — Search matching fields.** Context: the ADR requires "exact supported matching fields and limits"
+in the revised spec, and forbids promising full-text/offline search. Options: (A) SUBJECT + FROM/TO
+substring, server-side IMAP header search — matches the panel's mental model ("find that message from
+that person"), no body exposure, cheap to bound; (B) SUBJECT only — smallest surface but fails the
+common "who sent this?" case; (C) defer search and ship the dead-end — forbidden by the dispatch.
+**Recommendation: A**, with the empty-query and over-long-query bounds in W0's schema.
+
+**Q2 — Freshness line placement.** Context: every list needs the label; the rail also shows counts.
+Options: (A) one status line above the list + rail count markers, per-folder; (B) per-row badges —
+noisy and duplicative. **Recommendation: A** (matches §11's S-3..S-6 pins).
+
+**Q3 — Search view model.** Options: (A) search results replace the list with a "Back to <folder>"
+exit, browse rows preserved underneath (what §7 3.3 pins); (B) append results to the browse list —
+conflates sources and breaks the ceiling discipline. **Recommendation: A.**
+
+**Q4 — Observer id on workspace switch.** Options: (A) close old + open new with fresh ids (what §7 5.2
+pins); (B) one observer per panel instance forever — leaks across workspaces and complicates the
+gateway's per-workspace retention. **Recommendation: A.**
+
+**Q5 — Panel search input vs the agent's `search_email` tool.** The panel control is folder-scoped UI
+over the new REST search param; the agent tool is unchanged. No shared client code beyond the generated
+types. Stated to pre-empt a "reuse the tool" misread; no decision needed from the founder.
+
+## 17. Reachability — Definition of Done (the two never-merged lines)
+
+**Code correct and tested** — evidence required before this line may be stated:
+- Every test file in §8 exists, ran red on the pre-change code (tests-only commit through CI, or the
+  single dispatcher-owned narrow local run the root rules permit) and green after; qa-lead's independent
+  CHECK (mutation audit) passed on the panel suites; the §8.7 counterexample mutations were each shown
+  to kill at least one test.
+- `npm run typecheck` green (the only meaningful TS gate); `npm run lint:design-system-locks` green for
+  the touched trees; generated-types only — `make verify-contracts` green proves no hand-written wire
+  type slipped in.
+- The D25-era oracle rewrites (§8.8) landed through qa-lead with citations to this spec.
+
+**Reachable by a user/agent** — evidence required before this line may be stated:
+- A real user opening the built SPA reaches every §11 state through real clicks: cached-then-live open,
+  paging to 200 and search (E2), attachment Open → Library viewer → Back/Save (E3), the scripts-off
+  saved HTML (E3 leg), Refresh/Retry/Busy (E1) — executed, with screenshots, not written-only plans.
+- No new tool registration is implicated (this package is panel UI; the Hard Constraint #6 catalog check
+  applies to W10's tools, not here) — stated so the check is not silently skipped: the reachable-by-an-
+  agent half of this feature lives in W3's sibling packages and their own DoD.
+- The §13 documentation pages updated in the same change and audited by docs-verifier against the
+  executed behaviour; `docs/mail.md` and `docs/library.md` claims match what a user actually sees.
+- Presence verified end-to-end on the real socket (E5): open/close/reconnect/logout observed from the
+  gateway side, not only the SPA's send calls.
+
+---
+
+*Spec ends. Prepared by the architect for team-lead's grill dispatch; nothing in this file is
+implementation approval.*
