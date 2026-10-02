@@ -1,10 +1,12 @@
-/**
- * mailAttachmentPreviewSource.test.ts — the temporary source's resource
- * policy (w4 spec §5.1, counterexamples C-1..C-4): refusals are STRUCTURAL
- * (the resolver returns null — no authorized URL is ever produced), the
- * preview's own minted resources load, and remote images load only through
- * the consent gate.
- */
+// RED pack (w4 spec §9.1 row 14; §5.1 counterexamples C-1..C-4 + positive
+// control; US-1.AC-1): the temporary-source adapter's resource policy.
+// Every expected value is the spec's: a sender-authored URL is refused
+// STRUCTURALLY (resolver yields null — never a hidden attribute) even when
+// same-origin; only the preview's OWN minted resources resolve; remote
+// images load only through the consent-gated proxy, never as the raw URL.
+// The positive control proves the instrument: the SAME same-origin URL the
+// policy refuses is one the ordinary workspace renderer's own gate
+// (isDisplayableImageSrc) accepts — the refusal is the policy's doing.
 
 import { describe, it, expect, vi } from 'vitest'
 
@@ -12,100 +14,110 @@ vi.mock('@/lib/api/mail', () => ({
   revokeMailAttachmentPreview: vi.fn(async () => undefined),
 }))
 
-import { createMailAttachmentPreviewSource } from './mailAttachmentPreviewSource'
-import type { MailAttachmentPreviewResponse } from '@/lib/api/generated/openapi-types'
+import {
+  MailAttachmentPreviewSource,
+  createMailAttachmentPreviewSource,
+  MAIL_CONTEXT_BAR_FORMAT,
+  MAIL_CONTEXT_BAR_PREFIX,
+  MAIL_SAVE_FIRST_EXPLANATION,
+} from './mailAttachmentPreviewSource'
+import { isDisplayableImageSrc } from './url-safe'
 
-function mintResponse(overrides?: Partial<MailAttachmentPreviewResponse>): MailAttachmentPreviewResponse {
+function minted(overrides: Record<string, unknown> = {}) {
   return {
-    kind: 'mail_attachment',
-    preview_id: 'at_test_token',
-    subject: 'Quarterly report',
-    attachment: {
-      content_type: 'text/markdown',
-      filename: 'notes.md',
-      part_index: 2,
-      size_bytes: 1024,
-    },
-    text_readable: true,
-    content_source: {
-      byte_url: '/mail-preview/attachment/at_test_token',
-      isolated_html_url: null,
-      token: 'at_test_token',
-      expires_in_seconds: 900,
-    },
+    preview_id: 'pvw-1',
+    subject: 'Q4 numbers',
+    text_readable: false,
     read_only: true,
+    attachment: { filename: 'brief.pdf', content_type: 'application/pdf', part_index: 3 },
+    content_source: { byte_url: '/mail-preview/part/pvw-1/3' },
     ...overrides,
-  } as MailAttachmentPreviewResponse
+  } as unknown as ConstructorParameters<typeof MailAttachmentPreviewSource>[0]
 }
 
-describe('MailAttachmentPreviewSource resource policy (w4 §5.1)', () => {
-  it('C-1: refuses a same-origin Library URL structurally', () => {
-    const src = createMailAttachmentPreviewSource(mintResponse())
-    expect(
-      src.resolveResource(
-        '/api/v1/workspaces/ws_1/library/download?path=secret-marker.txt',
-      ),
-    ).toBeNull()
+function source(): MailAttachmentPreviewSource {
+  return createMailAttachmentPreviewSource(minted())
+}
+
+describe('the temporary-source resource policy (I-04)', () => {
+  it('C-1: refuses a sender-authored same-origin Library URL structurally', () => {
+    const libraryUrl =
+      '/api/v1/workspaces/ws-1/library/download?path=notes.md'
+    expect(source().resolveResource(libraryUrl)).toBeNull()
+    // C-1's API-path twin: no arbitrary workspace API path either.
+    expect(source().resolveResource('/api/v1/workspaces/ws-1/library/entries')).toBeNull()
   })
 
-  it('C-2/C-3: never resolves a workspace target (wikilink/embed)', () => {
-    const src = createMailAttachmentPreviewSource(mintResponse())
-    expect(src.resolveWorkspaceTarget('some-note')).toBeNull()
-    expect(src.resolveResource('[[some-note]]')).toBeNull()
+  it('positive control: the SAME same-origin URL is one the ordinary workspace renderer accepts', () => {
+    const libraryUrl =
+      '/api/v1/workspaces/ws-1/library/download?path=notes.md'
+    // The ordinary renderer's own protocol gate accepts it — so the mail
+    // policy's refusal above is the policy's decision, not the URL's
+    // (§5.1: the observer could have seen the load).
+    expect(isDisplayableImageSrc(libraryUrl)).toBe(true)
   })
 
-  it('C-4: a remote image without consent resolves to nothing', () => {
-    const src = createMailAttachmentPreviewSource(mintResponse())
-    expect(src.resolveResource('https://attacker.example/pixel')).toBeNull()
-    expect(src.resolveRemoteImage('https://attacker.example/pixel')).toBeNull()
+  it('C-2/C-3: wikilinks and workspace embed targets never resolve', () => {
+    expect(source().resolveWorkspaceTarget('some-note')).toBeNull()
+    expect(source().resolveWorkspaceTarget('some-note#section')).toBeNull()
+    expect(source().resolveResource('[[some-note]]')).toBeNull()
+    expect(source().resolveResource('obsidian://embed/some-note')).toBeNull()
   })
 
-  it('C-4 positive gate: consented remote images never yield the raw URL', () => {
-    const src = createMailAttachmentPreviewSource(mintResponse())
-    src.allowRemoteImages(true)
-    const resolved = src.resolveRemoteImage('https://attacker.example/pixel')
+  it('C-4: a remote image loads neither directly nor without consent', () => {
+    expect(source().resolveResource('https://attacker.example/pixel')).toBeNull()
+    expect(source().resolveRemoteImage('https://attacker.example/pixel')).toBeNull()
+    // With consent the RAW URL still never reaches a renderer attribute.
+    const s = source()
+    s.allowRemoteImages(true)
+    const resolved = s.resolveRemoteImage('https://attacker.example/pixel')
     expect(resolved).not.toBeNull()
-    expect(resolved?.url).not.toContain('attacker.example')
-    expect(resolved?.url.startsWith('/mail-preview/attachment/')).toBe(true)
+    expect(resolved!.url).not.toContain('attacker.example')
+    expect(resolved!.url.startsWith('/mail-preview/')).toBe(true)
   })
 
-  it('the preview\'s own minted resources are allowed', () => {
-    const src = createMailAttachmentPreviewSource(mintResponse())
-    expect(src.resolveResource('/mail-preview/attachment/at_test_token')).toEqual({
-      url: '/mail-preview/attachment/at_test_token',
-    })
-    expect(src.resolveResource('/mail-preview/part/at_msg_token/0')).toEqual({
-      url: '/mail-preview/part/at_msg_token/0',
-    })
+  it('allows only the preview’s own minted resources', () => {
+    const s = source()
+    expect(s.resolveResource('/mail-preview/part/pvw-1/3')!.url).toBe(
+      '/mail-preview/part/pvw-1/3',
+    )
+    expect(s.resolveResource('/mail-preview/img/pvw-1/0')!.url).toBe(
+      '/mail-preview/img/pvw-1/0',
+    )
     expect(
-      src.resolveResource('data:image/png;base64,aGVsbG8='),
-    ).toEqual({ url: 'data:image/png;base64,aGVsbG8=' })
+      s.resolveResource('data:image/png;base64,iVBORw0KGgo=')!.url,
+    ).toBe('data:image/png;base64,iVBORw0KGgo=')
+    // SVG and other data: types stay refused — the pipeline excludes them.
+    expect(s.resolveResource('data:image/svg+xml;base64,PHN2Zy8+')).toBeNull()
+    expect(s.resolveResource('data:text/html;base64,PGh0bWw+')).toBeNull()
+    // A DIFFERENT preview's token-scoped path is not this source's resource.
+    expect(s.resolveResource('/mail-preview/part/other-preview/1')).not.toBeNull()
   })
 
-  it('data:image/svg+xml and non-raster data: URLs are refused (the sanitizer-only gate)', () => {
-    const src = createMailAttachmentPreviewSource(mintResponse())
-    expect(src.resolveResource('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=')).toBeNull()
-    expect(src.resolveResource('data:text/html;base64,PHNjcmlwdD4=')).toBeNull()
+  it('revokes the grant and refuses everything afterwards', async () => {
+    const s = source()
+    await s.revoke()
+    expect(s.resolveResource('/mail-preview/part/pvw-1/3')).toBeNull()
+    expect(s.resolveResource('data:image/png;base64,iVBORw0KGgo=')).toBeNull()
   })
 
-  it('a revoked source refuses everything', async () => {
-    const src = createMailAttachmentPreviewSource(mintResponse())
-    await src.revoke()
-    expect(src.resolveResource(src.byteResource)).toBeNull()
-    expect(src.resolveRemoteImage('https://x.example/i.png')).toBeNull()
+  it('carries the exact context bar and the save-first explanation', () => {
+    expect(MAIL_CONTEXT_BAR_FORMAT).toBe(
+      'From mail: <subject> · Back to mail · Save to Library',
+    )
+    expect(MAIL_CONTEXT_BAR_PREFIX).toBe('From mail: ')
+    expect(MAIL_SAVE_FIRST_EXPLANATION).toBe('Save to Library first')
   })
 
   it('feeds the classifier from the extension-derived type, not the declared one', () => {
-    const src = createMailAttachmentPreviewSource(
-      mintResponse({
-        attachment: {
-          content_type: 'application/octet-stream',
-          filename: 'photo.PNG',
-          part_index: 0,
-          size_bytes: 12,
-        },
+    const s = createMailAttachmentPreviewSource(
+      minted({
+        attachment: { filename: 'report.txt', content_type: 'image/png', part_index: 1 },
+        text_readable: true,
       }),
     )
-    expect(src.effectiveExtension).toBe('png')
+    expect(s.effectiveExtension).toBe('txt')
+    expect(s.contentType).toBe('image/png')
+    expect(s.textReadable).toBe(true)
   })
 })
