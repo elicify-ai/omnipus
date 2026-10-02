@@ -97,6 +97,7 @@ import {
   type MailOpenAttachmentOutcome,
   type MailReturnFocus,
 } from './mailAttachmentHandoff'
+import { MailAttachmentViewer } from './MailAttachmentViewer'
 import { ListPreviewLayout, ListPreviewRegion } from '@/components/panel-shell/ListPreviewLayout'
 import type { ListPreviewLayoutMode } from '@/components/panel-shell/ListPreviewLayout'
 import {
@@ -998,7 +999,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
   const [searchDraft, setSearchDraft] = useState('')
 
   return (
-    <div data-testid="mail-panel" className="flex h-full min-h-0 w-full flex-col bg-[var(--color-surface-0)]">
+    <div data-testid="mail-panel" className="relative flex h-full min-h-0 w-full flex-col bg-[var(--color-surface-0)]">
       <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
         <Select
           value={agentId ?? ''}
@@ -1571,6 +1572,14 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
         confirmLabel="Discard"
         destructive
         onConfirm={() => resolveMailDiscardConfirmDialog(true)}
+      />
+      {/* The temporary attachment viewer's fallback host: idle (renders
+          null) until an Open hands off and no other host owns the seam. */}
+      <MailAttachmentViewer
+        workspaceId={workspaceId}
+        agentId={agentId ?? ''}
+        folder={folder as 'inbox' | 'sent' | 'drafts'}
+        messageRef={selectedRef ?? ''}
       />
     </div>
   )
