@@ -546,16 +546,20 @@ Diagnostics must let an operator debug discovery and cache behaviour without eve
 1. **Given** any operation in this package (success, unknown, ambiguous, failure), **when** its diagnostics are written, **then** they carry only opaque pair/generation IDs, safe classes, durations and counts.
 2. **Given** a server error containing folder names or message data, **when** it is reduced at the boundary, **then** only the safe class survives into logs and state.
 
-### US-11 — Older messages are reachable through folder search (P1 — correction round; register row 4; founder Q-D=A)
+### US-11 — Older messages are reachable: cursor-based browse paging and folder search (P1 — correction round; register row 4 both halves; founder Q-D=A; round-2 CRIT-1 completes the browse half)
 
-A user browsing past the 200-row ceiling must be able to *reach* older messages, not just be told to search: the panel's search runs server-side inside the 25/200 bounds, matching subject and sender/recipient substrings, and never consults the header cache.
+A user browsing past the 200-row ceiling must be able to *reach* older messages — by Load-more under an issued browse cursor, not just by being told to search — and the panel's search must run server-side inside the 25/200 bounds, matching subject and sender/recipient substrings, never consulting the header cache. Both sequences get their cursors from the same `view.go` issuance (§3.13's scoping ruling); the legacy numeric paging fields are replaced atomically.
 
-**Independent test:** fake IMAP server with 300 messages; a subject-substring search returns 25-row pages under a cursor up to the 200 ceiling (`view_limit_reached` beyond); a sender-substring search finds messages the subject search misses; the header cache's stored rows are neither served from nor written to by any search.
+**Independent test:** fake IMAP server with 300 messages; the list browse returns 25-row pages under issued browse cursors up to the 200 ceiling (`view_limit_reached` beyond, no next cursor), with `has_more` reflecting the live sequence and never the 50-row cache window; a subject-substring search returns 25-row pages under search cursors to its own 200 ceiling; a sender-substring search finds messages the subject search misses; a browse cursor presented to the search sequence (or against another folder epoch/generation) gets the typed 409 stale-cursor reset; the header cache's rows are neither served from nor written to by any search or by any page past the cached window.
 
 1. **Given** messages whose subjects contain the query, **when** a folder search runs, **then** results come from a server-side IMAP SEARCH (SUBJECT header match), 25 per page under an issued cursor.
 2. **Given** a message whose sender (or recipient) matches while its subject does not, **when** a folder search runs on FROM/TO, **then** the message is found — sender/recipient substring matching is part of the decided surface.
 3. **Given** a search sequence that has delivered 200 rows, **when** the next page is requested, **then** `view_limit_reached` is reported with no next cursor and no auto-continuation.
 4. **Given** a cursor from another query, folder version or generation, **when** it is presented, **then** the typed 409 stale-cursor result requests one visible view reset — and zero search rows ever enter or leave the header cache.
+5. **Given** a folder with more than 25 messages, **when** the list's Load-more runs, **then** each page arrives under a browse cursor binding pair, generation, folder, folder epoch, `sequence=browse` and the delivered-row count — issued by this package, never by the gateway.
+6. **Given** a browse sequence past the cached newest-50 window, **when** the next page is requested, **then** the page runs live and `has_more`/ceiling reflect the live delivered count — the cache window neither ends the sequence early, nor fakes the ceiling, nor serves the page.
+7. **Given** a browse sequence that has delivered 200 rows, **when** Load-more runs, **then** `view_limit_reached=true` with no next browse cursor and the search remedy offered.
+8. **Given** a browse cursor presented after the folder's epoch changed (or under another generation, or a search cursor presented to the browse sequence), **when** it is presented, **then** the typed 409 stale-cursor result requests one visible view reset, and the legacy `truncated`/`next_before_uid` fields are never populated by the new path.
 
 ### US-12 — Attachments are read part-wise and flagged truthfully (P1 — correction round; register rows 14–15)
 
@@ -594,6 +598,16 @@ The measurement campaign (w6) can only judge what the emitters record: this pack
 
 1. **Given** a cache read or discovery operation, **when** it completes, **then** its instrument record carries W2's sub-fields per §3.17 and no sub-fields owned by w1/w5-integration are fabricated.
 2. **Given** an operation that joined a coalesced flight, **when** its record is written, **then** `socket_count=0` plus the shared-flight marker are recorded (the joiner rule), keeping the socket sum comparable to the server's connection counter.
+
+### US-16 — Every message shows its honest effective date (P1 — round-2 fix; IMP-3; the ADR's "Missing message date" row; founder #1175)
+
+A message whose Date header is missing, unparsable or zero must not render as `1 Jan 1`, the epoch, or today: the panel falls back to the server's received/internal date, and only when neither exists does it show "No date" — one normalized rule for list rows, detail, Sent display and reply attribution, with null surviving the cache untouched.
+
+**Independent test:** fixtures binding known times: a message with a valid Date header shows it; a message with a zero/unparsable Date but a known internal date shows the internal date; a message with neither shows null end-to-end (cache included) and never a zero time; the same precedence holds on the detail read and in reply attribution.
+
+1. **Given** a message with a valid, non-zero Date header, **when** its list row or detail renders, **then** the normalized value is that header date (RFC 3339).
+2. **Given** a message whose Date header is zero or unparsable but whose internal date exists, **when** any surface renders it, **then** the internal date is shown — no second fetch was issued to obtain it.
+3. **Given** a message with neither a usable Date header nor an internal date, **when** any surface renders it, **then** the value is null (the wire's "No date" state) — never `1 Jan 1`, never the epoch, never today — and the cached row preserves the null (CX-22).
 
 ---
 
