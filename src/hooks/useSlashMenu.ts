@@ -324,6 +324,207 @@ function rankByFilter<T>(items: T[], filter: string, getRank: (item: T, lowerFil
   return [...prefixMatches, ...substringMatches]
 }
 
+// Extracted from useSlashMenu (pure relocation, 2026-10-02): the D9 branches
+// grew the hook function past its grandfathered function-size ceiling
+// (scripts/budgets/functions.txt pins useSlashMenu). The body is
+// byte-identical to the pre-extraction nested function; the variables it
+// closed over are now passed explicitly as `deps`.
+// runClientCommand — shared handler for client-delivery slash commands.
+// Called both from palette selection (executeSlashCommand) and from the
+// send-path interception so that typing "/new"+Enter (or its legacy
+// alias "/clear"+Enter) converges with selecting /new from the palette —
+// both run client-side, never reaching the backend.
+//
+// `argument` carries the text after an argument-bearing client command's
+// label (D9 "/stop-redirect <instruction>"), already trimmed of the
+// separating whitespace by resolveClientCommand. '' for every bare
+// command.
+//
+// Returns true when the command was handled (caller must NOT send the
+// text), false when the name is not a known client command (caller
+// should fall through to inserting as text — Issue 3 fallback).
+interface ClientCommandDeps {
+  allCommands: SlashCommand[]
+  startNewSession: UseSlashMenuParams['startNewSession']
+  appendMessage: UseSlashMenuParams['appendMessage']
+  cancelIfStreaming: UseSlashMenuParams['cancelIfStreaming']
+  isHelperSession: boolean
+  sendRedirectFrame: UseSlashMenuParams['sendRedirectFrame']
+  composerRuntime: ComposerRuntime
+  setInputValue: (value: string) => void
+  setSlashOpen: (open: boolean) => void
+}
+
+function runClientSlashCommand(name: string, argument: string, deps: ClientCommandDeps): boolean {
+  const { allCommands, startNewSession, appendMessage, cancelIfStreaming, isHelperSession, sendRedirectFrame, composerRuntime, setInputValue, setSlashOpen } = deps
+  if (name === 'new' || name === 'clear') {
+    // Renamed /clear → /new (the palette advertises /new; 'clear' survives
+    // as a hidden backend alias for CLI/channel muscle memory). Starts a
+    // new conversation (startNewSession), not just a local wipe.
+    startNewSession()
+    return true
+  }
+
+  if (name === 'help') {
+    // US-4/AC-2: build the help text from the fetched command list.
+    const helpLines = allCommands
+      .map((c) => `- \`${c.label}\` — ${c.description}`)
+      .join('\n')
+    const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Type **@** at the start of the input to switch agents\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
+    appendMessage({
+      id: generateId(),
+      role: 'system',
+      content: helpText,
+      timestamp: new Date().toISOString(),
+      status: 'done',
+    })
+    return true
+  }
+
+  if (name === 'model') {
+    // US-4/AC-2: open the model selector in the composer card
+    // (composer/ModelPicker.tsx).
+    // Setting modelSelectorOpen=true drives the controlled Popover in
+    // ModelSelector without the user having to click it directly. Per A4:
+    // web-only client action; opens the chat model selector, not the
+    // server agent default.
+    useUiStore.getState().setModelSelectorOpen(true)
+    return true
+  }
+
+  if (name === 'agents') {
+    // Open the agent selector in the composer card (composer/AgentPicker.tsx) via the ui store flag.
+    useUiStore.getState().setAgentSelectorOpen(true)
+    return true
+  }
+
+  if (name === 'skills') {
+    // D9: set input to "/skills" to trigger the skills-only filter in the
+    // menu. The menu handles this: when inputValue === "/skills",
+    // isSkillsFilter is true and only the Skills section shows. Re-open
+    // the menu after the clear.
+    composerRuntime.setText('/skills')
+    setInputValue('/skills')
+    setSlashOpen(true)
+    return true
+  }
+
+  if (name === 'cancel') {
+    // FR-3a: /cancel uses the same cancelIfStreaming() as the local
+    // Escape handler — only morph the button to "Stopping..." if the turn
+    // is actively streaming.
+    cancelIfStreaming()
+    return true
+  }
+
+  if (name === 'stop') {
+    // D9 row 1: /stop (root OR helper) = stop only this session's current
+    // turn — the same server behaviour as one Stop-button press (the tree
+    // cascade stays /cancel's and the confirmed second press's; /stop never
+    // cascades). The SPA consumer is therefore exactly the Stop button's
+    // single-press path: cancelIfStreaming() — the caller's useCancelState
+    // wiring sends the scope-less (session-default) cancel frame and runs
+    // the same "Stopping..." state machine the button uses. Not the
+    // redirect branch below; no /steer alias exists (founder O4).
+    cancelIfStreaming()
+    return true
+  }
+
+  if (name === 'stop-redirect') {
+    // D9 rows 2–3: /stop-redirect <instruction> redirects THAT helper
+    // (stop first, then continue with the instruction) — valid only in a
+    // helper's chat. Fail-closed on identity (seam ruling §3.2): the
+    // caller's isHelperSession derives from the attached session's
+    // server-minted "delegate" type; anything unresolvable is root here.
+    // Root refusal comes FIRST — a root user gets the targeting guidance
+    // whatever they typed after the command, never a usage hint implying
+    // the command could work here.
+    if (!isHelperSession) {
+      appendMessage({
+        id: generateId(),
+        role: 'system',
+        content: STOP_REDIRECT_ROOT_REFUSAL,
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      })
+      return true
+    }
+
+    // Usage gate: an empty instruction (bare command, or whitespace-only —
+    // JS .trim() is Unicode-aware, so NBSP/em-space-only residue is empty)
+    // replies usage and changes nothing: no frame, no message, no stop.
+    if (argument === '') {
+      appendMessage({
+        id: generateId(),
+        role: 'system',
+        content: STOP_REDIRECT_USAGE,
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      })
+      return true
+    }
+
+    // The frame targets the CURRENTLY OPEN session (D9 row 2 —
+    // conversation-scoped, #955: the helper's own chat redirects that
+    // helper). Read fresh from the store in this write path — never a
+    // render-captured value.
+    const sessionId = useSessionStore.getState().activeSessionId
+    if (!sessionId) {
+      appendMessage({
+        id: generateId(),
+        role: 'system',
+        content: STOP_REDIRECT_NO_SESSION,
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      })
+      return true
+    }
+
+    // Exactly one frame, exactly the generated shape — type, session_id,
+    // instruction and nothing else (no scope property exists on
+    // RedirectFrame; the schema's additionalProperties:false). The
+    // instruction is delivered verbatim after the command parse (trimmed
+    // at both ends above, internal spacing and multibyte content intact).
+    // The caller's sendRedirectFrame owns the transport and surfaces a
+    // visible error if the send fails — nothing here swallows one.
+    //
+    // The transport callback is optional only so pre-existing callers that
+    // never reach this line type-check. A caller that claims a helper
+    // session here but passed no transport is broken — fail LOUDLY (never
+    // `?.`; a silently dropped redirect would leave the helper's turn
+    // running while the UI pretends it redirected).
+    if (!sendRedirectFrame) {
+      throw new Error(
+        'useSlashMenu: /stop-redirect reached the send path with no sendRedirectFrame transport — the caller claimed isHelperSession but provided no frame sender.',
+      )
+    }
+    sendRedirectFrame({ type: 'redirect', session_id: sessionId, instruction: argument })
+    return true
+  }
+
+  if (name === 'resume') {
+    // Web-only: open the cross-workspace session search modal to pick a
+    // session to resume — same single instance the sidebar icon opens.
+    useUiStore.getState().openSearchModal()
+    return true
+  }
+
+  if (name === 'workspace') {
+    // Web-only: open the SAME SearchModal instance /resume opens, but in
+    // its 'workspaces' mode — ALL workspaces listed, ArrowUp/Down walks
+    // workspace headers, Enter switches (SearchModal's handleSwitchWorkspace,
+    // same as clicking a group header's switch arrow), not a dedicated
+    // picker of its own.
+    useUiStore.getState().openWorkspaceSwitcher()
+    return true
+  }
+
+  // Issue 3 fallback: unknown client command — do NOT silently drop.
+  // Return false so the caller inserts it as text rather than clearing
+  // the composer.
+  return false
+}
+
 export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   const {
     isStreaming,
@@ -780,187 +981,25 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     setSlashHighlight(0)
   }
 
-  // runClientCommand — shared handler for client-delivery slash commands.
-  // Called both from palette selection (executeSlashCommand) and from the
-  // send-path interception so that typing "/new"+Enter (or its legacy
-  // alias "/clear"+Enter) converges with selecting /new from the palette —
-  // both run client-side, never reaching the backend.
-  //
-  // `argument` carries the text after an argument-bearing client command's
-  // label (D9 "/stop-redirect <instruction>"), already trimmed of the
-  // separating whitespace by resolveClientCommand. '' for every bare
-  // command.
-  //
-  // Returns true when the command was handled (caller must NOT send the
-  // text), false when the name is not a known client command (caller
-  // should fall through to inserting as text — Issue 3 fallback).
+  // runClientCommand — thin per-render adapter over runClientSlashCommand
+  // (module scope: extracted to bring this hook back under its grandfathered
+  // function-size ceiling). Plain function, deliberately NOT useCallback, and
+  // the deps object is rebuilt on every call — the module function receives
+  // THIS render's values, the same closure semantics the pre-extraction
+  // nested function had (see the "Deliberately NOT wrapped in useCallback"
+  // note on interceptClientCommand below).
   function runClientCommand(name: string, argument = ''): boolean {
-    if (name === 'new' || name === 'clear') {
-      // Renamed /clear → /new (the palette advertises /new; 'clear' survives
-      // as a hidden backend alias for CLI/channel muscle memory). Starts a
-      // new conversation (startNewSession), not just a local wipe.
-      startNewSession()
-      return true
-    }
-
-    if (name === 'help') {
-      // US-4/AC-2: build the help text from the fetched command list.
-      const helpLines = allCommands
-        .map((c) => `- \`${c.label}\` — ${c.description}`)
-        .join('\n')
-      const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Type **@** at the start of the input to switch agents\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
-      appendMessage({
-        id: generateId(),
-        role: 'system',
-        content: helpText,
-        timestamp: new Date().toISOString(),
-        status: 'done',
-      })
-      return true
-    }
-
-    if (name === 'model') {
-      // US-4/AC-2: open the model selector in the composer card
-      // (composer/ModelPicker.tsx).
-      // Setting modelSelectorOpen=true drives the controlled Popover in
-      // ModelSelector without the user having to click it directly. Per A4:
-      // web-only client action; opens the chat model selector, not the
-      // server agent default.
-      useUiStore.getState().setModelSelectorOpen(true)
-      return true
-    }
-
-    if (name === 'agents') {
-      // Open the agent selector in the composer card (composer/AgentPicker.tsx) via the ui store flag.
-      useUiStore.getState().setAgentSelectorOpen(true)
-      return true
-    }
-
-    if (name === 'skills') {
-      // D9: set input to "/skills" to trigger the skills-only filter in the
-      // menu. The menu handles this: when inputValue === "/skills",
-      // isSkillsFilter is true and only the Skills section shows. Re-open
-      // the menu after the clear.
-      composerRuntime.setText('/skills')
-      setInputValue('/skills')
-      setSlashOpen(true)
-      return true
-    }
-
-    if (name === 'cancel') {
-      // FR-3a: /cancel uses the same cancelIfStreaming() as the local
-      // Escape handler — only morph the button to "Stopping..." if the turn
-      // is actively streaming.
-      cancelIfStreaming()
-      return true
-    }
-
-    if (name === 'stop') {
-      // D9 row 1: /stop (root OR helper) = stop only this session's current
-      // turn — the same server behaviour as one Stop-button press (the tree
-      // cascade stays /cancel's and the confirmed second press's; /stop never
-      // cascades). The SPA consumer is therefore exactly the Stop button's
-      // single-press path: cancelIfStreaming() — the caller's useCancelState
-      // wiring sends the scope-less (session-default) cancel frame and runs
-      // the same "Stopping..." state machine the button uses. Not the
-      // redirect branch below; no /steer alias exists (founder O4).
-      cancelIfStreaming()
-      return true
-    }
-
-    if (name === 'stop-redirect') {
-      // D9 rows 2–3: /stop-redirect <instruction> redirects THAT helper
-      // (stop first, then continue with the instruction) — valid only in a
-      // helper's chat. Fail-closed on identity (seam ruling §3.2): the
-      // caller's isHelperSession derives from the attached session's
-      // server-minted "delegate" type; anything unresolvable is root here.
-      // Root refusal comes FIRST — a root user gets the targeting guidance
-      // whatever they typed after the command, never a usage hint implying
-      // the command could work here.
-      if (!isHelperSession) {
-        appendMessage({
-          id: generateId(),
-          role: 'system',
-          content: STOP_REDIRECT_ROOT_REFUSAL,
-          timestamp: new Date().toISOString(),
-          status: 'done',
-        })
-        return true
-      }
-
-      // Usage gate: an empty instruction (bare command, or whitespace-only —
-      // JS .trim() is Unicode-aware, so NBSP/em-space-only residue is empty)
-      // replies usage and changes nothing: no frame, no message, no stop.
-      if (argument === '') {
-        appendMessage({
-          id: generateId(),
-          role: 'system',
-          content: STOP_REDIRECT_USAGE,
-          timestamp: new Date().toISOString(),
-          status: 'done',
-        })
-        return true
-      }
-
-      // The frame targets the CURRENTLY OPEN session (D9 row 2 —
-      // conversation-scoped, #955: the helper's own chat redirects that
-      // helper). Read fresh from the store in this write path — never a
-      // render-captured value.
-      const sessionId = useSessionStore.getState().activeSessionId
-      if (!sessionId) {
-        appendMessage({
-          id: generateId(),
-          role: 'system',
-          content: STOP_REDIRECT_NO_SESSION,
-          timestamp: new Date().toISOString(),
-          status: 'done',
-        })
-        return true
-      }
-
-      // Exactly one frame, exactly the generated shape — type, session_id,
-      // instruction and nothing else (no scope property exists on
-      // RedirectFrame; the schema's additionalProperties:false). The
-      // instruction is delivered verbatim after the command parse (trimmed
-      // at both ends above, internal spacing and multibyte content intact).
-      // The caller's sendRedirectFrame owns the transport and surfaces a
-      // visible error if the send fails — nothing here swallows one.
-      //
-      // The transport callback is optional only so pre-existing callers that
-      // never reach this line type-check. A caller that claims a helper
-      // session here but passed no transport is broken — fail LOUDLY (never
-      // `?.`; a silently dropped redirect would leave the helper's turn
-      // running while the UI pretends it redirected).
-      if (!sendRedirectFrame) {
-        throw new Error(
-          'useSlashMenu: /stop-redirect reached the send path with no sendRedirectFrame transport — the caller claimed isHelperSession but provided no frame sender.',
-        )
-      }
-      sendRedirectFrame({ type: 'redirect', session_id: sessionId, instruction: argument })
-      return true
-    }
-
-    if (name === 'resume') {
-      // Web-only: open the cross-workspace session search modal to pick a
-      // session to resume — same single instance the sidebar icon opens.
-      useUiStore.getState().openSearchModal()
-      return true
-    }
-
-    if (name === 'workspace') {
-      // Web-only: open the SAME SearchModal instance /resume opens, but in
-      // its 'workspaces' mode — ALL workspaces listed, ArrowUp/Down walks
-      // workspace headers, Enter switches (SearchModal's handleSwitchWorkspace,
-      // same as clicking a group header's switch arrow), not a dedicated
-      // picker of its own.
-      useUiStore.getState().openWorkspaceSwitcher()
-      return true
-    }
-
-    // Issue 3 fallback: unknown client command — do NOT silently drop.
-    // Return false so the caller inserts it as text rather than clearing
-    // the composer.
-    return false
+    return runClientSlashCommand(name, argument, {
+      allCommands,
+      startNewSession,
+      appendMessage,
+      cancelIfStreaming,
+      isHelperSession,
+      sendRedirectFrame,
+      composerRuntime,
+      setInputValue,
+      setSlashOpen,
+    })
   }
 
   // executeSlashCommand — called when the user selects a palette entry.
