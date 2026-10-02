@@ -225,6 +225,12 @@ func (a *restAPI) openLibraryRoot(w http.ResponseWriter, workspaceID, label stri
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return nil, false
 	}
+	// §5.4's provenance wiring, at the ONE opener every Library handler
+	// shares: with the marker store attached, a rename, move, copy or delete
+	// this root performs re-keys the mail-derived markers with the files. A
+	// nil store (workspace path unresolvable — never for a workspace that
+	// passed Exists) simply leaves the root without provenance hooks.
+	root.AttachPathMarker(a.mailMarkerStore(workspaceID))
 	return root, true
 }
 

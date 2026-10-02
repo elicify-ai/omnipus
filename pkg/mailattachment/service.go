@@ -116,6 +116,15 @@ type Service struct {
 // mailboxOf supplies the pair's mailbox label (server-computed — never an
 // agent-supplied host path).
 func NewService(reader PartReader, writer DestinationWriter, audit AuditSink, receipts *SaveReceiptStore, mailboxOf func() string) *Service {
+	// §5.4's provenance wiring (the traced-and-proved obligation): a
+	// destination that owns a library.Root and carries the marker store
+	// attaches the one to the other HERE, because the save path is the one
+	// place that knows both — after this, every Rename/CopyInto/Delete that
+	// root performs keeps its markers in step with its files, not only the
+	// saves this service writes.
+	if rw, ok := writer.(RootWriter); ok && rw.Root != nil && rw.Marker != nil {
+		rw.Root.AttachPathMarker(rw.Marker)
+	}
 	return &Service{
 		reader:    reader,
 		writer:    writer,

@@ -26,10 +26,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/library"
 )
 
 // markerEntry is one file's record. ScriptsAllowed is the per-file checkbox
@@ -237,4 +239,156 @@ func (s *MarkerStore) Delete(rel string) error {
 	}
 	delete(idx.Entries, rel)
 	return s.save(idx)
+}
+
+// --- prefix operations (the library.PathMarker seam; §5.4 provenance) ------
+//
+// The Library's Rename/Delete/CopyInto accept directories, so a marker keyed
+// by path must follow whole subtrees, not only single files. Matching is
+// boundary-checked — p == rel, or p carries the rel+"/" prefix — so
+// "a.html" never matches "a.html.bak".
+
+// underPrefix reports whether p is rel itself or lies beneath it.
+func underPrefix(p, rel string) bool {
+	return p == rel || strings.HasPrefix(p, rel+"/")
+}
+
+// MovePrefix implements library.PathMarker: every entry at fromRel or beneath
+// it re-keys to the corresponding path under toRel, each moved entry's
+// allowance resetting to scripts-off (the shipped Move semantic — a new
+// location starts un-answered). A fromRel with no entries is a no-op.
+func (s *MarkerStore) MovePrefix(fromRel, toRel string) error {
+	if fromRel == toRel {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx, err := s.load()
+	if err != nil {
+		return err
+	}
+	moved := false
+	for p, e := range idx.Entries {
+		if !underPrefix(p, fromRel) {
+			continue
+		}
+		np := toRel + strings.TrimPrefix(p, fromRel)
+		moved = true
+		delete(idx.Entries, p)
+		idx.Entries[np] = e
+	}
+	if !moved {
+		return nil
+	}
+	return s.save(idx)
+}
+
+// CopyPrefix implements library.PathMarker: the SOURCE store's entries at
+// fromRel or beneath it are duplicated into this store at toRel. Each copy is
+// equally mail-derived; its allowance is its own and starts un-answered
+// (§5.4's per-file rule — a copy is never silently scripts-on, and never
+// inherits the source's checkbox). The source is read through the
+// library.PathMarker interface, so the same code serves a copy within one
+// store and a copy across two workspaces' stores.
+func (s *MarkerStore) CopyPrefix(src library.PathMarker, fromRel, toRel string) error {
+	if src == nil {
+		return nil
+	}
+	rels, err := src.MailDerivedUnder(fromRel)
+	if err != nil {
+		return err
+	}
+	if len(rels) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx, err := s.load()
+	if err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	for _, p := range rels {
+		np := toRel + strings.TrimPrefix(p, fromRel)
+		allowOff := false
+		idx.Entries[np] = markerEntry{
+			MailDerived:    true,
+			ScriptsAllowed: &allowOff,
+			SavedAtUnixMS:  now,
+		}
+	}
+	return s.save(idx)
+}
+
+// DeletePrefix implements library.PathMarker: every entry at rel or beneath
+// it is dropped. A rel with no entries is orphan-tolerant.
+func (s *MarkerStore) DeletePrefix(rel string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx, err := s.load()
+	if err != nil {
+		return err
+	}
+	dropped := false
+	for p := range idx.Entries {
+		if underPrefix(p, rel) {
+			delete(idx.Entries, p)
+			dropped = true
+		}
+	}
+	if !dropped {
+		return nil
+	}
+	return s.save(idx)
+}
+
+// MailDerivedUnder implements library.PathMarker's read half: the sorted
+// workspace-relative paths this store marks mail-derived at prefix or beneath
+// it. A store read failure is returned — a CopyPrefix built on a corrupt
+// source index must not silently copy nothing (the caller logs the failure;
+// the serve side's own fail-safe keeps the copied file's ORIGINAL sibling
+// markers honest).
+func (s *MarkerStore) MailDerivedUnder(prefix string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for p, e := range idx.Entries {
+		if e.MailDerived && underPrefix(p, prefix) {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// MarkerView is one file's annotation answer for the UI surfaces: whether the
+// file is mail-derived, and the per-file scripts checkbox state when that
+// answer exists (nil = never answered = scripts off).
+type MarkerView struct {
+	MailDerived    bool
+	ScriptsAllowed *bool
+}
+
+// ViewUnder returns every entry recorded at prefix or beneath it (empty
+// prefix = the whole index) as one read — the listing annotation's bulk
+// shape, so a 200-row listing costs one index read, not 200.
+func (s *MarkerStore) ViewUnder(prefix string) (map[string]MarkerView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]MarkerView, len(idx.Entries))
+	for p, e := range idx.Entries {
+		if prefix != "" && !underPrefix(p, prefix) {
+			continue
+		}
+		out[p] = MarkerView{MailDerived: e.MailDerived, ScriptsAllowed: e.ScriptsAllowed}
+	}
+	return out, nil
 }
