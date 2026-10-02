@@ -222,6 +222,11 @@ describe('Mail panel states (US-3, US-6; refresh cadence per Q-C, superseding D2
       // and including 35 s would have fired by now.
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
       expect(fetchMailFolders.mock.calls.length).toBe(1)
+      // §7 scenario 1.6's second leg: the clock advances to 70 seconds total —
+      // still no folder or list request fired after the open event's requests.
+      await act(async () => { await vi.advanceTimersByTimeAsync(35_000) })
+      expect(fetchMailFolders.mock.calls.length).toBe(1)
+      expect(fetchMailMessages.mock.calls.length).toBe(1)
       // Closed panel never refreshes (§7 Scenario 1.3): unmounting stops everything.
       view.unmount()
       await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
