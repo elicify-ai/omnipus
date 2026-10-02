@@ -23,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/mailattachment"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
@@ -240,6 +241,18 @@ type restAPI struct {
 	// logout revocation. Nil until registered; readers go through
 	// mailPreviewTokenStoreOf(), which is nil-safe.
 	mailPreviewTokens atomic.Pointer[mailPreviewTokenStore]
+
+	// mailAttachmentTokens is the attachment PREVIEW grant store
+	// (rest_mail_attachment.go, F1) — metadata-only grants, published by
+	// newMailAttachmentRoutes at registration time; logout revocation walks
+	// it the same way. Nil until registered.
+	mailAttachmentTokens atomic.Pointer[mailAttachmentGrantStore]
+
+	// mailSaveReceipts is the process-lifetime save-operation receipt store
+	// (rest_mail_attachment.go, correction M-02): one store per process,
+	// lazily built, no eviction — the restart is the only bound (grill-2
+	// F-9). Nil until the first save.
+	mailSaveReceipts atomic.Pointer[mailattachment.SaveReceiptStore]
 
 	// devServers is the gateway-wide Tier 3 dev-server registry. Shared with
 	// the web_serve tool (dev mode) and workspace.shell_bg tool via the agent
@@ -697,6 +710,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// mint endpoint and the token-only /mail-preview/ serve prefix, sharing
 	// one token store published on the restAPI for logout revocation.
 	rae.a.registerMailPreviewRoutes(rae.cm)
+	// Attachment preview mint/revoke + the preview-purpose byte/HTML serve
+	// prefix (w4, F1) — registered AFTER the generic /mail-preview/ route;
+	// the mux prefers the more specific prefix.
+	rae.a.registerMailAttachmentRoutes(rae.cm)
 	// GET/PUT /api/v1/providers/default-model (ADR-068 FR-018/FR-042,
 	// T068-11): its OWN route with the high-blast-radius adminWrap chain
 	// (withAuth → RequireNotBypass — 401 unauthenticated, 503 under

@@ -939,6 +939,13 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 			store.invalidateSession(key)
 		}
 	}
+	// Attachment preview grants (w4, F1) are the same unauthenticated bearer
+	// credential in a URL path — they die with the session too.
+	if grants := a.mailAttachmentTokens.Load(); grants != nil {
+		if key, ok := PreviewSessionKey(r); ok {
+			grants.revokeSession(key)
+		}
+	}
 
 	// A CLI-token-authenticated caller's synthetic "cli" identity is not
 	// backed by any Gateway.Users row (see CLITokenContextKey's doc) — the

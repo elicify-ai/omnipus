@@ -30,6 +30,7 @@ import (
 	"io"
 	"mime/quotedprintable"
 	"strings"
+	"time"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -380,6 +381,70 @@ func (c *Client) readAttachmentPart(ctx context.Context, slug, ref string, partI
 }
 
 // maxEncodedPartBytes bounds the RAW network read behind the decoded cap.
+// MessageMeta is one message's bounded header facts: the flags that decide
+// visibility and the decoded subject — no body bytes, no flag writes.
+type MessageMeta struct {
+	Flags      []string
+	Subject    string
+	MessageID  string
+	From       string
+	FromName   string
+	ReplyTo    string
+	To         []string
+	Cc         []string
+	Date       time.Time
+	Bcc        []string
+	InReplyTo  string
+	References string
+}
+
+// ReadMessageMeta fetches one message's envelope + flags — the bounded
+// metadata read behind the attachment mint's context bar and visibility
+// check (no body is fetched, flags never change). The reference is validated
+// on the same connection that performs the fetch.
+func (c *Client) ReadMessageMeta(ctx context.Context, slug, ref string) (*MessageMeta, error) {
+	client, uid, err := c.selectAndValidateRef(ctx, slug, ref)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	bufs, err := runIMAP(ctx, "fetch meta", func() ([]*imapclient.FetchMessageBuffer, error) {
+		return client.Fetch(imap.UIDSetNum(imap.UID(uid)), &imap.FetchOptions{
+			UID: true, Flags: true, Envelope: true,
+		}).Collect()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("email transport: fetch meta: %w", err)
+	}
+	if len(bufs) == 0 || bufs[0] == nil || bufs[0].Envelope == nil {
+		return nil, fmt.Errorf("email transport: %w: no message %s in %s", ErrMessageNotFound, ref, slug)
+	}
+	buf := bufs[0]
+	meta := &MessageMeta{Subject: strings.TrimSpace(buf.Envelope.Subject), MessageID: buf.Envelope.MessageID}
+	for _, f := range buf.Flags {
+		meta.Flags = append(meta.Flags, string(f))
+	}
+	if len(buf.Envelope.From) > 0 {
+		meta.From = addressString(buf.Envelope.From[0])
+		meta.FromName = buf.Envelope.From[0].Name
+	}
+	if len(buf.Envelope.ReplyTo) > 0 {
+		meta.ReplyTo = addressString(buf.Envelope.ReplyTo[0])
+	}
+	meta.To = splitAddressList(addressListString(buf.Envelope.To))
+	meta.Cc = splitAddressList(addressListString(buf.Envelope.Cc))
+	if len(buf.Envelope.Bcc) > 0 {
+		meta.Bcc = splitAddressList(addressListString(buf.Envelope.Bcc))
+	}
+	if !buf.Envelope.Date.IsZero() {
+		meta.Date = buf.Envelope.Date.UTC()
+	}
+	if len(buf.Envelope.InReplyTo) > 0 {
+		meta.InReplyTo = buf.Envelope.InReplyTo[0]
+	}
+	return meta, nil
+}
+
 // maxEncodedPartBytes bounds the RAW network read behind the decoded cap.
 // Every content transfer encoding this path decodes either preserves size
 // (7bit/8bit/binary) or expands (base64 4/3; quoted-printable at most 2x on

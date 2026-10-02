@@ -141,6 +141,24 @@ func (a *restAPI) handleWorkspaceMail(w http.ResponseWriter, r *http.Request, re
 			return
 		}
 		a.handleMailAttachment(w, r, workspaceID, tail[0], tail[2], tail[4], idx)
+	// F2: the save-to-library subresource (w4). The drafts shadowing note
+	// above does not apply: drafts attachments save through the same
+	// explicit subresource, and this case is longer than the generic
+	// folder-message cases so it matches only its own shape.
+	case len(tail) == 8 && tail[1] == "folders" && tail[3] == "messages" && tail[5] == "attachments" && tail[7] == "save-to-library":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		idx, ierr := strconv.Atoi(tail[6])
+		if ierr != nil || idx < 0 {
+			jsonErr(w, http.StatusBadRequest, "malformed part index")
+			return
+		}
+		a.handleMailAttachmentSave(w, r, workspaceID, tail[0], tail[2], tail[4], idx)
+	// F5: the reply-context operation (w4).
+	case len(tail) == 6 && tail[1] == "folders" && tail[3] == "messages" && tail[5] == "reply-context":
+		a.handleMailReplyContext(w, r, workspaceID, tail[0], tail[2], tail[4])
 	default:
 		jsonErr(w, http.StatusNotFound, "not found")
 	}

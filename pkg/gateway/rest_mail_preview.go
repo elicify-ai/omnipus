@@ -24,6 +24,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/email/mailhtml"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/microcosm-cc/bluemonday"
@@ -263,19 +264,46 @@ const mailTokenPlaceholder = "MAILPREVIEWTOKENPLACEHOLDER"
 // mailSanitizePreviewHTML is the named inbound sanitizer (MC-10(5)/MC-40):
 // strips meta/base/forms/scripts/handlers, rewrites cid: and remote image
 // srcs onto the token-scoped mail-preview paths, hardens every surviving
-// anchor. The result is what the token store holds.
+// anchor — and, since the styling wave (F4/#1172), preserves SAFE styling
+// through the parsed CSS policy (pkg/email/mailhtml): style attributes via
+// bluemonday's own decode-then-check layer, <style> blocks via the
+// douceur-based stylesheet pass, the 73-property allow table, and the two
+// sanitizer-only gates (data:-font @font-face and data:image/svg+xml in CSS
+// url() stay stripped). The result is what the token store holds.
 func mailSanitizePreviewHTML(raw string, inlines []email.MailPart, remoteURLs []string) string {
+	// Pin-then-rewrite FIRST, while the original https url() values are
+	// still in the text — the CSS rewrite replaces them inside style
+	// attributes AND <style> blocks alike.
+	rewritten := mailRewritePreviewSources(raw, inlines, remoteURLs)
+	// Lift the <style> blocks for the stylesheet sanitizer (bluemonday
+	// cannot sanitize element content without AllowUnsafe), then drop
+	// over-cap style attributes (bounded work, P8).
+	prepared, blocks := mailhtml.ExtractStyleBlocks(rewritten, mailhtml.StyleMaxBlockBytes)
+	prepared = mailhtml.StripOversizedStyleAttrs(prepared)
+	sanitizedBlocks := make([]string, len(blocks))
+	for i, b := range blocks {
+		sanitizedBlocks[i] = mailhtml.SanitizeStylesheet(b, mailhtml.StyleMaxBlockBytes)
+	}
 	p := bluemonday.NewPolicy()
 	for _, el := range []string{"p", "div", "span", "br", "b", "strong", "i", "em", "u", "s",
 		"ul", "ol", "li", "table", "thead", "tbody", "tfoot", "tr", "td", "th",
 		"h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "code", "hr", "a", "img"} {
 		p.AllowElements(el)
 	}
+	// The style ELEMENT carries only the placeholder text here; its content
+	// is re-inserted post-sanitize from the sanitized blocks. The font
+	// element and the presentation attribute tables come from the artefact's
+	// markup table.
+	p.AllowElements("style")
+	mailhtml.AllowPresentationMarkup(p)
+	// The parsed CSS policy: the ONE 73-property table, applied to style
+	// attributes (decode-then-check, fail-closed on parse error).
+	mailhtml.ApplyStylePolicy(p)
 	p.AllowAttrs("alt", "width", "height", "align").OnElements("img")
 	p.AllowAttrs("href").Matching(mailAnchorHrefRe).OnElements("a")
 	p.AllowAttrs("src").Matching(mailImageSrcRe).OnElements("img")
-	rewritten := mailRewritePreviewSources(raw, inlines, remoteURLs)
-	html := p.Sanitize(rewritten)
+	html := p.Sanitize(prepared)
+	html = mailhtml.ReplaceStyleBlocks(html, sanitizedBlocks)
 	html = mailHardenAnchors(html)
 	return html
 }
@@ -315,6 +343,11 @@ func mailRewritePreviewSources(src string, inlines []email.MailPart, remoteURLs 
 		path := mailPreviewImgPrefix + mailTokenPlaceholder + "/" + strconv.Itoa(i)
 		out = mailRewriteSrcAttr(out, u, path)
 	}
+	// CSS url() values ride the same grant/index space: every pinned URL —
+	// whether referenced from an img src or a CSS background — rewrites
+	// onto its own /mail-preview/img/<token>/<i> path, so backgrounds
+	// actually render under Load-images consent (grill I-05).
+	out = mailhtml.RewriteCSSImageURLs(out, remoteURLs, mailPreviewImgPrefix+mailTokenPlaceholder)
 	return out
 }
 
@@ -358,18 +391,28 @@ var mailSrcAttrRe = regexp.MustCompile(`(?i)\bsrc\s*=\s*("([^"]*)"|'([^']*)')`)
 func mailExtractRemoteImageURLs(raw string) []string {
 	seen := map[string]bool{}
 	var out []string
+	collect := func(u string) {
+		u = strings.TrimSpace(u)
+		if !strings.HasPrefix(strings.ToLower(u), "https://") || seen[u] || len(out) >= 25 {
+			return
+		}
+		seen[u] = true
+		out = append(out, u)
+	}
 	for _, tag := range mailImgTagRe.FindAllString(raw, 64) {
 		for _, m := range mailSrcAttrRe.FindAllStringSubmatch(tag, 1) {
 			u := m[2]
 			if m[3] != "" {
 				u = m[3]
 			}
-			if !strings.HasPrefix(strings.ToLower(u), "https://") || seen[u] || len(out) >= 25 {
-				continue
-			}
-			seen[u] = true
-			out = append(out, u)
+			collect(u)
 		}
+	}
+	// The CSS half of the pin (grill I-05 / artefact §5): background
+	// url() values join the SAME mint-time grant so the token-scoped proxy
+	// is the only dialer for them too.
+	for _, u := range mailhtml.ExtractCSSImageURLs(raw, 25) {
+		collect(u)
 	}
 	return out
 }
