@@ -141,3 +141,383 @@ Proposed new files (all siblings inside the W3-owned trees, one owner each):
 inline-discriminated-union exception (OpenAPI-hosted `oneOf`) is W0's concern, not W3's.
 
 ---
+
+## 3. Interfaces published and consumed (parallel-build freeze)
+
+These are the boundaries the sibling packages build against **without editing each other's files**. A
+change to any Published row goes back through this spec and W0's contract set, not through a side edit.
+
+### 3.1 W3 publishes
+
+| Interface | Consumer | Frozen shape |
+|---|---|---|
+| **Handoff trigger** — Mail → Library temporary viewer | W8 | W3 calls one seam in W8's mount with a payload of generated types only: `{ source: MailAttachmentPreviewResponse, context: { subject: string, returnFocus: { kind: 'attachment-action' \| 'message-row' \| 'folder', id: string } } }`. W3 guarantees the descriptor is freshly minted per Open, carries no workspace path, and is dropped on exit. W8 guarantees the context bar (exact strings §11) and the focus/announcement contract of §4 US-7. |
+| **Return path** — Library temporary viewer → Mail | W3 (consumed by W8 via callback) | `onBack(): void` — W8 calls it for Back/Escape; W3 then decides the landing surface per §4 US-7 AS-3 (fresh live read of the originating message if still available; changed/deleted notice otherwise). W8 never re-opens Mail's queries itself. |
+| **Save handoff** | W8 | W3's handoff module exposes `saveToLibrary(descriptor)` (wraps `MailAttachmentSaveRequest` + `save_operation_token`) and a status channel (`loading \| saved \| failed(reason) \| unknown`) W8 renders in the context bar. Only a `saved` status enables **Open in Library**. |
+| **Presence lifecycle** | W4 (gateway), W1 (socket retention) | The SPA emits `mail_panel_observer` open when a Mail panel becomes visible with a resolved workspace, and close on §4 US-5's lifecycle events; `observer_id` is a fresh opaque value per panel instance per connection. REST reads that opt into panel semantics carry the same `observer_id`. Until the gateway acknowledges an open, W3 assumes nothing is retained (request-scoped behaviour is always correct). |
+| **Cache-view semantics** | W5 (tests), W2 (metadata contract) | The panel performs at most one `mode=live` request per eligible event, keyed by `publication_revision`: a response older than the newest revision the panel has applied is dropped unrendered. Eligible events: panel open with a mailbox resolved, folder switch, manual Refresh, own successful action (mark-seen, send, draft save/discard), one rediscovery after missing-folder. No repeating panel timer exists. |
+
+### 3.2 W3 consumes
+
+| Interface | Provider | Dependence |
+|---|---|---|
+| Generated REST/WS types listed in §2.3/§2.4 | W0 | Nothing ships before regeneration; frontend lands after the contract commit, in parallel with backend consumers of the same types. |
+| `mode=cache_first\|live`, `observer_id`, `refresh_mapping`, `search`, cursor + 409 semantics | W0/W2/W4 | §4 US-1/US-3 behaviour; an omitted `mode` stays live for existing callers (backward compatible by contract). |
+| `MailReadMetadata` on every folder/list response | W2/W4 | §4 US-2 labels. A response without metadata (pre-regeneration server) is a build-order violation, not a runtime fallback — no hand-written compat type. |
+| Temporary-source mount + context bar + resource policy enforcement | W8 | §4 US-6/US-7/US-8 acceptance criteria are joint; W3's journey tests treat the mount as the system under test's counterpart. |
+| `library_changed` notification | existing | Save success lets the normal Library change notification refresh lists; no second refresh protocol. |
+| Authenticated `WsConnection` | existing / W4 integration trace | Presence frames only; no new heartbeat, no cache-push frame (the ADR forbids one). |
+
+### 3.3 Ownership guard-rails (from the ADR's package table, binding here)
+
+- W8 never edits `MailPanel.tsx`, `src/lib/api/mail.ts`, or any mail-owned file; W3 never edits
+  `LibraryExplorer.tsx`, `LibraryPreviewPane.tsx`, or `src/components/library/**`.
+- The socket adapter file (`src/lib/ws.ts`) gets one writer — the integration owner traces it with W4
+  before the presence wave dispatches.
+- qa-lead owns every test-file edit, including rewriting the D25-era oracle tests this spec retires.
+
+---
+
+## 4. User stories and acceptance criteria
+
+Priorities: P0 = the feature is dishonest or unusable without it; P1 = required for the founder-approved
+scope; P2 = required for coherence, deferrable only with a tracked issue.
+
+### US-1 — Cached rows immediately, one live refresh per event (P0)
+
+A user opening Mail should see their messages straight away from the panel's cached view instead of
+staring at a spinner, and the panel should check the server once for fresher data — not repeatedly, and
+not at all while the panel is closed.
+
+Why this priority: instant labelled display is the ADR's central promise (its "Visible cached refresh
+shape" recommendation); without the one-refresh rule the panel can either hammer the server or show a
+finished-looking refresh that returned the same stale page.
+
+Independent test: with the gateway's cache endpoints stubbed, opening the panel issues exactly one
+cache-first read and at most one live read per event, and renders the cached rows before the live read
+settles.
+
+Acceptance scenarios:
+
+1. **Given** a mailbox whose folder metadata and headers are cached in memory with a fresh
+   last-validated time, **When** the user opens the Mail panel on that mailbox, **Then** rows render
+   from the cache-first response immediately (no full-list skeleton), the panel issues exactly one
+   `mode=live` refresh for that open event, and the rows update in place when it settles.
+2. **Given** the panel is open on a folder, **When** the user switches to another folder, **Then** the
+   same cache-first-then-one-live sequence runs for the new folder, and the previous folder's in-flight
+   live refresh, if any, is dropped rather than rendered into the wrong list.
+3. **Given** the panel is closed, **When** the watcher cycles and new mail arrives, **Then** the panel
+   performs no folder, count or header request until the next eligible event (badge polling continues
+   against the saved-state summary endpoint only).
+4. **Given** a cache-first response returned `source=none` (no cache), **When** the panel renders,
+   **Then** it shows the loading state and the one live refresh populates the list; `source=none` is
+   never displayed as an empty mailbox.
+5. **Given** the live refresh for an event is still in flight, **When** the user triggers another
+   eligible event for the same folder (for example presses Refresh again), **Then** the newest event's
+   request supersedes the old one and only the newest response is rendered — a response captured under
+   an older `publication_revision` is dropped even if it arrives last.
+6. **Given** the user performs a successful own action (marks a message read, sends, saves a draft),
+   **When** the action settles, **Then** exactly one refresh for the affected folder follows, and no
+   other folder refreshes.
+7. **Given** any panel state, **When** 30 seconds elapse repeatedly, **Then** the folder rail and the
+   message list issue no timer-driven requests (the D25 cadence is gone); the watcher banner's
+   saved-state summary poll is unchanged.
+
+### US-2 — Honest freshness: four sources, stale labels, unknown never zero (P0)
+
+A user must be able to tell whether the rows on screen were just confirmed with the server, came from a
+cache, or are not cache-backed at all — and a folder whose size the panel does not know must never look
+empty.
+
+Why this priority: the ADR makes "a cache hit is never presented as a settled server check and an unknown
+count is never shown as zero" a hard display rule; the folder rail's current code renders
+`unread ?? 0` and a bare `total`, which violates both halves today (Verified:
+`src/components/workspaces/mail/MailFolderRail.tsx::MailFolderRail`).
+
+Independent test: feed the view state the four `MailReadMetadata.source` values and null/non-null
+counts; assert the exact label text and that null counts render the unknown marker.
+
+Acceptance scenarios:
+
+1. **Given** a response with `source=live`, **When** rows render, **Then** the freshness line reads
+   "Checked just now" (or the validated time) with no stale marker.
+2. **Given** a response with `source=memory` or `source=encrypted_disk` and `stale=false`,
+   **When** rows render, **Then** the freshness line reads "Checked <relative time>" — for example
+   "Checked 2 minutes ago" — without implying a live check.
+3. **Given** `stale=true` and `refresh_needed=true`, **When** the cache-first rows render and the one
+   live refresh runs, **Then** the freshness line reads "Last checked <relative time> · Checking…",
+   the existing rows stay visible (no skeleton replaces them), and the line resolves to US-2 AS-1 or
+   US-2 AS-4 when the refresh settles.
+4. **Given** the live refresh fails while cached rows are displayed, **When** the failure settles,
+   **Then** the stale rows remain, the line reads "Couldn't refresh — showing messages as of <time>.",
+   a Retry control is present, and the last-validated time did not advance.
+5. **Given** a folder response whose `total` is `null` (unknown), **When** the rail renders, **Then**
+   the count slot shows "—" and never `0`; the same applies to a null inbox `unread_count`, which
+   renders "—" instead of the current bare zero (the legitimate zero count keeps rendering `0`).
+6. **Given** metadata carrying `notice_code=cache_unavailable`, **When** rows render, **Then** a
+   dismissible notice reads "Mail cache unavailable; using live access." and the rows are live-sourced.
+7. **Given** `last_validated_at` is `null` in any source, **When** rows render, **Then** the panel
+   treats freshness as unknown (the stale presentation), never as "just checked".
+
+### US-3 — Paging to 200 with a reachable search path (P0)
+
+A user with a large folder reads the newest messages immediately, loads more in steps, and can always
+reach older messages through search — never a dead-end instruction.
+
+Why this priority: today's panel renders one default page with no way forward (Verified:
+`MailPanel.tsx` passes no paging params and `MailMessageList` renders one array); the ADR names the
+dead-end "search instead" instruction as explicitly not completion.
+
+Independent test: stub paginated responses of known sizes; walk 25 → 50 → 200 and assert the Load more
+control, the ceiling behaviour, and that the search affordance appears and returns rows.
+
+Acceptance scenarios:
+
+1. **Given** a folder with more than 25 messages, **When** the first page renders, **Then** exactly 25
+   rows appear and a "Load more" control is present below the list.
+2. **Given** 50 rows displayed with more available, **When** the user activates "Load more", **Then**
+   25 more rows append (75 total) and previously loaded rows are preserved unchanged.
+3. **Given** 200 rows displayed, **When** the ceiling is reached, **Then** "Load more" is replaced by
+   the message "You're viewing the newest 200 messages. Search to find older ones." with the search
+   control focused or directly adjacent, and no further browse request is issued.
+4. **Given** the ceiling state, **When** the user searches, **Then** a folder-scoped search runs live
+   (never from cache), results render in the same 25-per-page / 200-ceiling discipline with their own
+   "Load more", and an exit ("Back to <folder>") restores the browse view.
+5. **Given** a search with no matches, **When** it settles, **Then** the list area reads
+   `No messages match "<query>".` and the browse view remains one control away.
+6. **Given** a stale or foreign cursor (409 typed result), **When** any paging action settles with it,
+   **Then** the panel resets the view to the folder's first page with the notice
+   "The folder changed. Showing the newest messages." — it does not spin, retry silently, or replay the
+   cursor.
+7. **Given** search or older-page results, **When** the user leaves the view (folder switch, panel
+   close, message navigation that discards the view), **Then** the working set beyond the reusable
+   newest-page cache is released and the next open starts from the cache-first read again.
+
+### US-4 — Folder names: visible overrides and honest "automatic" (P1)
+
+A user whose server names its folders unusually can set the Sent/Drafts folder name per mailbox, and
+"automatic" means exactly what it does.
+
+Why this priority: the configuration seam already exists end-to-end except for the UI (Verified in
+§2.2); the ADR requires the override to be visible and "automatic" to be spelled out.
+
+Independent test: open the mailbox settings for a configured mailbox; assert the two fields, the
+automatic semantics on empty, and that a saved name round-trips through the existing save path.
+
+Acceptance scenarios:
+
+1. **Given** a configured mailbox in the Connectors email panel, **When** the user opens its settings,
+   **Then** "Sent folder name" and "Drafts folder name" fields are present, optional, and show the
+   saved value or the placeholder "Automatic".
+2. **Given** either field, **When** the user leaves it empty and saves, **Then** the override is
+   cleared (the backend's existing clear-to-automatic behaviour applies — no extra checkbox is added)
+   and the helper text explains it: "Leave empty to find the folder automatically."
+3. **Given** a non-empty saved name, **When** the settings render, **Then** the name is treated as a
+   deliberate override and the helper text says so: "Uses this exact folder name on your mail server."
+4. **Given** the folder rail with `mapping_source=override` and `availability=unknown` (the named
+   folder cannot be found), **When** the role renders, **Then** the rail shows the unresolved state
+   (§11 state S-8) and the settings panel shows an actionable warning naming the field — the override
+   is never silently ignored.
+5. **Given** a mailbox whose stored name predates this feature and whose intent is unprovable,
+   **When** settings render, **Then** the stored name shows as the field value (an override) until the
+   user clears it to Automatic — the panel never discards it on the user's behalf.
+6. **Given** a confirmed-absent role (`availability=absent`), **When** the rail renders, **Then** the
+   role stays visible with "No messages" and the explanation of §11 state S-7; it is never reported as
+   an error, and an unknown role (S-8) is never reported as "the server has no such folder".
+
+### US-5 — Panel presence: the gateway knows when Mail is open (P0)
+
+The gateway may keep ready connections only while a real panel is open; the panel must therefore report
+open and close on the authenticated connection, survive tab churn honestly, and never let one tab's
+state leak into another's.
+
+Why this priority: socket-retention rules (two-minute idle, last-observer close) depend on presence;
+without the frames the gateway must assume the panel is always closed — correct but slower — or worse,
+retain sockets for a closed panel.
+
+Independent test: run the presence adapter against a stub socket; drive open/close/navigation/logout
+events; assert frame sequences and observer identity.
+
+Acceptance scenarios:
+
+1. **Given** the user opens the Mail panel with a workspace resolved, **When** the panel mounts,
+   **Then** one `mail_panel_observer` open frame is sent with a fresh opaque `observer_id` and the
+   workspace id — and nothing else: no user id, session id or mailbox id travels as identity.
+2. **Given** an open observer, **When** the user closes the panel (tab-strip close, shell close,
+   navigation away from the workspace), **Then** a close frame for that same `observer_id` is sent.
+3. **Given** an open observer, **When** the browser tab closes or navigates away without a close frame,
+   **Then** the connection drops and the gateway reaps the observer by socket loss — the SPA sends
+   best-effort close on `pagehide` but correctness never depends on it.
+4. **Given** an open observer, **When** the user logs out, **Then** the socket teardown (existing
+   logout behaviour) removes the observer; after re-login the new connection starts with no observers.
+5. **Given** the socket drops and reconnects, **When** the panel is still open, **Then** the adapter
+   re-sends the open frame with a fresh `observer_id` after the connection re-authenticates.
+6. **Given** two browser tabs each with Mail open, **When** one tab closes, **Then** only that tab's
+   observer closes; the other tab's retained state is unaffected, and each tab's observer id is distinct.
+7. **Given** the panel open without an acknowledged observer (frame lost, socket down), **When** the
+   user reads mail, **Then** all reads still work as ordinary request-scoped work — presence is an
+   optimization signal, never an authorization or correctness dependency.
+8. **Given** the workspace changes while the panel stays mounted, **When** the adapter observes the
+   switch, **Then** it closes the observer for the old workspace and opens one for the new workspace
+   with the same panel instance's fresh `observer_id` semantics per open.
+
+### US-6 — Attachment rows and the Open handoff (P1)
+
+A user can see which messages carry attachments before opening them, open an attachment straight into
+the Library viewer without saving anything, and save it deliberately when they want to keep it.
+
+Why this priority: F1/F7 are founder-settled scope (issues #1170/#1174); the panel is their frontend
+half.
+
+Independent test: with the mint endpoint stubbed, clicking Open produces the descriptor handoff with
+the exact context bar; Save performs the save call and enables Open in Library only on success.
+
+Acceptance scenarios:
+
+1. **Given** a list response where a row has `has_attachments=true`, **When** the row renders, **Then**
+   a paperclip indicator appears with accessible text "Has attachments"; rows with `false` show none.
+2. **Given** an open message with attachments, **When** the reading pane renders the attachment rows,
+   **Then** each row lists filename and size (nullable size shows "Size unknown", never "0 B") and
+   carries three actions: Open, Save to Library, Download — each with a distinct accessible name
+   including the filename (the focus-return target for I-06).
+3. **Given** the user activates Open on an attachment, **When** the mint settles, **Then** the Library
+   viewer shows the temporary preview with the context bar reading exactly
+   "From mail: <subject> · Back to mail · Save to Library", outside the rendered content, and nothing
+   was written to disk (the no-write proof is W8/W5's; W3's contract is that Open only mints).
+4. **Given** a temporary preview open, **When** the user activates "Back to mail" (or Escape),
+   **Then** the temporary source is disposed (W8) and Mail shows again with the focus rules of US-7.
+5. **Given** a temporary preview open, **When** the user activates "Save to Library" and it succeeds,
+   **Then** the context bar announces success (US-7 AS-5), "Open in Library" becomes available, and the
+   saved file is a real Library entry (real path, numbered-suffix name) — the temporary view never
+   pretends it was already saved.
+6. **Given** an attachment over the 25 MB cap, **When** the rows render, **Then** Open and Save are
+   unavailable with the cap explanation accessible in place (§11 state S-13), while Download remains
+   the browser action.
+7. **Given** the save response is lost after a possible commit (transport error), **When** the panel
+   shows the outcome, **Then** it shows the "Save result unknown" state (§11 state S-12); it never
+   re-sends Save on its own, and an explicit user retry of the same save carries the same
+   `save_operation_token` and resolves from the prior receipt.
+
+### US-7 — Handoff accessibility: focus, announcements, keyboard, reflow (P0)
+
+A keyboard or screen-reader user can open an attachment, work in the viewer, and come back to exactly
+where they were — or be told clearly where they landed.
+
+Why this priority: grill finding I-06; `docs/internal/design/design-system-definition.md::D16` makes
+focus restoration, status announcement, keyboard operation and zoom/reflow release requirements, not
+preferences.
+
+Independent test: keyboard-only and virtual-focus journeys over the handoff (open → viewer → save
+success/failure → back, including the deleted-source case), plus 320 px / 200 % zoom passes.
+
+Acceptance scenarios:
+
+1. **Given** the user activates Open on an attachment row, **When** the viewer mounts, **Then** focus
+   moves to the context bar's trusted heading ("From mail: <subject>") — never into the rendered
+   content — and a screen-reader announcement states the viewer opened with the attachment's name.
+2. **Given** the user returns to mail via Back, **When** the originating attachment action still
+   exists, **Then** focus returns to that exact action and the announcement names it; **Given** it no
+   longer exists (list refreshed, message moved/deleted, folder changed), **When** the return settles,
+   **Then** focus lands on the message's list row if present, else the containing folder tab — each
+   with an explicit announcement of where focus landed and why.
+3. **Given** a save in progress, an error, or a success inside the viewer, **When** the outcome
+   settles, **Then** it is announced through a polite live region without moving focus; success does
+   not steal focus to the Library panel.
+4. **Given** any disabled stored-file action in the viewer (edit, rename, move, Library download,
+   fill & sign), **When** a keyboard or screen-reader user reaches it, **Then** the control is
+   discoverable and its explanation "Save to Library first" is readable in place (associated text, not
+   a tooltip-only hint) and visible without hover.
+5. **Given** keyboard-only use, **When** the user works the context bar, **Then** Back, Save and any
+   Retry are reachable in a sensible tab order, Escape returns to mail, and focus never escapes into
+   browser chrome or gets trapped in the viewer.
+6. **Given** a narrow viewport (320 px width) or 200 % zoom, **When** the viewer renders, **Then** the
+   context bar wraps or stacks, and every control and explanation remains reachable and readable —
+   nothing depends on hover or a wide viewport.
+
+### US-8 — Temporary-source resource policy (P0)
+
+Content inside a temporary mail attachment may only load resources that belong to that preview —
+sender-authored same-origin URLs are not trusted merely because they are local — while ordinary
+workspace rendering is untouched.
+
+Why this priority: grill finding I-04; `isDisplayableImageSrc` resolves relative URLs against the
+current origin and passes any http/https/data URL (Verified), so a mail Markdown image pointing at a
+same-origin Library path would render today's renderer straight into an authenticated workspace
+resource.
+
+Independent test: a mail Markdown attachment whose image syntax targets a same-origin Library/API
+path, a workspace embed, and a remote URL; request counters assert zero loads, with an ordinary
+workspace file as the positive control.
+
+Acceptance scenarios:
+
+1. **Given** a temporary mail Markdown attachment containing `![x](<same-origin Library download URL>)`,
+   **When** the viewer renders it, **Then** zero requests are issued to that URL — the resolver never
+   yields an authorized target (structural refusal, not a hidden attribute or CSS cover).
+2. **Given** the same content patterns aimed at a workspace embed/wikilink target or a remote image,
+   **When** the viewer renders, **Then** zero requests issue to any of them.
+3. **Given** the preview's own minted resources (its byte/representation responses, CID inline parts of
+   the same message routed through the Mail preview prefix), **When** the viewer renders, **Then** they
+   load normally.
+4. **Given** an eligible remote image and the user's explicit "Load images" consent, **When** the
+   consented load runs, **Then** it goes through the existing token-scoped proxy and nothing else.
+5. **Given** the identical Markdown content as an ordinary workspace Library file, **When** the normal
+   viewer renders it, **Then** today's behaviour is unchanged (images and embeds resolve as before) —
+   the policy scopes the temporary mail source only.
+6. **Given** any reused renderer (markdown, media, HTML iframe) in the temporary view, **When** it
+   resolves a resource, **Then** it resolves through the source-scoped policy passed with the
+   handoff — never through the workspace/Library resolver.
+
+### US-9 — Saved mail-derived HTML: scripts off by default, per-file choice (P1)
+
+A user who saves an HTML attachment gets the original bytes in the Library, marked as mail-derived,
+rendering without scripts unless they explicitly allow them for that one file.
+
+Why this priority: founder Q5=A is settled; the frontend half is the visible checkbox and honest
+profiles. The provenance marker itself is W7's — this spec states the dependency, not the storage.
+
+Independent test: save an HTML attachment; reopen it in the Library viewer; assert scripts-off
+presentation, the marker-driven notice, and that the per-file checkbox changes only that file.
+
+Acceptance scenarios:
+
+1. **Given** a saved HTML attachment with `preview_profile=mail_restricted`, **When** the Library
+   viewer opens it, **Then** it renders with scripts off by default and a visible notice saying
+   scripts are disabled because the file came from mail.
+2. **Given** that file, **When** the user enables the per-file "Allow scripts" checkbox, **Then** only
+   that file switches to the ordinary isolated script-permitting workspace profile; the choice is
+   visible, per file, and never global.
+3. **Given** an ordinary workspace HTML file, **When** the viewer renders it, **Then** its existing
+   isolated scripts-allowed profile is unchanged and no mail-derived notice or checkbox appears.
+4. **Given** a mail-derived file whose marker is missing or unreadable, **When** the viewer opens it,
+   **Then** it fails safe (scripts stay off) rather than silently upgrading a known mail-derived file.
+5. **Dependency (stated, not owned here)**: the marker's survival across move, copy, rename and
+   restore-from-backup is the cache-and-provenance work's proof obligation (W7, founder Q5=A). W3/W8
+   render from the generated `preview_profile` field and the per-file allowance field only; neither
+   package may infer provenance by scanning bytes or filenames.
+
+### US-10 — Refresh and Retry keep their distinct meanings (P2)
+
+Manual Refresh forces a folder-list revalidation; Retry on a failure re-dials past backoff — and
+neither is ever copied into an automatic request.
+
+Why this priority: the ADR's failure table and the existing `retry=true` human-marker mechanism
+(Verified in `src/lib/api/mail.ts::retryQs` and `MailPanel`'s human refs) must survive the rewrite
+without merging.
+
+Independent test: stub the folder endpoint; assert Refresh sends `refresh_mapping=true` (and
+`mode=live`), Retry sends `retry=true` only from a failure surface, and automatic paths send neither.
+
+Acceptance scenarios:
+
+1. **Given** the panel open, **When** the user presses Refresh, **Then** one folder-list request with
+   `mode=live` and `refresh_mapping=true` follows, plus the folder's one live list refresh — and no
+   other folder is rediscovered.
+2. **Given** a failed surface (folders, list, detail), **When** the user presses Retry, **Then** the
+   affected query's next fetch carries `retry=true` (bypasses backoff only — never capacity or
+   security) and no automatic refresh ever carries it.
+3. **Given** a 503 with `reason=pool_busy`/`account_busy`/`server_connection_limit`, **When** the
+   panel renders the failure, **Then** the busy copy of §11 state S-5 shows with its specific cause
+   text where the reason is known.
+
+---
