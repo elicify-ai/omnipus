@@ -95,3 +95,82 @@ This package sits in the **email transport/tools** cluster (`pkg/email`), with i
 `docs/reference/go-implementation/` does not exist in this repository (same finding as the mail-view spec §3.6 — re-verified this session). In-repo patterns this spec reuses: the credentials package's AAD-binding discipline (`pkg/credentials/CLAUDE.md` — entry ciphertext bound to its name so a swapped entry fails authentication), the `email-watch/` state-file precedent (per-pair JSON under the data dir — including its *lesson*: it is un-ignored and never deleted, exactly what §3.8 must not repeat), and `fileutil.WriteFileAtomic` as the sole write primitive.
 
 ---
+
+## 3. Design — normative behaviour
+
+### 3.1 The three stable UI roles are logical roles
+
+The panel shows exactly three folders — Inbox, Sent, Drafts — forever, on every server (the ADR's P1.1 folder-choices row; the closed slug set already exists as `pkg/email/view.go::FolderSlugs`). **The slug is a *role*, a job the folder does, never a folder name.** A server's Sent folder may be named `Sent Items`, `[Gmail]/Sent Mail`, `INBOX.Sent`, `Отправленные`, or anything else; the role is stable even when no folder fills it or two folders could fill it.
+
+Normative rules:
+
+- **R-3.1-1.** Every folder-addressed interface (REST parameter, cache key, wire `slug`) continues to use only the closed slug set `inbox | sent | drafts`. A server folder name never appears in a slug position, a log field, or a cache filename. (Citations: `pkg/email/view.go::FolderSlugs`, `::FolderInbox`; the wire schema `contracts/components/schemas/MailFolder.yaml` enum.)
+- **R-3.1-2.** Resolution maps role → server folder name at runtime; the mapping is *state* (memory + the encrypted file), never a hardcoded assumption. Today's literal fallback in `pkg/email/transport.go::Account.withDefaults` (`"Sent"`/`"Drafts"`) is demoted to a *candidate proposal* (§3.2 step 4) — it is unpersisted and proves nothing about the server.
+- **R-3.1-3.** INBOX is fixed: role `inbox` resolves to the IMAP name `INBOX` and participates in no discovery (today's `folderNameFor` behaviour, preserved). A failed INBOX operation is an account error (§3.4), never an empty account.
+- **R-3.1-4.** Discovery never creates a server folder. No `CREATE`, ever, on any path in this package — not during discovery, not as a convenience for a missing Drafts folder (ADR P1.1 "truly absent folder" row).
+
+### 3.2 Discovery through role attributes, with probing fallback
+
+Discovery answers one question: *which real server folder fills each optional role (sent, drafts)?* Its inputs are the authenticated IMAP session (obtained through W1's pool/budget interfaces — W2 never dials privately), the operator's override fields (§3.3), and the saved encrypted metadata (§3.6). Its output is a **role mapping**: for each role, one of —
+
+| Outcome | Meaning |
+|---|---|
+| `present(name, uidvalidity, source)` | A folder was resolved and validated to exist; `source` ∈ `override | special_use | fallback | saved`. |
+| `absent` | Genuine, structurally confirmed absence (§3.4 evidence bar) — only reachable for sent/drafts, never inbox. |
+| `unknown(reason)` | Not resolved *and* not proven absent: discovery failed, was unsupported, or found nothing it could prove (M-01). |
+
+Normative procedure, in order (each step only when the previous produced no result for the role):
+
+1. **Override wins outright.** If the mailbox has a non-empty stored `sent_folder_name` / `drafts_folder_name`, that name *is* the candidate; discovery probes it for existence + UIDVALIDITY. On success: `present(name, source=override)` — no server enumeration is needed for that role. On structural `[NONEXISTENT]`: the override is reported as an actionable settings warning (ADR P1.3 "saved role now missing" row) — it is never silently replaced by another folder, and it is never silently ignored. On any other probe error: `unknown(reason)`, with the override still shown in settings.
+2. **Saved mapping, still valid.** If the encrypted metadata holds a mapping for the role whose source is `special_use` or `fallback`, and a validation probe (or a fresh discovery within this same operation) confirms the folder still exists with the recorded UIDVALIDITY, the saved mapping stands (`source=saved`). A `saved` entry the server no longer confirms is discarded per §3.11 and rediscovery runs — exactly one immediate coalesced rediscovery while the panel is open (ADR P1.3).
+3. **SPECIAL-USE role attributes (RFC 6154).** If the server advertises support (CAPABILITY contains `LIST-EXTENDED` and `SPECIAL-USE` — verified available to inspect via the go-imap client capability set, the same mechanism `pkg/email/view.go::DeleteDraftStatus` already uses for `imap.CapUIDPlus`), issue one LIST-EXTENDED command selecting folders with `\Sent` / `\Drafts` special-use attributes. A matching folder gives `present(name, source=special_use)` after an existence/UIDVALIDITY probe.
+4. **Candidate fallback list.** If LIST-EXTENDED is unavailable, advertises nothing useful for a role, or no role attribute matched: probe, in this fixed deterministic order, the candidates —
+   - Sent: `Sent`, `Sent Items`, `Sent Messages`, `[Gmail]/Sent Mail`
+   - Drafts: `Drafts`, `Draft`, `[Gmail]/Drafts`
+
+   The **first** candidate whose probe succeeds establishes `present(name, source=fallback)`. The list is a set of *proposals*, deliberately finite: it covers the dominant real-world namings without pretending to know every provider's layout, and its failures carry no conclusion (§3.4). The unpersisted `withDefaults` literals (`Sent`, `Drafts`) are simply the first entries of these lists — nothing else in the code path may treat them as knowledge.
+5. **Nothing resolved → `unknown`.** No special-use role recognized **and** no candidate probe succeeded **and** no override exists ⇒ `unknown(reason)`. Never `absent` (§3.4). The response offers the existing per-mailbox name setting as the remedy; a safe diagnostic class is recorded (§3.12).
+
+Normative rules:
+
+- **R-3.2-1.** *Only a successful probe establishes a mapping.* A candidate name's presence in the list, its appearance in an unextended LIST reply, or a provider naming convention is never sufficient. The probe is the same structural existence check `isNonexistentFolder` already interprets (`[NONEXISTENT]` vs. exists), plus a UIDVALIDITY read.
+- **R-3.2-2.** An unsupported extension is **not a whole-mailbox failure**: LIST-EXTENDED/SPECIAL-USE absence degrades to step 4 for that mailbox, and the mailbox otherwise works normally. Capability detection failure, malformed capability strings, and partial advertisement (e.g. `LIST-EXTENDED` without `SPECIAL-USE`) are all just "use the fallback list".
+- **R-3.2-3.** Discovery is bounded and coalesced: it runs as one budgeted operation under the shared account gate (consuming W1's rewritten coalescing identity, correction I-01), inside the ordinary read-work deadline; it fetches folder names and status, never message data.
+- **R-3.2-4.** Discovery is a *read*: no flag changes (probe SELECTs use the same peek/examine discipline as existing reads), no EXPUNGE, no CREATE, no SUBSCRIBE.
+- **R-3.2-5.** Every discovery result — success, `unknown`, or failure — publishes only through the §3.10 publication-revision check before it may touch the cache, the encrypted file, or a response.
+
+### 3.3 Overrides: reuse the existing settings exactly, with the provenance rule
+
+The per-mailbox override already exists end-to-end and W2 adds **no new field, no new flag, no migration**. The stored fields are `sent_folder_name` / `drafts_folder_name` on `pkg/config/config.go::MailboxConfig`; the update semantics already live in `pkg/gateway/rest_mailbox.go::restAPISetAgentMailbox.persistConfig` (read this checkout): **omitted field keeps its stored value; empty string deletes the key (clear-to-automatic); non-empty trimmed string is stored.** The Connectors schema already round-trips them (`contracts/components/schemas/Mailbox.yaml`, `::MailboxConfigureRequest.yaml`).
+
+Normative rules:
+
+- **R-3.3-1.** Reading: a non-empty stored value is an **override** (mapping source `override`) for its role and outranks every discovery result. Discovery still validates it (R-3.2-1) because a stale override must be *warned about*, not obeyed blindly into failures — but validation never *replaces* it (ADR P1.3: "an explicit missing override remains an actionable settings warning, not a reason to ignore the override").
+- **R-3.3-2.** An empty (or absent) stored value means **automatic**: discovery resolves the role per §3.2. The Connectors UI presents this as an explicit "Automatic" choice — clearing the field is the mechanism, exactly as `persistConfig` implements today.
+- **R-3.3-3.** **Legacy provenance.** A stored name whose operator intent is unprovable is shown as an **override** until the user chooses Automatic — it is *never silently discarded, never silently reclassified*, and intent is never inferred from the string's content (`"Sent"` stored by an operator means the same as any other stored name). The product has never written these fields itself (the mail-view spec added them as operator-settable with default empty; verified in `pkg/config/config.go::MailboxConfig` and the §2.1 setter behaviour), so every non-empty stored value is treated as deliberate. Unpersisted built-in defaults (`withDefaults`' literals) are discovery fallbacks only (R-3.1-2) — they are not overrides and never enter the saved metadata as such.
+- **R-3.3-4.** No discovered name is written back into operator configuration. The discovered mapping lives in the encrypted metadata file only (§3.6); `config.json` keeps holding exactly what the operator typed. This keeps the ADR's boundary: configuration is operator intent; discovery state is disposable cache.
+
+### 3.4 UNKNOWN vs ABSENT — the M-01 correction, normative
+
+The grill's M-01 finding and the ADR's correction make this distinction a hard requirement: **a failed candidate sweep is unresolved, not evidence of absence.**
+
+- **`unknown` (unresolved):** the role could not be resolved and absence was not proven. This is the outcome when: discovery commands failed or timed out; authentication, TLS, DNS or permission errors occurred anywhere in the flow; LIST-EXTENDED was unsupported and no candidate probe succeeded; or LIST succeeded but the server simply holds an untagged, locally named Sent folder outside the finite candidate list — from the client's seat, that case is *indistinguishable* from "no candidates exist". The role renders as **unresolved**, the response carries `availability=unknown` (W0's proposed field), and the UI offers the existing per-mailbox name setting. The user is never told "the server has no such folder" on this evidence.
+- **`absent` (confirmed):** requires **both** of these, and nothing less:
+  1. discovery completed successfully — the server answered the enumeration (LIST or LIST-EXTENDED) without error; and
+  2. every candidate applicable to the role — the override name when set, otherwise the full §3.2 candidate list — returned the server's **structural** not-found response, the same `[NONEXISTENT]` response code `pkg/email/view.go::isNonexistentFolder` already detects.
+
+  Only then may the role render as genuinely absent (`availability=absent`, `total=0` plus the server-folder-absent explanation; list returns an empty array rather than a mailbox-level 502).
+- **Anything else is `unknown`**: network, permission, timeout, auth and TLS failures during discovery or probing all leave the role `unknown`, never empty (ADR P1.3 "no special-use role" row and Failure-behaviour table).
+- **Missing INBOX is an account error, always.** INBOX takes no discovery, has no candidate list, and has no absent state: a structural not-found or any other failure on `inbox` fails the mailbox read loudly with the safe transport class, exactly as today's `FolderCounts` treats non-inbox errors — but for INBOX even `[NONEXISTENT]` is fatal. A healthy account always has an INBOX; "empty" is a count, not an availability state.
+- **Counts inherit the distinction.** An unknown/absent role's count is **not invented**: `absent` yields a real zero with the explanation; `unknown` yields `total=null` (W0's nullable field), never a fabricated 0 that would masquerade as "checked, empty".
+
+### 3.5 Multiple role candidates
+
+When more than one server folder could fill a role (two folders carry `\Sent`; or the saved mapping and a special-use attribute disagree; or two candidates probe successfully — the procedure stops at the first, so this primarily arises across saved-vs-fresh disagreement):
+
+- **R-3.5-1.** A **still-valid saved mapping wins** over a fresh ambiguity: if the encrypted metadata holds a validated mapping for the role, it stands and no ambiguity is surfaced. (Rationale: the user already chose or already accepted this folder; re-asking on every open would make the saved mapping worthless.)
+- **R-3.5-2.** Otherwise the response **shows the ambiguity and lets the user choose** through the visible per-mailbox name setting: the role is reported unresolved-by-ambiguity (an `unknown` variant with a distinct safe reason class), the settings path is offered, and the mail server is not touched for that role beyond the enumeration already performed.
+- **R-3.5-3.** **Never send or draft into an arbitrarily picked folder.** The compose, draft-APPEND and send-save paths resolve their destination folder through this same mapping; when it is unresolved or ambiguous they fail with a visible, actionable settings error instead of picking a folder. (The ADR's P1.3 "Multiple role candidates" row, made concrete for the write paths.)
+- **R-3.5-4.** The user's choice is expressed exactly one way: a non-empty value in the per-mailbox setting (R-3.3-1). There is no separate "chosen mapping" store, no second preference surface.
+
+---
