@@ -155,32 +155,56 @@ Proposed new files (all siblings inside the W3-owned trees, one owner each):
 | `LibraryEntry` | from `LibraryEntry.yaml` | Landed: requires a real workspace-relative `path` — the reason the temporary source must not fabricate one (the ADR's F1 viewer-input row) — and now carries `preview_profile: workspace\|mail_restricted` and the per-file `preview_scripts_allowed` field (founder Q5=A) — `contracts/components/schemas/LibraryEntry.yaml::preview_profile`, `::preview_scripts_allowed`. |
 | WS `ClientFrame` / `ServerFrame` | `src/lib/ws.ts` re-exports from generated | Landed: `contracts/asyncapi.yaml` carries `MailPanelObserverFrame` (`action: open\|close`, `observer_id`, `workspace_id`), the `mail_panel_observer_ack` and `mail_panel_observer_error` frames, and three new `WsFrameType` entries; `library_changed` remains the save-notification reuse path. |
 
-### 2.4 Contract shapes the W0 wave must add before any W3 code (register §2 rows; requested via w5-integration's amended §8 queue)
+### 2.4 Contract shapes the W0 wave landed (register §2 rows; commit `5f23ae8a0` on this branch)
 
 There is no W0 spec file: **W0 is backend-lead in the ADR's contracts wave (Wave B)** — the register
-rows below are the queue it works from. Each row names the publisher the register assigns; W3 consumes
-the generated result and never creates a stub or a second declaration of any of these.
+rows were its queue, and the wave has landed on this branch (commit `5f23ae8a0`; `make verify-contracts`
+green, independently re-run by the wave CHECK
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/receipts/contracts-wave-check.md`). The rows
+below name the landed shapes W3 consumes; W3 never creates a stub or a second declaration of any of
+them. Two nullabilities the register rows name are **not yet in the landed shapes** — the wave author's
+disclosed amendment schedule carries them, and this spec flags each where it bites.
 
-| Proposed generated shape | Publisher (register row) | W3 consumes it for |
+**Which metadata instance feeds which panel surface (the freshness model; grill Round 2 R2-I3).** The
+landed shapes carry **separate** `MailReadMetadata` instances — a validation of one surface is not a
+validation of another (the ADR's freshness-metadata row; the landed
+`contracts/components/schemas/MailReadMetadata.yaml` description). W3 renders exactly three of them,
+and no others exist for it:
+
+| Landed instance | Feeds |
+|---|---|
+| `MailFolder.mapping_metadata` | The folder-name/role states (§11 S-7/S-8) and the rail's role display — **the only surface that can carry `source=encrypted_disk` in Phase 1** |
+| `MailFolder.count_metadata` | The rail's count markers and their unknown "—" presentation |
+| `MailMessagePage.metadata` | The message-list freshness line (§11 S-3…S-6) and the reading pane's freshness context — the detail read (`MailMessage`) carries no metadata object in the landed shapes; the ADR gives mapping, counts and page headers their own and no others |
+
+In Phase 1 `encrypted_disk` reaches the panel only through `mapping_metadata` (the landed
+`MailReadMetadata.source` description scopes it so: headers are memory-only in Phase 1, counts are
+memory-only per ADR P1.1). A list or count fixture carrying `encrypted_disk` is not constructible from
+the landed shapes and no producer sends it — D-1 row 4 and U11 are scoped accordingly (§8.6/§8.3). The
+`source` enum's *definition* stays W0's (register row 2); W3 consumes the generated union
+(`MailReadMetadataSource`) and tests only the values this table names per surface.
+
+| Landed generated shape (register row) | Producer / owner | W3 consumes it for |
 |---|---|---|
-| `MailReadMetadata` — `source` (generated union; the exact scoping is W0's to schema from the ADR's freshness-metadata row — adr-grill-4 m4), `last_validated_at` (RFC 3339, nullable), `stale: boolean`, `refresh_needed: boolean`, `notice_code` (nullable closed enum, e.g. `cache_unavailable`), `publication_revision` (nullable opaque) | W0 (row 2); **w2 is the only value producer**; w5-integration attaches/advances in responses | Freshness labels (US-2); superseded-response dropping (US-1). |
-| `MailFolderList`/`MailMessagePage` gain metadata; `MailFolder` gains `availability: present\|absent\|unknown`, nullable `uidvalidity`, `mapping_source: override\|special_use\|fallback\|saved\|none`, `total` nullable | W0 (row 3). **Five `mapping_source` values**: the register adopts w2's producer enum, superseding the ADR's four-value proposal — the fifth value `saved` is the unflagged contract delta the first grill missed | Rail states (US-2, US-4); the `saved` value renders as an ordinary override (US-4 AS-5). |
-| Paging: `next_cursor` (nullable opaque string), `has_more`, `view_limit_reached`; panel default/max 25; `search` query param (founder Q-D=A: subject plus sender/recipient substring, server-side header search, within the 25/200 bounds); typed 409 stale-cursor result | Shapes: W0 (row 4), requested by w5-integration's amended §8 queue. **Implementation**: w2 implements the IMAP SEARCH and cursor issuance in its view file (the story its correction adds) — W3 builds neither | US-3. |
-| `MailAttachmentPreviewRequest` / `MailAttachmentPreviewResponse` (incl. `content_source.byte_url`, nullable `isolated_html_url`, `token`, `expires_in_seconds`, `read_only`, `text_readable`, `subject`, descriptor) and `message_ref` on list/read results (I-03) | W0 (row 8). `message_ref` is **minted by w5-integration's gateway handlers**; same-lease epoch/generation validation is w1's published capability plus w2's normative validation rules (row 16) — W3 carries it opaquely | US-6 (Open handoff). The server-side part fetch behind the mint is w2's targeted single-part reader (row 14) — invisible to W3. |
-| `MailAttachmentSaveRequest` (with `save_operation_token`, M-02) / `MailAttachmentSaveResponse` (`saved`, real `entry: LibraryEntry`, `path`, `absolute_path`, `size_bytes`, `audit_status`, `warning_code`) | W0 (rows 8/22); the bounded prior-receipt reconciliation service is the w4 file's ADR-W7 implementation | US-6 (Save branch), §11 states S-15/S-16/S-17. |
-| `MailReplyContextRequest` / `MailReplyContextResponse` | W0 (row 8) | F5 reply/quote prefill. |
-| `MailMessageSummary.has_attachments: boolean` required; `date` nullable (F6/F7) | W0 (row 8). The flag is **derived by w2's MIME structure classifier** (row 15) — W3 renders it and never derives it panel-side; date normalization is w1/w2's | Paperclip indicator; **No date**. |
-| AsyncAPI: `mail_panel_observer` client frame (`action: open\|close`, `observer_id`, `workspace_id`) + server acknowledgement/error frame, bound to the authenticated socket | W0 (row 5, step 3); the gateway handlers that bind/tear down observers are **w5-integration's** (rows 5/11) | US-5 (presence). |
-| `MailUnavailableError.reason` (`pool_busy\|account_busy\|server_connection_limit\|backoff`); `LibraryEntry.preview_profile: workspace\|mail_restricted` + the per-file scripts-allowance field (Q5=A) | `reason`: W0 (row 7, step 4); w5-integration maps the distinct values w1 supplies. `preview_profile`/allowance: W0 (row 8); the marker/allowance storage and its survival proof is the w4 file's ADR-W7 work | Busy copy; US-9. |
+| `MailReadMetadata` — **landed** at `contracts/components/schemas/MailReadMetadata.yaml`: `source` (generated 4-value union `MailReadMetadataSource`: `live\|memory\|encrypted_disk\|none`), nullable `last_validated_at` (RFC 3339), `stale: boolean`, `refresh_needed: boolean`, nullable closed-enum `notice_code` (`cache_unavailable`), nullable opaque `publication_revision`; all six required | W0 defined (row 2); **w2 is the only value producer**; w5-integration attaches/advances in responses | Freshness labels (US-2); superseded-response dropping (US-1); consumed through the three instances named above |
+| `MailFolder` role fields — **landed** at `contracts/components/schemas/MailFolder.yaml`: `availability: present\|absent\|unknown`, nullable `uidvalidity`, `mapping_source: override\|special_use\|fallback\|saved\|none`, `mapping_metadata` + `count_metadata`. **`total` is still required non-nullable** at the landed commit; the unknown-count nullability (the ADR's "make `total` nullable") rides the wave author's scheduled amendment (contracts-wave-check F2) — until it lands the `total: null` rail state (US-2 AS-5, MC-W3-4) has no wire representation, and the panel work that renders it gates on that amendment, never on an improvised sentinel | W0 defined (row 3). **Five `mapping_source` values**: the register adopts w2's producer enum, superseding the ADR's four-value proposal — the fifth value `saved` is the unflagged contract delta the first grill missed | Rail states (US-2, US-4); the `saved` value renders as an ordinary override (dataset **D-3**, the register row 3 five-value enum) |
+| Paging/search — **landed**: `contracts/components/schemas/MailMessagePage.yaml` (`next_cursor` nullable opaque string, `has_more`, `view_limit_reached`), the messages-read operation's `search` and `cursor` params, and the typed 409 at `contracts/components/schemas/MailStaleReferenceError.yaml` (`code: stale_cursor\|stale_reference`, wired on the list/detail/seen/download/save operations). Panel default/max 25; search fields per founder Q-D=A: subject plus sender/recipient substring, server-side header search, within the 25/200 bounds. Two landed prose items await their scheduled amendments and W3 reads them accordingly: the messages-read `limit` description still reads default-20/clamp-100 while `search` carries the 25/200 bound (contracts-wave-check F4) — **the panel always sends `limit=25` explicitly**, never relying on the server default; and the `search` description's "founder decision Q-D pending" sentence predates the Q-D answer — Q-D=A is decided (2026-10-02, `mail-feature-decisions.md`), this spec's fields stand, and the stale prose is not an open question (contracts-wave-check F5) | Shapes: W0 (row 4). **Implementation**: w2 implements the IMAP SEARCH and cursor issuance in its view file (§3.13 of its spec) — W3 builds neither | US-3 |
+| Preview/save/reply — **landed**: `contracts/components/schemas/MailAttachmentPreviewRequest.yaml` (`workspace_id`, `agent_id`, `folder`, `message_ref`, `part_index`) / `MailAttachmentPreviewResponse.yaml` (`kind: mail_attachment`, `preview_id`, `subject`, `attachment`, `text_readable`, `content_source` with `byte_url`, `read_only` const-true — metadata-only, no payload, the I-05 correction); `MailAttachmentSaveRequest.yaml` (required `save_operation_token`, M-02) / `MailAttachmentSaveResponse.yaml` (`saved` const-true, real `entry: LibraryEntry`, `path`, `absolute_path`, `size_bytes`, `audit_status: recorded\|disabled\|failed`, nullable `warning_code`); `message_ref` landed on `MailMessageSummary.yaml` and `MailMessage.yaml` (I-03) | W0 (rows 8/22). `message_ref` is **minted by w5-integration's gateway handlers**; same-lease epoch/generation validation is w1's published capability plus w2's normative validation rules (row 16) — W3 carries it opaquely. The bounded prior-receipt reconciliation service is the w4 file's ADR-W7 implementation | US-6 (Open handoff and Save branch), §11 states S-15/S-16/S-17. The server-side part fetch behind the mint is w2's targeted single-part reader (row 14) — invisible to W3 |
+| `MailReplyContextRequest` / `MailReplyContextResponse` — **landed** (`to`, `cc`, `bcc`, `subject`, `body_markdown`, `in_reply_to`) | W0 (row 8) | F5 reply/quote prefill |
+| `MailMessageSummary.has_attachments: boolean` — **landed**, required, on the summary and the detail. **`date` is still required non-nullable** on both shapes at the landed commit; the F6 "No date" state rides the same scheduled amendment as `total` (contracts-wave-check F3) — until it lands the formatter change gates on the amendment, never on a sentinel date | W0 (row 8). The flag is **derived by w2's MIME structure classifier** (row 15) — W3 renders it and never derives it panel-side; date normalization is w1/w2's | Paperclip indicator; **No date** (post-amendment) |
+| AsyncAPI — **landed**: `contracts/asyncapi.yaml` `MailPanelObserverFrame` (`action: open\|close`, `observer_id`, `workspace_id`), `mail_panel_observer_ack`, `mail_panel_observer_error`, three new `WsFrameType` entries, bound to the authenticated socket | W0 (row 5, step 3); the gateway handlers that bind/tear down observers are **w5-integration's** (rows 5/11) | US-5 (presence) |
+| `MailUnavailableError.reason` (`pool_busy\|account_busy\|server_connection_limit\|backoff`) — **landed**; `LibraryEntry.preview_profile: workspace\|mail_restricted` + `preview_scripts_allowed` (Q5=A) — **landed** | `reason`: W0 (row 7, step 4); w5-integration maps the distinct values w1 supplies. `preview_profile`/allowance: W0 (row 8); the marker/allowance storage and its survival proof is the w4 file's ADR-W7 work | Busy copy; US-9 |
 
-**Sequencing rule (Hard Constraint #8, as ruled by the register §5 deadlock ruling)**: W3 consumes
-generated types only. The contracts wave is owned: backend-lead in the ADR's W0 role runs Wave B
-immediately after the correction waves merge, and its regenerated artifacts merge before any
-wire-consuming production code. Until its schemas land and `scripts/gen-contracts.sh` regenerates
-`src/lib/api/generated/`, no W3 wire-consuming production file changes. Meanwhile W3 may build below the
-wire boundary (the internal adapters of §2.1 and RED tests for non-wire behaviour); a missing Wave B
-start is a blocked report to team-lead under shared rule 15 — never a licence to hand-write a parallel
-type. The one inline-discriminated-union exception (OpenAPI-hosted `oneOf`) is W0's concern, not W3's.
+**Sequencing rule (Hard Constraint #8, as ruled by the register §5 deadlock ruling) — satisfied for
+W3's inputs**: W3 consumes generated types only. The contracts wave ran and landed on this branch
+(commit `5f23ae8a0`): schemas and the regenerated `src/lib/api/generated/` / `pkg/api/generated/`
+artifacts committed atomically, `make verify-contracts` green. W3's wire-consuming code consumes the
+regenerated types from here on. Two branch-level items remain outstanding and are tracked, not worked
+around: the `total`/`date` nullability amendment (rows 2 and 6 above), and the five gateway
+consumer-compile sites the wave disclosed — the branch stays unpushed until the owning waves adapt
+those sites (wave CHECK finding F1; the gateway Mail routes are w5-integration's). Neither is W3's to
+fix, and neither licenses a hand-written parallel type. The one inline-discriminated-union exception
+(OpenAPI-hosted `oneOf`) is W0's concern, not W3's.
 
 ---
 
