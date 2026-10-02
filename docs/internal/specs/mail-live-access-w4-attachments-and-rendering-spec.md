@@ -36,7 +36,7 @@ Two grill findings shape the hardest parts: **I-04** (sender-authored markup in 
 - The temporary content-source seam in the Library viewer (stored entry vs temporary mail attachment) and its read-only capability rules.
 - The capped preview-purpose byte resource and the distinct browser-Download streaming path (grill I-05), including late-failure ordering.
 - The temporary-Mail resource policy passed to every reused renderer (grill I-04).
-- The Mail→Library handoff interaction contract: focus, announcements, keyboard, reflow (grill I-06).
+- The Mail→Library handoff interaction contract — focus, announcements, keyboard, reflow (grill I-06): the descriptor and the contract are **published by w3** (register R-1, one publisher; grill-2 F-1); this package consumes the frozen shape and delivers the Library-side behaviour.
 - The shared attachment transfer/save service used by panel and agent alike, its save-operation-token reconciliation for a lost response (grill M-02), its audit event, and its refusal cases.
 - The saved mail-derived HTML profile (founder Q5=A): original bytes, persisted mail-derived marker, scripts off by default, per-file scripts checkbox, marker provenance across move/copy/rename/restore.
 - The parsed CSS policy: allow-list from the security artefact, `<style>`-block pass, `url()` pin-then-rewrite extension, and the two data:-URI paths where the sanitizer is the only gate.
@@ -144,7 +144,6 @@ Stated so the packages can be built in parallel without editing each other's fil
 | `pkg/email/reply.go::BuildReplyRecipients` (proposed) — the transport-neutral recipient rule (Reply-To otherwise From; reply-all merge; self-exclusion; de-duplication) | W10 | w5-integration's gateway reply-context handler; `pkg/tools/email_compose.go` adapter (this package); indirectly the SPA (which implements nothing) |
 | `pkg/tools/email_attachments.go` — `list_email_attachments`, `read_email_attachment`, `download_email_attachment` + `read_message`'s attachment list | W10 | `EmailToolset`, catalog, inventory, seed, agent registration |
 | `src/components/library/mailAttachmentPreviewSource.ts` (proposed) — the temporary-source adapter + resource policy the renderers consume | W8 | `LibraryPreviewPane`, `LibraryExplorer`, every reused renderer |
-| The handoff callback shape Mail→Library (frozen jointly with W3 before either side builds) | W8 + W3 jointly, frozen first | `MailPanel` (W3), `LibraryExplorer` (W8) |
 
 ### 3.2 CONSUMES (delivered by others; this package edits none of their files)
 
@@ -155,7 +154,7 @@ Stated so the packages can be built in parallel without editing each other's fil
 | The shared pool/lease interfaces and the budget injection | **w1** (`MailSessions`, `Lease`, session-source injection; register row 9, frozen in w1 §3.1) | Inject into `Transfer`; never build a private client/pool |
 | The issued `message_ref` (register row 16, split): **w5-integration issues** it in the gateway handlers; **w1 publishes** the same-lease validation capability; **w2 holds** the normative validation FRs in `view.go` | w5-integration (issuance) + w1/w2 (validation) | Consume the reference unchanged; refuse stale references (wrong pair, old generation, old UIDVALIDITY) with the typed error before any fetch |
 | `has_attachments` metadata + the MIME structure classifier | **w2** (register row 15 — one MIME walker, no second) | `read_message`'s attachment list reuses the same classifier output — no second MIME walker |
-| The handoff callback shape (frozen above) | W3 | Mail panel invokes it; Library honours it |
+| The Mail→Library handoff descriptor and interaction contract — **one publisher (register R-1; grill-2 F-1): w3 publishes both**, and the freeze lives in w3's spec (w3 §3.1 handoff rows, "Frozen here"). The ADR's W8/W3 joint-ownership sentence (correction-round ¶378) covers the joint *work* — both sides build their half — not the shape's publication | w3 | W8 consumes the frozen descriptor: mounts the temporary source from it, guarantees the context bar and the focus/announcement/keyboard/reflow behaviour of §5.3, and never re-publishes, re-types or amends the descriptor; the joint work with W3 continues (§15 step 3); any disagreement about the shape resolves under register R-2.2 to a dated register line |
 | `pkg/library` path-safety primitives, `pkg/audit` logger, `pkg/tools/resolvepath` policy, `pkg/config` ceiling/inventory seams | Existing owners (Library leaf, audit, tools, config) | Call them; never bypass or weaken |
 | Tool description text for the three new tools | prometheus-prompt-engineer, supplied to W10's file | Paste, not author |
 
@@ -328,7 +327,7 @@ Everything else is refused **structurally** — the policy's resolver never yiel
 
 ### 5.3 The handoff interaction contract (grill I-06) — focus, announcements, keyboard, reflow
 
-Per the design system's accessibility release requirement (D16): focus visibility/restoration, status announcement, keyboard operation and zoom/reflow are release requirements, not preferences. Catalogued controls only (`button.tsx`, `icon-button.tsx`, `tooltip.tsx`, `dialog.tsx`, `FormError.tsx`, `checkbox.tsx`); no visual redesign.
+Per the design system's accessibility release requirement (D16): focus visibility/restoration, status announcement, keyboard operation and zoom/reflow are release requirements, not preferences. Catalogued controls only (`button.tsx`, `icon-button.tsx`, `tooltip.tsx`, `dialog.tsx`, `FormError.tsx`, `checkbox.tsx`); no visual redesign. Ownership (grill-2 F-1): the handoff descriptor and the normative interaction contract are **w3's published freeze** (register R-1 — one publisher); this section states the obligations the Library side satisfies against that freeze, never a second contract.
 
 | Moment | Required behaviour |
 |---|---|
@@ -934,7 +933,7 @@ Every FR-level statement in §§4–7 traces to a story above; every story has s
 
 1. **Contracts first — Wave B, owned by backend-lead in the ADR-W0 role** (preview mint/response, save subresource + token shapes, tool results, `message_ref` field on descriptor outputs, nullable date, `preview_profile`/allowance field) — regenerated and committed before any handler/consumer; there is no W0 spec file, so a Wave B that has not started is a blocked report to team-lead, never a stub (register §5).
 2. **W7 service + token reconciliation + marker storage** against tests 1–4.
-3. **W8 viewer source union + resource policy + handoff freeze with W3** against tests 14–15; I-06 interaction contract in the same slice.
+3. **W8 viewer source union + resource policy + handoff integration against w3's frozen descriptor** (F-1: w3 publishes the descriptor/contract, W8 consumes and honours it) against tests 14–15; I-06 interaction contract in the same slice.
 4. **W10 tools + policy catalog + `BuildReplyRecipients`** against tests 9–12; `read_message` descriptor extension rides it.
 5. **W9 CSS policy** behind its security-lead review against tests 7–8 — the sequence keeps the founder's quick wins (reply, dates) and the attachment flow ahead of full styling.
 6. **Dates (transport → contract consumers → display)** — small, independent, land early per the founder's ordering.
