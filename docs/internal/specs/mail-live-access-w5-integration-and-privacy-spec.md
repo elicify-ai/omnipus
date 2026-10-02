@@ -624,3 +624,160 @@ All tests are written and owned by the proof package (qa-lead); this spec names 
 | `pkg/gateway/rest_mailbox_test.go` | Config persistence semantics (E-Overrides) | Disable cascade adds behaviour; changes nothing about field handling |
 | `pkg/agent/email_tools_test.go`, `pkg/tools/email_no_retry_param_test.go` | Tool registration and the no-retry rule | Setter extension must not alter registration shape |
 | `pkg/email/view_missing_folder_test.go` | The count-side missing-folder hotfix | Named in the ADR's test strategy as preserved |
+
+---
+
+## 7. Publishes / Consumes (the parallel-work contract)
+
+### 7.1 This package PUBLISHES
+
+| Interface | Consumers | Frozen shape |
+|---|---|---|
+| **Runtime injection setters** on the tool surface (the `SetMailBudget` pattern extended to pool/cache/presence handles — `pkg/agent/email_tools.go`) | W1 (implements the handles), W10 (attachment tools ride the same injection) | Optional-interface setter pattern unchanged: a nil handle means "ungated" only in unit tests; production boot always injects before `NewAgentLoop` |
+| **restAPI shared-handle fields + lazy accessors** (`mailBudgetFor` pattern) | This package's handlers only | Private to the package; the accessors resolve the same process-wide instances as boot |
+| **Presence registry API**: register observer / drop observer / drop-connection (called from the WS teardown hook) | W1 (pool consults presence for panel-socket retention), W3 (via wire frames only) | Bound to the connection object; conservative when absent — absence degrades to request-scoped, never errors |
+| **Removal cascade entry points**: per-pair purge invoked from mailbox/agent/workspace deletion paths | W2 (cache manager performs the purge), W1 (lease close, generation advance) | Best-effort with truthful outcome enum (`removed` / `removed_cleanup_pending` + opaque cleanup intent); no plaintext copies |
+| **REST surface** (all changed/new handlers) | W3's SPA via W0's generated types only | Every wire shape comes from generated artifacts; this package never invents a parallel type |
+| **The exclusion gate decision** (allowed/refused + safe notice code) | W2 (cache writer consults before first write) | Refuse-on-doubt; the decision and its reason are loggable as safe classes |
+
+### 7.2 This package CONSUMES
+
+| From | Interface | Blocking dependency |
+|---|---|---|
+| **W0** | Generated Go/TS/Zod types for every §8 shape; the `WsFrameType` enum extension | Blocks all handler work — contract-first (Hard Constraint #8) |
+| **W1** | Pool/lease manager (acquire/release/retire, reservation counting, presence + generation hooks); the coalescing-identity rewrite (I-01); the watcher fair scheduler | Blocks US-1/US-2 verification; wiring can be stubbed but not proven before W1's interfaces freeze |
+| **W2** | Folder-mapping/header-cache services; the encrypted envelope writer (crypto owned by W2, security-lead reviewed); the pair-identity fingerprint verifier | Blocks US-3 verification; the *location/gate/purge policy* is this package's, the *envelope* is W2's |
+| **W7** | The Transfer service (Save mode) for the download/save endpoints | Blocks the attachment endpoint split's Save side; the preview byte endpoint itself needs only W2's part reader |
+| **W1 (redaction)** | The `recordFailure` correction (stop persisting raw error text) | US-7.3 is W1's file edit, this package's requirement — named here so it is not lost between packages |
+| **Deployment (omnipus-agent-os)** | The `mail-cache/` deny rule in the provisioning template + idempotent re-run on the machine | Blocks disk-cache activation (US-4); the product-side gate enforces the same rule defensively |
+
+**Interface-freeze sequencing** (from the ADR): W0 lands contracts first; the internal pool/cache/presence interfaces are frozen with the architect before parallel writers start; this package's wiring begins against the frozen interfaces, not against W1/W2's evolving internals.
+
+---
+
+## 8. Contract-first sequence this package owns
+
+This package owns **no contract files**. It owns the *requirements* below, requested from W0 in this order, and it may write handlers only after the corresponding generated artifacts exist. Every step follows the 5-step procedure (`CLAUDE.md`, "Contract regeneration"): schema → reference from `openapi.yaml`/`asyncapi.yaml` → `scripts/gen-contracts.sh` → commit generated diff atomically with the spec change → consume generated types only.
+
+| Order | Shape requested from W0 | Referenced from | This package's consumer |
+|---|---|---|---|
+| 1 | `MailReadMetadata` shared object: `source` (`live|memory|encrypted_disk|none`), nullable `last_validated_at`, `stale`, `refresh_needed`, nullable closed `notice_code` (incl. `cache_unavailable`), nullable opaque `publication_revision` | `openapi.yaml` → `MailFolder`, `MailFolderList`, `MailMessagePage` | Revision attach/advance in gateway responses (I-02); notice surfacing from the write gate |
+| 2 | Folder read params: `mode=cache_first|live` (omitted = live), `refresh_mapping` Boolean | `openapi.yaml` folder/list GETs | `handleMailFolders`/`handleMailList` param handling |
+| 3 | Presence frames: client `mail_panel_observer` (`action=open|close`, opaque `observer_id`, `workspace_id`) + server ack/error frames; `WsFrameType` enum entries | `asyncapi.yaml` `channels.chat` | `dispatchFrame` case + `wsFrameSchemaName` mapping (inbound validation) |
+| 4 | `MailUnavailableError.reason` extension: `pool_busy|account_busy|server_connection_limit|backoff` | `openapi.yaml` 503 response | Pool-refusal mapping in the budget wrapper |
+| 5 | Removal result discrimination: `removed|removed_cleanup_pending` + safe cleanup code + the Retry-cleanup operation keyed by opaque cleanup intent (covering the mailbox route and the agent/workspace cascade's mail part) | `openapi.yaml` mailbox delete + new cleanup operation | `deleteAgentMailbox`, `deleteAgent`, workspace cascade handlers |
+| 6 | Preview grant change: mint request/response drop payload semantics; `content_source.byte_url` → the **preview-purpose byte endpoint** (distinct operation from `getMailAttachment`), token-bound, cap-enforcing; `getMailAttachment` description pinned to browser-Download streaming | `openapi.yaml` mint + both byte operations (grill I-05) | `handleMint`, new preview byte handler, `handleMailAttachment` download role |
+| 7 | No new tool surfaces. This package adds no builtin tool names, so Hard Constraint #6 has no new registry rows from W5 — the constraint is honoured negatively: `grep -rl '"<new>"' pkg/coreagent/ pkg/config/ pkg/tools/` returning 0 is *correct* here because no new tool exists; the cache is not agent-invokable by design (MC-16 is the enforcement test) | — | — |
+
+**Generated artifacts that must be regenerated and committed atomically with each contract step** (never hand-edited): `pkg/api/generated/` (oapi-codegen Go types), `src/lib/api/generated/` (openapi-typescript TS types + openapi-zod-client Zod schemas), and the AsyncAPI Zod schemas — verified by `make verify-contracts` (a red verify is stale artifacts: regenerate, review, commit).
+
+**Sequencing rule within this package:** steps 1–4 unblock the panel/presence wave; steps 5–6 unblock removal/preview work. The preview grant change (step 6) may land **before** the byte-endpoint split is consumed by W3, but the payload removal and the endpoint split must be one atomic contract step — shipping payload-free grants against the old single shared byte endpoint would break inline serving.
+
+---
+
+## 9. Explicit non-goals
+
+| Not in this package | Reason / owner |
+|---|---|
+| Pool/lease internals, coalescing identity, watcher scheduling | W1's implementation; this package wires and consumes |
+| Envelope crypto, folder discovery, header-cache internals | W2; security-lead reviews the crypto |
+| Any SPA file | W3 exclusively |
+| Every `contracts/` and generated-file edit | W0 exclusively; this package requests and consumes |
+| Attachment Transfer service, Library storage, saved-HTML provenance | W7 |
+| Agent attachment tools, policy catalog, `BuildReplyRecipients` | W10 |
+| Phase 2 JMAP transport, trusted-origin probing, on-disk header snapshots | W6, later wave — this package's location/gate/cascade design is Phase-2-ready but nothing Phase 2 ships here |
+| The data-dir ignore rule's *provisioning-script edit and machine re-run* | team-lead/founder ops (deployment); this package specifies, gates on, and verifies it |
+| Fixing the blocked backup job (30 gitleaks findings, unloaded launchd service) | Reported as a note by the trace; a human-runbook task outside this feature |
+| Remediation of already-tracked cache files (should any exist at rollout) | The runbook (US-4.3) documents it; execution is ops, history rewrite is a founder decision |
+| Any measurement run | The measurement plan's runs belong to the UAT/proof lanes; this package only guarantees the counters exist (US-6.5, MC-12) |
+| Credential-store, shell-policy or backup-model overhauls | ADR non-goal: only necessary Mail cache isolation lands here |
+
+---
+
+## 10. Definition of Done
+
+**Code correct and tested** — requires ALL of:
+- Every §6 test written from this spec (RED first), passing (GREEN), with red-before-green receipts on the implementation branch (tests-only CI proof, or the single dispatcher-owned narrow local run the root rules permit), then an independent CHECK/mutation audit (the X-1…X-10 counterexamples each demonstrated to kill their mutation).
+- `make verify-contracts` green with the §8 artifacts regenerated in the same commits as their spec changes; no hand-edited generated files.
+- `make lint-budgets`, `make lint-guards` and the full CI gate green (remote cluster per the root rules); the four fixed+architect+security 5-reviewer gate clean on the feature branch, and the whole-epic gate before `→ main`.
+- The truthful-outcome rule proven: at least one test (B-18) drives a real unlink failure and asserts the non-success outcome; the removal paths never return unconditional success.
+
+**Reachable by a user/agent** — requires ALL of:
+- An executed UI journey: real Mail panel open produces the presence ack; panel close/socket death closes retained sockets (server-side counter evidence, not assertion-only); cached-state and `cache_unavailable` notice visible in the SPA when the gate refuses.
+- An executed agent journey: an allowed agent's mail tool call resolves the shared runtime (same-instance evidence); a file-tool attempt on `mail-cache/` is refused (MC-16 executed, not just written).
+- An executed privacy journey: mint → serve → logout on a real preview; token store inspection shows zero bytes; the marker-scan test executed against a marker-talking fake server.
+- The deployment receipt: US-4's E1–E5 executed **fresh on the target machine** (after the job is reloaded and unblocked), cited by path and date in the delivery report — the trace's snapshot is motivation, never proof.
+- Hard Constraint #6 honoured negatively (no new tools — §8 step 7) and positively for reachability: the feature is reachable through the existing registered mail surfaces (panel + existing tools), with the executed journeys above as evidence — registration/policy checks alone are not reachability.
+- User-facing documentation updates below landed and audited by `docs-verifier` against the actual behaviour in the same change.
+
+---
+
+## 11. User-facing documentation TODOs
+
+The ADR assigns these three pages to this package's owner (W4's drafting duty); `docs-verifier` audits each against actual behaviour before landing.
+
+| Page | Exact sections and what must be said |
+|---|---|
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/connectors.md` | In the mailbox settings/removal guidance: the Sent/Drafts override and Automatic-clear semantics (omitted keeps, empty clears, non-empty overrides — the existing behaviour, now user-visible in discovery states); what happens on removal — the new **cleanup-pending** outcome and its **Retry cleanup** action, including that it works after the mailbox entry is gone; what a pair move does to cached data. Do not promise a disk cache the Phase 1 gate may refuse; state that mail metadata caching activates only when the installation's data-folder privacy exclusion is confirmed, and what the visible cache-unavailable notice means. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/security.md` | In the mail section: precisely what is stored on disk (encrypted folder names/roles/version per mailbox — no subjects, addresses, bodies or attachments), where (the private cache directory under the data dir), the key dependency (derived from the credential store; losing it loses only the cache, never server mail), expiry/removal (removed with the mailbox/agent/workspace; rebuilt live), and that the directory is excluded from the data-folder Git backup and from app backups/restores — with the honest limit that a *pre-exclusion* captured copy in Git history or old archives is not removable by the app. State that HTML previews keep no message content server-side between requests (metadata-only grants) and that preview tokens die at logout/close/expiry. Distinguish saved attachments (normal user files) from the disposable encrypted cache. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/troubleshooting.md` | New Mail entries: "Mail is busy" vs backoff vs server connection limit (and that Retry bypasses only backoff); cache unavailable / cache warning states (what `cache_unavailable` means, that live access continues); "removal left cleanup pending" — what it means and that Retry cleanup is safe to run; preview fails to load after mailbox changes (the metadata-only re-fetch behaviour); and a support-hygiene note: never paste logs or state files into support channels (they contain opaque identifiers, not message content, by design — say both halves truthfully). |
+
+---
+
+## 12. Traceability matrix
+
+| Requirement (story) | BDD scenarios | Tests (§6) | Machine constraints |
+|---|---|---|---|
+| US-1 shared runtime | B-1…B-4 | 1–5 | MC-1, MC-2, MC-3 |
+| US-2 presence | B-5…B-8 | 6–9 | MC-4 |
+| US-3 cache placement + gate | B-9…B-13 | 10–13 | MC-5, MC-6, MC-16 |
+| US-4 deployment exclusion | B-14…B-16 | 14–16 | MC-7 + E1–E5 receipt |
+| US-5 removal cascades | B-17…B-21 | 17–20 | MC-8, MC-9 |
+| US-8 durable generation | B-22, B-23 | 21, 22 | MC-10 (+ MC-17 design rule) |
+| US-6 metadata-only previews | B-24…B-29 | 23–28 | MC-11…MC-14 |
+| US-7 redaction | B-30, B-31 | 29, 30 | MC-15 |
+| Cross-cutting (mutations) | — | 31 (X-1…X-10 embedded across) | — |
+
+Every story traces to at least one scenario, every scenario to at least one test, every test family to at least one machine-verifiable constraint. No gap row remains.
+
+---
+
+## 13. Open questions (options and recommendation)
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| Q1 | Who owns the data-dir ignore rule long-term — can a shipped feature depend on a separate machine-deployment repo for a correctness property? (trace §"decision or deployment change") | **(a)** deployment keeps ownership; this spec's prerequisite + product gate documented · **(b)** product writes/repairs an ignore fragment on boot · **(c)** move the cache outside the data dir (OS cache dir, or under `workspaces/<id>/` where deletion cascades) | **(a) + the product-side gate (US-3.3)** for v0.1.1. (b) makes the product fight the provisioning script's idempotent refresh over file ownership; (c) trades one problem for two (the workspace option still gets tar-captured — `createTarGz` does not skip `workspaces/*/work/` — and the OS-cache option breaks the co-located removal story). The gate makes (a) safe: without the rule the product simply refuses disk writes. Revisit (b) only if multi-machine drift proves real. |
+| Q2 | Does `email-watch/` (watcher state: UIDs, counts, classes — and raw error text until W1's redaction lands) get the same exclusion + a deletion story? | **(a)** add `email-watch/` to the same ignore rule and give it a purge on pair removal · **(b)** leave it; document as accepted exposure | **(a)** — it is the identical structural hole the trace found (un-ignored, never deleted, Git-captured), the fix is one more ignore line plus a purge call beside the cache purge, and it currently carries *worse* content (raw error text) than the encrypted cache. Founder confirms because it changes what gets backed up. |
+| Q3 | Should `extractTarGz` also skip `mail-cache` members defensively, even though fixed archives never contain them? | **(a)** skip defensively · **(b)** rely on archive hygiene alone | **(a)** — one string compare; it covers archives created before the exclusion lands (US-4.3's tracked-file window) and makes restore correct independent of archive provenance. |
+| Q4 | If an install's cache files were already committed before the ignore rule landed, who executes remediation, and is the backup remote's history rewritten? | **(a)** runbook only (`git rm -r --cached` + commit per install); history untouched · **(b)** runbook + history rewrite/force-push of the backup remote | **(a)** for v0.1.1 with **(b) reserved for evidenced exposure**: the cache is ciphertext (high-entropy, key never in the repo), so exposure is limited; a history rewrite of a backup remote is disruptive and needs its own founder call. The runbook (US-4.3) must exist regardless. |
+| Q5 | Should the preview mint dial once to validate the reference (fail fast at mint) or dial nothing? | **(a)** no-dial mint; failures surface at first serve · **(b)** validating mint (one metadata fetch at mint) | **(a)** — a validating mint doubles fetches for the common mint→serve path, reintroduces eager network work the design removed, and still cannot guarantee the serve-time fetch succeeds; the SPA already renders per-request states. Cost: the mint→error latency moves from mint to first serve — acceptable and measured (MC-12 counters). |
+| Q6 | Wave-1 preview part fetches: W2's targeted part reader, or whole-message PEEK fallback? | **(a)** wait for W2's targeted reader · **(b)** ship whole-message PEEK fallback, switch when W2 lands, keep counters | **(b)** — the byte cap and budget bounds make the fallback safe, the design's fetch-count measurement exposes its cost honestly, and blocking preview work on W2's schedule buys nothing for privacy (both shapes are request-only). |
+| Q7 | `releaseRuntimeResources` purge failures during workspace deletion: surface in the workspace-delete response, or log-only like today's cascade? | **(a)** extend the workspace delete response with the mail cleanup-pending discrimination · **(b)** best-effort log-only for the workspace path (truthful outcome only on the mailbox route) | **(a)** — the truthful-outcome rule (US-5.3) should not have a hole shaped "whenever it happened during a workspace delete"; the W0 shape (step 5) covers both routes at once. Flag: it touches a high-blast-radius handler — the 5-reviewer gate covers it. |
+
+---
+
+## 14. Evidence table
+
+| Claim | Evidence | Certainty |
+|---|---|---|
+| Preview grants carry payload bytes for 15 min | `pkg/gateway/mail_preview_token.go::mailPreviewGrant` (fields `HTML string`, `Inline []mailPreviewInline`, `RemoteURLs []string`), `MailPreviewTokenTTL = 15 * time.Minute`, `MailPreviewMaxLiveTokensPerSession = 8`, `mint`/`lookup`/`invalidateSession` read in this checkout | Verified |
+| The mint fetches outside the A8 budget | `pkg/gateway/rest_mail_preview.go::handleMint` — `client.ReadView` directly; no `mailBudgetWrap` on the `/mail-preview/` POST (the wrapped four GETs are `rest_mail_budget.go`'s documented set) | Verified |
+| The flight key lacks pair/generation; flights detach | `pkg/email/mail_budget.go::MailBudgetRequest.flightKey` (`Account + "\x00" + Operation + "\x00" + json(Params)`), `call` (`DoChan` + `flightContext`/`context.WithoutCancel`) | Verified |
+| Budget is shared process-wide by state-dir key | `pkg/email/mail_budget.go::SharedMailBudget`; injection `pkg/gateway/gateway.go::initializeAgentLoop` (`agent.SetSharedMailBudget(email.SharedMailBudget(rc.homePath))` before `NewAgentLoop`); watcher `pkg/gateway/gateway_boot.go` (`email.NewMailboxWatcherSet(provider, stg.homePath, email.SharedMailBudget(stg.homePath))`); tools `pkg/agent/email_tools.go::registerEmailToolsForAgent` + `SetSharedMailBudget` | Verified |
+| Every REST request builds a fresh client | `pkg/gateway/rest_mail.go::mailPairClient` — `email.NewClient(email.Account{…})` per call | Verified |
+| Socket authorization / liveness / teardown hooks | `pkg/gateway/websocket.go::WSHandler.authenticateWS` (cookie via `middleware.ResolveUserFromCookie`, else `AuthFrame` via `resolveBearerIdentity`); `wsPingPeriod` 30 s / `wsPongWait` 60 s + pong-handler and readLoop re-arming; teardown = the deferred block in `WSHandler.ServeHTTP` (`UnsubscribeEvents`, session-map deletes, `unbindConnHubLocked`, `wc.close()`); frame dispatch `wsHandlerReadLoop.dispatchFrame` + `wsFrameSchemaName` + `ValidateInboundFrameJSON` (gated `Gateway.ValidateInbound`) | Verified |
+| Tar backup/restore exclusion gaps | `pkg/gateway/rest_settings.go::createTarGz` (`topLevel == "logs" || topLevel == "backups"` → `filepath.SkipDir`); `extractTarGz` (skips only `config.json`; `maxRestoreFileSize` 256 MB) | Verified |
+| Deletion paths touch no cache/pool state; success can be unconditional | `pkg/gateway/rest_mailbox.go::deleteAgentMailbox` (config entry + `removeStoredCredential` ×2 + `triggerReloadAndWaitOutcome`, failures `logsafeError`, then `jsonOK(gen.OperationResult{Success: true})`); `pkg/gateway/rest_agents.go::deleteAgent` (`DeleteState`, reload); `pkg/gateway/rest_workspaces.go::releaseRuntimeResources` → `removeMailboxesForWorkspace` (config+credential only); `removeAllFn(wsDir)` wipe cannot reach `mail-cache/` (outside `workspaces/<id>/`) | Verified |
+| The disable→enable transition signal exists (mirror for disable) | `pkg/gateway/rest_mailbox.go::restAPISetAgentMailbox.persistConfig` (`wasEnabled` captured before overwrite; overrides kept-omitted/cleared-empty/nonempty) | Verified |
+| Raw error text seams | `pkg/email/watcher.go::recordFailure(errClass, errText string)` persists `LastErrorText` (state at `<StateDir>/email-watch/<pair>.json`, written 0600 atomic, never deleted — no `Remove` calls in `watcher.go`/`watcher_set.go`); wire is class-only (`pkg/gateway/rest_mail_summary.go::handleMailSummary` carries `LastErrorClass`; `MailboxNewMailSummary.yaml` requires `last_error_class`, no text field); `pkg/gateway/rest_mail.go::mailErr502` logs the raw error | Verified |
+| Atomic write primitive exists | `pkg/fileutil/file.go::WriteFileAtomic` | Verified |
+| Derivation seam and its limits | `pkg/credentials/store.go::Store.DeriveSubkey` (32-byte purpose key; `ErrStoreLocked`), `Store.Close` (no erasure guarantee) | Verified |
+| 25 MiB cap, part selection, seen split | `pkg/email/view.go::maxViewPartBytes = 25 << 20`, `SanitizeAttachmentName`; `pkg/gateway/rest_mail_read.go::handleMailAttachment` (whole `ReadView`, `mailPartByStableIndex`, 413 on `DataUnavailable`, `applyMailByteHeaders`); `handleMailSeen` (discards `ResolveRef`'s epoch, `MarkSeenIn` opens its own session) | Verified |
+| MailboxConfig identity fields | `pkg/config/config.go::MailboxConfig` (Enabled, WorkspaceID, hosts/ports, Username, PasswordRef, SentFolderName, DraftsFolderName) | Verified |
+| Contract anchors | `contracts/openapi.yaml` operationId `getMailAttachment`; `contracts/asyncapi.yaml` `channels.chat` + `WsFrameType` enum | Verified |
+| Auto-commit job is external; staging is `git add -A`; ignore file is a deny-list; job unloaded/blocked; tracked-file mechanism | `receipts/autocommit-trace.md` (launchd `com.omnipus.state-autocommit`, runner `/Users/danielpiatkowski/.local/bin/omnipus-state-autocommit`, generator scripts 35/36 of omnipus-agent-os, live `.gitignore` contents, `check-ignore` probes, 30-findings block, 22,239 pending) | Verified as a receipt — re-proven fresh by US-4's E1–E5 before any disk write ships |
+| Design authority and corrections applied | ADR-20261001 (read in full, 807 lines, this checkout @ `fc4c8bf6dcdfa257e3540f602f042dfa19882ce1`); `adr-grill-report.md` (read in full; I-01/I-02/I-05/I-06/M-01/M-02 dispositions carried into §3–§8; I-03/I-04 belong to W10/W8–W3 respectively) | Verified |
+| Impact assessment basis | GitNexus MCP tools not exposed in this session; §2.4 built from direct reads and the grep sweeps shown above — labelled Inferred there | Inferred |
+| **Self-check** | Re-read this spec end-to-end against the dispatch's nine mandatory contents (context ✓ stories ✓ BDD ✓ TDD ✓ non-goals ✓ DoD ✓ docs TODOs ✓ counterexamples incl. mutations X-1…X-10 ✓ open questions ✓) and the publishes/consumes requirement (§7) ✓. Every cited symbol was read in this checkout during this task; the one external-system claim (auto-commit job) rests on the named trace receipt and is explicitly gated on fresh evidence (US-4.5, E1–E5). No test, build or benchmark was run; no production, contract or test file was touched — `git diff` scope checked before each commit showed only this spec file. Commit series: one per major section, authored `Daniel Piatkowski <10800669+daniel-piatkowski-ai@users.noreply.github.com>`, no co-author trailers. | Verified artifact/scope check |
+
+skills: omnipus-shared-rules, plan-spec
