@@ -342,6 +342,16 @@ func TestCacheFile_RejectsBeforeAllocation(t *testing.T) {
 	scope := Scope{PairID: "pair-1", Generation: "gen-1"}
 	path := snapshotPath(base, "pair-1")
 
+	// The malformed-file subtests below place an envelope directly at the
+	// cache path — Save is what normally creates mail-cache/<pair>/, and these
+	// subtests must not go through it (F-9 exercises the READ refusal path).
+	// The fixture therefore creates the parent directory itself; without it
+	// os.WriteFile dies on the missing directory before the store under test
+	// is ever exercised.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+
 	t.Run("empty file", func(t *testing.T) {
 		if err := os.WriteFile(path, nil, 0o600); err != nil {
 			t.Fatalf("write empty: %v", err)

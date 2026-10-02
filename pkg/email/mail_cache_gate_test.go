@@ -220,11 +220,15 @@ func TestMailCacheExclusionGate_DetectsPreTrackedFile(t *testing.T) {
 	gitIn(t, base, "add", "-f", ".gitignore", "mail-cache/pair-1/folders.enc")
 	commitAll(t, base, "a cache path that is already tracked")
 
-	// Instrument cross-check: check-ignore (the spec's named semantics)
-	// reports the path as ignored — so a gate that trusted ignore rules
-	// alone would pass it; the tracked-ness is what must flip the verdict.
-	if out := gitIn(t, base, "check-ignore", "-v", "mail-cache/pair-1/folders.enc"); !strings.Contains(out, "mail-cache") {
-		t.Fatalf("instrument check: the path should be matched by the ignore rule, got: %s", out)
+	// Instrument cross-check. Git rule: ignore rules never apply to TRACKED
+	// paths, so plain `git check-ignore` exits 1 with no output for a file
+	// staged with -f — exactly this scenario — and the plain probe could
+	// never pass here. `--no-index` evaluates the rule text regardless of the
+	// index state, proving the RULE matches the path (so a gate trusting
+	// ignore rules alone would wrongly allow it); the gate refusal below then
+	// proves the tracked-ness is what flips the verdict (E-3).
+	if out := gitIn(t, base, "check-ignore", "--no-index", "-v", "mail-cache/pair-1/folders.enc"); !strings.Contains(out, "mail-cache/pair-1/folders.enc") {
+		t.Fatalf("instrument check: the ignore rule should match the pre-tracked cache path, got: %s", out)
 	}
 
 	store := gateStore(t, base)
