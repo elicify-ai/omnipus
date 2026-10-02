@@ -93,6 +93,12 @@ func TestMailPairClient_UnwiredClientFailsTypedNoDial(t *testing.T) {
 	}
 	require.NoError(t, env.api.credStore.Set(mailboxCredKey(unwiredAgent, unwiredWS), "s3cret"))
 
+	// US-1.4's Given: "the feature's application manager EXISTS". The typed
+	// wiring refusal is the manager-wired process's contract; before that,
+	// the Wave C→D legacy per-call dial is the sanctioned behaviour and the
+	// scenario does not apply.
+	env.api.mailSessionsFor()
+
 	// Break the pair's identity state on disk: scope resolution must fail
 	// (US-8.4's honest store-state rule), leaving the client unwired.
 	identPath, err := config.MailPairIdentityPath(env.api.homePath, unwiredAgent, unwiredWS)
