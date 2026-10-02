@@ -898,3 +898,68 @@ Each counterexample names the mutation a plausible wrong implementation survives
 | CX-15 | **Leak markers never reach logs.** Marker-laden folder names/subjects through every path. The mutation: passing `err.Error()` (server text) into a log field "temporarily". | Raw upstream text in diagnostics | `TestW2Diagnostics_LeakMarkerSweep` |
 
 ---
+
+## 12. Functional requirements and traceability
+
+### 12.1 Functional requirements
+
+| ID | Requirement |
+|---|---|
+| FR-W2-1 | The system MUST resolve the folder roles `inbox`, `sent`, `drafts` to server folder names at runtime; only these slugs are valid on any interface, and INBOX is fixed to the IMAP name `INBOX`. (R-3.1-1/3) |
+| FR-W2-2 | The system MUST NOT create, subscribe, or otherwise mutate server folders during discovery. (R-3.2-4, R-3.1-4) |
+| FR-W2-3 | Discovery MUST use SPECIAL-USE role attributes via LIST-EXTENDED when the server advertises them, and MUST fall back to ordinary probing when it does not; extension absence MUST NOT fail the mailbox. (R-3.2-2) |
+| FR-W2-4 | Discovery MUST probe, in the fixed order `Sent, Sent Items, Sent Messages, [Gmail]/Sent Mail` (sent) and `Drafts, Draft, [Gmail]/Drafts` (drafts), and only a successful probe MAY establish a `fallback` mapping. (R-3.2-1) |
+| FR-W2-5 | A non-empty stored `sent_folder_name`/`drafts_folder_name` MUST override discovery for its role, and a failing override MUST surface a settings warning rather than a silent substitution or silent ignoring. (R-3.3-1) |
+| FR-W2-6 | An empty or absent stored override MUST mean automatic; omitted fields on update MUST preserve; the reader semantics MUST match `persistConfig`'s writer semantics exactly. (R-3.3-2, O-4) |
+| FR-W2-7 | The system MUST treat every non-empty stored override as operator intent regardless of provenance, never discard it silently, and never classify it by inspecting its content. (R-3.3-3) |
+| FR-W2-8 | The system MUST report `availability=unknown` — with the override setting offered — for any role it cannot resolve, and MUST reserve `absent` for discovery-completed-plus-all-candidates-structurally-missing; all network/auth/TLS/timeout/permission failures MUST leave roles unknown (or fail the read), never empty. (§3.4) |
+| FR-W2-9 | A missing or failing INBOX MUST fail the mailbox read with a safe transport class on every surface — never render as a healthy empty account. (§3.4) |
+| FR-W2-10 | With multiple candidates and no still-valid saved mapping, the system MUST surface the ambiguity and MUST refuse send/draft destinations rather than pick arbitrarily; a still-valid saved mapping MUST stand. (R-3.5-1/2/3) |
+| FR-W2-11 | The system MUST persist per-mailbox folder metadata (resolved names, roles, sources, nullable UIDVALIDITY, availability, schema/config generation, transport, last-validated time) in exactly one encrypted file per mailbox, ≤64 KiB payload budget, and MUST refresh it only on the four §3.6 triggers — never on a timer, never while the panel is closed (dirty-mark and defer only). (§3.6) |
+| FR-W2-12 | The cache envelope MUST use AES-256-GCM with a fresh cryptographically random nonce per write, purpose-separated keys from `credentials.Store.DeriveSubkey`, AAD binding envelope purpose + schema version + pair identity + config generation + transport, and atomic ciphertext-only replacement; it MUST reject oversized/unsupported/malformed envelopes before unbounded allocation and MUST NEVER produce or accept unauthenticated plaintext. (§3.7) |
+| FR-W2-13 | Cache files MUST live under `<OmnipusHomeDir()>/mail-cache/<opaque-pair-id>/` with 0700 directory / 0600 file permissions on Unix and current-user restrictive ACLs on Windows, outside workspace/agent-visible trees. (§3.8) |
+| FR-W2-14 | The first cache write MUST be blocked on any install until the data-repository ignore rule (E-1) and the backup-walker skip (E-2) are deployed; the runtime gate MUST refuse disk writes and run live-only with a visible `cache_unavailable` notice when the check fails. (§3.8 gate) |
+| FR-W2-15 | The header cache MUST be memory-only, at most the newest 50 envelope+flag rows per role per mailbox, five-minute freshness with exactly one background refresh per eligible event, dropped 30 minutes after the panel was last open, within the 4 MiB global reusable-metadata budget, and MUST never serve or store search results or pages beyond the newest-50 window. (§3.9) |
+| FR-W2-16 | Every cache publication (memory rows, disk snapshot, timestamps, counts) MUST be gated by the publication-revision check: a read superseded by a newer revision publishes nothing. (§3.10) |
+| FR-W2-17 | Every §3.11 invalidation event MUST discard exactly what its row specifies, on both cache layers; stale rows MUST render labelled with their age, never as fresh; retention MUST NOT be extended by reads. (§3.11) |
+| FR-W2-18 | Diagnostics from this package MUST carry only opaque pair/generation identifiers, safe classes, durations and hit/miss/socket counts, and MUST never carry folder names, subjects, addresses, Message-IDs, credentials, or raw upstream error text. (§3.12) |
+| FR-W2-19 | W2 MUST NOT edit `transport.go`, any `contracts/` file, any `pkg/gateway/` file, or any test file; all cross-package interaction goes through the §4 interface freeze. (§4) |
+
+### 12.2 Traceability matrix
+
+| Requirement | User story | BDD scenarios | Tests (§7) |
+|---|---|---|---|
+| FR-W2-1 | US-1 | D-1, D-2, D-3 | `TestDiscovery_SpecialUseResolvesBeforeFallback`, fallback-order test |
+| FR-W2-2 | US-1 | D-5 | `TestDiscovery_NeverCreatesFolders` |
+| FR-W2-3 | US-1 | D-1, D-3 | `TestDiscovery_UnsupportedExtensionDegradesPerRole` |
+| FR-W2-4 | US-1 | D-2, D-4 | `TestDiscovery_FallbackOrderedProbeStopsAtFirstSuccess`, CX-1 test |
+| FR-W2-5 | US-2 | O-1, O-2 | `TestDiscovery_OverrideBeatsSpecialUse`, `..._StaleOverrideWarnsNotSwaps` (CX-2) |
+| FR-W2-6 | US-2 | O-3, O-4 | `TestDiscovery_EmptyClearsToAutomatic` (CX-3), omitted-keeps test |
+| FR-W2-7 | US-2 | O-5 | `TestDiscovery_OverrideBeatsSpecialUse` (provenance variant) |
+| FR-W2-8 | US-1, US-3 | D-4, U-1, U-2, U-3, U-5 | CX-1 test, `TestDiscovery_ProbeTimeoutIsUnknownNotAbsent`, nullable-total test (CX-13) |
+| FR-W2-9 | US-3 | U-4 | `TestDiscovery_MissingInboxIsFatalEvenForNonExistent` |
+| FR-W2-10 | US-4 | A-1, A-2, A-3 | `TestDiscovery_AmbiguousSpecialUseAsks`, saved-mapping test, write-refusal test |
+| FR-W2-11 | US-5 | F-1–F-5 | `TestCacheFile_TriggersExactlyFour`, closed-panel test (CX-10), round-trip test (CX-4) |
+| FR-W2-12 | US-6 | F-6–F-11 | cache_file_test.go full set (CX-6, CX-7, CX-8) |
+| FR-W2-13 | US-6, US-7 | F-1, G-1 | `TestCacheFile_PermissionsUnix` + Windows CI leg |
+| FR-W2-14 | US-7 | G-1, G-2, G-3 | exclusion-gate tests (CX-14), staging/backup end-to-end |
+| FR-W2-15 | US-8 | H-1–H-6 | header_cache_test.go full set (CX-11, CX-12) |
+| FR-W2-16 | US-9 | V-2 | `TestHeaderCache_SupersededReadPublishesNothing` (CX-9) |
+| FR-W2-17 | US-9 | V-1, V-3–V-6 | epoch, removal-race, reconfig, retention tests (CX-5, CX-11) |
+| FR-W2-18 | US-10 | L-1 | `TestW2Diagnostics_LeakMarkerSweep` (CX-15) |
+| FR-W2-19 | (process rule) | — | verified by review/`detect_changes`, not a test |
+
+**Coverage check:** every FR traces to at least one story, scenario and test; every §6 scenario traces to at least one US (its `Traces to` lines) and appears in a test row; every §5 acceptance scenario number is covered by at least one scenario in §6.
+
+## 13. Open questions (with options and recommendation)
+
+No question here blocks the spec's normative content; each names its owner and the default that applies if unanswered.
+
+- **OQ-1 — Who mints the opaque pair ID, and where does it live?** The cache path and AAD need a stable, non-reversible, collision-free per-pair identifier. Options: **(a)** the gateway (W4) mints a random 128-bit ID per pair on first mailbox configuration and stores it beside the pair's config entry (plaintext, non-sensitive, deleted with the pair — the removal cascade covers it); **(b)** derive it deterministically (e.g. HKDF over the pair key with a purpose string) — no storage, but the ID becomes key-dependent (rotation changes it, orphaning files) and derivable-by-anyone-holding-the-config; **(c)** reuse the watcher's filename sanitizer — **rejected by the ADR** (lossy, collision-prone). **Recommendation: (a)** — stable across restarts and rotations, trivially deleted on removal, and it keeps W2 consuming the ID opaquely. Owner: W4, with the architect freezing the exact field. Default if unanswered before implementation: (a).
+- **OQ-2 — Durable serialization of the configuration generation.** The ADR's risk table assigns the exact serialization to W4 ("a durable revision or a purpose-keyed opaque fingerprint… a spec/security-review obligation"). Options: monotonic integer persisted per pair (bump on every relevant change, requiring a write on each edit) versus an opaque fingerprint of the canonical identity (host, port, username, credential reference, override values — no password material) computed on demand (no storage, changes exactly when identity changes, but cannot distinguish "same identity re-saved"). **Recommendation: the fingerprint**, because §3.11's reconfiguration row only needs *change detection*, not ordering, and the fingerprint cannot drift from what it fingerprints. The publication revision (a separate, in-memory monotonic counter) is unaffected. Owner: W4 + security-lead review. Default: fingerprint.
+- **OQ-3 — LIST-EXTENDED/SPECIAL-USE capability detection mechanics.** Verified available: the go-imap client exposes the server capability set (the `imap.CapUIDPlus` precedent in `view.go::DeleteDraftStatus`), and `startViewIMAPRaw` can inject arbitrary capability sets for tests. Unverified: whether specific servers advertise `SPECIAL-USE` post-auth only. **Recommendation:** detect from the post-auth capability set; treat both names as required for the attribute path; add no pre-auth CAPABILITY round-trip. Owner: implementation, with the DT-1 dataset covering the absent/partial cases. Default as stated.
+- **OQ-4 — Long-term owner of the data-dir ignore rule.** The trace flags that a shipped product feature cannot depend on an external machine-deployment repo (omnipus-agent-os script 35) for a correctness property. Options: **(a)** keep deployment ownership and document the prerequisite (the gate makes it safe — an unexcluded install simply runs live-only); **(b)** the product also manages an ignore fragment on boot (belt and braces; new product behaviour writing into a deployment-owned file needs its own decision); **(c)** move the cache outside the data dir entirely (OS cache dir — but then the OS-level backup story changes and the delete cascades lose the workspace-delete coverage). **Recommendation: (a) for Phase 1** — the §3.8 gate converts "external ownership" from a correctness risk into a degradation, which is exactly what a disposable cache should do — with (b) revisited when the backup-pipeline ownership question (currently blocked on 30 gitleaks findings, a human task) is resolved. Owner: founder/architect at landing time. Default: (a).
+- **OQ-5 — Old backup archives containing cache files.** Once E-2 lands, new archives exclude the directory; archives created between first-write and E-2 (if any install ever wrote before the gate existed — the gate makes this a null set for new installs, but the rule ships with the feature so the window is theoretical). **Recommendation:** no pruning mechanism; the gate prevents creation, and restore of a hypothetical old archive is handled by the §3.11 corrupt/generation-mismatch rejection (a restored cache file from another generation simply refuses to open). Owner: founder if the theoretical window matters. Default: none.
+- **OQ-6 — Does `email-watch/` get the same treatment?** The trace's row 6: the watcher's state files sit un-ignored and never deleted in the data dir today — the identical shape of problem §3.8 solves for the cache, predating it. Options: extend E-1's ignore rule and add a deletion story now (scope growth into W1/W4 territory), or leave it tracked (it holds UIDs/counts/error classes — less sensitive than folder names) and note it. **Recommendation: leave it, note it in the connectors/security docs TODO review** — same-exclusion can ride E-1's edit at near-zero cost (one more deny line), but its deletion story is a separate decision; do not bundle it silently. Owner: founder/W4. Default: exclude-only (one extra line in E-1), no deletion change.
+
+---
