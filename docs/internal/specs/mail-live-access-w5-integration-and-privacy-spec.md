@@ -159,66 +159,69 @@ Panel-owned connections may be retained only while at least one authenticated Ma
 
 ### US-3 — Encrypted cache location, permissions and the write gate (P0)
 
-The encrypted folder-metadata file (Phase 1) and later the header snapshot (Phase 2) live under the data directory. Folder names can reveal sensitive projects and people, so the ADR requires encryption, restrictive permissions, and exclusion from every capture path *before the first write*. This story defines the on-disk contract and the product-side gate that refuses to write when exclusion cannot be confirmed.
+The encrypted folder-metadata file (Phase 1; headers stay memory-only) and later Phase-2 snapshot belong to a private, disposable application cache under the configured data root. Encryption and permissions do not replace exclusion from capture. The product must establish both exclusions itself on every install before writing, with a visible refusal only for a genuine failure. Authority: *Mail live access: pooled connections, folder discovery and a bounded cache* and founder ruling Q-A in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/mail-feature-decisions.md::Founder answers to the spec-grill decisions`.
 
-**Why this priority**: the first cache write on an unexcluded install commits mail-derived metadata to an off-machine Git backup within 15 minutes (the trace's verified mechanism), and Git history retains it regardless of later cleanup.
+**Why this priority**: version-control history and archives can retain sensitive metadata after current files are deleted. This is a product privacy invariant, not a deployment precondition.
 
-**Independent test**: with the exclusion rule present in a temp data dir, write a cache file and assert its path, permissions and ciphertext-only content; remove the rule and assert the write is refused with a visible cache-unavailable outcome and no file created.
-
-**Acceptance scenarios**:
-
-1. **Given** a configured data directory, **When** the cache writes a pair's folder metadata, **Then** the file lands at `<data-dir>/mail-cache/<opaque-pair-id>/folders.enc` (path derived from the configured data root, never hard-coded), inside a `0700` directory as a `0600` file, replaced atomically as complete ciphertext via the existing atomic-write primitive.
-2. **Given** two distinct (agent, workspace) pairs, **When** both write cache files, **Then** each pair's path is unambiguous and stable across restarts — the identifier is an opaque stable derivation of the pair identity, never the watcher's lossy filename sanitizer (`keyFor`) and never an email address or folder name.
-3. **Given** an install whose data-directory `.gitignore` (or `.git/info/exclude`) does not match the cache directory, **When** the first cache write is attempted, **Then** the write is refused before any file is created, the pair runs live-only, and the surfaced cache state carries the safe `cache_unavailable` notice — never a silent skip and never a plaintext fallback.
-4. **Given** a cache path where any component is (or becomes) a symlink, **When** the manager resolves or writes, **Then** it refuses the operation rather than following the link out of the cache directory.
-5. **Given** the agent filesystem/shell policy surface, **When** a file tool resolves any path under the cache directory, **Then** it is refused — a generic file tool must never become a decryption route.
-6. **Given** Windows, **When** the cache directory is created, **Then** access is restricted to the current user by the platform's own mechanism (ACL), not by a chmod call that has no effect there.
-
-### US-4 — The data-folder exclusion deployment change (P0 — blocks US-3's disk writes)
-
-The auto-commit job is machine-level deployment, not product code: a launchd agent runs a generated bash script that stages with bare `git add -A` in the data directory, gated by a gitleaks pre-commit, and pushes to an off-machine backup remote. Exclusion is decided **solely** by the deny-list `.gitignore` that an external provisioning script writes; the product writes no ignore file today (all verified in the trace receipt). The tar backup has the same hole with a different seam. This story specifies the exact deployment change and the evidence that proves it, and makes disk-cache activation **blocked** until that evidence exists.
-
-**Why this priority**: the ignore rule must land before the first cache write ships *on any install* — ignoring a file after it is tracked removes nothing, and the backup remote's history keeps every prior blob.
-
-**Independent test**: on a machine with the deployed job's staging rules, create a synthetic `mail-cache/` file plus one ordinary allowed state file, run the job's staging (or its exact `git add -A` semantics), and assert the cache file is untracked while the control file is staged; separately list the members of a fresh tar backup and assert the same split.
+**Independent test**: initialize a clean synthetic data root using only the product, write ciphertext after both exclusions hold, then independently break staging exclusion and archive exclusion; each genuine failure must refuse the next cache write with the visible notice.
 
 **Acceptance scenarios**:
 
-1. **Given** the provisioning script's ignore-file template, **When** the deployment change is applied, **Then** the template carries a `mail-cache/` deny rule (adjusted to the final directory name) and the script's idempotent refresh has been re-run on this machine, so the live `<data-dir>/.gitignore` matches the rule.
-2. **Given** the tar backup path, **When** `createTarGz` walks the data directory, **Then** top-level `mail-cache` is skipped exactly as `logs` and `backups` are — and the same skip makes fresh archives safe to restore, since restore only materializes what archives contain.
-3. **Given** an install where a cache file has already been committed (tracked), **When** the ignore rule lands, **Then** a documented remediation runbook exists (`git rm -r --cached mail-cache/` + commit per install), and the runbook names the history question (whether the backup remote's history is rewritten) as an explicit founder decision — never silently skipped.
-4. **Given** the whole gate, **When** the product decides whether disk cache writes are enabled, **Then** the gate is the product-side check of US-3 scenario 3 **plus** the deployment evidence below — deployment change without the product gate, or the gate without the deployment change, does not unblock.
-5. **Given** the trace's live-state caveats (job currently unloaded; last run blocked by 30 gitleaks findings; 22,239 dirty entries pending), **When** this feature claims the exclusion is real, **Then** the claim cites fresh evidence gathered after the job is reloaded and unblocked — never the trace's snapshot alone.
+1. **Given** a configured data directory, **When** folder metadata is written, **Then** it occupies the pair's private cache subtree, with `0700` directories and `0600` files on Unix, and only complete ciphertext is published atomically. The logical layout is data root → mail-cache → opaque pair ID → folders.enc; an example absolute location is `/Users/danielpiatkowski/.omnipus/mail-cache/<opaque-pair-id>/folders.enc`, never a hard-coded runtime root.
+2. **Given** two distinct agent/workspace pairs, **When** their cache identities are assigned, **Then** each has a **randomly minted 128-bit ID stored beside its configuration**, stable across normal restart and credential rotation; no derived credential value, lossy name, email address or folder name identifies the subtree. This is the register's row-12 settlement (grill-3 M-2).
+3. **Given** a genuine failure to establish/prove **either** effective staging exclusion **or** application backup/archive exclusion, **When** a cache write is attempted, **Then** no cache file is created, live access remains subject to its normal authorization/budget, and **`cache_unavailable`** is visible. A normal clean install is not left in this state merely because external setup is absent: the product owns establishing both exclusions (US-4).
+4. **Given** a cache path whose component is or becomes a symlink, **When** the application resolves or writes it, **Then** it refuses safely rather than following the link out of its private subtree.
+5. **Given** ordinary agent workspace-file authority, **When** a file or shell operation attempts the private cache subtree, **Then** the path is refused; generic file access never becomes a decryption route.
+6. **Given** Windows, **When** the private cache directory is created or used, **Then** native access-control permissions restrict it to the current user. The acceptance evidence includes a real Windows execution and a denied-access control, not a Unix mode check or compilation claim (grill-3 M-7; register row 23).
 
-**Evidence that proves the exclusion is real** (all five required; this is the US-3/US-4 unblock receipt):
+### US-4 — Product-owned staging, backup and restore exclusion (P0)
 
-| # | Evidence | Passes when |
+**Correction, 2026-10-02 — Q-A/Q-B are decided.** The application, on **every install**, owns exclusion of its entire disposable Mail cache and watcher-state directories from data-directory version-control staging and from **all of its own backups/archives**. Startup/new-root initialization establishes the product's own exclusion before the first sensitive write; reinitialization is idempotent and preserves unrelated operator choices. A staging repository introduced later cannot enable sensitive writes without the same protection. The product also filters its archive/restore paths, including repository objects that could carry excluded data from history. Genuine I/O or conflicting/tracked-state failures are visible and block disk activation; **a refusal is not a substitute for shipping the product-owned exclusion**. No external repository, personal configuration or separately installed job is an interface or prerequisite of this feature.
+
+**Why this priority**: an ignore rule alone neither removes tracked files nor stops an application archive from copying them. The gate has one owner (this package), two required conditions and one first-write consumer (W2), settled in register row 18.
+
+**Independent test**: on clean synthetic Linux/macOS/Windows data roots, run product initialization with no external setup; create encrypted-cache and watcher-state fixtures plus an ordinary state-file positive control. Exercise effective staging and every product archive/restore path. Sensitive fixtures never stage/archive/restore; the ordinary control does. Then break each exclusion independently and prove refusal before a cache write.
+
+**Acceptance scenarios**:
+
+1. **Given** a fresh or upgraded install without any external exclusion setup, **When** the product initializes its data root, **Then** it establishes its own effective exclusion for cache **and watcher state** before either can be persisted. Repeating initialization preserves protection and unrelated settings. In a root without version control, no staging exists; introducing a repository later is handled by the same product check, not treated as permanent proof of exclusion.
+2. **Given** ordinary state, cache files, watcher-state files and a synthetic repository history containing sensitive fixtures, **When** an application backup/archive is created or an old archive restored, **Then** excluded current, temporary and retired Mail files never appear or re-materialize, and repository metadata capable of carrying their historical copies is not included/restored as a bypass. Ordinary state and saved workspace files remain included under their normal rules. Arbitrary manual copies and forensic historical erasure are not promised.
+3. **Given** evidence of already-tracked cache or watcher-state files, **When** rollout encounters the conflict, **Then** disk activation remains blocked and a **product remediation runbook**, drafted by this owner and audited by docs-verifier, explains index removal, verification and the separate authorization needed for any history rewrite/external-copy cleanup. Neither destructive history rewriting nor an assumption of harmless ciphertext happens silently. The runbook is required regardless of whether rollout finds a tracked file.
+4. **Given** the one published gate decision, **When** **either** effective staging exclusion or archive exclusion is absent, unreadable, overridden or unproven, **Then** W2 refuses the cache write with `cache_unavailable`. Both conditions allow encrypted writing only after product establishment and proof; a later archive-skip regression must not leave writing enabled. Effective policy precedence/negations and tracked-state conflicts are considered, not a substring or two-filename check. The security path is self-evaluated in pure Go, never a spawned Git command.
+5. **Given** a claim that the product privacy guarantee ships, **When** its delivery report is reviewed, **Then** it includes fresh **E1–E5** receipts from the candidate build on the supported platforms, with ordinary-file positive controls. No historical trace or written-only plan is execution evidence.
+
+**E1–E5 product exclusion receipt** — future proof obligations, **not executed in this spec correction**:
+
+| ID | Evidence instrument | Passes when |
 |---|---|---|
-| E1 | `git -C <data-dir> check-ignore -v mail-cache/ mail-cache/x.enc` | Both paths match a rule naming the cache directory |
-| E2 | `git -C <data-dir> ls-files -i -c --exclude-standard` | Empty — nothing cache-related is already tracked |
-| E3 | `POST /api/v1/backup` archive member listing | No `mail-cache` member; a positive-control ordinary state file **is** present (proves the listing instrument sees members) |
-| E4 | Restore of that archive into a scratch dir | No cache file materializes |
-| E5 | Staging run with the deployed job's rules after a real cache write | `git status --porcelain` shows no cache paths staged; the positive control appears |
+| E1 | Product-only clean-install/upgrade initialization; independent effective-policy oracle over cache and watcher-state current/temp/retired fixtures | Product establishes exclusion without external setup; policy precedence/negation cases match an independent Git oracle. Git may be used by QA as an oracle, **never by the product security path**. |
+| E2 | Actual tracked/index-path inspection plus an already-tracked synthetic conflict | No sensitive fixture is tracked or staged on the clean install; the tracked-conflict case is refused visibly, not declared safe because an ignore rule exists. |
+| E3 | Member and content listing for **every application backup/archive** | Cache, watcher state and repository-object sensitive markers are absent; ordinary state and a saved workspace-file control are present. |
+| E4 | Restore of fresh and hostile/old archives into a scratch root | No protected Mail file or repository-history bypass materializes; ordinary state and saved-file provenance controls restore normally. |
+| E5 | Actual staging after product initialization and a real synthetic cache/watcher write, followed by independent staging/backup-coverage failure injection | The control is staged, sensitive files are not; breaking **either** coverage condition refuses the next cache write with a visible notice. |
+
+The matched absence checks always include a control that the same instrument can see. Product runtime establishment is this package's obligation; the end-to-end gate tests and execution receipts belong to **qa-lead/w6**, not a competing gateway test owner.
 
 ### US-5 — Removal cascades with truthful cleanup outcomes (P0)
 
-Five events must end a pair's cached identity: mailbox disable, mailbox removal, agent deletion, workspace deletion, and credential/endpoint change — plus key rotation and store lock from the credential side. Today none of them touch the filesystem (verified §2.1), and the one handler that comes closest (`deleteAgentMailbox`) reports unconditional success even when its best-effort steps fail. This story defines the cascade and its honesty rule.
+Mailbox disable/removal, agent/workspace deletion, pair moves and credential/endpoint changes invalidate a pair's disposable Mail identity; credential-store lock/key rotation invalidate its cache as well. **Watcher state is excluded and purged on mailbox removal** (founder Q-B=A), not left behind as an orphan. This package wires the one cascade; W1 owns runtime quiescence/redaction and W2 owns cache deletion. Saved Library files remain ordinary user data, outside this cascade.
 
-**Why this priority**: resurrection is the failure mode — a late cache write or a failed unlink that still reports success leaves mail-derived files (or retained sockets, or live presence) behind a removed pair, and the operator has no way to know.
+**Why this priority**: a late write or false purge success can resurrect sensitive state after removal. The operator needs a visible, retryable cleanup outcome even after the mailbox row has gone.
 
-**Independent test**: for each trigger, remove a pair with a cache subtree present and a paused in-flight cache write; assert leases close, presence revokes, files disappear (or the outcome says cleanup-pending), and the paused write cannot recreate anything.
+**Independent test**: pause both a cache write and a watcher-state completion, run each removal trigger, and release them deterministically. Prove no resurrection, full purge or truthful cleanup-pending, and an unaffected saved Library-file control.
 
 **Acceptance scenarios**:
 
-1. **Given** a mailbox save that flips `enabled` true→false, **When** the save commits, **Then** the pair's cache subtree is purged, its leases are closed and its presence is revoked — the same transition detection the existing `wasEnabled` capture already provides, mirrored for the disable direction.
-2. **Given** mailbox removal (`deleteAgentMailbox`), **When** config and credentials are removed, **Then** the cache purge runs best-effort, and the response distinguishes full `removed` from `removed_cleanup_pending` (with a safe cleanup code) instead of unconditional success; the separately authorized Retry-cleanup operation works **after** the config row is gone, keyed by the pair's opaque cleanup intent.
-3. **Given** an unlink that fails (permissions, AV hold, platform lock), **When** the removal handler responds, **Then** it never reports a successful purge: the pair stays tombstoned, the cleanup-pending outcome is visible, and no plaintext copy of anything is created as a workaround.
-4. **Given** a cache write that was in flight when removal happened, **When** the write completes, **Then** a generation/tombstone check at publication time discards it — no file is (re)created after removal, on any trigger, without polling or sleeps.
-5. **Given** agent deletion, **When** the agent's records are removed, **Then** every pair the agent owned is cascaded through the same cache purge (best-effort, same truthful-outcome rule) — the deletion response carries the same pending-cleanup discrimination when any purge fails.
-6. **Given** workspace deletion, **When** `releaseRuntimeResources` cascades its mailboxes, **Then** each removed pair's cache subtree is purged in the same step (the wholesale directory wipe does not cover the cache, which lives outside `workspaces/<id>/`).
-7. **Given** a credential, host, port, username or folder-override change on an existing pair, **When** the save commits, **Then** the pair's generation advances before any older completion can publish, old disposable caches are deleted (never migrated under an uncertain key), and the pair's leases are closed.
-8. **Given** credential-store lock or key rotation, **When** the cache manager notices, **Then** in-memory derived keys and cached plaintext are cleared, disposable files are removed, and rebuild happens only after normal credential resolution succeeds — a missing/wrong master key is never "fixed" by creating a new one over existing data.
-9. **Given** a gateway restart with orphan cache files (pair no longer configured), **When** boot reconciliation runs, **Then** orphans whose pair no longer exists are deleted best-effort, with failures logged as safe classes — never rendered as usable state.
+1. **Given** a mailbox becoming disabled, **When** the save commits, **Then** its disposable cache and watcher state are purged, panel grants/presence revoked and leases closed, with the same truthful-outcome rule as removal.
+2. **Given** mailbox removal, **When** config/credential removal completes, **Then** the cascade distinguishes full **`removed`** from **`removed_cleanup_pending`** with a safe cleanup code, accounting for cache **and watcher-state** deletion; separately authorized **Retry cleanup** works after config deletion through opaque cleanup intent.
+3. **Given** a cache or watcher-state unlink failure, **When** removal responds, **Then** the pair remains disabled/tombstoned, pending cleanup is visible/retryable and no successful purge or plaintext workaround is claimed.
+4. **Given** cache or watcher-state work in flight at removal, **When** its late completion is released, **Then** no removed-pair file is recreated and no cache/summary timestamp advances. The result is determined by identity/publication guards, not sleeps, polling or cancellation of an independent agent turn.
+5. **Given** an agent with several mailbox pairs, **When** the agent is deleted, **Then** each pair undergoes the same cache/watcher purge and any failed cleanup is reflected in the mail portion of the response.
+6. **Given** a workspace with several mailbox pairs, **When** the workspace is deleted, **Then** each pair's private state is purged explicitly; deleting only the workspace directory is not counted as private-cache cleanup.
+7. **Given** a credential, endpoint, username or folder-override change, or a same-value re-save, **When** it commits, **Then** the persisted config epoch advances before older work can publish, old disposable cache is deleted and old leases close. The **random pair ID remains stable** for the same pair; a moved pair loses its former binding and state.
+8. **Given** store lock or key rotation, **When** the runtime observes it, **Then** owned keys/plaintext caches are cleared best-effort, disposable files removed and rebuilding waits for normal credential resolution. No replacement master key is minted over existing encrypted data, and no forensic memory-erasure claim is made.
+9. **Given** a restart containing orphan cache or watcher files for an absent pair, **When** boot reconciliation runs, **Then** none is usable/served; deletion is attempted and a failure retains safe opaque, visible/retryable cleanup intent rather than a log-only success. This criterion is traced explicitly in B-33/§6 (grill-3 M-7).
+10. **Given** a previously saved attachment, including mail-derived HTML, **When** its mailbox is removed or cache expires, **Then** its ordinary workspace file, original bytes and required provenance/script preference are untouched; normal workspace backup/restore rules still apply (founder Q-E and Q5 final).
 
 ### US-6 — Metadata-only preview grants (P0)
 
@@ -235,38 +238,73 @@ Today a mail HTML preview grant carries the entire fetched payload — sanitized
 3. **Given** the mint request itself, **When** it is processed, **Then** it dials nothing: mint authorizes the pair and issues the ref-bound token; the first serve performs the fetch and surfaces 404 (missing), 400 (bad ref), or the size/decode failure — a mint that would have failed under today's eager fetch now fails at serve with the same safe classes.
 4. **Given** every existing preview security control, **When** the grant shape changes, **Then** all of them still hold: per-session cap 8 refuses (429) with no eviction, logout revocation via `invalidateSession`, unknown/expired/revoked all one 404 answer, signature tokens replace-on-mint at their own 2-minute TTL and never counted against the message cap, remote images only from the grant-recorded URL list through the token-scoped bounded proxy, and the Mail CSP unchanged on the isolated document.
 5. **Given** a message with N inline images, **When** the SPA renders the preview, **Then** the part requests each fetch through the shared pool — the added live fetches are counted and reported (the ADR's measurement obligation), never hidden; the design accepts the cost and this package surfaces it to the measurement plan.
-6. **Given** the new preview-purpose byte endpoint (grill I-05's wire split, defined by W0), **When** it serves an attachment part for Open, **Then** it enforces inline disposition, `no-store`, the unchanged 25 MiB actual-decoded-byte cap checked before success, and the grant's ownership lifecycle (view exit, expiry, revoke, panel close all end it) — while the existing attachment endpoint keeps its browser-Download role and disposition via the unchanged `applyMailByteHeaders`.
+6. **Given** the dedicated preview-purpose byte endpoint (W0's atomic wire split), **When** it serves a selected attachment for Open, **Then** it uses inline disposition, `no-store`, the unchanged **25 MiB actual-decoded-byte cap before success**, and the grant's view-exit/expiry/revoke/close lifecycle. Browser Download remains a separate attachment-disposition stream, including larger files. An honestly known over-cap size disables Open/Save upfront; unknown or falsely low metadata cannot be pre-detected by fetching content and instead causes a visible abort during transfer if actual bytes exceed the cap.
+7. **Given** an attachment preview/read/Save/Download, **When** its bytes are fetched, **Then** it consumes **W2's one targeted part reader** on the validated W1 lease: only the selected MIME leaf is read with PEEK, flags unchanged. Nested parts and the dedicated draft marker follow the common classifier; no whole-message PEEK, unrelated part, second MIME walker, disk spool or reusable byte cache is permitted. If W2's reader has not landed, the dependent endpoint waits/reports blocked, never ships a fallback (grill-3 I-5/grill-4 C3).
+8. **Given** temporary Mail content followed by an explicit successful Save, **When** the real Library file is opened, **Then** temporary mail resource authority is disposed and **ordinary workspace resource rules apply**. Saved HTML keeps original bytes, its proven mail-derived marker, scripts off by default and the visible per-file checkbox. This does not extend temporary resource restrictions to saved non-HTML files (founder Q-E; Q5 final).
 
-### US-7 — Redaction: what pool, cache and probe diagnostics may record (P1)
+### US-7 — Safe diagnostics and the mandatory instrument (P0 emission; P1 redaction)
 
-New pool/cache/probe diagnostics are mandatory for the measurement plan, and they sit next to two existing seams that pass raw upstream text into durable state (`recordFailure` persists `LastErrorText`) or logs (`mailErr502` logs the raw error). This story draws the line.
+The measurement campaign needs a safe, complete per-operation record on successful work as well as failures. **w6-proof owns the sole record definition; this package owns the gateway request envelope/emitter; W1 supplies pool fields and fixes watcher raw-error persistence; W2 supplies cache fields** (register rows 17/19). This package fixes only its gateway error/log boundary. No measurement can claim success from missing records or free-form failure-only logging.
 
-**Why this priority**: the watcher state file is captured by the Git backup today (un-ignored, per the trace) — raw server error text landing there is a real disclosure path, not a style concern. The wire is already safe: the summary serves only the class, so removing raw text has no UI impact (verified §2.1).
+**Why this priority**: absent emitters strand the P0 campaign (grill-4 C1/grill-3 M-1), while raw provider errors can disclose sensitive content through otherwise ordinary state/log paths (grill-3 I-4). Exclusion and redaction are separate required protections.
 
-**Independent test**: drive a fake IMAP server whose error strings contain distinctive synthetic markers (a fake subject, address and folder name); assert the markers appear nowhere in logs, watcher state, audit entries or cache envelopes, while the safe class strings do appear.
-
-**Acceptance scenarios**:
-
-1. **Given** any pool, cache, probe or watcher diagnostic write, **When** it records, **Then** it records only: opaque pair identifiers, generation identifiers, operation labels, safe error classes, durations, and counts (dials, commands, sockets, hit/miss, refusals).
-2. **Given** the same writes, **When** inspected, **Then** they never contain: subjects, addresses, Message-IDs, server folder names (role slugs `inbox`/`sent`/`drafts` are fine), credential values, full JMAP URLs, raw protocol transcripts, response bodies, or any raw upstream error string passed through as if it were safe.
-3. **Given** `recordFailure(errClass, errText)` (W1's file, this package's requirement), **When** a failure is recorded, **Then** the raw `errText` no longer enters the persisted state file — the field receives either empty or a class-derived safe message; the summary wire contract is unchanged (it already serves only the class).
-4. **Given** `mailErr502` and the mail-path `logsafeError`/`logsafeWarn` sites, **When** they log, **Then** they log the class plus safe fields — not the raw error value.
-5. **Given** an error that leaves its trust boundary (into a 5xx detail, a cleanup-pending code, a cache notice), **When** it is rendered, **Then** it is a closed safe class; URL-bearing values are redacted before crossing.
-
-### US-8 — Durable generation across restarts (P0)
-
-The generation that invalidates caches and blocks late completions must survive restarts: a process that restarts after an offline endpoint/password edit must not reconstruct a generation that makes old encrypted snapshots look applicable to the new account (the ADR's "stable generation incorrectly rebuilt" risk). This package decides the mechanism (W0 contracts the wire-visible parts; W1/W2 consume it).
-
-**Why this priority**: without durable generation, every other invalidation rule can be silently undone by a restart — the tombstone holds but the snapshot still decrypts.
-
-**Independent test**: configure a pair, write a snapshot, stop the process, change the pair's password in config offline, restart, and present the old snapshot — assert it is rejected without plaintext salvage and the pair rebuilds live.
+**Independent test**: drive success, safe failure, cache hit, coalesced readers, preview mint/serve, summary and removal through real gateway seams, capture the one instrument sink and logs, and scan distinctive server/content markers. The valid record/class control must be visible; a deliberately absent sink invalidates the campaign.
 
 **Acceptance scenarios**:
 
-1. **Given** a pair's canonical identity (endpoint host/port, username, credential reference binding) resolved at runtime, **When** the cache writes or reads a snapshot, **Then** the snapshot's envelope carries a purpose-keyed, non-secret fingerprint of that identity (derived via the sanctioned `DeriveSubkey` seam over the canonical identity and the resolved credential material — never the password bytes themselves in key names, files or logs), recomputed and compared on every load.
-2. **Given** a restart without any credential change, **When** the cache loads a snapshot, **Then** the fingerprint matches and the snapshot is usable — pair identity is stable across normal restarts.
-3. **Given** any relevant identity change (password, host, port, username, folder-override), **When** the next load compares fingerprints, **Then** the old snapshot is rejected as foreign — deleted, rebuilt live, never salvaged, never displayed.
-4. **Given** the locked-store case, **When** a cache read is attempted, **Then** the manager reports the store state distinctly (locked ≠ cache miss ≠ corrupt) and serves live-only with the safe warning — a broken credential store is never misreported as a cache problem.
+1. **Given** operational Mail diagnostics, **When** they are recorded, **Then** only opaque pair/generation IDs, closed operation/error labels, genuine timings and counts appear; role slugs are allowed, content-bearing names are not.
+2. **Given** subjects, addresses, Message-IDs, folder names, credentials, full URLs or raw server responses in provider data, **When** diagnostics and durable failure state are inspected, **Then** none appears there. Class labels remain visible, not truncated raw text masquerading as redaction.
+3. **Given** a watcher failure, **When** **W1's watcher implementation** records it, **Then** persisted text is empty or class-derived, never raw provider text. This package consumes that correction and preserves the already class-only summary wire; it does not patch or duplicate W1's watcher logic.
+4. **Given** a gateway mail failure, **When** this package logs/maps it, **Then** only the safe class and approved fields enter the log/response, never the raw error value.
+5. **Given** a cache notice, cleanup-pending result or upstream error crossing a user boundary, **When** displayed, **Then** it uses a safe closed class and never discloses a URL-bearing provider message.
+6. **Given** a completed gateway Mail operation, **When** it succeeds or fails, **Then** exactly one complete record in **w6's frozen shape** reaches the injected sink and dedicated structured log, including the real outcome/duration and the supplied pool/cache fields. Preview mint, each serve request, summary and removal are covered, not just the four dialing GETs. Removal's missing enum member is the explicit publisher request §13 Q8; it cannot be invented locally.
+7. **Given** coalesced reads, a cache hit or metadata-only mint, **When** their records are collected, **Then** a joiner reports zero socket count plus the shared-flight marker, and a cache hit/mint reports zero mail acquisition; pool/cache owners supply their fields truthfully. Joined records never double-count the shared flight or label stale memory headers as encrypted disk headers.
+8. **Given** the production emitter is missing, or an exercised operation has no records, **When** the proof campaign attempts to judge a bar, **Then** the run is invalid/not judgeable and Wave E does not proceed — never a silent green, zero-latency sample or ad-hoc replacement instrument.
+
+### US-8 — One durable identity construction across restarts (P0)
+
+**Correction (grill-3 M-2/M-3; register row 12):** this package implements the **random persisted 128-bit pair ID** and the **non-secret generation fingerprint of canonical pair identity plus persisted config epoch**. W1/W2 consume them unchanged, not through independently derived fingerprints. Encryption keys still come from the existing credential-store seam; resolved credential material is **not** the generation input.
+
+**Why this priority**: incompatible constructions make valid snapshots unusable across packages; an unchanged epoch after a credential replacement can make an old snapshot look applicable. Password rotation must invalidate cache, not orphan its randomly named subtree.
+
+**Independent test**: record the pair ID/generation, restart unchanged, then replace credentials at the same reference through the supported save flow and separately change the endpoint while stopped. Compare the persisted epoch/canonical identity and reject old snapshots before display; prove a same-value re-save advances the epoch too. Config contains credential references, never plaintext passwords.
+
+**Acceptance scenarios**:
+
+1. **Given** a pair's canonical identity and persisted config epoch, **When** its current generation is supplied to pool/cache/flight consumers, **Then** all three receive the **same opaque non-secret fingerprint** of those values, with no credential material included. The pair ID is the separate randomly assigned persisted value.
+2. **Given** an unchanged configuration and epoch after restart, **When** a valid snapshot is loaded, **Then** the ID/generation match and the snapshot is usable subject to freshness/key checks.
+3. **Given** a relevant config/credential save or same-value re-save, **When** it commits, **Then** the epoch advances before publication, the generation changes, old work/snapshots are rejected and old disposable cache is deleted without salvage. A stopped-process endpoint change changes canonical identity; a supported offline credential replacement must also persist the epoch advance, not rely on secret hashing. Normal password rotation leaves the pair ID intact.
+4. **Given** a locked/broken credential store, **When** cache or live access is attempted, **Then** store-locked/broken is distinct from cache miss/corruption. Cache use is unavailable; live work can occur only if the normal credential/authorization path genuinely permits it, otherwise it fails visibly. No fabricated authenticated fallback or replacement master key is allowed.
+
+### US-9 — Issued references make the first attachment journey reachable (P0)
+
+Every list/detail or attachment metadata result, including the agent's read result, returns the authorized opaque message reference that the next action needs. **w5-integration is the single issuer; W1 exposes same-lease epoch/generation evidence; W2 performs same-lease validation**. This is first-phase work, not a promise deferred to JMAP or to another issuer (grill-3 C-1; register row 16).
+
+**Why this priority**: a message without Message-ID must still be openable/readable/savable from actual returned values. A remembered numeric UID is not authority after a folder is recreated.
+
+**Independent test**: list/read a synthetic message without Message-ID, then list/read/save its attachment using only returned references/part indices. Separately replay a reference after a config/epoch change and into a wrong pair; prove rejection before content fetch or mutation.
+
+**Acceptance scenarios**:
+
+1. **Given** an authorized message lacking Message-ID, **When** panel list/detail and agent read/attachment metadata return, **Then** they include the same issuer's usable opaque reference, binding pair, config/folder generation and live folder epoch/UID. No model or UI reconstructs it.
+2. **Given** a returned reference and stable attachment index, **When** the next permitted Open/read/Save/Download or seen action executes, **Then** W2 validates it on W1's **same selected lease** before fetch/mutation; the accepted reference addresses the original message only.
+3. **Given** a foreign-pair, old-generation or old-epoch reference, **When** it is presented, **Then** independent mailbox authorization is unchanged and validation yields the typed stale-reference 409 before any content command or mutation. No wrong-message success or resolve-then-mutate race is allowed.
+
+### US-10 — Gateway consumes bounded search, freshness and metadata honestly (P0)
+
+W0 publishes the wire fields; W2 alone searches, issues cursors, classifies attachment metadata and decides freshness. This package makes those existing publishers reachable through its gateway routes instead of inventing substitute services (grill-3 C-2; grill-4 C2/C3/m4; founder Q-C/Q-D/Q-E).
+
+**Why this priority**: the 200-row wall is a dead end without server search, missing REST observer association silently disables pooling, and false zero counts/source labels conceal failures.
+
+**Independent test**: exercise generated folder/list requests with real observer association, 25/+25/200 browse/search bounds, subject/from/to-only matches, a stale cursor, unknown count and Phase-1 mapping/header cache hits. Fake-server counters and safe generated results prove the seam, not a second search implementation.
+
+**Acceptance scenarios**:
+
+1. **Given** more than 200 folder messages or search matches, **When** browsing or searching by subject/sender/recipient substring, **Then** server-side results arrive 25 at a time, the active view never exceeds 200, the next cursor disappears at the ceiling and the search affordance remains reachable. Older/search rows do not enlarge the newest-50 reusable cache.
+2. **Given** a cursor from another pair/folder/query/config/epoch, **When** the next page is requested, **Then** the typed stale-cursor 409 is visible and permits one view reset, not silent reinterpretation or replay.
+3. **Given** absent or **older-than-five-minute** headers/counts, **When** the panel opens or switches folder, **Then** one eligible live refresh occurs; fresh data (including exactly five minutes old) causes no live refresh. **Manual Refresh always** and confirmed own-action refresh remains unchanged. Mapping freshness has its separate >24-hour rule; no repeated panel timer or watcher cache fill is introduced.
+4. **Given** unknown folder count or Phase-1 cached metadata, **When** responses are produced, **Then** unknown count is null, not zero; disk source labels describe folder mapping only, and cached headers/counts are memory-labelled. The same W2 classifier feeds paperclip/detail/agent attachment facts without body fetch.
+5. **Given** a successful explicit attachment Save, **When** the result hands off to its real Library entry, **Then** ordinary workspace resource rules apply and the temporary source is disposed. Saved HTML alone retains its already-decided original bytes/provenance, scripts-off default and per-file checkbox; cache removal never deletes the saved file.
 
 ---
 
