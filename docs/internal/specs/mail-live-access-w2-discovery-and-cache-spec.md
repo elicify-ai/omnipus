@@ -826,3 +826,75 @@ The feature modifies existing behaviour (`FolderCounts` semantics, `folderNameFo
 3. **Seam tests:** the discovery service and snapshot store are consumed through interfaces (§4) — integration seam tests inject fakes for W4's handlers without a live server, proving the boundary compile-breaks rather than silently drifting.
 
 ---
+
+## 8. Explicit non-goals
+
+| Outside this package | Boundary / reason |
+|---|---|
+| **Phase 2's on-disk header cache** (`headers.enc`) | Explicitly excluded by the dispatch. This package builds only the folder-metadata file; the header snapshot store, its 7-day/150-row/1 MiB/32 MiB bounds, and the D6/D21 amendment are a later wave after Phase 1's separate recorded evidence. The §3.7 envelope deliberately leaves room (purpose-separated keys, schema version, transport field) so Phase 2 never breaks the folder file's format. |
+| The connection pool, budgets and leases (W1) | W2 consumes the frozen interfaces; it never dials privately, never creates sockets, never changes `transport.go` or `mail_budget.go`. |
+| Gateway handlers, wire schemas, removal cascades, backup-skip edits (W0/W4) | W2 produces the values; W0 regenerates the types; W4 wires. W2 edits no `contracts/` or `pkg/gateway/` file. |
+| Panel UI, stale labels' rendering, settings forms (W3) | W3 renders freshness/availability from the metadata W2 produces; the connector override form already exists and is unchanged. |
+| Agent tools (W10) | Phase 1 tools keep their live read paths; they consume no header cache and no discovery service in this wave (ADR: agent work never fills or extends panel caches). |
+| Watcher behaviour changes (W1) | The watcher keeps its cadence and backoff; its only interaction with W2 is marking dirty. No watcher-driven refresh, no watcher fairness rewrite here. |
+| Server folder creation, subscription or any mailbox mutation from discovery | Zero `CREATE`/`SUBSCRIBE`/`EXPUNGE`; discovery is read-only by rule R-3.2-4. |
+| Message bodies, snippets, attachment bytes or attachment lists in any cache | The folder file and the memory header cache hold metadata only; the field set is closed (§3.9). No body field may be added without changing this spec. |
+| New config keys, env vars, or credential-store changes | Overrides reuse `sent_folder_name`/`drafts_folder_name`; keys come from `DeriveSubkey`; the HKDF derivation and boot contract are untouchable (the credentials CLAUDE.md forbids "fixing" the misleading comment). |
+| A local mailbox mirror, full-text index, SQLite store, or any new runtime dependency | Pure Go, single binary, file-based storage only. |
+| Historical Git/backup cleanup or secure-erase guarantees | Exclusion is prevention-before-first-write (§3.8); nothing promises SSD/Git-history erasure (the ADR's stated limits). |
+| The `email-watch/` state's own ignore/delete story | Flagged in the autocommit trace as the same-shape problem; it needs its own decision (OQ-6), not a silent side fix here. |
+
+## 9. Definition of Done (the repo's two never-merged lines)
+
+**Code correct and tested.** Evidence required, per claim:
+
+- Every §7 test exists, ran red-before-green (tests-only CI commit proof, or the one dispatcher-owned narrow local run the root rules permit), and passed in CI — with exit codes captured directly, named `--- PASS` lines counted (not just `ok`), and the false-green checklist applied before any green is reported.
+- The §11 counterexamples each have a named test that demonstrably fails against a careless implementation (the mutation probe: qa-lead's CHECK runs at least the CX-1/CX-2/CX-7/CX-9 mutations and shows the suite dies).
+- Crypto and permissions claims carry executed evidence: nonce-freshness, AAD-refusal, reject-before-allocate and atomicity tests (DT-2) green; Unix 0700/0600 verified in the Unix CI leg; the Windows restrictive-access behaviour verified in CI's Windows leg (a chmod-only claim is not acceptable on any platform).
+- Footprint honesty: the 50-row/4 MiB/64 KiB bounds are asserted by tests (DT-3), not inferred from row caps; no claim that a bound implies a measured memory number.
+- No forbidden surface introduced: guards `scripts/check-no-shell-deny-patterns.sh` etc. stay green; `make lint-budgets` passes for the new files; `make verify-contracts` passes after W0's regeneration (W2's code compiles against the generated types only).
+
+**Reachable by a user/agent.** Evidence required:
+
+- A real user opens the Mail panel on a configured mailbox: the folder rail resolves via discovery/override (including at least one non-`Sent`-named server in the executed test plan), folders open, stale labels and the unresolved state render, Refresh works — exercised UAT rows with independent validation, not registry checks.
+- The tool-registration gate (Hard Constraint #6) is explicitly **not applicable to new tools** — W2 adds no tool — but the reachability analogue still holds: the folder/availability metadata must be observable by a real client through the regenerated wire types; a backend service nobody's response carries is a library, not a feature.
+- The exclusion gate is observable: on a machine with exclusions deployed, cache files exist and the staging job provably skips them (G-1's end-to-end run); on one without, the live-only notice is visible in the panel.
+- The matching user-facing documentation updates (§10) are drafted by the implementing leads and audited by docs-verifier against the executed behaviour — written-but-not-audited is not done.
+- Disk-cache enablement specifically: **blocked until E-1 and E-2 are deployed** (§3.8). "Code complete but gate pending" is the honest state until the deployment change lands; it must never be reported as done.
+
+## 10. User-facing documentation TODOs
+
+Per the ADR's documentation table (drafting owners named there; docs-verifier audits each against actual behaviour):
+
+| Page (absolute path in this checkout) | What must be said for W2's slice | Owner |
+|---|---|---|
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/connectors.md` | The Sent/Drafts name setting: leaving it empty means **Automatic** (Omnipus discovers the server's Sent/Drafts folders), a typed name overrides discovery, and clearing it returns to Automatic. An override the server can't find is shown as a settings warning, never silently swapped. What "unresolved" means: the folders couldn't be identified — set the name explicitly; never stated as "the server has no such folder". | W4/backend-lead (per ADR table) |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/mail.md` | The folder rail's resolved names and counts; immediate cached rows vs live validation; the stale-age label and Refresh; unknown vs absent roles (the unresolved state and the settings prompt — never a false "no such folder"); panel-close retention in plain words (lists revalidate after ~30 minutes away; counts/headers are not stored on disk); no offline mailbox — reopening fetches live. | W3/frontend-lead (per ADR table) |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/security.md` | Precisely what is stored: one small **encrypted** file per mailbox holding folder names, roles and server version markers — no messages, subjects, addresses or bodies; sealed with AES-256-GCM under a key derived from the same master key as the credential store (never a second password); fresh random nonce per write; tampering/swapping is detected, not merely discouraged; file and directory permissions restricted to the current user (Windows equivalent stated as current-user restrictive access); the whole cache directory is excluded from the data-folder auto-commit repository **and** from application backups/restore **before** any file is written; deleting a mailbox deletes its cache file; losing/unlocking the master key makes the cache rebuild live — it never contains the only copy of anything. No forensic erasure promise. | W4/backend-lead (per ADR table); security-lead reviews the wording |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/docs/troubleshooting.md` | "Your Sent/Drafts folder couldn't be identified" vs "your server has no such folder" — what each means and the fix (set the name in mailbox settings); what "Mail cache unavailable; using live access" means; busy/Refresh-vs-Retry basics as they touch cached lists; what to do when a cached list looks old (Refresh; ages are shown). No credential- or token-bearing log excerpts in instructions. | W4/backend-lead (per ADR table) |
+
+No other user page is touched by W2's slice; if implementation reveals another affected page, the implementing lead adds its TODO here before landing.
+
+## 11. Counterexamples — tests a careless implementation must fail
+
+Each counterexample names the mutation a plausible wrong implementation survives; the §7 suite must die on each. CX-1 is the mandatory minimum of the dispatch brief.
+
+| # | Counterexample | The careless mutation it kills | Test |
+|---|---|---|---|
+| CX-1 | **Untagged localized Sent folder.** LIST succeeds; an untagged `Elementos-Enviados` folder exists; no candidate matches. Expected: `unknown` + setting offered. The mutation: `absent`/empty-with-explanation whenever "LIST ran fine and nothing matched" — treating the finite candidate list as a proof of server layout. | Candidate-sweep-failure → absence | `TestDiscovery_NoCandidatesIsUnknownNeverAbsent` (DT-1 row 4) |
+| CX-2 | **Override outranks special-use.** Stored `Archive` + a `\Sent`-tagged `Sent Items`. Expected: `Archive` used. The mutation: discovery result preferred because "the server knows best", silently overriding the operator. | Override demoted below discovery | `TestDiscovery_OverrideBeatsSpecialUse` |
+| CX-3 | **Clear-to-automatic actually clears.** Empty string saved → next resolution is automatic. The mutation: treating the empty field as a literal folder name (impossible folder) or keeping the old value. | Reader-side semantics diverge from `persistConfig` | `TestDiscovery_EmptyClearsToAutomatic` |
+| CX-4 | **UIDVALIDITY never fabricated.** A role never validated stores null epoch, not `0`. The mutation: zero-value struct serialization presenting 0 as a real epoch — and later epoch checks comparing "real" 0 against a folder whose epoch is 0. | Fabricated epoch | `TestCacheFile_RoundTripPreservesAllFields` (nil-stays-nil assertion) |
+| CX-5 | **Cross-pair isolation.** Two pairs on one account with different Sent mappings; both resolve and cache. The mutation: cache/pool keyed by account key alone → pair B renders pair A's Sent. (The I-01 family.) | Account-keyed caching | `TestHeaderCache_CrossPairIsolation` + the I-01 budget tests |
+| CX-6 | **Nonce freshness.** Identical payloads written twice must differ in ciphertext. The mutation: a deterministic or reused nonce (e.g. derived from pair ID) — every test still passes, the crypto is broken. | Static/reused nonce | `TestCacheFile_FreshNoncePerWrite` |
+| CX-7 | **AAD actually binds.** Pair B's file at pair A's path, and a same-pair file from an older generation. The mutation: AAD omitted or bound only to a constant → foreign files decrypt happily. | Missing/constant AAD | `TestCacheFile_ForeignPairRefuses` / `..._ForeignGenerationRefuses` |
+| CX-8 | **Reject-before-allocate.** A 2 GB claimed-size envelope. The mutation: reading the body into memory before checking the declared/actual length against the cap — works on every small test, OOMs on the hostile one. | Unbounded allocation on malformed input | `TestCacheFile_RejectsBeforeAllocation` (DT-2 rows 4–6) |
+| CX-9 | **Superseded read publishes nothing (I-02).** The pause-and-release sequence of V-2. The mutation: invalidation-only ordering (delete-then-refill) without the revision check — the stale read repopulates unread flags and a fresh timestamp *after* the mutation. | Missing publication-revision fence | `TestHeaderCache_SupersededReadPublishesNothing` |
+| CX-10 | **No background refresh while closed.** Panel closed across the 5-minute and 24-hour marks. The mutation: a `time.Ticker` "helpfully" keeping things fresh — every open-panel test passes; the closed-panel guarantee and the eight-socket world both break. | Polling timer | `TestCacheFile_ClosedPanelNeverTouchesServerOrDisk` + `TestCacheFile_TriggersExactlyFour` |
+| CX-11 | **Retention is not extended by reads.** Cached rows read repeatedly at 29 minutes past close. The mutation: refreshing `lastAccessed` on read → immortal cache entries. | Read-extends-retention | `TestHeaderCache_RetentionDropsAfterThirtyMinutesClosed` (repeated-read variant) |
+| CX-12 | **Budget overflow stays visible.** Rows sized past 4 MiB. The mutation: silent truncation of fields or silent eviction of live rows — the suite must require the typed budget refusal and the visible live-only outcome. | Silent truncation | `TestHeaderCache_BudgetOverflowIsVisibleNotTruncated` (DT-3) |
+| CX-13 | **Unknown counts stay null.** Unknown role's total. The mutation: `int` zero-value serialization — "0" renders as a checked-empty folder. | Fabricated zero | `TestFolderCounts_UnknownRoleHasNullableTotal` |
+| CX-14 | **Gate actually blocks.** Exclusion missing → first write must not happen. The mutation: the gate check implemented but its failure path logging-and-continuing. | Log-only gate | `TestMailCacheExclusionGate_BlocksWhenMissing` |
+| CX-15 | **Leak markers never reach logs.** Marker-laden folder names/subjects through every path. The mutation: passing `err.Error()` (server text) into a log field "temporarily". | Raw upstream text in diagnostics | `TestW2Diagnostics_LeakMarkerSweep` |
+
+---
