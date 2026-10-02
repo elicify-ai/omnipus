@@ -840,7 +840,7 @@ Stated in this repo's two never-merged lines, with the specific evidence each re
 
 | Page and section (verified in this checkout) | What must be said |
 |---|---|
-| `docs/mail.md` → **Read messages** | The paperclip list behaviour's sibling: the attachment name/size list; **Open** opens a temporary Library view (no file created, vanishes on exit/reload); the exact context bar and Back behaviour; scriptless HTML/SVG-as-static-image behaviour; the 25 MB preview/save cap with larger-files Download-only; Save vs Download distinction; the "Save result unknown" state after a lost response and what an explicit retry returns (the prior receipt, never a duplicate); what "Save to Library first" means for the disabled actions. |
+| `docs/mail.md` → **Read messages** | The paperclip list behaviour's sibling: the attachment name/size list; **Open** opens a temporary Library view (no file created, vanishes on exit/reload); the exact context bar and Back behaviour; scriptless HTML/SVG-as-static-image behaviour; the 25 MB preview/save cap with larger-files Download-only; Save vs Download distinction; the "Save result unknown" state after a lost response and what an explicit retry returns — the prior receipt while the gateway holds it (exactly one file), while after a server restart the receipt is gone and the retry is a new save that lands under a numbered name and says so (grill-3 M-6); what "Save to Library first" means for the disabled actions. |
 | `docs/mail.md` → **Compose and send** | Reply vs Reply all recipient rules (Reply all keeps original To+Cc minus you, no duplicates, never the Bcc; plain Reply goes to the sender only); the quoted original is editable; Reply-To preference; Date → received date → "No date". |
 | `docs/mail.md` → **If something goes wrong** | Refused Save causes (permission, size, path); saved-but-audit-warning is still saved; over-cap Download-only; agent attachment tools: list/read freely, save asks with the normal Auto-approve caveat; stripped-styling notice and remote images blocked until "Load images". |
 | `docs/library.md` → **What the preview shows** | A Mail Open is not a file/list entry, bookmark or offline copy; no workspace path; vanishes on exit/reload; renderer support and unsupported formats; temporary read-only controls; Library Download/edit/rename/move/PDF fill-sign need Save first; the mail bar. |
@@ -882,27 +882,32 @@ docs-verifier audits every claim against the actual UI/handlers; security-lead c
 
 ## 13. Open questions (with options and recommendations)
 
-No founder-level question remains open (Q1–Q5 answered and recorded). These are engineering decisions to settle at implementation start; each has a recommendation so the team can proceed on the default and revisit if the founder disagrees.
+No founder-level question remains open (Q1–Q5 answered and recorded). The founder's 2026-10-02 spec-grill rulings (mail-feature-decisions.md, "Founder answers to the spec-grill decisions") are likewise settled: **Q-A** (the product owns its cache-directory exclusion from staging and from the application's own backups/archives on every install — this spec carries no machine-setup dependency; §16 records the sweep), **Q-B** (watcher state excluded and purged on mailbox removal — w1/w5's surfaces, not touched here), **Q-C** (refresh-on-open keeps the design's stale-gating — out of this package's scope), **Q-D** (folder search: subject + sender/recipient, server-side, 25/200 bounds — w2's surface, not touched here), **Q-E** (saved mail file = ordinary workspace file; recorded in §5.1/§5.4). None is reopened by this spec. The five items below are **engineering** decisions, each with a status and owner; work proceeds on the stated default.
 
 **Q-A — The mailbox label inside `mail/<mailbox>/`.**
 Options: (a) sanitized mailbox address alone; (b) sanitized address + owning agent ID always; (c) address alone, agent-ID suffix only when two pairs would share a label.
 **Recommendation: (c)** — readable by default, disambiguated only on real collision, exactly the ADR's "sanitized mailbox address disambiguated by the validated owning agent ID" intent. The save service computes it once, server-side; never agent-supplied.
+**Status: open — owner: W7 implementer, architect sign-off at implementation start; default (c).**
 
 **Q-B — What `read_email_attachment` returns for images/documents.**
 Options: (a) text-only first wave — binary formats return descriptor + explicit unsupported + the Save option; (b) full visual/document reader representation in the same wave.
 **Recommendation: (a) with (b) gated on the traced reader integration.** The ADR marks the visual/document tool-result adapter as Unknown-until-traced; shipping list+text+save with an honest unsupported outcome is reachable and safe immediately; the visual representation lands as a follow-up once the reader path is traced and demonstrated. No fake "read" for binary ever ships.
+**Status: open — owner: W10 implementer with architect; default (a), (b) gated on the traced reader path.**
 
 **Q-C — Where the per-file scripts checkbox lives.**
 Options: (a) in the preview pane header (only visible when viewing the file); (b) in the Explorer's per-file action menu as well.
 **Recommendation: (a) for the first wave** — the decision is about *viewing* this file with scripts; keeping it at the point of viewing is the smaller, clearer surface. Adding it to the action menu later is additive.
+**Status: open — owner: W8 implementer under the design-system rules; default (a).**
 
 **Q-D — `<body>`-attribute honouring for saved/preview HTML.**
 Options: (a) leave body-level `bgcolor`/`background`/`text` unreachable (fragment sanitization drops them); (b) `serveHTML` wraps the fragment in fixed boilerplate carrying the sanitized body values.
 **Recommendation: (b)** — the artefact holds the three attributes in the allow-list either way and names the wrapper as the only way to honour them; the boilerplate is fixed and carries only sanitized values. Small cost, visible fidelity win for real mail.
+**Status: open — owner: W9 implementer, confirmed inside the §12.2 security-lead CSS review; default (b).**
 
 **Q-E — Style-attribute and `<style>` size caps.**
 Options: (a) 4 KB attribute / 16 KB block (Gmail-parity, artefact's suggestion); (b) tighter custom bounds.
 **Recommendation: (a)** — parity with the reference clients is the compatibility target; both sit well inside the existing 256 KB HTML cap.
+**Status: decided — the CSS authority (`receipts/css-allowlist.md`) is adopted as-is (see header), which fixes (a)'s numbers; there is no remaining choice.**
 
 ---
 
@@ -910,7 +915,7 @@ Options: (a) 4 KB attribute / 16 KB block (Gmail-parity, artefact's suggestion);
 
 | Story | BDD scenarios (§8 feature) | Tests (§9) |
 |---|---|---|
-| US-1 Open without saving | Temporary preview (all 8) | T1, T5, T14, T15, T17 |
+| US-1 Open without saving | Temporary preview (all 11, incl. the I-6 two-form over-cap pair and the AC-6/AC-7 scenarios) | T1, T5, T14, T15, T17 |
 | US-2 Save + Download | Save/Download (8) | T2, T3, T4, T6, T16, T17 |
 | US-3 Agent tools | Agent tools (6) | T10, T11, T12, T1 (shared service), T17 |
 | US-4 Styling | Styling (4) | T7, T8, T17 |
@@ -927,7 +932,7 @@ Every FR-level statement in §§4–7 traces to a story above; every story has s
 
 ## 15. Implementation sequence within this package
 
-1. **W0 contract freeze first** (preview mint/response, save subresource + token, tool results, `message_ref` on descriptor outputs, nullable date, `preview_profile`/allowance field) — regenerated and committed before any handler/consumer.
+1. **Contracts first — Wave B, owned by backend-lead in the ADR-W0 role** (preview mint/response, save subresource + token shapes, tool results, `message_ref` field on descriptor outputs, nullable date, `preview_profile`/allowance field) — regenerated and committed before any handler/consumer; there is no W0 spec file, so a Wave B that has not started is a blocked report to team-lead, never a stub (register §5).
 2. **W7 service + token reconciliation + marker storage** against tests 1–4.
 3. **W8 viewer source union + resource policy + handoff freeze with W3** against tests 14–15; I-06 interaction contract in the same slice.
 4. **W10 tools + policy catalog + `BuildReplyRecipients`** against tests 9–12; `read_message` descriptor extension rides it.
