@@ -265,3 +265,78 @@ The generation that invalidates caches and blocks late completions must survive 
 2. **Given** a restart without any credential change, **When** the cache loads a snapshot, **Then** the fingerprint matches and the snapshot is usable — pair identity is stable across normal restarts.
 3. **Given** any relevant identity change (password, host, port, username, folder-override), **When** the next load compares fingerprints, **Then** the old snapshot is rejected as foreign — deleted, rebuilt live, never salvaged, never displayed.
 4. **Given** the locked-store case, **When** a cache read is attempted, **Then** the manager reports the store state distinctly (locked ≠ cache miss ≠ corrupt) and serves live-only with the safe warning — a broken credential store is never misreported as a cache problem.
+
+---
+
+## 4. Behavioral contract (quick reference)
+
+### 4.1 When/Then summary
+
+| When | Then |
+|---|---|
+| Any mail path (panel, watcher, tool) resolves its runtime | It gets the same process-wide pool, budget and cache instances |
+| Two pairs share one account and run identical reads | Results never cross pairs; combined dials still respect the 2-slot account gate |
+| The last panel observer disappears (frame, socket death, logout) | Panel-owned idle sockets close; shared flights finish only for remaining real owners; nothing polls |
+| A cache write is attempted without proven Git-staging exclusion | The write is refused before file creation; the pair runs live-only with a visible `cache_unavailable` notice |
+| A cache file is written | It is ciphertext-only, atomically replaced, 0600 in a 0700 dir, at a stable per-pair path derived from the data root |
+| A tar backup is created or restored | `mail-cache` is skipped on archive and on restore — old archives included |
+| Any of the five removal triggers fires | Leases close, presence revokes, generation advances, cache purges; a failed purge yields `removed_cleanup_pending`, never silent success |
+| A cache write completes after its pair was removed | It is discarded by the tombstone/generation check — no resurrection, no polling |
+| A credential/endpoint/override change commits | The generation fingerprint changes; old snapshots are rejected and deleted, never migrated |
+| A preview is minted | No HTML/body/inline bytes enter any store; the grant is authorization/reference metadata only |
+| A preview or inline part is served | It live-fetches through the shared budget/pool, sanitizes in-request, serves `no-store`, drops bytes at request end |
+| A preview token is unknown, expired or revoked | The same 404 answer as today; cap-8 still refuses with 429; logout still revokes everything |
+| Any mail diagnostic is written | Only opaque ids, safe classes, durations and counts — never subjects, addresses, folder names or raw upstream text |
+
+### 4.2 Explicit non-behaviors
+
+| The system must not… | Because |
+|---|---|
+| …construct a second pool/budget/cache instance on any path | The founder's 2/mailbox and 8/global ceilings are unenforceable against a forked pool (ADR P1.2) |
+| …let the account key (`host:port|username`) decide result sharing or cache isolation | Two pairs on one account would read each other's data (grill I-01); the account key is contention-only |
+| …write any cache file before exclusion from Git staging is proven | The first unexcluded write is committed off-machine within 15 minutes and history retains it (trace §5) |
+| …fall back to a plaintext cache file, or to an unencrypted temp/journal file, when encryption or exclusion fails | A degraded cache is worse than no cache; the failure must be visible (ADR security section) |
+| …reuse the watcher's lossy `keyFor` sanitizer as the cache pair identifier | Two distinct pairs can produce the same sanitized name; the cache must be unambiguous |
+| …report a successful purge when an unlink failed | A false success orphans mail-derived files with no operator-visible trail (ADR cleanup-failure row) |
+| …poll, sleep or retry-loop to win the late-completion race | The generation/tombstone check is a correctness rule, not a timing heuristic (ADR: no new timers) |
+| …store HTML, body, attachment or inline bytes in any token grant, query cache or persistent store | The request-only body rule has no exceptions (founder brief; F1 "no storage" row) |
+| …let the preview mint dial IMAP | Mint is authorization; the serve request is the fetch — a validating mint doubles fetches and reintroduces eager work |
+| …loosen any existing preview control to make metadata-only grants easier | Every control (cap, revocation, 404 parity, proxy scoping, CSP) is preserved verbatim (US-6.4) |
+| …serve a restored cache snapshot from an old backup archive | Stale snapshots bypass every freshness rule (trace §3, restore row) |
+| …route agent file tools through the cache directory | A generic file tool must never become a decryption route (ADR filesystem row) |
+| …introduce a mail-data polling timer, panel-refresh heartbeat or IDLE subscription | Retired/forbidden surfaces (ADR P1.1, non-goals) |
+| …log or persist subjects, addresses, Message-IDs, server folder names, credentials or raw upstream error strings | Watcher state is Git-captured today; logs are durable; raw text is not a safe class (US-7) |
+
+### 4.3 Machine-verifiable constraints
+
+| ID | Constraint | Test observable |
+|---|---|---|
+| MC-1 | Exactly one pool, one budget, one cache manager per process; all six wiring sites (§2.2) resolve pointer-identical instances | Pointer identity assertions at each site; second-construction returns the same instance |
+| MC-2 | Global concurrent IMAP sockets ≤ 8; per-mailbox ≤ 2; connecting reservations counted; a 9th demand gets the typed busy refusal within the 5 s acquisition window | Fake-server accepted/max counters; refusal latency ≤ acquisition bound |
+| MC-3 | Identical reads on two pairs of one account produce pair-correct results (no cross-pair flight sharing); combined dials ≤ 2 | Per-pair result markers on the fake server; dial counter |
+| MC-4 | Observer open → panel request may retain a socket; observer close, socket death, or logout → no panel-retained socket survives (server socket count returns to baseline) | Fake-server socket count before/after; independent tool request unaffected |
+| MC-5 | Cache path = `<data-root>/mail-cache/<opaque-pair-id>/…`; dir mode 0700, file mode 0600 (Unix); Windows current-user ACL; stable across restart; distinct for distinct pairs | Path/mode assertions; two-pair distinctness; restart stability |
+| MC-6 | Cache write refused with `cache_unavailable` when the exclusion rule is absent from both `<data-dir>/.gitignore` and `.git/info/exclude`; allowed when present in either; no file created on refusal | Flip the rule in a temp data dir; assert file existence and notice code both ways |
+| MC-7 | `createTarGz` skips top-level `mail-cache`; `extractTarGz` skips `mail-cache` members regardless of archive age | Archive member listing; restore-into-scratch assertion; positive control file present |
+| MC-8 | Removal of a pair with a failing unlink → response `removed_cleanup_pending` + safe code + Retry-cleanup succeeds later, including after the config row is gone; success path → subtree gone | Permission-blocked dir; retry assertions |
+| MC-9 | A cache write completing after removal writes nothing (tombstone/generation guard), deterministically, with the write paused mid-flight | Paused-write harness; disk assertion after release |
+| MC-10 | Credential/host/port/username/override change → old snapshot rejected (fingerprint mismatch), files deleted, leases closed; restart without change → snapshot still valid | Offline-edit-then-restart dataset; both directions asserted |
+| MC-11 | Minted preview grant contains zero bytes: no HTML string, no `Inline[].Data`, no attachment data; URL list permitted; expiry/session/identity fields as today | White-box store inspection + grant-size bound |
+| MC-12 | Preview serve fetches live through the budget: during backoff → typed refusal, zero dials; otherwise one gated fetch per serve request (counted) | Fake-server command counter; backoff-state serve attempt |
+| MC-13 | All existing preview controls hold: cap-8-refuses (429, no eviction), logout revocation, unknown/expired/revoked = one 404, signature kind replace-on-mint @ 2 min TTL and outside the message cap, remote images only from the grant-recorded list via the token-scoped proxy | The existing preview test families re-derived against the new grant shape — none weakened |
+| MC-14 | Preview-purpose responses carry `Cache-Control: no-store`; the new preview byte endpoint enforces the 25 MiB actual-decoded cap before success and inline disposition; the download endpoint keeps `applyMailByteHeaders` attachment disposition | Header assertions on both endpoints; over-cap refusal with false metadata |
+| MC-15 | Diagnostics contain zero leak markers (synthetic subject/address/folder-name markers) and do contain the safe class strings; `recordFailure` persists no raw text; `mailErr502` logs class + safe fields only | Marker-scan test with positive control |
+| MC-16 | Agent file/shell policy refuses any path under the cache directory | `ResolveTurnFSPolicy`/`ResolvePath`-level refusal test |
+| MC-17 | Pair identity is stable across restart and changes with endpoint/credential identity, via a purpose-keyed non-secret fingerprint over canonical identity + resolved credential material (DeriveSubkey seam); no password bytes in filenames, keys or logs | Restart-stability + change-rejection dataset; fingerprint never equals a password hash of the raw password alone |
+
+### 4.4 Integration boundaries
+
+| External system / package | Data in and out | Contract | Failure behaviour |
+|---|---|---|---|
+| **W0 (contracts)** | Schema/enum additions this package needs (§8) | This package never edits `contracts/` or generated artifacts; it requests, W0 defines and regenerates | A missing generated type blocks this package's handler work — declared, not improvised |
+| **W1 (read runtime)** | Pool/lease manager, budget internals, watcher scheduling; presence hooks and generation hooks it exposes | Frozen internal interfaces agreed with architect + W0 before parallel writers start (ADR sequencing) | Pool unavailable → requests take the typed busy/failure path, never bypass |
+| **W2 (discovery/cache service)** | Folder-mapping and header-cache services; the encrypted envelope writer | This package decides *where* files live, *whether* writes are gated, and *when* they are purged; W2 owns the envelope format and crypto | Cache service error → safe cache-health warning; live work continues (ADR failure table) |
+| **W7 (attachment service)** | Transfer service for Save mode | This package wires preview/download endpoints to it; it never edits Library files | Service refusal → typed error on the wire, no partial file |
+| **W3 (SPA)** | Generated REST/WS types only | Presence frames, metadata fields, cleanup-pending result — all via W0's generated types; no ad-hoc JSON | SPA missing → server behaviour unchanged (server never depends on UI) |
+| **Deployment (omnipus-agent-os, outside repo)** | The `mail-cache/` deny rule in the provisioning script's ignore template + idempotent re-run | Owned by team-lead/founder ops; this package specifies it (US-4) and consumes its evidence | Rule absent → the product-side gate keeps disk writes blocked (defence in depth) |
+| **launchd auto-commit job** | Reads whatever the deny-list allows | Not controllable by product code; the ignore rule is the only lever | Job blocked/unloaded (today's live state) does NOT weaken the gate — the gate is the rule + product check, not the job's health |
