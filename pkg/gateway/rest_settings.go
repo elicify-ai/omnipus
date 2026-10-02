@@ -409,9 +409,25 @@ func createTarGz(srcDir, destPath string) error {
 			return nil // skip the root itself
 		}
 		// Skip logs and backups to prevent log noise and recursive inclusion.
+		// w5-integration (US-4/MC-7, founder Q-A/Q-B): the product's OWN
+		// backup never captures the private Mail namespaces — the cache
+		// (mail-cache/) and the watcher state (email-watch/) — on any
+		// install, whatever their current/temp/retired contents; and it
+		// never carries the data root's OWN repository metadata (top-level
+		// .git), whose history could hold pre-gate cache state that no
+		// in-archive check can vouch for — the product's own means of
+		// ensuring its archives cannot carry it. Nested repositories (a
+		// workspace's own .git) are ordinary state and stay included.
 		topLevel := strings.SplitN(rel, string(filepath.Separator), 2)[0]
-		if topLevel == "logs" || topLevel == "backups" {
+		switch topLevel {
+		case "logs", "backups":
 			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		case mailCacheDirName, mailWatchDirName, ".git":
+			if info.IsDir() {
+				slog.Warn("rest: backup: excluded protected Mail/version-control namespace", "namespace", topLevel)
 				return filepath.SkipDir
 			}
 			return nil
@@ -615,6 +631,15 @@ func extractTarGz(archivePath, destDir string) error {
 		if clean == "config.json" {
 			continue
 		}
+		// w5-integration (US-4.2/MC-7/B-15): protected Mail namespaces and
+		// the data root's own repository metadata never re-materialize from
+		// ANY archive — including a hostile or pre-exclusion old backup.
+		// Only TOP-LEVEL .git is protected: a nested .git is a workspace
+		// repository's ordinary history and restores normally.
+		if isProtectedRestoreNamespace(clean) {
+			slog.Warn("rest: restore: skipping protected Mail/version-control entry", "name", hdr.Name)
+			continue
+		}
 		destPath := filepath.Join(destDir, clean)
 		// Defense-in-depth: ensure the resolved path is still under destDir.
 		if !strings.HasPrefix(destPath, filepath.Clean(destDir)+string(os.PathSeparator)) {
@@ -724,4 +749,20 @@ func (a *restAPI) HandleAbout(w http.ResponseWriter, r *http.Request) {
 		DevicePairingEnabled: cfg.Sandbox.Experimental.DevicePairingEnabled,
 	}
 	jsonOK(w, resp)
+}
+
+// isProtectedRestoreNamespace reports whether a restored entry's clean
+// relative path lands in one of the namespaces the product never carries:
+// the private Mail cache (mail-cache), the watcher state (email-watch), or
+// the data root's OWN repository metadata (top-level .git). Only TOP-LEVEL
+// .git is protected — a nested .git is a workspace repository's ordinary
+// history and restores normally (US-4.2: ordinary state and saved workspace
+// files remain included).
+func isProtectedRestoreNamespace(clean string) bool {
+	topLevel := strings.SplitN(clean, string(filepath.Separator), 2)[0]
+	switch topLevel {
+	case mailCacheDirName, mailWatchDirName, ".git":
+		return true
+	}
+	return false
 }
