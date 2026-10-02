@@ -1,17 +1,35 @@
 # Feature Specification: Mail live access — W3 Mail panel and settings surface
 
 **Created**: 2026-10-02
-**Status**: Proposed — draft for the grill. This is the W3 implementation specification for the
-founder-approved design in `docs/internal/architecture/ADR-20261001-mail-live-access-pooling-folder-discovery-and-cache.md`
-(cited below as "the ADR"). It has not been grilled, gated or approved for implementation.
+**Status**: Proposed — the one prescribed spec-correction round applied (2026-10-02). This is the W3
+implementation specification for the founder-approved design in
+`docs/internal/architecture/ADR-20261001-mail-live-access-pooling-folder-discovery-and-cache.md`
+(cited below as "the ADR"). The correction round applies the grill report
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill-2.md` (findings F-1…F-12) and the
+landing-order interface register (`docs/internal/specs/mail-live-access-landing-order.md`, §2) row by
+row; the correction record and its evidence table are §18. Still not grilled-gate-passed, gated or
+approved for implementation.
 **Input**: the ADR (one prescribed grill round applied — findings I-01…I-06, M-01, M-02; founder answers
 Q1=A, Q2=B, Q3=A, Q4=A, Q5=A recorded 2026-10-02) and its review
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill-report.md`.
-**Work package**: W3 — panel/settings (frontend-lead), per the ADR's "Affected components and parallel
-work packages" table. This spec covers design work package W3, the frontend half of W4's gateway-facing
-request shapes, and the frontend parts of the ADR's feature sections F1, F2 and F7.
-**Sibling specs this one must not edit**: W8's Library-viewer spec (renderer/resource-policy
-implementation), W0's contract change set, W1/W2 backend read-runtime specs, W7's Save-service spec.
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill-report.md`; the spec-set grill
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/adr-grill-2.md`; the founder rulings of
+2026-10-02 in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/mail-feature-decisions.md`
+(Q-A cache exclusion in product terms, Q-B watcher purge, Q-C refresh stale-gating, Q-D search fields,
+Q-E saved-file resource policy).
+**Package mapping** (landing-order register §2 preamble — one line per file, binding for every
+dispatch): this file is **w3 = ADR-W3 (panel/settings)**. The sibling files are: **w1** =
+`mail-live-access-w1-read-runtime-spec.md` (ADR-W1 read runtime), **w2** =
+`mail-live-access-w2-discovery-and-cache-spec.md` (ADR-W2 discovery/cache), **w4** =
+`mail-live-access-w4-attachments-and-rendering-spec.md` (ADR-W7–W10 features — the Save service, the
+agent tools and the Library renderer/resource-policy work of the ADR's W8 rows), **w5** =
+`mail-live-access-w5-integration-and-privacy-spec.md` (ADR-W4 integration/privacy), **w6** =
+`mail-live-access-w6-proof-spec.md` (ADR-W5 proof). **W0 is a role, not a spec file**: backend-lead in
+the ADR's W0 contracts wave (register §5) — no `mail-live-access-w0-*` file exists or is required.
+Where this spec says "W4/W7/W8/W9/W10" in ADR-letter terms, the owning spec file is w4 unless the row
+names w5 or w6; ownership boundaries stay as the ADR's package table draws them. Interface ownership
+authority is the landing-order register §2; this spec never re-implements another row's interface.
+**Sibling specs this one must not edit**: w1, w2, w4, w5 and w6 as listed above, plus
+`mail-live-access-landing-order.md` itself.
 Interfaces this spec publishes to, and consumes from, those packages are frozen in §3.
 
 **Certainty convention used throughout**: **Verified** = the file/symbol was read in THIS checkout
