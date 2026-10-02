@@ -12,10 +12,7 @@ vi.mock('@/lib/api/mail', () => ({
   revokeMailAttachmentPreview: vi.fn(async () => undefined),
 }))
 
-import {
-  MailAttachmentPreviewSource,
-  createMailAttachmentPreviewSource,
-} from './mailAttachmentPreviewSource'
+import { createMailAttachmentPreviewSource } from './mailAttachmentPreviewSource'
 import type { MailAttachmentPreviewResponse } from '@/lib/api/generated/openapi-types'
 
 function mintResponse(overrides?: Partial<MailAttachmentPreviewResponse>): MailAttachmentPreviewResponse {

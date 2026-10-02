@@ -28,6 +28,23 @@ const MAIL_PREVIEW_PART_PREFIX = '/mail-preview/part/'
 const MAIL_PREVIEW_IMG_PREFIX = '/mail-preview/img/'
 
 /**
+ * The exact mail context bar, from the founder's F1 decision: the Library
+ * viewer renders "From mail: <subject> · Back to mail · Save to Library".
+ * ONE constant so the Library-side integration (the panel wave's
+ * LibraryPreviewPane edit) renders the specified text and no other
+ * (US-1.AC-1: "the context bar reads exactly").
+ */
+export const MAIL_CONTEXT_BAR_PREFIX = 'From mail: '
+export const MAIL_CONTEXT_BAR_FORMAT = `${MAIL_CONTEXT_BAR_PREFIX}<subject> · Back to mail · Save to Library`
+
+/**
+ * The disabled stored-file actions' explanation (US-1.AC-2): rendered text,
+ * visible without hover, readable by screen readers — never a tooltip-only
+ * hint.
+ */
+export const MAIL_SAVE_FIRST_EXPLANATION = 'Save to Library first'
+
+/**
  * The resolved shape renderers consume: a URL the preview is authorized to
  * load, or null for a structural refusal (never a guessed fallback).
  */
