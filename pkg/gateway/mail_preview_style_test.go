@@ -58,6 +58,13 @@ func TestMailSanitizePreviewHTMLMediaQueryBlock(t *testing.T) {
 }
 
 // P2/P6 at the pipeline level: @import and @font-face never reach the served artifact.
+//
+// Instrument note: while finding F1 stands (blocks are discarded wholesale),
+// these assertions pass trivially — no block content reaches the artifact at
+// all. They are the correct POST-FIX oracle: once the placeholder pipeline
+// renders sanitized blocks, a mutation that lets dangerous at-rules through
+// MUST fail here. The live at-rule oracles today are the unit-level ones in
+// pkg/email/mailhtml/sanitize_test.go (mutation-killed there).
 func TestMailSanitizePreviewHTMLDangerousAtRulesStripped(t *testing.T) {
 	in := `<style>@import url("https://evil/x.css"); @font-face{font-family:E;src:url(data:font/woff2;base64,AAAA)} p{color:red}</style><p>x</p>`
 	out := normalizeHTML(t, mailSanitizePreviewHTML(in, nil, nil))
