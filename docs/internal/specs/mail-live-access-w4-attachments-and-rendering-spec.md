@@ -929,7 +929,7 @@ Options: (a) 4 KB attribute / 16 KB block (Gmail-parity, artefact's suggestion);
 | US-1 Open without saving | Temporary preview (all 11, incl. the I-6 two-form over-cap pair and the AC-6/AC-7 scenarios) | T1, T5, T14, T15, T17 |
 | US-2 Save + Download | Save/Download (8) | T2, T3, T4, T6, T16, T17 |
 | US-3 Agent tools | Agent tools (6) | T10, T11, T12, T1 (shared service), T17 |
-| US-4 Styling | Styling (4) | T7, T8, T17 |
+| US-4 Styling | Styling (5 — the Outline + four Scenarios) | T7, T8, T17 |
 | US-5 Reply all | Reply (5) | T9, T16 (compose integration) |
 | US-6 Date fallback | Date (2) | T13 |
 | §5.1 resource policy | C-1..C-4 + positive control | T14, T17 |
