@@ -662,3 +662,63 @@ A run is invalid and is re-run with the discard recorded when: the workspace or 
 | Resource invariants | ≤ 2 sockets/mailbox, ≤ 8 global, existing 2/account work slots; panel-close releases sockets; ≈ 2 min idle expiry; ≤ 50 headers/role; < **10 MiB** runtime overhead vs the same warmed baseline; request-scoped body buffers reported separately | **target**; baseline socket profile trivially 1-per-request — verify, don't infer, in M-D |
 
 A bar is **failed** by its own stated percentile and opposing measurement; a bar with missing samples reports the gap and is not passed by absence. Absolute bars name clock and host; paired bars name the exact percentile and the opposing series.
+
+---
+
+## 9. UAT campaign (live instance)
+
+Two lanes minimum (uat-tester), each PASS row checked by an independent uat-validator — the repo's standing UAT structure. The campaign runs **on the live instance with the 13 mailboxes** after CI-green, before the founder's landing yes. The prohibitions are absolute: this is shared state holding the founder's real mail.
+
+### 9.1 What the campaign must cover (rows → claims → screenshots)
+
+| # | Row | Claim it evidences | Named screenshot(s) |
+|---|---|---|---|
+| U-1 | Open the workspace Mail panel per mailbox (deep link) | Folder rail renders with counts; cached-first or live per state | `u1-rail-<pair>.png` — rail with all three roles and counts visible |
+| U-2 | Reopen a recently opened mailbox | Cached-first display: rows appear immediately, labelled with age; one live refresh follows | `u2-cached-first-<pair>.png` (immediate rows) + `u2-refresh-settled-<pair>.png` (post-refresh, freshness label) |
+| U-3 | Let rows age past the threshold, then trigger refresh failure (network simulate at the harness level, not the live server) | Stale label + visible error + Retry; rows never presented as fresh | `u3-stale-error-<pair>.png` — stale label AND error AND Retry in one frame |
+| U-4 | Exercise Sent/Drafts on a mailbox without them | Confirmed-absent shows empty with the server-folder-absent explanation; an unresolved discovery shows the unknown state and the name-setting prompt — never a false "no such folder" (M-01) | `u4-absent-<pair>.png` vs `u4-unknown-<pair>.png` — the two states visually distinct |
+| U-5 | Saturate (open many mailboxes rapidly) until busy | Typed busy message "Mail is busy. Try again.", cached rows remain visible | `u5-busy-<pair>.png` |
+| U-6 | Open an attachment (each kind available), then Back | Temporary Library viewer with the exact context bar; focus behaviour visible; no new Library entry | `u6-open-<kind>.png` (context bar readable), `u6-back-<kind>.png` (returned to mail) |
+| U-7 | Save an attachment → Open in Library | Saved under the mail hierarchy; "Saved to Library" + Open in Library; file exists at the real path | `u7-saved-<name>.png` + `u7-open-in-library.png` + a redacted path listing |
+| U-8 | Browser Download the same attachment | A browser download, not a Library file | `u8-download-<name>.png` (browser download surface) |
+| U-9 | Keyboard-only pass over U-6/U-7 (Open → viewer → Save → Back), narrow width + 200 % zoom | Focus on the trusted heading; Back restores the originating action; context bar reachable at 320 px | `u9-keyboard-open.png`, `u9-narrow-context-bar.png`, `u9-zoom-context-bar.png` |
+| U-10 | Paperclip indicator on a list row with attachments | Indicator present with accessible "Has attachments" text | `u10-paperclip-<pair>.png` |
+| U-11 | Reply all composition on a multi-recipient message | To/Cc prefilled exactly per the rule; Bcc absent; compose opened, **never sent** | `u11-replyall-compose.png` — recipient chips visible, send NOT clicked |
+| U-12 | Open a message with no usable date | **No date** rendered in list and detail | `u12-no-date-list.png`, `u12-no-date-detail.png` |
+| U-13 | Agent journey (allowed agent): read_message → list_email_attachments → read_email_attachment on an owned pair | Tool results correct; list/read create no file; transcript shows the issued reference | `u13-agent-read.png` (tool transcript, redacted) |
+| U-14 | Agent save under ask, approval granted — then declined case | Granted: file saved, real path returned; declined: explicit refusal, zero transfer | `u14-agent-save-granted.png`, `u14-agent-save-declined.png` |
+| U-15 | Styled HTML mail render (a message in the tester's own synthetic seed where available) | Colour/layout preserved; no remote loads by default; Load-images consent path works | `u15-styled-default.png` (no remote loads), `u15-styled-consent.png` (after Load images) |
+| U-16 | Panel close → summary/badge still updates from saved state; reopen within 30 min vs after | No background panel spinner while closed; badge honest | `u16-closed-badge.png` |
+
+### 9.2 What the campaign must NOT do (hard prohibitions)
+
+| Prohibition | Reason |
+|---|---|
+| **No sends** — never complete a send on any live mailbox, including the Reply-all rows (compose may be opened and then abandoned) | Real mail would go to real people; the send path's live acceptance is a separate, founder-scoped exercise |
+| **No deletes** — no message or folder deletion, no `\Deleted` flag, no expunge-inducing action | Irreversible on live data |
+| **No key/credential changes** — no password rotation, no mailbox reconfiguration that would bump a generation mid-campaign | Would invalidate caches/series mid-run and risks locking the account |
+| **No server folder create/rename/move** | Would change folder discovery results mid-campaign and mutate the founder's mailbox layout |
+| **No UIDVALIDITY-inducing operations** (no folder recreation, no server-side migration) | Destroys the epoch for every cached reference and the M-A/M-F series |
+| **No flag mutations beyond an ordinary open** (mark-seen from opening is accepted and noted; no unread-toggling sweeps) | Keeps read-state honest for the measurement pairs |
+| **No convenience substitution** — an unavailable/failing mailbox is reported unavailable; it is never swapped for a healthy one | The ADR's rule: do not silently replace slow or failing pairs |
+
+### 9.3 Evidence rules
+
+Every PASS row carries its named screenshot(s) (workspace badge visible in every screenshot, per the UAT lane conventions), a redacted page snapshot, and both clocks where the row is a timing row. Subjects/addresses are redacted before receipts leave the lane; the redaction is noted per screenshot. The uat-validator re-drives the critical rows (U-2, U-4, U-6, U-7, U-11, U-13, U-14) with its own account and browser, and overturns with its own evidence.
+
+---
+
+## 10. Test-integrity rules this suite enforces
+
+From `docs/internal/false-green-patterns.md` (read in full for this spec) and the shared rules — binding on every test this package writes and every green it accepts:
+
+1. **A retry-pass counts as red.** A test that failed and passed on re-run has not passed: it is investigated to a mechanism before any green is reported. A test failing twice under isolated re-runs is a **defect**, not a flake — and calling it a flake is how a real defect survives (repo "Reporting Results").
+2. **Every test must be able to fail.** `go test -run` prints `ok` for a pattern matching nothing — count `--- PASS`/`--- FAIL` lines by name; a package `FAIL` with zero `--- FAIL` lines is a hang, not a finding; `ok` with zero named passes is not evidence. Each new test's first RED run is proven (tests-only commit through CI, or the single dispatcher-owned narrow local run), and the suite is mutation-proven via §7.
+3. **Exit codes captured directly**, never through a pipe: `cmd > log 2>&1; echo "exit=$?"` — a wrapper's 0 has masked a hard compile error here before.
+4. **Assert behaviour, never source text** (trap 2): a grep proving an identifier exists passed 673/673 while the gate was deleted. The I-04 resource-policy test counts requests; the no-write test diffs the filesystem; nothing in this plan passes on a string search of the implementation.
+5. **Count discrete properties, never stopwatches** (trap 3): socket caps, login counts, refresh counts, request counts are the oracles; where a duration is the property (instrument truth, M-E bounds), the delay is *injected and known*, not asserted from wall-clock margins.
+6. **Positive controls everywhere** (trap 8's lesson): the leak scan must find the marker when it is present (in the mail data); the request counter must fire on the workspace-file control; the exclusion test must see the allowed state file. A check that could never see the failure proves nothing.
+7. **Coverage is enforced, not maintained** (trap 4): every new Playwright spec is assigned to exactly one shard in `tests/e2e/shards.json` (`scripts/e2e-shards.sh check` fails CI otherwise); Go tests are picked up by the CI runners by construction — a test that no job runs is not a test.
+8. **The generated validator can be weaker than the contract** (trap 8): where a test binds to generated types, the probe carries a passing control so a wrong-shape rejection is distinguishable from a validator that accepts anything.
+9. **Build configuration**: Go tests run with `CGO_ENABLED=0`, tags `goolm,stdjson`; the full suite never runs locally — CI is the authority (repo rule 2 and the OOM history behind it); at most one narrow local test at a time.
+10. **Bind verdicts to tree hashes**: a result from a tree that moved mid-run is meaningless; every receipt names its SHA (MC-P27 harness rule).
