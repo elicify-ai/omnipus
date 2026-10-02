@@ -109,7 +109,31 @@ func retainedPayloadSize(ts *turnState, msgs []providers.Message) (int, error) {
 	return len(data), err
 }
 
-func (al *AgentLoop) checkpointWindow(ctx context.Context, ts *turnState, messages []providers.Message, toolDefs []providers.ToolDefinition, force bool) ([]providers.Message, bool, error) {
+// checkpointWindowOptions carries the per-invocation checkpoint variations.
+type checkpointWindowOptions struct {
+	estimateNotes bool
+}
+
+// checkpointWindowOption tweaks one checkpointWindow invocation.
+type checkpointWindowOption func(*checkpointWindowOptions)
+
+// estimateEphemeralNotes charges the ephemeral system-note estimate (C1) on
+// top of the measured messages when deciding whether the trigger fired and
+// whether the staged relief reached its target. Only the admitted-result
+// checkpoints pass it: their candidate slice does not yet contain the
+// request-only notes, so the estimate is the only way the trigger can see
+// them. The send-seam checkpoints (checkpointRequest, the forced overflow
+// retry) measure already-assembled payloads that carry the real notes and
+// must not add the estimate — that would double-count.
+func estimateEphemeralNotes() checkpointWindowOption {
+	return func(o *checkpointWindowOptions) { o.estimateNotes = true }
+}
+
+func (al *AgentLoop) checkpointWindow(ctx context.Context, ts *turnState, messages []providers.Message, toolDefs []providers.ToolDefinition, force bool, opts ...checkpointWindowOption) ([]providers.Message, bool, error) {
+	var co checkpointWindowOptions
+	for _, opt := range opts {
+		opt(&co)
+	}
 	if err := ctx.Err(); err != nil {
 		return messages, false, err
 	}
@@ -131,7 +155,14 @@ func (al *AgentLoop) checkpointWindow(ctx context.Context, ts *turnState, messag
 	window, _, _ := ts.agent.windowSnapshot()
 	shareLimit := toolResultShareLimit(cs, window)
 	midTurnChecksTotal.Add(1)
-	totalFired := requestTokens(measured, toolDefs) > budget
+	// C1: at the admitted-result checkpoints the request-only notes are not
+	// in the slice yet; charge their estimate so a note-inflated total still
+	// fires relief. Zero on the send-seam paths (notes already assembled).
+	noteTokens := 0
+	if co.estimateNotes {
+		noteTokens = al.ephemeralSystemNoteTokens(ts)
+	}
+	totalFired := requestTokens(measured, toolDefs)+noteTokens > budget
 	shareFired := toolResultShareTokens(measured) > shareLimit
 	if !force && !totalFired && !shareFired {
 		return measured, false, nil
@@ -158,7 +189,7 @@ func (al *AgentLoop) checkpointWindow(ctx context.Context, ts *turnState, messag
 				break
 			}
 		}
-		if !force && p.atTarget(toolDefs, budget, shareLimit, totalFired, shareFired) {
+		if !force && p.atTarget(toolDefs, budget, shareLimit, noteTokens, totalFired, shareFired) {
 			break
 		}
 		changed := p.dropRecall()
@@ -214,8 +245,11 @@ func (al *AgentLoop) checkpointWindow(ctx context.Context, ts *turnState, messag
 	return p.messages, true, nil
 }
 
-func (p *windowCheckpoint) atTarget(defs []providers.ToolDefinition, budget, shareLimit int, totalFired, shareFired bool) bool {
-	total, share := requestTokens(p.messages, defs), toolResultShareTokens(p.messages)
+func (p *windowCheckpoint) atTarget(defs []providers.ToolDefinition, budget, shareLimit, noteTokens int, totalFired, shareFired bool) bool {
+	// The note estimate rides on every total-shaped comparison here too (C1):
+	// the ephemeral notes are un-emptiable, so relief stops only when the
+	// measured remainder PLUS the notes is at or under the 4/5 hysteresis.
+	total, share := requestTokens(p.messages, defs)+noteTokens, toolResultShareTokens(p.messages)
 	if total > budget || share > shareLimit {
 		return false
 	}
