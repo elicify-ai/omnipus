@@ -18,11 +18,21 @@ package browser
 // only status emitter in this lifecycle is reportFailure's single error-arm
 // execution for the fresh epoch's single discovery serve — proven by the
 // served==2 attribution assertion — so the <statuses> receive is an
-// existence proof, not a timing bet; the deadline bounds only the FAILURE
-// mode. firstServe orders arming strictly after the attach epoch's
-// successful serve has executed. "Success is silent" and "reported once"
-// are structural: a successful discovery has no emission path at all, and
-// the error arm runs exactly once per epoch. Harness note: this follows the
+// existence proof, not a timing bet; that deadline bounds only the FAILURE
+// mode. The pre-arming firstServe receive is deadline-bounded too (2 s,
+// named failure — CHECK F2): a regression that stops the attach epoch from
+// ever serving fails in ~2 s instead of hanging the package for go test's
+// 10-minute timeout. firstServe orders arming strictly after the attach
+// epoch's successful serve has executed. "Success is silent" is structural:
+// a successful discovery has no emission path at all. "Reported once" is
+// received + a bounded 50 ms settle (CHECK F1, the house idiom of
+// live_fresh_attachment_review_test.go): the settle is bounded observation,
+// NOT proof of producer completion — no seam exists after the sink send on
+// the watch goroutine (initialize returns into processEvents and parks) —
+// so a duplicate delayed more than 50 ms after the first could still evade
+// it; that residual is stated here, not hidden. The duplicate shape this
+// file must catch (M-2x: back-to-back synchronous reportFailure calls)
+// sends within microseconds of the first. Harness note: this follows the
 // real-time channel idiom of live_fresh_attachment_review_test.go (the
 // goroutine-ful lifecycle tests cannot use testing/synctest — registry
 // sweeper, death-watch and processEvents goroutines never exit, so a bubble
@@ -60,7 +70,10 @@ const liveDocumentRefreshFailureMessage = "The browser could not confirm the new
 // closes on the stub's first serve — under this file's ordering that is the
 // attach epoch's discovery — giving the test a channel-synchronized point
 // (no sleep, no race winner) to arm the error strictly after the successful
-// serve has executed.
+// serve has executed; the receive on it is deadline-bounded (2 s, named
+// failure) because it closes on the SUCCESS path only — an attach-epoch
+// regression that never serves, or one whose discovery fails before arming,
+// must fail with a name, not hang the package (CHECK F2).
 type discoveryFrameTreeStub struct {
 	mu         sync.Mutex
 	failing    bool
@@ -165,8 +178,17 @@ func TestLiveDocumentDiscoveryErrorOnCurrentWatchReachesStatusSink(t *testing.T)
 
 	// The attach epoch's discovery runs asynchronously; wait for its exact
 	// serve on the stub's channel — this serve has executed when the receive
-	// returns, so arming below can never retroactively fail it.
-	<-stub.firstServe
+	// returns, so arming below can never retroactively fail it. The deadline
+	// bounds the SETUP phase (CHECK F2): firstServe closes on the success
+	// path only, so a regression that stops the attach epoch from ever
+	// serving (watch not installed, serve dropped) — or one whose attach-time
+	// discovery errors before this test arms — fails here with a name in ~2 s
+	// instead of hanging the package for go test's 10-minute timeout.
+	select {
+	case <-stub.firstServe:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("attach-time discovery never served; served=%v", stub.servedMethods())
+	}
 
 	// A successful frame discovery has NO emission path at all (its status
 	// sources are the discovery error that did not happen and a death
@@ -204,13 +226,24 @@ func TestLiveDocumentDiscoveryErrorOnCurrentWatchReachesStatusSink(t *testing.T)
 		t.Fatalf("discovery error on a current watch never reached the status sink; served=%v", stub.servedMethods())
 	}
 
-	// Exactly once, non-blocking drain: any additional emission delivered by
-	// now fails the test; a later one is structurally impossible (the error
-	// arm executes once per epoch and no other emitter exists here).
+	// Exactly once — bounded settle (CHECK F1, house idiom of
+	// live_fresh_attachment_review_test.go). The receive above releases the
+	// watch goroutine; in the duplicate shape this file must catch (M-2x:
+	// back-to-back synchronous reportFailure calls on that goroutine) the
+	// second send lands within microseconds of the first, well inside the
+	// 50 ms window, so the drain fails the test. This window is bounded
+	// observation, NOT proof of producer completion — no seam exists after
+	// the sink send on the watch goroutine to synchronize on (initialize
+	// returns into processEvents, which parks forever) — so a hypothetical
+	// duplicate delayed more than 50 ms after the first could still evade it;
+	// that residual is stated, not hidden. On the passing path the window
+	// costs a constant 50 ms and asserts nothing about timing; a later
+	// emission is structurally impossible in current production shape (the
+	// error arm executes once per epoch and no other emitter exists here).
 	select {
 	case extra := <-statuses:
 		t.Fatalf("the discovery failure must be reported exactly once; extra=%q", extra)
-	default:
+	case <-time.After(50 * time.Millisecond):
 	}
 
 	// Attribution + closed surface: the whole lifecycle served exactly two
@@ -231,5 +264,79 @@ func TestLiveDocumentDiscoveryErrorOnCurrentWatchReachesStatusSink(t *testing.T)
 	// asserted to surface.
 	lv.mu.Lock()
 	require.Equal(t, survivorCtx, lv.tabCtx, "the view must follow the surviving tab — the erroring epoch is the current one")
+	lv.mu.Unlock()
+}
+
+// TestLiveDocumentDiscoveryErrorOnAttachEpochReachesStatusSink owns the
+// attach-epoch half of the same visible-current-error contract (CHECK F2
+// failure class (b), turned into an owned positive case): at attach time the
+// attach epoch IS the current watch — live.go::Attach installs it
+// synchronously (installDocumentWatchLocked, initializePicture=true) — so its
+// discovery failure must reach the just-registered status sink exactly once
+// with the production message. The stub is armed BEFORE Attach, so the very
+// first discovery serve is the failing one. firstServe never closes on an
+// error serve (success-only), which is exactly why this test must NOT wait on
+// it — waiting would hang on the very regression class F2 names. No
+// CloseTab, no rebind: served==[Page.getFrameTree] attributes the emission to
+// the attach epoch's discovery executing the genuine error (a failure in an
+// earlier arm would serve nothing, and any alien command would be named by
+// the closed surface).
+func TestLiveDocumentDiscoveryErrorOnAttachEpochReachesStatusSink(t *testing.T) {
+	m := newTestManagerWithFakeTabs(t)
+	// Same fixture contract as the rebind-epoch test: fake tabs, no host memory claim.
+	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
+	reg := newLiveViewRegistry(m)
+
+	// Second-registry trap (audited pattern, live_deadlock_test.go): pre-create
+	// the view, bind the stub on ITS seam, then Attach reuses the same view.
+	stub := newDiscoveryFrameTreeStub()
+	lv := reg.view(testSessionID)
+	stub.bind(lv)
+	stub.failDiscovery() // armed BEFORE Attach: the first discovery is the failing one.
+
+	_, err := m.Session(testSessionID) // tab 0, active
+	require.NoError(t, err)
+
+	statuses := make(chan string, 4)
+	controlledByOther, err := reg.Attach(testSessionID, "viewer1", func(message string) { statuses <- message }, nil, nil)
+	require.NoError(t, err)
+	require.False(t, controlledByOther)
+
+	// The visible-current-error contract for the attach epoch: same existence
+	// proof as the rebind-epoch test — exactly one message can ever be sent
+	// (single error arm, single discovery serve per epoch, no other emitter
+	// in this lifecycle) — with the deadline bounding only the failure mode.
+	select {
+	case got := <-statuses:
+		require.Equal(t, liveDocumentRefreshFailureMessage, got,
+			"the attach epoch's discovery failure must surface the production document-refresh message")
+	case <-time.After(2 * time.Second):
+		t.Fatalf("discovery error on the attach epoch never reached the status sink; served=%v", stub.servedMethods())
+	}
+
+	// Exactly once — same bounded settle and same stated >50 ms residual as
+	// the rebind-epoch test above (bounded observation, not producer-
+	// completion proof; no post-emission seam exists on the watch goroutine).
+	select {
+	case extra := <-statuses:
+		t.Fatalf("the attach-epoch discovery failure must be reported exactly once; extra=%q", extra)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Attribution + closed surface: the whole lifecycle served exactly one
+	// protocol command — the attach epoch's failing discovery — so the
+	// message traces to the real attach path (Attach →
+	// installDocumentWatchLocked → initialize), never a parallel emitter or
+	// an earlier arm.
+	served := stub.servedMethods()
+	require.Len(t, served, 1, "the attach epoch must serve exactly one frame discovery: %v", served)
+	require.Equal(t, "Page.getFrameTree", served[0],
+		"the attach epoch must not reach any protocol command beyond frame discovery: %v", served)
+
+	// Watch ownership sanity: the attach must have installed the document
+	// watch synchronously — the failing epoch is the live view's own current
+	// watch, not a detached one.
+	lv.mu.Lock()
+	require.NotNil(t, lv.documentWatch, "sanity: attach must install the document watch synchronously")
 	lv.mu.Unlock()
 }
