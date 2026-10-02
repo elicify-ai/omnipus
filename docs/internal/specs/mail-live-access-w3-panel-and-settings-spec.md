@@ -328,9 +328,12 @@ Acceptance scenarios:
 
 1. **Given** a response with `source=live`, **When** rows render, **Then** the freshness line reads
    "Checked just now" (or the validated time) with no stale marker.
-2. **Given** a response with `source=memory` or `source=encrypted_disk` and `stale=false`,
-   **When** rows render, **Then** the freshness line reads "Checked <relative time>" — for example
-   "Checked 2 minutes ago" — without implying a live check.
+2. **Given** a response with `source=memory` and `stale=false`, **When** rows render, **Then** the
+   freshness line reads "Checked <relative time>" — for example "Checked 2 minutes ago" — without
+   implying a live check. **Given** `MailFolder.mapping_metadata.source=encrypted_disk` (Phase 1's
+   only `encrypted_disk` surface — the landed `MailReadMetadata.source` scoping; list and count
+   metadata never carry it in Phase 1), **When** the rail's role display renders from it, **Then** it
+   labels the validated age by the same vocabulary and never implies a live check.
 3. **Given** `stale=true` and `refresh_needed=true`, **When** the cache-first rows render and the one
    live refresh runs, **Then** the freshness line reads "Last checked <relative time> · Checking…",
    the existing rows stay visible (no skeleton replaces them), and the line resolves to US-2 AS-1 or
@@ -370,7 +373,9 @@ Acceptance scenarios:
 4. **Given** the ceiling state, **When** the user searches, **Then** a folder-scoped search runs live
    (never from cache — matching subject plus sender/recipient substrings, server-side, within the
    25/200 bounds; founder Q-D=A), results render in the same 25-per-page / 200-ceiling discipline with
-   their own "Load more", and an exit ("Back to <folder>") restores the browse view.
+   their own "Load more", and an exit ("Back to <folder>") restores the browse view. At the search's
+   own 200-match ceiling the "Load more" control is replaced by §11 state S-30's copy — never the
+   browse-ceiling text (S-21), which would read as nonsense mid-search.
 5. **Given** a search with no matches, **When** it settles, **Then** the list area reads
    `No messages match "<query>".` and the browse view remains one control away.
 6. **Given** a stale or foreign cursor (409 typed result), **When** any paging action settles with it,
@@ -471,7 +476,9 @@ Acceptance scenarios:
 3. **Given** the user activates Open on an attachment, **When** the mint settles, **Then** the Library
    viewer shows the temporary preview with the context bar reading exactly
    "From mail: <subject> · Back to mail · Save to Library", outside the rendered content, and nothing
-   was written to disk (the no-write proof is W8/W5's; W3's contract is that Open only mints).
+   was written to disk (the no-write proof belongs to the owners of the temporary source and its
+   measurement — the ADR-W8 renderer work, the w4 file, and the proof package, the w6 file; W3's
+   contract is that Open only mints).
 4. **Given** a temporary preview open, **When** the user activates "Back to mail" (or Escape),
    **Then** the temporary source is disposed (W8) and Mail shows again with the focus rules of US-7.
 5. **Given** a temporary preview open, **When** the user activates "Save to Library" and it succeeds,
