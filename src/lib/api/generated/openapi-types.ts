@@ -17196,7 +17196,7 @@ export interface components {
             cause: "stop" | "redirect_pause" | "cascade" | "restart" | "timeout";
             /**
              * Format: int64
-             * @description Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present for restart notes (sub-agent control plane ADR D8.3); absent otherwise.
+             * @description Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
              * @example 1
              */
             boot_seq?: number;

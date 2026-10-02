@@ -22636,7 +22636,7 @@ type Session struct {
 		// At RFC3339 timestamp when this stop note was written.
 		At time.Time `json:"at"`
 
-		// BootSeq Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present for restart notes (sub-agent control plane ADR D8.3); absent otherwise.
+		// BootSeq Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
 		BootSeq *int64 `json:"boot_seq,omitempty"`
 
 		// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
@@ -23166,7 +23166,7 @@ type SessionDetail struct {
 			// At RFC3339 timestamp when this stop note was written.
 			At time.Time `json:"at"`
 
-			// BootSeq Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present for restart notes (sub-agent control plane ADR D8.3); absent otherwise.
+			// BootSeq Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
 			BootSeq *int64 `json:"boot_seq,omitempty"`
 
 			// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
