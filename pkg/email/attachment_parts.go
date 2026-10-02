@@ -281,9 +281,16 @@ func (c *Client) fetchPartIsDraftMarker(ctx context.Context, client *imapclient.
 	if len(bufs) == 0 || bufs[0] == nil {
 		return false, nil
 	}
+	// Both sides fold case: the header name reaches the peek buffer in
+	// whatever case the composing client wrote it, so the needle folds with
+	// the haystack (a mixed-case needle against a lowercased haystack can
+	// never match — the draft body part then leaks as a fake message.md
+	// attachment).
+	needle := strings.ToLower(draftBodyPartHeader) + ":"
 	for _, sec := range bufs[0].BodySection {
-		if strings.Contains(strings.ToLower(string(sec.Bytes)), draftBodyPartHeader+":") &&
-			strings.Contains(strings.ToLower(string(sec.Bytes)), draftBodyPartValue) {
+		lower := strings.ToLower(string(sec.Bytes))
+		if strings.Contains(lower, needle) &&
+			strings.Contains(lower, draftBodyPartValue) {
 			return true, nil
 		}
 	}
