@@ -44,12 +44,13 @@ func orphanACMapEphemeral(t *testing.T) {
 	raw := orphanACMappingFixture()
 	h.append(t, raw...)
 	before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
-	candidate := []providers.Message{
-		{Role: "system", Content: "independent pinned envelope"},
+	candidate := make([]providers.Message, 0, 4)
+	candidate = append(candidate,
+		providers.Message{Role: "system", Content: "independent pinned envelope"},
 		raw[0],
 		raw[3], // Transient recall deliberately matches a real archived identity.
-		{Role: "user", Content: "transient recalled question"},
-	}
+		providers.Message{Role: "user", Content: "transient recalled question"},
+	)
 	candidate = append(candidate, orphanACPick(raw, 3, 5, 6, 7, 8, 9, 10, 11, 12)...)
 	candidate = append(candidate, providers.Message{Role: "user", Content: "not yet archived current request"})
 	original := cwR1Clone(t, candidate)

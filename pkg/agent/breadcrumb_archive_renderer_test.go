@@ -56,8 +56,9 @@ var crumbArchiveLineRe = regexp.MustCompile(`archive_line=(\d+)`)
 // so this sequence is the render order of the evicted records.
 func crumbLineOrder(t *testing.T, crumb string) []int {
 	t.Helper()
-	var order []int
-	for _, line := range crumbEntryLines(crumb) {
+	entries := crumbEntryLines(crumb)
+	order := make([]int, 0, len(entries))
+	for _, line := range entries {
 		m := crumbArchiveLineRe.FindStringSubmatch(line)
 		if m == nil {
 			t.Fatalf("entry line without an archive_line address: %q", line)

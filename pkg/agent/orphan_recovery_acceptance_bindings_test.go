@@ -125,9 +125,9 @@ func orphanACRecoveryIdempotence(t *testing.T) {
 	after := orphanACSnapshot(t, h)
 	require.Len(t, after.Archive, 8, "I2: earlier call_0 record cannot suppress cancellation of the later assistant position")
 	require.Equal(t, before.Archive, after.Archive[:7], "positional recovery appends only, preserving both original orphan declarations")
-	require.Equal(t, "system", after.Archive[7].Message.Role)
+	require.Equal(t, "system", after.Archive[7].Role)
 	var marker map[string]any
-	require.NoError(t, json.Unmarshal([]byte(after.Archive[7].Message.Content), &marker))
+	require.NoError(t, json.Unmarshal([]byte(after.Archive[7].Content), &marker))
 	require.Equal(t, map[string]any{"type": "turn_canceled_restart", "tool_call_id": "call_0", "reason": "ungraceful_shutdown_recovery"}, marker, "second record binds to the later declaration without a new persisted shape")
 	require.Equal(t, 8, after.State.Count)
 	require.Equal(t, before.State.Skip, after.State.Skip)
