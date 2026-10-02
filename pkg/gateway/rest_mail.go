@@ -247,9 +247,12 @@ func auditMail(a *restAPI, event audit.EventName, decision audit.Decision, detai
 
 // mailErr502 writes the MC-8 error envelope: the closed error class is the
 // only thing that crosses the wire - `error` carries the class string,
-// `code` its machine-readable duplicate.
+// `code` its machine-readable duplicate. w5-integration US-7.4/MC-15: the
+// same closed class is the only thing that reaches the LOG — the raw
+// provider error value never does (it can carry subjects, addresses, folder
+// names, Message-IDs, credentials, full URLs or raw server responses).
 func mailErr502(w http.ResponseWriter, err error) {
 	class := email.ClassifyMailError(err)
-	logsafeError("rest: mail upstream failure", "class", class, "error", err)
+	logsafeError("rest: mail upstream failure", "class", class)
 	jsonErrCode(w, http.StatusBadGateway, "mail server error: "+class, class)
 }

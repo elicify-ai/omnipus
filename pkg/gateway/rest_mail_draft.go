@@ -204,7 +204,8 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 	cleanupWarn := ""
 	if derr := client.DeleteDraft(r.Context(), cur.UID); derr != nil {
 		cleanupWarn = "the draft was updated, but deleting the old copy failed"
-		logsafeWarn("rest: old draft copy delete failed", "agent_id", agentID, "error", derr)
+		// w5 US-7.4/MC-15: only the closed class reaches the log.
+		logsafeWarn("rest: old draft copy delete failed", "agent_id", agentID, "class", email.ClassifyMailError(derr))
 	}
 	draftSendForget(out.MessageID)
 	auditMail(a, audit.EventMailPanelDraftUpdated, audit.DecisionAllow, map[string]any{
@@ -544,13 +545,15 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		resp.SentSaved = false
 		sw := "the message was sent, but saving to the Sent folder failed"
 		resp.SaveWarning = &sw
-		logsafeWarn("rest: draft sent copy APPEND failed", "agent_id", agentID, "error", aerr)
+		// w5 US-7.4/MC-15: only the closed class reaches the log.
+		logsafeWarn("rest: draft sent copy APPEND failed", "agent_id", agentID, "class", email.ClassifyMailError(aerr))
 	}
 	cleanupWarn := ""
 	expunged, derr := client.DeleteDraftStatus(r.Context(), cur.UID)
 	if derr != nil {
 		cleanupWarn = "the message was sent, but deleting the draft copy failed"
-		logsafeWarn("rest: draft cleanup after send failed", "agent_id", agentID, "error", derr)
+		// w5 US-7.4/MC-15: only the closed class reaches the log.
+		logsafeWarn("rest: draft cleanup after send failed", "agent_id", agentID, "class", email.ClassifyMailError(derr))
 	}
 	resp.DraftCleanupWarning = nil
 	if cleanupWarn != "" {
