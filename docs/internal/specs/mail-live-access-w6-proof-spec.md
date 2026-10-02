@@ -800,14 +800,14 @@ From `docs/internal/false-green-patterns.md` (read in full for this spec) and th
 | MC-P23 | US-P4 AC-5 | B-P20 | T30 |
 | MC-P24 | US-P4 AC-6 | B-P21 | T31 |
 | MC-P25 | US-P4 AC-7 | B-P22 | T32 |
-| MC-P26 | US-P4 AC-8 | (T33 scope) | T33 |
+| MC-P26 | US-P4 AC-8 | B-P28 | T33 |
 | MC-P27 | US-P5 AC-1…AC-4 | B-P23, B-P24 | T6, T37, §8.3 |
-| MC-P28 | US-P5 AC-5 | (§8.4) | T37, M-A…M-F |
+| MC-P28 | US-P5 AC-5 | B-P29 | T37, M-A…M-F |
 | MC-P29 | US-P6 AC-1, AC-2 | B-P25 | U-1…U-16, T35 |
 | MC-P30 | US-P7 AC-1 | B-P26 | §7 M-α1…M-α12 |
 | MC-P31 | US-P4 AC-9 | B-P27 | T36 |
 
-Every MC-P traces to at least one story, scenario and test; every scenario traces to at least one story (its `Traces to` line) and one MC-P through this table; the seven user stories carry **41** numbered acceptance scenarios in §3, all covered above (the draft's "34" was a miscount — the pre-correction text held 40, grill-4 m1; this correction adds AC-9).
+Every MC-P traces to at least one story, scenario and test; every scenario traces to at least one story (its `Traces to` line) and one MC-P through this table; the seven user stories carry **41** numbered acceptance scenarios in §3, all covered above (the draft's "34" was a miscount — the pre-correction text held 40, grill-4 m1; this correction adds AC-9). The round-2 F-1 gap is closed in the text rather than excepted: B-P28 gives MC-P26 its scenario (the former "(T33 scope)" cell was a test ID, not a scenario) and B-P29 gives MC-P28 its scenario (the former "(§8.4)" cell was a section reference) — the claim above is now true by construction, and §17's counts were re-derived from the corrected text.
 
 ---
 
