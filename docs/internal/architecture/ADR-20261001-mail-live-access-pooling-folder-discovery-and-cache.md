@@ -698,6 +698,38 @@ Recorded for the **later design/spec review**, not a new interview in this dispa
 
 **Engineering verification gaps — not questions the founder must guess at:** trace the real data-autocommit job/exclusion owner; verify socket auth/liveness/teardown integration and restart-stable credential/config identity; establish exact JMAPACCESS URL support and service-origin configuration; collect missing message-open/Retry/large-folder baseline and diagnose saved-state summary latency. Backend/QA/security own those receipts. Until verified, they remain **Unknown**; no number/provider/API syntax is invented to fill them.
 
+### Recorded answers to the original questions — do not interview again
+
+The original Q1–Q3 text above is retained **verbatim as review history**, not an open invitation to change the settled answers. Current authority: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/mail-feature-decisions.md::Founder decisions on the ADR's own open questions`, read for this extension (**Verified, high confidence**). The dated correction and affected core tables carry these answers; none is a measured result.
+
+| Original question | Recorded founder answer, 2026-10-02 | Effect on the design |
+|---|---|---|
+| Q1 | **A — accepted as proposed:** 150 headers/mailbox, deletion 7 days after last successful validation, 1 MiB/mailbox and 32 MiB global disk bound, 64 KiB folder-role file, JMAP re-probe every 7 days and failed-probe minimum 15 minutes. | These named bounds are settled, not a new vote. The narrow headers/flags/folder-state cache exception never includes body/attachment bytes. Specification and implementation/footprint receipts are still required. |
+| Q2 | **B — JMAP means prefer it**, with a clearly labelled IMAP fallback and no claim that an IMAP request used JMAP. | Replaces the historical strict-JMAP recommendation. Auto still has visible fallback; no preference bypasses endpoint/TLS/credential trust or capacity. |
+| Q3 | **A — accepted as proposed:** 5-second maximum pool wait within a 45-second read budget, 4 MiB reusable metadata budget in both phases, and the cached-display/warm-live/cold/body/summary acceptance bars, with cached display separately measured from live fetch. | Accepted targets must be in the spec; measured attainment is still Unknown. Sampling remains an explicit method recommendation, not an invented acceptance run. |
+
+### New genuine decisions created by the feature extension
+
+Only **Q4/Q5** below are new. List/read permission, global Save `ask`, the no-extra-approval/no-type-blocklist rule, the existing 25 MB cap, option B/no-disk Open, scriptless mail-derived HTML and the Reply all/date/display decisions are **not reopened**. These choices use existing permission/rendering machinery; they do not add a scanner or ask the founder to guess at an engineering measurement. Answer shape for the later founder interview: **“Q4 A, Q5 A.”**
+
+**Q4 — How standard Auto-approve treats an agent's attachment save.** Global `ask` alone does not settle this: the current standard classifier can still run an Ask tool when Auto is on and its workspace-path condition passes. The choice determines whether unattended workspace saves can finish under Auto. Default Ask and normal per-agent tightening are already decided; this chooses only the new entry in the existing `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-uat/wt-adr-mail/pkg/tools/auto_approve.go::autoApproveClasses` table (**E-Tool-policy**).
+
+| Option | Effect / recommendation |
+|---|---|
+| **A — Recommended** | Use the existing **workspace-path conditional Auto** class (`AutoRunsIfArgs`), like ordinary file writes: Auto-off/agent Never-auto-approve still prompts normally, Auto-on may run a save confined to the authorized work root. The classifier derives the same server-selected destination, and execution rechecks the final unique path through the standard pin/path machinery. Global `deny` and per-agent tightening still apply; no new attachment gate or free destination parameter. This best matches the founder's “normal download tool” intent. |
+| B | Use the existing **always-asks under Auto** class (`AutoAsks`), like the current sending-email tools. Save still ships global `ask`; Auto cannot skip that prompt and unattended Ask calls are refused by the normal tool system. No extra approval mechanism. |
+
+**Q5 — Preserve scripts-off when an HTML attachment becomes a real Library file.** The founder's scripts-off rule is settled for mail-derived HTML. Today's ordinary Library HTML intentionally allows isolated scripts. A raw save followed by ordinary Library Open could therefore silently enable the attachment's scripts, particularly after a move/reload. Choose how to retain the rule, not whether mail HTML may execute (**E-HTML-isolation**, **E-Library-save**).
+
+**Architect concern:** saving bytes alone does not preserve the mail-derived rendering profile; current `LibraryHtmlFrame` uses `allow-scripts` for workspace files. The selected strategy must close that handoff gap without changing ordinary workspace HTML or adding an approval/blocklist/scanner.
+
+| Option | Effect / recommendation |
+|---|---|
+| **A — Recommended** | Keep the attachment's original bytes and retain a **small server-managed mail-origin/rendering marker**, written only on explicit Save. Generated Library metadata exposes the restricted profile; Library move/rename/copy and ordinary reader/reload paths retain it. The marker contains no preview token, body bytes or cached subject, and a missing/corrupt expected marker must not silently upgrade the known mail-derived file. Backend/security must trace all relevant file-mutation paths before claiming that guarantee. This preserves the original file and avoids a new scanner; origin metadata is user-file provenance, not an attachment cache. |
+| B | Save a clearly disclosed **scriptless HTML copy**, using the already-required HTML/CSS sanitizer to remove active/resource escapes, instead of persisting origin metadata. Browser Download still supplies the original file. This is simpler storage but changes saved HTML bytes and may lose functionality/content; it must be named/documented as a safe copy, never claimed byte-identical to the original attachment. No new approval gate or type blocklist. |
+
+Neither new choice is silently decided here. Implementers must carry the founder's answers through the single prescribed ADR review/interview/correction process; unresolved profile/Auto semantics are design questions, not permission to bypass the settled restrictions. The engineering gaps already listed above remain owned verification work, not additional founder questions.
+
 ## Evidence table
 
 Certainty applies to the **claim in each row**, not to future implementation/performance. Evidence labels anchor the design above; named future files/types remain proposals. Skills used: `omnipus-shared-rules`, `gitnexus-exploring`, `ux-heuristics-review`.
