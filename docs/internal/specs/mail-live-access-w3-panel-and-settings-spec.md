@@ -1296,3 +1296,67 @@ Every FR appears above; every scenario traces to at least one FR through its US.
 referenced from §8 and inherit their rows' traces.
 
 ---
+## 11. Every user-visible state, with its exact text
+
+These strings are pins: component tests assert them verbatim; copy changes come back through this spec.
+`<x>` marks a substituted value. Where a string already exists in the code it is marked *(existing —
+verified)* and must not drift.
+
+| # | State | Surface | Exact text / presentation |
+|---|---|---|---|
+| S-1 | Loading, no cache | Message list | Skeleton rows (three, existing `ListSkeleton`), `aria-label="Loading messages"`. No text claim of freshness. |
+| S-2 | Loading detail | Reading pane | Existing spinner, `aria-label="Loading message"` *(existing — verified)*. |
+| S-3 | Fresh live rows | List + rail | Freshness line: `Checked just now` (or `Checked <relative time>`); no stale marker. |
+| S-4 | Cached rows, fresh | List + rail | `Checked <relative time>` — e.g. `Checked 2 minutes ago`. |
+| S-5 | Stale-and-checking | List header line | `Last checked <relative time> · Checking…` — rows stay visible; a subtle inline spinner rides the line; no skeleton. |
+| S-6 | Refresh failed, stale rows kept | List header line + notice | `Couldn't refresh — showing messages as of <time>.` + a `Retry` button. Connection-failure classes additionally show `Can't connect to this mailbox · <class>` in the watcher banner's existing shape. |
+| S-7 | Folder confirmed absent | Rail + list | Rail: role visible with count `0`; list: `No messages` + `Your mail server has no <Sent|Drafts> folder. You can set the folder name in mailbox settings.` with `Open mailbox settings` link. Never an error surface. |
+| S-8 | Folder unresolved (unknown) | Rail + list | Rail: role visible with count `—`; list: `Couldn't confirm the <Sent|Drafts> folder on this server.` + `Set the folder name in mailbox settings.` + the settings link. Never claims absence; never `No messages`. |
+| S-9 | Busy (capacity) | Failure surface | Generic: `Mail is busy. Try again.` + `Retry`. With reason: `pool_busy`/`account_busy` → `Mail is busy. Try again.`; `server_connection_limit` → `The mail server reached its connection limit. Try again shortly.`; `backoff` → existing banner text *(existing — verified: "Can't connect to this mailbox · <class> — retrying at <time>")*. |
+| S-10 | Connection failure, no cache | List / detail | `Can't connect to this mailbox` + `Error class: <class>` + `Retry` *(existing — verified)* + existing `Open mailbox settings` affordance. |
+| S-11 | Message changed or deleted | Reading pane | `This message changed or was deleted. Refresh the list.` *(existing — verified for drafts)* generalized to all folders + `Refresh list` button. A stale row click can never render as a successful open. |
+| S-12 | Cache unavailable | Dismissible notice | `Mail cache unavailable; using live access.` |
+| S-13 | Over-cap attachment | Attachment row | Open and Save unavailable with `This attachment is larger than the 25 MB preview limit. Use Download.` (associated text, not tooltip-only). |
+| S-14 | Unsaved-Compose discard prompt | ConfirmDialog | Title `Discard unsaved changes?` · body `You have unsaved changes in Mail. Leaving now will discard them. Continue?` · confirm `Discard` *(existing — verified; unchanged)*. |
+| S-15 | Save succeeded | Viewer status region (announced, no focus move) | `Saved to Library as <final name>.` + `Open in Library` enabled; audit-warning variant prepends the safe warning code text from the response. |
+| S-16 | Save failed | Viewer status region | `Could not save to Library. <safe reason>` + `Retry` + `Back to mail`; stored-file controls stay disabled; the temporary view stays open. |
+| S-17 | Save result unknown | Viewer status region | `Save result unknown — checking whether it saved.` + explicit `Retry save` (same `save_operation_token`); never an automatic resend; resolves to S-15/S-16 only via the receipt. |
+| S-18 | Handoff opened | Context bar + live region | Bar: `From mail: <subject>` heading + `Back to mail` + `Save to Library` controls; announcement `Opening <filename> from mail.`; focus on the heading. |
+| S-19 | Returned to mail | Live region | `Returned to <filename> in <folder>.` / fallback: `<filename>'s message is no longer in this folder. Focus moved to the <message list | folder tab>.` |
+| S-20 | Disabled stored-file action | Viewer | Control rendered disabled with associated text `Save to Library first.` — keyboard-discoverable, visible without hover. |
+| S-21 | Ceiling reached | Below list | `You're viewing the newest 200 messages. Search to find older ones.` + adjacent search control; `Load more` absent. |
+| S-22 | Search empty | List area | `No messages match "<query>".` |
+| S-23 | Stale cursor reset | Notice (once) | `The folder changed. Showing the newest messages.` |
+| S-24 | Scripts-off mail HTML | Library viewer notice | `Scripts are disabled because this file came from mail.` + per-file `Allow scripts` checkbox with helper `Applies to this file only.` |
+| S-25 | Unknown attachment size | Attachment row | `Size unknown` (never `0 B`). |
+
+## 12. Components: reuse the catalogue, justify anything new
+
+The design-system skill is loaded for this spec (rule: load before proposing components). Mapping:
+
+| Job | Component (catalogued, `src/components/ui/`) | Notes |
+|---|---|---|
+| All actions (Retry, Refresh, Load more, Open, Save to Library, Download, Back, search submit) | `Button` | Variants as shipped; no raw buttons anywhere (controls lock). |
+| Mailbox chooser | `Select` *(existing in MailPanel)* | Unchanged. |
+| Discard prompt | `ConfirmDialog` *(existing)* | S-14 strings pinned. |
+| Loading skeleton | `Skeleton` *(existing)* | S-1; never replaces stale rows (S-5). |
+| Unread badge | `Badge` *(existing)* | Unknown count renders "—" as text, not a Badge. |
+| Settings text fields (folder names) | `Input` + `Label` + `FormError` | The Connectors form's existing field row pattern (`FieldRow`, verified in `EmailMailboxPanel.tsx`). |
+| Search field | `Input` + `Button` | Panel-local composite; no new catalogued component needed. |
+| Per-file scripts checkbox | `Checkbox` | Rendered in W8's surface (S-24); named here because the acceptance criteria are joint. |
+| Empty/error states | `empty-state.tsx` / `error-state.tsx` / `QueryErrorState` (existing) | Used for S-7/S-8/S-10/S-22 where the current panel renders ad-hoc `div`s — reuse, don't add a fourth pattern. |
+| Notices (S-12, S-23) | Existing inline banner pattern (`role="status"`/`role="alert"` banners already in MailPanel) | Same visual language; no new component. |
+
+**New components proposed: none.** The freshness line, context bar, paging footer and availability
+states are compositions of the above inside W3/W8-owned files. Any implementation that reaches for a new
+`*EmptyState`/`*ErrorState`/`*Skeleton` local copy first greps for the catalogue and the existing
+shared components (design-system rule 14); a justified exception would need a stated reason in code and
+reviewer sign-off. No visual redesign; tokens only (spacing/type/colour from
+`src/styles/tokens.generated.css`; no raw values; the spacing scale's non-linear steps apply).
+
+Accessibility requirements cite `docs/internal/design/design-system-definition.md::D16` (focus
+restoration, status announcement, keyboard operation, zoom/reflow as release requirements); focus
+management uses the existing panel-shell focus utilities (`src/components/panel-shell/panelFocus.ts`)
+where applicable rather than bespoke focus code.
+
+---
