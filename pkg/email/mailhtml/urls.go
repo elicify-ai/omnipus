@@ -119,7 +119,14 @@ func RewriteCSSImageURLs(raw string, urls []string, prefix string) string {
 		u = strings.TrimSpace(u)
 		for i, want := range urls {
 			if u == want {
-				return "url(\"" + prefix + strconv.Itoa(i) + "\")"
+				// Single quotes, deliberately: the rewrite lands inside
+				// double-quoted style="…" attributes, where a double quote
+				// TERMINATES the attribute and the rewritten path leaks as
+				// garbage (the rewritten background never renders). A
+				// single-quoted url() is valid CSS and inert inside a
+				// double-quoted HTML attribute; the token-scoped path itself
+				// carries no quotes, so the quoting form is always legal.
+				return "url('" + prefix + strconv.Itoa(i) + "')"
 			}
 		}
 		return tok
