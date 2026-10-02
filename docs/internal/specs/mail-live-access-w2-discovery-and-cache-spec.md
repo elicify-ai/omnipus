@@ -915,7 +915,7 @@ Format: Given/When/Then, one action per When; each scenario is typed **Happy / A
 
 ## 7. TDD plan (tests designed from this specification, before implementation)
 
-**Owner and order:** qa-lead (W5) authors all test files (RED), driven by this section; production owners never edit them. Order: unit tests for the pure pieces (mapping/state machines, envelope codec, cache bounds) → package-integration tests against the real in-memory IMAP server → the exclusion-gate integration checks. Command shapes follow `CLAUDE.md`/`omnipus-backend-rules` (tags `goolm,stdjson`, `CGO_ENABLED=0`, one narrow local test at a time; CI owns the suites). Harness: `pkg/email/imapserver_test.go::startMemIMAP` and `view_test.go::startViewIMAP`/`::startViewIMAPRaw` (the capability-set variant drives D-1/D-3); the global `imapDial` seam forbids blind parallelism.
+**Owner and order:** qa-lead (w6-proof) authors all test files (RED), driven by this section; production owners never edit them — **including the exclusion-gate tests, which are qa-lead/w6-owned** (register row 18; this section's former "W4-owned integration" label is corrected, grill M-4). Order: unit tests for the pure pieces (mapping/state machines, envelope codec, cache bounds) → package-integration tests against the real in-memory IMAP server → the exclusion-gate integration checks. Command shapes follow `CLAUDE.md`/`omnipus-backend-rules` (tags `goolm,stdjson`, `CGO_ENABLED=0`, one narrow local test at a time; CI owns the suites). Harness: `pkg/email/imapserver_test.go::startMemIMAP` and `view_test.go::startViewIMAP`/`::startViewIMAPRaw` (the capability-set variant drives D-1/D-3); the global `imapDial` seam forbids blind parallelism. **Oracle split (register R-4, grill I-4):** the end-to-end I-02 oracle for the cache layers is this package's V-2 test below; W1's T16/T21 assert the W1-observable seam callbacks — the two are complementary, and neither package duplicates the other's oracle. **Production seam ordered for RED (grill M-5):** `cache_file.go` routes its atomic replace through a package-local write indirection defaulting to `fileutil.WriteFileAtomic` (the `pkg/credentials` `writeFileAtomicFn` precedent, verified at `pkg/credentials/store_lock_test.go::HoldFirstWrite` usage) so the crash-consistency test can park the first write without any production edit or test hook in logic.
 
 ### 7.1 Named test files and what each test proves
 
@@ -938,8 +938,8 @@ Format: Given/When/Then, one action per When; each scenario is typed **Happy / A
 | | `TestCacheFile_FreshNoncePerWrite` | Identical payloads written twice → different ciphertexts **and** different nonces (F-8) | US-6.3 |
 | | `TestCacheFile_RejectsBeforeAllocation` | Truncated / bad nonce length / unsupported version / oversized (claim ≫ 64 KiB budget) envelopes → refused with no allocation proportional to claimed size (F-9; dataset DT-2) | US-6.4 |
 | | `TestCacheFile_LockedStoreIsLiveOnlyNoMint` | Locked store → cache-unavailable; no key file appears; no plaintext fallback written (F-10) | US-6.5 |
-| | `TestCacheFile_AtomicReplaceCrashConsistency` | Injected mid-write failure (parked `WriteFileAtomic`, the `pkg/credentials` sidecar-lock precedent) → next load opens old-or-new complete snapshot (F-11) | US-6.6 |
-| | `TestCacheFile_PermissionsUnix` | Created dir 0700, file 0600 (Unix; Windows restrictive-access proof runs in CI's Windows leg, §9) | US-6 (envelope rules) |
+| | `TestCacheFile_AtomicReplaceCrashConsistency` | Injected mid-write failure (parked first write through the package-local write indirection — the `pkg/credentials` precedent, ordered in this section's owner paragraph per grill M-5) → next load opens old-or-new complete snapshot (F-11) | US-6.6 |
+| | `TestCacheFile_PermissionsUnix` | Created dir 0700, file 0600 (Unix; the Windows restrictive-access evidence comes from the register row-23 instrument — w5-integration's Windows-leg workflow extension, or the fallback UAT-machine receipt — §9; a chmod-only claim is unacceptable on any platform) | US-6 (envelope rules) |
 | | `TestCacheFile_TriggersExactlyFour` | Trigger matrix: first open populates; <24 h reopen = zero discovery; >24 h reopen = one; manual = one; post-failure = exactly one; **no ticker exists** (F-2–F-5) | US-5.1–5.5 |
 | | `TestCacheFile_ClosedPanelNeverTouchesServerOrDisk` | Panel closed + watcher version change + elapsed time → zero IMAP commands, zero writes, dirty flag only; deferred refresh fires once at next open (F-4) | US-5.4, US-5.5 |
 | `pkg/email/header_cache_test.go` | `TestHeaderCache_WarmHitServesNewestFifty` | Fresh snapshot → memory hit with recorded validation time; ≤50 rows; source `memory` (H-1, H-5) | US-8.1, US-8.5 |
@@ -949,14 +949,19 @@ Format: Given/When/Then, one action per When; each scenario is typed **Happy / A
 | | `TestHeaderCache_SearchAndOlderPagesBypass` | Search + page-beyond-50 → live reads, never served from nor written to the cache (H-6) | US-8.5 |
 | | `TestHeaderCache_CrossPairIsolation` | Two pairs, one account, different folders → neither sees the other's rows (I-01's cache face) | US-9 (isolation rule) |
 | | `TestHeaderCache_UidValidityChangeDiscardsEpoch` | UIDVALIDITY bump → old-epoch rows/cursors/counts gone before new rows publish; version saved once (V-1) | US-9.1 |
-| | `TestHeaderCache_SupersededReadPublishesNothing` | Pause a pre-mutation read after its server snapshot; complete mark-read + post-refresh; release the old read → nothing published anywhere; **and no new timer was introduced** (V-2 — the I-02 oracle) | US-9.2 |
+| | `TestHeaderCache_SupersededReadPublishesNothing` | Pause a pre-mutation read after its server snapshot; complete mark-read + post-refresh; release the old read → nothing published anywhere; **and no new timer was introduced** (V-2 — **the end-to-end I-02 oracle for the cache layers**; W1's T16/T21 assert the W1-observable seam callbacks, register R-4/grill I-4) | US-9.2 |
+| | `TestFolderCounts_FreshServedWithoutDial` / `..._StaleRefreshesOnceManualAlwaysNoTimer` / `..._FailedRefreshPreservesAndLabels` | The counts rows of §3.9's counts block: fresh counts (4:59) served with zero dials; stale (5:01) exactly one refresh, manual Refresh always, **no repeating timer exists**; failed refresh keeps prior counts + visible error, timestamp unchanged (C-1..C-3; grill I-6's missing tests) | US-14.1–14.3 |
 | | `TestHeaderCache_LateWriteAfterRemovalRefuses` | Pair removed with a write in flight → generation guard refuses; no file reappears (V-3) | US-9.3 |
 | | `TestHeaderCache_ReconfigDeletesNotMigrates` | Host/port/credential/override change → old caches deleted, rediscovery under new generation (V-4) | US-9.4 |
+| `pkg/email/mail_search_test.go` (proposed) | `TestFolderSearch_SubjectAndAddressServerSide` / `..._Bounds25And200` / `..._StaleCursorTypedReset` / `..._NeverTouchesHeaderCache` | Server-side SUBJECT + FROM/TO substring search (founder Q-D=A); 25/page, 200 ceiling, `view_limit_reached` beyond; stale cursor → one typed 409 reset; zero cache reads or writes from any search (S-1..S-4; register row 4's added story) | US-11.1–11.4 |
+| `pkg/email/attachment_parts_test.go` (proposed) | `TestPartReader_FetchesOnlyAddressedPart` / `..._DraftMarkerExcludedFromIndices` / `TestClassifier_HasAttachmentsEstablishedAbsence` / `..._DeterministicSameEpoch` | Only the addressed part transfers (partial for text, whole for image; zero flag changes; nothing server-side written or kept); the draft marker is excluded from leaf indices and classification, identical indices twice under one epoch; `false` is established absence; classification deterministic (P-1..P-3; register rows 14–15) | US-12.1–12.3 |
+| `pkg/email/view_ref_validation_test.go` (proposed) | `TestRefValidation_StaleEpochRefused` / `..._ForeignGenerationRefused` | A reference from another epoch or generation is refused with the typed stale-reference result before any server command acts on it; zero mint paths exist in this package (R-1, R-2; register row 16) | US-13.1–13.2 |
+| `pkg/email/instrument_emission_test.go` (proposed) | `TestInstrument_CacheAndDiscoverySubFields` / `TestInstrument_JoinerRecordsZeroSocketAndMarker` | W2's sub-fields of the w6-frozen record present on cache/discovery paths, no other layer's fields fabricated; a coalesced joiner records `socket_count=0` + shared-flight marker (L-2; register row 17) | US-15.1–15.2 |
 | `pkg/email/view_missing_folder_test.go` (existing — qa-lead extends) | `TestFolderCounts_UnknownRoleHasNullableTotal` / `TestFolderCounts_ConfirmedAbsentIsEmptyNotError` | The count-side faces of U-5/U-1: unknown → `total=null`; confirmed absent → empty array, not 502 | US-3.3, US-3.1 |
 | | (existing `TestFolderCounts_*` three) | **Regression**: must pass unchanged (§7.3) | — |
 | `pkg/email/logging_leak_test.go` | `TestW2Diagnostics_LeakMarkerSweep` | Drive every §6 scenario with leak-marker fixture data; sweep all sinks for markers (zero) while safe classes/counts present (L-1) | US-10.1–10.2 |
-| `pkg/gateway/` (W4-owned integration; named here for the gate) | `TestMailCacheExclusionGate_BlocksWhenMissing` / `..._PassesWhenDeployed` / `..._DetectsPreTrackedFile` | G-1..G-3 against the real check-ignore mechanism and a stubbed/staged `createTarGz` walk | US-7.1–7.3 |
-| | `TestMailStagingAndBackup_ContainNoCacheFiles` | End-to-end: deployed staging job + backup archive contain no plaintext-or-ciphertext cache marker; positive control IS captured (G-1's instrument check) | US-7.3 |
+| `pkg/email/` (gate unit/integration rows — **qa-lead/w6-owned**, register row 18; this table's former "W4-owned integration" label corrected, grill M-4) | `TestMailCacheExclusionGate_BlocksWhenMissing` / `..._PassesWhenProvable` / `..._DetectsPreTrackedFile` | G-1..G-3 against the product's in-process exclusion evaluator (§3.8 E-1, `git check-ignore`-equivalent semantics, no shell-out) and the backup-skip half (E-2): missing either → refuse + live-only + visible notice; both provable → write succeeds; pre-tracked path → not excluded | US-7.1–7.3 |
+| | `TestMailStagingAndBackup_ContainNoCacheFiles` | **Wave E end-to-end proof, not repo CI** (grill I-5; register rows 18/23): on a machine where both exclusions provably hold, staging + the application backup archive contain no plaintext-or-ciphertext cache marker while a positive-control allowed file IS captured. Repo CI has no such machine; the evidence instrument is the Wave E gate, per the register | US-7.3 |
 
 ### 7.2 Test datasets
 
@@ -980,7 +985,7 @@ Each row traces to its scenario; boundary values come from this spec's numbers (
 
 | Case | Input | Expected | Traces to |
 |---|---|---|---|
-| minimal payload | one role resolved, nil UIDVALIDITY | round-trips; nil stays nil (never fabricated 0) | F-1, R-3.11 unknown-epoch rule |
+| minimal payload | one role resolved, nil UIDVALIDITY | round-trips; nil stays nil (never fabricated 0) | F-1, §3.11's nullable-epoch rule (grill M-3 correction: the cited "R-3.11" rule does not exist; the rule is §3.11's UIDVALIDITY row prose) |
 | max normal payload | 3 roles incl. ambiguity lists, ≈ budget boundary | round-trips under the 64 KiB budget | F-1 |
 | budget+1 | payload just over 64 KiB target | refused or visible cache-unavailable — never truncated | F-9 |
 | 10× oversized claim | header claims ≫ actual, or huge body | refused **before** allocation proportional to the claim | F-9 |
@@ -1000,6 +1005,8 @@ Each row traces to its scenario; boundary values come from this spec's numbers (
 | budget boundary | rows sized to just-under/just-over 4 MiB total | kept vs visible budget refusal | US-8 budget rule |
 | oversized subject/address envelope | one row with a pathological subject | visible per-data cache-unavailable outcome, never truncation | US-8 budget rule |
 | leak-marker rows | markers in names/subjects/addresses | markers in rows OK (memory, not logs); logs clean | L-1 |
+| counts freshness boundary | counts age 4:59 vs 5:01 (fake clock) | served-without-dial vs exactly one refresh; manual Refresh always; no timer | C-1, C-2 (grill I-6) |
+| counts failure | refresh fails or is superseded | prior counts + visible error, timestamp unchanged; superseded publishes nothing | C-3 |
 
 **DT-4 — Invalidation ordering** (for the V-scenarios)
 
@@ -1009,6 +1016,19 @@ Each row traces to its scenario; boundary values come from this spec's numbers (
 | UIDVALIDITY mid-read | epoch bumps between SEARCH and FETCH | old rows discarded; new epoch saved once | V-1 |
 | removal race | pair removed while write paused | write refused; no file | V-3 |
 | reconfig race | override change while read paused | stale read publishes nothing under old generation | V-4 |
+
+**DT-5 — Search, part reader, classification and reference validation** (correction round; for the S/P/R-scenarios)
+
+| Case | Input | Expected | Traces to |
+|---|---|---|---|
+| subject vs address match | 300-message folder; query matching one subject and a different sender | SUBJECT search finds the subject match; FROM/TO search finds the sender match; both server-side | S-1, S-2 |
+| pagination bounds | search result sets of 24 / 25 / 200 / 201 | 25-row pages; 200-row ceiling; `view_limit_reached` with no next cursor beyond | S-3 |
+| stale cursor | cursor from another query / folder version / generation | typed 409 reset requested once; no silent reinterpretation | S-4 |
+| cache interaction | any search while a newest-50 snapshot exists | zero cache reads, zero cache writes | S-1, US-11.4 |
+| part transfer shapes | text part; image part; PDF part | partial fetch permitted for text; whole part for image/PDF; zero flag changes; nothing kept | P-1 |
+| draft-marker structure | marker part + two attachments | marker excluded from indices and classification; identical resolution twice | P-2 |
+| established absence | zero attachment-classified parts | `has_attachments=false`, deterministic across runs | P-3 |
+| stale reference | ref minted at epoch N, live epoch N+1; ref from another generation | refused with the typed stale-reference result before any acting command | R-1, R-2 |
 
 ### 7.3 Regression impact
 
@@ -1089,6 +1109,11 @@ Each counterexample names the mutation a plausible wrong implementation survives
 | CX-13 | **Unknown counts stay null.** Unknown role's total. The mutation: `int` zero-value serialization — "0" renders as a checked-empty folder. | Fabricated zero | `TestFolderCounts_UnknownRoleHasNullableTotal` |
 | CX-14 | **Gate actually blocks.** Exclusion missing → first write must not happen. The mutation: the gate check implemented but its failure path logging-and-continuing. | Log-only gate | `TestMailCacheExclusionGate_BlocksWhenMissing` |
 | CX-15 | **Leak markers never reach logs.** Marker-laden folder names/subjects through every path. The mutation: passing `err.Error()` (server text) into a log field "temporarily". | Raw upstream text in diagnostics | `TestW2Diagnostics_LeakMarkerSweep` |
+| CX-16 | **Search never touches the cache.** A search run while a newest-50 snapshot exists. The mutation: answering search from the cached 50 rows (the "50 cached headers are not a complete server-search result" failure). | Cache-served search | `TestFolderSearch_NeverTouchesHeaderCache` |
+| CX-17 | **Part fetch is part-wise and marker-free.** An addressed part on a message with a draft marker. The mutation: fetching the whole message for a part request, or numbering/exposing the draft-marker part as an attachment. | Whole-message fetch for a part request; draft part classified as attachment | `TestPartReader_FetchesOnlyAddressedPart` / `..._DraftMarkerExcludedFromIndices` |
+| CX-18 | **Stale reference refused.** A ref from epoch N against a folder now at N+1 (the exact defect in today's `view.go`/`handleMailSeen` epoch-discard). The mutation: resolving the ref against the new epoch silently — today's behaviour. | Missing same-lease validation | `TestRefValidation_StaleEpochRefused` |
+| CX-19 | **Counts refresh is stale-gated.** Counts 4:59 old at a trigger event. The mutation: refreshing unconditionally on every event (the w3 contradiction the register aligned away) or keeping them fresh via a repeating timer. | Unconditional/timer counts refresh | `TestFolderCounts_StaleRefreshesOnceManualAlwaysNoTimer` |
+| CX-20 | **Joiner instrument honesty.** A discovery that joined a coalesced flight. The mutation: recording a socket for the joined flight (or fabricating another layer's sub-fields), inflating the socket sum w6 compares against the server counter. | Dishonest joiner record | `TestInstrument_JoinerRecordsZeroSocketAndMarker` |
 
 ---
 
