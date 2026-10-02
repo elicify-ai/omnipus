@@ -588,3 +588,77 @@ Existing behaviour the change must preserve, with the existing tests that guard 
 | `pkg/email/dial_timeout_classification_test.go`, `pkg/email/append_timeout_red_test.go` | The 30 s dial / 45 s command bounds and timeout classification the pool must respect as subordinate bounds |
 | `pkg/email/compose_readback_signature_test.go`, `pkg/email/decode_test.go`, `pkg/email/view_test.go` | Compose/decode/view behaviour outside this change's scope |
 | Frontend: existing `MailPanel`/`mail-format`/query-client suites | The panel's current contracts (retry asymmetry, 30 s refetch while mounted) until W3's event-driven refresh lands — then the new tests replace the timer assertions deliberately, never silently |
+
+---
+
+## 7. Mutation list for the CHECK auditor
+
+Each row is a deliberate defect a careless implementation would survive. CHECK applies **one mutation at a time** to the green implementation, runs the named test, expects failure, restores (the repo's one-narrow-local-run rule serializes these; or they run as a scripted mutation pass on CI where the harness allows). A mutation whose test still passes is a **CHECK BLOCK** naming both.
+
+| # | Mutation (defect injected) | Careless implementation it mimics | Test that must die |
+|---|---|---|---|
+| M-α1 | Reuse a socket after a protocol error (retire-on-poison removed / poison path closes but re-enqueues the session) | "Close on error" that forgets the retirement bookkeeping | T10 `TestPoolPoison_RetiredNotReused` |
+| M-α2 | Publish a superseded read (drop the publication-revision check at completion) | Cache/service layer that trusts "my read succeeded" over "my read is current" | T15 `TestPublicationRevision_SupersededReadPublishesNothing` |
+| M-α3 | Drop the pair (or generation) from the read-sharing key — keep `account + operation + params` | The exact I-01 hazard in today's `flightKey`, reproduced by "simplifying" the identity | T13, T14 `TestCoalescingIdentity_*` |
+| M-α4 | Skip UIDVALIDITY validation when exercising a reference (validate at resolve time only) | Today's resolve-then-mutate split the ADR explicitly replaces | T21 `TestCacheEpoch_UIDValidityChangeDiscardsAll` |
+| M-α5 | Treat a failed candidate sweep as confirmed absence (no recognized role + failed probes → `availability=absent`) | M-01: the finite candidate list failing read as "the server has no such folder" | T22 sibling `TestDiscovery_UnresolvedRoleIsUnknown` (extends the existing `view_missing_folder` pack; listed with §6.3's file set) |
+| M-α6 | Allow an unlimited preview byte path (cap check reads reported metadata only, or the preview reuses the download endpoint) | I-05's single-shared-endpoint failure in either direction | T34 `TestPreviewBytePath_CapAndDownloadSplit` |
+| M-α7 | Ship `download_email_attachment: allow` (or make the save auto-approve regardless of the setting) | "Helpfully" loosening the ask default, or a bespoke approval path that ignores Auto state | T29 `TestAgentSaveAsk_ShippedDefaultAndModes` |
+| M-α8 | Let the sanitizer keep `position:fixed` (or any single banned construct) | A property/value table with one permissive row; the E2E computed-style half catches what a string-presence test would miss | T31 `TestMailCSS_SafeStylesSurviveUnsafeRemoved` |
+| M-α9 | Advance `last_validated` on a failed refresh | "We tried, so we're fresh" timestamp handling | T22 `TestCacheStale_LabelSurvivesFailedRefresh` |
+| M-α10 | Return `total=0` for an unknown count (drop the nullable) | Fabricated zero in the absence/unknown mapping | T18 sibling `TestMailFolders_UnknownCountIsNull` (gateway schema assertion in §6.2's file set) |
+| M-α11 | Copy the original Bcc into a Reply-all | Recipient-merge shortcut | T30 `TestReplyAll_ExactRecipientSet` |
+| M-α12 | Keep the 15-minute preview body retention (metadata-only grant not implemented) | The P1 compatibility item silently deferred | T26 `TestTemporaryOpen_WritesNothing` (its token-store byte assertion) |
+
+Rules of engagement for CHECK: never weaken a test to make a mutation detectable *after the fact* — if a mutation survives, the finding is the test's, and the fix is a stronger assertion derived from the design (MC-P reference), not an adjusted expectation read off the mutated code. Mutation evidence is a saved log path + exit code per run (receipt-per-claim rule).
+
+---
+
+## 8. Measurement plan (executable procedure)
+
+No measurement is performed by this specification task. This section makes the campaign executable: who runs what, on which build, with which clocks, repetitions, invalid-run rules and pass/fail bars. Numbers marked **target** are the ADR's founder-accepted bars (Q3=A); numbers marked **baseline** are read from the baseline receipt — none is invented.
+
+### 8.1 Fixed conditions
+
+| Condition | Value | Source |
+|---|---|---|
+| Mailboxes | The same 13 configured mailboxes as lane-M; opaque pair IDs in receipts; a slow/failing pair is never swapped for a convenient provider | ADR measurement plan; baseline §3.1 |
+| Baseline build | `0.1.1+ee936a38` (the ADR's evidence baseline) | baseline §header |
+| Candidate build | Bound to its exact SHA in every receipt; a receipt without the SHA is invalid | ADR "Bind all new receipts to exact candidate and baseline SHAs" |
+| Host | One benchmark browser/host recorded per campaign; live-provider variability reported as an explained caveat, never omitted | ADR sampling recommendation |
+| Clocks | (a) click→rendered (user clock: Playwright visible-state probe + screenshot), (b) request-start→response-end (request clock: network events on the exact URL). Both per sample, never merged | baseline §4 general rules |
+| Instrument | The §6.1 records; receipts join browser clocks to instrument records per operation | this spec |
+| Privacy | Durations, statuses, byte counts, row counts only. No subjects, addresses, message content, credentials in any receipt | baseline §4; MC-P2 |
+
+### 8.2 Arms (the missing series, now scheduled)
+
+| Arm | Number produced | Procedure (condensed; full click-level detail inherits baseline §4 M-1…M-6) | Repetitions | Invalid if |
+|---|---|---|---|---|
+| **M-A message-open** (the headline gap — lane-M opened exactly one message and never timed it) | Request + click clock for the detail GET; time-to-rendered-body; mark-seen noted, not measured as part of open | Deep-link into the panel (`?panel=mail&agent=<id>`); for each pair with ≥ 1 inbox message, open the first listed message; capture both clocks + screenshot | ≥ 5 cold, ≥ 10 warm per measured message, interleaved | 30 s folders refetch fired during the open; row count changed between list and open; a warm sample materially faster than its cold pair on this build (no cache exists — reuse would mean browser memory served it) |
+| **M-B independent request clocks — folders / list / summary / drafts** | Splits lane-M's shared-origin click clock into user-perceived vs server time | Fresh panel session per pair; deep-link; network-layer captures all requests per URL; byte size + row count recorded | ≥ 5 cold + ≥ 10 warm per pair per operation | Panel auto-selected a mailbox (ambiguous click origin) — deep links only |
+| **M-C attachment + HTML-preview cost** | Request clock for attachment fetch and for the Load-images mint + frame fetches; click→images-painted | Only where an artifact exists; > 15-minute spacing or a different message to avoid measuring today's token-body store; **candidate build: token store must hold no bodies (MC-P19)** — a repeated-fetch comparison proves it | ≥ 3 per available artifact; n recorded, *not applicable* where none | Any token-store hit on the candidate build (a body cache exists — that is a correctness failure, not a timing) |
+| **M-D large-folder benchmark** (controlled, never live-provider evidence) | Folders/list/open against the fake server at 10,000 and 100,000 synthetic messages; paging to the 200 ceiling; search finding older synthetic mail; gateway peak RSS delta; socket counts; UID-search share attribution | Scratch `OMNIPUS_HOME` + one disposable mailbox against the fake server; never the live data dir or credentials; fixed artificial server latency recorded | ≥ 5 per size | The gateway served any real mailbox; fake-server clock skew unrecorded |
+| **M-E connection-failure Retry exercise** (controlled) | Time-to-visible-error and Retry round-trip per class: `connect_refused`, `timeout` (accept-then-silence), `dns`, `tls`; busy/backoff shape; summary's residual retries measured separately | Scratch home; one benchmark mailbox per case; capture failing attempt clock (≈ bound), click→error-visible, then Retry round-trip; assert named class + Retry + zero automatic retries on folders/messages/detail; `retry=true` present only on the human click | ≥ 5 per class | Any silent retry on the read queries; error class rendered as empty-folder; the marker on an automatic request |
+| **M-F cached-first vs live arms** (candidate only; baseline has no cache) | Cached-first display time **separate** from live-fetch time; stale-threshold behaviour (immediate stale display + one live refresh); warm-socket reuse eligibility and hit rate; closed-30-minute re-fetch | Phase-1 matrix of the ADR run table: empty-cache cold, saved-folder cold (restart), warm socket within 2 min, warm headers, watcher interplay, > 8 active saturation, one-connection server | Per ADR sampling: ≥ 5 cold, ≥ 10 warm per operation per pair, randomized order | Any run violating §8.3; a cached sample compared against a live sample as if like-for-like |
+
+**Honest-comparison rules** (inherited verbatim from baseline §6 — the unfair comparisons already proven in this evidence base): never average error round-trips with success timings; never sum the folders and list click ranges (same origin, overlapping); compare Sent success against Inbox pages of similar size, reporting the old 502 error speed separately; compare only same-row-count populations or M-D's controlled folders; require the browser/HTTP/server split before crediting any summary fix; never compare "IMAP cold live" with "cached warm display" and credit the transport.
+
+### 8.3 Invalid-run rule (discard, re-run, and say so)
+
+A run is invalid and is re-run with the discard recorded when: the workspace or panel reloaded mid-operation; a second request to the same URL was observed (double-click); the response came from browser memory (React Query `staleTime` hit — verified by checking the request actually fired on the network tab); any other client or agent touched the same mailbox during the series; the gateway restarted; the build is not the receipt's SHA; or an exercised operation produced zero instrument records (§6.1 T6). Never extrapolate a missing sample; an empty folder is *not applicable*, not 0 ms.
+
+### 8.4 Pass/fail bars (founder-accepted targets, Q3=A — judged, not assumed)
+
+| Bar | Judgement | Baseline anchor |
+|---|---|---|
+| Connection wait | Busy acquisition surfaces within the **5 s** maximum wait, inside the **45 s** total read budget (30 s dial ceiling subordinate); typed result, no ninth socket | **target**; baseline worst-case waits derived from `dialTimeout`/`commandTimeout` (Verified constants) |
+| Reusable metadata | ≤ **4 MiB** global reusable metadata budget; overflow visible, never truncated | **target** (Q3=A, both phases) |
+| Cached first display | Median ≤ **250 ms**, p95 ≤ **500 ms**, same benchmark browser/host; stale-vs-validated reported separately; no full-list skeleton replacing useful rows | **target**, absolute (no baseline cache exists — never paired against baseline) |
+| Warm live reuse | ≥ **50 %** lower paired median vs baseline re-dial cost where reuse is eligible; outliers and failures recorded | **target**, paired against baseline warm ≈ cold re-dials (baseline §2.4) |
+| Cold folder/list work | No > **10 %** paired-median regression vs baseline rows 1–2 on the same pairs/folders, on **both** clocks; a regression caused by newly-honest discovery is shown as a split and requires explicit acceptance | **target**, paired; baseline folders 2.5–8.1 s, list 4.7–22.8 s click-clock (**baseline**) |
+| Message open | No > **10 %** paired-median regression vs the M-A series, same message, both clocks — M-A must exist first | **target**; baseline: none exists (that is the gap) |
+| Summary | p95 ≤ **1 s** request-to-render + **zero** mail network calls + no wait on pool/cache refresh; the old 17–25 s delay (**baseline**, cause Unknown) gets a diagnosed trace, not just a fast number | **target** + **baseline** anchor |
+| Visible failure | One attempt ends by its bound with named class + Retry; folders/messages/detail show **zero** automatic retries; summary's residual 3-retry behaviour measured-and-accepted or removed | **target**; baseline anchor: 80 logged upstream failures with no timing, one ≤ 5 s `folder_missing` Retry (**baseline**) |
+| Resource invariants | ≤ 2 sockets/mailbox, ≤ 8 global, existing 2/account work slots; panel-close releases sockets; ≈ 2 min idle expiry; ≤ 50 headers/role; < **10 MiB** runtime overhead vs the same warmed baseline; request-scoped body buffers reported separately | **target**; baseline socket profile trivially 1-per-request — verify, don't infer, in M-D |
+
+A bar is **failed** by its own stated percentile and opposing measurement; a bar with missing samples reports the gap and is not passed by absence. Absolute bars name clock and host; paired bars name the exact percentile and the opposing series.
