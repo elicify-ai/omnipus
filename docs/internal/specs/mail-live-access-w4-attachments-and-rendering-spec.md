@@ -718,3 +718,69 @@ Scenario: Saved HTML marker survives Library operations (Edge)
   And a corrupt/missing marker fails safe to the stricter profile
   Traces to: §5.4, US-2.AC-1
 ```
+
+---
+
+## 9. TDD plan (tests designed from the DESIGN, before implementation)
+
+Owner: qa-lead (W5) — RED first against this spec, independent CHECK after GREEN; production owners never weaken these tests. Harness: real in-memory IMAP (`pkg/email/imapserver_test.go::startMemIMAP`) with command/byte counters; browser scenarios in the E2E suite with request counters. Go tests run under the repo's required tags; no full local suite — CI is the authority. All filenames below are new unless noted; none exists today (checked).
+
+### 9.1 Test files and what each proves
+
+| Order | Test file | Level | Proves |
+|---|---|---|---|
+| 1 | `pkg/mailattachment/service_test.go` | Unit/Integration | The shared `Transfer` service: selected-part PEEK only (byte counters), 25 MiB decoded cap authority, mode separation (viewer bytes / browser response / Library write), Open writes nothing (fs observation + Save positive control), refusal taxonomy. |
+| 2 | `pkg/mailattachment/save_test.go` | Unit | Sanitize→validate chain (`SanitizeAttachmentName` then `ValidateCreateName`), parent creation via `Root.Mkdir`, numbered collision incl. case-folded, parent-file conflict refusal, complete-file publication (no partial file on failure; cleanup failure reported). |
+| 3 | `pkg/mailattachment/save_token_test.go` | Unit/Integration | M-02: commit-then-lost-response; explicit same-token retry returns the prior receipt (exactly one file); different token = new save; automatic replay never fires; unknown state stays unknown until resolved. |
+| 4 | `pkg/mailattachment/html_profile_test.go` | Unit/Integration | Q5=A: original bytes stored; marker written only on Save; `preview_profile` values; marker survival across `Root.Rename`, `CopyInto`, `MoveInto`, archive-restore; corrupt/missing marker fails safe to scripts-off; per-file allowance switches only that file. |
+| 5 | `pkg/gateway/mail_attachment_preview_test.go` | Integration | Mint: metadata-only grant (no payload bytes in the token store), preview-purpose byte resource bound to preview_id/part/lifecycle, inline disposition + `no-store`, cap refusal ordering (late-failure before success), revoke/expiry/panel-close kill, Download role streams over-cap with attachment disposition, no-redirect discipline on the preview prefix. |
+| 6 | `pkg/gateway/mail_attachment_save_api_test.go` | Integration | The `save-to-library` subresource end-to-end: success shape (real `LibraryEntry`, final name, relative+absolute path, audit status), refusal status codes, lost-response reconciliation over HTTP, audit event vocabulary/fields (no bytes/subject/token), mailbox-removal does not delete saved files. |
+| 7 | `pkg/email/mailhtml/sanitize_test.go` | Unit | The CSS policy: all 73 allowed properties + `@media` pass; every deny-list entry dropped; the artefact's P1–P9 proof obligations; escape-decode ordering; fail-closed on parse error; bounded work; style-attribute and `<style>`-block paths; the two sanitizer-only gates (data:-font, data:image/svg+xml). |
+| 8 | `pkg/gateway/mail_preview_style_test.go` | Integration | `mailSanitizePreviewHTML` + rewrite pipeline integration: style/class/style-block/bgcolor/`<font>` survive; CSS `url()` pinned and rewritten to `/mail-preview/img/<token>/<i>`; extraction covers CSS urls (not just `<img>`); 256 KB cap; CSP unchanged (`style-src 'unsafe-inline'`, `script-src 'none'`). |
+| 9 | `pkg/email/reply_test.go` | Unit | `BuildReplyRecipients`: Reply-To preference/absence; reply-all merge (To+Cc), self+primary exclusion (case-insensitive), display-name/case de-duplication, Bcc never copied, invalid-address actionable error, no-eligible-primary empty set. |
+| 10 | `pkg/tools/email_attachments_test.go` | Unit/Integration | Tool contracts: list (metadata only, no body bytes, no Seen), read (text vs unsupported/too-large outcomes, no file), download (same service, real path result, refusal zero-write), `message_ref` consumed unchanged, wrong-pair/old-generation/old-epoch refusals, no-Message-ID journey, missing-mailbox honest result, registration unconditional. |
+| 11 | `pkg/config/policy_ceiling_test.go` (extends existing config tests) | Unit | Literal allow/allow/ask ceiling entries; `ReconcileToolPolicyCeiling` adds missing keys without overwriting operator values; no per-agent backfill (guard scripts still pass); `allStaticToolNames` contains the three names (boot panic guard). |
+| 12 | `pkg/tools/auto_approve_mail_test.go` (extends existing) | Unit | Auto classification: list/read follow read tools; save resolves via the existing workspace-path conditional class; Auto-off/denied/God-Mode behaviour unchanged; agent allow cannot loosen global ask. |
+| 13 | `pkg/gateway/rest_mail_date_test.go` (extends gateway mail tests) | Unit/Integration | Effective-date normalization: Date → internal date → null; explicit null serialization; no zero time on the wire; fixtures for unparsable/zero/missing. |
+| 14 | `src/lib/mailAttachmentPreviewSource.test.tsx` (W5 frontend) | Component | Temporary source adapter: classifier feeding (extension-derived type, `text_readable` hint), capability flags, resource-policy resolver refusals (C-1..C-4 structural), minted-resource allow, object-URL/token disposal on unmount. |
+| 15 | `src/components/library/LibraryPreviewPane.mailsource.test.tsx` | Component | Viewer integration: context bar exact text, all renderers mount from the temporary source, stored actions disabled with accessible explanation, HTML scripts-off profile, per-file checkbox behaviour, focus/announcement contract (I-06), 320 px/200% reflow. |
+| 16 | `src/components/workspaces/mail/MailPanel.attachments.test.tsx` | Component | Attachment list: Open/Save/Download actions with accessible names; over-cap Open/Save unavailable with cap explanation; failed save keeps the row; "Save result unknown" state and explicit retry flow. |
+| 17 | `tests/e2e/mail-attachments.spec.ts` | E2E | Real browser journeys: Open→view→Back (focus restoration), Save→Open in Library, Download unchanged, keyboard-only journey, request-counter assertions for I-04 and styling remote-load checks, screen-reader announcement smoke. |
+
+**Order**: 1–4 (service primitives) → 5–6 (gateway) → 7–8 (CSS) → 9–12 (reply/tools/policy) → 13 (dates) → 14–16 (components) → 17 (E2E). Each RED run is proven failing on the pre-change code (tests-only CI commit or the single dispatcher-owned narrow local run), then green.
+
+### 9.2 Test datasets
+
+| Dataset | Rows / shape | Exercises | Traces to |
+|---|---|---|---|
+| DS-ATT-PARTS | Nested multipart: 2 leaf attachments + inline CID image + draft-marker part + a genuine user `message.md`; one attachment with `DataUnavailable`; encoded (base64) vs decoded size mismatch; unknown size | Stable index resolution; marker exclusion; size honesty; indicator/list agreement | US-3.AC-1/2, DS rows in ADR test strategy |
+| DS-SIZE | Decoded actual: 0, 1 B, 25 MiB − 1, **25 MiB exactly**, 25 MiB + 1, 30 MiB; reported metadata: true / absent / lying-high / lying-low | Cap boundary authority (decoded, not reported); Download-only above cap | §5.2, US-1.AC-4 |
+| DS-NAMES | `../../..\\evil:name?.pdf`; empty; `...`; Windows-invalid (`con`, `aux`, trailing dot/space); 200-char name; unicode + combining marks; case-clash pair | Sanitize→validate chain; suffix behaviour; refusal classes | US-2.AC-2/3 |
+| DS-SAVE-PATHS | missing parents; parent occupied by file; symlink/mount escape; existing dir reuse; two concurrent saves (panel+agent) same name | Path-safety primitives; concurrency without clobber | US-2.AC-1/2/7 |
+| DS-TOKEN | commit→lost response; retry same token; retry different token; unknown-state observation window; server restart between commit and retry (receipt bounded — bounded reconciliation, not a general exactly-once framework: after restart the retry is a new save attempt that must not duplicate silently — it lands numbered and says so) | M-02 boundaries | US-2.AC-6 |
+| DS-HTML-PROFILE | original-bytes HTML saved; marker present/corrupt/missing; move/copy/rename/restore; checkbox on/off; ordinary workspace HTML control | Q5=A provenance + fail-safe | §5.4 |
+| DS-CSS | allow-list positive fixture (73-property coverage sample per group); P1–P9 inputs; escaped/shorthand/custom-property cases; oversized/unclosed/deep-nesting; 16 KB `<style>` cap; probe mail | Parser policy correctness + boundedness | US-4.AC-* |
+| DS-REPLY | From/Reply-To/To/Cc/Bcc matrix incl. mixed case, display-name duplicates, self-in-To/Cc, self-only recipients, invalid addresses, missing Reply-To, HTML-only body | Recipient rule + quote safety | US-5.AC-* |
+| DS-DATE | valid Date; unparsable; zero; missing (internal present); both missing; Date≠internal; list vs detail vs Sent vs agent vs attribution | Precedence + display parity | US-6.AC-* |
+| DS-REFS | issued ref happy path; wrong pair; old generation; recreated folder (new UIDVALIDITY, old UID); ref after mailbox move | I-03 refusals on the same lease | US-3.AC-4 |
+
+### 9.3 Counterexamples and mutation probes
+
+A careless implementation would survive ordinary happy-path tests. These must die:
+
+| # | Mutation a careless implementation would survive | Test that kills it |
+|---|---|---|
+| M1 | Preview byte resource shares the Download endpoint (one unlimited path) or skips the decoded-byte cap, trusting `reported_size_bytes` | DS-SIZE lying-low row: over-cap preview must abort despite truthful-looking metadata; Download must still complete (kills both the shared-path and metadata-trust mutations) |
+| M2 | Resource policy implemented as "hide the element" (CSS/unmount) instead of resolver refusal | C-1..C-4 request counters — zero requests, plus a DevTools-free structural assertion that the resolver returns no URL; positive control proves the counter works |
+| M3 | Sanitizer implemented as a regex/character-class (the `sigStyleAttrRe` school) | P4 escape set: `col\6fr:red` must SURVIVE (decoded-safe) while `ht\74 tps://` is dropped — a regex fails this asymmetry in one direction or the other; comment-spliced `position` must drop |
+| M4 | Save-token reconciliation "replays" the save instead of returning the prior receipt | DS-TOKEN same-token row: exactly one file, original numbered name; replay would create `(1)` |
+| M5 | Audit-failure-after-commit reported as failed save (inviting duplicate retries) | Audit-failure row: saved=true + warning + path; the UI copy must not advise retry |
+| M6 | Marker stored as a byte-level HTML comment (travels with copies but is user-visible content and dies with byte transformations) or as a filename convention (dies on rename) | DS-HTML-PROFILE: marker survives move/copy/rename/restore invisible to the user; a comment-based marker fails the rename/reencode rows, a filename marker fails the rename row |
+| M7 | Reply-all Cc computed in the SPA from displayed chips (second implementation, display-name duplicate leakage) | Reply dataset: final send payload assertion — chips hidden state can't satisfy it; mixed-case + display-name duplicate rows kill naive Set-dedup |
+| M8 | Date fallback serialized as Go zero time / epoch instead of null | DS-DATE "neither" row + wire assertion: explicit null; `1 Jan 1` string assert on every surface |
+| M9 | `read_message` attachment list computed from the sender's `Content-Type` header alone (type confusion) | DS-ATT-PARTS mislabelled part rows: effective extension-derived classification disagrees with the declared type — must follow the actual part |
+| M10 | Open/Save allowed to fetch via the whole-message reader "temporarily" | Byte counters: only the selected part's bytes move (DS-ATT-PARTS counters), for Open, Save, agent read and Download alike |
+
+### 9.4 Regression impact
+
+Existing behaviour that must keep passing unchanged: the current attachment Download UX and headers (`handleMailAttachment`'s disposition/filename discipline); ordinary workspace Library rendering (stored entries, edit/rename/move, HTML `allow-scripts` profile); the existing six email tools' policies and `read_message`'s Seen behaviour; existing Mail panel list/detail rendering for dated messages; `pkg/email/view_missing_folder_test.go` suites; existing signature/outbound policies. New regression tests: ordinary-workspace-Markdown rendering unchanged under the resource-policy work (positive control lives in the suite permanently); Download role preserved for under-cap parts; existing reply tool behaviour unchanged after the `BuildReplyRecipients` extraction (same outputs on the existing test corpus).
