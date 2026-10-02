@@ -750,4 +750,67 @@ Scenario keys map as `B-W1-n`. Every scenario traces to its user story's accepta
 - **Then** the operation fails immediately with the typed missing-wiring error
 - **And** zero dials occurred
 
+---
+
+## 8. TDD plan (tests designed before implementation)
+
+**Harness rule (carried from the ADR's test strategy):** all pooled-runtime tests run against the real in-tree fake IMAP server — `pkg/email/imapserver_test.go::startMemIMAP` (real `go-imap/v2` in-memory server on loopback TCP; the `imapDial` seam swapped per test and restored via cleanup). W5 extends the harness **in test code only** with: connection/LOGIN/SELECT/STATUS/FETCH command counters (wrapping the `imapDial` seam client-side and counting accepts server-side), controlled stalls at greeting/TLS/login/select/fetch, scripted BYE and idle-close, per-session identity markers, and a controllable clock for idle/revision timing. Tests must not run blindly in parallel (global seam). **No test hooks, flags or globals are ever set from production code.** Expected values are derived from this design, never read off the implementation (oracle independence).
+
+| Order | Test name (indicative) | Level | Traces to BDD | What it proves |
+|---|---|---|---|---|
+| 1 | `TestPool_CeilingsHoldUnderConcurrency` | Unit (`startMemIMAP` + counters) | B-W1-4, B-W1-5 | Max accepted connections ≤ 2 per mailbox / ≤ 8 global across scripted panel+tool+watcher concurrency; every over-cap demand ends typed-busy; no ninth dial |
+| 2 | `TestPool_ReservationsCountWhileConnecting` | Unit (greeting-stall server) | B-W1-6 | A dial blocked at greeting holds countable capacity; second borrower waits/busies; accept count 1 |
+| 3 | `TestPool_FailedDialReleasesReservation` | Unit (refusing server) | B-W1-7 | After a failed dial, immediate re-acquire succeeds; counters at baseline |
+| 4 | `TestLease_ReSelectBeforeUse` | Unit (command capture) | B-W1-2, MC-W1-6 | Borrow after a Sent user sees Inbox rows with a captured SELECT Inbox first |
+| 5 | `TestLease_ConcurrentBorrowersIsolated` | Unit (mid-command pause) | B-W1-8 | Two borrowers, one paused: both return their own folder's rows |
+| 6 | `TestLease_ReadsPreserveFlags_PeekOnly` | Unit (command capture + server flags) | B-W1-9 | Zero non-PEEK fetches on reads; unread states unchanged server-side |
+| 7 | `TestLease_StructuralFolderAbsent_HealthySession` | Unit (`[NONEXISTENT]` scripted) | B-W1-10 | Absence outcome ≠ transport error; session survives for the next read |
+| 8 | `TestPool_PoisonOnTimeout_Cancel_Bye_Protocol` (table) | Unit (stall/BYE/malformed scripted) | B-W1-12, B-W1-15 | Each poison cause closes and retires; no subsequent borrow reuses the session; reader termination observed before the socket is counted gone |
+| 9 | `TestPool_DeadIdleReplacementOnce` | Unit (server kills idle session) | B-W1-16 | Read replaces a dead idle session exactly once, inside the original deadline; second dead replacement fails visibly |
+| 10 | `TestPool_MutationNeverReplayed` | Unit | B-W1-17 | Mutation on dead session → single visible retryable failure; zero duplicate server effects; identical mutations never coalesce |
+| 11 | `TestPool_JoinerCancelIsolation` | Unit | B-W1-18 | Cancelling one of three joiners fails only that waiter |
+| 12 | `TestPool_IdleReleaseAndLRU` | Unit (fake clock) | MC-W1-11, MC-W1-12 | ~2-min idle close from last completed use; eviction picks least-recently-completed idle, never active |
+| 13 | `TestPool_AllEightActiveTypedBusy` | Unit (held leases) | B-W1-11, MC-W1-13 | 9th demand: bounded wait (< 7 s) then the pool-busy class; accept count 8 |
+| 14 | `TestPool_ReleaseNeverExpunges` | Unit (server-side state) | MC-W1-14 | `\Deleted`-flagged message survives release/eviction/idle-close; re-select still sees it |
+| 15 | `TestBudget_CoalescingIdentityMatrix` | Unit | B-W1-19, B-W1-20, B-W1-21 | DS-3 matrix: same identity → one dial; each differing component → separate dials with correct per-identity results; account gate still bounds combined dials |
+| 16 | `TestBudget_RevisionSupersededReadPublishesNothing` | Unit (paused read + mutation ordering) | B-W1-22, MC-W1-17 | DS-4 ordering: superseded read publishes nothing anywhere; refresh stands; refresh never joined the old flight |
+| 17 | `TestPresence_RetentionLifecycle` | Unit (registry + fake clock) | B-W1-23, B-W1-24, B-W1-25 | DS-5 matrix: retention exactly while ≥1 observer; last-observer close immediate (idle) / at completion (active); disconnect/logout/workspace-exit removal; independent tool/watcher work untouched |
+| 18 | `TestPresence_DisabledUntilWired` | Unit | B-W1-26, MC-W1-20 | With retention disabled: every operation's socket closes; count returns to baseline after each |
+| 19 | `TestWatcherSet_BoundedFairProgress` | Unit (13 mailboxes, one stalled) | B-W1-27, B-W1-28 | Other due mailboxes complete within the pass; ≤1 cycle in flight per mailbox; stagger + due gate preserved |
+| 20 | `TestWatcher_SkipLeavesLastCheckedUnchanged` | Unit (saturated capacity) | B-W1-29, MC-W1-22 | Skip recorded; state file's last-success/attempt unchanged; zero dials |
+| 21 | `TestWatcher_ClosedPanelNoRetentionNoCacheFill` | Unit (closed panel, ≥3 intervals) | B-W1-30, MC-W1-23 | Zero retained sockets; zero cache writes/refreshes; dirty-mark only |
+| 22 | `TestWatcher_NeverMutates` (regression, exists in shape) | Unit (`startMemIMAP`) | B-W1-31 | No STORE, no turn, no task — preserved through the rewrite |
+| 23 | `TestBudget_OneOwnerPerOperation` | Unit (slot counter) | B-W1-32, MC-W1-24 | Exactly one account-slot acquisition per gated operation across all three paths; ≤2 concurrent per account ever |
+| 24 | `TestBudget_RetryBypassesBackoffOnly` | Unit | B-W1-33, MC-W1-25 | Retry bypasses the backoff gate; still bounded by slot and pool under saturation |
+| 25 | `TestClient_MissingSourceFailsVisibly` | Unit | B-W1-34, MC-W1-26 | Nil session source in production shape → typed wiring error, zero dials |
+| 26 | `TestPool_DeadlineBounds` (table: greeting/TLS/login/select/fetch stalls) | Unit (fake clock + stalls) | B-W1-12, B-W1-13, MC-W1-4 | Every outcome inside 45 s total; dial ≤ 30 s; command bound subordinate to remaining total |
+| 27 | `TestMailFolders_MissingSentRegressionPool` (preserve + extend) | Unit (`startViewIMAP`) | B-W1-10 | The three `view_missing_folder_test.go` tests pass unchanged through the pooled path; page-path Sent/Drafts absence now succeeds where the count path already did |
+| 28 | Existing budget/watcher RED pack (preserve) | Unit | — | `mail_budget_red_test.go`, `watcher_budget_red_test.go`, `watcher_backoff_red_test.go`, `watcher_cycle_if_due_red_test.go`, `append_timeout_red_test.go`, `dial_timeout_classification_test.go` pass unchanged (key-shape test updated to the new identity, never weakened) |
+
+### 8.1 Test datasets
+
+| Dataset | Rows (boundary → edge → error → happy) | Traces to |
+|---|---|---|
+| DS-1 Socket pressure | 1 mailbox 1 op (baseline), 2 concurrent same-mailbox (at cap), 3rd same-mailbox (refused), 8 global concurrent (at cap), 9th global (refused), 13 mailboxes × light load (turnover + LRU), 2 pairs on 1 account (shared account gate), dial-in-flight + demand (reservation counting) | B-W1-4/5/6, B-W1-19 |
+| DS-2 Poison causes | command timeout, context cancellation, scripted BYE, malformed/protocol-failure response, silently-closed idle session (dead-idle, read → one replacement), dead session during a **mutation** (no replay), poisoned socket offered for reuse (must be refused), `[NONEXISTENT]` select (healthy — contrast row) | B-W1-12/15/16/17, B-W1-10 |
+| DS-3 Coalescing identity | same pair+generation+op+args+purpose (share); differs by pair (2 pairs/1 account, different Sent mappings); differs by generation (reconfig mid-flight); differs by purpose (cache vs live); differs by args (different folder/limit); differs by operation; empty params (opt-out, preserved); joiner-cancel mid-flight; mutation pair (never coalesce) | B-W1-18/19/20/21 |
+| DS-4 Revision ordering | read paused → mutation completes → read resumes (publishes nothing); read completes → mutation (publishes, normal); mutation → refresh (never joins old flight); UIDVALIDITY change mid-read (supersedes); two delayed responses out of order (newest revision wins at the consumer); cache-shaped vs live same folder | B-W1-21/22 |
+| DS-5 Presence | 1 observer warm reuse; 2 tabs → close 1 (retain); close last (idle close immediate); active op during last close (close at completion); socket drop without close frame; logout; workspace exit; detached flight finishes after last observer (no retention); retention disabled entirely (every op closes); REST presenting a foreign observer ID (no authority) | B-W1-23/24/25/26 |
+| DS-6 Watcher | 13 due, 1 stalled (12 progress); mailbox mid-cycle at due moment (no second cycle); all capacity foreground-held (skip; state unchanged); panel closed ≥3 intervals (no retention/no fill/dirty-mark only); backoff window (no dial, unchanged); new mail (state advances once); UIDVALIDITY reset (baseline rule preserved) | B-W1-27/28/29/30/31 |
+| DS-7 Deadlines | greeting stall, TLS stall, login stall, select stall, fetch stall, queue expiry under account saturation, acquisition-window expiry (5 s), total-deadline boundary (success at 44 s, failure by 45 s + slack), failed dial reservation release | B-W1-7/11/12/13/14 |
+
+### 8.2 Regression impact
+
+**Preserved unchanged (must keep passing through the rewrite):**
+
+- `pkg/email/view_missing_folder_test.go` — all three named tests (§2.1). The pooled path must not soften anything they pin.
+- `pkg/email/mail_budget_red_test.go` — all six named tests; `TestMailBudget_SingleflightKeyIncludesParams` is updated by W5 to the new identity shape **without weakening** (it must still pin that params participate and that paramless ops opt out).
+- `pkg/email/watcher_budget_red_test.go` (skip-is-not-failure; cycle-through-budget), `watcher_backoff_red_test.go` (ladder bounds + jitter window), `watcher_cycle_if_due_red_test.go` (no dial in backoff), `append_timeout_red_test.go`, `dial_timeout_classification_test.go`.
+- The existing visible-failure contract: 503 `backoff`/`busy` envelopes (`mailBudgetErr`), Retry-bypasses-backoff-only, no dial during backoff.
+
+**New regression tests required:**
+
+- The pooled path serving `FolderCounts`/`ReadFolderPage`/`ReadView` must reproduce today's success shapes byte-for-shape (same wire types, same nil-vs-empty slice handling — `mailNonNilSlice` contract) so W2's rewiring cannot silently change responses.
+- The `Transport` interface method set and `AccountKey` derivation (`host:port|username`) are pinned by existing tests; the spec adds the explicit assertion that `AccountKey` is unchanged after the rewrite (it is the contention key everything else keys from).
+
 <!-- W1-SPEC-CONTINUES -->
