@@ -149,11 +149,14 @@ function busyReasonFromError(err: unknown): MailUnavailableError['reason'] | nul
 }
 
 /** The failure surface's headline: busy refusals name their cause (S-9);
- * connection failures keep the existing shape (S-10). */
-function mailFailureHeadline(err: unknown): string {
+ * connection failures keep the existing shape (S-10). `errorClassOverride`
+ * lets a surface feed its already-translated class (the folders surface's
+ * backoff→watcher-class substitution) instead of re-deriving one from the
+ * raw error. */
+function mailFailureHeadline(err: unknown, errorClassOverride?: string | null): string {
   const busy = busyReasonFromError(err)
   if (busy !== null) return busyCopy(busy)
-  const errorClass = mailErrorCode(err)
+  const errorClass = errorClassOverride ?? mailErrorCode(err)
   return isMailConnectionFailure(errorClass) ? "Can't connect to this mailbox" : `Could not load (${errorClass})`
 }
 
@@ -1121,7 +1124,11 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
                 className="flex flex-1 flex-col items-center justify-center gap-[var(--space-2)] p-[var(--space-4)]"
               >
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-                  {isMailConnectionFailure(folderErrorClass) ? "Can't connect to this mailbox" : 'Could not load this mailbox'}
+                  {/* One failure vocabulary across all mail surfaces (S-9 +
+                      FR-W3-20): a busy 503 names its cause here exactly as
+                      the list and detail surfaces do; the backoff→watcher
+                      class translation feeds its connection class through. */}
+                  {mailFailureHeadline(foldersQuery.error, folderErrorClass)}
                 </p>
                 <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                   Error class: {folderErrorClass}
