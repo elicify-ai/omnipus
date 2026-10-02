@@ -169,7 +169,7 @@ export function onCacheReadSettled(
   }
   const live = shouldIssueLive(applied, event, now)
   if (!live) return { view: applied, live: false }
-  return beginLiveRefresh(applied)
+  return { view: beginLiveRefresh(applied).view, live: true }
 }
 
 /**

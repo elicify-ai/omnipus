@@ -25,7 +25,6 @@
 // dependency (US-5 AS-7): every send is best-effort — an unacknowledged or
 // unsendable frame changes nothing about how reads behave.
 
-import type { ClientFrame } from '@/lib/ws'
 import type { MailPanelObserverFrame } from '@/lib/api/generated/asyncapi-types'
 
 /** The one frame constructor (MC-W3-5): exactly the generated frame's four
@@ -43,9 +42,23 @@ export function mailPanelObserverFrame(
   }
 }
 
-/** The socket handle the adapter sends through — the generated ClientFrame's
- * `send` pick, so both the live WsConnection and a stub satisfy it. */
-export type MailPresenceSender = { send(frame: ClientFrame): boolean }
+/**
+ * The socket handle the adapter sends through, typed against the GENERATED
+ * MailPanelObserverFrame. The live WsConnection satisfies it (its
+ * `send(frame: ClientFrame)` method parameter is bivariant against this
+ * narrower frame type); the frame itself rides `WsConnection.send`'s
+ * JSON.stringify path at runtime.
+ *
+ * CONTRACT GAP (reported to team-lead, register row 5 / R-3.2): the landed
+ * asyncapi.yaml declares the three mail_panel_observer messages and schemas
+ * but has NO `operations` entry binding them as a client send on the chat
+ * channel, so the generated `ClientFrame` union does not include the frame
+ * yet (the generator derives the union from send-operations only, by
+ * design). Until backend-lead (the W0 owner) adds the operation and
+ * regenerates, this seam carries the generated frame interface directly —
+ * never a hand-written parallel type.
+ */
+export type MailPresenceSender = { send(frame: MailPanelObserverFrame): boolean }
 
 export interface MailPanelPresenceDeps {
   /** The authenticated socket, or null while disconnected / logged out. */
