@@ -248,9 +248,17 @@ func (s *Service) Save(ctx context.Context, req SaveRequest) (*SaveReceipt, erro
 	// written only here. The gate decides on what the content IS, not only
 	// the name: the part's declared content type or an html-ish saved
 	// extension both make it an HTML document (the F7 finding — a .htm
-	// attachment is the same HTML surface and used to save unmarked).
+	// attachment is the same HTML surface and used to save unmarked). A nil
+	// marker store REFUSES the save (fail closed, the DestinationWriter
+	// contract — the F6 finding): an unmarkable mail-derived HTML file must
+	// never land scripts-capable.
 	if mailDerivedHTMLDocument(finalRel, part.ContentType) {
-		if merr := s.writer.MarkerStore().Mark(finalRel); merr != nil {
+		store := s.writer.MarkerStore()
+		if store == nil {
+			s.cleanupAfterRefusal(finalRel, nil)
+			return nil, fmt.Errorf("%w: the destination provides no mail-derived marker store; the HTML save is refused", ErrDestinationWrite)
+		}
+		if merr := store.Mark(finalRel); merr != nil {
 			s.cleanupAfterRefusal(finalRel, nil)
 			return nil, fmt.Errorf("%w: could not record the mail-derived marker for the saved HTML file: %v", ErrDestinationWrite, merr)
 		}
