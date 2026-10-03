@@ -196,6 +196,19 @@ type LifecycleRecord struct {
 	// persistLocked requires it non-nil whenever State == LifecycleStopped.
 	StopNote *StopNote `json:"stop_note,omitempty"`
 
+	// FinalDelivery is the protected terminal/outbox commit tuple (ADR-20260928
+	// sub-agent control plane, D2 CRIT-001): the one outcome/publication
+	// commit writes done/failed AND this unpublished final-delivery entry in
+	// a single mutation, and the upward deliverer publishes only FROM it.
+	// Non-nil only on a terminal (completed/failed) record of the generation
+	// the final was produced for — persistLocked enforces both, plus the
+	// deterministic `<session>:<generation>:final` replay id. Post-commit
+	// delivery progress NEVER mutates this struct: it lives in typed
+	// final_delivery_update journal envelopes written only by
+	// LifecycleStore.UpdateFinalDelivery (lifecycle_outbox.go). Internal
+	// storage only — no gateway/SPA bytes.
+	FinalDelivery *FinalDeliveryCommit `json:"final_delivery,omitempty"`
+
 	OwnerScopeKind OwnerScopeKind `json:"owner_scope_kind"`
 	OwnerScopeID   string         `json:"owner_scope_id,omitempty"`
 	// OwnsPlanID is set when THIS session is a plan's OWNER session — the
@@ -384,6 +397,23 @@ func (s *LifecycleStore) tail(sessionID string) (rec *LifecycleRecord, found boo
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
+			continue
+		}
+		// Journal-line discriminator (ADR-20260928 D2, delivery-only journal):
+		// a final_delivery_update envelope is NOT a lifecycle record. Decoding
+		// one as a LifecycleRecord would yield a zero-value record (empty
+		// session_id/state) and — at the tail — present delivery progress as a
+		// bogus current state. Skip envelope lines here; UpdateFinalDelivery's
+		// readers join them to their commits (lifecycle_outbox.go).
+		var probe struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal([]byte(line), &probe); err != nil {
+			// Skip a torn/corrupt line; keep the last good record. This is
+			// deliberately non-fatal — see the doc comment above.
+			continue
+		}
+		if probe.Kind == JournalKindFinalDeliveryUpdate {
 			continue
 		}
 		var r LifecycleRecord
@@ -582,6 +612,33 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 	}
 	if rec.StopNote != nil && !IsValidStopCause(rec.StopNote.Cause) {
 		return fmt.Errorf("session: lifecycle: invalid stop_note.cause %q", rec.StopNote.Cause)
+	}
+	// ADR-20260928 D2 CRIT-001: the protected final-delivery tuple exists only
+	// on the terminal commit that produced it — never on a non-terminal or
+	// stopped record, never on a foreign generation, and never under any id
+	// but the deterministic `<session>:<generation>:final` replay id. A
+	// stopped record carrying an outbox entry is exactly the "losing final
+	// published anyway" contradiction T11 pins.
+	if rec.FinalDelivery != nil {
+		fd := rec.FinalDelivery
+		if !rec.Terminal() {
+			return fmt.Errorf("session: lifecycle: final_delivery requires a terminal (completed/failed) record, got state %q", rec.State)
+		}
+		if fd.Generation != rec.Generation {
+			return fmt.Errorf("session: lifecycle: final_delivery.generation %d must equal record generation %d", fd.Generation, rec.Generation)
+		}
+		if fd.CommitID == "" {
+			return fmt.Errorf("session: lifecycle: final_delivery requires commit_id (the producing run's identity)")
+		}
+		if fd.ParentSessionID == "" {
+			return fmt.Errorf("session: lifecycle: final_delivery requires parent_session_id")
+		}
+		if fd.PayloadHash == "" || len(fd.Payload) == 0 {
+			return fmt.Errorf("session: lifecycle: final_delivery requires payload_hash and the exact upward payload")
+		}
+		if want := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation); fd.MessageID != want {
+			return fmt.Errorf("session: lifecycle: final_delivery.message_id %q must be the deterministic replay id %q", fd.MessageID, want)
+		}
 	}
 	return nil
 }
