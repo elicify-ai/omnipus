@@ -146,6 +146,12 @@ var allStaticToolNames = []string{
 	// the D19 fill (pkg/gateway/rest_mailbox.go) and the ADR-090
 	// inventory grant reference this name.
 	"create_email_draft",
+	// Attachment tools (ADR-20261001 F3, w4): list/read/save for RECEIVED
+	// attachments. An override key absent from this literal PANICS
+	// validateOverrideKeys at boot, so the three names land here in the
+	// same commit as their ceiling entries (defaults.go) and their ADR-090
+	// inventory grants.
+	"list_email_attachments", "read_email_attachment", "download_email_attachment",
 	"ToolSearch",
 	// ADR-056 — the unified read-only background-job roster (plans owned,
 	// subagents delegated, standalone tasks assigned to or created by the

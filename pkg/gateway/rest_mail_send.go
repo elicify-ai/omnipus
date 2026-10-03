@@ -159,7 +159,9 @@ func (a *restAPI) handleMailSendInner(w http.ResponseWriter, r *http.Request, wo
 		resp.SentSaved = false
 		sw := "the message was sent, but saving to the Sent folder failed"
 		resp.SaveWarning = &sw
-		logsafeError("rest: mail sent copy APPEND failed", "agent_id", agentID, "error", aerr)
+		// w5 US-7.4/MC-15: only the closed class reaches the log - never the
+		// raw provider error text.
+		logsafeError("rest: mail sent copy APPEND failed", "agent_id", agentID, "class", email.ClassifyMailError(aerr))
 	}
 	attCount := len(atts)
 	auditMail(a, audit.EventMailPanelSend, audit.DecisionAllow, map[string]any{

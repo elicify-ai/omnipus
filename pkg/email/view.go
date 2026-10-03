@@ -79,39 +79,44 @@ func ClassifyMailError(err error) string { return classifyMailError(err) }
 // the others report what the server says) and UIDVALIDITY. One IMAP session
 // for the whole request (round-1 MAJ-012).
 func (c *Client) FolderCounts(ctx context.Context) ([]FolderStat, error) {
-	client, _, err := c.dialIMAP(ctx)
+	var out []FolderStat
+	// Pooled read (Wave C): one lease on INBOX carries the whole STATUS loop;
+	// without an injected session source the legacy per-call dial keeps the
+	// identical command sequence.
+	err := c.withMailSession(ctx, "INBOX", false, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		out = make([]FolderStat, 0, len(FolderSlugs))
+		for _, slug := range FolderSlugs {
+			name, ferr := c.folderNameFor(slug)
+			if ferr != nil {
+				return ferr
+			}
+			status, serr := runIMAP(ctx, "status "+slug, func() (*imap.StatusData, error) {
+				return client.Status(name, &imap.StatusOptions{NumMessages: true, NumUnseen: true, UIDValidity: true}).Wait()
+			})
+			if serr != nil {
+				// A mailbox with no Sent or Drafts folder must still open: report the
+				// folder as empty instead of failing the whole panel. INBOX stays fatal
+				// (a mailbox without an inbox is a real problem), and any other error
+				// (timeout, auth, cancel) still fails loudly.
+				if slug != FolderInbox && isNonexistentFolder(serr) {
+					out = append(out, FolderStat{Slug: slug, DisplayName: name})
+					continue
+				}
+				return fmt.Errorf("email transport: status %s (%s): %w", slug, name, serr)
+			}
+			st := FolderStat{Slug: slug, DisplayName: name, UIDValidity: status.UIDValidity}
+			if status.NumMessages != nil {
+				st.Total = int(*status.NumMessages)
+			}
+			if status.NumUnseen != nil {
+				st.Unseen = int(*status.NumUnseen)
+			}
+			out = append(out, st)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer client.Close()
-	out := make([]FolderStat, 0, len(FolderSlugs))
-	for _, slug := range FolderSlugs {
-		name, ferr := c.folderNameFor(slug)
-		if ferr != nil {
-			return nil, ferr
-		}
-		status, serr := runIMAP(ctx, "status "+slug, func() (*imap.StatusData, error) {
-			return client.Status(name, &imap.StatusOptions{NumMessages: true, NumUnseen: true, UIDValidity: true}).Wait()
-		})
-		if serr != nil {
-			// A mailbox with no Sent or Drafts folder must still open: report the
-			// folder as empty instead of failing the whole panel. INBOX stays fatal
-			// (a mailbox without an inbox is a real problem), and any other error
-			// (timeout, auth, cancel) still fails loudly.
-			if slug != FolderInbox && isNonexistentFolder(serr) {
-				out = append(out, FolderStat{Slug: slug, DisplayName: name})
-				continue
-			}
-			return nil, fmt.Errorf("email transport: status %s (%s): %w", slug, name, serr)
-		}
-		st := FolderStat{Slug: slug, DisplayName: name, UIDValidity: status.UIDValidity}
-		if status.NumMessages != nil {
-			st.Total = int(*status.NumMessages)
-		}
-		if status.NumUnseen != nil {
-			st.Unseen = int(*status.NumUnseen)
-		}
-		out = append(out, st)
 	}
 	return out, nil
 }
@@ -171,6 +176,26 @@ func parseMailRef(ref string) (mailRef, error) {
 	return mailRef{}, fmt.Errorf("%w: must be uid:<uidvalidity>:<uid> or mid:<message-id>", ErrMailRefInvalid)
 }
 
+// refEpochMismatch applies the same-lease reference-validation rule (W2 spec
+// §3.16 R-3.16-1/2) to a parsed uid: ref against the folder's live
+// UIDVALIDITY from the SAME session: a reference minted under an earlier
+// epoch names a DIFFERENT message once the folder has been recreated
+// server-side, so it is refused with the typed stale-reference error BEFORE
+// any command uses the UID — never silently resolved against the new epoch,
+// never fallen back to. A ref carrying no epoch (uidvalidity 0, the
+// degenerate parse shape) has nothing to compare; this is the same rule
+// attachment_parts.go::withValidatedRef applies, shared here so every
+// reference consumer states it once. The wording deliberately avoids
+// upstream-class tokens ("folder", "auth", "tls", …) so a stale refusal
+// cannot misclassify as a transport failure in the string-matching
+// classifier before the gateway's typed 409 mapping (R-3.16-2) is wired.
+func refEpochMismatch(r mailRef, liveUIDValidity uint32) error {
+	if r.uidvalidity == 0 || r.uidvalidity == liveUIDValidity {
+		return nil
+	}
+	return fmt.Errorf("%w: reference epoch %d does not match the live epoch %d", ErrMailStaleReference, r.uidvalidity, liveUIDValidity)
+}
+
 // selectFolder SELECTs the slug's real folder and returns its UIDVALIDITY and
 // message count. Reads are ordinary SELECTs; the fetches behind them are all
 // BODY.PEEK, so no flag is ever written (round-2 MAJ-003).
@@ -201,51 +226,80 @@ func (c *Client) ReadFolderPage(ctx context.Context, slug string, limit int, bef
 	if limit > maxListLimit {
 		limit = maxListLimit
 	}
-	client, _, err := c.dialIMAP(ctx)
-	if err != nil {
-		return nil, 0, false, err
-	}
-	defer client.Close()
-	uidvalidity, _, err := c.selectFolder(ctx, client, name)
-	if err != nil {
-		return nil, 0, false, err
-	}
+	var (
+		rows      []MailRow
+		uv        uint32
+		truncated bool
+	)
+	// Pooled read (Wave C): the page rides one lease on the addressed
+	// folder; without an injected session source the legacy per-call dial
+	// keeps the identical command sequence.
+	err = c.withMailSession(ctx, name, false, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		uidvalidity, _, serr := c.selectFolder(ctx, client, name)
+		if serr != nil {
+			// Confirmed-absent role (w2 spec §3.4): a structural [NONEXISTENT]
+			// on the resolved Sent or Drafts folder is genuine absence — the
+			// list face returns an EMPTY page rather than a mailbox-level
+			// failure. INBOX stays fatal: a mailbox without an inbox is a
+			// broken account, never a healthy empty one (§3.4). On the pooled
+			// path the lease's own SELECT already refused the absent folder as
+			// the ErrFolderAbsent SelectError (its raw *imap.Error is not
+			// errors.As-visible through the wrap), so both shapes map here.
+			if slug != FolderInbox && (isNonexistentFolder(serr) || errors.Is(serr, ErrFolderAbsent)) {
+				rows = []MailRow{}
+				return nil
+			}
+			return serr
+		}
+		uv = uidvalidity
 
-	if beforeUID == 1 {
-		return []MailRow{}, uidvalidity, false, nil
-	}
-	// Drafts must search past the cursor as well: a higher UID can supersede
-	// an unflagged predecessor that sits inside a later page's UID range.
-	crit := &imap.SearchCriteria{NotFlag: []imap.Flag{imap.FlagDeleted}}
-	if beforeUID > 0 && slug != FolderDrafts {
-		var s imap.UIDSet
-		s.AddRange(imap.UID(1), imap.UID(beforeUID-1))
-		crit.UID = []imap.UIDSet{s}
-	}
-	sd, serr := runIMAP(ctx, "search page", func() (*imap.SearchData, error) {
-		return client.UIDSearch(crit, nil).Wait()
+		if beforeUID == 1 {
+			rows = []MailRow{}
+			return nil
+		}
+		// Drafts must search past the cursor as well: a higher UID can supersede
+		// an unflagged predecessor that sits inside a later page's UID range.
+		crit := &imap.SearchCriteria{NotFlag: []imap.Flag{imap.FlagDeleted}}
+		if beforeUID > 0 && slug != FolderDrafts {
+			var s imap.UIDSet
+			s.AddRange(imap.UID(1), imap.UID(beforeUID-1))
+			crit.UID = []imap.UIDSet{s}
+		}
+		sd, serr := runIMAP(ctx, "search page", func() (*imap.SearchData, error) {
+			return client.UIDSearch(crit, nil).Wait()
+		})
+		if serr != nil {
+			return fmt.Errorf("email transport: search page %s: %w", slug, serr)
+		}
+		all := searchDataUIDs(sd)
+		if len(all) == 0 {
+			rows = []MailRow{}
+			return nil
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i] > all[j] }) // newest first
+		if slug == FolderDrafts {
+			draftRows, tr, ferr := c.readCurrentDraftRows(ctx, client, all, limit, beforeUID)
+			if ferr != nil {
+				return ferr
+			}
+			rows, truncated = draftRows, tr
+			return nil
+		}
+		tr := len(all) > limit
+		if tr {
+			all = all[:limit]
+		}
+		fetched, ferr := c.fetchMailRows(ctx, client, imap.UIDSetNum(toUIDs(all)...))
+		if ferr != nil {
+			return ferr
+		}
+		rows, truncated = fetched, tr
+		return nil
 	})
-	if serr != nil {
-		return nil, 0, false, fmt.Errorf("email transport: search page %s: %w", slug, serr)
+	if err != nil {
+		return nil, 0, false, err
 	}
-	all := searchDataUIDs(sd)
-	if len(all) == 0 {
-		return []MailRow{}, uidvalidity, false, nil
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i] > all[j] }) // newest first
-	if slug == FolderDrafts {
-		rows, truncated, ferr := c.readCurrentDraftRows(ctx, client, all, limit, beforeUID)
-		return rows, uidvalidity, truncated, ferr
-	}
-	truncated := len(all) > limit
-	if truncated {
-		all = all[:limit]
-	}
-	rows, ferr := c.fetchMailRows(ctx, client, imap.UIDSetNum(toUIDs(all)...))
-	if ferr != nil {
-		return nil, 0, false, ferr
-	}
-	return rows, uidvalidity, truncated, nil
+	return rows, uv, truncated, nil
 }
 
 // readCurrentDraftRows scans only as far as a full page plus a truncation
@@ -309,6 +363,9 @@ type MailRow struct {
 func (c *Client) fetchMailRows(ctx context.Context, client *imapclient.Client, set imap.UIDSet) ([]MailRow, error) {
 	opts := &imap.FetchOptions{
 		UID: true, Flags: true, Envelope: true,
+		// US-6.AC-1's fallback source: the server's INTERNALDATE rides the
+		// same FETCH — no second round trip for the effective-date rule.
+		InternalDate: true,
 		BodySection: []*imap.FetchItemBodySection{{
 			Specifier:    imap.PartSpecifierHeader,
 			HeaderFields: []string{"X-Omnipus-Draft"},
@@ -345,7 +402,12 @@ func (c *Client) fetchMailRows(ctx context.Context, client *imapclient.Client, s
 			UID:       uint32(buf.UID),
 			MessageID: buf.Envelope.MessageID,
 			Subject:   strings.TrimSpace(buf.Envelope.Subject),
-			Date:      buf.Envelope.Date.UTC(),
+			// US-6.AC-1, applied ONCE here for every list surface (folder
+			// pages, Sent, drafts): a valid Date header wins, else the
+			// INTERNALDATE, else the zero time — which is the wire's "No
+			// date" state, never a fabricated date. EffectiveDate normalizes;
+			// a zero or unparsable envelope Date is ABSENCE (US-6.AC-2).
+			Date: effectiveRowDate(buf.Envelope.Date, buf.InternalDate),
 		}
 		if len(buf.Envelope.From) > 0 {
 			row.From = addressString(buf.Envelope.From[0])
@@ -375,6 +437,16 @@ func (c *Client) fetchMailRows(ctx context.Context, client *imapclient.Client, s
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].UID > rows[j].UID }) // newest first
 	return rows, nil
+}
+
+// effectiveRowDate applies the effective-date precedence (EffectiveDate, the
+// rule the transport owns) to one fetched envelope: a valid Date header
+// first, else the server's INTERNALDATE, else the zero time — the "No date"
+// state, never a fabricated date (US-6.AC-1/AC-2). One helper so every fetch
+// mapping site (list rows, the detail view) states the rule identically.
+func effectiveRowDate(headerDate, internalDate time.Time) time.Time {
+	d, _ := EffectiveDate(headerDate, internalDate)
+	return d
 }
 
 // searchDataUIDs extracts a search result's UIDs.
@@ -492,83 +564,98 @@ func (c *Client) ReadView(ctx context.Context, slug, ref string) (*MailView, err
 	if err != nil {
 		return nil, err
 	}
-	client, _, err := c.dialIMAP(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-	uidvalidity, _, err := c.selectFolder(ctx, client, name)
-	if err != nil {
-		return nil, err
-	}
-
-	uid := r.uid
-	if r.kind == "mid" {
-		uid, err = c.searchMessageID(ctx, client, r.messageID)
-		if err != nil {
-			return nil, err
+	var view *MailView
+	// Pooled read (Wave C): the whole view walk rides one lease on the
+	// addressed folder; without an injected session source the legacy
+	// per-call dial keeps the identical command sequence.
+	err = c.withMailSession(ctx, name, false, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		uidvalidity, _, selErr := c.selectFolder(ctx, client, name)
+		if selErr != nil {
+			return selErr
 		}
-		if uid == 0 {
-			return nil, fmt.Errorf("email transport: %w: no message %s in %s", ErrMessageNotFound, ref, slug)
+		if r.kind == "uid" {
+			// W2 §3.16 R-3.16-1/2: the ref's embedded epoch is compared to the
+			// live folder epoch ON THIS SESSION before any command uses the UID —
+			// a stale ref must never fetch (a recreated folder would render a
+			// different message's body as the clicked message).
+			if verr := refEpochMismatch(r, uidvalidity); verr != nil {
+				return verr
+			}
 		}
-	}
 
-	opts := &imap.FetchOptions{UID: true, Flags: true, Envelope: true, BodySection: []*imap.FetchItemBodySection{{Peek: true}}}
-	fetched, ferr := runIMAP(ctx, "fetch view", func() ([]*imapclient.FetchMessageBuffer, error) {
-		return client.Fetch(imap.UIDSetNum(imap.UID(uid)), opts).Collect()
+		uid := r.uid
+		if r.kind == "mid" {
+			uid, selErr = c.searchMessageID(ctx, client, r.messageID)
+			if selErr != nil {
+				return selErr
+			}
+			if uid == 0 {
+				return fmt.Errorf("email transport: %w: no message %s in %s", ErrMessageNotFound, ref, slug)
+			}
+		}
+
+		opts := &imap.FetchOptions{UID: true, Flags: true, Envelope: true, InternalDate: true, BodySection: []*imap.FetchItemBodySection{{Peek: true}}}
+		fetched, ferr := runIMAP(ctx, "fetch view", func() ([]*imapclient.FetchMessageBuffer, error) {
+			return client.Fetch(imap.UIDSetNum(imap.UID(uid)), opts).Collect()
+		})
+		if ferr != nil {
+			return fmt.Errorf("email transport: fetch view: %w", ferr)
+		}
+		if len(fetched) == 0 || fetched[0] == nil {
+			return fmt.Errorf("email transport: %w: message %s not found in %s", ErrMessageNotFound, ref, slug)
+		}
+		buf := fetched[0]
+		var raw []byte
+		for _, sec := range buf.BodySection {
+			if len(sec.Bytes) > 0 {
+				raw = sec.Bytes
+			}
+		}
+		if len(raw) == 0 {
+			return fmt.Errorf("email transport: message %s fetched empty", ref)
+		}
+		view = viewFromRaw(raw, slug, uid)
+		view.UID = uid
+		view.UIDValidity = uidvalidity
+		for _, f := range buf.Flags {
+			view.Flags = append(view.Flags, string(f))
+		}
+		if buf.Envelope != nil {
+			// Same header handling as bufferToMessage (transport.go) — the view
+			// and the tool lists must never disagree about a header.
+			view.Subject = strings.TrimSpace(buf.Envelope.Subject)
+			view.MessageID = buf.Envelope.MessageID
+			if len(buf.Envelope.InReplyTo) > 0 {
+				view.InReplyTo = buf.Envelope.InReplyTo[0]
+			}
+			if len(buf.Envelope.From) > 0 {
+				view.From = addressString(buf.Envelope.From[0])
+				view.FromName = buf.Envelope.From[0].Name
+			}
+			if len(buf.Envelope.ReplyTo) > 0 {
+				view.ReplyTo = addressString(buf.Envelope.ReplyTo[0])
+			}
+			view.To = splitAddressList(addressListString(buf.Envelope.To))
+			view.Cc = splitAddressList(addressListString(buf.Envelope.Cc))
+			// The detail surface rides the SAME effective-date rule as the lists
+			// (US-6.AC-1: every surface): header date, else INTERNALDATE, else
+			// the zero time the "No date" renderers already guard on.
+			view.Date = effectiveRowDate(buf.Envelope.Date, buf.InternalDate)
+		}
+		if slug == FolderDrafts && view.MessageID != "" {
+			// A replacement APPEND may succeed while deleting its predecessor
+			// fails. Resolve the current non-deleted copy on this same session
+			// rather than trusting that the old UID still exists.
+			currentUID, serr := c.searchMessageID(ctx, client, view.MessageID)
+			if serr != nil {
+				return serr
+			}
+			view.SupersededDraft = currentUID > uid
+		}
+		return nil
 	})
-	if ferr != nil {
-		return nil, fmt.Errorf("email transport: fetch view: %w", ferr)
-	}
-	if len(fetched) == 0 || fetched[0] == nil {
-		return nil, fmt.Errorf("email transport: %w: message %s not found in %s", ErrMessageNotFound, ref, slug)
-	}
-	buf := fetched[0]
-	var raw []byte
-	for _, sec := range buf.BodySection {
-		if len(sec.Bytes) > 0 {
-			raw = sec.Bytes
-		}
-	}
-	if len(raw) == 0 {
-		return nil, fmt.Errorf("email transport: message %s fetched empty", ref)
-	}
-	view := viewFromRaw(raw, slug, uid)
-	view.UID = uid
-	view.UIDValidity = uidvalidity
-	for _, f := range buf.Flags {
-		view.Flags = append(view.Flags, string(f))
-	}
-	if buf.Envelope != nil {
-		// Same header handling as bufferToMessage (transport.go) — the view
-		// and the tool lists must never disagree about a header.
-		view.Subject = strings.TrimSpace(buf.Envelope.Subject)
-		view.MessageID = buf.Envelope.MessageID
-		if len(buf.Envelope.InReplyTo) > 0 {
-			view.InReplyTo = buf.Envelope.InReplyTo[0]
-		}
-		if len(buf.Envelope.From) > 0 {
-			view.From = addressString(buf.Envelope.From[0])
-			view.FromName = buf.Envelope.From[0].Name
-		}
-		if len(buf.Envelope.ReplyTo) > 0 {
-			view.ReplyTo = addressString(buf.Envelope.ReplyTo[0])
-		}
-		view.To = splitAddressList(addressListString(buf.Envelope.To))
-		view.Cc = splitAddressList(addressListString(buf.Envelope.Cc))
-		if !buf.Envelope.Date.IsZero() {
-			view.Date = buf.Envelope.Date.UTC()
-		}
-	}
-	if slug == FolderDrafts && view.MessageID != "" {
-		// A replacement APPEND may succeed while deleting its predecessor
-		// fails. Resolve the current non-deleted copy on this same session
-		// rather than trusting that the old UID still exists.
-		currentUID, serr := c.searchMessageID(ctx, client, view.MessageID)
-		if serr != nil {
-			return nil, serr
-		}
-		view.SupersededDraft = currentUID > uid
+	if err != nil {
+		return nil, err
 	}
 	return view, nil
 }
@@ -854,25 +941,26 @@ func (c *Client) MarkSeenIn(ctx context.Context, slug string, uid uint32) error 
 	if err != nil {
 		return err
 	}
-	client, _, err := c.dialIMAP(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	if _, _, err := c.selectFolder(ctx, client, name); err != nil {
-		return err
-	}
-	storeFlags := &imap.StoreFlags{
-		Op:     imap.StoreFlagsAdd,
-		Flags:  []imap.Flag{imap.FlagSeen},
-		Silent: true,
-	}
-	if _, err := runIMAP(ctx, "store seen", func() (struct{}, error) {
-		return struct{}{}, client.Store(imap.UIDSetNum(imap.UID(uid)), storeFlags, nil).Close()
-	}); err != nil {
-		return fmt.Errorf("email transport: mark seen uid %d in %s: %w", uid, slug, err)
-	}
-	return nil
+	// Pooled mutation (Wave C): the \Seen write rides a mutation lease —
+	// never coalesced, never automatically replayed (W1 §4.5.4); without an
+	// injected session source the legacy per-call dial keeps the identical
+	// command sequence.
+	return c.withMailSession(ctx, name, true, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		if _, _, err := c.selectFolder(ctx, client, name); err != nil {
+			return err
+		}
+		storeFlags := &imap.StoreFlags{
+			Op:     imap.StoreFlagsAdd,
+			Flags:  []imap.Flag{imap.FlagSeen},
+			Silent: true,
+		}
+		if _, err := runIMAP(ctx, "store seen", func() (struct{}, error) {
+			return struct{}{}, client.Store(imap.UIDSetNum(imap.UID(uid)), storeFlags, nil).Close()
+		}); err != nil {
+			return fmt.Errorf("email transport: mark seen uid %d in %s: %w", uid, slug, err)
+		}
+		return nil
+	})
 }
 
 // DeleteDraft flags a draft \Deleted and, when the server supports UIDPLUS,
@@ -897,39 +985,46 @@ func (c *Client) DeleteDraftStatus(ctx context.Context, uid uint32) (expunged bo
 	if err != nil {
 		return false, err
 	}
-	client, _, err := c.dialIMAP(ctx)
+	// Pooled mutation (Wave C): the \Deleted flag and the UIDPLUS expunge
+	// ride a mutation lease — never coalesced, never automatically replayed
+	// (W1 §4.5.4); without an injected session source the legacy per-call
+	// dial keeps the identical command sequence.
+	err = c.withMailSession(ctx, name, true, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		if _, _, serr := c.selectFolder(ctx, client, name); serr != nil {
+			return serr
+		}
+		storeFlags := &imap.StoreFlags{
+			Op:     imap.StoreFlagsAdd,
+			Flags:  []imap.Flag{imap.FlagDeleted},
+			Silent: true,
+		}
+		if _, serr := runIMAP(ctx, "store deleted", func() (struct{}, error) {
+			return struct{}{}, client.Store(imap.UIDSetNum(imap.UID(uid)), storeFlags, nil).Close()
+		}); serr != nil {
+			return fmt.Errorf("email transport: flag draft uid %d deleted: %w", uid, serr)
+		}
+		if client.Caps().Has(imap.CapUIDPlus) {
+			if _, xerr := runIMAP(ctx, "uid expunge", func() (struct{}, error) {
+				return struct{}{}, client.UIDExpunge(imap.UIDSetNum(imap.UID(uid))).Close()
+			}); xerr != nil {
+				return fmt.Errorf("email transport: expunge draft uid %d: %w", uid, xerr)
+			}
+			expunged = true
+		}
+		return nil
+	})
 	if err != nil {
 		return false, err
-	}
-	defer client.Close()
-	if _, _, err := c.selectFolder(ctx, client, name); err != nil {
-		return false, err
-	}
-	storeFlags := &imap.StoreFlags{
-		Op:     imap.StoreFlagsAdd,
-		Flags:  []imap.Flag{imap.FlagDeleted},
-		Silent: true,
-	}
-	if _, err := runIMAP(ctx, "store deleted", func() (struct{}, error) {
-		return struct{}{}, client.Store(imap.UIDSetNum(imap.UID(uid)), storeFlags, nil).Close()
-	}); err != nil {
-		return false, fmt.Errorf("email transport: flag draft uid %d deleted: %w", uid, err)
-	}
-	if client.Caps().Has(imap.CapUIDPlus) {
-		if _, err := runIMAP(ctx, "uid expunge", func() (struct{}, error) {
-			return struct{}{}, client.UIDExpunge(imap.UIDSetNum(imap.UID(uid))).Close()
-		}); err != nil {
-			return false, fmt.Errorf("email transport: expunge draft uid %d: %w", uid, err)
-		}
-		expunged = true
 	}
 	return expunged, nil
 }
 
 // ResolveRef resolves a folder-scoped ref to its current (uidvalidity, uid)
-// without fetching the body: uid-form refs ride the live folder epoch;
-// mid-form refs search only the addressed folder among non-\Deleted messages,
-// resolving multiple hits to the highest UID (round-2 MIN-005). The gateway's
+// without fetching the body: uid-form refs validate their embedded epoch
+// against the live folder epoch (W2 §3.16 R-3.16-1/2 — a stale ref refuses
+// with the typed stale-reference error, never a resolution); mid-form refs
+// search only the addressed folder among non-\Deleted messages, resolving
+// multiple hits to the highest UID (round-2 MIN-005). The gateway's
 // staleness preconditions and the seen action resolve through this so list
 // rows, reads and mutations address one consistently-defined target.
 func (c *Client) ResolveRef(ctx context.Context, slug, ref string) (uint32, uint32, error) {
@@ -941,24 +1036,42 @@ func (c *Client) ResolveRef(ctx context.Context, slug, ref string) (uint32, uint
 	if err != nil {
 		return 0, 0, err
 	}
-	client, _, err := c.dialIMAP(ctx)
+	var (
+		uv  uint32
+		uid uint32
+	)
+	// Pooled read (Wave C): the resolution rides one lease on the addressed
+	// folder; without an injected session source the legacy per-call dial
+	// keeps the identical command sequence.
+	err = c.withMailSession(ctx, name, false, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		liveUV, _, serr := c.selectFolder(ctx, client, name)
+		if serr != nil {
+			return serr
+		}
+		uv = liveUV
+		if r.kind == "uid" {
+			// W2 §3.16 R-3.16-1/2: the live epoch is never paired with a stale
+			// UID — a ref minted under an earlier epoch is refused with the typed
+			// stale-reference error, never silently resolved (the resolved value
+			// feeds the panel's seen action, which would flag the WRONG message).
+			if verr := refEpochMismatch(r, uv); verr != nil {
+				return verr
+			}
+			uid = r.uid
+			return nil
+		}
+		resolved, serr := c.searchMessageID(ctx, client, r.messageID)
+		if serr != nil {
+			return serr
+		}
+		if resolved == 0 {
+			return fmt.Errorf("email transport: no message %s in %s", ref, slug)
+		}
+		uid = resolved
+		return nil
+	})
 	if err != nil {
 		return 0, 0, err
-	}
-	defer client.Close()
-	uv, _, err := c.selectFolder(ctx, client, name)
-	if err != nil {
-		return 0, 0, err
-	}
-	if r.kind == "uid" {
-		return uv, r.uid, nil
-	}
-	uid, err := c.searchMessageID(ctx, client, r.messageID)
-	if err != nil {
-		return 0, 0, err
-	}
-	if uid == 0 {
-		return 0, 0, fmt.Errorf("email transport: no message %s in %s", ref, slug)
 	}
 	return uv, uid, nil
 }

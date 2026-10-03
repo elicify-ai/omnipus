@@ -96,3 +96,33 @@ properties:
       not a guarantee — GET .../content's is_text/too_large fields are the
       authoritative check at read time.
     example: true
+  preview_profile:
+    type: string
+    enum:
+      - workspace
+      - mail_restricted
+    description: >
+      Preview isolation profile for this file (founder Q5=A, recorded
+      2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile"
+      row; mail-live-access-landing-order register row 8 — W0 is the
+      single publisher). workspace = the ordinary isolated script-permitting
+      workspace profile. mail_restricted = the file was written by an
+      explicit Save from Mail: original bytes preserved, rendered with
+      scripts OFF by default under the stricter mail-derived policy. The
+      mail-derived marker is written only by explicit Save (never by
+      Open), must survive move, copy, rename and restore-from-backup
+      (provenance survival is a traced, proved implementation obligation),
+      and a missing or corrupt expected marker fails safely rather than
+      silently upgrading a known mail-derived file. Absent on entries that
+      predate this field = ordinary workspace profile.
+    example: "mail_restricted"
+  preview_scripts_allowed:
+    type: boolean
+    description: >
+      The per-file scripts checkbox (founder Q5=A) — true only when the
+      user explicitly allowed scripts for THIS one file, switching only
+      its preview to the ordinary isolated script-permitting profile.
+      Visible, per file, never silent and never global. Meaningful only
+      with preview_profile=mail_restricted; on ordinary workspace files
+      the isolated profile is the default state and this field is absent.
+    example: false

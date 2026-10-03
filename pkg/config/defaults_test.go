@@ -186,9 +186,27 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		if name == "bash" {
 			continue
 		}
+		// download_email_attachment is a fifth, founder-decided exception,
+		// distinct from destructive/operatorOnly (ADR-20261001 F3, w4 spec
+		// US-3; founder Q4=A, 2026-10-02): saving a RECEIVED attachment is a
+		// normal download tool that WRITES the workspace's mail hierarchy, so
+		// it ships "ask" — the ordinary consent gate stands in front of a
+		// workspace write exactly as it does for every other ask-default
+		// tool. Q4=A rules out an attachment-specific mechanism: under
+		// Auto-approve it rides the existing workspace-path conditional
+		// class like write_file/send_file; there is no blocklist, scanner or
+		// third policy layer. Its siblings list_email_attachments and
+		// read_email_attachment are read-only structure/text access and stay
+		// in the allow sweep above.
+		if name == "download_email_attachment" {
+			continue
+		}
 		if policy != "allow" {
 			t.Errorf("expected non-destructive tool %q to be seeded 'allow', got %q", name, policy)
 		}
+	}
+	if got := cfg.Sandbox.ToolPolicies["download_email_attachment"]; got != "ask" {
+		t.Errorf("download_email_attachment must be seeded 'ask' (founder Q4=A, 2026-10-02: a normal download tool whose workspace write keeps the ordinary consent gate — no exception, no attachment-specific mechanism), got %q", got)
 	}
 	if got := cfg.Sandbox.ToolPolicies["disable_channel"]; got != "allow" {
 		t.Errorf("disable_channel is reversible, not a delete — expected 'allow', got %q", got)

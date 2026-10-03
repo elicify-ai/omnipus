@@ -104,6 +104,10 @@ type captureIMAP struct {
 
 func startCaptureIMAP(t *testing.T, msgs [][]byte, seenUIDs map[int]bool, rejectKeyword bool) captureIMAP {
 	t.Helper()
+	// Source-less client by design; declare the legacy-dial world (order-
+	// independence fixture) so the peek/agent-read behavior is verified on the
+	// dial path regardless of test order.
+	pinLegacyDialWorld(t)
 	mem := imapmemserver.New()
 	user := imapmemserver.NewUser(testIMAPUser, testIMAPPass)
 	if err := user.Create("INBOX", nil); err != nil {

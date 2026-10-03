@@ -1,10 +1,13 @@
 package gateway
 
-// rest_mail_preview.go - the Mail HTML preview (spec 2.3a, MC-10). The mint
-// (POST /api/v1/mail/html-preview-token) is the ONE live-IMAP fetch: it
-// fetches the message, sanitizes the HTML, records the inline parts and the
-// remote-image URL list in the token store, and mints the token. The
-// /mail-preview/ serve routes never dial IMAP and answer 404-only.
+// rest_mail_preview.go - the Mail HTML preview (spec 2.3a, MC-10; w5
+// US-6/MC-11/MC-12: metadata-only grants). The mint
+// (POST /api/v1/mail/html-preview-token) DIALS NOTHING: it authorizes the
+// pair and issues the ref-bound token (US-6.3). Every serve request fetches
+// and sanitizes within its own request through the shared pool and budget,
+// and holds bytes only for that request's lifetime (US-6.2). Signature
+// preview grants keep their operator-supplied sanitized HTML at mint —
+// that is not mail content, and their controls are unchanged.
 
 import (
 	"context"
@@ -24,6 +27,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/email/mailhtml"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/microcosm-cc/bluemonday"
@@ -129,9 +133,14 @@ func (p *mailPreviewRoutes) setMailPreviewSecurityHeaders(w http.ResponseWriter)
 	h.Set("Cache-Control", "no-store")
 }
 
-// handleMint implements POST /api/v1/mail/html-preview-token (D13/D17):
-// decode, resolve the pair, ONE live fetch, sanitize, record, mint.
+// handleMint implements POST /api/v1/mail/html-preview-token (D13/D17; w5
+// US-6.3/MC-12: mint dials nothing). It authorizes the pair, validates the
+// folder slug, and issues the ref-bound metadata token. Every failure the
+// old eager mint produced at mint time (missing message, oversized body,
+// backoff, upstream error) now surfaces at the FIRST SERVE with the same
+// safe classes — the failure moved, it did not disappear.
 func (p *mailPreviewRoutes) handleMint(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -151,42 +160,20 @@ func (p *mailPreviewRoutes) handleMint(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	client := p.api.mailPairClient(w, req.AgentId, req.WorkspaceId)
-	if client == nil {
-		return
-	}
-	v, err := client.ReadView(r.Context(), string(req.Folder), req.MessageRef)
-	if err != nil {
-		if errors.Is(err, email.ErrMailRefInvalid) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
-			mailErr502(w, err)
-		}
-		return
-	}
-	if mailViewHidden(v) {
-		jsonErr(w, http.StatusNotFound, "message not found")
-		return
-	}
-	html := v.HTMLBody
-	if len(html) > mailPreviewMaxHTMLBytes {
-		jsonErr(w, http.StatusBadRequest, "html body too large")
+	// Authorization only: the pair must resolve to an authenticated client.
+	// NewClient dials nothing (US-6.3) — the counter stays at zero here.
+	if p.api.mailPairClient(w, req.AgentId, req.WorkspaceId) == nil {
 		return
 	}
 	loadRemote := req.LoadRemote != nil && *req.LoadRemote
-	inlineParts := make([]mailPreviewInline, 0, len(v.Inline))
-	for _, part := range v.Inline {
-		inlineParts = append(inlineParts, mailPreviewInline{ContentType: part.ContentType, Data: part.Data})
-	}
-	remoteURLs := []string(nil)
-	if loadRemote {
-		remoteURLs = mailExtractRemoteImageURLs(v.HTMLBody)
-	}
 	token, merr := p.tokens.mint(sessionKey, mailPreviewGrant{
 		WorkspaceID: req.WorkspaceId, AgentID: req.AgentId,
 		Folder: string(req.Folder), Ref: req.MessageRef, LoadRemote: loadRemote,
-		HTML: mailSanitizePreviewHTML(v.HTMLBody, v.Inline, remoteURLs), Inline: inlineParts, RemoteURLs: remoteURLs,
 	})
+	// w5 US-7.6/MC-18, per the spec's frozen mint line: the metadata mint
+	// emits its record under the frozen "open" category with ZERO mail
+	// acquisition (source "none", socket_count 0 — the mint dialed nothing).
+	p.api.emitMailOperationTiming("open", req.AgentId, req.WorkspaceId, started, merr, "none", false)
 	if merr != nil {
 		// A full per-session token table is the caller's doing, not a server
 		// fault: refuse 429 with the actionable text and no ERROR log — the
@@ -257,31 +244,96 @@ func (p *mailPreviewRoutes) handleSignatureMint(w http.ResponseWriter, r *http.R
 }
 
 // mailTokenPlaceholder stands in for the token inside sanitized HTML; it is
-// substituted with the real token only AFTER a successful mint.
+// substituted with the real token only AFTER a successful mint — and ONLY
+// inside the path shapes the pipeline itself minted (mailSubstitutePreviewToken):
+// the placeholder is a fixed literal, so a bare whole-document substitution
+// would also fire inside a sender-typed occurrence — an href carrying it to
+// a foreign host delivered the live bearer token to that host (the F2
+// finding).
 const mailTokenPlaceholder = "MAILPREVIEWTOKENPLACEHOLDER"
+
+// mailTokenPathRe matches exactly the two path forms mailRewritePreviewSources
+// mints around the placeholder — the token-scoped /mail-preview/part|img
+// index paths ("/PH/<i>" from the src rewrite, "PH<i>" from the CSS url()
+// rewrite). An href is never such a form, so the token substitution below
+// cannot fire inside any attribute a sender controls.
+var mailTokenPathRe = regexp.MustCompile(`(/mail-preview/(?:part|img)/)` + regexp.QuoteMeta(mailTokenPlaceholder) + `((?:/\d+|\d+))`)
+
+// mailSubstitutePreviewToken writes the live serve token into the preview
+// paths, and only there:
+//   - the shape-scoped replacement fires solely inside the minted
+//     /mail-preview/part|img path forms (their values are wholly
+//     pipeline-generated; the /mail-preview/img form without a slash before
+//     the index is the CSS url() rewrite's own emission);
+//   - every surviving literal is scrubbed, so a sender-typed placeholder —
+//     in an href, a class, a text node — never leaves the frame carrying
+//     the constant, with or without the token.
+func mailSubstitutePreviewToken(html, token string) string {
+	html = mailTokenPathRe.ReplaceAllStringFunc(html, func(m string) string {
+		i := strings.Index(m, mailTokenPlaceholder)
+		return m[:i] + token + m[i+len(mailTokenPlaceholder):]
+	})
+	return strings.ReplaceAll(html, mailTokenPlaceholder, "")
+}
 
 // mailSanitizePreviewHTML is the named inbound sanitizer (MC-10(5)/MC-40):
 // strips meta/base/forms/scripts/handlers, rewrites cid: and remote image
 // srcs onto the token-scoped mail-preview paths, hardens every surviving
-// anchor. The result is what the token store holds.
+// anchor — and, since the styling wave (F4/#1172), preserves SAFE styling
+// through the parsed CSS policy (pkg/email/mailhtml): style attributes via
+// bluemonday's own decode-then-check layer, <style> blocks via the
+// douceur-based stylesheet pass, the 73-property allow table, and the two
+// sanitizer-only gates (data:-font @font-face and data:image/svg+xml in CSS
+// url() stay stripped). The result is what the token store holds.
 func mailSanitizePreviewHTML(raw string, inlines []email.MailPart, remoteURLs []string) string {
+	// Pin-then-rewrite FIRST, while the original https url() values are
+	// still in the text — the CSS rewrite replaces them inside style
+	// attributes AND <style> blocks alike.
+	rewritten := mailRewritePreviewSources(raw, inlines, remoteURLs)
+	// Lift the <style> blocks for the stylesheet sanitizer (bluemonday
+	// cannot sanitize element content without AllowUnsafe), then drop
+	// over-cap style attributes (bounded work, P8).
+	prepared, blocks := mailhtml.ExtractStyleBlocks(rewritten, mailhtml.StyleMaxBlockBytes)
+	prepared = mailhtml.StripOversizedStyleAttrs(prepared)
+	// P4 decode-before-check on the attribute path: identifier escapes are
+	// decoded through the declaration parser, so the browser's reading of
+	// the property name is what the policy judges.
+	prepared = mailhtml.DecodeStyleAttrProperties(prepared)
+	sanitizedBlocks := make([]string, len(blocks))
+	for i, b := range blocks {
+		sanitizedBlocks[i] = mailhtml.SanitizeStylesheet(b, mailhtml.StyleMaxBlockBytes)
+	}
 	p := bluemonday.NewPolicy()
 	for _, el := range []string{"p", "div", "span", "br", "b", "strong", "i", "em", "u", "s",
 		"ul", "ol", "li", "table", "thead", "tbody", "tfoot", "tr", "td", "th",
 		"h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "code", "hr", "a", "img"} {
 		p.AllowElements(el)
 	}
+	// The style ELEMENT carries only the placeholder text here; its content
+	// is re-inserted post-sanitize from the sanitized blocks. The font
+	// element and the presentation attribute tables come from the artefact's
+	// markup table.
+	p.AllowElements("style")
+	mailhtml.AllowPresentationMarkup(p)
+	// The parsed CSS policy: the ONE 73-property table, applied to style
+	// attributes (decode-then-check, fail-closed on parse error).
+	mailhtml.ApplyStylePolicy(p)
 	p.AllowAttrs("alt", "width", "height", "align").OnElements("img")
 	p.AllowAttrs("href").Matching(mailAnchorHrefRe).OnElements("a")
 	p.AllowAttrs("src").Matching(mailImageSrcRe).OnElements("img")
-	rewritten := mailRewritePreviewSources(raw, inlines, remoteURLs)
-	html := p.Sanitize(rewritten)
+	html := p.Sanitize(prepared)
+	html = mailhtml.ReplaceStyleBlocks(html, sanitizedBlocks)
 	html = mailHardenAnchors(html)
 	return html
 }
 
-// mailAnchorHrefRe allows only http/https/mailto anchors after rewrite.
-var mailAnchorHrefRe = regexp.MustCompile(`^(?:https?|mailto):`)
+// mailAnchorHrefRe allows only http/https/mailto anchors after rewrite, and
+// anchors the END too: a value that merely BEGINS with an allowed scheme used
+// to survive with arbitrary trailing content — the shape that carried the
+// token placeholder (and now meets the scrub instead) into a foreign host
+// (the F2 finding). A URL is scheme + whitespace-free remainder; malformed
+// whitespace-bearing values drop (fail-safe: the link vanishes).
+var mailAnchorHrefRe = regexp.MustCompile(`^(?:https?|mailto):\S*$`)
 
 // mailImageSrcRe allows data: images and the token-scoped preview paths.
 var mailImageSrcRe = regexp.MustCompile(`^(?:/mail-preview/(?:part|img)/|data:image/(?:png|gif|jpe?g|webp);base64,)`)
@@ -315,6 +367,11 @@ func mailRewritePreviewSources(src string, inlines []email.MailPart, remoteURLs 
 		path := mailPreviewImgPrefix + mailTokenPlaceholder + "/" + strconv.Itoa(i)
 		out = mailRewriteSrcAttr(out, u, path)
 	}
+	// CSS url() values ride the same grant/index space: every pinned URL —
+	// whether referenced from an img src or a CSS background — rewrites
+	// onto its own /mail-preview/img/<token>/<i> path, so backgrounds
+	// actually render under Load-images consent (grill I-05).
+	out = mailhtml.RewriteCSSImageURLs(out, remoteURLs, mailPreviewImgPrefix+mailTokenPlaceholder)
 	return out
 }
 
@@ -358,18 +415,28 @@ var mailSrcAttrRe = regexp.MustCompile(`(?i)\bsrc\s*=\s*("([^"]*)"|'([^']*)')`)
 func mailExtractRemoteImageURLs(raw string) []string {
 	seen := map[string]bool{}
 	var out []string
+	collect := func(u string) {
+		u = strings.TrimSpace(u)
+		if !strings.HasPrefix(strings.ToLower(u), "https://") || seen[u] || len(out) >= 25 {
+			return
+		}
+		seen[u] = true
+		out = append(out, u)
+	}
 	for _, tag := range mailImgTagRe.FindAllString(raw, 64) {
 		for _, m := range mailSrcAttrRe.FindAllStringSubmatch(tag, 1) {
 			u := m[2]
 			if m[3] != "" {
 				u = m[3]
 			}
-			if !strings.HasPrefix(strings.ToLower(u), "https://") || seen[u] || len(out) >= 25 {
-				continue
-			}
-			seen[u] = true
-			out = append(out, u)
+			collect(u)
 		}
+	}
+	// The CSS half of the pin (grill I-05 / artefact §5): background
+	// url() values join the SAME mint-time grant so the token-scoped proxy
+	// is the only dialer for them too.
+	for _, u := range mailhtml.ExtractCSSImageURLs(raw, 25) {
+		collect(u)
 	}
 	return out
 }
@@ -413,15 +480,32 @@ func (p *mailPreviewRoutes) handleServe(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// serveHTML serves the sanitized HTML with the real token substituted for
-// the placeholder in the token-scoped image paths.
+// serveHTML serves the preview HTML. A signature grant serves its
+// operator-supplied sanitized HTML exactly as before (no dial). A message
+// grant performs its OWN budget-gated live fetch and sanitizes within this
+// request (US-6.2/MC-12) — the grant never carried the payload — records
+// the freshly extracted remote-image URL list (serve-time recording, §13
+// Q5), and serves with the real token substituted for the placeholder.
 func (p *mailPreviewRoutes) serveHTML(w http.ResponseWriter, r *http.Request, token string) {
 	g, ok := p.tokens.lookup(token)
 	if !ok {
 		mailPreviewNotFound(w)
 		return
 	}
-	html := strings.ReplaceAll(g.HTML, mailTokenPlaceholder, token)
+	if grantKindOf(g) == mailPreviewKindSignature {
+		html := mailSubstitutePreviewToken(g.HTML, token)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodHead {
+			return
+		}
+		_, _ = w.Write([]byte(html))
+		return
+	}
+	html, ok := p.fetchAndSanitizeMessageHTML(w, r, token, g)
+	if !ok {
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {
@@ -430,25 +514,88 @@ func (p *mailPreviewRoutes) serveHTML(w http.ResponseWriter, r *http.Request, to
 	_, _ = w.Write([]byte(html))
 }
 
-// servePart serves one mint-time inline part by index. Only image parts are
-// served: the sandboxed iframe can reference them solely through img-src
-// (the CSP names the part path under img-src only), so anything else has no
-// rendering path and is refused as a bare 404.
+// fetchAndSanitizeMessageHTML is the message-preview serve: one live,
+// budget-gated ReadView through the SAME shared pool and budget the panel
+// GETs use, the same 256 KB served-HTML cap (moved here from the mint —
+// US-6.3), sanitize within the request, and the remote-image URL list
+// recorded for the proxy. The bytes live only for this request.
+func (p *mailPreviewRoutes) fetchAndSanitizeMessageHTML(w http.ResponseWriter, r *http.Request, token string, g mailPreviewGrant) (string, bool) {
+	client := p.api.mailPairClient(w, g.AgentID, g.WorkspaceID)
+	if client == nil {
+		return "", false
+	}
+	v, handled := mailBudgetWrap(p.api, w, r, g.AgentID, g.WorkspaceID, client, "open",
+		map[string]any{"folder": g.Folder, "ref": g.Ref}, func(c context.Context) (*email.MailView, error) {
+			return client.ReadView(c, g.Folder, g.Ref)
+		}, func(*email.MailView) *int {
+			return mailInstrumentRows(1) // one message read
+		})
+	if handled {
+		return "", false
+	}
+	if mailViewHidden(v) {
+		jsonErr(w, http.StatusNotFound, "message not found")
+		return "", false
+	}
+	if len(v.HTMLBody) > mailPreviewMaxHTMLBytes {
+		jsonErr(w, http.StatusBadRequest, "html body too large")
+		return "", false
+	}
+	remoteURLs := []string(nil)
+	if g.LoadRemote {
+		remoteURLs = mailExtractRemoteImageURLs(v.HTMLBody)
+	}
+	// Serve-time recording (§13 Q5): the proxy's later requests dial only
+	// entries of THIS fetch's list. Best-effort — an expired token still
+	// finishes the response it already authorized.
+	_ = p.tokens.recordRemoteURLs(token, remoteURLs)
+	html := mailSanitizePreviewHTML(v.HTMLBody, v.Inline, remoteURLs)
+	return mailSubstitutePreviewToken(html, token), true
+}
+
+// servePart serves one inline part by index. For a message grant the part
+// bytes are fetched LIVE within this request (US-6.2 — the grant never
+// carried them; the added live fetches are the ADR's recorded measurement
+// item). Only image parts are served: the sandboxed iframe can reference
+// them solely through img-src (the CSP names the part path under img-src
+// only), so anything else has no rendering path and is refused as a bare
+// 404. Signature grants have no inline parts and stay 404 here.
 func (p *mailPreviewRoutes) servePart(w http.ResponseWriter, r *http.Request, token string, idx int) {
 	g, ok := p.tokens.lookup(token)
-	if !ok || idx >= len(g.Inline) {
+	if !ok {
 		mailPreviewNotFound(w)
 		return
 	}
-	part := g.Inline[idx]
+	if grantKindOf(g) == mailPreviewKindSignature {
+		mailPreviewNotFound(w)
+		return
+	}
+	client := p.api.mailPairClient(w, g.AgentID, g.WorkspaceID)
+	if client == nil {
+		return
+	}
+	v, handled := mailBudgetWrap(p.api, w, r, g.AgentID, g.WorkspaceID, client, "open",
+		map[string]any{"folder": g.Folder, "ref": g.Ref, "part": idx}, func(c context.Context) (*email.MailView, error) {
+			return client.ReadView(c, g.Folder, g.Ref)
+		}, func(*email.MailView) *int {
+			return mailInstrumentRows(1) // one message read
+		})
+	if handled {
+		return
+	}
+	if mailViewHidden(v) || idx >= len(v.Inline) {
+		mailPreviewNotFound(w)
+		return
+	}
+	part := v.Inline[idx]
 	if mt, _, perr := mime.ParseMediaType(part.ContentType); perr != nil || !strings.HasPrefix(mt, "image/") {
 		mailPreviewNotFound(w)
 		return
 	}
 	if len(part.Data) == 0 {
-		// Round-8 F7: an inline part whose bytes are absent at mint (over
+		// Round-8 F7: an inline part whose bytes are absent at fetch (over
 		// the 25 MiB per-part fetch cap, or a decode failure at view time —
-		// the transport leaves Data nil and the mint boundary carries that
+		// the transport leaves Data nil and the serve boundary carries that
 		// as empty Data) must refuse like the attachment download
 		// (rest_mail_read.go's 413), never serve 200 with zero bytes — a
 		// broken image indistinguishable from a corrupt one.

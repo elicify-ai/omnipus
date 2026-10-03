@@ -211,6 +211,25 @@ func applyMailByteHeaders(w http.ResponseWriter, contentType, filename string) {
 	h.Set(headerContentTypeOptions, nosniffValue)
 }
 
+// applyMailPreviewInlineByteHeaders sets the two headers the mail
+// attachment-preview BYTE resource sets itself (rest_mail_attachment.go's
+// serveBytes): the caller-derived Content-Type and the bare INLINE
+// disposition — this route renders inside the sandboxed preview frame, and
+// an .html part never reaches it (MC-42 routes HTML to the /html
+// projection instead). The MC-10 header set (CSP, nosniff, no-store) is the
+// prefix's serveHandler discipline and is applied before this runs.
+//
+// It lives here, not in the mail route file, for the same reason
+// applyMailByteHeaders does: FR-008c's source gate allows a
+// Content-Disposition write in exactly one file of this package, and a
+// handler that sets its own disposition sets its own (absent) policy and
+// its own (sniffed) type. Callers MUST call this BEFORE writing any bytes.
+func applyMailPreviewInlineByteHeaders(w http.ResponseWriter, contentType string) {
+	h := w.Header()
+	h.Set(headerContentType, contentType)
+	h.Set(headerContentDisposition, "inline")
+}
+
 // serveLibraryContent serves already-opened bytes with the headers above.
 //
 // The name argument to http.ServeContent is deliberately empty. That argument

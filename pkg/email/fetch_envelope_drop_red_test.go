@@ -57,6 +57,10 @@ func (s *envDropSession) Fetch(w *imapserver.FetchWriter, numSet imap.NumSet, op
 // returns a production *Client wired to it (imapDial swapped to plaintext).
 func startEnvDropIMAP(t *testing.T) *Client {
 	t.Helper()
+	// Source-less client by design; declare the legacy-dial world (order-
+	// independence fixture) so the env-drop reads ride the dial regardless of
+	// whether an earlier test wired the process-wide manager.
+	pinLegacyDialWorld(t)
 	mem := imapmemserver.New()
 	user := imapmemserver.NewUser(envDropUser, envDropPass)
 	require.NoError(t, user.Create("INBOX", nil))

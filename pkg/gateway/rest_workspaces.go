@@ -2156,6 +2156,18 @@ func removeMailboxesForWorkspace(a *restAPI, workspaceID string) {
 				"agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		}
 	}
+	// w5-integration (US-5.6/B-21): the workspace directory wipe does NOT
+	// touch the private Mail cache/watcher namespaces — they live under the
+	// data root, outside any workspace directory. Deleting only the
+	// workspace directory is never counted as private-cache cleanup: each
+	// bound pair's cache subtree and watcher state file get the same
+	// truthful purge as a direct mailbox removal. The workspace-delete
+	// response cannot carry per-pair mail-cleanup outcomes (a disclosed
+	// contract gap in the wave report): a failed step is logged with its
+	// safe code and stays retryable through the intent it keeps.
+	for _, agentID := range boundAgentIDs {
+		a.runMailboxRemovalCascade(agentID, workspaceID)
+	}
 }
 
 // --- FR-043a / SC-017: the deleted workspace's browser profile ---------------

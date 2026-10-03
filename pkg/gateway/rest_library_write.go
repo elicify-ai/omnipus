@@ -859,7 +859,15 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 			jsonErr(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
-		resp.Entries = append(resp.Entries, library.EntryFromInfo(finalRel, fi))
+		// The response's entries element IS the contract's LibraryEntry:
+		// LibraryUploadResponse hosts its items over the internal component
+		// ref (see the openapi.yaml components comment), so EntryFromInfo's
+		// generated entry is appended directly — no hand-written mirror
+		// struct, no preview-profile enum conversion. Uploads are ordinary
+		// workspace files today, so preview_profile is nil here; the direct
+		// append still carries it should EntryFromInfo ever set one.
+		entry := library.EntryFromInfo(finalRel, fi)
+		resp.Entries = append(resp.Entries, entry)
 	}
 
 	if len(resp.Entries) == 0 {

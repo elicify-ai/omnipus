@@ -1,9 +1,19 @@
 title: MailMessagePage
 description: >
   One page of mail message envelopes (GET
-  /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Truncation is
-  explicit — the page never silently drops rows (mirrors
-  pkg/email/transport.go::SearchResult's explicit-truncation contract).
+  /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Paging is
+  cursor-based and explicit (ADR-20261001 "Paging and search" row;
+  mail-live-access-landing-order register row 4 — W0 is the single
+  publisher): next_cursor is an opaque string binding the pair/config
+  generation, folder version, query and number delivered in this
+  browse/search sequence; has_more states whether a next page exists;
+  view_limit_reached marks the 200-rows-per-folder-per-view hard ceiling,
+  beyond which the user searches — no next browse cursor is issued at the
+  ceiling. The page never silently drops rows. Legacy numeric paging
+  (truncated / next_before_uid / the before_uid query parameter) is
+  superseded by the cursor fields and is retained only until the panel's
+  consumer migration lands (landing-order Wave C); it is then removed in
+  one atomic contract step.
 type: object
 additionalProperties: false
 required:
@@ -18,7 +28,10 @@ properties:
       $ref: ./MailMessageSummary.yaml
   truncated:
     type: boolean
-    description: Whether more messages exist beyond this page.
+    description: >
+      Legacy explicit-truncation flag (email-mail-view-spec §2.3) —
+      superseded by has_more; retained only until the consumer migration
+      lands, then removed.
   next_before_uid:
     type: integer
     format: int64
@@ -26,6 +39,44 @@ properties:
     maximum: 4294967295
     nullable: true
     description: >
-      The before_uid cursor for the next page when truncated is true; null
-      when this page is the last one.
+      Legacy numeric cursor — superseded by next_cursor; retained only
+      until the consumer migration lands, then removed.
     example: 87
+  next_cursor:
+    type: string
+    nullable: true
+    description: >
+      Opaque cursor for the next page when has_more is true and the view
+      limit is not reached; null on the last page or at the 200-row ceiling.
+      Binds the pair/config generation, folder version (UIDVALIDITY), the
+      browse/search query and the number of rows already delivered in this
+      sequence. Presenting a stale or mismatched cursor returns the typed
+      409 stale-cursor result — the client resets the view once, never
+      spins or replays. Optional on the wire until the cursor-issuing
+      producer lands (the is_knowledge_base precedent); producers emit it
+      always once landed.
+    example: "MWI6NDU2OjEyMztCMQ"
+  has_more:
+    type: boolean
+    description: >
+      Whether more messages exist beyond this page in this sequence.
+      Optional on the wire until the cursor-issuing producer lands; the
+      legacy truncated flag remains authoritative for pre-cursor consumers
+      until the migration removes it.
+    example: true
+  view_limit_reached:
+    type: boolean
+    description: >
+      True when this page delivered up to the 200-rows-per-folder-per-view
+      hard ceiling (ADR P1.1 "Display pagination") — no next browse cursor
+      is issued; the panel offers the reachable folder-scoped search
+      instead ("Search to find older messages"). Older loaded pages remain
+      the active view's working set and are released on view exit; they
+      never enlarge the reusable newest-50 cache. Optional on the wire
+      until the producer lands.
+    example: false
+  metadata:
+    $ref: ./MailReadMetadata.yaml
+    description: >
+      Optional on the wire until the cache/read producers land; producers
+      emit it always once landed.

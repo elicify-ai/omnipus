@@ -173,6 +173,20 @@ grep -c "<your new string>" pkg/gateway/spa/assets/index-*.js
 
 A count of 0 means the copy is stale.
 
+## Mail is busy or cannot refresh
+
+The mail panel can answer with a **busy** notice instead of message data. Omnipus allows two connections per mailbox and eight across the whole application, shared fairly between the panel, your agents' mail tools, and the background new-mail watcher; a request that cannot get a slot inside a few seconds is refused rather than piling on. The notice says which of three things happened: the mailbox is in a **backoff** window after a failed check (the panel's **Retry** click bypasses only this), the **mailbox is busy** (its two slots were taken — wait a moment and retry), or the **server limit** was hit. Backoff clears on its own when the watcher's next attempt succeeds.
+
+Folder lists load 25 messages at a time, up to 200 per view; **Search** runs on your mail server within that same window, so older messages are reachable without loading everything. If a list or message was changed or deleted on the server in the meantime, the panel says so and lets you refresh once rather than showing you stale content.
+
+## Mail cache unavailable
+
+A **cache unavailable** warning on the mail panel means Omnipus could not prove that its private mail metadata storage is protected on this install — for example a disk failure or a permission problem, or a version-control repository in the data directory whose state Omnipus cannot verify. It is deliberately careful: until the proof succeeds, no cached mail metadata is written, and the mailbox keeps working live. The warning never means your mail is unavailable, and it is not asking you to install extra tooling — check disk space and the data directory's permissions first. See [Security for users](security.md#mail-metadata-and-temporary-previews) for what the cache holds.
+
+## Mailbox removal left cleanup pending
+
+Removing a mailbox always removes its configuration and stored password first — the account stops working immediately. Omnipus then erases its cached mail metadata and new-mail watching state. When that erase could not fully finish (a file held open or a disk error), the removal result says **cleanup pending** with a safe reason code and a retry key, instead of claiming success. Nothing of the mailbox remains usable in the meantime. Retry the cleanup with the key — `POST /api/v1/mailboxes/cleanup` with `{"cleanup_intent": "<the retry key>"}` — which also works after the mailbox row is already gone from the settings; the response is truthful again: **removed** when every step has now succeeded, **cleanup pending** with the same key if something still failed. Removing an agent or a workspace runs the same erase for each mailbox it held; files you saved from mail into a workspace are ordinary workspace files and are never touched by this cleanup.
+
 ## Two more errors with short fixes
 
 **"priority must be between 1 and 5"** — task priority runs from 1 (highest) to 5 (lowest); 3 is the default, and anything outside the range is rejected.

@@ -97,6 +97,7 @@ package gateway
 import (
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync/atomic"
 
@@ -436,9 +437,10 @@ func libraryIsolationHostIsLoopback(hostname string) bool {
 // Kept together in one immutable value so a reader can never observe a policy
 // built from one origin beside a record of another.
 type libraryIsolationState struct {
-	origin  string
-	sources []string
-	policy  string
+	origin     string
+	sources    []string
+	policy     string
+	restricted string
 }
 
 // libraryIsolationFrozen holds the policy for the life of the process.
@@ -487,9 +489,10 @@ var libraryIsolationDegradedWarned atomic.Bool
 func freezeLibraryIsolationPolicy(canonicalOrigin string) {
 	sources := libraryIsolationSources(canonicalOrigin)
 	libraryIsolationFrozen.Store(&libraryIsolationState{
-		origin:  canonicalOrigin,
-		sources: sources,
-		policy:  buildLibraryIsolationPolicy(sources),
+		origin:     canonicalOrigin,
+		sources:    sources,
+		policy:     buildLibraryIsolationPolicy(sources),
+		restricted: buildMailRestrictedIsolationPolicy(sources),
 	})
 
 	if len(sources) > 0 {
@@ -536,6 +539,59 @@ func libraryIsolationPolicy() string {
 		return state.policy
 	}
 	return buildLibraryIsolationPolicy(nil)
+}
+
+// --- the §5.4 mail-derived profile (founder Q5=A) ---------------------------
+//
+// The w4 spec's two-profile rule: a saved mail-derived HTML file previews
+// under a SCRIPTS-OFF profile ("scripts off entirely, script-src 'none'")
+// unless its own per-file checkbox allowed scripts; there is no third
+// profile. The restricted shape is DERIVED from the ordinary template by
+// exactly two removals — allow-scripts leaves the sandbox directive, and
+// script-src collapses to 'none' — because a second hand-copied template
+// would drift exactly the way inline_serving_test.go's gate exists to
+// prevent, and a directive that silently drifted back IN here would reopen
+// scripts under the one profile whose whole job is closing them.
+
+// mailRestrictedScriptSrcSrcRe collapses the ordinary script-src directive
+// (sources + 'unsafe-inline') to 'none'. The ordinary template carries
+// exactly one script-src directive.
+var mailRestrictedScriptSrcRe = regexp.MustCompile(`script-src [^;]+;`)
+
+// mailRestrictedFallbackPolicy is the shape the derivation degrades to if the
+// ordinary template ever drifts past the anchors above: the restricted
+// profile's own floor, listing nothing the restricted profile must not have.
+// Stricter than any drift, never looser — the fail-safe direction.
+const mailRestrictedFallbackPolicy = "sandbox; default-src 'none'; " +
+	"script-src 'none'; style-src 'unsafe-inline'; connect-src 'none'; " +
+	"form-action 'none'; base-uri 'none'; object-src 'none'"
+
+// buildMailRestrictedIsolationPolicy derives the §5.4 scripts-off profile
+// from the ordinary one for the same source list: same sandbox (minus
+// allow-scripts), same style/img/font/media sources, script-src 'none'.
+func buildMailRestrictedIsolationPolicy(sources []string) string {
+	restricted := strings.Replace(buildLibraryIsolationPolicy(sources),
+		"sandbox allow-scripts;", "sandbox;", 1)
+	restricted = mailRestrictedScriptSrcRe.ReplaceAllString(restricted, "script-src 'none';")
+	if strings.Contains(restricted, "allow-scripts") {
+		// The sandbox anchor missed — the ordinary template changed shape.
+		// Serve the restricted floor rather than risk scripts under this
+		// profile, and let the drift show up in the CSP tests rather than in
+		// a served page.
+		return mailRestrictedFallbackPolicy
+	}
+	return restricted
+}
+
+// libraryIsolationPolicyMailRestricted returns the §5.4 scripts-off profile
+// frozen alongside the ordinary one (same freeze, same sources). Unfrozen —
+// a unit test that never registered routes — it is derived through the same
+// function from the same 'self' form the ordinary accessor returns.
+func libraryIsolationPolicyMailRestricted() string {
+	if state := libraryIsolationFrozen.Load(); state != nil {
+		return state.restricted
+	}
+	return buildMailRestrictedIsolationPolicy(nil)
 }
 
 // libraryIsolationPolicySources reports the path-confined source list the

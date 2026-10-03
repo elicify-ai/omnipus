@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"sort"
@@ -60,6 +61,44 @@ var sharedMailBudget atomic.Pointer[email.MailBudget]
 // resolve the SAME instance themselves via email.SharedMailBudget(stateDir).
 func SetSharedMailBudget(b *email.MailBudget) { sharedMailBudget.Store(b) }
 
+// sharedMailSessions holds the process-wide pooled session manager the
+// email tools' clients borrow IMAP sessions from (w5-integration, MC-1 —
+// the pool analogue of sharedMailBudget). Nil (unit tests) keeps the
+// legacy per-call dial.
+var sharedMailSessions atomic.Pointer[email.MailSessions]
+
+// SetSharedMailSessions installs the process-wide shared session manager.
+// One writer per process (gateway boot, BEFORE NewAgentLoop so the tools
+// capture it at registration — the SetSharedMailBudget ordering rule).
+func SetSharedMailSessions(s *email.MailSessions) { sharedMailSessions.Store(s) }
+
+// MailGenerationResolver returns one pair's non-secret configuration
+// generation (w5-integration owns the construction; this side consumes it
+// as an opaque value, register row 12).
+type MailGenerationResolver func(agentID, workspaceID string) (generation string, err error)
+
+// sharedMailGenerationResolver resolves a pair's generation for the pool's
+// identity scope. One writer (gateway boot); nil keeps clients unscooped —
+// which only unit tests do.
+var sharedMailGenerationResolver atomic.Pointer[MailGenerationResolver]
+
+// SetMailGenerationResolver installs the generation resolver.
+func SetMailGenerationResolver(r MailGenerationResolver) {
+	sharedMailGenerationResolver.Store(&r)
+}
+
+// mailGenerationForPair resolves the pair's generation through the injected
+// resolver. A failure is returned — never swallowed: a client without its
+// generation would pool under the endpoint-only identity and break pair
+// isolation (MC-3), so the caller skips the pair visibly instead.
+func mailGenerationForPair(agentID, workspaceID string) (string, error) {
+	r := sharedMailGenerationResolver.Load()
+	if r == nil {
+		return "", errors.New("email tools: no mail generation resolver installed")
+	}
+	return (*r)(agentID, workspaceID)
+}
+
 func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *AgentInstance) {
 	if cfg == nil || agent == nil {
 		return
@@ -111,6 +150,21 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 			slog.Warn("email tools: mailbox transport construction failed — skipping pair",
 				"agent_id", agentID, "workspace_id", wsID, "error", err)
 			continue
+		}
+		// w5-integration (MC-1, wiring site 4): the tool's client borrows
+		// sessions from THE shared pool under the pair's own identity scope.
+		// A scope-resolution failure skips the pair visibly — an unscooped
+		// client would break pair isolation, so no fallback dial path exists
+		// here once the manager is wired.
+		if s := sharedMailSessions.Load(); s != nil {
+			gen, gerr := mailGenerationForPair(agentID, wsID)
+			if gerr != nil {
+				slog.Warn("email tools: mail pair generation unavailable — skipping pair",
+					"agent_id", agentID, "workspace_id", wsID)
+				continue
+			}
+			client.SetSessionSource(s)
+			client.SetSessionScope(agentID+"/"+wsID, gen)
 		}
 		transports[wsID] = client
 	}
