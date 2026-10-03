@@ -2,6 +2,7 @@ package channels_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -136,6 +137,19 @@ func TestDispatchCancelIfRecognized_InterceptorCalledWithCorrectArgs(t *testing.
 // mockInterceptor implements CancelInterceptor for testing.
 type mockInterceptor struct {
 	onRequestCancel func(ctx context.Context, channel, chatID, userID string) (bool, bool, error)
+
+	// D9 recordings — populated only by RequestRedirectByChannelChat, which
+	// no /cancel test in this file is permitted to reach (that method fails
+	// loudly on any call instead of faking a successful redirect).
+	redirectCalls []mockRedirectCall
+}
+
+// mockRedirectCall is one recorded RequestRedirectByChannelChat crossing.
+type mockRedirectCall struct {
+	channelName string
+	chatID      string
+	userID      string
+	instruction string
 }
 
 func (m *mockInterceptor) RequestCancelByChannelChat(ctx context.Context, channel, chatID, userID string) (bool, bool, error) {
@@ -143,6 +157,17 @@ func (m *mockInterceptor) RequestCancelByChannelChat(ctx context.Context, channe
 		return m.onRequestCancel(ctx, channel, chatID, userID)
 	}
 	return false, false, nil
+}
+
+// RequestRedirectByChannelChat satisfies the D9-grown CancelInterceptor
+// interface (cancelparse.go) so this /cancel fake keeps compiling. Only
+// DispatchRedirectIfRecognized calls it and no test in this file invokes that
+// dispatch — a call here is an unexpected crossing: it is recorded on
+// redirectCalls and answered with a VISIBLE error, never a silent success or
+// no-op that could read as a working redirect.
+func (m *mockInterceptor) RequestRedirectByChannelChat(ctx context.Context, channelName, chatID, userID, instruction string) error {
+	m.redirectCalls = append(m.redirectCalls, mockRedirectCall{channelName: channelName, chatID: chatID, userID: userID, instruction: instruction})
+	return fmt.Errorf("mockInterceptor: unexpected RequestRedirectByChannelChat(%s/%s by %q, instruction %q) — no test in this file drives the /stop-redirect path", channelName, chatID, userID, instruction)
 }
 
 // TestDispatchCancelIfRecognized_UsesInstanceName is a regression test for

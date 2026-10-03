@@ -20,6 +20,11 @@ import (
 
 type recordingCancelInterceptor struct {
 	calls int
+
+	// redirectCalls counts RequestRedirectByChannelChat crossings, kept
+	// separate so the denied-sender assertion on calls keeps its exact
+	// meaning (no WeCom test drives the /stop-redirect path).
+	redirectCalls int
 }
 
 func (r *recordingCancelInterceptor) RequestCancelByChannelChat(
@@ -30,6 +35,23 @@ func (r *recordingCancelInterceptor) RequestCancelByChannelChat(
 ) (bool, bool, error) {
 	r.calls++
 	return true, false, nil
+}
+
+// RequestRedirectByChannelChat satisfies the D9-grown CancelInterceptor
+// interface (pkg/channels/cancelparse.go) so this cancel-recording fake keeps
+// compiling. No WeCom test drives /stop-redirect — a call here is an
+// unexpected crossing: it is recorded on redirectCalls and answered with a
+// VISIBLE error, never a silent success or no-op that could read as a wired
+// redirect.
+func (r *recordingCancelInterceptor) RequestRedirectByChannelChat(
+	context.Context,
+	string,
+	string,
+	string,
+	string,
+) error {
+	r.redirectCalls++
+	return errors.New("recordingCancelInterceptor: unexpected RequestRedirectByChannelChat call — no WeCom test drives the /stop-redirect path")
 }
 
 func TestDispatchIncoming_DeniedSenderHasNoSideEffects(t *testing.T) {

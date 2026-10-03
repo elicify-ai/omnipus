@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -64,6 +65,27 @@ type stubAgentLoop struct {
 	returnErr       error // if non-nil, returned by simulateInterrupt and RequestCancelForSession
 	returnFired     *bool // if non-nil, overrides the fired return value from RequestCancelForSession
 	returnArmed     bool  // returned as the armed return value from RequestCancelForSession
+
+	// D9 recordings — populated only by StopSessionTurn / RedirectSessionTurn,
+	// which no legacy /cancel test below is permitted to reach (both methods
+	// fail loudly on any call instead of faking a successful stop/redirect).
+	redirectCalls []stubRedirectCall
+	stopCalls     []stubStopCall
+}
+
+// stubRedirectCall is one recorded RedirectSessionTurn crossing on stubAgentLoop.
+type stubRedirectCall struct {
+	sessionID   string
+	instruction string
+	userID      string
+	channel     string
+}
+
+// stubStopCall is one recorded StopSessionTurn crossing on stubAgentLoop.
+type stubStopCall struct {
+	sessionID string
+	userID    string
+	channel   string
 }
 
 func (s *stubAgentLoop) simulateInterrupt(sessionID, hint string) ([]string, error) {
@@ -85,6 +107,27 @@ func (s *stubAgentLoop) RequestCancelForSession(ctx context.Context, sessionID, 
 		return *s.returnFired, s.returnArmed, nil
 	}
 	return s.callCount > 0, s.returnArmed, nil
+}
+
+// RedirectSessionTurn satisfies the D9-grown AgentLoopInterface (runtime.go)
+// so this legacy /cancel stub keeps compiling. The /cancel handler and
+// CancelActiveTurn exercise only RequestCancelForSession — no test in this
+// file drives the redirect path — so a call here is an unexpected crossing:
+// it is recorded on redirectCalls and answered with a VISIBLE error, never a
+// silent success or no-op that could read as a working redirect.
+func (s *stubAgentLoop) RedirectSessionTurn(ctx context.Context, sessionID, instruction, userID, channel string) error {
+	s.redirectCalls = append(s.redirectCalls, stubRedirectCall{sessionID: sessionID, instruction: instruction, userID: userID, channel: channel})
+	return fmt.Errorf("stubAgentLoop: unexpected RedirectSessionTurn(session=%q, instruction=%q, user=%q, channel=%q) — legacy /cancel tests must not reach the D9 redirect path", sessionID, instruction, userID, channel)
+}
+
+// StopSessionTurn satisfies the D9-grown AgentLoopInterface (runtime.go) so
+// this legacy /cancel stub keeps compiling. No /cancel test in this file
+// drives the /stop path — a call here is an unexpected crossing: it is
+// recorded on stopCalls and answered as a VISIBLE failure
+// (fired=false, armed=false, error), never a faked fired/armed outcome.
+func (s *stubAgentLoop) StopSessionTurn(ctx context.Context, sessionID, userID, channel string) (bool, bool, error) {
+	s.stopCalls = append(s.stopCalls, stubStopCall{sessionID: sessionID, userID: userID, channel: channel})
+	return false, false, fmt.Errorf("stubAgentLoop: unexpected StopSessionTurn(session=%q, user=%q, channel=%q) — legacy /cancel tests must not reach the D9 /stop path", sessionID, userID, channel)
 }
 
 // TestCancelHandler_CallsInterruptSession verifies that the /cancel handler
