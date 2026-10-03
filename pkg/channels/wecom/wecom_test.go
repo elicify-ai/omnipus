@@ -22,9 +22,21 @@ type recordingCancelInterceptor struct {
 	calls int
 
 	// redirectCalls counts RequestRedirectByChannelChat crossings, kept
-	// separate so the denied-sender assertion on calls keeps its exact
-	// meaning (no WeCom test drives the /stop-redirect path).
+	// separate so the cancel-path assertions on calls keep their exact
+	// meaning: every non-redirect WeCom test asserts it stays 0, and the
+	// /stop-redirect adapter-path test asserts exactly 1 with the recorded
+	// arguments below.
 	redirectCalls int
+
+	// Arguments of the (single allowed) RequestRedirectByChannelChat
+	// crossing, recorded so the /stop-redirect adapter-path test can assert
+	// the D9 primitive received the adapter's exact
+	// (channelName, chatID, senderID, instruction) tuple — not merely that
+	// some call happened.
+	redirectChannel     string
+	redirectChatID      string
+	redirectSenderID    string
+	redirectInstruction string
 }
 
 func (r *recordingCancelInterceptor) RequestCancelByChannelChat(
@@ -38,20 +50,21 @@ func (r *recordingCancelInterceptor) RequestCancelByChannelChat(
 }
 
 // RequestRedirectByChannelChat satisfies the D9-grown CancelInterceptor
-// interface (pkg/channels/cancelparse.go) so this cancel-recording fake keeps
-// compiling. No WeCom test drives /stop-redirect — a call here is an
-// unexpected crossing: it is recorded on redirectCalls and answered with a
-// VISIBLE error, never a silent success or no-op that could read as a wired
-// redirect.
+// interface (pkg/channels/cancelparse.go) and RECORDS each crossing with its
+// full argument tuple: TestDispatchIncoming_StopRedirectAdapterPath asserts
+// exactly one call carrying the adapter's (channelName, chatID, senderID,
+// instruction). It still answers with a VISIBLE error — never a silent
+// success or no-op — so a redirect ack can never read as a wired redirect.
 func (r *recordingCancelInterceptor) RequestRedirectByChannelChat(
-	context.Context,
-	string,
-	string,
-	string,
-	string,
+	_ context.Context,
+	channelName, chatID, senderID, instruction string,
 ) error {
 	r.redirectCalls++
-	return errors.New("recordingCancelInterceptor: unexpected RequestRedirectByChannelChat call — no WeCom test drives the /stop-redirect path")
+	r.redirectChannel = channelName
+	r.redirectChatID = chatID
+	r.redirectSenderID = senderID
+	r.redirectInstruction = instruction
+	return errors.New("recordingCancelInterceptor: redirect crossing recorded; this fake wires no real redirect")
 }
 
 func TestDispatchIncoming_DeniedSenderHasNoSideEffects(t *testing.T) {
@@ -808,4 +821,216 @@ func wecomTestAck(body any) wecomEnvelope {
 		ErrMsg:  "ok",
 		Body:    raw,
 	}
+}
+
+// --- D9 /stop-redirect adapter reachability (ADR-20260928 D9, corrected
+// transport ruling §3.1) -----------------------------------------------
+//
+// Specification under test: a Tier-B channel adapter must recognise
+// /stop-redirect inside its OWN dispatch path and route it through
+// channels.DispatchRedirectIfRecognized BEFORE the message can reach the
+// agent loop's intake (the pkg/bus inbound channel) — mid-stream text would
+// only enter the steering queue, which is exactly what the corrected
+// transport ruling §3.1 forbids. Every expected value below derives from
+// that D9 contract (pkg/channels/cancelparse.go::DispatchRedirectIfRecognized)
+// and from the allow-list precedent in
+// TestDispatchIncoming_DeniedSenderHasNoSideEffects — NOT from the current
+// implementation, whose dispatchIncoming wires no redirect dispatch at all.
+//
+// Deliberate gaps: command-word case/whitespace rules and the bare-form
+// usage text are unit-tested in pkg/channels/cancelparse_test.go; the ack
+// wording is the sendFn reply path, not the adapter reachability defect
+// under test. The green run and mutation probes for this test are CHECK's
+// duty and are deferred per the RED role split.
+
+// newStopRedirectTestChannel builds a WeComChannel wired the way the
+// dispatch-path tests need: fresh req-id routes, running state, a recording
+// CancelInterceptor at the agent-loop seam, and a commandSend stub standing
+// in for the WeCom websocket transport. allowFrom mirrors config.WeComConfig's
+// allow-list (nil/empty = allow all, per BaseChannel.IsAllowedSender).
+func newStopRedirectTestChannel(
+	t *testing.T,
+	messageBus *bus.MessageBus,
+	allowFrom []string,
+) (*WeComChannel, *recordingCancelInterceptor) {
+	t.Helper()
+
+	const secretRef = "WECOM_TEST_SECRET"
+	bundle := credentials.SecretBundle{
+		credentials.SecretRef(secretRef): "secret-1",
+	}
+	ch, err := NewChannel(config.WeComConfig{
+		BotID:     "bot-1",
+		SecretRef: secretRef,
+		AllowFrom: allowFrom,
+	}, bundle, messageBus)
+	if err != nil {
+		t.Fatalf("NewChannel() error = %v", err)
+	}
+	ch.ctx = context.Background()
+	ch.routes = newReqIDStore(filepath.Join(t.TempDir(), "reqids.json"))
+	ch.SetRunning(true)
+
+	interceptor := &recordingCancelInterceptor{}
+	ch.SetCancelInterceptor(interceptor)
+	ch.commandSend = func(wecomCommand, time.Duration) (wecomEnvelope, error) {
+		return wecomTestAck(nil), nil
+	}
+	return ch, interceptor
+}
+
+func stopRedirectTestMessage(msgID, chatID, userID, content string) wecomIncomingMessage {
+	msg := wecomIncomingMessage{
+		MsgID:    msgID,
+		ChatID:   chatID,
+		ChatType: "direct",
+		MsgType:  "text",
+		Text: &struct {
+			Content string `json:"content"`
+		}{Content: content},
+	}
+	msg.From.UserID = userID
+	return msg
+}
+
+// dispatchAndDrain runs the real dispatch path and drains every inbound
+// message the bus holds afterwards, so an interception assertion can prove
+// the message never reached the agent loop's intake.
+func dispatchAndDrain(
+	t *testing.T,
+	ch *WeComChannel,
+	messageBus *bus.MessageBus,
+	reqID string,
+	msg wecomIncomingMessage,
+) []bus.InboundMessage {
+	t.Helper()
+	if err := ch.dispatchIncoming(reqID, msg); err != nil {
+		t.Fatalf("dispatchIncoming() error = %v", err)
+	}
+	var drained []bus.InboundMessage
+	for {
+		select {
+		case m := <-messageBus.InboundChan():
+			drained = append(drained, m)
+		default:
+			return drained
+		}
+	}
+}
+
+// TestDispatchIncoming_StopRedirectAdapterPath proves the WeCom adapter
+// dispatch path intercepts /stop-redirect through the D9 redirect dispatch
+// — one interceptor call with the exact (channel, chat, sender, instruction)
+// tuple and no fallthrough to the agent-loop intake — while leaving the
+// ordinary-text path, the /cancel path and the sender allow-list untouched.
+func TestDispatchIncoming_StopRedirectAdapterPath(t *testing.T) {
+	t.Run("redirect_command_intercepted_once_before_intake", func(t *testing.T) {
+		messageBus := bus.NewMessageBus()
+		ch, interceptor := newStopRedirectTestChannel(t, messageBus, nil)
+
+		msg := stopRedirectTestMessage("msg-sr-1", "chat-sr-1", "user-sr-1", "/stop-redirect do this")
+		inbound := dispatchAndDrain(t, ch, messageBus, "req-sr-1", msg)
+
+		if interceptor.redirectCalls != 1 {
+			t.Fatalf(
+				"/stop-redirect was not routed through the adapter's redirect dispatch: redirectCalls = %d, want 1 (cancelCalls = %d, inbound published = %d)",
+				interceptor.redirectCalls, interceptor.calls, len(inbound),
+			)
+		}
+		if interceptor.redirectChannel != "wecom" ||
+			interceptor.redirectChatID != "chat-sr-1" ||
+			interceptor.redirectSenderID != "user-sr-1" ||
+			interceptor.redirectInstruction != "do this" {
+			t.Fatalf(
+				"redirect primitive arguments = (channel=%q, chat=%q, sender=%q, instruction=%q), want (wecom, chat-sr-1, user-sr-1, do this)",
+				interceptor.redirectChannel, interceptor.redirectChatID, interceptor.redirectSenderID, interceptor.redirectInstruction,
+			)
+		}
+		if len(inbound) != 0 {
+			t.Fatalf(
+				"/stop-redirect fell through to the agent-loop intake: %d inbound message(s) published, want 0 — the command must be consumed before HandleMessage (corrected transport ruling §3.1)",
+				len(inbound),
+			)
+		}
+	})
+
+	t.Run("bare_redirect_command_consumed_without_handler_call", func(t *testing.T) {
+		messageBus := bus.NewMessageBus()
+		ch, interceptor := newStopRedirectTestChannel(t, messageBus, nil)
+
+		msg := stopRedirectTestMessage("msg-sr-2", "chat-sr-2", "user-sr-2", "/stop-redirect")
+		inbound := dispatchAndDrain(t, ch, messageBus, "req-sr-2", msg)
+
+		if interceptor.redirectCalls != 0 {
+			t.Fatalf(
+				"bare /stop-redirect reached the redirect handler: redirectCalls = %d, want 0 (the bare form is usage-only and changes nothing)",
+				interceptor.redirectCalls,
+			)
+		}
+		if len(inbound) != 0 {
+			t.Fatalf(
+				"bare /stop-redirect fell through to the agent-loop intake: inbound published = %d, want 0 (it must be consumed with the usage reply)",
+				len(inbound),
+			)
+		}
+	})
+
+	t.Run("ordinary_text_dispatches_normally_without_redirect", func(t *testing.T) {
+		messageBus := bus.NewMessageBus()
+		ch, interceptor := newStopRedirectTestChannel(t, messageBus, nil)
+
+		msg := stopRedirectTestMessage("msg-sr-3", "chat-sr-3", "user-sr-3", "do this")
+		inbound := dispatchAndDrain(t, ch, messageBus, "req-sr-3", msg)
+
+		if len(inbound) != 1 {
+			t.Fatalf("ordinary text inbound count = %d, want 1", len(inbound))
+		}
+		if inbound[0].ChatID != "chat-sr-3" {
+			t.Fatalf("ordinary text inbound ChatID = %q, want chat-sr-3", inbound[0].ChatID)
+		}
+		if inbound[0].Content != "do this" {
+			t.Fatalf("ordinary text inbound Content = %q, want \"do this\"", inbound[0].Content)
+		}
+		if interceptor.redirectCalls != 0 {
+			t.Fatalf("ordinary text triggered redirect: redirectCalls = %d, want 0", interceptor.redirectCalls)
+		}
+		if interceptor.calls != 0 {
+			t.Fatalf("ordinary text triggered cancel: cancelCalls = %d, want 0", interceptor.calls)
+		}
+	})
+
+	t.Run("cancel_command_stays_on_cancel_path", func(t *testing.T) {
+		messageBus := bus.NewMessageBus()
+		ch, interceptor := newStopRedirectTestChannel(t, messageBus, nil)
+
+		msg := stopRedirectTestMessage("msg-sr-4", "chat-sr-4", "user-sr-4", "/cancel")
+		inbound := dispatchAndDrain(t, ch, messageBus, "req-sr-4", msg)
+
+		if interceptor.calls != 1 {
+			t.Fatalf("/cancel cancelCalls = %d, want 1 (cancel must keep firing the cancel state machine)", interceptor.calls)
+		}
+		if interceptor.redirectCalls != 0 {
+			t.Fatalf("/cancel triggered redirect: redirectCalls = %d, want 0", interceptor.redirectCalls)
+		}
+		if len(inbound) != 0 {
+			t.Fatalf("/cancel reached the agent-loop intake: inbound published = %d, want 0", len(inbound))
+		}
+	})
+
+	t.Run("denied_sender_never_reaches_redirect", func(t *testing.T) {
+		messageBus := bus.NewMessageBus()
+		ch, interceptor := newStopRedirectTestChannel(t, messageBus, []string{"allowed-user"})
+
+		msg := stopRedirectTestMessage("msg-sr-5", "chat-sr-5", "denied-user", "/stop-redirect do this")
+		inbound := dispatchAndDrain(t, ch, messageBus, "req-sr-5", msg)
+
+		_, hasTurn := ch.getTurn("chat-sr-5")
+		_, hasRoute := ch.routes.Get("chat-sr-5")
+		if interceptor.redirectCalls != 0 || interceptor.calls != 0 || len(inbound) != 0 || hasTurn || hasRoute {
+			t.Fatalf(
+				"denied sender side effects: redirectCalls = %d, cancelCalls = %d, inbound = %d, turn = %v, route = %v; want all zero/false",
+				interceptor.redirectCalls, interceptor.calls, len(inbound), hasTurn, hasRoute,
+			)
+		}
+	})
 }
