@@ -575,7 +575,7 @@ func (s *LifecycleStore) compactRetiredPayloadLocked(sessionID string, generatio
 	if !changed {
 		return nil
 	}
-	if err := fileutil.WriteFileAtomic(path, buf.Bytes(), 0o600); err != nil {
+	if err := fileutil.WriteFileAtomicSyncDir(path, buf.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("session: lifecycle: final delivery: atomic compaction for session %q generation %d commit %q: %w", sessionID, generation, commitID, err)
 	}
 	return nil
