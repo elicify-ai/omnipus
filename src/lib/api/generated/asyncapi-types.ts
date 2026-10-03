@@ -10,6 +10,7 @@ export type WsFrameType =
   | "auth"
   | "message"
   | "cancel"
+  | "redirect"
   | "ping"
   | "attach_session"
   | "device_pairing_response"
@@ -111,6 +112,12 @@ export interface CancelFrame {
   type: "cancel";
   session_id: string;
   scope?: "session" | "tree";
+}
+
+export interface RedirectFrame {
+  type: "redirect";
+  session_id: string;
+  instruction: string;
 }
 
 export interface PingFrame {
@@ -1134,6 +1141,7 @@ export type WsFrame =
   | AuthFrame
   | MessageFrame
   | CancelFrame
+  | RedirectFrame
   | PingFrame
   | PongFrame
   | AttachSessionFrame
@@ -1215,6 +1223,7 @@ export type ClientFrame =
   | AuthFrame
   | MessageFrame
   | CancelFrame
+  | RedirectFrame
   | PingFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
@@ -1234,7 +1243,7 @@ export type ClientFrame =
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 

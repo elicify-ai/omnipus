@@ -41,6 +41,8 @@ channels:
         $ref: '#/components/messages/MessageFrame'
       CancelFrame:
         $ref: '#/components/messages/CancelFrame'
+      RedirectFrame:
+        $ref: '#/components/messages/RedirectFrame'
       PingFrame:
         $ref: '#/components/messages/PingFrame'
       AttachSessionFrame:
@@ -252,6 +254,14 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/CancelFrame'
+  sendRedirect:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Redirect a session — the /stop-redirect command''s transport: stop the named session''s in-progress turn, then resume it on the same generation with the instruction as the newest instruction. Sent by the SPA''s client-side interception of the typed command, never as chat text.
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/RedirectFrame'
   sendPing:
     action: send
     channel:
@@ -1015,6 +1025,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/CancelFrame'
+    RedirectFrame:
+      name: RedirectFrame
+      title: redirect
+      summary: Redirect a session — stop its in-progress turn, then resume it on the same generation with a new instruction (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RedirectFrame'
     PingFrame:
       name: PingFrame
       title: ping
@@ -1564,6 +1581,7 @@ components:
       - auth
       - message
       - cancel
+      - redirect
       - ping
       - attach_session
       - device_pairing_response
@@ -1792,6 +1810,28 @@ components:
           - session
           - tree
           default: session
+    RedirectFrame:
+      title: RedirectFrame
+      description: 'Client → server redirect one session: stop its in-progress turn, then resume it on the same generation with the instruction (D2/D9). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.'
+      type: object
+      required:
+      - type
+      - session_id
+      - instruction
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: redirect
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        instruction:
+          type: string
+          minLength: 1
+          maxLength: 16384
+          pattern: '\S'
     PingFrame:
       title: PingFrame
       description: Client → server heartbeat.
