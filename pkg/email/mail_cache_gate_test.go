@@ -16,6 +16,24 @@ package email
 //   - ADR-20261001 filesystem table: "Verify cache files are not already
 //     tracked; ignoring tracked files does not remove them."
 //
+// ROUND-2 IMP-1 CORRECTION (2026-10-03, qa-lead). The header above records
+// this pack's original provenance, quoting register row 18's pre-correction
+// "self-evaluated" wording. The settlement (w2 spec §3.8 E-1 cell, §4.1 Save
+// row, §4.2 gate-decision row; register R-4) splits row 18's unified
+// condition across TWO components with ONE evaluator and ONE enforcer: the
+// PUBLISHER (w5-integration) runs the check-ignore-equivalent evaluation —
+// this package's EvaluateStagingExclusion is its E-1 entry point — and
+// publishes a GateDecision (allowed Boolean + nullable safe notice_code);
+// the ENFORCER (FolderSnapshotStore.Save) consumes the published decision,
+// never re-evaluates, and fails CLOSED on absence. Per §7.1's gate rows this
+// pack therefore injects the decision in all three shapes — ABSENT (refuse +
+// live-only + cache_unavailable + zero artifacts), NOT-ALLOWED (the shape the
+// E-3 pre-tracked case arrives in: refuse, tracked state untouched) and
+// ALLOWED (the write succeeds) — and, where the chain matters, derives the
+// injected decision from the publisher's own EvaluateStagingExclusion
+// verdict asserted in the same test. Assertions are never weakened relative
+// to the pre-correction pack; each test below states what moved where.
+//
 // ORACLE INSTRUMENT (deliberate and named): these TESTS invoke the real git
 // binary to build the data-directory states and to cross-check the ignore
 // semantics. This is test-only. The SPEC forbids production code from
@@ -37,9 +55,24 @@ import (
 	"testing"
 )
 
+// testNoticeCacheUnavailable is the Phase-1 safe notice_code the w2 spec
+// pins for the disabled disk cache (§3.8 gate paragraph; the landed
+// contracts/components/schemas/MailReadMetadata.yaml notice_code value).
+const testNoticeCacheUnavailable = "cache_unavailable"
+
+// noticePtr hands a GateDecision its *string NoticeCode.
+func noticePtr(s string) *string { return &s }
+
 // gateStore builds a snapshot store whose baseDir stands in for the resolved
 // data root (§3.8: <OmnipusHomeDir()>/mail-cache/<opaque-pair-id>/folders.enc;
 // OmnipusHomeDir is injected by the caller in production).
+//
+// This builder injects NO gate decision: it is the ABSENT-decision
+// instrument of §7.1's split (round-2 IMP-1, 2026-10-03) — a store built
+// before/without the publisher's decision must refuse every write (fail
+// closed on absence, §3.8 gate paragraph), which is exactly the row
+// TestMailCacheExclusionGate_BlocksWhenMissing asserts. For the other two
+// injection shapes see gateStoreAllowed / gateStoreNotAllowed.
 func gateStore(t *testing.T, base string) *FolderSnapshotStore {
 	t.Helper()
 	return NewFolderSnapshotStore(base,
@@ -47,6 +80,43 @@ func gateStore(t *testing.T, base string) *FolderSnapshotStore {
 		testPurposeFolder,
 		func(Scope) Revision { return Revision(1) },
 	)
+}
+
+// gateStoreWithDecision builds the same store with an explicit published
+// GateDecision — §7.1's injection point (round-2 IMP-1). The decision below
+// models the PUBLISHER's verdict for the fixture under test; every caller
+// asserts the publisher's own EvaluateStagingExclusion result first, so the
+// injection is derived from the evaluation — never a store-side
+// re-evaluation and never a free-floating allowance.
+func gateStoreWithDecision(t *testing.T, base string, d GateDecision) *FolderSnapshotStore {
+	t.Helper()
+	return NewFolderSnapshotStore(base,
+		func(Scope) ([]byte, error) { return repeatByte(0xAA, 32), nil },
+		testPurposeFolder,
+		func(Scope) Revision { return Revision(1) },
+		WithGateDecision(d),
+	)
+}
+
+// gateStoreAllowed is the ALLOWED injection of §7.1: the publisher evaluated
+// both halves as holding (the staging half via EvaluateStagingExclusion —
+// asserted by the caller — and the E-2 backup skip attested by its owner)
+// and published allowed=true; the write path must proceed (§7.1: allowed=true
+// → write succeeds).
+func gateStoreAllowed(t *testing.T, base string) *FolderSnapshotStore {
+	t.Helper()
+	return gateStoreWithDecision(t, base, GateDecision{Allowed: true})
+}
+
+// gateStoreNotAllowed is the NOT-ALLOWED injection of §7.1, carrying the
+// Phase-1 safe notice: the shape the E-3 pre-tracked case arrives in (§7.1:
+// "the pre-tracked case arrives as a not-allowed decision and is refused")
+// and the shape the publisher publishes wherever the evaluation cannot prove
+// exclusion. The write path must refuse, surface the notice and leave
+// tracked/existing state untouched.
+func gateStoreNotAllowed(t *testing.T, base string) *FolderSnapshotStore {
+	t.Helper()
+	return gateStoreWithDecision(t, base, GateDecision{Allowed: false, NoticeCode: noticePtr(testNoticeCacheUnavailable)})
 }
 
 func repeatByte(b byte, n int) []byte {
@@ -104,17 +174,29 @@ func gitIsRepo(t *testing.T, dir string) bool {
 	return strings.TrimSpace(string(out)) == "true"
 }
 
-// TestMailCacheExclusionGate_BlocksWhenMissing — G-2, US-7.2, CX-14.
-// Oracle: where version-control staging exists (a data-directory repository)
-// and the product cannot prove the cache path excluded, the first cache write
-// is REFUSED: zero cache files exist, the cache-unavailable class surfaces,
-// and the mailbox runs live-only. CX-14's mutation — a gate that logs and
-// continues — dies on the file assertions.
+// TestMailCacheExclusionGate_BlocksWhenMissing — G-2, US-7.2, CX-14; §7.1's
+// ABSENT-decision row.
+// Round-2 IMP-1 correction (2026-10-03): the refusal asserted here now
+// arrives through the settled mechanism — a store built WITHOUT a published
+// gate decision refuses every write (fail closed on absence, §3.8 gate
+// paragraph; §4.2), because the enforcer never re-evaluates the exclusion
+// itself (register row 18's one-evaluator/one-enforcer split). The property
+// is unchanged: zero cache files exist, the cache-unavailable class
+// surfaces, the mailbox runs live-only. CX-14's mutation — a gate that logs
+// and continues — still dies on the file assertions, and the fail-open
+// mutant ("no decision → write anyway") dies on the refusal assertion.
 func TestMailCacheExclusionGate_BlocksWhenMissing(t *testing.T) {
 	base := t.TempDir()
 	gitIn(t, base, "init")
 	if !gitIsRepo(t, base) {
 		t.Fatal("precondition: the base dir must be a git repository for this gate case")
+	}
+	// Publisher half, asserted negatively so the fixture stays consistent
+	// with the injected absence: in a bare repository with no covering rule,
+	// the publisher's E-1 evaluation must NOT prove exclusion (§3.8 E-1) —
+	// i.e. a real publisher would have published not-allowed, never allowed.
+	if evalErr := EvaluateStagingExclusion(base); evalErr == nil {
+		t.Fatal("precondition: the publisher's staging-half evaluation must not prove exclusion in a bare repository without a covering rule (§3.8 E-1)")
 	}
 
 	store := gateStore(t, base)
@@ -149,15 +231,24 @@ func TestMailCacheExclusionGate_BlocksWhenMissing(t *testing.T) {
 }
 
 // TestMailCacheExclusionGate_PassesWhenProvableAndWriteLeavesStatusUnchanged —
-// G-1, US-7.1, and the dispatch brief's PRODUCT property: a cache write
-// leaves the data folder's version-control status unchanged.
-// Oracle: with a committed ignore rule covering the cache path (the
-// product's own check can prove exclusion), the write succeeds; git's status
-// — the independent instrument the spec's "check-ignore-equivalent semantics"
-// names — shows NOTHING before and after; and a POSITIVE CONTROL plain file
-// written beside it IS reported by the same instrument, proving the
-// instrument could have seen a capture (false-green rule: test the
-// instrument).
+// G-1, US-7.1, §7.1's ALLOWED-decision row, and the dispatch brief's PRODUCT
+// property: a cache write leaves the data folder's version-control status
+// unchanged.
+// Round-2 IMP-1 correction (2026-10-03): the withdrawn design had the STORE
+// self-evaluate the staging half and allow the write on its own verdict; that
+// reading is settled away (register row 18; w2 spec §3.8 E-1 cell, §4.1 Save
+// row — one evaluator, one enforcer). The property now spans the chain, and
+// this test asserts each link in order: (1) the PUBLISHER's E-1 evaluation —
+// EvaluateStagingExclusion, the entry point §3.8/§4.2 name — proves exclusion
+// under the committed covering rule; (2) the publisher publishes allowed=true
+// (modelled by the injection, derived from the verdict just asserted — never
+// a store-side re-evaluation); (3) the ENFORCER consumes the allowed decision
+// and the write succeeds (§7.1: allowed=true → write succeeds; §7 line 510).
+// Oracle: git's status — the independent instrument the spec's
+// "check-ignore-equivalent semantics" names — shows NOTHING before and
+// after; and a POSITIVE CONTROL plain file written beside it IS reported by
+// the same instrument, proving the instrument could have seen a capture
+// (false-green rule: test the instrument).
 func TestMailCacheExclusionGate_PassesWhenProvableAndWriteLeavesStatusUnchanged(t *testing.T) {
 	base := t.TempDir()
 	gitIn(t, base, "init")
@@ -170,7 +261,15 @@ func TestMailCacheExclusionGate_PassesWhenProvableAndWriteLeavesStatusUnchanged(
 		t.Fatalf("precondition: the repo must be clean before the write, status: %s", status)
 	}
 
-	store := gateStore(t, base)
+	// Link 1 — the publisher's staging-half evaluation proves exclusion
+	// (§3.8 E-1; the evaluation is the publisher's per register row 18).
+	if evalErr := EvaluateStagingExclusion(base); evalErr != nil {
+		t.Fatalf("the publisher's staging-half evaluation must prove exclusion under the committed covering rule (§3.8 E-1, register row 18): %v", evalErr)
+	}
+
+	// Links 2+3 — the published allowed decision (modelled by the injection)
+	// lets the first write through (§7.1 ALLOWED row; G-1).
+	store := gateStoreAllowed(t, base)
 	scope := Scope{PairID: "pair-1", Generation: "gen-1"}
 	if err := store.Save(scope, testSnapshot(), Revision(1), repeatByte(0xAA, 32)); err != nil {
 		t.Fatalf("the first cache write must succeed where both exclusions are provable (G-1/E-1), got %v", err)
@@ -196,12 +295,18 @@ func TestMailCacheExclusionGate_PassesWhenProvableAndWriteLeavesStatusUnchanged(
 	_ = os.Remove(filepath.Join(base, "control-marker.txt"))
 }
 
-// TestMailCacheExclusionGate_DetectsPreTrackedFile — G-3, E-3.
-// Oracle: a cache path ever committed to the data-directory repository is
-// NOT untracked by a deny rule (ignore rules do not apply to tracked files);
-// the gate treats a tracked cache path as not-excluded and refuses disk
-// writes. The git oracle cross-check shows the ignore rule alone WOULD match
-// the path — proving the tracked-ness, not the rule, flips the verdict.
+// TestMailCacheExclusionGate_DetectsPreTrackedFile — G-3, E-3; §7.1's
+// NOT-ALLOWED row ("the pre-tracked case arrives as a not-allowed decision
+// and is refused").
+// Round-2 IMP-1 correction (2026-10-03): under the settled split the tracked
+// verdict belongs to the PUBLISHER's evaluation (EvaluateStagingExclusion
+// reporting the E-3 ErrCachePathTracked flavour, asserted below), and the
+// write path refuses the two refusal shapes §7.1 names — the ABSENT decision
+// (fail closed on absence) and the published NOT-ALLOWED decision that a
+// real publisher publishes for this fixture. The git oracle cross-check
+// still shows the ignore rule alone WOULD match the path — proving the
+// tracked-ness, not the rule, flips the verdict — and the tracked file must
+// survive both refusals untouched.
 func TestMailCacheExclusionGate_DetectsPreTrackedFile(t *testing.T) {
 	base := t.TempDir()
 	gitIn(t, base, "init")
@@ -240,25 +345,62 @@ func TestMailCacheExclusionGate_DetectsPreTrackedFile(t *testing.T) {
 	if readErr != nil || string(got) != pretracked {
 		t.Fatalf("the refused write must not touch the tracked file, err=%v content=%q", readErr, got)
 	}
+
+	// Publisher half, asserted so the injected decision below is derived from
+	// the evaluation (§3.8 E-3; §4.2): the publisher's E-1 evaluation must
+	// report the E-3 TRACKED flavour here — the decision its publisher would
+	// publish is not-allowed, never allowed.
+	if evalErr := EvaluateStagingExclusion(base); evalErr == nil || !errors.Is(evalErr, ErrCachePathTracked) {
+		t.Fatalf("the publisher's evaluation must report the E-3 tracked flavour for a committed cache path (§3.8 E-3; §7.1: the pre-tracked case arrives as a not-allowed decision), got %v", evalErr)
+	}
+
+	// §7.1's prescribed arrival shape: the pre-tracked case reaches the write
+	// path as a published NOT-ALLOWED decision (with the Phase-1 safe notice).
+	// The refusal must surface that notice and STILL leave the tracked file
+	// exactly as committed (the enforcer never removes on a gate refusal —
+	// §3.8/Save: it cannot distinguish a tracked path from a not-provable
+	// one; cleanup belongs to the removal cascade).
+	refused := gateStoreNotAllowed(t, base)
+	err := refused.Save(scope, testSnapshot(), Revision(1), repeatByte(0xAA, 32))
+	if !errors.Is(err, ErrCacheUnavailable) {
+		t.Fatalf("a published not-allowed decision must refuse the write on a pre-tracked cache path (§7.1/E-3), got %v", err)
+	}
+	if !strings.Contains(err.Error(), testNoticeCacheUnavailable) {
+		t.Fatalf("the not-allowed refusal must carry the safe notice_code %q (§3.8 gate paragraph: visible notice), got %v", testNoticeCacheUnavailable, err)
+	}
+	got2, readErr2 := os.ReadFile(cachePath)
+	if readErr2 != nil || string(got2) != pretracked {
+		t.Fatalf("the not-allowed refusal must not touch the tracked file, err=%v content=%q", readErr2, got2)
+	}
 }
 
 // TestMailCacheExclusionGate_NoRepositoryHoldsTrivially — E-1's trivial-hold
-// clause.
-// Oracle: "where no version-control staging exists in the data directory
-// there is nothing to be captured by and the staging half holds trivially" —
-// the write succeeds in a plain (non-repository) directory. The git
-// instrument proves the precondition (no repo), keeping this from silently
-// becoming "git missing = pass".
+// clause (conformance item (e), §3.8 evaluator conformance contract); §7.1's
+// ALLOWED row.
+// Round-2 IMP-1 correction (2026-10-03): the trivial hold is a verdict of
+// the PUBLISHER's evaluation, not of the store — where no version-control
+// staging exists in the data directory there is nothing to be captured by
+// and the staging half holds trivially (§3.8 E-1), so the publisher publishes
+// allowed=true and the enforcer writes. The test asserts both links: the
+// evaluation's trivial hold, then the write through the injected allowed
+// decision derived from it. The git instrument still proves the precondition
+// (no repo), keeping this from silently becoming "git missing = pass".
 func TestMailCacheExclusionGate_NoRepositoryHoldsTrivially(t *testing.T) {
 	base := t.TempDir()
 	if gitIsRepo(t, base) {
 		t.Fatal("precondition: the base dir must NOT be a repository for this gate case")
 	}
 
-	store := gateStore(t, base)
+	// Link 1 — the publisher's evaluation holds trivially (§3.8 E-1 (e)).
+	if evalErr := EvaluateStagingExclusion(base); evalErr != nil {
+		t.Fatalf("with no repository the staging half must hold trivially (§3.8 E-1; conformance item (e)), got %v", evalErr)
+	}
+
+	// Link 2 — the published allowed decision lets the write through.
+	store := gateStoreAllowed(t, base)
 	scope := Scope{PairID: "pair-1", Generation: "gen-1"}
 	if err := store.Save(scope, testSnapshot(), Revision(1), repeatByte(0xAA, 32)); err != nil {
-		t.Fatalf("the staging half holds trivially with no repository — the write must succeed (E-1), got %v", err)
+		t.Fatalf("the staging half holds trivially with no repository — the publisher publishes allowed and the write must succeed (E-1/§7.1), got %v", err)
 	}
 	if _, statErr := os.Stat(snapshotPath(base, "pair-1")); statErr != nil {
 		t.Fatalf("the sealed snapshot must exist: %v", statErr)
