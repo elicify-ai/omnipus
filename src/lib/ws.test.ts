@@ -908,6 +908,9 @@ describe('ClientFrameTypes — contract test', () => {
       'auth',
       'message',
       'cancel',
+      // contracts/asyncapi.yaml sendRedirect / RedirectFrame: client → server
+      // (`action: send` on the chat channel). Discriminator const is `redirect`.
+      'redirect',
       'ping',
       'attach_session',
       'device_pairing_response',
