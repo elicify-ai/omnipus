@@ -217,6 +217,13 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
 		return
 	}
+	// Stopped-child notices are retried from the landed note. A stored
+	// final still takes the completion-repair path below; this returns
+	// false for that case. Same-generation resume retry after the note
+	// is cleared needs W2's control ledger and is not handled here.
+	if r.recoverStoppedChildNotice(ctx, rec, notice) {
+		return
+	}
 	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
 		// A current-generation Stop is durable. Do not deliver or re-wake any
 		// pending entry; it waits for Revive to mint a newer generation.

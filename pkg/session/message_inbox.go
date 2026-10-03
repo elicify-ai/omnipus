@@ -225,6 +225,12 @@ func classifyEnvelope(peek envelopePeek) SessionMessageDeliveryClass {
 // ONE literal instead of two that could silently drift apart.
 const LifecycleNoticeReasonPrefixToolIterations = "max_tool_iterations:"
 
+// LifecycleNoticePrefixStoppedChild marks a machine-authored direct-parent
+// notice that a steered child landed stopped (sub-agent control plane D6).
+// kind stays error and Fatal stays false; this prefix is what makes the
+// notice wake-eligible. The text is not a final hand-back.
+const LifecycleNoticePrefixStoppedChild = "stopped_child:"
+
 // steeringLifecycleNoticeTextPrefixes lists every machine-authored
 // failureReason prefix (never user-supplied free text) that marks a
 // kind=error, Fatal=false SessionMessage as a genuine ADR-091 steering
@@ -250,6 +256,7 @@ const LifecycleNoticeReasonPrefixToolIterations = "max_tool_iterations:"
 // matches inside this same generic `error` envelope).
 var steeringLifecycleNoticeTextPrefixes = []string{
 	LifecycleNoticeReasonPrefixToolIterations,
+	LifecycleNoticePrefixStoppedChild,
 }
 
 func isSteeringLifecycleNoticeText(text string) bool {

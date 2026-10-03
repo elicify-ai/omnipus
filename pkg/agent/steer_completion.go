@@ -120,6 +120,18 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	stopBeforeDelivery := rec.Stop
 	finalWoke := false
 	prepare := func() error {
+		// A stop is not a final hand-back. Persist the note, then the
+		// direct-parent notice, and only then let the transition land.
+		// An append failure returns here so the fence stays and boot can
+		// retry. W2's control ledger is what keeps that retry derivable
+		// after a same-generation resume clears the note.
+		if nextState == session.LifecycleStopped {
+			noted, noteErr := al.ensureCurrentStopNote(rec, outcome)
+			if noteErr != nil {
+				return noteErr
+			}
+			return al.deliverStoppedChildNotice(ctx, noted, false)
+		}
 		if finalAlreadyStored {
 			return nil
 		}
