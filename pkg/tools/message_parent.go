@@ -43,6 +43,13 @@ type MessageParentLifecycleStore interface {
 	// parkNeedsInput routes through it so the park transition holds the
 	// per-session striped lock across the whole tail→decide→write RMW.
 	Mutate(sessionID string, fn func(*session.LifecycleRecord) error) error
+	// HasNeedsInputRecord reports whether the lifecycle history contains a
+	// persisted needs_input record for the exact park identity — the durable
+	// evidence that a park landed (ADR-20260928 D1.5/D1.7). Signature-
+	// identical to *session.LifecycleStore.HasNeedsInputRecord, so a real
+	// store satisfies it trivially and every test fake that embeds
+	// *session.LifecycleStore inherits it for free.
+	HasNeedsInputRecord(sessionID string, generation int, correlationID string, deadline time.Time) (bool, error)
 	// List returns every LifecycleRecord matching filter — signature-
 	// identical to *session.LifecycleStore.List, so a real store satisfies
 	// this trivially and every existing test fake that embeds

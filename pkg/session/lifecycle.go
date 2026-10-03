@@ -403,7 +403,14 @@ func (s *LifecycleStore) tail(sessionID string) (rec *LifecycleRecord, found boo
 }
 
 // HasNeedsInputRecord reports whether the session's lifecycle JSONL history
-// contains a persisted needs_input record for (generation, correlationID).
+// contains a persisted needs_input record for the exact park identity
+// (generation, correlationID, deadline). The caller passes the sidecar
+// record's OriginalDeadline, which park wrote from the same instant as the
+// lifecycle record's NeedsInput.TTLDeadline — matching all three is what
+// binds this history line to THAT park, not merely to a reused
+// correlation at the same generation (the park path accepts a caller's
+// correlation_id verbatim, so (generation, correlationID) alone is not an
+// original-park identity).
 //
 // This is the durable evidence that a park itself landed. The pending-
 // question sidecar record is appended inside park's Mutate callback, BEFORE
@@ -415,7 +422,7 @@ func (s *LifecycleStore) tail(sessionID string) (rec *LifecycleRecord, found boo
 // NeedsInput from the tail); only this history line can. Answer paths
 // consult it before trusting an OPEN sidecar record. not-wire-format:
 // server-internal.
-func (s *LifecycleStore) HasNeedsInputRecord(sessionID string, generation int, correlationID string) (bool, error) {
+func (s *LifecycleStore) HasNeedsInputRecord(sessionID string, generation int, correlationID string, deadline time.Time) (bool, error) {
 	if err := validateLifecycleSessionID(sessionID); err != nil {
 		return false, err
 	}
@@ -441,7 +448,8 @@ func (s *LifecycleStore) HasNeedsInputRecord(sessionID string, generation int, c
 			continue
 		}
 		if r.State == LifecycleNeedsInput && r.Generation == generation &&
-			r.NeedsInput != nil && r.NeedsInput.CorrelationID == correlationID {
+			r.NeedsInput != nil && r.NeedsInput.CorrelationID == correlationID &&
+			r.NeedsInput.TTLDeadline.Equal(deadline) {
 			return true, nil
 		}
 	}

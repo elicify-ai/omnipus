@@ -87,7 +87,7 @@ func (dt *delegateToolExecuteRespond) acceptStoppedPendingQuestion() (accepted b
 		// line is the evidence the park landed; without it the record is
 		// an orphan and the respond is refused visibly. The record itself
 		// is left untouched — the refusal is the recovery, not an erase.
-		landed, err := dt.t.lifecycle.HasNeedsInputRecord(dt.sessionID, q.AskerGeneration, q.CorrelationID)
+		landed, err := dt.t.lifecycle.HasNeedsInputRecord(dt.sessionID, q.AskerGeneration, q.CorrelationID, q.OriginalDeadline)
 		if err != nil {
 			return false, ErrorResult(fmt.Sprintf("delegate: respond: reconcile pending question: %v", err)).WithError(err), true
 		}
@@ -223,18 +223,25 @@ func (dt *delegateToolExecuteRespond) transcriptHasInstruction(instruction strin
 // finishPendingResume closes the question and, if Dispatch did not admit the
 // session, queues it for admission. It does not mint a generation.
 //
-// Split ordering (ADR-20260928 D1.5): the lifecycle transition persists
-// FIRST — that is the durable delivery — and only then is the sidecar
-// closed as applied. The applied record must never be appended inside the
-// Mutate callback: a callback runs before Mutate's own persist, so a
-// lifecycle persist failure there would leave the sidecar applied while the
-// child was never durably queued — the false-applied split. When the Mutate
-// fails, this function returns the error visibly, the sidecar keeps
-// answer_pending_delivery with the exact reserved answer and its original
-// deadline, and a later explicit retry of the same respond re-runs the whole
-// path: commitPendingAnswer treats the same answer text as idempotent, the
-// transcript copy keeps its once identity, and only a successful Mutate is
-// ever followed by the applied record.
+// Receipt vs effect, in the order resumePendingQuestion runs them
+// (ADR-20260928 D1.5): (1) the answer is RESERVED in the sidecar as
+// answer_pending_delivery; (2) the answer is RECEIVED — appended to the
+// asker's transcript and verified by read-back, which is this tree's
+// receipt proof, not a dispatch attempt; (3) Dispatch asks admission to
+// resume the same generation; (4) THIS step's lifecycle transition persists
+// (the durable resume effect); (5) only after (2) already holds AND (4) has
+// persisted does applyPendingQuestion write applied. Applied is therefore
+// never written for a queued lifecycle or a dispatch attempt alone, and it
+// is never appended inside the Mutate callback: a callback runs before
+// Mutate's own persist, so a lifecycle persist failure there would leave
+// the sidecar applied while the resume effect never landed — the
+// false-applied split. When the Mutate fails, this function returns the
+// error visibly, the sidecar keeps answer_pending_delivery with the exact
+// reserved answer and its original deadline, and a later explicit retry of
+// the same respond re-runs the whole path: commitPendingAnswer treats the
+// same answer text as idempotent, the transcript copy keeps its once
+// identity, and only a successful Mutate is ever followed by the applied
+// record.
 func (dt *delegateToolExecuteRespond) finishPendingResume() error {
 	if err := dt.t.lifecycle.Mutate(dt.sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
@@ -262,12 +269,14 @@ func (dt *delegateToolExecuteRespond) finishPendingResume() error {
 	return dt.applyPendingQuestion()
 }
 
-// applyPendingQuestion appends the applied record once the lifecycle
-// delivery above is durable. It takes the per-session lifecycle lock itself
-// (the Mutate has released it; QuestionStore methods hold no lock of their
-// own). A concurrent respond that reserved the same answer between the two
-// steps still converges here: applied is idempotent, and any other status is
-// a visible error, never an overwrite.
+// applyPendingQuestion appends the applied record once the receipt (the
+// transcript copy, verified by read-back earlier in the respond path) and
+// the durable lifecycle resume effect above both hold. It takes the
+// per-session lifecycle lock itself (the Mutate has released it;
+// QuestionStore methods hold no lock of their own). A concurrent respond
+// that reserved the same answer between the two steps still converges here:
+// applied is idempotent, and any other status is a visible error, never an
+// overwrite.
 func (dt *delegateToolExecuteRespond) applyPendingQuestion() error {
 	mu := dt.t.lifecycle.Lock(dt.sessionID)
 	mu.Lock()
