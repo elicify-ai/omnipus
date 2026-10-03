@@ -12,12 +12,16 @@ name: Desktop artifact (dispatch only)
 # branch, not to be merged.
 
 on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: "Git ref to build (defaults to the branch this workflow is dispatched on)"
-        required: false
-        default: ""
+  # workflow_dispatch requires the workflow to exist on the default branch, and
+  # landing anything on main needs human approval — so this runs on a push to
+  # this scratch branch only. Scoped by branch name and path: it cannot fire on
+  # main, on release, or on any other branch.
+  push:
+    branches:
+      - ci/desktop-artifact-*
+    paths:
+      - .github/workflows/desktop-artifact.yml
+      - .ci-artifact-trigger
 
 permissions:
   contents: read
@@ -30,7 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Set up Go
@@ -73,7 +77,7 @@ jobs:
       - name: Record build provenance
         run: |
           {
-            echo "ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}"
+            echo "ref: ${{ github.ref }}"
             echo "commit: $(git rev-parse HEAD)"
             echo "commit_short: $(git rev-parse --short=8 HEAD)"
             echo "built_at: $(date -u +%FT%TZ)"
