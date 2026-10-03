@@ -1,7 +1,9 @@
+Status: In review
+
 # Feature Specification: Mail live access — W3 Mail panel and settings surface
 
 **Created**: 2026-10-02
-**Status**: Proposed — the one prescribed spec-correction round applied (2026-10-02), then the **final
+**Status history**: Proposed — the one prescribed spec-correction round applied (2026-10-02), then the **final
 Round-2 fix round applied (2026-10-02)**. This is the W3
 implementation specification for the founder-approved design in
 `docs/internal/architecture/ADR-20261001-mail-live-access-pooling-folder-discovery-and-cache.md`
