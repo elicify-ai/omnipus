@@ -205,6 +205,13 @@ func TestMailCacheExclusionGate_BlocksWhenMissing(t *testing.T) {
 	if !errors.Is(err, ErrCacheUnavailable) {
 		t.Fatalf("the first cache write must be refused where staging exists without a provable exclusion (G-2/E-1), got %v", err)
 	}
+	// §7.1's ABSENT row is "refuse + live-only + cache_unavailable": the
+	// refusal must carry the visible safe notice, not just the error class —
+	// the disabled state is a VISIBLE product outcome (§3.8 gate paragraph),
+	// never a silent one (round-2 IMP-1).
+	if !strings.Contains(err.Error(), testNoticeCacheUnavailable) {
+		t.Fatalf("the absent-decision refusal must carry the visible safe notice_code %q (§7.1 ABSENT row: refuse + live-only + cache_unavailable), got %v", testNoticeCacheUnavailable, err)
+	}
 
 	// Zero cache artifacts: no folders.enc, no temp/journal file (R-3.7-5:
 	// no plaintext temporary ever exists), nothing outside .git.
