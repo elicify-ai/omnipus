@@ -523,7 +523,6 @@ func TestBootRealDeliverer_CorruptCommittedPayload_RefusedBeforeDelivery(t *test
 	finalID, payload, payloadHash := commitAllGenDoneFinal(t, h, child, parent, commitID,
 		"the exact committed result")
 	al, deliverer := newRealDelivererLoopFixture(t, h)
-	tailBefore := realDelivererRecordSnapshot(t, h.lifecycle, child)
 
 	corrupted := realDelivererCorruptCommittedPayload(t, h, child,
 		"BIT-ROT: this text never came from the child's turn")
@@ -557,6 +556,12 @@ func TestBootRealDeliverer_CorruptCommittedPayload_RefusedBeforeDelivery(t *test
 	if !hashStillProtected {
 		t.Fatalf("instrument: the protected payload_hash no longer reads %q after the file-level corruption — only the payload bytes may change", payloadHash)
 	}
+	// Baseline AFTER the deliberate corruption, BEFORE the pass: a correct
+	// refusal never rewrites the corrupt bytes, so the tail's pre-corruption
+	// bytes can never come back — the snapshot the pass is held against is the
+	// corrupted on-disk state it is invoked on. This proves the refusal itself
+	// mutated neither the tail record nor the outbox (D2).
+	tailBefore := realDelivererRecordSnapshot(t, h.lifecycle, child)
 
 	notices, runErr := runRealDelivererPass(t, h, al, deliverer)
 	for _, n := range notices {
