@@ -11,6 +11,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -421,6 +422,33 @@ func TestSteeredTurnDrain1020_EnqueueAfterFinalEmptyCheckIsConsumedOrRefused(t *
 	}
 }
 
+// steerDrainAdmissionProviderQ2Fixture is used ONLY by the two direct-call
+// fixture migrations below. Install it before Dispatch and never replace the
+// shared AgentInstance.Provider while a real run is in flight. Both model
+// counters stay exact: the first real request is setup; subsequent requests
+// reach the independently measured continuation provider.
+type steerDrainAdmissionProviderQ2Fixture struct {
+	mu           sync.Mutex
+	calls        int
+	initial      providers.LLMProvider
+	continuation providers.LLMProvider
+}
+
+func (p *steerDrainAdmissionProviderQ2Fixture) Chat(ctx context.Context, messages []providers.Message, definitions []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.calls++
+	provider := p.continuation
+	if p.calls == 1 {
+		provider = p.initial
+	}
+	p.mu.Unlock()
+	return provider.Chat(ctx, messages, definitions, model, options)
+}
+
+func (p *steerDrainAdmissionProviderQ2Fixture) GetDefaultModel() string {
+	return p.continuation.GetDefaultModel()
+}
+
 func TestSteeredTurnDrain1020_TwoItemsPersistentPreDequeueFailureAreAllAbandoned(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -429,18 +457,50 @@ func TestSteeredTurnDrain1020_TwoItemsPersistentPreDequeueFailureAreAllAbandoned
 	if !ok {
 		t.Fatal("SETUP: default agent is not registered")
 	}
-	agent.Provider = provider
+	boot := session.NewBootEpochStore(al.GetConfig().Agents.Defaults.Home)
+	epoch, mintErr := boot.Mint()
+	if mintErr != nil || epoch == 0 {
+		t.Fatalf("Mint genuine fixture boot epoch = %d, error=%v", epoch, mintErr)
+	}
+	al.SetBootEpochStore(boot)
+	// The required initial admission is a REAL live producer, parked only at
+	// the external model boundary. Its request is counted separately from the
+	// continuation provider whose unchanged zero-call oracle is below.
+	initialProvider := &lateSteeringProvider{
+		firstCallStarted: make(chan struct{}), releaseFirstCall: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	releaseInitial := func() { releaseOnce.Do(func() { close(initialProvider.releaseFirstCall) }) }
+	t.Cleanup(releaseInitial)
+	agent.Provider = &steerDrainAdmissionProviderQ2Fixture{initial: initialProvider, continuation: provider}
+	wireSteerCompletionDeps(t, al)
 	child := launchQueuedSteeredTurnDrainChild1020(
 		t, al, testDefaultAgentID, "exercise two-item abandonment after persistent pre-dequeue failure")
+	dispatched, dispatchErr := NewSteerLauncher(al).Dispatch(context.Background(), child.SessionID, child.Generation)
+	if dispatchErr != nil || dispatched.State != steer.DispatchRunning {
+		t.Fatalf("real initial Dispatch = %+v, error=%v, want running", dispatched, dispatchErr)
+	}
+	select {
+	case <-initialProvider.firstCallStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("real initial admitted producer did not reach its external model boundary")
+	}
 	lifecycle := al.GetSessionLifecycleStore()
 	snapshot, err := lifecycle.Load(child.SessionID)
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
-	ts, err := al.reconstructSteeredTurn(snapshot, nil)
-	if err != nil {
-		t.Fatalf("reconstructSteeredTurn: %v", err)
+	ts := al.getActiveTurnState(child.SessionID)
+	if ts == nil {
+		t.Fatal("real initial producer has no registered live handle")
 	}
+	original := al.tsExecutionClaim(ts, child.SessionID)
+	if original.SessionID != child.SessionID || original.Generation != child.Generation || original.BootSeq != epoch ||
+		original.RunID == "" || !original.matches(snapshot) || !al.steerAdmission().hasExecutionReservation(original) {
+		t.Fatalf("real initial producer claim/record/reservation mismatch: claim=%+v record=%+v", original, snapshot)
+	}
+	// The stable pre-dispatch provider routes any erroneous continuation
+	// request to the measured provider; no shared provider swap is needed.
 	for i := 1; i <= 2; i++ {
 		if _, enqueueErr := al.EnqueueSteeringMessage(
 			child.SessionID,
@@ -461,11 +521,14 @@ func TestSteeredTurnDrain1020_TwoItemsPersistentPreDequeueFailureAreAllAbandoned
 	}
 	t.Cleanup(logger.DisableFileLogging)
 
-	blocker := &turnState{turnID: "issue-1020-pre-dequeue-blocker", sessionKey: child.SessionID}
-	al.activeTurnStates.Store(child.SessionID, blocker)
+	// Keep the original REAL producer registered: Continue must fail before
+	// dequeue, exactly as the old fake blocker modeled, without forging a
+	// live handle or borrowing an admission's queued identity.
+	if al.getActiveTurnState(child.SessionID) != ts || !al.steerAdmission().hasExecutionReservation(original) {
+		t.Fatal("original producer lost its real pre-dequeue failure barrier")
+	}
 	discardSteeredTurnDrain1020(al.drainSteeredTurn(
 		context.Background(), snapshot, ts, turnResult{finalContent: "initial response"}, nil))
-	al.activeTurnStates.Delete(child.SessionID)
 	logger.DisableFileLogging()
 
 	logData, logErr := os.ReadFile(logPath)
@@ -514,30 +577,55 @@ func TestSteeredTurnDrain1020_TwoItemsPersistentPreDequeueFailureAreAllAbandoned
 		t.Errorf("abandonment error reports = %d, want exactly 2 (one per queued item)", reports)
 	}
 
-	if mutateErr := lifecycle.Mutate(child.SessionID, func(rec *session.LifecycleRecord) error {
-		rec.Stop = &session.Stop{
-			At:         time.Now().UTC(),
-			Generation: rec.Generation,
-			By:         session.Principal{Kind: session.PrincipalKindHuman, ID: "issue-1020-test"},
-		}
-		return nil
-	}); mutateErr != nil {
-		t.Fatalf("stamp Stop for revival: %v", mutateErr)
+	canceller := NewSteerCanceller(lifecycle, al.SteerGenerationCancel)
+	if _, stopErr := canceller.CancelSubtree(context.Background(), child.SessionID,
+		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "issue-1020-test"}); stopErr != nil {
+		t.Fatalf("normal Stop for revival: %v", stopErr)
 	}
-	revivedGeneration, reviveErr := NewSteerCanceller(lifecycle, nil).Revive(
+	releaseInitial()
+	finished := make(chan struct{})
+	go func() { al.steerAdmission().turns.Wait(); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("original admitted producer did not finish after Stop/release")
+	}
+	stopped, loadErr := lifecycle.Load(child.SessionID)
+	if loadErr != nil || stopped.State != session.LifecycleStopped || stopped.Generation != original.Generation ||
+		stopped.StopNote == nil || al.steerAdmission().hasExecutionReservation(original) {
+		t.Fatalf("normal stopped original before revival = %+v, error=%v", stopped, loadErr)
+	}
+	revivedGeneration, reviveErr := canceller.Revive(
 		context.Background(), child.SessionID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "issue-1020-test"})
 	if reviveErr != nil {
 		t.Fatalf("Revive: %v", reviveErr)
 	}
-	attempt, continueErr := al.continueSteeredTurn(context.Background(), child.SessionID, revivedGeneration)
-	if continueErr != nil {
-		t.Fatalf("continueSteeredTurn(revived empty queue): %v", continueErr)
+	if revivedGeneration != original.Generation {
+		t.Fatalf("landed stopped child revived generation = %d, want same original generation %d", revivedGeneration, original.Generation)
+	}
+	// D2/Q2: Revive clears the OLD producer. That producer is inactive even
+	// if the revived queue is empty; nil success was an unstamped-fixture
+	// oracle, not permission to reuse a stopped admission.
+	attempt, continueErr := al.continueSteeredTurn(context.Background(), child.SessionID, revivedGeneration, original)
+	if !errors.Is(continueErr, errSteeredDrainInactive) {
+		t.Fatalf("continueSteeredTurn(stopped original after revival) = %v, want %v", continueErr, errSteeredDrainInactive)
 	}
 	if attempt.turnRan {
 		t.Error("a revived generation executed a stale item left by the failed prior-generation drain")
 	}
+	after, loadErr := lifecycle.Load(child.SessionID)
+	if loadErr != nil || after.State != session.LifecycleQueued || after.Generation != revivedGeneration ||
+		after.ExecutionID != nil || after.FinalDelivery != nil || after.StopNote != nil || after.Stop != nil {
+		t.Fatalf("stale original drain changed revived state: %+v, error=%v", after, loadErr)
+	}
 	if got := len(provider.Requests()); got != 0 {
 		t.Errorf("provider requests after revival = %d, want 0 because no stale item may survive abandonment", got)
+	}
+	initialProvider.mu.Lock()
+	initialCalls := initialProvider.calls
+	initialProvider.mu.Unlock()
+	if initialCalls != 1 {
+		t.Errorf("distinct initial-admission provider requests = %d, want exactly 1 setup call", initialCalls)
 	}
 }
 
@@ -557,27 +645,96 @@ func TestSteeredTurnDrain1020_NonDefaultChildResetsOnlyItsOwnMessageState(t *tes
 	defaultAgent.Tools.RegisterReplacing(defaultReset)
 	childAgent.Tools.RegisterReplacing(childReset)
 
-	child := launchQueuedSteeredTurnDrainChild1020(t, al, "ray", "exercise non-default child continuation")
-	if _, err := al.EnqueueSteeringMessage(
-		child.SessionID,
-		"ray",
-		providers.Message{Role: "user", Content: "continue the ray child"},
-		"issue-1020-ray-continuation",
-	); err != nil {
-		t.Fatalf("EnqueueSteeringMessage: %v", err)
+	boot := session.NewBootEpochStore(al.GetConfig().Agents.Defaults.Home)
+	epoch, mintErr := boot.Mint()
+	if mintErr != nil || epoch == 0 {
+		t.Fatalf("Mint genuine non-default fixture boot epoch = %d, error=%v", epoch, mintErr)
 	}
-	attempt, err := al.continueSteeredTurn(context.Background(), child.SessionID, child.Generation)
-	if err != nil {
-		t.Fatalf("continueSteeredTurn: %v", err)
+	al.SetBootEpochStore(boot)
+	initialProvider := &lateSteeringProvider{
+		firstCallStarted: make(chan struct{}), releaseFirstCall: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	releaseInitial := func() { releaseOnce.Do(func() { close(initialProvider.releaseFirstCall) }) }
+	t.Cleanup(releaseInitial)
+	childAgent.Provider = &steerDrainAdmissionProviderQ2Fixture{initial: initialProvider, continuation: provider}
+	child := launchQueuedSteeredTurnDrainChild1020(t, al, "ray", "exercise non-default child continuation")
+	var original executionClaim
+	var attempt steeredContinuationAttempt
+	var defaultBaseline, childBaseline int
+	observer := &steerTurnDrainObserver1020{hook: func(sessionID string) error {
+		if sessionID != child.SessionID {
+			return fmt.Errorf("non-default boundary session = %q, want %q", sessionID, child.SessionID)
+		}
+		record, loadErr := al.GetSessionLifecycleStore().Load(sessionID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !original.matches(record) || !al.steerAdmission().hasExecutionReservation(original) ||
+			al.getActiveTurnState(sessionID) != nil {
+			return fmt.Errorf("non-default continuation lost its actual post-turn original admission: claim=%+v record=%+v", original, record)
+		}
+		// The real initial turn has ended. Count exactly what THIS continuation
+		// resets, without weakening the oracle to an absolute >=1 assertion.
+		defaultBaseline, childBaseline = defaultReset.ResetCount(), childReset.ResetCount()
+		if _, enqueueErr := al.EnqueueSteeringMessage(sessionID, "ray",
+			providers.Message{Role: "user", Content: "continue the ray child"}, "issue-1020-ray-continuation"); enqueueErr != nil {
+			return enqueueErr
+		}
+		var continueErr error
+		attempt, continueErr = al.continueSteeredTurn(context.Background(), sessionID, child.Generation, original)
+		return continueErr
+	}}
+	classifier := NewSteerRecordClassifier(al.GetSessionLifecycleStore(), al.GetSessionStore())
+	al.SetSteerAudienceDeps(NewSteerAudienceResolver(classifier), observer, NewSteerUpwardDeliverer())
+	dispatched, dispatchErr := NewSteerLauncher(al).Dispatch(context.Background(), child.SessionID, child.Generation)
+	if dispatchErr != nil || dispatched.State != steer.DispatchRunning {
+		t.Fatalf("real initial non-default Dispatch = %+v, error=%v, want running", dispatched, dispatchErr)
+	}
+	select {
+	case <-initialProvider.firstCallStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("real initial non-default producer did not reach its model boundary")
+	}
+	ts := al.getActiveTurnState(child.SessionID)
+	if ts == nil {
+		t.Fatal("real initial non-default producer has no registered live handle")
+	}
+	original = al.tsExecutionClaim(ts, child.SessionID)
+	record, loadErr := al.GetSessionLifecycleStore().Load(child.SessionID)
+	if loadErr != nil || original.SessionID != child.SessionID || original.Generation != child.Generation ||
+		original.RunID == "" || original.BootSeq != epoch || !original.matches(record) || !al.steerAdmission().hasExecutionReservation(original) {
+		t.Fatalf("real original non-default claim/record/reservation mismatch: claim=%+v record=%+v error=%v", original, record, loadErr)
+	}
+	releaseInitial()
+	finished := make(chan struct{})
+	go func() { al.steerAdmission().turns.Wait(); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("real non-default admission/direct continuation did not finish")
+	}
+	boundaryCalls, hookRuns, hookErr := observer.result()
+	if boundaryCalls == 0 || hookRuns != 1 || hookErr != nil {
+		t.Fatalf("normal non-default post-turn boundary = calls:%d runs:%d error:%v, want one successful continuation", boundaryCalls, hookRuns, hookErr)
 	}
 	if !attempt.turnRan {
 		t.Fatal("non-default child continuation did not run")
 	}
-	if got := defaultReset.ResetCount(); got != 0 {
-		t.Errorf("default agent send_message reset count = %d, want 0", got)
+	if got := defaultReset.ResetCount() - defaultBaseline; got != 0 {
+		t.Errorf("default agent send_message reset delta = %d, want 0", got)
 	}
-	if got := childReset.ResetCount(); got != 1 {
-		t.Errorf("non-default child send_message reset count = %d, want exactly 1", got)
+	if got := childReset.ResetCount() - childBaseline; got != 1 {
+		t.Errorf("non-default child send_message reset delta = %d, want exactly 1", got)
+	}
+	if got := len(provider.Requests()); got != 1 {
+		t.Errorf("non-default continuation provider requests = %d, want exactly 1", got)
+	}
+	initialProvider.mu.Lock()
+	initialCalls := initialProvider.calls
+	initialProvider.mu.Unlock()
+	if initialCalls != 1 {
+		t.Errorf("distinct initial non-default provider requests = %d, want exactly 1 setup call", initialCalls)
 	}
 }
 
