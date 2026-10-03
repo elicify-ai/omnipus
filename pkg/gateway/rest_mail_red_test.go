@@ -84,7 +84,20 @@ func newMailRedEnv(t *testing.T) *mailRedEnv {
 	seedWorkspaceFile(t, api.homePath, mailRedWS)
 	mux := http.NewServeMux()
 	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
-	return &mailRedEnv{api: api, mux: mux}
+	env := &mailRedEnv{api: api, mux: mux}
+	// Boot replay: production establishes the process-wide mail runtime
+	// before any request can reach the pooled path (gateway.go::
+	// loadConfigAndProvider → initGatewayMailRuntime; initializeAgentLoop
+	// then publishes the live loop). Without it the pool's
+	// establishment-time credential resolver
+	// (mail_runtime.go::resolveCredentials) reads an unbooted holder and
+	// answers "config not wired yet", so every pooled operation fails
+	// before any dial — the sweep's duration_ms=1 / socket_count=-1
+	// instrument rows, mislabeled class "dns" by the classifier. Seeding
+	// order matters: credStore and the mailbox rows exist above, so the
+	// resolver sees exactly what a booted gateway sees.
+	bootTestMailRuntime(t, env)
+	return env
 }
 
 func mailDo(mux *http.ServeMux, method, path, ip string, authed bool, body string) *httptest.ResponseRecorder {
