@@ -61,12 +61,41 @@
 // inbox final alone; re-wake after acknowledgement; an outbox commit minted
 // for the uncommitted G+1.
 //
-// Known gaps (deliberate, not W3a): stopped(restart) stop notes and D6
-// direct-parent notices, boot_seq/stop_seq (W3b; W2a/W2b dependencies);
-// payload retirement/compaction and the UpdateFinalDelivery refusal matrix
-// (T11 negative pack); frames as a distinct durable artifact (absorbed by
-// the deliverer seam here — asserting a mock's internals would be a fake
-// oracle); root→C→D notice batching and wake coalescing (D8.4, W3b).
+// Known gaps (deliberate, not W3a): the stopped(restart) LANDING of an
+// interrupted G+1 — cause note, boot_seq, stop_seq — and D6 direct-parent
+// notices (W3b; W2a/W2b dependencies): this pack pins only D8.9's own
+// restated bound ("the session must never be `working` by itself after the
+// reboot") and neither asserts nor endorses this branch's legacy
+// failed(interrupted) outcome as the boot result; payload
+// retirement/compaction and the UpdateFinalDelivery refusal matrix (T11
+// negative pack); frames as a distinct durable artifact (absorbed by the
+// deliverer seam here — asserting a mock's internals would be a fake
+// oracle); root→C→D notice batching and wake coalescing (D8.4, W3b); the
+// D2 execution-identity seam (run_id/boot_seq on the record — W2b;
+// FinalDeliveryCommit's own doc comment: commit_id is a stand-in for
+// run_id).
+//
+// Oracle correction (founder-side dispatcher, 2026-10-03 — the ONE bounded
+// W3a qa correction): the original primary RED counted G's publication but
+// would not reject a phantom `<child>:G+1:final` published alongside it
+// (ListPendingFinalDeliveries sees only committed outbox descriptors; the
+// old tail check only forbade `completed`). CORRECTION 1 adds
+// assertNoUncommittedFinalPublished: no `<child>:<generation>:final` may
+// reach the parent's REAL inbox or the delivered wake seam without the
+// matching committed lifecycle+outbox result — D2 "Publish only a committed
+// outbox", D8.9 "before → `stopped`, with no final id published" — while a
+// genuine committed G+1 final stays legal (the store's own descriptor is
+// the witness; the id is never blanket-banned). The deliverer's event
+// counter alone is not receipt proof: the inbox read is the same durable
+// store the parent reads, cross-checked against the lifecycle outbox.
+// CORRECTION 2 is the delivery-only isolation test below: it must ride the
+// boot-consumed delivery pass (SteerBootRecovery.Run's D8.1 pass two), NOT
+// the live-completion publisher driven directly — without proving the boot
+// consumer calls the same method, that path proves nothing. The pass does
+// not exist on this branch, so the test is an explicit BLOCKED naming the
+// requested production signature; the G+1 pre/post identity-state oracle it
+// will pin is specified in its doc comment and lands once, on the merged
+// test branch, when the backend adds the method.
 
 package agent
 
@@ -74,6 +103,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,6 +194,80 @@ func resumeToGPlusOne(t *testing.T, h *bootRecoveryHarness, child string) {
 	}
 }
 
+// allGenFinalGeneration reports the generation N of a `<child>:<N>:final`
+// replay id and whether the id has that shape at all. The shape is fixed by
+// D2/the commit boundary (ReplayID), never read off observed output.
+func allGenFinalGeneration(child, id string) (int, bool) {
+	rest, ok := strings.CutPrefix(id, child+":")
+	if !ok {
+		return 0, false
+	}
+	digits, ok := strings.CutSuffix(rest, ":final")
+	if !ok {
+		return 0, false
+	}
+	generation, err := strconv.Atoi(digits)
+	if err != nil || generation <= 0 {
+		return 0, false
+	}
+	return generation, true
+}
+
+// assertNoUncommittedFinalPublished is CORRECTION 1's strong negative
+// (oracle correction 2026-10-03): no `<child>:<generation>:final` entry may
+// appear on the parent's REAL inbox or the delivered wake seam unless the
+// lifecycle journal holds the matching committed terminal+outbox result for
+// that exact generation — D2: "Publish only a committed outbox"; D8.9: a
+// restart stop that lands before the commit lands "with no final id
+// published". This closes the hole a committed-descriptor-only count leaves
+// open: an UNCOMMITTED generation's final in the actual inbox/frame/wake
+// seam is invisible to ListPendingFinalDeliveries, because no commit was
+// ever minted for it. A genuine committed G+1 final is allowed — the
+// witness is the store's own outbox descriptor joined by generation, and
+// the observed bytes are hash-checked against its PayloadHash (D2: a
+// same-id/different-payload collision is a visible consistency error,
+// never an acknowledgment or silent suppression). fixtureCommitted pins
+// the generations this test fixture itself committed, so generation 1's
+// bytes are guarded even if the pending scan drifted; the expected id and
+// hashes derive from the ADR and the fixture's commit, never from what the
+// boot happened to emit.
+func assertNoUncommittedFinalPublished(t *testing.T, h *bootRecoveryHarness, child, seam string, observed []generated.SessionMessage, fixtureCommitted map[int]session.FinalDeliveryCommit) {
+	t.Helper()
+	pending, err := h.lifecycle.ListPendingFinalDeliveries()
+	if err != nil {
+		t.Fatalf("ListPendingFinalDeliveries (phantom cross-check on %s): %v", seam, err)
+	}
+	backed := make(map[int]session.FinalDeliveryCommit, len(pending)+len(fixtureCommitted))
+	for _, entry := range pending {
+		if entry.SessionID == child {
+			backed[entry.Generation] = entry.Commit
+		}
+	}
+	for generation, commit := range fixtureCommitted {
+		backed[generation] = commit
+	}
+	for _, message := range observed {
+		envelope := bootEnvelope(t, message)
+		generation, isFinal := allGenFinalGeneration(child, envelope.MessageID)
+		if !isFinal {
+			continue
+		}
+		commit, committed := backed[generation]
+		if !committed {
+			t.Fatalf("%s published %q with NO committed lifecycle+outbox result for generation %d (committed generations for %s: %d pending entries) — D2: publish only a committed outbox, an uncommitted record is stopped; D8.9: before the commit a restart lands with no final id published",
+				seam, envelope.MessageID, generation, child, len(pending))
+		}
+		got, marshalErr := message.MarshalJSON()
+		if marshalErr != nil {
+			t.Fatalf("re-encode %s final %s: %v", seam, envelope.MessageID, marshalErr)
+		}
+		if hash := fmt.Sprintf("%x", sha256.Sum256(got)); hash != commit.PayloadHash {
+			t.Fatalf("%s final %s bytes do not hash to its committed payload (published %s, committed %s) — D2: a same-id/different-payload collision is a visible consistency error, never an acknowledgment",
+				seam, envelope.MessageID, hash, commit.PayloadHash)
+		}
+	}
+}
+
 // TestBootAllGen_CommittedFinalPublishedAtBootDespiteNewerGeneration — the
 // W3a behavioural RED: G is committed (done + exact upward outbox, never
 // published — the crash-before-append cut), an explicit RESUME has already
@@ -191,10 +296,31 @@ func TestBootAllGen_CommittedFinalPublishedAtBootDespiteNewerGeneration(t *testi
 		t.Fatalf("SteerBootRecovery.Run: %v", err)
 	}
 
+	// CORRECTION 1 (oracle correction 2026-10-03), checked FIRST so the red
+	// names the phantom and not only the missing G publication: the REAL
+	// parent inbox and the delivered wake seam must hold no
+	// <child>:<generation>:final entry that no committed outbox backs — not
+	// even alongside a correctly published G. The deliverer's event counter
+	// alone is not receipt proof; the inbox read below is the same durable
+	// store the parent reads, cross-checked against the lifecycle outbox.
+	inboxMessages, _, _, err := h.inbox.Drain(parent, child, "", 200)
+	if err != nil {
+		t.Fatalf("Drain(parent inbox): %v", err)
+	}
+	committedFixture := map[int]session.FinalDeliveryCommit{1: {
+		Generation: 1, CommitID: commitID, MessageID: finalID, PayloadHash: payloadHash,
+	}}
+	assertNoUncommittedFinalPublished(t, h, child, "parent inbox", inboxMessages, committedFixture)
+	woken := make([]generated.SessionMessage, 0, len(h.deliverer.snapshot()))
+	for _, event := range h.deliverer.snapshot() {
+		woken = append(woken, event.Message)
+	}
+	assertNoUncommittedFinalPublished(t, h, child, "delivered wake seam", woken, committedFixture)
+
 	// D8.1/D8.9: the committed G final reaches the direct parent's durable
 	// inbox under <child>:G:final — exactly once, byte-identical to the
 	// committed payload.
-	messages, _, _, err := h.inbox.Drain(parent, child, "", 200)
+	messages := inboxMessages
 	if err != nil {
 		t.Fatalf("Drain(parent inbox): %v", err)
 	}
@@ -262,6 +388,15 @@ func TestBootAllGen_CommittedFinalPublishedAtBootDespiteNewerGeneration(t *testi
 	}
 	if tail.Generation != 2 {
 		t.Fatalf("tail generation after boot = %d, want 2 — updating G's delivery metadata must never change G+1's identity (D2)", tail.Generation)
+	}
+	// D8.9: "Either way the session must never be `working` by itself after
+	// the reboot." The exact landing — stopped with a cause:restart note,
+	// boot_seq and stop_seq — is W3b's pack (W2a/W2b dependencies); this
+	// pack does not adjudicate it and does NOT read this branch's legacy
+	// failed(interrupted) outcome as the intended boot result. A completed
+	// tail stays the promotion defect the next check pins.
+	if tail.State == session.LifecycleRunning || tail.State == session.LifecycleQueued {
+		t.Fatalf("G+1 tail after boot = %q — the session must never be working by itself after the reboot (D8.9); a boot stops an uncommitted current run without executing it", tail.State)
 	}
 	if tail.State == session.LifecycleCompleted {
 		t.Fatalf("G+1 landed completed at a boot that only retried G's committed final — an old generation's delivery must not promote the newer generation (D2/D8.5)")
@@ -439,17 +574,29 @@ func TestBootAllGen_CommittedFailedFinalPublishedAtBoot(t *testing.T) {
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 
 	commitID := "commit-g1-failed-crash-before-append"
-	finalID, payload, _ := commitAllGenFailedFinal(t, h, child, parent, commitID, "real: failure committed before the restart")
+	finalID, payload, payloadHash := commitAllGenFailedFinal(t, h, child, parent, commitID, "real: failure committed before the restart")
 	resumeToGPlusOne(t, h, child)
 
 	if err := h.recovery().Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
+	// CORRECTION 1 (oracle correction 2026-10-03): the failed twin carries
+	// the same strong negative — a committed failed G never licenses a
+	// phantom <child>:G+1:final on the real inbox or the wake seam.
 	messages, _, _, err := h.inbox.Drain(parent, child, "", 200)
 	if err != nil {
 		t.Fatalf("Drain(parent inbox): %v", err)
 	}
+	committedFixture := map[int]session.FinalDeliveryCommit{1: {
+		Generation: 1, CommitID: commitID, MessageID: finalID, PayloadHash: payloadHash,
+	}}
+	assertNoUncommittedFinalPublished(t, h, child, "parent inbox", messages, committedFixture)
+	woken := make([]generated.SessionMessage, 0, len(h.deliverer.snapshot()))
+	for _, event := range h.deliverer.snapshot() {
+		woken = append(woken, event.Message)
+	}
+	assertNoUncommittedFinalPublished(t, h, child, "delivered wake seam", woken, committedFixture)
 	published := 0
 	for _, message := range messages {
 		if bootEnvelope(t, message).MessageID != finalID {
@@ -488,4 +635,48 @@ func TestBootAllGen_CommittedFailedFinalPublishedAtBoot(t *testing.T) {
 	if tail.Generation != 2 || tail.State == session.LifecycleCompleted {
 		t.Fatalf("tail after boot = gen %d state %q, want gen 2 and not completed — G's failed delivery must not promote or rewrite G+1 (D2)", tail.Generation, tail.State)
 	}
+}
+
+// TestBootAllGen_DeliveryOnlyPublishLeavesGPlusOneUntouched — CORRECTION 2
+// (oracle correction 2026-10-03, dispatcher-refined): isolate the
+// DELIVERY-only phase from the whole boot, on the pass the boot ACTUALLY
+// consumes. The boot-side delivery business pass does not exist on this
+// branch (boot_sweep.go::SteerBootRecovery has no ListPendingFinalDeliveries
+// caller), so this subassertion is an explicit, loud BLOCKED pending the W3a
+// backend API — never t.Skip, never a test-only seam, never a fake branch.
+// Driving the live-completion publisher
+// (steer_completion_commit.go::AgentLoop.publishCommittedFinal) directly
+// from here would test the wrong path: nothing proves the boot consumer
+// calls it.
+//
+// Requested production business method (backend to add as NORMAL used code,
+// called by SteerBootRecovery.Run's D8.1 pass two; the test then drives the
+// SAME method once, on this merged test branch):
+//
+//	func (r *SteerBootRecovery) publishPendingCommittedFinals(ctx context.Context) error
+//
+// Contract: for every ListPendingFinalDeliveries entry, publish the exact
+// committed payload to the direct parent's real inbox under the replay id,
+// record durable facts through LifecycleStore.UpdateFinalDelivery only, and
+// mutate NO LifecycleRecord (D2 "Publish only a committed outbox"; D8.1
+// pass two; D8.9 "without changing that generation's outcome").
+//
+// When it lands, THIS test pins the isolation oracle: G committed (done +
+// outbox, unpublished), explicit RESUME on G+1, one call of the method —
+// then (a) the G final sits on the real parent inbox exactly once,
+// byte-identical to the committed payload; (b) FinalDeliveryState shows
+// inbox_appended+wake_recorded via UpdateFinalDelivery, payload not retired;
+// (c) G+1's identity/state tuple is unchanged — generation, state,
+// resumed_from, failed_reason, Stop fence, StopNote, NeedsInput, FinalDelivery
+// (D8.5: "updating G's delivery metadata never changes G+1's state or
+// identity"). The D2 execution-identity seam (run_id/boot_seq on the
+// record) is not landed on this branch — FinalDeliveryCommit's doc comment:
+// commit_id is a stand-in for run_id — so the tuple asserts every identity
+// field the record carries today; W2b's identity fields join it when they
+// exist. The whole boot's OWN effect on G+1 — D8's stopped(restart) landing
+// with cause note, boot_seq and stop_seq — is another pass and W3b's pack;
+// the primary test's D8.9 "never working after the reboot" bound stays the
+// only whole-boot tail claim this pack makes.
+func TestBootAllGen_DeliveryOnlyPublishLeavesGPlusOneUntouched(t *testing.T) {
+	t.Fatal("BLOCKED: the W3a boot delivery-only pass does not exist on this branch — required production business method SteerBootRecovery.publishPendingCommittedFinals(ctx) (called by SteerBootRecovery.Run's D8.1 pass two, delivery-only via LifecycleStore.UpdateFinalDelivery, no LifecycleRecord mutation) is not implemented; required by ADR-20260928 D2 'Publish only a committed outbox', D8.1, D8.5, D8.9 and T11's W3a slice. The G+1 pre/post identity-state isolation oracle is specified in this test's doc comment and rides on that method — no test-only seam will stand in for it")
 }
