@@ -702,6 +702,21 @@ func (c *QQChannel) handleC2CMessage() event.C2CMessageEventHandler {
 		) {
 			return nil
 		}
+		// D9 /stop-redirect: the dispatch sibling of /cancel (corrected
+		// transport ruling §3.1) — intercepted before the agent loop's
+		// intake with the same already-authorized identity; the instruction
+		// is opaque text, never a session id.
+		if channels.DispatchRedirectIfRecognized(
+			c.ctx,
+			content,
+			c.Name(),
+			senderID,
+			senderID,
+			c.GetCancelInterceptor(),
+			channels.CancelSendFn(c),
+		) {
+			return nil
+		}
 		c.HandleMessage(c.ctx,
 			bus.Peer{Kind: bus.PeerDirect, ID: senderID},
 			data.ID,
@@ -781,6 +796,21 @@ func (c *QQChannel) handleGroupATMessage() event.GroupATMessageEventHandler {
 		}
 
 		if channels.DispatchCancelIfRecognized(
+			c.ctx,
+			content,
+			c.Name(),
+			data.GroupID,
+			senderID,
+			c.GetCancelInterceptor(),
+			channels.CancelSendFn(c),
+		) {
+			return nil
+		}
+		// D9 /stop-redirect: the dispatch sibling of /cancel (corrected
+		// transport ruling §3.1) — intercepted before the agent loop's
+		// intake with the same already-authorized identity; the instruction
+		// is opaque text, never a session id.
+		if channels.DispatchRedirectIfRecognized(
 			c.ctx,
 			content,
 			c.Name(),

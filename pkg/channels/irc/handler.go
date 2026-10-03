@@ -112,6 +112,21 @@ func (c *IRCChannel) onPrivmsg(conn *ircevent.Connection, e ircmsg.Message) {
 	) {
 		return
 	}
+	// D9 /stop-redirect: the dispatch sibling of /cancel (corrected transport
+	// ruling §3.1) — intercepted before the agent loop's intake with the same
+	// already-authorized identity; the instruction is opaque text, never a
+	// session id.
+	if channels.DispatchRedirectIfRecognized(
+		c.ctx,
+		content,
+		c.Name(),
+		chatID,
+		nick,
+		c.GetCancelInterceptor(),
+		channels.CancelSendFn(c),
+	) {
+		return
+	}
 	c.HandleMessage(c.ctx, peer, messageID, nick, chatID, content, nil, metadata, sender)
 }
 

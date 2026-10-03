@@ -386,6 +386,21 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 	) {
 		return
 	}
+	// D9 /stop-redirect: the dispatch sibling of /cancel (corrected transport
+	// ruling §3.1) — intercepted before the agent loop's intake with the same
+	// already-authorized identity; the instruction is opaque text, never a
+	// session id.
+	if channels.DispatchRedirectIfRecognized(
+		ctx,
+		content,
+		c.Name(),
+		fromUserID,
+		fromUserID,
+		c.GetCancelInterceptor(),
+		channels.CancelSendFn(c),
+	) {
+		return
+	}
 	c.HandleMessage(ctx, peer, messageID, fromUserID, fromUserID, content, mediaRefs, metadata, sender)
 }
 

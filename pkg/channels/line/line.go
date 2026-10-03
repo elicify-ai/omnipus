@@ -419,6 +419,21 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 	) {
 		return
 	}
+	// D9 /stop-redirect: the dispatch sibling of /cancel (corrected transport
+	// ruling §3.1) — intercepted before the agent loop's intake with the same
+	// already-authorized identity; the instruction is opaque text, never a
+	// session id.
+	if channels.DispatchRedirectIfRecognized(
+		c.ctx,
+		content,
+		c.Name(),
+		chatID,
+		senderID,
+		c.GetCancelInterceptor(),
+		channels.CancelSendFn(c),
+	) {
+		return
+	}
 	c.HandleMessage(c.ctx, peer, msg.ID, senderID, chatID, content, mediaPaths, metadata, sender)
 }
 
