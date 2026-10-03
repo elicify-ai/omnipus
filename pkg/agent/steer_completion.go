@@ -386,7 +386,7 @@ type steeredCompletionFlight struct {
 var steeredCompletionFlights sync.Map //nolint:gochecknoglobals
 
 func (al *AgentLoop) runSteeredCompletionOnce(rec *session.LifecycleRecord, claim executionClaim, complete func() (bool, error)) (bool, error) {
-	key := steeredCompletionFlightKey{loop: al, sessionID: rec.SessionID, generation: rec.Generation, bootSeq: claim.BootSeq, runID: claim.RunID}
+	key := steeredCompletionFlightKey{loop: al, sessionID: claim.SessionID, generation: claim.Generation, bootSeq: claim.BootSeq, runID: claim.RunID}
 	candidate := &steeredCompletionFlight{done: make(chan struct{})}
 	actual, loaded := steeredCompletionFlights.LoadOrStore(key, candidate)
 	if loaded {
