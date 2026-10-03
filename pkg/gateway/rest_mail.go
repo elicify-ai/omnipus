@@ -213,8 +213,20 @@ func (a *restAPI) mailPairClient(w http.ResponseWriter, agentID, workspaceID str
 	}
 	// w5-integration (MC-1, wiring site 5): the panel's per-request client
 	// borrows sessions from THE shared pool — never a private one — under
-	// the pair's own identity scope.
-	wireMailSessionSource(a.homePath, client, agentID, workspaceID, mb)
+	// the pair's own identity scope. A scope-resolution failure (unreadable
+	// pair identity) leaves the client unwired; while the application manager
+	// EXISTS (US-1.4's Given — boot injects it at restAPI construction), the
+	// request refuses here with the typed wiring error rather than handing
+	// back a client whose first dial would open an unmanaged socket
+	// (US-1.4/B-4: the server accepts no unmanaged socket). Without the
+	// manager the Wave C→D legacy per-call dial stays the sanctioned
+	// behaviour, exactly as at the client-level typed refusal.
+	if werr := wireMailSessionSource(a.homePath, client, agentID, workspaceID, mb); werr != nil {
+		if a.mailSessions != nil {
+			mailErr502(w, werr)
+			return nil
+		}
+	}
 	return client
 }
 

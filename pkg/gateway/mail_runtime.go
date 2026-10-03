@@ -231,21 +231,24 @@ func gatewayMailSessionsFor(homePath string) *email.MailSessions {
 
 // wireMailSessionSource injects the shared pool source and the pair's
 // identity scope into one freshly constructed client (w5 §2.2 sites 4/5).
-// A scope-resolution failure injects NEITHER: the client's first dial then
-// fails with W1's typed ErrSessionSourceMissing wiring error instead of
-// silently pooling under the endpoint-only identity (which would break pair
-// isolation, MC-3). The failure is logged without any pair attribute beyond
-// the IDs the caller already named.
-func wireMailSessionSource(homePath string, client *email.Client, agentID, workspaceID string, mb config.MailboxConfig) {
+// A scope-resolution failure injects NEITHER and returns W1's typed
+// ErrSessionSourceMissing wiring error: the caller must refuse the request
+// with it (a client left unwired here must never reach a dial — US-1.4/B-4,
+// the server accepts no unmanaged socket) instead of silently pooling under
+// the endpoint-only identity (which would break pair isolation, MC-3). The
+// failure is logged without any pair attribute beyond the IDs the caller
+// already named.
+func wireMailSessionSource(homePath string, client *email.Client, agentID, workspaceID string, mb config.MailboxConfig) error {
 	rt := gatewayMailRuntimeFor(homePath)
 	pairKey, generation, err := rt.mailScope(agentID, workspaceID, mb)
 	if err != nil {
 		logsafeWarn("rest: mail pair identity unavailable — client left unwired (typed wiring error on first dial)",
 			"agent_id", agentID, "workspace_id", workspaceID)
-		return
+		return email.ErrSessionSourceMissing
 	}
 	client.SetSessionSource(gatewayMailSessionsFor(homePath))
 	client.SetSessionScope(pairKey, generation)
+	return nil
 }
 
 // restAPI accessors — the restAPI holds the sessions handle captured at
