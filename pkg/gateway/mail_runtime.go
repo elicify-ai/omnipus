@@ -33,15 +33,22 @@ package gateway
 // never logged and never leaves the resolver except into the pool's
 // establish call (FR-W1-4).
 //
-// Instrument: W1's SessionsConfig.Instrument callback carries no context
-// (PoolInstrumentSample has no pair identity), so a per-operation join of
-// the pool sub-fields into the w6 §6.1 record is not soundly writable from
-// here — two concurrent operations on one pair would race any context-free
-// window marker. The sink is therefore left unwired in this wave and the
-// R-3 request for a context-carrying Instrument variant is filed with W1
-// (recorded in the wave report); the operation envelope
-// (mail_instrument.go::emitMailOperation) emits everything the gateway owns
-// truthfully and leaves the pool sub-fields to that seam.
+// Instrument: W1's SessionsConfig.Instrument and MailBudget.Instrument
+// callbacks carry no context (PoolInstrumentSample has no pair identity),
+// so a per-operation join of the pool sub-fields into the w6 §6.1 record is
+// not soundly writable from here — two concurrent operations on one pair
+// would race any context-free window marker. The sinks are therefore left
+// unwired and the R-3 request for a context-carrying Instrument variant is
+// filed with W1 (recorded in the wave report). Wiring today's context-free
+// callbacks would be worse than leaving them silent: each joiner sample
+// (the budget now emits one per coalesced joiner, socket_count=0 plus the
+// shared-flight marker) would appear as a SECOND record in the joining
+// request's window — breaking exactly-one-record — and each pool sample
+// would be attributable to no operation at all. Until R-3 lands, the
+// operation envelope (mail_instrument.go::emitMailOperationTimingRows)
+// states what this seam can prove and carries the explicit unknown
+// sentinel (mail_instrument.go::mailInstrumentUnknown) for the rest —
+// never a zero that reads as a measurement.
 
 import (
 	"errors"
