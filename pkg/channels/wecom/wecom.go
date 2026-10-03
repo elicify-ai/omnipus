@@ -676,6 +676,22 @@ func (c *WeComChannel) dispatchIncoming(reqID string, msg wecomIncomingMessage) 
 	) {
 		return nil
 	}
+	// D9 /stop-redirect: the dispatch sibling of /cancel (corrected transport
+	// ruling §3.1) — intercepted HERE, before the message can reach the agent
+	// loop's intake, where mid-stream text would only enter the steering
+	// queue unparsed. Same already-authorized (channelName, chatID, senderID)
+	// identity as /cancel: the instruction is opaque text, never a session id.
+	if channels.DispatchRedirectIfRecognized(
+		c.ctx,
+		content,
+		c.Name(),
+		actualChatID,
+		senderID,
+		c.GetCancelInterceptor(),
+		channels.CancelSendFn(c),
+	) {
+		return nil
+	}
 	c.HandleMessage(c.ctx, peer, msg.MsgID, senderID, actualChatID, content, mediaRefs, metadata, sender)
 	return nil
 }
