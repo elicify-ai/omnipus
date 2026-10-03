@@ -104,6 +104,16 @@ func mailWatcherTransportForPair(t *testing.T, env *mailRedEnv, agentID, workspa
 	t.Helper()
 	imapPort, _ := startPlainIMAP(t)
 	smtpPort, _ := listenCount(t)
+	return mailWatcherTransportForPairAt(t, env, agentID, workspaceID, imapPort, smtpPort)
+}
+
+// mailWatcherTransportForPairAt is the same production-parity wiring pinned
+// to a caller-chosen fixture: the summary tests stage messages into their
+// OWN startPlainIMAP fixture and the pooled transport must cycle THAT
+// mailbox for a live-count oracle to mean anything (the pool dials the
+// endpoint the CLIENT carries — never a fixture of its own choosing).
+func mailWatcherTransportForPairAt(t *testing.T, env *mailRedEnv, agentID, workspaceID string, imapPort, smtpPort int) *email.Client {
+	t.Helper()
 	client, err := email.NewClient(email.Account{
 		IMAPHost: "127.0.0.1",
 		IMAPPort: imapPort,
