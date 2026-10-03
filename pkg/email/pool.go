@@ -227,6 +227,15 @@ type Lease struct {
 	// serial by contract.
 	abortStop chan struct{}
 
+	// poisoned records a §4.5.1 poison cause releaseLease cannot otherwise
+	// observe: the borrower command's own bound (the per-command timeout
+	// inside runIMAP) or a cancellation firing while the lease's operation
+	// context is still live. A timed-out command may still be in flight on
+	// the socket — the command reader survives one slow command, so
+	// readerClosed sees nothing — and such a socket is retired at Release,
+	// never returned to the idle pool. Set only through noteOperationError.
+	poisoned bool
+
 	released bool
 }
 
@@ -287,6 +296,35 @@ func (l *Lease) stopAbortWatch() {
 	default:
 		close(l.abortStop)
 	}
+}
+
+// noteOperationError records the borrower operation's outcome on the lease
+// before Release (§4.5.1): a timeout- or cancellation-class operation error
+// poisons the socket even when the lease's own context is still live — the
+// per-command bound fired inside runIMAP, which returns its error without
+// closing anything, so neither l.ctx.Err() nor readerClosed can see it at
+// release. Release consults this marker: a marked lease is retired, never
+// returned to the idle pool with the timed-out command still in flight.
+func (l *Lease) noteOperationError(err error) {
+	if isPoisonOperationError(err) {
+		l.poisoned = true
+	}
+}
+
+// isPoisonOperationError reports whether err is one of §4.5.1's poison
+// causes that releaseLease cannot observe through the lease context or the
+// command reader: a timeout (a context deadline, or a deadline-flavored
+// transport failure) or a cancellation. Server BYE and protocol failures
+// terminate the command reader and are caught by readerClosed at release;
+// the internal command deadline leaves the reader alive.
+func isPoisonOperationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	return isDeadlineFlavored(err)
 }
 
 // PanelPresence is the transport-agnostic observer registry (spec §3.1,
@@ -898,12 +936,13 @@ func (s *MailSessions) swapReservation(sess *poolSession, id mailboxIdentity) {
 // releaseLease implements Lease.Release's decision (spec §4.6.4/4.6.5): a
 // healthy socket returns to the idle pool only when retention is enabled
 // AND at least one eligible panel observer remains for the socket's
-// workspace; everything else closes. A poisoned operation (cancelled or
-// timed-out operation context, terminated command reader) never returns to
-// the pool.
+// workspace; everything else closes. A poisoned operation (a borrower
+// command timeout or cancellation recorded by noteOperationError, a
+// cancelled or timed-out operation context, a terminated command reader)
+// never returns to the pool.
 func (s *MailSessions) releaseLease(l *Lease) {
 	sess := l.sess
-	poison := (l.ctx != nil && l.ctx.Err() != nil) || readerClosed(sess.client)
+	poison := l.poisoned || (l.ctx != nil && l.ctx.Err() != nil) || readerClosed(sess.client)
 
 	s.mu.Lock()
 	now := s.now()
@@ -1124,11 +1163,19 @@ func (c *Client) withMailSession(ctx context.Context, folder string, mutation bo
 	if err != nil {
 		return err
 	}
-	defer lease.Release()
+	// Release runs in a closure over the lease variable: a plain
+	// `defer lease.Release()` snapshots the value receiver HERE, before the
+	// operation runs, and a poison recorded afterwards would never reach it.
+	defer func() { lease.Release() }()
 	if lease.SelectError != nil {
 		return lease.SelectError
 	}
-	return fn(ctx, lease.Client(), lease.NumMessages)
+	opErr := fn(ctx, lease.Client(), lease.NumMessages)
+	// §4.5.1: a borrower command timeout or cancellation retires the socket
+	// — the timed-out command may still be in flight even though the reader
+	// and the lease context are both alive.
+	lease.noteOperationError(opErr)
+	return opErr
 }
 
 func (c *Client) sessionEndpoint() string {
@@ -1164,8 +1211,12 @@ func (c *Client) mailboxStatus(ctx context.Context, tryOnly bool) (int, uint32, 
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	defer lease.Release()
-	return statusOnClient(ctx, lease.Client())
+	// Closure, not `defer lease.Release()`: the deferred release must see
+	// noteOperationError's poison mark (see withMailSession).
+	defer func() { lease.Release() }()
+	unseen, uidnext, uidvalidity, statErr := statusOnClient(ctx, lease.Client())
+	lease.noteOperationError(statErr)
+	return unseen, uidnext, uidvalidity, statErr
 }
 
 // markPanelMetadataDirty forwards the watcher's dirty-mark through the
