@@ -482,16 +482,16 @@ func (t *CreateEmailDraftTool) Execute(ctx context.Context, args map[string]any)
 	return NewToolResult(string(data))
 }
 
-// parseReplyRecipients builds the recipient set for reply (MC-15/D26): the
-// primary (Reply-To-preferring) address is To; cc/bcc arguments add Cc/Bcc;
-// reply_all adds the original message's To and Cc recipients — minus the
-// mailbox's own address and the primary, which stays the only To. The merged
-// envelope honours MC-27 (at most 50 after de-duplication), all pre-dial.
+// parseReplyRecipients builds the recipient set for reply (MC-15/D26) by
+// calling the ONE shared recipient rule (pkg/email/reply.go::
+// BuildReplyRecipients — the same rule the gateway reply-context operation
+// runs; w4 spec US-5.AC-5: the tool adapter keeps argument coercion, never a
+// second algorithm). The primary (Reply-To-preferring) address is To;
+// cc/bcc arguments add Cc/Bcc; reply_all merges the original message's To
+// and Cc recipients — minus the mailbox's own address and the primary,
+// which stays the only To. The merged envelope honours MC-27 (at most 50
+// after de-duplication), all pre-dial.
 func parseReplyRecipients(toolName string, args map[string]any, orig *email.Message, primary, ownAddress string) (*mailRecipients, error) {
-	toAddrs, bad := email.ParseRecipientList([]string{primary})
-	if len(bad) > 0 || len(toAddrs) == 0 {
-		return nil, fmt.Errorf("%s: reply recipient %q is not a valid email address", toolName, primary)
-	}
 	ccEntries, err := recipientArgEntries(toolName, "cc", args["cc"])
 	if err != nil {
 		return nil, err
@@ -500,48 +500,43 @@ func parseReplyRecipients(toolName string, args map[string]any, orig *email.Mess
 	if err != nil {
 		return nil, err
 	}
-	ccAddrs, badCc := email.ParseRecipientList(ccEntries)
-	if len(badCc) > 0 {
-		return nil, fmt.Errorf("%s: recipient %q is not a valid email address", toolName, badCc[0])
+	mode := email.ReplyModeReply
+	if replyAllArg(args) {
+		mode = email.ReplyModeReplyAll
+	}
+	rr, err := email.BuildReplyRecipients(email.ReplyInput{
+		From:       orig.From,
+		ReplyTo:    orig.ReplyTo,
+		To:         splitOrigList(orig.To),
+		Cc:         splitOrigList(orig.Cc),
+		ExtraCc:    ccEntries,
+		Mode:       mode,
+		OwnAddress: ownAddress,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", toolName, err)
 	}
 	bccAddrs, badBcc := email.ParseRecipientList(bccEntries)
 	if len(badBcc) > 0 {
 		return nil, fmt.Errorf("%s: recipient %q is not a valid email address", toolName, badBcc[0])
 	}
-	if replyAllArg(args) {
-		for _, list := range []string{orig.To, orig.Cc} {
-			if strings.TrimSpace(list) == "" {
-				continue
-			}
-			addrs, badList := email.ParseRecipientList([]string{list})
-			if len(badList) > 0 {
-				return nil, fmt.Errorf("%s: original message recipient %q is not a valid email address", toolName, badList[0])
-			}
-			ccAddrs = append(ccAddrs, addrs...)
-		}
-	}
-
-	// Drop the primary (already To) and the mailbox's own address from Cc,
-	// then de-duplicate within Cc — a reply-all must not loop mail back to
-	// the sender's own mailbox.
-	primaryKey := strings.ToLower(primary)
-	ownKey := strings.ToLower(strings.TrimSpace(ownAddress))
-	seenCc := make(map[string]bool)
-	ccClean := make([]mail.Address, 0, len(ccAddrs))
-	for _, a := range ccAddrs {
-		key := strings.ToLower(a.Address)
-		if key == primaryKey || (ownKey != "" && key == ownKey) || seenCc[key] {
-			continue
-		}
-		seenCc[key] = true
-		ccClean = append(ccClean, a)
-	}
-	env := envelopeRecipientsDedup(toAddrs, ccClean, bccAddrs)
+	env := envelopeRecipientsDedup(rr.To, rr.Cc, bccAddrs)
 	if len(env) > maxMailRecipients {
 		return nil, fmt.Errorf("%s: more than %d recipients after de-duplication (got %d); the maximum is %d",
 			toolName, maxMailRecipients, len(env), maxMailRecipients)
 	}
-	return &mailRecipients{To: toAddrs, Cc: ccClean, Bcc: bccAddrs, Envelope: env}, nil
+	return &mailRecipients{To: rr.To, Cc: rr.Cc, Bcc: bccAddrs, Envelope: env}, nil
+}
+
+// splitOrigList passes one comma-joined original header list through the
+// recipient parser's own entry splitting: ParseRecipientList splits entries
+// on CR/LF and commas itself, so the joined form is passed as a single
+// entry. An empty list is the empty entry set.
+func splitOrigList(joined string) []string {
+	if strings.TrimSpace(joined) == "" {
+		return nil
+	}
+	return []string{joined}
 }
 
 // replyAllArg reports the optional reply_all flag (absent/false → false).

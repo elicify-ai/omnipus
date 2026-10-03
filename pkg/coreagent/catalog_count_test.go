@@ -143,7 +143,24 @@ import (
 // new shipped defaults.go entry. POST-MERGE addition, same rule as grep and
 // the knowledge_list pair above. Policy wiring rides the ADR-090 inventory
 // grant (allow for every role) and the D19 configure-time fill.
-const catalogSizeToday = 111
+//
+// Bumped 111 -> 114 adding the three agent attachment tools for RECEIVED
+// mail attachments (ADR-20261001 F3, w4 spec US-3, #1171; founder Q4=A,
+// 2026-10-02): list_email_attachments (descriptors only — no body bytes,
+// no Seen change), read_email_attachment (text-only first wave; binary
+// returns an explicit unsupported outcome plus the Save option), and
+// download_email_attachment (the shared mailattachment service — same cap,
+// naming, audit and refusals as the panel; destination always the
+// workspace mail hierarchy, no path argument). All three are POST-MERGE
+// additions, same rule as grep and create_email_draft above. Shipped
+// ceiling: allow/allow/ask (defaults.go) — the save tool is a normal
+// download-shaped write with the ordinary ask default and the ordinary
+// Auto-approve classification, per the founder's explicit "no exception,
+// no special mechanism" ruling; no new blocklist, scanner or third policy
+// layer was added. Registered at every Hard-Constraint-6 touch point in
+// the same commit (seed.go, defaults.go, ADR-090 inventory, Auto classes,
+// EmailToolset).
+const catalogSizeToday = 114
 
 // currentKnowledgeToolNames is every knowledge_* tool presently in the
 // catalog: ADR-068 D15.3's original six (the replacement for ADR-067's
@@ -354,7 +371,7 @@ func TestCatalog_MergeArithmetic(t *testing.T) {
 		// alongside (the two knowledge names) their own implementation.
 		// Bump this alongside catalogSizeToday, in the same commit,
 		// whenever a tool is added post-merge.
-		postMergeAdditions = 10 // +3 goal-flow; +2 ADR-090 readback; +1 environment_setup; +1 create_email_draft (email-mail-view spec §2.7 point 6)
+		postMergeAdditions = 13 // +3 goal-flow; +2 ADR-090 readback; +1 environment_setup; +1 create_email_draft (email-mail-view spec §2.7 point 6); +3 mail attachment tools (ADR-20261001 F3, w4 spec US-3, founder Q4=A)
 	)
 	// Checked against the FROZEN adr068OriginalSixKnowledgeToolNames, not
 	// currentKnowledgeToolNames — this arithmetic is a fact about what the

@@ -100,11 +100,7 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 	}
 	cur, err := client.ReadView(r.Context(), email.FolderDrafts, ref)
 	if err != nil {
-		if errors.Is(err, email.ErrMailRefInvalid) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
-			mailErr502(w, err)
-		}
+		mailDraftViewErr(w, err)
 		return
 	}
 	if status, code, msg := mailDraftStaleness(cur, req.Uid, req.Uidvalidity); status != 0 {
@@ -204,7 +200,8 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 	cleanupWarn := ""
 	if derr := client.DeleteDraft(r.Context(), cur.UID); derr != nil {
 		cleanupWarn = "the draft was updated, but deleting the old copy failed"
-		logsafeWarn("rest: old draft copy delete failed", "agent_id", agentID, "error", derr)
+		// w5 US-7.4/MC-15: only the closed class reaches the log.
+		logsafeWarn("rest: old draft copy delete failed", "agent_id", agentID, "class", email.ClassifyMailError(derr))
 	}
 	draftSendForget(out.MessageID)
 	auditMail(a, audit.EventMailPanelDraftUpdated, audit.DecisionAllow, map[string]any{
@@ -218,6 +215,10 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		"folder":      client.DraftsFolderName(),
 		"attachments": mailAuditAttachments(in.Attachments),
 	})
+	// Date stays unset on purpose: this fresh draft copy has no fetch-derived
+	// date, and the required-but-nullable wire field (the W0 amendment)
+	// serializes the unset pointer as the contract's null "No date" state —
+	// never a fabricated 0001-01-01 zero date (US-6.AC-4).
 	resp := gen.MailMessage{
 		Folder: gen.MailMessageFolderDrafts, Uid: mailUIDToWire(newUID), Uidvalidity: mailUIDToWire(newUV),
 		Subject: req.Subject, To: mailNonNilSlice(req.To), Cc: mailNonNilSlice(derefStrings(req.Cc)),
@@ -240,11 +241,16 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		if mailViewDraftBodyPart(p) {
 			continue
 		}
+		// reported_size_bytes stays unset: the listing is parsed from the
+		// just-composed bytes, which carry only the decoded size — never a
+		// server-reported transfer size, and the contract keeps the two
+		// distinct (decoded must not be duplicated into reported).
 		resp.Attachments = append(resp.Attachments, struct {
-			ContentType string `json:"content_type"`
-			Filename    string `json:"filename"`
-			PartIndex   int    `json:"part_index"`
-			SizeBytes   int    `json:"size_bytes"`
+			ContentType       string `json:"content_type"`
+			Filename          string `json:"filename"`
+			PartIndex         int    `json:"part_index"`
+			ReportedSizeBytes *int64 `json:"reported_size_bytes,omitempty"`
+			SizeBytes         int    `json:"size_bytes"`
 		}{ContentType: p.ContentType, Filename: p.Filename, PartIndex: p.PartIndex, SizeBytes: p.SizeBytes})
 	}
 	resp.Attachments = mailNonNilSlice(resp.Attachments)
@@ -329,6 +335,29 @@ func mailDraftUIDPreconditionsValid(bodyUID, bodyUV int64) bool {
 	return bodyUID >= 0 && bodyUID <= maxUint32 && bodyUV >= 0 && bodyUV <= maxUint32
 }
 
+// mailDraftViewErr maps a ReadView failure on the draft update/send paths to
+// the response email-mail-view-spec §2.3 pins for this surface: a malformed
+// ref is 400; a ref refused by the same-lease stale-reference validation
+// (W2 spec §3.16 R-3.16-1/2 — view.go::refEpochMismatch's typed
+// ErrMailStaleReference) IS the spec's stale precondition and is answered
+// 409 with body code "stale_draft" — the exact triple mailDraftStaleness
+// writes for a body describing a superseded copy (MC-16, round-2
+// MAJ-008.1) — never the generic upstream 502 the refusal used to collapse
+// into. The guard stands: the stale ref is refused BEFORE any command uses
+// its UID — never resolved, never fetched, never handed to SMTP. Any other
+// failure stays in the closed 502 class (MC-8). One helper for both draft
+// mutation paths so the two cannot drift apart again.
+func mailDraftViewErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, email.ErrMailRefInvalid):
+		jsonErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, email.ErrMailStaleReference):
+		jsonErrCode(w, http.StatusConflict, "stale draft", "stale_draft")
+	default:
+		mailErr502(w, err)
+	}
+}
+
 // mailDraftStaleness is the MC-16 POST-READ check: a body describing
 // anything other than the CURRENT copy is stale. Returns (409,
 // "stale_draft", ...) so callers emit the closed code on the wire.
@@ -393,11 +422,7 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 	}
 	cur, err := client.ReadView(r.Context(), email.FolderDrafts, ref)
 	if err != nil {
-		if errors.Is(err, email.ErrMailRefInvalid) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
-			mailErr502(w, err)
-		}
+		mailDraftViewErr(w, err)
 		return
 	}
 	key := bracketMessageID(cur.MessageID)
@@ -539,13 +564,15 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		resp.SentSaved = false
 		sw := "the message was sent, but saving to the Sent folder failed"
 		resp.SaveWarning = &sw
-		logsafeWarn("rest: draft sent copy APPEND failed", "agent_id", agentID, "error", aerr)
+		// w5 US-7.4/MC-15: only the closed class reaches the log.
+		logsafeWarn("rest: draft sent copy APPEND failed", "agent_id", agentID, "class", email.ClassifyMailError(aerr))
 	}
 	cleanupWarn := ""
 	expunged, derr := client.DeleteDraftStatus(r.Context(), cur.UID)
 	if derr != nil {
 		cleanupWarn = "the message was sent, but deleting the draft copy failed"
-		logsafeWarn("rest: draft cleanup after send failed", "agent_id", agentID, "error", derr)
+		// w5 US-7.4/MC-15: only the closed class reaches the log.
+		logsafeWarn("rest: draft cleanup after send failed", "agent_id", agentID, "class", email.ClassifyMailError(derr))
 	}
 	resp.DraftCleanupWarning = nil
 	if cleanupWarn != "" {

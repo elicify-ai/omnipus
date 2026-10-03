@@ -84,7 +84,10 @@ export type WsFrameType =
   | "session_snapshot"
   | "catch_up_complete"
   | "user_message"
-  | "agent_created";
+  | "agent_created"
+  | "mail_panel_observer"
+  | "mail_panel_observer_ack"
+  | "mail_panel_observer_error";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -1152,6 +1155,28 @@ export interface AgentCreatedFrame {
   agent_id: string;
 }
 
+export interface MailPanelObserverFrame {
+  type: "mail_panel_observer";
+  action: "open" | "close";
+  observer_id: string;
+  workspace_id: string;
+}
+
+export interface MailPanelObserverAckFrame {
+  type: "mail_panel_observer_ack";
+  action: "open" | "close";
+  observer_id: string;
+  workspace_id: string;
+}
+
+export interface MailPanelObserverErrorFrame {
+  type: "mail_panel_observer_error";
+  observer_id: string;
+  workspace_id: string;
+  code: "unauthorized_workspace" | "malformed_frame";
+  error: string;
+}
+
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
@@ -1233,7 +1258,10 @@ export type WsFrame =
   | SessionSnapshotFrame
   | CatchUpCompleteFrame
   | UserMessageFrame
-  | AgentCreatedFrame;
+  | AgentCreatedFrame
+  | MailPanelObserverFrame
+  | MailPanelObserverAckFrame
+  | MailPanelObserverErrorFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -1325,4 +1353,7 @@ export type ServerFrame =
   | SessionSnapshotFrame
   | CatchUpCompleteFrame
   | UserMessageFrame
-  | AgentCreatedFrame;
+  | AgentCreatedFrame
+  | MailPanelObserverFrame
+  | MailPanelObserverAckFrame
+  | MailPanelObserverErrorFrame;

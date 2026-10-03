@@ -182,53 +182,99 @@ type MailboxStatuser interface {
 	MailboxStatus(ctx context.Context) (unseen int, uidnext, uidvalidity uint32, err error)
 }
 
+// poolTryStatuser is the watcher's non-blocking STATUS capability (W1
+// §4.10.2): the same one-STATUS probe, but the pool acquisition skips
+// instead of queueing when the ceilings are full. Same-package capability,
+// implemented by *Client when a session source is injected.
+type poolTryStatuser interface {
+	mailboxStatusTry(ctx context.Context) (unseen int, uidnext, uidvalidity uint32, err error)
+}
+
 // Cycle runs one watcher pass for the mailbox: probe unseen/uidnext/
 // uidvalidity, update the state file. It never mutates flags, never creates
 // tasks, never starts an agent turn (D20/D27/FR-023). When a budget is
 // wired, the dial goes through Budget.TryCall (non-blocking): a skip —
-// backoff or both slots busy — is not a cycle failure, so the cycle returns
-// without recording anything; only the dial itself is gated, and the
-// watcher's own success/failure bookkeeping is unchanged.
+// backoff, both slots busy, or the pool ceilings full (ErrPoolSkipped,
+// W1 §4.10.2) — is not a cycle failure, so the cycle returns without
+// recording anything; only the dial itself is gated, and the watcher's own
+// success/failure bookkeeping is unchanged. A skipped cycle leaves the
+// last-checked time unchanged: the badge cannot claim a check that did not
+// happen.
 func (w *Watcher) Cycle(ctx context.Context) error {
 	err := w.runCycle(ctx)
 	if err == nil {
 		return nil
 	}
-	if w.cfg.Budget != nil && errors.Is(err, ErrMailSkipped) {
-		// The dial never happened — do NOT recordFailure (a budget skip must
-		// not advance backoff); log and let the next tick try again.
-		slog.Info("email watcher: cycle skipped by mail budget",
+	if w.cfg.Budget != nil && (errors.Is(err, ErrMailSkipped) || errors.Is(err, ErrPoolSkipped)) {
+		// The dial never happened — do NOT recordFailure (a skip must not
+		// advance backoff); log and let the next tick try again.
+		slog.Info("email watcher: cycle skipped",
 			"agent_id", w.cfg.AgentID, "workspace_id", w.cfg.WorkspaceID,
 			"reason", err.Error())
 		return nil
 	}
-	w.recordFailure(classifyMailError(err), err.Error())
+	// Only the closed CLASS is persisted — never the raw provider text
+	// (FR-W1-23, §4.12).
+	w.recordFailure(classifyMailError(err))
 	return err
 }
 
 // runCycle is the raw cycle body: probe → recordSuccess, with the probe
-// error returned to Cycle for the recordFailure tail. The budget skip is
-// detected via the ErrMailSkipped sentinel inside Cycle.
+// error returned to Cycle for the recordFailure tail. The skip sentinels
+// (ErrMailSkipped / ErrPoolSkipped) are detected inside Cycle.
 func (w *Watcher) runCycle(ctx context.Context) error {
+	w.mu.Lock()
+	prev := w.state
+	w.mu.Unlock()
 	unseen, uidnext, uidvalidity, err := w.probe(ctx)
 	if err != nil {
 		return err
 	}
 	w.recordSuccess(unseen, uidnext, uidvalidity)
+	w.markPanelDirtyIfNeeded(prev, unseen, uidvalidity)
 	return nil
 }
 
+// markPanelDirtyIfNeeded is the watcher's ONLY panel-metadata interaction
+// (FR-W1-26): when a cycle observes a folder-version change (a UIDVALIDITY
+// reset or new unseen mail) while no panel event consumes it, the change is
+// signalled through the published dirty-mark interface — never a cache
+// write, never a refresh trigger, no mail data carried.
+func (w *Watcher) markPanelDirtyIfNeeded(prev WatcherState, unseen int, uidvalidity uint32) {
+	if prev.LastSuccessAt == "" {
+		// First run establishes the baseline; a baseline is not a change.
+		return
+	}
+	if prev.UIDValidity != uidvalidity || unseen > prev.UnseenTotal {
+		if dm, ok := w.cfg.Transport.(interface {
+			markPanelMetadataDirty(pair, folder string)
+		}); ok {
+			dm.markPanelMetadataDirty(w.cfg.AgentID+"/"+w.cfg.WorkspaceID, "INBOX")
+		}
+	}
+}
+
 // probe reads the mailbox's live counters without touching any flag. The
-// STATUS-based path is used whenever the transport exposes it (*Client).
-// With a budget wired (A8), the dial itself is gated through Budget.TryCall
-// (non-blocking): a refusal — account in backoff or both slots busy —
-// surfaces as the ErrMailSkipped sentinel (Cycle's skip branch handles it;
-// the dial function never runs). A nil budget dials directly, unchanged —
-// nil = ungated, which the unit tests driving a bare Watcher rely on.
+// STATUS-based path is used whenever the transport exposes it (*Client) —
+// preferring the pool-aware non-blocking variant when a session source is
+// injected (§4.10.2). With a budget wired (A8), the dial itself is gated
+// through Budget.TryCall (non-blocking): a refusal — account in backoff or
+// both slots busy — surfaces as the ErrMailSkipped sentinel (Cycle's skip
+// branch handles it; the dial function never runs). A nil budget dials
+// directly, unchanged — nil = ungated, which the unit tests driving a bare
+// Watcher rely on.
 func (w *Watcher) probe(ctx context.Context) (int, uint32, uint32, error) {
 	var unseen int
 	var uidnext, uidvalidity uint32
 	dial := func(ctx context.Context) error {
+		if sp, ok := w.cfg.Transport.(poolTryStatuser); ok {
+			u, n, v, err := sp.mailboxStatusTry(ctx)
+			if err != nil {
+				return err
+			}
+			unseen, uidnext, uidvalidity = u, n, v
+			return nil
+		}
 		if sp, ok := w.cfg.Transport.(MailboxStatuser); ok {
 			u, n, v, err := sp.MailboxStatus(ctx)
 			if err != nil {
@@ -263,6 +309,7 @@ func (w *Watcher) probe(ctx context.Context) (int, uint32, uint32, error) {
 		AgentID:     w.cfg.AgentID,
 		WorkspaceID: w.cfg.WorkspaceID,
 		Operation:   "watcher_cycle",
+		Purpose:     "watcher",
 	}, dial)
 	if err != nil {
 		return 0, 0, 0, err
@@ -288,13 +335,19 @@ func (w *Watcher) recordSuccess(unseen int, uidnext, uidvalidity uint32) {
 }
 
 // recordFailure stores the classified failure and the next attempt time.
-func (w *Watcher) recordFailure(errClass, errText string) {
+// Only the SAFE classified representation is persisted (FR-W1-23, §4.12,
+// grill-1 C-1): the closed class from classifyMailError plus safe metadata
+// (next-attempt time, consecutive-failure count). The raw provider error
+// string is NEVER written to email-watch/<pair>.json — raw provider text can
+// embed folder names, server hostnames and account prefixes, and persisting
+// it would turn a transient failure into a durable disclosure.
+func (w *Watcher) recordFailure(errClass string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.applyState(func() {
 		w.state.State = "error"
 		w.state.LastErrorClass = errClass
-		w.state.LastErrorText = errText
+		w.state.LastErrorText = "" // raw provider text never persists (FR-W1-23)
 		w.state.Attempt++
 		// Real jitter (MC-33): draw the unit from the package-level
 		// concurrency-safe source (math/rand/v2) instead of the hardcoded
@@ -373,10 +426,18 @@ func (w *Watcher) save() error {
 
 // classifyMailError maps a mail transport error to the spec's closed error
 // class enum (MC-8): timeout | dns | connect_refused | auth_failed | tls |
-// folder_missing | server_error. Refusal is detected structurally first
-// (errors.Is on ECONNREFUSED) and before the substring sweep: the dial
-// wrapper's "dial TLS" text must not turn a refused connection into the
-// tls class.
+// folder_missing | server_error. Structural detection runs first (errors.Is /
+// errors.As on the sentinel error types), before the substring sweep: the
+// dial wrapper's "dial TLS" text must not turn a refused connection into the
+// tls class, and a *net.DNSError is the resolver's own verdict — no substring
+// guess needed. The dns TEXT patterns are deliberately name-resolution-only:
+// the old bare "resolve" pattern matched the pool's "resolve credentials"
+// wrapper and reported a local credential failure as dns — the wrong lead
+// for an operator. A credential-resolution failure never reaches the mail
+// server, so neither auth_failed nor dns is truthful; MC-8 has no local
+// class, and the contract enum is closed, so it takes the honest
+// server_error fallback with a distinguishing warning (never the raw text —
+// FR-W1-23 redaction discipline).
 func classifyMailError(err error) string {
 	if err == nil {
 		return ""
@@ -394,12 +455,30 @@ func classifyMailError(err error) string {
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return "connect_refused"
 	}
+	var dnserr *net.DNSError
+	if errors.As(err, &dnserr) {
+		return "dns"
+	}
 	msg := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(msg, "dns"), strings.Contains(msg, "resolve"), strings.Contains(msg, "no such host"):
-		return "dns"
-	case strings.Contains(msg, "auth"), strings.Contains(msg, "invalid credentials"), strings.Contains(msg, "login failed"):
+	case strings.Contains(msg, "authentication"), strings.Contains(msg, "invalid credentials"), strings.Contains(msg, "login failed"):
+		// The server rejected presented credentials. Must stay ahead of the
+		// generic credential case below: "invalid credentials" is auth.
 		return "auth_failed"
+	case strings.Contains(msg, "credential"):
+		// Local credential-resolution failure (the pool's "resolve
+		// credentials" wrapper; the resolver's "credential store locked",
+		// "credentials not resolvable"): no dial ever happened. server_error
+		// is the closest truthful class in the closed MC-8 enum; this warn
+		// keeps the cause distinguishable from a server fault. The raw error
+		// text is deliberately NOT logged here (FR-W1-23).
+		slog.Warn("email error classified: local credential-resolution failure, stored as server_error")
+		return "server_error"
+	case strings.Contains(msg, "no such host"), strings.Contains(msg, "lookup"), strings.Contains(msg, "dns error"), strings.Contains(msg, "no addresses for"):
+		// Name-resolution failures only. "no addresses for" is
+		// resolveHostBounded's empty-answer failure — a genuine resolution
+		// failure that carries no *net.DNSError for the structural check.
+		return "dns"
 	case strings.Contains(msg, "connection refused"), strings.Contains(msg, "connect:"):
 		return "connect_refused"
 	case strings.Contains(msg, "tls"), strings.Contains(msg, "x509"), strings.Contains(msg, "certificate"):

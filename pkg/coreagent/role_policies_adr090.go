@@ -26,7 +26,13 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 	grant(allow, "create_email_draft")
 	grant(allow, "ToolSearch", "Skill")
 
-	commonWork := []string{"read_file", "list_directory", "grep", "list_mounts", "library_list", "library_read", "remember", "recall_memory", "recall_conversation", "send_message", "message_parent", "goal_claim", "read_inbox", "search_email", "read_message", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
+	// list_email_attachments / read_email_attachment join commonWork with
+	// the same grants as read_message (w4 F3: freely list and read received
+	// attachments); download_email_attachment is granted ask to the
+	// mail-reading roles alongside send_email/reply — the ordinary ask
+	// posture, never a loosening. Admin/hidden roles keep their narrower
+	// mail authority (no commonWork mail reads).
+	commonWork := []string{"read_file", "list_directory", "grep", "list_mounts", "library_list", "library_read", "remember", "recall_memory", "recall_conversation", "send_message", "message_parent", "goal_claim", "read_inbox", "search_email", "read_message", "list_email_attachments", "read_email_attachment", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
 	switch id {
 	case IDMia:
 		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "write_file", "edit_file", "append_file", "search_web", "fetch_url", "switch_agent", "send_file", "create_task", "update_task", "list_tasks", "set_todos", "find_skills")...)
@@ -48,13 +54,13 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		// Mia's intended bash posture is Ask, same as everyone else —
 		// listed explicitly (matching environment_setup's own convention
 		// above) rather than silently defaulting to it.
-		grant(ask, "send_email", "reply", "request_mount", "browser_upload_file", "environment_setup", "bash")
+		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "browser_upload_file", "environment_setup", "bash")
 	case IDJim:
 		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "switch_agent", "send_file", "create_task", "update_task", "list_tasks", "list_jobs", "set_todos", "delegate", "create_plan", "execute_plan", "stop_plan", "find_skills", "list_skills")...)
-		grant(ask, "send_email", "reply", "request_mount", "browser_upload_file")
+		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "browser_upload_file")
 	case IDAva:
 		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "switch_agent", "list_agents", "get_agent", "get_agent_tools", "create_agent", "update_agent", "delete_agent", "list_models", "find_skills", "list_skills", "install_skill", "create_skill", "edit_skill", "remove_skill", "list_mcp_servers", "get_workspace", "list_workspaces", "update_workspace")...)
-		grant(ask, "send_email", "reply", "request_mount")
+		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount")
 	case IDAdmin:
 		grant(allow, "remember", "recall_memory", "recall_conversation", "AskUserQuestion", "set_goal", "goal_claim", "read_file", "write_file", "edit_file", "append_file", "list_directory", "grep", "list_mounts", "send_message", "switch_agent", "add_mcp_server", "list_mcp_servers", "list_providers", "configure_provider", "test_provider", "list_models", "list_channels", "configure_channel", "enable_channel", "test_channel", "run_doctor", "get_usage")
 		grant(allow, "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list")
@@ -70,10 +76,10 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		grant(ask, "request_mount", "remove_mcp_server", "disable_channel", "environment_setup", "bash")
 	case IDPlanner:
 		grant(allow, append(commonWork, "search_web", "fetch_url", "create_task", "update_task", "list_tasks", "delegate")...)
-		grant(ask, "send_email", "reply", "request_mount")
+		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount")
 	case IDResearcher:
 		grant(allow, append(commonWork, "search_web", "fetch_url")...)
-		grant(ask, "send_email", "reply", "request_mount")
+		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount")
 	case IDWorker:
 		grant(allow, append(commonWork, "write_file", "edit_file", "append_file", "search_web", "fetch_url", "send_file", "update_task", "list_tasks", "set_todos", "delegate", "serve_web")...)
 		// environment_setup (ADR-090 ES-FR-01): Ask — explicit stored entry
@@ -84,7 +90,7 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		// above — the global ceiling shipped "ask", so the Worker's
 		// intended bash posture is Ask too, listed explicitly rather than
 		// silently defaulting to it.
-		grant(ask, "send_email", "reply", "request_mount", "environment_setup", "bash")
+		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "environment_setup", "bash")
 	}
 	if id == IDMia || id == IDJim || id == IDWorker {
 		grant(ask, "knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create")

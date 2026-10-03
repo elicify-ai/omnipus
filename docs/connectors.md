@@ -77,14 +77,19 @@ Each guide explains the credentials and platform-specific setup.
 
 Use **Configure** on a row to change its settings. The stored password is never shown; leave **Password** blank to keep it while editing the *same* agent and workspace. If you change either the owning agent or workspace, you must enter the password again because credentials do not transfer. A successful move can show **Mailbox saved, but the old mailbox could not be removed — delete it manually from the list.** if removal of the old row fails. **Remove Mailbox** asks for confirmation before deleting the saved configuration and credentials; a failed removal keeps the confirmation open and shows the error.
 
+### Email mailbox settings — folder names
+
+Under **Folder names**, **Sent folder name** and **Drafts folder name** tell Omnipus which folders to use for sent mail and drafts. Leave a field empty to let Omnipus find the folder automatically (the placeholder says **Automatic**); enter a value to use exactly that folder name on your mail server. Saving with a field cleared removes the override. A name Omnipus cannot confirm on your server shows a warning beside that field — check the spelling or clear the field back to automatic; the name is never silently ignored. A name saved by an older version stays as the field's value until you clear it yourself.
+
 Back in the workspace, select **Mail** to open the [mailbox panel](mail.md#set-up-and-open-mail) and choose the agent's address. Email is not set up through the chat-connector **Configure** flow above.
 
 ## Limits and things to watch
 
 - A saved secret is not shown again. Leave its field blank when editing if you want to keep the stored value.
 - A connector can show **Failed to start** when its credentials or connection fail. Open **Configure** to correct it.
-- **Disable** stops a connected account without deleting its configuration.
-- Deleting an account removes its configuration, credentials, and stored state.
+- **Disable** stops a connected account without deleting its configuration. Disabling also erases the mailbox's cached mail metadata and its new-mail watching state, and revokes its open previews; re-enabling starts fresh. The configuration and stored password are kept, and the mailbox keeps the same private storage name it had.
+- Deleting an account removes its configuration, credentials, cached mail metadata, and new-mail watching state. The removal result says which of the two happened: **removed** (everything succeeded) or **removed, cleanup pending** (the account is gone and can no longer be used, but erasing its cached files did not fully finish). Cleanup pending is never shown as a full success; the response carries a retry key, and the separately authorized cleanup operation (`POST /api/v1/mailboxes/cleanup` with that key) finishes the job — it keeps working after the mailbox row is gone. Deleting an agent or a workspace runs the same erase for every mailbox it held.
+- Omnipus keeps the mailbox's cached mail metadata in its own private storage under the data directory, and the application makes sure its own backups and restores never copy that storage or the new-mail watching state. A **cache unavailable** warning means Omnipus could not prove that protection on your install — a genuine failure such as a disk or permission problem — not missing external setup. Mail keeps working live while the warning shows; only the cached metadata is off.
 - A workspace-bound connector cannot fall back to another agent if its selected agent is later deleted or becomes ineligible. Update the connector's routing choice.
 - WhatsApp may be unavailable in a lite build.
 - LINE and Google Chat webhook mode need a public HTTPS address.

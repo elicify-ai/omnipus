@@ -141,6 +141,24 @@ func (a *restAPI) handleWorkspaceMail(w http.ResponseWriter, r *http.Request, re
 			return
 		}
 		a.handleMailAttachment(w, r, workspaceID, tail[0], tail[2], tail[4], idx)
+	// F2: the save-to-library subresource (w4). The drafts shadowing note
+	// above does not apply: drafts attachments save through the same
+	// explicit subresource, and this case is longer than the generic
+	// folder-message cases so it matches only its own shape.
+	case len(tail) == 8 && tail[1] == "folders" && tail[3] == "messages" && tail[5] == "attachments" && tail[7] == "save-to-library":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		idx, ierr := strconv.Atoi(tail[6])
+		if ierr != nil || idx < 0 {
+			jsonErr(w, http.StatusBadRequest, "malformed part index")
+			return
+		}
+		a.handleMailAttachmentSave(w, r, workspaceID, tail[0], tail[2], tail[4], idx)
+	// F5: the reply-context operation (w4).
+	case len(tail) == 6 && tail[1] == "folders" && tail[3] == "messages" && tail[5] == "reply-context":
+		a.handleMailReplyContext(w, r, workspaceID, tail[0], tail[2], tail[4])
 	default:
 		jsonErr(w, http.StatusNotFound, "not found")
 	}
@@ -193,6 +211,22 @@ func (a *restAPI) mailPairClient(w http.ResponseWriter, agentID, workspaceID str
 		jsonErr(w, http.StatusNotFound, "no mailbox configured for this agent and workspace")
 		return nil
 	}
+	// w5-integration (MC-1, wiring site 5): the panel's per-request client
+	// borrows sessions from THE shared pool — never a private one — under
+	// the pair's own identity scope. A scope-resolution failure (unreadable
+	// pair identity) leaves the client unwired; while the application manager
+	// EXISTS (US-1.4's Given — boot injects it at restAPI construction), the
+	// request refuses here with the typed wiring error rather than handing
+	// back a client whose first dial would open an unmanaged socket
+	// (US-1.4/B-4: the server accepts no unmanaged socket). Without the
+	// manager the Wave C→D legacy per-call dial stays the sanctioned
+	// behaviour, exactly as at the client-level typed refusal.
+	if werr := wireMailSessionSource(a.homePath, client, agentID, workspaceID, mb); werr != nil {
+		if a.mailSessions != nil {
+			mailErr502(w, werr)
+			return nil
+		}
+	}
 	return client
 }
 
@@ -225,9 +259,12 @@ func auditMail(a *restAPI, event audit.EventName, decision audit.Decision, detai
 
 // mailErr502 writes the MC-8 error envelope: the closed error class is the
 // only thing that crosses the wire - `error` carries the class string,
-// `code` its machine-readable duplicate.
+// `code` its machine-readable duplicate. w5-integration US-7.4/MC-15: the
+// same closed class is the only thing that reaches the LOG — the raw
+// provider error value never does (it can carry subjects, addresses, folder
+// names, Message-IDs, credentials, full URLs or raw server responses).
 func mailErr502(w http.ResponseWriter, err error) {
 	class := email.ClassifyMailError(err)
-	logsafeError("rest: mail upstream failure", "class", class, "error", err)
+	logsafeError("rest: mail upstream failure", "class", class)
 	jsonErrCode(w, http.StatusBadGateway, "mail server error: "+class, class)
 }

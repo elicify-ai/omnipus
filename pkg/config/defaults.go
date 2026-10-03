@@ -308,7 +308,21 @@ func defaultToolPoliciesGeneral() map[string]string {
 		// per-tool ask/allow values only where the agent has no explicit
 		// entry.
 		"create_email_draft": "allow",
-		"ToolSearch":         "allow",
+		// Attachment tools (ADR-20261001 F3, w4 spec US-3): listing and
+		// reading RECEIVED attachments are read-only structure/text access
+		// — ceiling allow, alongside read_inbox/read_message. Saving is a
+		// normal download tool with the shipped global default ASK (founder
+		// F3 decision): the ordinary permission system governs it, with the
+		// existing workspace-path conditional Auto class and no
+		// attachment-specific approval, blocklist or fallback. Hard
+		// Constraint #6: these are the shipped ceiling entries every agent's
+		// policy resolution reads; ReconcileToolPolicyCeiling self-heals
+		// them into old installs additively, never overwriting an
+		// operator-set value, and no per-agent deny backfill exists.
+		"list_email_attachments":    "allow",
+		"read_email_attachment":     "allow",
+		"download_email_attachment": "ask",
+		"ToolSearch":                "allow",
 		// Skill (ADR-072 D1): the on-demand skill load/search tool —
 		// the same structural-floor reasoning as ToolSearch above
 		// applies one layer up for skills. Raising the ceiling grants

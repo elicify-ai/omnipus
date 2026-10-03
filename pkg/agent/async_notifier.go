@@ -350,7 +350,10 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 }
 
 func asyncNotifyMetadata(event AsyncNotifyEvent) map[string]string {
-	metadata := make(map[string]string, len(event.Metadata)+2)
+	// Capacity hint only — CodeQL go/allocation-size-overflow false positive: maps
+	// grow as needed, and the two optional "steer_*" keys are already among
+	// event.Metadata's entries, so len(event.Metadata) is an exact, overflow-free hint.
+	metadata := make(map[string]string, len(event.Metadata))
 	for key, value := range event.Metadata {
 		metadata[key] = fmt.Sprint(value)
 	}

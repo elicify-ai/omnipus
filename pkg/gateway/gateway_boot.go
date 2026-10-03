@@ -422,7 +422,9 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 	// cycle, so mailbox changes via the Connectors API need no restart.
 	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
-			return buildMailboxes(stg.agentLoop.GetConfig(), stg.credStore)
+			rt := gatewayMailRuntimeFor(stg.homePath)
+			return buildMailboxes(stg.agentLoop.GetConfig(), stg.credStore,
+				gatewayMailSessionsFor(stg.homePath), rt.mailGenerationForPair)
 		})
 		// A8 mail-operation budget: the watcher set gates its cycles through
 		// the SAME shared per-account gate the REST panel and the agent tools
@@ -671,6 +673,13 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	stg.wsHandler = newWSHandler(stg.msgBus, stg.agentLoop, stg.allowedOrigin)
 	stg.wsHandler.home = stg.homePath
+	// w5-integration (US-2/MC-4): bind W1's ONE Mail panel presence registry
+	// to the WS lifecycle (frames dispatch, teardown revokes), and flip the
+	// pool's retention gate — the production activation the conservative
+	// request-scoped default has been waiting for. Retention still only ever
+	// extends an authorized read; presence never grants access.
+	stg.wsHandler.SetMailPresence(gatewayMailSessionsFor(stg.homePath).Presence())
+	gatewayMailSessionsFor(stg.homePath).EnableRetention()
 	toolStore := newToolResultStore(stg.homePath)
 	stg.wsHandler.toolStore = toolStore
 	stg.runningServices.toolStore = toolStore
@@ -1218,6 +1227,7 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		onboardingStateUnknown: stg.onboardingStateUnknown,
 		homePath:               stg.homePath,
 		mailBudget:             email.SharedMailBudget(stg.homePath), // A8: the shared per-account gate
+		mailSessions:           gatewayMailSessionsFor(stg.homePath), // w5 MC-1: the ONE shared pooled session manager
 		taskStore:              stg.tStore,
 		taskExecutor:           stg.tExecutor,
 		liveTaskActivity:       stg.tExecutor, // founder decision 2026-09-14: Task.last_activity_at
@@ -1241,6 +1251,12 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		taskLock:               task.TaskFileLock,                   // shared striped lock for board task RMW
 	}
 	stg.api.cronService.Store(stg.runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	// w5-integration (US-5.9/B-33): boot reconciliation — orphan Mail cache
+	// subtrees, watcher state files and identity records (state whose pair
+	// is absent from the live config) are never servable, their deletion is
+	// attempted once here, and a failed deletion keeps a safe visible
+	// retryable cleanup intent instead of a log-only success.
+	stg.api.reconcileOrphanMailState()
 	// #904: a successful reload clears the Performance pending-apply state.
 	stg.runningServices.reloadOutcome.onSuccess = stg.api.pendingApply.clearAfterReload
 	// D-107: the Library REST write handlers broadcast a library_changed WS

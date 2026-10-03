@@ -415,6 +415,15 @@ const (
 	// Fields: {workspace_id, agent_id, uid, uidvalidity, expunged}.
 	EventMailPanelDraftDiscarded = "mail.panel.draft_discarded"
 
+	// EventMailAttachmentSaved — INFO. One attachment was explicitly saved
+	// into the workspace Library (ADR-20261001 F2; w4 spec US-2.AC-4) — the
+	// user-directed export shared by the panel's Save and the agent's
+	// download_email_attachment. Fields: actor, workspace_id, agent_id
+	// (pair), folder, message_ref, part_index, original_name, final_name,
+	// final path, size_bytes. NO attachment bytes, subject, password or
+	// token — the save_operation_token never enters the audit log.
+	EventMailAttachmentSaved = "mail.attachment_saved"
+
 	// EventBrowserWebRTCStreamStarted — INFO. A per-agent WebRTC capture
 	// session's encoder page was successfully started (the FIRST
 	// WebRTC-capable viewer offer for that agent — ADR-047 D2, wave-plan

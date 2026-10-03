@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/pairing"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -177,6 +178,12 @@ type WSHandler struct {
 	msgBus        *bus.MessageBus
 	agentLoop     *agent.AgentLoop
 	allowedOrigin string
+
+	// mailPresence is W1's ONE Mail panel presence registry
+	// (pkg/email/pool.go::PanelPresence), bound by boot via SetMailPresence
+	// (mail_presence.go). The adapter — never a second store: observers bind
+	// to this connection's chat ID and revoke through teardown's UnbindAll.
+	mailPresence atomic.Pointer[email.PanelPresence]
 
 	// activeConns tracks in-flight ServeHTTP goroutines so Wait() can block
 	// until all connections have fully torn down (used by tests to avoid
@@ -669,6 +676,13 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(h.sessionIDs, chatID)
 		h.unbindConnHubLocked(wc)
 		h.mu.Unlock()
+		// w5-integration (US-2.3/MC-4): revoke this connection's Mail panel
+		// observers BEFORE the socket closes. This deferred block is the one
+		// choke point every disconnected socket passes through — explicit
+		// close frame, read error, ping-deadline expiry, abnormal closure;
+		// logout and browser quit converge here because they all end the
+		// socket — so no separate presence sweeper or heartbeat exists.
+		h.revokeMailPanelObservers(chatID)
 		wc.close()
 
 		// Emit observability counters at connection teardown so operators can
@@ -1233,10 +1247,10 @@ wsHandlerReadLoopLoop1:
 }
 
 // stringPtrOrEmpty dereferences an optional wire-format string field,
-// returning "" for a nil pointer. Kept out of dispatchFrame's own body so
-// the #823 client_message_id field doesn't grow dispatchFrame's grandfathered
-// gocyclo budget (scripts/budgets/gocyclo.txt) — mirrors the existing
-// agentID/sessionID deref pattern inline below.
+// returning "" for a nil pointer. Kept out of handleMessageFrame's own body
+// so the #823 client_message_id field doesn't grow its gocyclo footprint
+// (scripts/budgets/gocyclo.txt ratchets dispatchFrame's family) — mirrors
+// the existing agentID/sessionID deref pattern inline below.
 func stringPtrOrEmpty(p *string) string {
 	if p != nil {
 		return *p
@@ -1244,69 +1258,79 @@ func stringPtrOrEmpty(p *string) string {
 	return ""
 }
 
+// handleMessageFrame decodes and routes one message frame — the chat-message
+// pipeline's entry on the WebSocket read path. Extracted from dispatchFrame
+// (its case carries the metadata parsing no other frame type needs) so the
+// type switch stays within its pinned gocyclo budget
+// (scripts/budgets/gocyclo.txt).
+func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFlow {
+	var f generated.MessageFrame
+	if err := json.Unmarshal(data, &f); err != nil {
+		slog.Warn("ws: malformed message frame", "error", err)
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "malformed message frame",
+		})
+		return wsHandlerReadLoopContinue
+	}
+	if f.Content == "" && len(f.Media) == 0 {
+		return wsHandlerReadLoopContinue
+	}
+	var agentID string
+	if f.AgentId != nil {
+		agentID = *f.AgentId
+	}
+	var sessionID string
+	if f.SessionId != nil {
+		sessionID = *f.SessionId
+	}
+	clientMessageID := stringPtrOrEmpty(f.ClientMessageId)
+	var modelName string
+	if v, ok := f.Metadata["model_name"].(string); ok {
+		if strings.TrimSpace(v) != "" {
+			modelName = v
+		}
+	}
+	// M4: workspace→turn binding. When the message originates from a
+	// workspace chat the SPA sets metadata.workspace_id; we stamp it on
+	// the session meta so task_create/delegation lands on this workspace.
+	var workspaceID string
+	if v, ok := f.Metadata["workspace_id"].(string); ok {
+		workspaceID = strings.TrimSpace(v)
+	}
+	// Workspace-setup kickoff: the SPA sends this flag on a
+	// workspace's first open so the server records the trigger as a
+	// system-role transcript entry (not a user bubble), clears
+	// SetupPending exactly once, and gives the session a clean title —
+	// see contracts/asyncapi.yaml metadata.workspace_setup_kickoff.
+	//
+	// Kickoff intent is signaled by KEY PRESENCE, not a loose
+	// type assertion — see parseSetupKickoffMetadata's doc comment. A
+	// key that IS present but not exactly boolean true is rejected
+	// outright instead of ever reaching handleChatMessage as a normal
+	// message.
+	setupKickoff, malformedKickoff := parseSetupKickoffMetadata(f.Metadata)
+	if malformedKickoff {
+		slog.Warn("ws: malformed workspace_setup_kickoff metadata — rejecting",
+			"chat_id", wh.chatID, "value", f.Metadata["workspace_setup_kickoff"])
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "malformed workspace_setup_kickoff metadata",
+		})
+		return wsHandlerReadLoopContinue
+	}
+	wh.h.handleChatMessageWithClientID(
+		wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
+		modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, wh.wc,
+	)
+	return wsHandlerReadLoopNext
+}
+
 // dispatchFrame dispatches one validated WebSocket frame to its type-specific handler.
 func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandlerReadLoopFlow {
 	switch peek.Type {
 	case string(generated.WsFrameTypeMessage):
-		var f generated.MessageFrame
-		if err := json.Unmarshal(data, &f); err != nil {
-			slog.Warn("ws: malformed message frame", "error", err)
-			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "malformed message frame",
-			})
-			return wsHandlerReadLoopContinue
-		}
-		if f.Content == "" && len(f.Media) == 0 {
-			return wsHandlerReadLoopContinue
-		}
-		var agentID string
-		if f.AgentId != nil {
-			agentID = *f.AgentId
-		}
-		var sessionID string
-		if f.SessionId != nil {
-			sessionID = *f.SessionId
-		}
-		clientMessageID := stringPtrOrEmpty(f.ClientMessageId)
-		var modelName string
-		if v, ok := f.Metadata["model_name"].(string); ok {
-			if strings.TrimSpace(v) != "" {
-				modelName = v
-			}
-		}
-		// M4: workspace→turn binding. When the message originates from a
-		// workspace chat the SPA sets metadata.workspace_id; we stamp it on
-		// the session meta so task_create/delegation lands on this workspace.
-		var workspaceID string
-		if v, ok := f.Metadata["workspace_id"].(string); ok {
-			workspaceID = strings.TrimSpace(v)
-		}
-		// Workspace-setup kickoff: the SPA sends this flag on a
-		// workspace's first open so the server records the trigger as a
-		// system-role transcript entry (not a user bubble), clears
-		// SetupPending exactly once, and gives the session a clean title —
-		// see contracts/asyncapi.yaml metadata.workspace_setup_kickoff.
-		//
-		// Kickoff intent is signaled by KEY PRESENCE, not a loose
-		// type assertion — see parseSetupKickoffMetadata's doc comment. A
-		// key that IS present but not exactly boolean true is rejected
-		// outright instead of ever reaching handleChatMessage as a normal
-		// message.
-		setupKickoff, malformedKickoff := parseSetupKickoffMetadata(f.Metadata)
-		if malformedKickoff {
-			slog.Warn("ws: malformed workspace_setup_kickoff metadata — rejecting",
-				"chat_id", wh.chatID, "value", f.Metadata["workspace_setup_kickoff"])
-			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "malformed workspace_setup_kickoff metadata",
-			})
-			return wsHandlerReadLoopContinue
-		}
-		wh.h.handleChatMessageWithClientID(
-			wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
-			modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, wh.wc,
-		)
+		return wh.handleMessageFrame(data)
 	case string(generated.WsFrameTypeCancel):
 		return wh.handleCancelFrame(data)
 	case string(generated.WsFrameTypeAttachSession):
@@ -1374,6 +1398,19 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			return wsHandlerReadLoopContinue
 		}
 		wh.h.subscribePairingInterest(wh.wc, f.ChannelId, f.Active)
+	case string(generated.WsFrameTypeMailPanelObserver):
+		// w5-integration (US-2/MC-4): Mail panel presence open/close. No
+		// inbound JSON Schema was generated for this frame, so validation is
+		// the handler's own (mail_presence.go) — the owned ack/safe-error
+		// shape; the generic unknown-frame fallback below is never relied on.
+		var f generated.MailPanelObserverFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			wh.wc.inboundDropped.Add(1)
+			slog.Warn("ws: malformed mail_panel_observer frame", "chat_id", wh.chatID)
+			wh.h.sendMailPanelObserverError(wh.wc, f, "malformed_frame", "malformed mail panel observer frame")
+			return wsHandlerReadLoopContinue
+		}
+		wh.h.handleMailPanelObserverFrame(wh.wc, wh.chatID, f)
 	case string(generated.WsFrameTypeAskUserAnswer):
 		// AskUserQuestion card submission/cancel (askuserquestion-tool-
 		// spec v3 §3): bridge to askuser.Registry.Submit / CancelByUser.

@@ -42,3 +42,27 @@ properties:
     type: string
     format: date-time
     description: Present when code=backoff.
+  reason:
+    type: string
+    enum:
+      - pool_busy
+      - account_busy
+      - server_connection_limit
+      - backoff
+    description: >
+      Safe refusal reason (mail-live-access-landing-order register row 7 —
+      W0 is the single publisher; ADR-20261001 "Human Retry and upstream
+      limits" row). pool_busy = the global eight-socket ceiling stayed
+      exhausted past the bounded acquisition wait (distinct from an
+      account-slot refusal — w1 spec §4.6). account_busy = the per-account
+      two-slot work gate (the existing busy code's queue-timeout case).
+      server_connection_limit = the server itself refused further
+      connections and the response structurally established that limit —
+      recognized only from the structural response, never promoted from
+      unknown response text; the refused session is retired and the
+      effective per-mailbox capacity for that server is reduced in-process.
+      backoff = the watcher backoff gate. Present where applicable; absent
+      = no more specific reason than code carries. Retry remains explicit
+      and bounded: a human retry bypasses only backoff, never the
+      semaphore, socket cap, TLS validation or mutation safeguards.
+    example: "pool_busy"

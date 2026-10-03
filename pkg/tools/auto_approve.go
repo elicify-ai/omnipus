@@ -172,6 +172,16 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"read_inbox":         AutoRuns,
 	"search_email":       AutoRuns,
 	"read_message":       AutoRuns,
+	// Attachment tools (w4 F3, founder Q4=A): list/read follow the read
+	// tools (structure/text metadata only, nothing written); the save tool
+	// rides the EXISTING workspace-path conditional class exactly like
+	// write_file/send_file — its destination is always the workspace mail
+	// hierarchy (no path argument to abuse), and Auto-approve off / a
+	// declined ask / an effective deny behave exactly as for any other
+	// ask-default tool. No attachment-specific approval exists.
+	"list_email_attachments":    AutoRuns,
+	"read_email_attachment":     AutoRuns,
+	"download_email_attachment": AutoRunsIfArgs,
 
 	// Agents & tasks
 	"delegate":        AutoRuns,
