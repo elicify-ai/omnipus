@@ -278,10 +278,13 @@ type setupAndStartServicesState struct {
 	tExecutor              *agent.TaskExecutor
 	planStore              *plan.Store
 	lifecycleStore         *session.LifecycleStore
-	intentLog              *plan.IntentLog
-	bootSweepCfg           config.PlanningConfig
-	providerCatalog        *catalog.Catalog
-	api                    *restAPI
+	// bootEpoch is minted once, before any other boot stage. Later recovery
+	// reads this instance; it must not mint a second time.
+	bootEpoch       *session.BootEpochStore
+	intentLog       *plan.IntentLog
+	bootSweepCfg    config.PlanningConfig
+	providerCatalog *catalog.Catalog
+	api             *restAPI
 }
 
 func setupAndStartServices(
@@ -298,6 +301,14 @@ func setupAndStartServices(
 	allowGodMode bool,
 ) (rs *services, retErr error) {
 	stg := &setupAndStartServicesState{ctx: ctx, cfg: cfg, bundle: bundle, agentLoop: agentLoop, msgBus: msgBus, homePath: homePath, credStore: credStore, sandboxResult: sandboxResult, builtinReg: builtinReg, mcpReg: mcpReg, allowGodMode: allowGodMode}
+
+	// First act of boot recovery pass one (ADR D8.5): persist the monotonic
+	// boot epoch before schedulers, channels, or SteerBootRecovery.Run.
+	// Run does not mint. A failure here stops boot; nothing else writes
+	// boot_epoch.json.
+	if err := stg.mintBootEpoch(); err != nil {
+		return nil, err
+	}
 
 	if runningServices, stop, err := stg.startSchedulers(); stop {
 		return runningServices, err
@@ -991,6 +1002,7 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 		Classifier:     classifier,
 		LifecycleStore: stg.lifecycleStore,
 		SessionStore:   sessionStore,
+		BootEpoch:      stg.bootEpoch,
 		BootHook: func(ctx context.Context) error {
 			deps := stg.runningServices.SteerDeps
 			recovery := &agent.SteerBootRecovery{
