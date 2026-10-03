@@ -72,7 +72,16 @@ export async function openTerminalSession(page: Page, baseURL: string, sessionId
 }
 
 export async function turnVerboseOff(page: Page, baseURL: string) {
-  await page.goto(`${baseURL}/#/settings?tab=chat`);
+  await page.goto(`${baseURL}/#/settings`);
+  // Activate the Chat tab the way a user does, then drive the switch.
+  // Release run 37106636828: a same-document goto to '#/settings?tab=chat'
+  // rendered the DEFAULT Providers tab (trace: the live URL settled at
+  // '#/settings', search dropped), so this switch never mounted. No shipped
+  // spec pins '?tab=' activating a tab; tool-iteration-limit.spec.ts and
+  // delegation-hidden.spec.ts always click the tab after goto.
+  const chatTab = page.locator('button[role="tab"]', { hasText: 'Chat' });
+  await expect(chatTab).toBeVisible();
+  await chatTab.click();
   const toggle = page.getByRole('switch', { name: 'Verbose chat' });
   await expect(toggle).toBeVisible();
   // Drive the shipped setting, not a synthetic localStorage state. A deliberate
