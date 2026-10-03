@@ -847,10 +847,6 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 	now := time.Now().UTC()
 	var message generated.SessionMessage
 	if outcome == steer.OutcomeFinalAnswer {
-		questions, err := al.parkedQuestions(rec.SessionID)
-		if err != nil {
-			return message, fmt.Errorf("steer: complete: collect parked questions: %w", err)
-		}
 		// Round-4: a hand-back from a post-finish revival prefixes the
 		// answer text so the parent sees "Follow-up after a late
 		// instruction: ..." in the wake-up summary. Keyed by the
@@ -861,7 +857,7 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 		if al.consumePostFinishRevival(rec.SessionID, rec.Generation) {
 			answer = postFinishRevivalPrefix + answer
 		}
-		err = message.FromSessionMessageHandback(generated.SessionMessageHandback{
+		err := message.FromSessionMessageHandback(generated.SessionMessageHandback{
 			MessageId:      rec.SessionID,
 			SessionId:      rec.SessionID,
 			CreatedAt:      now,
@@ -870,7 +866,13 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 			Mode:           generated.SessionMessageHandbackModeFinal,
 			ResultSoFar:    answer,
 			Artifacts:      []string{},
-			OpenQuestions:  questions,
+			// ADR-20260928 D6b (object cd20cf8b): "On this completed path
+			// open_questions is empty; parkedQuestions stays only for a
+			// non-completion hand-back (e.g. a stopped-child report),
+			// excluding open-relay questions (MIN-006)." A child's relayed
+			// question is left untouched in the parent's inbox — its
+			// non-completion home — and never rides the final hand-back.
+			OpenQuestions: []string{},
 		})
 		return message, err
 	}
@@ -1141,35 +1143,4 @@ func (al *AgentLoop) completeSteeredTurnIfDeferredAtGate(sessionID string) {
 	}
 	tailErr := fmt.Errorf("%w: the goal was ended while this session was deferred at the completion gate", context.Canceled)
 	al.completeSteeredTurnAfterGoal(context.Background(), sessionID, "", tailErr)
-}
-
-func (al *AgentLoop) parkedQuestions(ownerID string) ([]string, error) {
-	inbox := al.GetMessageInboxStore()
-	if inbox == nil {
-		return nil, errors.New("message inbox store is not wired")
-	}
-	messages, cursor, more, err := inbox.Drain(ownerID, "", "", 256)
-	if err != nil {
-		return nil, err
-	}
-	for more {
-		var page []generated.SessionMessage
-		page, cursor, more, err = inbox.Drain(ownerID, "", cursor, 256)
-		if err != nil {
-			return nil, err
-		}
-		messages = append(messages, page...)
-	}
-	questions := make([]string, 0)
-	for _, message := range messages {
-		kind, err := message.Discriminator()
-		if err != nil || kind != "question" {
-			continue
-		}
-		question, err := message.AsSessionMessageQuestion()
-		if err == nil && strings.TrimSpace(question.Text) != "" {
-			questions = append(questions, question.Text)
-		}
-	}
-	return questions, nil
 }
