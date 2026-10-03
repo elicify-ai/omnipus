@@ -7718,7 +7718,15 @@
       "lane": 1
     },
     {
+      "source": "src/components/workspaces/mail/MailAttachmentViewer.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/workspaces/mail/MailAttachmentsEditor.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailAttachmentsPane.tsx",
       "lane": 6
     },
     {
@@ -7758,11 +7766,23 @@
       "lane": 6
     },
     {
+      "source": "src/components/workspaces/mail/MailReplyContext.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/workspaces/mail/MailSignaturePreview.tsx",
       "lane": 6
     },
     {
       "source": "src/components/workspaces/mail/mail-format.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailAttachmentHandoff.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailCacheView.ts",
       "lane": 6
     },
     {
@@ -7775,6 +7795,10 @@
     },
     {
       "source": "src/components/workspaces/mail/mailPanelIntent.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailPanelPresence.ts",
       "lane": 6
     },
     {
