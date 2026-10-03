@@ -87,6 +87,18 @@ func bootTestMailRuntime(t *testing.T, env *mailRedEnv) {
 	rt := initGatewayMailRuntime(env.api.homePath, env.api.agentLoop.GetConfig(), env.api.credStore)
 	rt.setAgentLoop(env.api.agentLoop)
 	rt.setCredentialStore(env.api.credStore)
+	// The holder is first-writer-wins for homePath: once an earlier test in
+	// this binary created it, the struct field keeps THAT env's data dir
+	// while setAgentLoop/setCredentialStore re-point everything else. A
+	// production holder always carries THE process's one data dir, so a
+	// faithful per-test replay re-points it too — otherwise mailScope's
+	// identity reads (LoadOrMintMailPairIdentity(rt.homePath, …)) hit
+	// another env's directory and per-env isolation claims (a test that
+	// corrupts ITS OWN identity sidecar, for one) silently test the wrong
+	// dir. Plain-field write is safe here the way the whole shared holder
+	// is: package tests run sequentially (no t.Parallel in the mail
+	// suite).
+	rt.homePath = env.api.homePath
 }
 
 // mailWatcherTransportForPair builds a watcher transport the way production
