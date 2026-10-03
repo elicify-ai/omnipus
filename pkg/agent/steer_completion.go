@@ -136,8 +136,17 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		case steeredCommitNotice:
 			noticeErr := al.deliverSteeredNotice(ctx, rec, outcome, answer, failureReason)
 			return false, noticeErr
+		case steeredCommitStopped:
+			// A stop THIS mutation landed keeps its legacy interrupted/
+			// timeout upward event until the D6 stopped-child notice
+			// replaces it — the parent's only signal today. A stop that had
+			// already landed (this completion is the loser T11 pins)
+			// publishes nothing at all.
+			if commitRes.landedStop && isTerminalOutcome(outcome) {
+				return false, al.deliverSteeredNotice(ctx, rec, outcome, answer, failureReason)
+			}
+			return false, nil
 		default:
-			// steeredCommitStopped: the stop won, nothing to publish.
 			// steeredCommitRefused: mirror the pre-boundary refusal — report
 			// the reloaded record's terminality to the finishing disposal.
 			return commitRes.terminalNow, nil

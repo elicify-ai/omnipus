@@ -66,9 +66,16 @@ type steeredCommitResult struct {
 	// terminalNow is set only for steeredCommitRefused: the record's
 	// terminality as reloaded after the refusal.
 	terminalNow bool
-	commit      *session.FinalDeliveryCommit
-	message     generated.SessionMessage
-	messageID   string
+	// landedStop is true when THIS mutation performed the stopped landing
+	// (fresh fence carried out, or a fence-less stop disposition) — as
+	// opposed to finding the stop already landed. A fresh landing keeps the
+	// legacy interrupted/timeout upward event until the D6 stopped-child
+	// notice replaces it; an already-landed stop publishes nothing (the
+	// losing completion T11 pins).
+	landedStop bool
+	commit     *session.FinalDeliveryCommit
+	message    generated.SessionMessage
+	messageID  string
 }
 
 // errCompleteNoPublishableOutcome refuses a terminal commit whose outcome
@@ -150,6 +157,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 				// strand a running+fenced record with no live turn left to
 				// land it.
 				res.kind = steeredCommitStopped
+				res.landedStop = true
 				return landSteeredStopLocked(cur, outcome)
 			}
 			// A terminal/notice disposition racing a fresh fence: refuse. The
@@ -171,6 +179,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 			// A stop disposition with no fence: a legacy RequestCancel path or
 			// a lifetime-budget expiry. Same landing, synthesized note.
 			res.kind = steeredCommitStopped
+			res.landedStop = true
 			return landSteeredStopLocked(cur, outcome)
 		}
 		if nextState == session.LifecycleRunning {

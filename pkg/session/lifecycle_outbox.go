@@ -129,10 +129,13 @@ func (p FinalDeliveryProgress) Equal(n FinalDeliveryProgress) bool {
 }
 
 // Delivered reports whether the durable facts show this final fully
-// delivered (D2 retirement precondition: inbox appended AND wake recorded
-// OR the inbox id acknowledged).
+// delivered — D2's retirement precondition, read strictly: the parent inbox
+// append is durable AND either its required frames AND wake are durably
+// recorded, or the matching inbox id is durably acknowledged. A final whose
+// frames fact is missing is NOT delivered, whatever the wake did — the
+// publisher records a fact only on a real receipt, never on an assumption.
 func (p FinalDeliveryProgress) Delivered() bool {
-	return p.InboxAppended && (p.WakeRecorded || p.AckObserved)
+	return p.InboxAppended && ((p.FramesPersisted && p.WakeRecorded) || p.AckObserved)
 }
 
 // FinalDeliveryCommand is UpdateFinalDelivery's whole command surface
@@ -257,17 +260,27 @@ func joinFinalDelivery(sessionID string, lines []lifecycleJournalLine) (map[fina
 				return nil, fmt.Errorf("%w: session %q generation %d commit %q envelope revision %d does not advance %d",
 					ErrFinalDeliveryOrphanEnvelope, sessionID, env.Generation, env.CommitID, env.DeliveryRevision, st.revision)
 			}
+			// The protected tuple may ride ONLY on a durable retirement
+			// marker, and then only as a restatement of the identity already
+			// on the committed record — never as a mutation of it. Any drift
+			// between marker and commit is a visible consistency error that
+			// can never authorize publication or retirement (D2).
+			if env.Protected != nil {
+				p := env.Protected
+				if !env.PayloadRetired {
+					return nil, fmt.Errorf("%w: session %q generation %d commit %q carries a protected tuple on a non-retirement envelope",
+						ErrFinalDeliveryOrphanEnvelope, sessionID, env.Generation, env.CommitID)
+				}
+				if p.Generation != st.commit.Generation || p.CommitID != st.commit.CommitID ||
+					p.MessageID != st.commit.MessageID || p.Outcome != st.commit.Outcome ||
+					p.ParentSessionID != st.commit.ParentSessionID || p.PayloadHash != st.commit.PayloadHash {
+					return nil, fmt.Errorf("%w: session %q generation %d commit %q retirement marker identity does not match the committed tuple",
+						ErrFinalDeliveryOrphanEnvelope, sessionID, env.Generation, env.CommitID)
+				}
+			}
 			st.revision = env.DeliveryRevision
 			st.progress = env.DeliveryProgress
 			st.retired = st.retired || env.PayloadRetired
-			if env.Protected != nil {
-				st.commit.MessageID = env.Protected.MessageID
-				st.commit.Outcome = env.Protected.Outcome
-				st.commit.ParentSessionID = env.Protected.ParentSessionID
-				st.commit.PayloadHash = env.Protected.PayloadHash
-				st.commit.Generation = env.Protected.Generation
-				st.commit.CommitID = env.Protected.CommitID
-			}
 		}
 	}
 	_ = seenEnvelope
@@ -313,6 +326,9 @@ func (s *LifecycleStore) UpdateFinalDelivery(sessionID string, generation int, c
 	}
 	if cmd.Advance == nil && !cmd.Retire {
 		return fmt.Errorf("session: lifecycle: final delivery: empty command (advance_progress or retire_payload required)")
+	}
+	if cmd.Advance != nil && cmd.Retire {
+		return fmt.Errorf("session: lifecycle: final delivery: one command per update (advance_progress or retire_payload, never both)")
 	}
 	mu := s.Lock(sessionID)
 	mu.Lock()
