@@ -202,7 +202,11 @@ func refuseSymlinkComponent(path string) error {
 // (the generated cleanup contract's refused cases).
 const mailCleanupIntentTTL = 24 * time.Hour
 
-type mailCleanupIntent struct {
+// mailCleanupIntent is a pending-cleanup record held ONLY in the process:
+// every field is json:"-" (never serialized), the store is memory-only with
+// gateway-restart lifetime, and no code path marshals the struct — nothing
+// here crosses the gateway/SPA boundary.
+type mailCleanupIntent struct { // not-wire-format: process-local intent-store record, all fields json:"-"; memory-only store, never marshaled or emitted to any client
 	AgentID     string    `json:"-"`
 	WorkspaceID string    `json:"-"`
 	PairID      string    `json:"-"` // set only for reconciliation intents (pair already unmapped)
