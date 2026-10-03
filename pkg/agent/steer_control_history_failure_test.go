@@ -387,12 +387,18 @@ func TestHistoryFailure_StopLandsUnderUnwritableLedger_ResumeRefusedThenExactlyO
 // pack's behavioral RED witness. Spec: when a stop lands, its D6 landed-stop
 // history becomes discoverable (the W1 direct-parent notice publisher's
 // only source), or the history failure is surfaced by the stop call itself
-// — never confined to a log while the caller hears success. The assertion
-// is the missing-event assertion the dispatch brief names: on a tree where
-// the landing swallows the append failure into a WARN log and returns void,
-// the event is missing AND nothing was surfaced, and this test is red for
-// exactly that reason. It deliberately does NOT pretend StopTurns returned
-// an error — it reports the observed return values in the failure message.
+// — never confined to a log while the caller hears success (D2 round-3
+// MAJ-001: a persistence failure is surfaced, never claimed as delivery).
+// The ledger is provably unwritable for the whole window, so an honest
+// landing CANNOT append the event here; the oracle therefore fails ONLY
+// when the event is missing AND nothing was surfaced (visible refusal OR
+// event), and whatever does appear is held to the D6 tuple by the negative
+// controls below — no forged, duplicated or rewritten history. On the
+// pre-change tree the landing swallows the append failure into a WARN log
+// and returns void, the event is missing AND nothing was surfaced, and
+// this test is red for exactly that reason. It deliberately does NOT
+// pretend StopTurns returned an error — it reports the observed return
+// values in the failure message.
 func TestHistoryFailure_LandedHistoryEventMissingAndUnsurfacedAtLanding(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -416,29 +422,95 @@ func TestHistoryFailure_LandedHistoryEventMissingAndUnsurfacedAtLanding(t *testi
 	if listErr != nil {
 		t.Fatalf("ListStoppedTransitions after the landing: %v", listErr)
 	}
+
+	// The durable tuple (note+effect) is the retry anchor: it must have
+	// survived the landing whatever the history outcome (D2 CRIT-001 — the
+	// landing retains stop_note in the same mutation; boot reconciliation
+	// retries the history from exactly this pair). A failed append never
+	// justifies a lost note/effect.
+	landed, loadErr := lifecycle.Load(childID)
+	if loadErr != nil {
+		t.Fatalf("Load(landed): %v", loadErr)
+	}
+	if landed.StopNote == nil || landed.StopEffect == nil {
+		t.Fatalf("the landed stop lost its durable tuple: note=%v effect=%v — boot reconciliation retries the "+
+			"history from exactly this pair; a failed append never justifies dropping it (D2 CRIT-001)",
+			landed.StopNote, landed.StopEffect)
+	}
+	note := *landed.StopNote
+	if note.At.IsZero() || note.Seq == 0 || note.Cause != session.StopCauseStop || note.By != historyFailureActor {
+		t.Fatalf("durable stop note = {at=%s by=%q seq=%d cause=%q}, want the original non-zero instant, a real "+
+			"control-ledger seq, cause %q and actor %q (the D6 history tuple's source)",
+			note.At, note.By, note.Seq, note.Cause, session.StopCauseStop, historyFailureActor)
+	}
+	if landed.StopEffect.ControlID == "" || landed.StopEffect.Target.Generation != generation {
+		t.Fatalf("durable stop effect = %+v, want a control id and target generation %d (the acceptance the "+
+			"history belongs to)", landed.StopEffect, generation)
+	}
+
 	// "Surfaced" = the stop call itself reported the history failure: a
 	// returned error, or a report entry naming the child with a reason about
 	// the landed-stop history / control ledger. A WARN log line is not a
-	// surfacing channel a caller (or W1) can read.
-	surfaced := stopErr != nil
-	if !surfaced {
-		for _, u := range report.Unreachable {
-			if u.ID == childID &&
-				(strings.Contains(u.Reason, "landed-stop history") || strings.Contains(u.Reason, "control ledger")) {
-				surfaced = true
-			}
+	// surfacing channel a caller (or W1) can read. surfacedByReport pins the
+	// specific report arm so the naming control below can tell a generic
+	// unrelated error from a history-failure surfacing.
+	surfacedByReport := false
+	for _, u := range report.Unreachable {
+		if u.ID == childID &&
+			(strings.Contains(u.Reason, "landed-stop history") || strings.Contains(u.Reason, "control ledger")) {
+			surfacedByReport = true
 		}
 	}
-	if len(transitions) != 1 {
+	surfaced := surfacedByReport || stopErr != nil
+
+	// The oracle: with the append provably failed, this fails ONLY when the
+	// D6 event is missing AND nothing was surfaced — either arm satisfies
+	// the spec (visible refusal OR event).
+	if len(transitions) == 0 && !surfaced {
 		t.Errorf("the landed stop's history is neither discoverable nor surfaced: %d history event(s) after the "+
-			"landing (want the D6 event), stopErr=%v, report.Reached=%v, report.Unreachable=%v — the append failure "+
-			"was confined to a WARN log while the stop landing reported success (source-verified gap: "+
+			"landing (want the D6 event or a visible failure), stopErr=%v, report.Reached=%v, report.Unreachable=%v — "+
+			"the append failure was confined to a WARN log while the stop landing reported success (source-verified gap: "+
 			"steer_cancel.go::recordLandedStopLedger logs and returns void, and landSteeredStopReport discards it)",
 			len(transitions), stopErr, report.Reached, report.Unreachable)
+	}
+
+	// Negative controls on the discoverable arm: an event that appears
+	// despite the blocked append must be exactly the ONE original D6 tuple —
+	// no forged duplicates, no wrong seq, no rewritten instant (D6 keys one
+	// notice per (parent, child, generation, stop_seq)).
+	if len(transitions) > 1 {
+		t.Errorf("forged duplicated history: %d landed-stop events for one accepted control, want at most 1: %+v",
+			len(transitions), transitions)
+	}
+	if len(transitions) == 1 {
+		got := transitions[0]
+		if got.ParentSessionID != parentID || got.Generation != generation || got.StopSeq != note.Seq ||
+			got.Cause != session.StopCauseStop || !got.At.Equal(note.At) ||
+			got.ControlID != landed.StopEffect.ControlID || got.Actor != note.By {
+			t.Errorf("the single landed-stop event does not match the durable tuple: got {parent=%q gen=%d seq=%d "+
+				"cause=%q at=%s control=%q actor=%q}, want {parent=%q gen=%d seq=%d cause=%q at=%s control=%q "+
+				"actor=%q} (D6: the history derives from the retained note and the accepted StopEffect, "+
+				"At = the original instant)",
+				got.ParentSessionID, got.Generation, got.StopSeq, got.Cause, got.At, got.ControlID, got.Actor,
+				parentID, generation, note.Seq, session.StopCauseStop, note.At, landed.StopEffect.ControlID, note.By)
+		}
 	}
 	if len(transitions) == 1 && transitions[0].StopSeq == 0 {
 		t.Errorf("the reported history event carries no real control seq: %+v — D6's history is keyed by the "+
 			"accepted control's seq, not a placeholder", transitions[0])
+	}
+
+	// Negative control on the surfaced arm: when no event exists, the
+	// surfacing must NAME the ledger/history failure — a generic unrelated
+	// error is not a visible surfacing — and the tuple must still sit on the
+	// real lifecycle store for the later retry (the assertions above already
+	// proved it did).
+	if len(transitions) == 0 && surfaced && !surfacedByReport &&
+		!strings.Contains(strings.ToLower(stopErr.Error()), "ledger") &&
+		!strings.Contains(strings.ToLower(stopErr.Error()), "history") {
+		t.Errorf("the stop call returned an error that does not name the control-ledger/landed-stop-history "+
+			"failure it must surface: %v — a generic unrelated error is not a visible surfacing of the history "+
+			"append failure", stopErr)
 	}
 }
 
