@@ -62,9 +62,18 @@ const cacheDirName = "mail-cache"
 // ensureStagingExclusion returns nil only where the cache directory is
 // provably excluded from data-directory version-control staging. The cache
 // write path calls this BEFORE any filesystem effect, so a refusal leaves
-// nothing behind (not even the directory).
+// nothing behind (not even the directory). The data root is resolved once
+// and used consistently: git evaluates RESOLVED paths, so the repository
+// walk and the cache-directory comparison must both run on the same
+// resolved shape (a symlinked data-root segment otherwise compares a
+// resolved repo root against a logical cache path and misreads an enclosing
+// repository as "outside").
 func ensureStagingExclusion(dataRoot string) error {
-	repo, err := findGitRepo(dataRoot)
+	resolved, rerr := filepath.EvalSymlinks(dataRoot)
+	if rerr != nil {
+		return fmt.Errorf("staging exclusion not provable: %w", rerr)
+	}
+	repo, err := findGitRepo(resolved)
 	if err != nil {
 		return fmt.Errorf("staging exclusion not provable: %w", err)
 	}
@@ -73,7 +82,7 @@ func ensureStagingExclusion(dataRoot string) error {
 		// captured by; the staging half holds trivially (§3.8 E-1).
 		return nil
 	}
-	cacheDir := filepath.Join(dataRoot, cacheDirName)
+	cacheDir := filepath.Join(resolved, cacheDirName)
 	rel, err := filepath.Rel(repo.root, cacheDir)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return errors.New("staging exclusion not provable: the cache directory is outside its repository root")
@@ -114,11 +123,24 @@ type gitRepo struct {
 // component stats over the logical path saw only logical ancestors and
 // missed an enclosing repo behind a symlink (the F11 finding). A resolution
 // failure is "not provable": the gate refuses rather than guess.
+// findGitRepo walks up from start looking for a ".git" directory or a ".git"
+// file (worktree/submodule pointer, "gitdir: <path>"). nil with no error
+// means no repository encloses start. The walk runs over the RESOLVED path:
+// git itself works on resolved paths, and a symlinked data-root segment
+// whose target sits inside a repository must find that repository — per-
+// component stats over the logical path saw only logical ancestors and
+// missed an enclosing repo behind a symlink (the F11 finding). A resolution
+// failure is "not provable": the gate refuses rather than guess.
 func findGitRepo(start string) (*gitRepo, error) {
 	dir, err := filepath.Abs(start)
 	if err != nil {
 		return nil, err
 	}
+	resolved, rerr := filepath.EvalSymlinks(dir)
+	if rerr != nil {
+		return nil, rerr
+	}
+	dir = resolved
 	for {
 		candidate := filepath.Join(dir, ".git")
 		info, statErr := os.Stat(candidate)
