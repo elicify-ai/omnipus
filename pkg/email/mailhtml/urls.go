@@ -33,6 +33,7 @@ import (
 //   - "data:image/(png|gif|jpe?g|webp);base64," — the inline raster shape
 //     the CSP's img-src data: branch admits and the sanitizer therefore
 //     fully owns (P1: data:image/svg+xml must NOT match — it does not).
+//
 // A raw remote URL is not a serving shape: the rewrite runs first, so one
 // still raw here is unpinned and the declaration drops (F3).
 var cssURLAllowedRe = regexp.MustCompile(`^(?:/mail-preview/(?:part|img)/|data:image/(?:png|gif|jpe?g|webp);base64,)`)
