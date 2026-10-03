@@ -178,6 +178,9 @@ func TestStopSeq_StopWhileAlreadyStoppedIsIdempotent(t *testing.T) {
 	if first.State != session.LifecycleStopped || first.StopNote == nil {
 		t.Fatalf("setup: first stop did not land stopped with a note: state=%q note=%v", first.State, first.StopNote)
 	}
+	if first.Generation != generation {
+		t.Fatalf("setup: first stop landed at generation %d, want the child's own %d (a stop never moves the generation)", first.Generation, generation)
+	}
 	retained := *first.StopNote
 
 	// D2 stop table: "stopped -> 'already stopped'; no ledger line (MIN-007)".
