@@ -182,6 +182,7 @@ function closeAllOwned(): void {
     entry.stopWatching()
     forgetPanelTabHandle(entry.identity, entry.handle)
     try {
+      console.debug('[ui4-diag] closeAllOwned fired at', Date.now())
       entry.handle.close()
     } catch {
       // Page teardown is already in progress; the browser owns final cleanup.
@@ -233,6 +234,7 @@ export function registerPanelPopout(registration: PanelPopoutRegistration): void
     removeOwned(previous)
     if (previous.handle !== registration.handle) {
       try {
+        console.debug('[ui4-diag] registerPanelPopout replacing a previous handle at', Date.now())
         previous.handle.close()
       } catch {
         // Replacing a stale child is best-effort; the new record remains valid.
