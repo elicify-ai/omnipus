@@ -44,6 +44,10 @@ func TestCWSlideR1_InjectedSteeringSurvivesPreSendFailureAndPressure(t *testing.
 	ri.messages = h.check(t, ts, ri.messages)
 	cwR1AssertControls(t, ri.messages, controls)
 	cwR1Prepare(t, rr)
+	// The dead-dial probe replaces only the provider, not the send seam:
+	// run the same pre-send checkpoint the production callLLM closure runs
+	// before every attempt (loop_run_turn_response.go::callLLMWithRetries).
+	require.NoError(t, rr.rq.checkpointRequest(true))
 
 	// Real connection refusal BEFORE an HTTP request is sent. Reserve and
 	// close a local listener, then let the actual adapter attempt the dial.
