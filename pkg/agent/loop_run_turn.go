@@ -67,8 +67,17 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setFinalContent(rz.rc.rx.finalContent)
 	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory {
 		finalMsg := providers.Message{Role: "assistant", Content: rz.rc.rx.finalContent}
-		rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddMessage(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, finalMsg.Role, finalMsg.Content)
-		if err := rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.Save(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); err != nil {
+		// #1081: the final reply's archive append is checked admission — the
+		// same path every other assistant message rides (recordToolCalls →
+		// appendWindowMessage) — so a storage refusal reaches the save-error
+		// branch below instead of vanishing inside the fire-and-forget
+		// wrapper. Save stays behind the append: interface-mandated, and a
+		// store whose durability is not per-append may still fail it.
+		err := rz.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(finalMsg)
+		if err == nil {
+			err = rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.Save(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey)
+		}
+		if err != nil {
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
 			// Wave 1: never surface raw err.Error() (session-save is a
 			// local I/O error, not a provider error, but the same
