@@ -751,7 +751,11 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 	}
 
 	if mt.waitParks {
-		if perr := mt.t.parkNeedsInput(mt.childSessionID, mt.correlationID, mt.now); perr != nil {
+		authority := session.QuestionAuthorityOwnerRequired
+		if a, ok := stringArg(mt.args, "authority"); ok && a == session.QuestionAuthoritySelfOK {
+			authority = session.QuestionAuthoritySelfOK
+		}
+		if perr := mt.t.parkNeedsInput(mt.childSessionID, mt.correlationID, authority, mt.now); perr != nil {
 			return ErrorResult(fmt.Sprintf("message_parent: question accepted but failed to park session: %v", perr)).WithError(perr)
 		}
 	}
@@ -848,18 +852,19 @@ func (mt *messageParentToolExecute) reportUndeliveredWake() {
 // snapshot Execute captured. Callers MUST NOT already hold Lock(sessionID)
 // (sync.Mutex is not reentrant — Mutate takes it once internally). The
 // honesty template is delegate.go transitionLifecycle's doc comment.
-func (t *MessageParentTool) parkNeedsInput(childSessionID string, correlationID string, now time.Time) error {
+func (t *MessageParentTool) parkNeedsInput(childSessionID, correlationID, authority string, now time.Time) error {
 	return t.lifecycle.Mutate(childSessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
 		}
+		deadline := now.Add(t.needsInputTTL)
 		cur.State = session.LifecycleNeedsInput
 		cur.NeedsInput = &session.NeedsInput{
 			CorrelationID:   correlationID,
 			Reconstructable: true, // park-time hint only (m5); boot-sweep re-derives authoritatively
-			TTLDeadline:     now.Add(t.needsInputTTL),
+			TTLDeadline:     deadline,
 		}
-		return nil
+		return t.appendPendingQuestion(cur, correlationID, authority, deadline)
 	})
 }
 
