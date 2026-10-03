@@ -128,20 +128,31 @@ type SessionsConfig struct {
 	// instrument record whose full shape w6-proof §6.1 freezes (register
 	// row 17): the acquisition wait, the socket delta this operation caused
 	// (1 when it established a connection, 0 when it reused an existing
-	// one — a coalesced joiner never reaches the pool and records nothing
-	// here, which keeps the record sum comparable to the server's
-	// connection counter), and the pool outcome in the frozen outcome
-	// domain ("ok" | "pool_busy"). W1 adds no field of its own.
+	// one), and the pool outcome in the frozen outcome domain. A coalesced
+	// joiner never reaches the pool, so THIS seam never carries its record —
+	// the coalescing layer emits it (socket_count=0 plus the frozen
+	// shared-flight marker, MC-W1-28's joiner rule) through
+	// MailBudget.Instrument, keeping the record sum comparable to the
+	// server's connection counter. SharedFlight on the sample is w6 §6.1's
+	// frozen member (the joiner marker), not a W1-invented field; the frozen
+	// shape still has no established/reused discriminator and W1 adds none
+	// (R2-I-2).
 	Instrument func(PoolInstrumentSample)
 }
 
 // PoolInstrumentSample carries W1's pool sub-fields of the instrument record
 // (register row 17). The record shape itself has exactly one publisher —
-// w6-proof; this is not a second definition.
+// w6-proof; this is not a second definition. SharedFlight is w6 §6.1's frozen
+// shared_flight member (MC-W1-28's joiner rule binds W1 to carry it): true
+// only on a coalesced joiner's record, which the coalescing layer emits with
+// socket_count=0 through MailBudget.Instrument — the flight owner's pool
+// record carries the socket, keeping MC-P4's socket sum comparable to the
+// server's connection counter.
 type PoolInstrumentSample struct {
 	AcquireWaitMs int64
 	SocketCount   int
-	Outcome       string // "ok" | "pool_busy" (w6-proof §6.1 outcome domain)
+	Outcome       string // "ok" | "pool_busy" | a classified failure class (w6-proof §6.1 outcome domain)
+	SharedFlight  bool   // w6-proof §6.1 shared_flight: true only on a coalesced joiner's record
 }
 
 // mailboxIdentity is the pool key (spec §4.2): the agent/workspace pair, the
@@ -1079,10 +1090,16 @@ func (s *MailSessions) MarkPanelMetadataDirty(pair, folder string) {
 
 // SetPanelDirtySink wires the consumer (w5-integration). Pending marks
 // recorded before a sink existed are delivered once, preserving
-// consumed-once semantics.
+// consumed-once semantics. A nil sink unwires WITHOUT discarding: buffered
+// marks stay parked for the next sink — dropping them here would silently
+// lose every change a closed panel never learned of.
 func (s *MailSessions) SetPanelDirtySink(sink func(pair, folder string)) {
 	s.dirtyMu.Lock()
 	s.dirtySink = sink
+	if sink == nil {
+		s.dirtyMu.Unlock()
+		return
+	}
 	pending := make([][2]string, 0, len(s.dirtyPending))
 	seen := map[string]bool{}
 	for key, folder := range s.dirtyPending {

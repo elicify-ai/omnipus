@@ -121,15 +121,33 @@ func (e *MailBackoffError) Error() string {
 type MailBudget struct {
 	stateDir string
 
+	// Instrument, when set, receives the coalesced joiner's W1 pool
+	// sub-fields of the instrument record (MC-W1-28, register row 17 — the
+	// mechanical joiner rule W1 §3.1 assigns to THIS layer): a joiner never
+	// reaches the pool, so its record carries socket_count=0 plus the
+	// w6-proof §6.1 frozen shared_flight marker, keeping MC-P4's socket sum
+	// comparable to the server's connection counter. It delivers the same
+	// PoolInstrumentSample the pool seam uses — one record shape, one
+	// publisher (FR-W1-25). Set before the first gated call; never
+	// reassigned afterwards (the emit path reads it unlocked).
+	Instrument func(PoolInstrumentSample)
+
 	mu       sync.Mutex
 	accounts map[string]*mailAccountGate
 }
 
-// mailAccountGate is one account's slice of the budget: the 2-slot semaphore
-// and the singleflight group.
+// mailAccountGate is one account's slice of the budget: the 2-slot semaphore,
+// the singleflight group, and the flight-claim registry the joiner rule's
+// detection half reads.
 type mailAccountGate struct {
 	slots   chan struct{}
 	flights singleflight.Group
+
+	// joinMu guards joinFlight. Claim and DoChan happen under ONE hold of it,
+	// so claim order is flight-creation order: the first claimant is always
+	// the caller whose fn singleflight runs.
+	joinMu     sync.Mutex
+	joinFlight map[string]struct{}
 }
 
 const mailBudgetSlotsPerAccount = 2
@@ -169,7 +187,7 @@ func (b *MailBudget) gateFor(account string) *mailAccountGate {
 	defer b.mu.Unlock()
 	g, ok := b.accounts[account]
 	if !ok {
-		g = &mailAccountGate{slots: make(chan struct{}, mailBudgetSlotsPerAccount)}
+		g = &mailAccountGate{slots: make(chan struct{}, mailBudgetSlotsPerAccount), joinFlight: map[string]struct{}{}}
 		b.accounts[account] = g
 	}
 	return g
@@ -316,7 +334,28 @@ func call[T any](b *MailBudget, ctx context.Context, req MailBudgetRequest, fn f
 	if req.Revision != nil {
 		key = key + "\x00" + captured
 	}
-	resCh := gate.flights.DoChan(key, func() (any, error) {
+	// Coalescing join. The joiner rule (W1 §3.1, MC-W1-28, register row 17)
+	// is applied HERE — the joiner never reaches the pool, so the pool seam
+	// cannot see it. The claim and the DoChan run under ONE hold of joinMu,
+	// so claim order equals flight-creation order: the first claimant is
+	// always the caller whose fn singleflight executes (the flight owner,
+	// whose dial the pool seam records); every later arrival while the key
+	// stays claimed is a joiner and records its own
+	// socket_count=0+shared_flight marker (emitJoiner below). The owner's fn
+	// retires the claim when the dial truly ends, so a later caller starts a
+	// fresh flight instead of being counted as a joiner.
+	started := time.Now()
+	var (
+		joiner bool
+		resCh  <-chan singleflight.Result
+	)
+	gate.joinMu.Lock()
+	if _, ok := gate.joinFlight[key]; ok {
+		joiner = true
+	} else {
+		gate.joinFlight[key] = struct{}{}
+	}
+	resCh = gate.flights.DoChan(key, func() (any, error) {
 		// The flight is SHARED: it must never be hostage to the first
 		// caller's cancellation — a tab close or an aborted fetch would
 		// spuriously fail every coalesced joiner whose own context is
@@ -325,16 +364,34 @@ func call[T any](b *MailBudget, ctx context.Context, req MailBudgetRequest, fn f
 		// (transport.go::ctxOrCommandDeadline's rule): the first caller's
 		// deadline when it set one, else commandTimeout. Each caller keeps
 		// its own independent bail-out in the select below.
+		//
+		// Runs at most once per flight — in the claimant's DoChan (claim
+		// order == creation order under joinMu) — so this unconditional
+		// release always retires THIS flight's own claim. The singleflight
+		// map's own delete lags this release by its post-fn epilogue: a
+		// caller claiming inside that lag joins the just-finished call's
+		// result while labeled owner and emits no joiner record — a
+		// nanoseconds-wide undercount of one operation's record, never a
+		// socket-sum error (the dial is still counted exactly once).
+		defer gate.releaseFlightKey(key)
 		flightCtx, cancel := flightContext(ctx)
 		defer cancel()
 		return runDialValue(gate, flightCtx, exec)
 	})
+	gate.joinMu.Unlock()
 	select {
 	case res := <-resCh:
 		// Joiners receive the executor's value AND error (standard
 		// singleflight semantics; no Forget — a caller whose deadline
 		// expires simply stops waiting and leaves the flight to finish for
 		// the others).
+		if joiner {
+			outcome := "ok"
+			if res.Err != nil {
+				outcome = classifyMailError(res.Err)
+			}
+			b.emitJoiner(started, outcome)
+		}
 		if res.Err != nil {
 			var zero T
 			return zero, res.Err
@@ -355,9 +412,48 @@ func call[T any](b *MailBudget, ctx context.Context, req MailBudgetRequest, fn f
 	case <-ctx.Done():
 		// Per-caller bail-out: ONLY this caller's own context ends its wait;
 		// the shared flight itself continues for the others.
+		if joiner {
+			// The joiner's operation still ended — record it (w6 §6.1:
+			// emitted on success and failure alike) with the seam's
+			// bounded-refusal class, the same condition the pool seam maps
+			// to pool_busy for a never-dialed operation.
+			b.emitJoiner(started, "pool_busy")
+		}
 		var zero T
 		return zero, fmt.Errorf("%w: %w", ErrMailBusy, ctx.Err())
 	}
+}
+
+// releaseFlightKey retires one flight claim (the owner's fn defer; see the
+// claim site in call for the ordering that makes the claimant always the
+// flight's executor).
+func (g *mailAccountGate) releaseFlightKey(key string) {
+	g.joinMu.Lock()
+	delete(g.joinFlight, key)
+	g.joinMu.Unlock()
+}
+
+// emitJoiner delivers the coalesced joiner's W1 pool sub-fields of the
+// instrument record (MC-W1-28, register row 17) to MailBudget.Instrument:
+// socket_count=0 (a joiner never dials — the flight owner's pool record
+// carries the socket) plus the w6-proof §6.1 shared_flight marker, with the
+// joiner's own measured queue time inside the budget (§6.1: acquire_wait_ms
+// is measured, never inferred). A nil sink stays silent, exactly like the
+// pool seam. Outcome is the caller's pre-mapped safe class.
+func (b *MailBudget) emitJoiner(started time.Time, outcome string) {
+	if b.Instrument == nil {
+		return
+	}
+	waitMs := time.Since(started).Milliseconds()
+	if waitMs < 0 {
+		waitMs = 0
+	}
+	b.Instrument(PoolInstrumentSample{
+		AcquireWaitMs: waitMs,
+		SocketCount:   0,
+		Outcome:       outcome,
+		SharedFlight:  true,
+	})
 }
 
 // totalReadDeadline is the founder-accepted total read-work ceiling (§4.4):
