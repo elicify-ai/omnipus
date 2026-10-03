@@ -31,6 +31,19 @@ package email
 // The POSITIVE CONTROL (TestExclusionEvaluator_CoveringRepoIsExcluded) keeps
 // this conformance set from passing by always refusing: a repo whose rules
 // genuinely cover the cache path must let the write through.
+//
+// ROUND-2 IMP-1 CORRECTION (2026-10-03, qa-lead). The settlement (w2 spec
+// §3.8 E-1 cell + gate paragraph, §4.2; register R-4) makes the evaluator
+// this file's direct-verdict assertions bind — pathIgnored/tracksUnder/
+// findGitRepo and the exported EvaluateStagingExclusion — the PUBLISHER's
+// E-1 entry point, and makes FolderSnapshotStore.Save a pure decision
+// CONSUMER (one evaluator, one enforcer). The conformance dataset is
+// unchanged and still binds that evaluator; what changed is the WRITE half
+// of each row: the verdict asserted from the evaluator is the verdict whose
+// published decision the store consumes — not-provable ⇒ not-allowed
+// injection ⇒ refusal (§7.1), provable ⇒ allowed injection ⇒ the write
+// succeeds. Every git-oracle cross-check and every direct verdict assertion
+// below is untouched.
 
 import (
 	"errors"
@@ -118,15 +131,29 @@ func gitCheckIgnore(t *testing.T, dir, path string, noIndex bool) (ignored bool,
 	}
 }
 
-// assertFirstWriteRefused drives the gate through Save and asserts the typed
-// refusal plus zero artifacts left behind (CX-14 hygiene: a refusing gate
-// leaves nothing, not even the directory).
+// assertFirstWriteRefused drives the write path through Save and asserts the
+// typed refusal plus zero artifacts left behind (CX-14 hygiene: a refusing
+// gate leaves nothing, not even the directory).
+//
+// Round-2 IMP-1 correction (2026-10-03): every caller's fixture is a case
+// where the PUBLISHER's evaluation cannot prove exclusion (not covered,
+// negation-only stack, unparseable rules) — so what reaches the write path
+// is the published NOT-ALLOWED decision with the Phase-1 safe notice
+// (§4.2; §7.1's not-allowed row), modelled here by the injection derived
+// from the evaluator verdict each caller asserts just before. The store
+// itself still never evaluates anything: it refuses the published
+// not-allowed decision before any filesystem effect. (The ABSENT-decision
+// refusal row — fail closed on absence — is the gate pack's
+// TestMailCacheExclusionGate_BlocksWhenMissing.)
 func assertFirstWriteRefused(t *testing.T, base string) {
 	t.Helper()
-	store := gateStore(t, base)
+	store := gateStoreNotAllowed(t, base)
 	err := store.Save(Scope{PairID: "pair-1", Generation: "gen-1"}, testSnapshot(), Revision(1), repeatByte(0xAA, 32))
 	if !errors.Is(err, ErrCacheUnavailable) {
 		t.Fatalf("the first cache write must be refused where the data directory's ignore state does not provably exclude the cache path (§3.8 E-1 check-and-refuse), got %v", err)
+	}
+	if !strings.Contains(err.Error(), testNoticeCacheUnavailable) {
+		t.Fatalf("the not-allowed refusal must carry the safe notice_code %q (§3.8 gate paragraph: visible notice), got %v", testNoticeCacheUnavailable, err)
 	}
 	if _, statErr := os.Stat(snapshotPath(base, "pair-1")); statErr == nil {
 		t.Fatal("a refused write left folders.enc behind — the gate refuses before any filesystem effect (§3.8)")
@@ -213,9 +240,16 @@ func TestExclusionEvaluator_NegationReincludeRespected(t *testing.T) {
 		t.Fatal("a negation below a denied directory must not re-include the directory itself (git last-match/ancestor semantics, DT-6 row 2): want excluded")
 	}
 
-	store := gateStore(t, base)
+	// Publisher half (round-2 IMP-1): the exclusion the evaluator just
+	// proved is what the publisher publishes as allowed — derived from the
+	// asserted verdict, never re-evaluated by the store (§4.2).
+	if evalErr := EvaluateStagingExclusion(base); evalErr != nil {
+		t.Fatalf("the publisher's evaluation must prove exclusion for the denied-ancestor fixture (§3.8 E-1): %v", evalErr)
+	}
+
+	store := gateStoreAllowed(t, base)
 	if err := store.Save(Scope{PairID: "pair-1", Generation: "gen-1"}, testSnapshot(), Revision(1), repeatByte(0xAA, 32)); err != nil {
-		t.Fatalf("a genuinely excluded cache path must let the first write through (G-1), got %v", err)
+		t.Fatalf("a genuinely excluded cache path must let the first write through (G-1/§7.1 allowed row), got %v", err)
 	}
 }
 
@@ -247,9 +281,14 @@ func TestExclusionEvaluator_NestedIgnorePrecedence(t *testing.T) {
 		if !ignored {
 			t.Fatal("the deeper negation must not re-include the denied ancestor directory (git nested-file precedence, DT-6 row 3): want excluded")
 		}
-		store := gateStore(t, base)
+		// Publisher half (round-2 IMP-1): the proved exclusion is published
+		// as allowed and the enforcer writes (§4.2; §7.1 allowed row).
+		if evalErr := EvaluateStagingExclusion(base); evalErr != nil {
+			t.Fatalf("the publisher's evaluation must prove exclusion for the denied-ancestor fixture (§3.8 E-1): %v", evalErr)
+		}
+		store := gateStoreAllowed(t, base)
 		if err := store.Save(Scope{PairID: "pair-1", Generation: "gen-1"}, testSnapshot(), Revision(1), repeatByte(0xAA, 32)); err != nil {
-			t.Fatalf("the ancestor deny proves exclusion — the write must succeed (G-1), got %v", err)
+			t.Fatalf("the ancestor deny proves exclusion — the write must succeed (G-1/§7.1), got %v", err)
 		}
 	})
 
@@ -303,9 +342,15 @@ func TestExclusionEvaluator_InfoExcludeHonoured(t *testing.T) {
 		t.Fatal("a cache path denied only via .git/info/exclude must be judged excluded (DT-6 row 4): want excluded")
 	}
 
-	store := gateStore(t, base)
+	// Publisher half (round-2 IMP-1): the info/exclude-proved exclusion is
+	// what the publisher publishes as allowed (§4.2; §7.1 allowed row).
+	if evalErr := EvaluateStagingExclusion(base); evalErr != nil {
+		t.Fatalf("the publisher's evaluation must prove exclusion via .git/info/exclude (§3.8 E-1; DT-6 row 4): %v", evalErr)
+	}
+
+	store := gateStoreAllowed(t, base)
 	if err := store.Save(Scope{PairID: "pair-1", Generation: "gen-1"}, testSnapshot(), Revision(1), repeatByte(0xAA, 32)); err != nil {
-		t.Fatalf("the info/exclude deny proves exclusion — the write must succeed (G-1), got %v", err)
+		t.Fatalf("the info/exclude deny proves exclusion — the write must succeed (G-1/§7.1), got %v", err)
 	}
 }
 
@@ -342,13 +387,26 @@ func TestExclusionEvaluator_TrackedFileNotExcludedDespiteRule(t *testing.T) {
 		t.Fatal("the evaluator must see the committed cache path as tracked (E-3/DT-6 row 5)")
 	}
 
-	// The gate refuses a tracked cache path whatever the rules say (E-3). The
-	// tracked placeholder file legitimately exists — the refusal must leave
-	// it exactly as committed, never overwrite or remove it.
-	store := gateStore(t, base)
+	// Publisher half (round-2 IMP-1): the tracked verdict the evaluator just
+	// reported is what makes the publisher publish NOT-ALLOWED with the E-3
+	// flavour (§3.8 E-3; §7.1: the pre-tracked case arrives as a not-allowed
+	// decision).
+	if evalErr := EvaluateStagingExclusion(base); evalErr == nil || !errors.Is(evalErr, ErrCachePathTracked) {
+		t.Fatalf("the publisher's evaluation must report the E-3 tracked flavour for a committed cache path (§3.8 E-3/DT-6 row 5), got %v", evalErr)
+	}
+
+	// The write path refuses the published not-allowed decision whatever the
+	// rules say (E-3). The tracked placeholder file legitimately exists — the
+	// refusal must leave it exactly as committed, never overwrite or remove
+	// it (the enforcer cannot distinguish a tracked path from a not-provable
+	// one; cleanup belongs to the removal cascade).
+	store := gateStoreNotAllowed(t, base)
 	err = store.Save(Scope{PairID: "pair-1", Generation: "gen-1"}, testSnapshot(), Revision(1), repeatByte(0xAA, 32))
 	if !errors.Is(err, ErrCacheUnavailable) {
 		t.Fatalf("a pre-tracked cache path must refuse the first write even under a covering deny rule (E-3/DT-6 row 5), got %v", err)
+	}
+	if !strings.Contains(err.Error(), testNoticeCacheUnavailable) {
+		t.Fatalf("the not-allowed refusal must carry the safe notice_code %q (§3.8 gate paragraph: visible notice), got %v", testNoticeCacheUnavailable, err)
 	}
 	got, readErr := os.ReadFile(cachePath)
 	if readErr != nil || string(got) != "committed-before-the-gate" {
@@ -402,9 +460,16 @@ func TestExclusionEvaluator_CoveringRepoIsExcluded(t *testing.T) {
 		t.Fatal("a repo whose rules genuinely cover the cache path must be judged excluded — the conformance set must not pass by always refusing")
 	}
 
-	store := gateStore(t, base)
+	// Publisher half (round-2 IMP-1): the covered cache path's proved
+	// exclusion is what the publisher publishes as allowed — derived from
+	// the asserted verdict, never a store-side re-evaluation (§4.2).
+	if evalErr := EvaluateStagingExclusion(base); evalErr != nil {
+		t.Fatalf("the publisher's evaluation must prove exclusion for the covering fixture (§3.8 E-1): %v", evalErr)
+	}
+
+	store := gateStoreAllowed(t, base)
 	if err := store.Save(Scope{PairID: "pair-1", Generation: "gen-1"}, testSnapshot(), Revision(1), repeatByte(0xAA, 32)); err != nil {
-		t.Fatalf("where the evaluation proves exclusion the first write must succeed (G-1/US-7.1), got %v", err)
+		t.Fatalf("where the evaluation proves exclusion the first write must succeed (G-1/US-7.1/§7.1 allowed row), got %v", err)
 	}
 	if _, statErr := os.Stat(snapshotPath(base, "pair-1")); statErr != nil {
 		t.Fatalf("the sealed snapshot must exist after the allowed write: %v", statErr)
