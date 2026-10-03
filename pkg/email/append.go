@@ -44,6 +44,7 @@ func (c *Client) AppendMessage(ctx context.Context, folder string, flags []strin
 		// APPEND literal but never sends the tagged response must not hang this
 		// call forever. Write/Close/Wait all run inside the same fn so the
 		// timeout covers the whole sequence, not just the final Wait.
+		var data *imap.AppendData
 		data, err = runIMAP(ctx, "append to "+folder, func() (*imap.AppendData, error) {
 			cmd := client.Append(folder, int64(len(raw)), opts)
 			if _, werr := cmd.Write(raw); werr != nil {
