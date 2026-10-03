@@ -1,0 +1,39 @@
+title: MailAttachmentSaveRequest
+description: >
+  Request body of the save-to-library subresource for one attachment part
+  (ADR-20261001 "Save-to-workspace request/response (F2)" row, correction
+  M-02; w5 spec §8 — W0 is the single publisher). Source identity is in the
+  route (pair, folder, message ref, part index); the body carries only the
+  current view's optional observer and the save-operation token. There is
+  no arbitrary save path, destination or overwrite switch: folder, leaf
+  name and month hierarchy are server-selected. The human Save click (or
+  the ask-approved agent download) is the explicit request — never a
+  guarantee the server can write; refusals return typed errors, and a lost
+  response resolves ONLY through the bounded same-token retry path.
+type: object
+additionalProperties: false
+required:
+  - save_operation_token
+properties:
+  observer_id:
+    type: string
+    description: >
+      Opaque per-panel observer ID (mail_panel_observer frame) when the
+      save belongs to an open Mail panel — associates the work with that
+      observer's retention semantics. Absent for agent-tool saves. Never
+      grants access by itself: the route's pair authorization is checked
+      independently.
+    example: "obs_5f3a"
+  save_operation_token:
+    type: string
+    minLength: 1
+    description: >
+      Client-generated opaque token for THIS save attempt (correction M-02)
+      — echoed by the response. An explicit user retry carrying the SAME
+      token is answered with the prior save receipt when that save already
+      committed — exactly one file exists, no second numbered duplicate —
+      and only a genuinely uncommitted operation performs the save. A
+      different token is a new user request. No automatic replay ever
+      carries a token: reconciliation is bounded to this explicit retry
+      path, not a general exactly-once framework.
+    example: "sv_77bd21aa"

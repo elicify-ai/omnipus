@@ -153,6 +153,12 @@ channels:
         $ref: '#/components/messages/CatchUpCompleteFrame'
       UserMessageFrame:
         $ref: '#/components/messages/UserMessageFrame'
+      MailPanelObserverFrame:
+        $ref: '#/components/messages/MailPanelObserverFrame'
+      MailPanelObserverAckFrame:
+        $ref: '#/components/messages/MailPanelObserverAckFrame'
+      MailPanelObserverErrorFrame:
+        $ref: '#/components/messages/MailPanelObserverErrorFrame'
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
@@ -1570,6 +1576,30 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/UserMessageFrame'
+    MailPanelObserverFrame:
+      name: MailPanelObserverFrame
+      title: mail_panel_observer
+      summary: 'Mail panel presence open/close (client → server, ADR-20261001 "Mail panel presence" row; register row 5 — W0 is the single
+        publisher, w5-integration implements the gateway handlers, w1''s registry is transport-agnostic).
+
+        '
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MailPanelObserverFrame'
+    MailPanelObserverAckFrame:
+      name: MailPanelObserverAckFrame
+      title: mail_panel_observer_ack
+      summary: Mail panel presence accepted; the observer is bound to this authenticated connection and the authorized workspace (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MailPanelObserverAckFrame'
+    MailPanelObserverErrorFrame:
+      name: MailPanelObserverErrorFrame
+      title: mail_panel_observer_error
+      summary: Mail panel presence refused — safe closed-class reason (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MailPanelObserverErrorFrame'
   schemas:
     WsFrameType:
       title: WsFrameType
@@ -1653,6 +1683,9 @@ components:
       - catch_up_complete
       - user_message
       - agent_created
+      - mail_panel_observer
+      - mail_panel_observer_ack
+      - mail_panel_observer_error
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -7253,3 +7286,134 @@ components:
             The newly created agent's ID. Informational only — never a
             scoping instruction. Clients invalidate the entire ['agents']
             listing query regardless of which agent id triggered the frame.
+    MailPanelObserverFrame:
+      title: MailPanelObserverFrame
+      description: >
+        Client → server Mail panel presence open/close (ADR-20261001 "Mail
+        panel presence" row; mail-live-access-landing-order register row 5
+        — W0 is the single publisher, w5-integration implements the gateway
+        handlers). Opaque per-panel observer IDs: multiple tabs carry
+        distinct observers, and each panel instance mints a fresh one.
+        Connection-scoped, not session-scoped — no session_id, like
+        LibraryChangedFrame. The server binds the observer to THIS
+        authenticated connection and the currently authorized workspace;
+        REST requests can never claim ownership using another socket/user's
+        ID. Explicit close, socket disconnect and logout revoke exactly
+        that connection's observers — independent watcher/tool work is
+        never interrupted. Until presence is acknowledged the panel
+        conservatively assumes request-scoped connections. No new
+        data-refresh heartbeat or cache-push frame exists and none may be
+        added here: the watcher stays the only closed-panel notice surface
+        (founder decision; ADR P1.1).
+      type: object
+      required:
+      - type
+      - action
+      - observer_id
+      - workspace_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: mail_panel_observer
+        action:
+          type: string
+          enum:
+          - open
+          - close
+          description: >
+            open = this panel instance is open (its observer may retain
+            pooled panel sockets while it stays open). close = it closed —
+            that observer's idle panel sockets close immediately and its
+            in-flight work is cancelled; active sockets close when the last
+            dependent request completes.
+        observer_id:
+          type: string
+          minLength: 1
+          description: >
+            Opaque per-panel observer identifier — minted fresh per panel
+            instance by the client, meaningless to anything but presence
+            binding. Never reused across tabs, never an authorization
+            credential.
+        workspace_id:
+          type: string
+          minLength: 1
+          description: >
+            Workspace whose Mail panel is open — must be one this
+            authenticated connection is authorized for; the server refuses
+            otherwise with mail_panel_observer_error.
+    MailPanelObserverAckFrame:
+      title: MailPanelObserverAckFrame
+      description: >
+        Server → client: the observer is bound to this authenticated
+        socket/session and the authorized workspace (ADR-20261001 "Mail
+        panel presence" row). Until this ack arrives the panel keeps
+        conservative request-scoped behaviour. Connection-scoped; no
+        session_id, no replay, no persistence — presence dies with the
+        connection.
+      type: object
+      required:
+      - type
+      - action
+      - observer_id
+      - workspace_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: mail_panel_observer_ack
+        action:
+          type: string
+          enum:
+          - open
+          - close
+          description: The accepted action this ack confirms.
+        observer_id:
+          type: string
+          minLength: 1
+          description: The bound observer's opaque ID (echo).
+        workspace_id:
+          type: string
+          minLength: 1
+          description: The workspace the observer is now bound to (echo).
+    MailPanelObserverErrorFrame:
+      title: MailPanelObserverErrorFrame
+      description: >
+        Server → client: the presence request was refused with a safe,
+        closed-class reason (ADR-20261001 "Mail panel presence" row). The
+        panel falls back to conservative request-scoped connections — it
+        never retries the open in a loop and never treats the refusal as
+        authorization. Connection-scoped; no session_id.
+      type: object
+      required:
+      - type
+      - observer_id
+      - workspace_id
+      - code
+      - error
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: mail_panel_observer_error
+        observer_id:
+          type: string
+          minLength: 1
+          description: The refused observer's opaque ID (echo).
+        workspace_id:
+          type: string
+          minLength: 1
+          description: The refused workspace (echo).
+        code:
+          type: string
+          enum:
+          - unauthorized_workspace
+          - malformed_frame
+          description: >
+            Closed-class refusal reason. unauthorized_workspace = this
+            authenticated connection is not authorized for that workspace —
+            never a hint about what WOULD be authorized. malformed_frame =
+            the frame failed validation.
+        error:
+          type: string
+          description: Human-readable message, safe to display; no raw error text.

@@ -351,6 +351,17 @@ func (t *ReadMessageTool) Execute(ctx context.Context, args map[string]any) *Too
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_message failed: %v", err))
 	}
+	// w5-integration US-9 (register rows 8/16; ADR correction I-03): the
+	// result carries the issued opaque reference so the attachment journey
+	// addresses this message without the optional Message-ID. The
+	// production client issues on its fetch lease (transport.go::ReadMessage);
+	// a Transport implementation that does not issue leaves the field empty
+	// and the tool asks THE one issuer (email.IssueMessageRef) with the
+	// evidence it holds — never a locally formatted reference (no second
+	// issuer; the tools never mint locally).
+	if msg.MessageRef == "" {
+		msg.MessageRef = email.IssueMessageRef(email.MessageRefClaims{UID: msg.UID})
+	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_message: marshal: %v", err))
@@ -665,7 +676,11 @@ func parseUID(raw any) (uint32, bool) {
 
 // EmailToolset constructs the full set of email tools over an agent's
 // workspace→transport map. Returned in a stable order. Used by the per-agent
-// wiring in pkg/agent.
+// wiring in pkg/agent. The three attachment tools (w4 F3) ride the same
+// transports-only construction signature: list/read resolve their capability
+// on the transport at execution time; the save tool receives the shared
+// transfer service through its optional SetTransferService setter at the
+// same registration pass that wires SetMailBudget here.
 func EmailToolset(tps EmailTransports) []Tool {
 	return []Tool{
 		NewReadInboxTool(tps),
@@ -674,5 +689,8 @@ func EmailToolset(tps EmailTransports) []Tool {
 		NewSendEmailTool(tps),
 		NewReplyTool(tps),
 		NewCreateEmailDraftTool(tps),
+		NewListEmailAttachmentsTool(tps),
+		NewReadEmailAttachmentTool(tps),
+		NewDownloadEmailAttachmentTool(tps),
 	}
 }

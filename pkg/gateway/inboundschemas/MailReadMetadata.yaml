@@ -1,0 +1,92 @@
+title: MailReadMetadata
+description: >
+  Freshness metadata carried by a Mail read response (ADR-20261001
+  "Freshness metadata" row; mail-live-access-landing-order register row 2 —
+  W0 is the single publisher, w2 is the only value producer, w5 attaches and
+  advances in gateway responses). A 200 cache response is not evidence of a
+  live success: the SPA renders "last checked / checking / refresh failed"
+  from these fields, and drops a delayed response whose
+  publication_revision is superseded (correction I-02). A missing
+  last_validated_at means unknown/stale, never just fetched. A mapping, its
+  counts and a page of headers carry SEPARATE metadata objects — a
+  validation of one is not a validation of the others. Metadata describes
+  successful validation, not rendering or access time; timestamps never
+  advance on failure (ADR failure table).
+type: object
+additionalProperties: false
+required:
+  - source
+  - last_validated_at
+  - stale
+  - refresh_needed
+  - notice_code
+  - publication_revision
+properties:
+  source:
+    type: string
+    enum:
+      - live
+      - memory
+      - encrypted_disk
+      - none
+    description: >
+      Where the served data came from. live = validated against the mail
+      server in this read; memory = the bounded in-memory working cache;
+      encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder
+      mapping only — headers never emit encrypted_disk in Phase 1, they are
+      memory-only; w2 §4.1); none = no reusable source served this data
+      (absent/unknown data, or a live read that could not be validated).
+    example: "memory"
+  last_validated_at:
+    type: string
+    format: date-time
+    nullable: true
+    description: >
+      RFC 3339 timestamp of the last successful server validation of this
+      data, or null when the data has never been validated (unknown) or the
+      source is live in this request. Null means unknown/stale — never
+      "just fetched". Cache timestamps never advance on a failed refresh.
+    example: "2026-10-02T09:15:00Z"
+  stale:
+    type: boolean
+    description: >
+      True when the served data is older than its freshness threshold
+      (5 minutes for counts and headers, 24 hours for the saved folder
+      mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay
+      visible and labelled; they are never silently replaced by a skeleton
+      or presented as live.
+    example: false
+  refresh_needed:
+    type: boolean
+    description: >
+      True when one eligible live refresh for this data is still owed under
+      the event-driven refresh rules (panel open, folder switch, own
+      successful action, manual Refresh — ADR P1.1). Never true because of a
+      timer; no repeating refresh timer exists (founder decision).
+    example: false
+  notice_code:
+    type: string
+    nullable: true
+    description: >
+      Closed-enum safe notice when the reusable cache could not serve or
+      could not be written, so live access was used instead (or had to
+      be). cache_unavailable = the reusable cache is unavailable for this
+      data (exclusion gate refused, byte/row bound exceeded, envelope
+      unreadable) — the read itself may still have succeeded live. Null =
+      no notice. The enum is closed; a new code is a contract change, not a
+      free-form string.
+    enum:
+      - cache_unavailable
+    example: "cache_unavailable"
+  publication_revision:
+    type: string
+    nullable: true
+    description: >
+      Opaque, monotonically advancing publication revision (correction I-02)
+      the served data was produced under, owned by the gateway/cache
+      service. A delayed frontend response carrying a revision older than
+      the newest one it has applied is dropped — never rendered, never
+      published into cache state. Null = no revision attaches to this read
+      (e.g. data with no invalidation events yet). Never parsed by the SPA:
+      compare for equality/recency only, treat as opaque.
+    example: "m1f2-9c4e"

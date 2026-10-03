@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -52,12 +53,16 @@ func TestFolderCounts_MissingDraftsFolderStillOpensMailbox(t *testing.T) {
 }
 
 // Negative control: only a missing folder is softened. A cancelled request must
-// still fail loudly (it is not a folder problem).
+// still fail loudly (it is not a folder problem) — and it must fail from the
+// cancellation itself, never from the FR-W1-2 wiring refusal, which would let
+// this control pass without exercising cancellation at all.
 func TestFolderCounts_CancelledRequestStillFails(t *testing.T) {
 	cl, _ := startViewIMAP(t, "inbox")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := cl.FolderCounts(ctx); err == nil {
 		t.Fatal("a cancelled FolderCounts must return an error, not empty stats")
+	} else if errors.Is(err, ErrSessionSourceMissing) {
+		t.Fatalf("cancelled FolderCounts failed with the wiring refusal, not the cancellation: %v", err)
 	}
 }

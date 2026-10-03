@@ -34,6 +34,11 @@ const (
 // *Client wired to it. seenUIDs marks messages \Seen at append time.
 func startMemIMAP(t *testing.T, msgs [][]byte, seenUIDs map[int]bool) *Client {
 	t.Helper()
+	// Every client this harness returns is deliberately source-less: its tests
+	// verify legacy-dial transport behavior. Declare that wiring world here so
+	// the outcome no longer depends on whether some earlier test wired the
+	// process-wide manager (FR-W1-2 order-independence fixture).
+	pinLegacyDialWorld(t)
 
 	mem := imapmemserver.New()
 	user := imapmemserver.NewUser(testIMAPUser, testIMAPPass)

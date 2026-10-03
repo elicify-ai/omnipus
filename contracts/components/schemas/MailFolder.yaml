@@ -1,9 +1,18 @@
 title: MailFolder
 description: >
   One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox,
-  as listed live from the mail server. Counts are live IMAP values at request
-  time; the unread count exists for the Inbox only and is null everywhere
-  else (round-1 MIN-005).
+  as listed from the mail server (email-mail-view-spec D5; ADR-20261001
+  "Missing versus unknown folder/count" row; mail-live-access-landing-order
+  register row 3 — W0 is the single publisher, w2's discovery is the only
+  producer of the role fields' values). Counts and freshness are per role:
+  mapping and count metadata are separate objects, and a confirmed-absent
+  Sent/Drafts has total=0 with an explanation while an unknown or failed
+  count has total=null — never an invented zero. Missing INBOX remains an
+  account error, not an unknown folder. The role fields (availability,
+  uidvalidity, mapping_source) and the two metadata objects are optional on
+  the wire until the discovery producer lands — fixtures and builds
+  predating them keep working (the is_knowledge_base precedent); producers
+  emit them always once landed.
 type: object
 additionalProperties: false
 required:
@@ -32,7 +41,18 @@ properties:
     example: "INBOX"
   total:
     type: integer
-    description: Live message count of the folder.
+    description: >
+      Live message count of the folder. A confirmed-absent optional role
+      reports 0 with its explanation (correction M-01; w2 spec §4.1).
+      Deferred nullability (register row 3; acceptance recorded in
+      mail-live-access-landing-order §8, 2026-10-02): this schema cannot
+      yet express an unknown or failed count — total is required and
+      non-nullable here — and the W0 amendment that makes it nullable
+      executes atomically with the Wave C/D consumer PRs. From that
+      amendment on, the value may be absent on responses until the w2
+      discovery producer supplies it; a consumer must treat an absent
+      total as unknown and never as 0 or false — a fabricated 0 never
+      masquerades as "checked, empty".
     example: 42
   unread_count:
     type: integer
@@ -43,3 +63,63 @@ properties:
       only other unread surface — the list endpoint never filters by it
       (round-2 OBS-001 dropped the unseen_only query parameter).
     example: 3
+  availability:
+    type: string
+    enum:
+      - present
+      - absent
+      - unknown
+    description: >
+      [Optional on the wire until the discovery producer lands — fixtures
+      and builds predating this field keep working, the is_knowledge_base
+      precedent; producers emit it always once landed.]
+      Discovery outcome for this role (correction M-01). present = a
+      resolved mapping was validated against the server. absent = discovery
+      completed successfully AND every candidate probe returned the
+      server's structural not-found — confirmed absence only; the role is
+      shown empty with the server-folder-absent explanation. unknown =
+      unresolved: discovery commands failed or timed out, an auth/TLS/DNS/
+      permission error occurred, LIST-EXTENDED was unsupported with no
+      candidate probe succeeding, or the server simply holds an untagged,
+      locally named folder outside the candidate list — from the client's
+      seat that is indistinguishable from absence, so the role renders
+      unresolved with the per-mailbox name setting offered. Absence is
+      never inferred from a finite candidate list failing (w2 spec §4.1).
+    example: "present"
+  uidvalidity:
+    type: integer
+    format: int64
+    minimum: 0
+    maximum: 4294967295
+    nullable: true
+    description: >
+      IMAP UIDVALIDITY of the resolved folder — the epoch its UIDs (and any
+      paging cursors) are valid in. Null before validation or when the
+      role's mapping is unknown: unknown is represented as null, never a
+      fabricated version (ADR P1.3 "UIDVALIDITY changes" row). A changed
+      uidvalidity discards affected header entries and cursors before new
+      rows are published.
+    example: 456
+  mapping_source:
+    type: string
+    enum:
+      - override
+      - special_use
+      - fallback
+      - saved
+      - none
+    description: >
+      How this role's folder name was resolved (register row 3 settles the
+      five values; the ADR's four-value proposal is superseded). override =
+      the operator's explicit per-mailbox Sent/Drafts name setting wins.
+      special_use = the server advertised the role (LIST-EXTENDED
+      SPECIAL-USE). fallback = a common-name candidate probe succeeded
+      without special-use support. saved = a still-valid previously saved
+      mapping was reused. none = no recognized role and no successful
+      candidate probe (availability=unknown), or the role is confirmed
+      absent.
+    example: "special_use"
+  mapping_metadata:
+    $ref: ./MailReadMetadata.yaml
+  count_metadata:
+    $ref: ./MailReadMetadata.yaml

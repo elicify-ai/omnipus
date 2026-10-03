@@ -337,6 +337,10 @@ func TestDialSMTPRaw_AllResolvedAddressesFailWithLastConnectError(t *testing.T) 
 // mailbox content.
 func f2StartMemIMAPPlain(t *testing.T) *Client {
 	t.Helper()
+	// Source-less client by design; declare the legacy-dial world (order-
+	// independence fixture) so the resolver-seam tests drive real dials, not
+	// the FR-W1-2 wiring refusal, regardless of test order.
+	pinLegacyDialWorld(t)
 	mem := imapmemserver.New()
 	user := imapmemserver.NewUser(f2IMAPUser, f2IMAPPass)
 	require.NoError(t, user.Create("INBOX", nil))
@@ -436,6 +440,7 @@ func TestDialIMAP_FallsBackAcrossResolvedAddresses(t *testing.T) {
 }
 
 func TestDialIMAP_AllResolvedAddressesFailWithLastConnectError(t *testing.T) {
+	pinLegacyDialWorld(t) // source-less client: legacy-dial world (order-independence fixture)
 	cl, err := NewClient(Account{
 		IMAPHost: f2IMAPName,
 		IMAPPort: 993,
@@ -471,6 +476,7 @@ func TestDialIMAP_AllResolvedAddressesFailWithLastConnectError(t *testing.T) {
 }
 
 func TestDialIMAP_AllAddressAttemptsShareCallerDeadline(t *testing.T) {
+	pinLegacyDialWorld(t) // source-less client: legacy-dial world (order-independence fixture)
 	cl, err := NewClient(Account{
 		IMAPHost: f2IMAPName,
 		IMAPPort: 993,

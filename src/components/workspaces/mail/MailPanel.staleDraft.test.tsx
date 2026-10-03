@@ -18,6 +18,16 @@ vi.mock('@/lib/api/mail', async (importOriginal) => ({
   fetchMailFolders, fetchMailMessages, fetchMailMessage, fetchMailSummary,
 }))
 
+// Superseded oracle, re-pinned (W3 panel spec §11 S-11 + §8.8's re-pin list):
+// the drafts-era string "This draft was changed or deleted elsewhere. The list
+// has been refreshed." was replaced by the generalized message-changed surface
+// "This message changed or was deleted. Refresh the list." — landed in
+// a3a678b34 (cache-first panel, 2026-10-02).
+const MESSAGE_CHANGED = 'This message changed or was deleted. Refresh the list.'
+// The settled panel list read (W3 spec §2.4 "the panel always sends limit=25
+// explicitly", §3.2 cache-first open event), landed in a3a678b34.
+const OPEN_LIST_CALL = { limit: 25, mode: 'cache_first', retry: false } as const
+
 const staleRow: MailMessageSummary = {
   message_id: '<stale-draft@test.local>', uid: 1, uidvalidity: 3,
   folder: 'drafts', subject: 'F5 stale draft', from: 'mia@test.local', from_name: null,
@@ -51,8 +61,13 @@ describe('MailPanel — stale draft recovery errors', () => {
     renderDraft()
     fireEvent.click(await screen.findByRole('button', { name: /F5 stale draft/ }))
     await waitFor(() => expect(fetchMailMessages).toHaveBeenCalledTimes(2))
-    expect(await screen.findByText('404: The requested resource was not found.')).toBeInTheDocument()
-    expect(screen.queryByText('This draft was changed or deleted elsewhere. The list has been refreshed.')).not.toBeInTheDocument()
+    // S-11 (MailPanel.tsx::detailIsStaleReference): a 404 for a message that no
+    // longer resolves always lands on the message-changed surface, whose text
+    // explains and offers "Refresh list" — it never claims a refresh happened.
+    const readingPane = within(screen.getByTestId('mail-reading-zone'))
+    expect(await readingPane.findByText(MESSAGE_CHANGED)).toBeInTheDocument()
+    expect(readingPane.getByRole('button', { name: 'Refresh list' })).toBeEnabled()
+    expect(readingPane.queryByText(/has been refreshed/i)).not.toBeInTheDocument()
   })
 
   it('does not resolve a missing Message-ID to an unrelated draft', async () => {
@@ -61,7 +76,7 @@ describe('MailPanel — stale draft recovery errors', () => {
       .mockResolvedValueOnce({ ...stalePage, messages: [] })
     renderDraft()
     fireEvent.click(await screen.findByRole('button', { name: /F5 stale draft/ }))
-    expect(await screen.findByText('This draft was changed or deleted elsewhere. The list has been refreshed.')).toBeInTheDocument()
+    expect(await screen.findByText(MESSAGE_CHANGED)).toBeInTheDocument()
     expect(fetchMailMessage).toHaveBeenCalledTimes(1)
     expect(fetchMailMessage).toHaveBeenCalledWith('ws-1', 'mia', 'drafts', 'uid:3:1', { retry: false })
     expect(fetchMailMessages).toHaveBeenCalledTimes(2)
@@ -73,7 +88,7 @@ describe('MailPanel — stale draft recovery errors', () => {
       .mockResolvedValueOnce({ ...stalePage, messages: [otherRow] })
     renderDraft()
     fireEvent.click(await screen.findByRole('button', { name: /F5 stale draft/ }))
-    expect(await screen.findByText('This draft was changed or deleted elsewhere. The list has been refreshed.')).toBeInTheDocument()
+    expect(await screen.findByText(MESSAGE_CHANGED)).toBeInTheDocument()
     expect(fetchMailMessage).toHaveBeenCalledTimes(1)
     expect(fetchMailMessage).toHaveBeenCalledWith('ws-1', 'mia', 'drafts', 'uid:3:1', { retry: false })
     expect(screen.getByRole('button', { name: /Other draft/ })).toBeInTheDocument()
@@ -92,20 +107,22 @@ describe('MailPanel — stale draft recovery errors', () => {
 
     const draftRow = await screen.findByRole('button', { name: /F5 stale draft/ })
     expect(fetchMailMessages.mock.calls).toEqual([
-      ['ws-1', 'mia', 'drafts', { retry: false }],
+      ['ws-1', 'mia', 'drafts', OPEN_LIST_CALL],
     ])
     fireEvent.click(draftRow)
 
+    // S-10 surface: the failure names its class on the caption line
+    // ("Error class: <class>"), not as a bare element.
     const preview = within(screen.getByTestId('mail-reading-zone'))
-    expect(await preview.findByText(errorCode, { exact: true })).toBeVisible()
+    expect(await preview.findByText(`Error class: ${errorCode}`, { exact: true })).toBeVisible()
     expect(preview.getByRole('button', { name: /^Retry$/ })).toBeEnabled()
     expect(fetchMailMessage.mock.calls).toEqual([
       ['ws-1', 'mia', 'drafts', 'uid:3:1', { retry: false }],
     ])
     expect(fetchMailMessages.mock.calls).toEqual([
-      ['ws-1', 'mia', 'drafts', { retry: false }],
+      ['ws-1', 'mia', 'drafts', OPEN_LIST_CALL],
     ])
-    expect(screen.queryByText('This draft was changed or deleted elsewhere. The list has been refreshed.', { exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByText(MESSAGE_CHANGED, { exact: true })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /F5 stale draft/ })).toBeVisible()
   })
 
@@ -114,10 +131,10 @@ describe('MailPanel — stale draft recovery errors', () => {
       .mockRejectedValueOnce(new ApiError(502, undefined, { code: 'server_error' }))
     renderDraft()
     fireEvent.click(await screen.findByRole('button', { name: /F5 stale draft/ }))
-    expect(await screen.findByText('server_error')).toBeInTheDocument()
+    expect(await screen.findByText('Error class: server_error')).toBeInTheDocument()
     expect(fetchMailMessage).toHaveBeenCalledTimes(2)
     expect(fetchMailMessage).toHaveBeenLastCalledWith('ws-1', 'mia', 'drafts', 'mid:<stale-draft@test.local>', { retry: false })
     expect(fetchMailMessages).toHaveBeenCalledTimes(1)
-    expect(screen.queryByText('This draft was changed or deleted elsewhere. The list has been refreshed.')).not.toBeInTheDocument()
+    expect(screen.queryByText(MESSAGE_CHANGED)).not.toBeInTheDocument()
   })
 })

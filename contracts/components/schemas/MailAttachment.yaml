@@ -35,5 +35,27 @@ properties:
     example: "application/pdf"
   size_bytes:
     type: integer
-    description: Decoded attachment size in bytes.
+    description: >
+      Decoded attachment size in bytes (ADR-20261001 "Attachment metadata
+      (F1/F3/F7)" row; register row 8). Metadata-only list/read results
+      establish structure, not a decoded transfer, so a labelled
+      reported_size_bytes may carry the server-reported transfer size
+      instead — the decoded value is never silently substituted by IMAP
+      structure octets (potentially encoded) and never by 0 for unknown.
+      Becomes nullable (unknown honestly) together with its consumer
+      changes per the landing order's Wave C/D sequencing; the actual
+      decoded transfer remains the cap authority.
     example: 1048576
+  reported_size_bytes:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      Optional, labelled server-reported transfer size for the part —
+      present only when the server reports one. Distinct from the decoded
+      size_bytes: metadata-only reads may carry this without having
+      decoded the part, and a false or unknown report is caught at actual
+      transfer time (the preview contract aborts on a mid-transfer size or
+      decode failure — correction I-05). Never substituted for
+      size_bytes.
+    example: 1049600

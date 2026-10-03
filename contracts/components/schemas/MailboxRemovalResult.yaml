@@ -1,0 +1,47 @@
+title: MailboxRemovalResult
+description: >
+  Truthful outcome of a mailbox removal with cleanup (ADR-20261001 "Removal
+  with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the single
+  publisher). Distinguishes a fully removed pair from one whose cleanup
+  did not fully complete, instead of an unconditional success=true over
+  best-effort failures. Marking the pair disabled and preventing new
+  acquisitions always happen FIRST; cleanup_pending never serves residual
+  files. cleanup_intent keys the separately authorized Retry-cleanup
+  operation and keeps working after the config row is gone; it carries no
+  plaintext copy of anything cleaned.
+type: object
+additionalProperties: false
+required:
+  - outcome
+  - cleanup_intent
+  - cleanup_code
+properties:
+  outcome:
+    type: string
+    enum:
+      - removed
+      - removed_cleanup_pending
+    description: >
+      removed = the pair is gone and every cleanup step succeeded.
+      removed_cleanup_pending = the pair is disabled, removed from config
+      and acquires nothing, but at least one cleanup step (cache purge,
+      credential deletion, reload) failed and is retried via Retry-cleanup.
+    example: "removed"
+  cleanup_intent:
+    type: string
+    nullable: true
+    description: >
+      Opaque retry key for the separately authorized Retry-cleanup
+      operation, present exactly when outcome is removed_cleanup_pending —
+      null when removed. Survives the config row's deletion so the retry
+      path still works afterwards.
+    example: "cln_4b81"
+  cleanup_code:
+    type: string
+    nullable: true
+    description: >
+      Safe, closed-class cleanup failure code — present exactly when
+      outcome is removed_cleanup_pending, null otherwise. No raw upstream
+      error text, no paths, no credentials. A logged unlink failure is
+      never reported as a successful purge.
+    example: "cache_cleanup_failed"

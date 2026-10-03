@@ -171,10 +171,18 @@ func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
 	}
 	table := AutoApproveClassTable()
 	// 109 founder-file tools plus bash (§3.8) plus create_email_draft
-	// (D45, 2026-09-26 -- catalog grew after the founder file was saved;
-	// total 111).
-	if len(table) != 111 {
-		t.Errorf("table has %d entries, want 111 (109 founder-file tools plus bash plus create_email_draft -- D45, 2026-09-26, catalog grew after the founder file was saved)", len(table))
+	// (D45, 2026-09-26 -- catalog grew after the founder file was saved)
+	// plus the three mail attachment tools (ADR-20261001 F3, w4 spec US-3;
+	// founder Q4=A, 2026-10-02 -- catalog grew again; total 114). The
+	// attachment tools ride the ORDINARY classes, exactly as Q4=A rules:
+	// list_email_attachments and read_email_attachment are AutoRuns (like
+	// their read peers read_inbox/read_message), download_email_attachment
+	// is AutoRunsIfArgs -- the EXISTING workspace-path conditional class it
+	// shares with write_file/send_file, since its destination is always the
+	// authorized workspace's mail hierarchy. No attachment-specific
+	// mechanism; auto_approve_mail_test.go pins the peer-class equality.
+	if len(table) != 114 {
+		t.Errorf("table has %d entries, want 114 (109 founder-file tools plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02)", len(table))
 	}
 	if got := table["bash"]; got != AutoShellMode {
 		t.Errorf("bash class = %s, want shell_mode (bash keeps its own mechanism, §3.7)", got)

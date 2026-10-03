@@ -54,6 +54,13 @@ var watcherMutatingVerbs = []string{
 func TestWatcher_NeverMutatesFlags(t *testing.T) {
 	const marker = "watcher-body-marker-77f3c1"
 	capture := startCaptureIMAP(t, [][]byte{watcherMsgRaw("m1@example.test", marker)}, nil, false)
+	// FR-W1-2 wiring gate: with the process-wide shared manager wired (the
+	// package's refusal test), the watcher's transport calls are the typed
+	// ErrSessionSourceMissing refusal without an injected session source.
+	// Inject the pool harness's source so the cycle rides the lease path
+	// production uses; the assertions below still watch the watcher's own
+	// post-seed transcript (lease LOGINS add no mutating verb).
+	capture.cl.SetSessionSource(newSessionsForAddr(t, capture.addr, newPoolTestClock()))
 	// The harness seeds INBOX through its own client on the same DebugWriter
 	// before the watcher exists; only the transcript after seeding is the
 	// watcher's.
@@ -159,6 +166,10 @@ func TestWatcherHarness_StoreDetectsCommands(t *testing.T) {
 
 func TestWatcher_KeyedOnUIDNotUnseen(t *testing.T) {
 	capture := startCaptureIMAP(t, [][]byte{watcherMsgRaw("m1@example.test", "k1")}, nil, false)
+	// Same FR-W1-2 wiring gate as TestWatcher_NeverMutatesFlags: the cycle
+	// rides the pool harness's lease path, which adds no flag mutation of
+	// its own — the final flag assertions below stay the watcher's verdict.
+	capture.cl.SetSessionSource(newSessionsForAddr(t, capture.addr, newPoolTestClock()))
 	dir := t.TempDir()
 	const agentID, wsID = "agent-b", "ws-b"
 	w, err := NewWatcher(WatcherConfig{AgentID: agentID, WorkspaceID: wsID, Transport: capture.cl, StateDir: dir})

@@ -4739,6 +4739,24 @@ func (e LibraryConflictErrorCode) Valid() bool {
 	}
 }
 
+// Defines values for LibraryEntryPreviewProfile.
+const (
+	LibraryEntryPreviewProfileMailRestricted LibraryEntryPreviewProfile = "mail_restricted"
+	LibraryEntryPreviewProfileWorkspace      LibraryEntryPreviewProfile = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the LibraryEntryPreviewProfile enum.
+func (e LibraryEntryPreviewProfile) Valid() bool {
+	switch e {
+	case LibraryEntryPreviewProfileMailRestricted:
+		return true
+	case LibraryEntryPreviewProfileWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LibraryInlineDispositionDisposition.
 const (
 	LibraryInlineDispositionDispositionAttachment LibraryInlineDispositionDisposition = "attachment"
@@ -4832,6 +4850,252 @@ func (e LibraryPreviewTokenResponseScope) Valid() bool {
 	}
 }
 
+// Defines values for MailAttachmentPreviewRequestFolder.
+const (
+	MailAttachmentPreviewRequestFolderDrafts MailAttachmentPreviewRequestFolder = "drafts"
+	MailAttachmentPreviewRequestFolderInbox  MailAttachmentPreviewRequestFolder = "inbox"
+	MailAttachmentPreviewRequestFolderSent   MailAttachmentPreviewRequestFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentPreviewRequestFolder enum.
+func (e MailAttachmentPreviewRequestFolder) Valid() bool {
+	switch e {
+	case MailAttachmentPreviewRequestFolderDrafts:
+		return true
+	case MailAttachmentPreviewRequestFolderInbox:
+		return true
+	case MailAttachmentPreviewRequestFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentPreviewResponseKind.
+const (
+	MailAttachmentPreviewResponseKindMailAttachment MailAttachmentPreviewResponseKind = "mail_attachment"
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentPreviewResponseKind enum.
+func (e MailAttachmentPreviewResponseKind) Valid() bool {
+	switch e {
+	case MailAttachmentPreviewResponseKindMailAttachment:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentPreviewResponseReadOnly.
+const (
+	MailAttachmentPreviewResponseReadOnlyTrue MailAttachmentPreviewResponseReadOnly = true
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentPreviewResponseReadOnly enum.
+func (e MailAttachmentPreviewResponseReadOnly) Valid() bool {
+	switch e {
+	case MailAttachmentPreviewResponseReadOnlyTrue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentSaveResponseAuditStatus.
+const (
+	MailAttachmentSaveResponseAuditStatusDisabled MailAttachmentSaveResponseAuditStatus = "disabled"
+	MailAttachmentSaveResponseAuditStatusFailed   MailAttachmentSaveResponseAuditStatus = "failed"
+	MailAttachmentSaveResponseAuditStatusRecorded MailAttachmentSaveResponseAuditStatus = "recorded"
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentSaveResponseAuditStatus enum.
+func (e MailAttachmentSaveResponseAuditStatus) Valid() bool {
+	switch e {
+	case MailAttachmentSaveResponseAuditStatusDisabled:
+		return true
+	case MailAttachmentSaveResponseAuditStatusFailed:
+		return true
+	case MailAttachmentSaveResponseAuditStatusRecorded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentSaveResponseEntryPreviewProfile.
+const (
+	MailAttachmentSaveResponseEntryPreviewProfileMailRestricted MailAttachmentSaveResponseEntryPreviewProfile = "mail_restricted"
+	MailAttachmentSaveResponseEntryPreviewProfileWorkspace      MailAttachmentSaveResponseEntryPreviewProfile = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentSaveResponseEntryPreviewProfile enum.
+func (e MailAttachmentSaveResponseEntryPreviewProfile) Valid() bool {
+	switch e {
+	case MailAttachmentSaveResponseEntryPreviewProfileMailRestricted:
+		return true
+	case MailAttachmentSaveResponseEntryPreviewProfileWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentSaveResponseSaved.
+const (
+	MailAttachmentSaveResponseSavedTrue MailAttachmentSaveResponseSaved = true
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentSaveResponseSaved enum.
+func (e MailAttachmentSaveResponseSaved) Valid() bool {
+	switch e {
+	case MailAttachmentSaveResponseSavedTrue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentSaveResponseWarningCode.
+const (
+	MailAttachmentSaveResponseWarningCodeAuditWriteFailed MailAttachmentSaveResponseWarningCode = "audit_write_failed"
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentSaveResponseWarningCode enum.
+func (e MailAttachmentSaveResponseWarningCode) Valid() bool {
+	switch e {
+	case MailAttachmentSaveResponseWarningCodeAuditWriteFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderAvailability.
+const (
+	MailFolderAvailabilityAbsent  MailFolderAvailability = "absent"
+	MailFolderAvailabilityPresent MailFolderAvailability = "present"
+	MailFolderAvailabilityUnknown MailFolderAvailability = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderAvailability enum.
+func (e MailFolderAvailability) Valid() bool {
+	switch e {
+	case MailFolderAvailabilityAbsent:
+		return true
+	case MailFolderAvailabilityPresent:
+		return true
+	case MailFolderAvailabilityUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderCountMetadataNoticeCode.
+const (
+	MailFolderCountMetadataNoticeCodeCacheUnavailable MailFolderCountMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderCountMetadataNoticeCode enum.
+func (e MailFolderCountMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailFolderCountMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderCountMetadataSource.
+const (
+	MailFolderCountMetadataSourceEncryptedDisk MailFolderCountMetadataSource = "encrypted_disk"
+	MailFolderCountMetadataSourceLive          MailFolderCountMetadataSource = "live"
+	MailFolderCountMetadataSourceMemory        MailFolderCountMetadataSource = "memory"
+	MailFolderCountMetadataSourceNone          MailFolderCountMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderCountMetadataSource enum.
+func (e MailFolderCountMetadataSource) Valid() bool {
+	switch e {
+	case MailFolderCountMetadataSourceEncryptedDisk:
+		return true
+	case MailFolderCountMetadataSourceLive:
+		return true
+	case MailFolderCountMetadataSourceMemory:
+		return true
+	case MailFolderCountMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderMappingMetadataNoticeCode.
+const (
+	MailFolderMappingMetadataNoticeCodeCacheUnavailable MailFolderMappingMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderMappingMetadataNoticeCode enum.
+func (e MailFolderMappingMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailFolderMappingMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderMappingMetadataSource.
+const (
+	MailFolderMappingMetadataSourceEncryptedDisk MailFolderMappingMetadataSource = "encrypted_disk"
+	MailFolderMappingMetadataSourceLive          MailFolderMappingMetadataSource = "live"
+	MailFolderMappingMetadataSourceMemory        MailFolderMappingMetadataSource = "memory"
+	MailFolderMappingMetadataSourceNone          MailFolderMappingMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderMappingMetadataSource enum.
+func (e MailFolderMappingMetadataSource) Valid() bool {
+	switch e {
+	case MailFolderMappingMetadataSourceEncryptedDisk:
+		return true
+	case MailFolderMappingMetadataSourceLive:
+		return true
+	case MailFolderMappingMetadataSourceMemory:
+		return true
+	case MailFolderMappingMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderMappingSource.
+const (
+	MailFolderMappingSourceFallback   MailFolderMappingSource = "fallback"
+	MailFolderMappingSourceNone       MailFolderMappingSource = "none"
+	MailFolderMappingSourceOverride   MailFolderMappingSource = "override"
+	MailFolderMappingSourceSaved      MailFolderMappingSource = "saved"
+	MailFolderMappingSourceSpecialUse MailFolderMappingSource = "special_use"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderMappingSource enum.
+func (e MailFolderMappingSource) Valid() bool {
+	switch e {
+	case MailFolderMappingSourceFallback:
+		return true
+	case MailFolderMappingSourceNone:
+		return true
+	case MailFolderMappingSourceOverride:
+		return true
+	case MailFolderMappingSourceSaved:
+		return true
+	case MailFolderMappingSourceSpecialUse:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MailFolderSlug.
 const (
 	MailFolderSlugDrafts MailFolderSlug = "drafts"
@@ -4853,6 +5117,132 @@ func (e MailFolderSlug) Valid() bool {
 	}
 }
 
+// Defines values for MailFolderListFoldersAvailability.
+const (
+	MailFolderListFoldersAvailabilityAbsent  MailFolderListFoldersAvailability = "absent"
+	MailFolderListFoldersAvailabilityPresent MailFolderListFoldersAvailability = "present"
+	MailFolderListFoldersAvailabilityUnknown MailFolderListFoldersAvailability = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersAvailability enum.
+func (e MailFolderListFoldersAvailability) Valid() bool {
+	switch e {
+	case MailFolderListFoldersAvailabilityAbsent:
+		return true
+	case MailFolderListFoldersAvailabilityPresent:
+		return true
+	case MailFolderListFoldersAvailabilityUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersCountMetadataNoticeCode.
+const (
+	MailFolderListFoldersCountMetadataNoticeCodeCacheUnavailable MailFolderListFoldersCountMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersCountMetadataNoticeCode enum.
+func (e MailFolderListFoldersCountMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailFolderListFoldersCountMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersCountMetadataSource.
+const (
+	MailFolderListFoldersCountMetadataSourceEncryptedDisk MailFolderListFoldersCountMetadataSource = "encrypted_disk"
+	MailFolderListFoldersCountMetadataSourceLive          MailFolderListFoldersCountMetadataSource = "live"
+	MailFolderListFoldersCountMetadataSourceMemory        MailFolderListFoldersCountMetadataSource = "memory"
+	MailFolderListFoldersCountMetadataSourceNone          MailFolderListFoldersCountMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersCountMetadataSource enum.
+func (e MailFolderListFoldersCountMetadataSource) Valid() bool {
+	switch e {
+	case MailFolderListFoldersCountMetadataSourceEncryptedDisk:
+		return true
+	case MailFolderListFoldersCountMetadataSourceLive:
+		return true
+	case MailFolderListFoldersCountMetadataSourceMemory:
+		return true
+	case MailFolderListFoldersCountMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersMappingMetadataNoticeCode.
+const (
+	MailFolderListFoldersMappingMetadataNoticeCodeCacheUnavailable MailFolderListFoldersMappingMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersMappingMetadataNoticeCode enum.
+func (e MailFolderListFoldersMappingMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailFolderListFoldersMappingMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersMappingMetadataSource.
+const (
+	MailFolderListFoldersMappingMetadataSourceEncryptedDisk MailFolderListFoldersMappingMetadataSource = "encrypted_disk"
+	MailFolderListFoldersMappingMetadataSourceLive          MailFolderListFoldersMappingMetadataSource = "live"
+	MailFolderListFoldersMappingMetadataSourceMemory        MailFolderListFoldersMappingMetadataSource = "memory"
+	MailFolderListFoldersMappingMetadataSourceNone          MailFolderListFoldersMappingMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersMappingMetadataSource enum.
+func (e MailFolderListFoldersMappingMetadataSource) Valid() bool {
+	switch e {
+	case MailFolderListFoldersMappingMetadataSourceEncryptedDisk:
+		return true
+	case MailFolderListFoldersMappingMetadataSourceLive:
+		return true
+	case MailFolderListFoldersMappingMetadataSourceMemory:
+		return true
+	case MailFolderListFoldersMappingMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersMappingSource.
+const (
+	MailFolderListFoldersMappingSourceFallback   MailFolderListFoldersMappingSource = "fallback"
+	MailFolderListFoldersMappingSourceNone       MailFolderListFoldersMappingSource = "none"
+	MailFolderListFoldersMappingSourceOverride   MailFolderListFoldersMappingSource = "override"
+	MailFolderListFoldersMappingSourceSaved      MailFolderListFoldersMappingSource = "saved"
+	MailFolderListFoldersMappingSourceSpecialUse MailFolderListFoldersMappingSource = "special_use"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersMappingSource enum.
+func (e MailFolderListFoldersMappingSource) Valid() bool {
+	switch e {
+	case MailFolderListFoldersMappingSourceFallback:
+		return true
+	case MailFolderListFoldersMappingSourceNone:
+		return true
+	case MailFolderListFoldersMappingSourceOverride:
+		return true
+	case MailFolderListFoldersMappingSourceSaved:
+		return true
+	case MailFolderListFoldersMappingSourceSpecialUse:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MailFolderListFoldersSlug.
 const (
 	MailFolderListFoldersSlugDrafts MailFolderListFoldersSlug = "drafts"
@@ -4868,6 +5258,45 @@ func (e MailFolderListFoldersSlug) Valid() bool {
 	case MailFolderListFoldersSlugInbox:
 		return true
 	case MailFolderListFoldersSlugSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListMetadataNoticeCode.
+const (
+	MailFolderListMetadataNoticeCodeCacheUnavailable MailFolderListMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListMetadataNoticeCode enum.
+func (e MailFolderListMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailFolderListMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListMetadataSource.
+const (
+	MailFolderListMetadataSourceEncryptedDisk MailFolderListMetadataSource = "encrypted_disk"
+	MailFolderListMetadataSourceLive          MailFolderListMetadataSource = "live"
+	MailFolderListMetadataSourceMemory        MailFolderListMetadataSource = "memory"
+	MailFolderListMetadataSourceNone          MailFolderListMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListMetadataSource enum.
+func (e MailFolderListMetadataSource) Valid() bool {
+	switch e {
+	case MailFolderListMetadataSourceEncryptedDisk:
+		return true
+	case MailFolderListMetadataSourceLive:
+		return true
+	case MailFolderListMetadataSourceMemory:
+		return true
+	case MailFolderListMetadataSourceNone:
 		return true
 	default:
 		return false
@@ -4937,6 +5366,45 @@ func (e MailMessagePageMessagesFolder) Valid() bool {
 	}
 }
 
+// Defines values for MailMessagePageMetadataNoticeCode.
+const (
+	MailMessagePageMetadataNoticeCodeCacheUnavailable MailMessagePageMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailMessagePageMetadataNoticeCode enum.
+func (e MailMessagePageMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailMessagePageMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessagePageMetadataSource.
+const (
+	MailMessagePageMetadataSourceEncryptedDisk MailMessagePageMetadataSource = "encrypted_disk"
+	MailMessagePageMetadataSourceLive          MailMessagePageMetadataSource = "live"
+	MailMessagePageMetadataSourceMemory        MailMessagePageMetadataSource = "memory"
+	MailMessagePageMetadataSourceNone          MailMessagePageMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailMessagePageMetadataSource enum.
+func (e MailMessagePageMetadataSource) Valid() bool {
+	switch e {
+	case MailMessagePageMetadataSourceEncryptedDisk:
+		return true
+	case MailMessagePageMetadataSourceLive:
+		return true
+	case MailMessagePageMetadataSourceMemory:
+		return true
+	case MailMessagePageMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MailMessageSummaryFolder.
 const (
 	MailMessageSummaryFolderDrafts MailMessageSummaryFolder = "drafts"
@@ -4952,6 +5420,81 @@ func (e MailMessageSummaryFolder) Valid() bool {
 	case MailMessageSummaryFolderInbox:
 		return true
 	case MailMessageSummaryFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailReadMetadataNoticeCode.
+const (
+	MailReadMetadataNoticeCodeCacheUnavailable MailReadMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailReadMetadataNoticeCode enum.
+func (e MailReadMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailReadMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailReadMetadataSource.
+const (
+	MailReadMetadataSourceEncryptedDisk MailReadMetadataSource = "encrypted_disk"
+	MailReadMetadataSourceLive          MailReadMetadataSource = "live"
+	MailReadMetadataSourceMemory        MailReadMetadataSource = "memory"
+	MailReadMetadataSourceNone          MailReadMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailReadMetadataSource enum.
+func (e MailReadMetadataSource) Valid() bool {
+	switch e {
+	case MailReadMetadataSourceEncryptedDisk:
+		return true
+	case MailReadMetadataSourceLive:
+		return true
+	case MailReadMetadataSourceMemory:
+		return true
+	case MailReadMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailReplyContextRequestMode.
+const (
+	MailReplyContextRequestModeReply    MailReplyContextRequestMode = "reply"
+	MailReplyContextRequestModeReplyAll MailReplyContextRequestMode = "reply_all"
+)
+
+// Valid indicates whether the value is a known member of the MailReplyContextRequestMode enum.
+func (e MailReplyContextRequestMode) Valid() bool {
+	switch e {
+	case MailReplyContextRequestModeReply:
+		return true
+	case MailReplyContextRequestModeReplyAll:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailStaleReferenceErrorCode.
+const (
+	MailStaleReferenceErrorCodeStaleCursor    MailStaleReferenceErrorCode = "stale_cursor"
+	MailStaleReferenceErrorCodeStaleReference MailStaleReferenceErrorCode = "stale_reference"
+)
+
+// Valid indicates whether the value is a known member of the MailStaleReferenceErrorCode enum.
+func (e MailStaleReferenceErrorCode) Valid() bool {
+	switch e {
+	case MailStaleReferenceErrorCodeStaleCursor:
+		return true
+	case MailStaleReferenceErrorCodeStaleReference:
 		return true
 	default:
 		return false
@@ -5030,6 +5573,30 @@ func (e MailUnavailableErrorLastErrorClass) Valid() bool {
 	}
 }
 
+// Defines values for MailUnavailableErrorReason.
+const (
+	MailUnavailableErrorReasonAccountBusy           MailUnavailableErrorReason = "account_busy"
+	MailUnavailableErrorReasonBackoff               MailUnavailableErrorReason = "backoff"
+	MailUnavailableErrorReasonPoolBusy              MailUnavailableErrorReason = "pool_busy"
+	MailUnavailableErrorReasonServerConnectionLimit MailUnavailableErrorReason = "server_connection_limit"
+)
+
+// Valid indicates whether the value is a known member of the MailUnavailableErrorReason enum.
+func (e MailUnavailableErrorReason) Valid() bool {
+	switch e {
+	case MailUnavailableErrorReasonAccountBusy:
+		return true
+	case MailUnavailableErrorReasonBackoff:
+		return true
+	case MailUnavailableErrorReasonPoolBusy:
+		return true
+	case MailUnavailableErrorReasonServerConnectionLimit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MailboxNewMailSummaryWatcherState.
 const (
 	MailboxNewMailSummaryWatcherStateBackoff MailboxNewMailSummaryWatcherState = "backoff"
@@ -5045,6 +5612,24 @@ func (e MailboxNewMailSummaryWatcherState) Valid() bool {
 	case MailboxNewMailSummaryWatcherStateError:
 		return true
 	case MailboxNewMailSummaryWatcherStateOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailboxRemovalResultOutcome.
+const (
+	MailboxRemovalResultOutcomeRemoved               MailboxRemovalResultOutcome = "removed"
+	MailboxRemovalResultOutcomeRemovedCleanupPending MailboxRemovalResultOutcome = "removed_cleanup_pending"
+)
+
+// Valid indicates whether the value is a known member of the MailboxRemovalResultOutcome enum.
+func (e MailboxRemovalResultOutcome) Valid() bool {
+	switch e {
+	case MailboxRemovalResultOutcomeRemoved:
+		return true
+	case MailboxRemovalResultOutcomeRemovedCleanupPending:
 		return true
 	default:
 		return false
@@ -12737,6 +13322,42 @@ func (e ListWorkspacesParamsStatus) Valid() bool {
 	}
 }
 
+// Defines values for ListMailFoldersParamsMode.
+const (
+	ListMailFoldersParamsModeCacheFirst ListMailFoldersParamsMode = "cache_first"
+	ListMailFoldersParamsModeLive       ListMailFoldersParamsMode = "live"
+)
+
+// Valid indicates whether the value is a known member of the ListMailFoldersParamsMode enum.
+func (e ListMailFoldersParamsMode) Valid() bool {
+	switch e {
+	case ListMailFoldersParamsModeCacheFirst:
+		return true
+	case ListMailFoldersParamsModeLive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListMailMessagesParamsMode.
+const (
+	ListMailMessagesParamsModeCacheFirst ListMailMessagesParamsMode = "cache_first"
+	ListMailMessagesParamsModeLive       ListMailMessagesParamsMode = "live"
+)
+
+// Valid indicates whether the value is a known member of the ListMailMessagesParamsMode enum.
+func (e ListMailMessagesParamsMode) Valid() bool {
+	switch e {
+	case ListMailMessagesParamsModeCacheFirst:
+		return true
+	case ListMailMessagesParamsModeLive:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListMailMessagesParamsFolder.
 const (
 	ListMailMessagesParamsFolderDrafts ListMailMessagesParamsFolder = "drafts"
@@ -12794,6 +13415,48 @@ func (e GetMailAttachmentParamsFolder) Valid() bool {
 	case GetMailAttachmentParamsFolderInbox:
 		return true
 	case GetMailAttachmentParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SaveMailAttachmentToLibraryParamsFolder.
+const (
+	SaveMailAttachmentToLibraryParamsFolderDrafts SaveMailAttachmentToLibraryParamsFolder = "drafts"
+	SaveMailAttachmentToLibraryParamsFolderInbox  SaveMailAttachmentToLibraryParamsFolder = "inbox"
+	SaveMailAttachmentToLibraryParamsFolderSent   SaveMailAttachmentToLibraryParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the SaveMailAttachmentToLibraryParamsFolder enum.
+func (e SaveMailAttachmentToLibraryParamsFolder) Valid() bool {
+	switch e {
+	case SaveMailAttachmentToLibraryParamsFolderDrafts:
+		return true
+	case SaveMailAttachmentToLibraryParamsFolderInbox:
+		return true
+	case SaveMailAttachmentToLibraryParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetMailReplyContextParamsFolder.
+const (
+	GetMailReplyContextParamsFolderDrafts GetMailReplyContextParamsFolder = "drafts"
+	GetMailReplyContextParamsFolderInbox  GetMailReplyContextParamsFolder = "inbox"
+	GetMailReplyContextParamsFolderSent   GetMailReplyContextParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the GetMailReplyContextParamsFolder enum.
+func (e GetMailReplyContextParamsFolder) Valid() bool {
+	switch e {
+	case GetMailReplyContextParamsFolderDrafts:
+		return true
+	case GetMailReplyContextParamsFolderInbox:
+		return true
+	case GetMailReplyContextParamsFolderSent:
 		return true
 	default:
 		return false
@@ -17883,9 +18546,18 @@ type LibraryEntry struct {
 	// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
 	Path string `json:"path"`
 
+	// PreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
+	PreviewProfile *LibraryEntryPreviewProfile `json:"preview_profile,omitempty"`
+
+	// PreviewScriptsAllowed The per-file scripts checkbox (founder Q5=A) — true only when the user explicitly allowed scripts for THIS one file, switching only its preview to the ordinary isolated script-permitting profile. Visible, per file, never silent and never global. Meaningful only with preview_profile=mail_restricted; on ordinary workspace files the isolated profile is the default state and this field is absent.
+	PreviewScriptsAllowed *bool `json:"preview_scripts_allowed,omitempty"`
+
 	// Size File size in bytes. Always 0 for directories.
 	Size int64 `json:"size"`
 }
+
+// LibraryEntryPreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
+type LibraryEntryPreviewProfile string
 
 // LibraryEntryMount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
 // It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
@@ -18016,47 +18688,7 @@ type LibraryTransferRequest struct {
 // LibraryUploadResponse Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile.
 type LibraryUploadResponse struct {
 	// Entries Entries created by this upload, in the order the multipart parts were received.
-	Entries []struct {
-		// IsDir True when this entry is a directory.
-		IsDir bool `json:"is_dir"`
-
-		// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
-		IsHidden bool `json:"is_hidden"`
-
-		// IsKnowledgeBase True when this DIRECTORY is itself a knowledge base, using the exact same marker-based detection GET /library/{workspace_id}/knowledge answers per folder (KnowledgeBaseInfo.is_knowledge_base) — computed once per directory entry during listing so the Library explorer's Vault icon is a fact the server states, not something the client infers from whichever folders it happens to have queried this session (a directory never opened yet, or a session whose cache was evicted, used to render as a plain folder even though it was a real knowledge base). Present (true or false) for a directory whenever detection could complete; absent when the entry is a file, or when detection could not complete for this one row (a listing failure on a single entry never fails the whole directory listing). Optional on the wire so SPA builds and fixtures that predate this field keep working.
-		IsKnowledgeBase *bool `json:"is_knowledge_base,omitempty"`
-
-		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
-		IsTextEditable bool `json:"is_text_editable"`
-
-		// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
-		Mime *string `json:"mime,omitempty"`
-
-		// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
-		ModifiedAt time.Time `json:"modified_at"`
-
-		// Mount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
-		// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
-		Mount *struct {
-			// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
-			Broad bool `json:"broad"`
-
-			// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
-			HostPath string `json:"host_path"`
-
-			// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
-			Name string `json:"name"`
-		} `json:"mount,omitempty"`
-
-		// Name Base filename or directory name (final path segment).
-		Name string `json:"name"`
-
-		// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
-		Path string `json:"path"`
-
-		// Size File size in bytes. Always 0 for directories.
-		Size int64 `json:"size"`
-	} `json:"entries"`
+	Entries []LibraryEntry `json:"entries"`
 }
 
 // LibraryWorkspaceNode One workspace as a node in the Library's virtual root listing (GET /api/v1/library/workspaces) — the sidebar entry point (library-spec.md D-3: "two entry points, one component"). Drilling into a node scopes all subsequent Library operations to that workspace's work tree via {workspace_id}.
@@ -18103,8 +18735,26 @@ type MailAttachment struct {
 	// PartIndex Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
 	PartIndex int `json:"part_index"`
 
-	// SizeBytes Decoded attachment size in bytes.
+	// ReportedSizeBytes Optional, labelled server-reported transfer size for the part — present only when the server reports one. Distinct from the decoded size_bytes: metadata-only reads may carry this without having decoded the part, and a false or unknown report is caught at actual transfer time (the preview contract aborts on a mid-transfer size or decode failure — correction I-05). Never substituted for size_bytes.
+	ReportedSizeBytes *int64 `json:"reported_size_bytes,omitempty"`
+
+	// SizeBytes Decoded attachment size in bytes (ADR-20261001 "Attachment metadata (F1/F3/F7)" row; register row 8). Metadata-only list/read results establish structure, not a decoded transfer, so a labelled reported_size_bytes may carry the server-reported transfer size instead — the decoded value is never silently substituted by IMAP structure octets (potentially encoded) and never by 0 for unknown. Becomes nullable (unknown honestly) together with its consumer changes per the landing order's Wave C/D sequencing; the actual decoded transfer remains the cap authority.
 	SizeBytes int `json:"size_bytes"`
+}
+
+// MailAttachmentContentSource The server-issued content source of one metadata-only attachment preview grant (ADR-20261001 "Temporary preview mint (F1)" row, correction I-05; mail-live-access-landing-order register rows 5/8 — W0 is the single publisher). Carries authorization and reference metadata ONLY — never attachment bytes: the grant holds no payload, and every byte read is a fresh, request-scoped fetch through the preview-purpose endpoint. All URLs are server-issued, same-gateway and source-scoped — never caller-selected, never the authenticated download endpoint.
+type MailAttachmentContentSource struct {
+	// ByteUrl The dedicated preview-purpose byte endpoint for this grant (correction I-05) — token-scoped, bound server-side to the minted preview_id, the selected part_index and the grant's ownership lifecycle (view exit, expiry, revoke and panel close all kill it). Serves INLINE rendering disposition with Cache-Control: no-store, and enforces the 25 MiB actual-decoded-byte cap BEFORE any success state is committed — a size or decode failure discovered mid-transfer aborts the response with a visible typed error, so a truncated stream can never render as a completed preview. This is never the authenticated attachment-download resource.
+	ByteUrl string `json:"byte_url"`
+
+	// ExpiresInSeconds Grant lifetime in seconds from mint, mirroring the existing preview token TTL rules (the token store holds authorization/reference metadata only; expiry is the backstop when a close could not be delivered).
+	ExpiresInSeconds int `json:"expires_in_seconds"`
+
+	// IsolatedHtmlUrl The token-scoped scriptless rendering projection of the same preview reader, present only when the attachment is renderable as isolated HTML — served with the Mail isolation policy (script-src 'none', no same-origin permission), never a raw HTML object URL, srcdoc or a Library bundle token. Null for every non-HTML attachment.
+	IsolatedHtmlUrl *string `json:"isolated_html_url"`
+
+	// Token Opaque, metadata-only grant token — authorization/reference metadata for mint, revoke and byte-fetch binding. Holds no attachment bytes, no body text and no payload of any kind (the retained-payload preview grant shape is retired by the ADR's request-only body rule).
+	Token string `json:"token"`
 }
 
 // MailAttachmentInput One attachment supplied for an outbound message (D28) — on the human paths (MailSendRequest.attachments, MailDraftUpdateRequest.attachments). The agent path carries no wire schema: agent tool attachments are workspace-file references resolved server-side through pkg/tools/resolvepath.go::ResolvePath under its open-read rule (D33, security sign-off C2; no separate policy or gate — MC-35).
@@ -18118,6 +18768,181 @@ type MailAttachmentInput struct {
 	// Filename Attachment filename. Sanitized on serve and on attach (MC-32) — no path separators are ever stored or served.
 	Filename string `json:"filename"`
 }
+
+// MailAttachmentPreviewRequest Mint request for one attachment's temporary, metadata-only preview grant (ADR-20261001 "Temporary preview mint (F1)" row; w4 spec §2.3 — W0 is the single publisher). Carries no host path, arbitrary URL, destination, upload bytes or new approval: authorization binds to the current session, the exact pair/config/folder generation, the message and the selected part. Minting creates no file, retains no bytes and writes nothing to disk (F1 "No storage" row) — it is the metadata grant the temporary Library viewer consumes. Rate-limited by the existing dedicated preview-token limiter family.
+type MailAttachmentPreviewRequest struct {
+	// AgentId ID of the mailbox-owning agent.
+	AgentId string `json:"agent_id"`
+
+	// Folder Folder slug — exactly inbox, sent or drafts (MC-5).
+	Folder MailAttachmentPreviewRequestFolder `json:"folder"`
+
+	// MessageRef The gateway-issued message reference from the list/read result that named this attachment (correction I-03) — consumed unchanged, never a model-synthesized identity and never dependent on the optional Message-ID. Bound to the authorized pair, folder and configuration generation; validated on the same lease that serves the preview.
+	MessageRef string `json:"message_ref"`
+
+	// ObserverId Opaque per-panel observer ID (mail_panel_observer frame) when the mint belongs to an open Mail panel — binds the grant's ownership lifecycle to that observer so panel close revokes it. Absent for non-panel (agent-tool) mints; the grant then lives for its bounded TTL only.
+	ObserverId *string `json:"observer_id,omitempty"`
+
+	// PartIndex Stable leaf index of the attachment part (MailAttachment.part_index) — resolved against MIME including nested parts, with the Omnipus draft-body marker excluded. Only this part is ever fetched (PEEK — flags unchanged).
+	PartIndex int `json:"part_index"`
+
+	// WorkspaceId Workspace of the mailbox pair.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// MailAttachmentPreviewRequestFolder Folder slug — exactly inbox, sent or drafts (MC-5).
+type MailAttachmentPreviewRequestFolder string
+
+// MailAttachmentPreviewResponse Metadata-only response of one attachment preview mint (ADR-20261001 "Temporary preview mint (F1)" row; w3 spec §2.4 and w5 spec §8 step 6 — W0 is the single publisher). Returns authorization/reference metadata for the temporary Library viewer — kind, display subject, the attachment descriptor, the text_readable classification hint, the content source and read-only capability — and NO cached payload: every byte read is a fresh request-scoped fetch through content_source.byte_url. This response is the temporary alternative of the F1 content-source union; it is never a LibraryEntry and carries no path, filesystem identity or stored-file capability.
+type MailAttachmentPreviewResponse struct {
+	// Attachment Attachment descriptor on MailMessage (D28 — inbound messages, drafts and sent copies). The gateway never returns raw MIME names: filename is sanitized for download (no path separators, edge case 21) and the same sanitized name is what the download endpoint serves.
+	Attachment struct {
+		// ContentType The MIME part's declared content type, as listed. (The download endpoint serves with an extension-derived content type instead — MC-42.)
+		ContentType string `json:"content_type"`
+
+		// Filename Sanitized attachment filename — no path separators, never trusted raw from the MIME part (MC-32; the same sanitized form is served on the download's Content-Disposition per MC-42).
+		Filename string `json:"filename"`
+
+		// PartIndex Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
+		PartIndex int `json:"part_index"`
+
+		// ReportedSizeBytes Optional, labelled server-reported transfer size for the part — present only when the server reports one. Distinct from the decoded size_bytes: metadata-only reads may carry this without having decoded the part, and a false or unknown report is caught at actual transfer time (the preview contract aborts on a mid-transfer size or decode failure — correction I-05). Never substituted for size_bytes.
+		ReportedSizeBytes *int64 `json:"reported_size_bytes,omitempty"`
+
+		// SizeBytes Decoded attachment size in bytes (ADR-20261001 "Attachment metadata (F1/F3/F7)" row; register row 8). Metadata-only list/read results establish structure, not a decoded transfer, so a labelled reported_size_bytes may carry the server-reported transfer size instead — the decoded value is never silently substituted by IMAP structure octets (potentially encoded) and never by 0 for unknown. Becomes nullable (unknown honestly) together with its consumer changes per the landing order's Wave C/D sequencing; the actual decoded transfer remains the cap authority.
+		SizeBytes int `json:"size_bytes"`
+	} `json:"attachment"`
+
+	// ContentSource The server-issued content source of one metadata-only attachment preview grant (ADR-20261001 "Temporary preview mint (F1)" row, correction I-05; mail-live-access-landing-order register rows 5/8 — W0 is the single publisher). Carries authorization and reference metadata ONLY — never attachment bytes: the grant holds no payload, and every byte read is a fresh, request-scoped fetch through the preview-purpose endpoint. All URLs are server-issued, same-gateway and source-scoped — never caller-selected, never the authenticated download endpoint.
+	ContentSource struct {
+		// ByteUrl The dedicated preview-purpose byte endpoint for this grant (correction I-05) — token-scoped, bound server-side to the minted preview_id, the selected part_index and the grant's ownership lifecycle (view exit, expiry, revoke and panel close all kill it). Serves INLINE rendering disposition with Cache-Control: no-store, and enforces the 25 MiB actual-decoded-byte cap BEFORE any success state is committed — a size or decode failure discovered mid-transfer aborts the response with a visible typed error, so a truncated stream can never render as a completed preview. This is never the authenticated attachment-download resource.
+		ByteUrl string `json:"byte_url"`
+
+		// ExpiresInSeconds Grant lifetime in seconds from mint, mirroring the existing preview token TTL rules (the token store holds authorization/reference metadata only; expiry is the backstop when a close could not be delivered).
+		ExpiresInSeconds int `json:"expires_in_seconds"`
+
+		// IsolatedHtmlUrl The token-scoped scriptless rendering projection of the same preview reader, present only when the attachment is renderable as isolated HTML — served with the Mail isolation policy (script-src 'none', no same-origin permission), never a raw HTML object URL, srcdoc or a Library bundle token. Null for every non-HTML attachment.
+		IsolatedHtmlUrl *string `json:"isolated_html_url"`
+
+		// Token Opaque, metadata-only grant token — authorization/reference metadata for mint, revoke and byte-fetch binding. Holds no attachment bytes, no body text and no payload of any kind (the retained-payload preview grant shape is retired by the ADR's request-only body rule).
+		Token string `json:"token"`
+	} `json:"content_source"`
+
+	// Kind Fixed discriminator of the temporary (mail attachment) alternative of the Library content-source union — the SPA branches on it without string matching on any other field.
+	Kind MailAttachmentPreviewResponseKind `json:"kind"`
+
+	// PreviewId Opaque grant identifier — the revoke and lifecycle key of this preview. Server-issued; never synthesized by the client.
+	PreviewId string `json:"preview_id"`
+
+	// ReadOnly Always true — the temporary source is read-only by construction. No stored-file action (Library edit, rename, move/copy/delete, PDF fill/sign, Library download) is available until Save to Library succeeds; capability checks prevent the calls, they do not merely hide buttons.
+	ReadOnly MailAttachmentPreviewResponseReadOnly `json:"read_only"`
+
+	// Subject Decoded subject of the message the attachment belongs to (RFC 2047 decoded) — display metadata for the exact "From mail: <subject> · Back to mail · Save to Library" context bar (correction I-06).
+	Subject string `json:"subject"`
+
+	// TextReadable Classification hint for the Library viewer's text classifier (F1 "Renderer adapters" row) — whether the attachment is expected to render as readable text. It never grants editing, and actual text/decode/size is still validated at read time, independently of this hint.
+	TextReadable bool `json:"text_readable"`
+}
+
+// MailAttachmentPreviewResponseKind Fixed discriminator of the temporary (mail attachment) alternative of the Library content-source union — the SPA branches on it without string matching on any other field.
+type MailAttachmentPreviewResponseKind string
+
+// MailAttachmentPreviewResponseReadOnly Always true — the temporary source is read-only by construction. No stored-file action (Library edit, rename, move/copy/delete, PDF fill/sign, Library download) is available until Save to Library succeeds; capability checks prevent the calls, they do not merely hide buttons.
+type MailAttachmentPreviewResponseReadOnly bool
+
+// MailAttachmentSaveRequest Request body of the save-to-library subresource for one attachment part (ADR-20261001 "Save-to-workspace request/response (F2)" row, correction M-02; w5 spec §8 — W0 is the single publisher). Source identity is in the route (pair, folder, message ref, part index); the body carries only the current view's optional observer and the save-operation token. There is no arbitrary save path, destination or overwrite switch: folder, leaf name and month hierarchy are server-selected. The human Save click (or the ask-approved agent download) is the explicit request — never a guarantee the server can write; refusals return typed errors, and a lost response resolves ONLY through the bounded same-token retry path.
+type MailAttachmentSaveRequest struct {
+	// ObserverId Opaque per-panel observer ID (mail_panel_observer frame) when the save belongs to an open Mail panel — associates the work with that observer's retention semantics. Absent for agent-tool saves. Never grants access by itself: the route's pair authorization is checked independently.
+	ObserverId *string `json:"observer_id,omitempty"`
+
+	// SaveOperationToken Client-generated opaque token for THIS save attempt (correction M-02) — echoed by the response. An explicit user retry carrying the SAME token is answered with the prior save receipt when that save already committed — exactly one file exists, no second numbered duplicate — and only a genuinely uncommitted operation performs the save. A different token is a new user request. No automatic replay ever carries a token: reconciliation is bounded to this explicit retry path, not a general exactly-once framework.
+	SaveOperationToken string `json:"save_operation_token"`
+}
+
+// MailAttachmentSaveResponse Success response of an attachment save to the Library (panel Save and the agent download share this one shape — ADR-20261001 "Save-to-workspace request/response (F2)" and F3 rows; w3 spec §2.4, w4 spec §2.3 — W0 is the single publisher). Returned only for a completed save: the file is fully written under the mail → <mailbox> → <year-month> hierarchy with a sanitized, unique, suffixed name. Refusals are typed errors with no invented path — never a saved=true with a fabricated destination. A lost response resolves through the same-token retry, which returns THIS receipt again for the already-committed save (correction M-02). This is also the "shared Save response/path fields" of the agent download_email_attachment result (F3) — one shape, no second.
+type MailAttachmentSaveResponse struct {
+	// AbsolutePath Separately resolved absolute path of the saved file — the form the agent's normal file/document tools consume. The panel never needs it; the agent result carries it (F3). Server-resolved inside the authorized work root; never client-derived.
+	AbsolutePath string `json:"absolute_path"`
+
+	// AuditStatus Truthful audit outcome of the mail.attachment_saved event (ADR F2 "Audit" row). recorded = the audit entry was written; disabled = the operator's audit setting is off; failed = the audit write failed AFTER the file landed — the save stands (saved=true with the real path), this field and warning_code carry the visible warning, and no retry is invited (a retry would duplicate the file).
+	AuditStatus MailAttachmentSaveResponseAuditStatus `json:"audit_status"`
+
+	// Entry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
+	Entry struct {
+		// IsDir True when this entry is a directory.
+		IsDir bool `json:"is_dir"`
+
+		// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
+		IsHidden bool `json:"is_hidden"`
+
+		// IsKnowledgeBase True when this DIRECTORY is itself a knowledge base, using the exact same marker-based detection GET /library/{workspace_id}/knowledge answers per folder (KnowledgeBaseInfo.is_knowledge_base) — computed once per directory entry during listing so the Library explorer's Vault icon is a fact the server states, not something the client infers from whichever folders it happens to have queried this session (a directory never opened yet, or a session whose cache was evicted, used to render as a plain folder even though it was a real knowledge base). Present (true or false) for a directory whenever detection could complete; absent when the entry is a file, or when detection could not complete for this one row (a listing failure on a single entry never fails the whole directory listing). Optional on the wire so SPA builds and fixtures that predate this field keep working.
+		IsKnowledgeBase *bool `json:"is_knowledge_base,omitempty"`
+
+		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
+		IsTextEditable bool `json:"is_text_editable"`
+
+		// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
+		Mime *string `json:"mime,omitempty"`
+
+		// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
+		ModifiedAt time.Time `json:"modified_at"`
+
+		// Mount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
+		// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
+		Mount *struct {
+			// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
+			Broad bool `json:"broad"`
+
+			// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
+			HostPath string `json:"host_path"`
+
+			// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
+			Name string `json:"name"`
+		} `json:"mount,omitempty"`
+
+		// Name Base filename or directory name (final path segment).
+		Name string `json:"name"`
+
+		// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
+		Path string `json:"path"`
+
+		// PreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
+		PreviewProfile *MailAttachmentSaveResponseEntryPreviewProfile `json:"preview_profile,omitempty"`
+
+		// PreviewScriptsAllowed The per-file scripts checkbox (founder Q5=A) — true only when the user explicitly allowed scripts for THIS one file, switching only its preview to the ordinary isolated script-permitting profile. Visible, per file, never silent and never global. Meaningful only with preview_profile=mail_restricted; on ordinary workspace files the isolated profile is the default state and this field is absent.
+		PreviewScriptsAllowed *bool `json:"preview_scripts_allowed,omitempty"`
+
+		// Size File size in bytes. Always 0 for directories.
+		Size int64 `json:"size"`
+	} `json:"entry"`
+
+	// Path Final workspace-relative path of the saved file — includes any numbered collision suffix; identical to entry.path. The actual saved name is entry.name.
+	Path string `json:"path"`
+
+	// Saved Always true on this shape — a response that did not save is a typed error, never a saved=false body. The visible "Save result unknown" state (lost response) resolves to this receipt via the same-token retry.
+	Saved MailAttachmentSaveResponseSaved `json:"saved"`
+
+	// SizeBytes Actual byte count of the committed file.
+	SizeBytes int64 `json:"size_bytes"`
+
+	// WarningCode Closed safe warning code accompanying audit_status, or null. The one Phase-1 warning: audit_write_failed — the file is saved and usable, but its audit event could not be recorded. Never carries raw error text, tokens or credentials.
+	WarningCode *MailAttachmentSaveResponseWarningCode `json:"warning_code"`
+
+	// WorkspaceId Workspace the file was saved into.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// MailAttachmentSaveResponseAuditStatus Truthful audit outcome of the mail.attachment_saved event (ADR F2 "Audit" row). recorded = the audit entry was written; disabled = the operator's audit setting is off; failed = the audit write failed AFTER the file landed — the save stands (saved=true with the real path), this field and warning_code carry the visible warning, and no retry is invited (a retry would duplicate the file).
+type MailAttachmentSaveResponseAuditStatus string
+
+// MailAttachmentSaveResponseEntryPreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
+type MailAttachmentSaveResponseEntryPreviewProfile string
+
+// MailAttachmentSaveResponseSaved Always true on this shape — a response that did not save is a typed error, never a saved=false body. The visible "Save result unknown" state (lost response) resolves to this receipt via the same-token retry.
+type MailAttachmentSaveResponseSaved bool
+
+// MailAttachmentSaveResponseWarningCode Closed safe warning code accompanying audit_status, or null. The one Phase-1 warning: audit_write_failed — the file is saved and usable, but its audit event could not be recorded. Never carries raw error text, tokens or credentials.
+type MailAttachmentSaveResponseWarningCode string
 
 // MailDraftSendRequest Panel send (D12, POST /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}/send): the panel IS the approval. Transmits exactly the request's content — never re-reads the draft as truth (round-1 MAJ-002) — APPENDs the Sent copy (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009): a repeat submit after a completed send returns the recorded first outcome, never a second transmission (FR-021). keep_attachment_parts is optional here and defaults to carrying ALL of the current copy's attachments (spec §2.2; the UI lists exactly what will be carried, D28). Audit event + rate limit.
 type MailDraftSendRequest struct {
@@ -18185,44 +19010,209 @@ type MailDraftUpdateRequest struct {
 	Uidvalidity int64 `json:"uidvalidity"`
 }
 
-// MailFolder One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox, as listed live from the mail server. Counts are live IMAP values at request time; the unread count exists for the Inbox only and is null everywhere else (round-1 MIN-005).
+// MailFolder One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox, as listed from the mail server (email-mail-view-spec D5; ADR-20261001 "Missing versus unknown folder/count" row; mail-live-access-landing-order register row 3 — W0 is the single publisher, w2's discovery is the only producer of the role fields' values). Counts and freshness are per role: mapping and count metadata are separate objects, and a confirmed-absent Sent/Drafts has total=0 with an explanation while an unknown or failed count has total=null — never an invented zero. Missing INBOX remains an account error, not an unknown folder. The role fields (availability, uidvalidity, mapping_source) and the two metadata objects are optional on the wire until the discovery producer lands — fixtures and builds predating them keep working (the is_knowledge_base precedent); producers emit them always once landed.
 type MailFolder struct {
+	// Availability [Optional on the wire until the discovery producer lands — fixtures and builds predating this field keep working, the is_knowledge_base precedent; producers emit it always once landed.] Discovery outcome for this role (correction M-01). present = a resolved mapping was validated against the server. absent = discovery completed successfully AND every candidate probe returned the server's structural not-found — confirmed absence only; the role is shown empty with the server-folder-absent explanation. unknown = unresolved: discovery commands failed or timed out, an auth/TLS/DNS/ permission error occurred, LIST-EXTENDED was unsupported with no candidate probe succeeding, or the server simply holds an untagged, locally named folder outside the candidate list — from the client's seat that is indistinguishable from absence, so the role renders unresolved with the per-mailbox name setting offered. Absence is never inferred from a finite candidate list failing (w2 spec §4.1).
+	Availability *MailFolderAvailability `json:"availability,omitempty"`
+
+	// CountMetadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+	CountMetadata *struct {
+		// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+		LastValidatedAt *time.Time `json:"last_validated_at"`
+
+		// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+		NoticeCode *MailFolderCountMetadataNoticeCode `json:"notice_code"`
+
+		// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+		PublicationRevision *string `json:"publication_revision"`
+
+		// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+		RefreshNeeded bool `json:"refresh_needed"`
+
+		// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+		Source MailFolderCountMetadataSource `json:"source"`
+
+		// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+		Stale bool `json:"stale"`
+	} `json:"count_metadata,omitempty"`
+
 	// DisplayName The mail server's real folder name for this slug (the per-mailbox sent_folder_name / drafts_folder_name override applies, else the auto-resolved standard name).
 	DisplayName string `json:"display_name"`
+
+	// MappingMetadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+	MappingMetadata *struct {
+		// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+		LastValidatedAt *time.Time `json:"last_validated_at"`
+
+		// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+		NoticeCode *MailFolderMappingMetadataNoticeCode `json:"notice_code"`
+
+		// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+		PublicationRevision *string `json:"publication_revision"`
+
+		// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+		RefreshNeeded bool `json:"refresh_needed"`
+
+		// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+		Source MailFolderMappingMetadataSource `json:"source"`
+
+		// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+		Stale bool `json:"stale"`
+	} `json:"mapping_metadata,omitempty"`
+
+	// MappingSource How this role's folder name was resolved (register row 3 settles the five values; the ADR's four-value proposal is superseded). override = the operator's explicit per-mailbox Sent/Drafts name setting wins. special_use = the server advertised the role (LIST-EXTENDED SPECIAL-USE). fallback = a common-name candidate probe succeeded without special-use support. saved = a still-valid previously saved mapping was reused. none = no recognized role and no successful candidate probe (availability=unknown), or the role is confirmed absent.
+	MappingSource *MailFolderMappingSource `json:"mapping_source,omitempty"`
 
 	// Slug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
 	Slug MailFolderSlug `json:"slug"`
 
-	// Total Live message count of the folder.
+	// Total Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation (correction M-01; w2 spec §4.1). Deferred nullability (register row 3; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express an unknown or failed count — total is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w2 discovery producer supplies it; a consumer must treat an absent total as unknown and never as 0 or false — a fabricated 0 never masquerades as "checked, empty".
 	Total int `json:"total"`
+
+	// Uidvalidity IMAP UIDVALIDITY of the resolved folder — the epoch its UIDs (and any paging cursors) are valid in. Null before validation or when the role's mapping is unknown: unknown is represented as null, never a fabricated version (ADR P1.3 "UIDVALIDITY changes" row). A changed uidvalidity discards affected header entries and cursors before new rows are published.
+	Uidvalidity *int64 `json:"uidvalidity,omitempty"`
 
 	// UnreadCount Live IMAP UNSEEN count. Present for the Inbox only; null for Sent and Drafts (round-1 MIN-005). The watcher's per-mailbox unseen_total is the only other unread surface — the list endpoint never filters by it (round-2 OBS-001 dropped the unseen_only query parameter).
 	UnreadCount *int `json:"unread_count"`
 }
 
+// MailFolderAvailability [Optional on the wire until the discovery producer lands — fixtures and builds predating this field keep working, the is_knowledge_base precedent; producers emit it always once landed.] Discovery outcome for this role (correction M-01). present = a resolved mapping was validated against the server. absent = discovery completed successfully AND every candidate probe returned the server's structural not-found — confirmed absence only; the role is shown empty with the server-folder-absent explanation. unknown = unresolved: discovery commands failed or timed out, an auth/TLS/DNS/ permission error occurred, LIST-EXTENDED was unsupported with no candidate probe succeeding, or the server simply holds an untagged, locally named folder outside the candidate list — from the client's seat that is indistinguishable from absence, so the role renders unresolved with the per-mailbox name setting offered. Absence is never inferred from a finite candidate list failing (w2 spec §4.1).
+type MailFolderAvailability string
+
+// MailFolderCountMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailFolderCountMetadataNoticeCode string
+
+// MailFolderCountMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailFolderCountMetadataSource string
+
+// MailFolderMappingMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailFolderMappingMetadataNoticeCode string
+
+// MailFolderMappingMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailFolderMappingMetadataSource string
+
+// MailFolderMappingSource How this role's folder name was resolved (register row 3 settles the five values; the ADR's four-value proposal is superseded). override = the operator's explicit per-mailbox Sent/Drafts name setting wins. special_use = the server advertised the role (LIST-EXTENDED SPECIAL-USE). fallback = a common-name candidate probe succeeded without special-use support. saved = a still-valid previously saved mapping was reused. none = no recognized role and no successful candidate probe (availability=unknown), or the role is confirmed absent.
+type MailFolderMappingSource string
+
 // MailFolderSlug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
 type MailFolderSlug string
 
-// MailFolderList The three mail folders (D5) of one mailbox with live counts — the response of GET /workspaces/{id}/mail/{agentId}/folders.
+// MailFolderList The three mail folders (D5) of one mailbox with counts and freshness — the response of GET /workspaces/{id}/mail/{agentId}/folders (mail-live-access-landing-order register rows 2/3; ADR-20261001 "Freshness metadata" row). The list-level metadata describes THIS read; each folder carries its own mapping and count metadata, because a mapping validation and a count fetch are separate successes with separate timestamps.
 type MailFolderList struct {
 	// Folders Exactly the three D5 folders (Inbox, Sent, Drafts).
 	Folders []struct {
+		// Availability [Optional on the wire until the discovery producer lands — fixtures and builds predating this field keep working, the is_knowledge_base precedent; producers emit it always once landed.] Discovery outcome for this role (correction M-01). present = a resolved mapping was validated against the server. absent = discovery completed successfully AND every candidate probe returned the server's structural not-found — confirmed absence only; the role is shown empty with the server-folder-absent explanation. unknown = unresolved: discovery commands failed or timed out, an auth/TLS/DNS/ permission error occurred, LIST-EXTENDED was unsupported with no candidate probe succeeding, or the server simply holds an untagged, locally named folder outside the candidate list — from the client's seat that is indistinguishable from absence, so the role renders unresolved with the per-mailbox name setting offered. Absence is never inferred from a finite candidate list failing (w2 spec §4.1).
+		Availability *MailFolderListFoldersAvailability `json:"availability,omitempty"`
+
+		// CountMetadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+		CountMetadata *struct {
+			// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+			LastValidatedAt *time.Time `json:"last_validated_at"`
+
+			// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+			NoticeCode *MailFolderListFoldersCountMetadataNoticeCode `json:"notice_code"`
+
+			// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+			PublicationRevision *string `json:"publication_revision"`
+
+			// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+			RefreshNeeded bool `json:"refresh_needed"`
+
+			// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+			Source MailFolderListFoldersCountMetadataSource `json:"source"`
+
+			// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+			Stale bool `json:"stale"`
+		} `json:"count_metadata,omitempty"`
+
 		// DisplayName The mail server's real folder name for this slug (the per-mailbox sent_folder_name / drafts_folder_name override applies, else the auto-resolved standard name).
 		DisplayName string `json:"display_name"`
+
+		// MappingMetadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+		MappingMetadata *struct {
+			// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+			LastValidatedAt *time.Time `json:"last_validated_at"`
+
+			// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+			NoticeCode *MailFolderListFoldersMappingMetadataNoticeCode `json:"notice_code"`
+
+			// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+			PublicationRevision *string `json:"publication_revision"`
+
+			// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+			RefreshNeeded bool `json:"refresh_needed"`
+
+			// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+			Source MailFolderListFoldersMappingMetadataSource `json:"source"`
+
+			// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+			Stale bool `json:"stale"`
+		} `json:"mapping_metadata,omitempty"`
+
+		// MappingSource How this role's folder name was resolved (register row 3 settles the five values; the ADR's four-value proposal is superseded). override = the operator's explicit per-mailbox Sent/Drafts name setting wins. special_use = the server advertised the role (LIST-EXTENDED SPECIAL-USE). fallback = a common-name candidate probe succeeded without special-use support. saved = a still-valid previously saved mapping was reused. none = no recognized role and no successful candidate probe (availability=unknown), or the role is confirmed absent.
+		MappingSource *MailFolderListFoldersMappingSource `json:"mapping_source,omitempty"`
 
 		// Slug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
 		Slug MailFolderListFoldersSlug `json:"slug"`
 
-		// Total Live message count of the folder.
+		// Total Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation (correction M-01; w2 spec §4.1). Deferred nullability (register row 3; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express an unknown or failed count — total is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w2 discovery producer supplies it; a consumer must treat an absent total as unknown and never as 0 or false — a fabricated 0 never masquerades as "checked, empty".
 		Total int `json:"total"`
+
+		// Uidvalidity IMAP UIDVALIDITY of the resolved folder — the epoch its UIDs (and any paging cursors) are valid in. Null before validation or when the role's mapping is unknown: unknown is represented as null, never a fabricated version (ADR P1.3 "UIDVALIDITY changes" row). A changed uidvalidity discards affected header entries and cursors before new rows are published.
+		Uidvalidity *int64 `json:"uidvalidity,omitempty"`
 
 		// UnreadCount Live IMAP UNSEEN count. Present for the Inbox only; null for Sent and Drafts (round-1 MIN-005). The watcher's per-mailbox unseen_total is the only other unread surface — the list endpoint never filters by it (round-2 OBS-001 dropped the unseen_only query parameter).
 		UnreadCount *int `json:"unread_count"`
 	} `json:"folders"`
+
+	// Metadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+	Metadata *struct {
+		// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+		LastValidatedAt *time.Time `json:"last_validated_at"`
+
+		// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+		NoticeCode *MailFolderListMetadataNoticeCode `json:"notice_code"`
+
+		// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+		PublicationRevision *string `json:"publication_revision"`
+
+		// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+		RefreshNeeded bool `json:"refresh_needed"`
+
+		// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+		Source MailFolderListMetadataSource `json:"source"`
+
+		// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+		Stale bool `json:"stale"`
+	} `json:"metadata,omitempty"`
 }
+
+// MailFolderListFoldersAvailability [Optional on the wire until the discovery producer lands — fixtures and builds predating this field keep working, the is_knowledge_base precedent; producers emit it always once landed.] Discovery outcome for this role (correction M-01). present = a resolved mapping was validated against the server. absent = discovery completed successfully AND every candidate probe returned the server's structural not-found — confirmed absence only; the role is shown empty with the server-folder-absent explanation. unknown = unresolved: discovery commands failed or timed out, an auth/TLS/DNS/ permission error occurred, LIST-EXTENDED was unsupported with no candidate probe succeeding, or the server simply holds an untagged, locally named folder outside the candidate list — from the client's seat that is indistinguishable from absence, so the role renders unresolved with the per-mailbox name setting offered. Absence is never inferred from a finite candidate list failing (w2 spec §4.1).
+type MailFolderListFoldersAvailability string
+
+// MailFolderListFoldersCountMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailFolderListFoldersCountMetadataNoticeCode string
+
+// MailFolderListFoldersCountMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailFolderListFoldersCountMetadataSource string
+
+// MailFolderListFoldersMappingMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailFolderListFoldersMappingMetadataNoticeCode string
+
+// MailFolderListFoldersMappingMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailFolderListFoldersMappingMetadataSource string
+
+// MailFolderListFoldersMappingSource How this role's folder name was resolved (register row 3 settles the five values; the ADR's four-value proposal is superseded). override = the operator's explicit per-mailbox Sent/Drafts name setting wins. special_use = the server advertised the role (LIST-EXTENDED SPECIAL-USE). fallback = a common-name candidate probe succeeded without special-use support. saved = a still-valid previously saved mapping was reused. none = no recognized role and no successful candidate probe (availability=unknown), or the role is confirmed absent.
+type MailFolderListFoldersMappingSource string
 
 // MailFolderListFoldersSlug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
 type MailFolderListFoldersSlug string
+
+// MailFolderListMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailFolderListMetadataNoticeCode string
+
+// MailFolderListMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailFolderListMetadataSource string
 
 // MailHtmlPreviewTokenRequest Request to mint a short-lived token for one message's HTML body (D13/D17, POST /mail/html-preview-token — session-authenticated, stays in the API namespace, security sign-off C1). This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched once, sanitized, and its body plus inline cid: parts and the load_remote remote-image URL list are held in the in-memory token store for the TTL — the /mail-preview/ serve routes (§2.3a) never dial IMAP. load_remote defaults to false (D17 — remote images blocked by default; "Load images" re-mints with true). Rate-limited by a dedicated per-IP limiter (MC-44).
 type MailHtmlPreviewTokenRequest struct {
@@ -18267,7 +19257,10 @@ type MailMessage struct {
 		// PartIndex Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
 		PartIndex int `json:"part_index"`
 
-		// SizeBytes Decoded attachment size in bytes.
+		// ReportedSizeBytes Optional, labelled server-reported transfer size for the part — present only when the server reports one. Distinct from the decoded size_bytes: metadata-only reads may carry this without having decoded the part, and a false or unknown report is caught at actual transfer time (the preview contract aborts on a mid-transfer size or decode failure — correction I-05). Never substituted for size_bytes.
+		ReportedSizeBytes *int64 `json:"reported_size_bytes,omitempty"`
+
+		// SizeBytes Decoded attachment size in bytes (ADR-20261001 "Attachment metadata (F1/F3/F7)" row; register row 8). Metadata-only list/read results establish structure, not a decoded transfer, so a labelled reported_size_bytes may carry the server-reported transfer size instead — the decoded value is never silently substituted by IMAP structure octets (potentially encoded) and never by 0 for unknown. Becomes nullable (unknown honestly) together with its consumer changes per the landing order's Wave C/D sequencing; the actual decoded transfer remains the cap authority.
 		SizeBytes int `json:"size_bytes"`
 	} `json:"attachments"`
 
@@ -18283,8 +19276,8 @@ type MailMessage struct {
 	// Cc Cc addresses (D26).
 	Cc []string `json:"cc"`
 
-	// Date Message date (RFC 3339).
-	Date time.Time `json:"date"`
+	// Date Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+	Date *time.Time `json:"date"`
 
 	// DraftCleanupWarning Set when the OLD draft copy could not be removed after a successful update-APPEND of the new copy (MAJ-009/MC-28 — the panel warns of a possible duplicate draft). Same underlying mechanism as the send path's draft_cleanup_warning (MailSendResponse), triggered by update instead of send. Null when cleanup succeeded, and always null on the read paths (GET message, list messages) — only the update endpoint can set it.
 	DraftCleanupWarning *string `json:"draft_cleanup_warning,omitempty"`
@@ -18297,6 +19290,9 @@ type MailMessage struct {
 
 	// FromName Display name of the sender when present, else null.
 	FromName *string `json:"from_name"`
+
+	// HasAttachments Paperclip indicator (F7) — same derivation and semantics as MailMessageSummary.has_attachments; carried consistently on the detail shape (register row 8). False is confirmed absence.
+	HasAttachments *bool `json:"has_attachments,omitempty"`
 
 	// HasHtml Whether an HTML body part exists. The HTML itself is never in this object — it is served only through the token-gated mail-preview routes (D13, §2.3a).
 	HasHtml bool `json:"has_html"`
@@ -18315,6 +19311,9 @@ type MailMessage struct {
 
 	// MessageId The Message-ID header value, or null when the mail carries none.
 	MessageId *string `json:"message_id"`
+
+	// MessageRef Gateway-issued opaque message reference (correction I-03; register row 8) — same shape and rules as MailMessageSummary.message_ref. The detail result's issued reference: every follow-up operation on this message (attachment preview, save, reply context, seen) consumes it unchanged, and the gateway validates its embedded folder epoch, pair and configuration generation on the same lease that serves the follow-up — a mismatch is the typed 409 stale-reference refusal before any fetch or mutation.
+	MessageRef *string `json:"message_ref,omitempty"`
 
 	// ReadByAgent Whether the flag list carries the $OmnipusAgentRead keyword (D38, FR-039) — derived per fetch, never stored by Omnipus.
 	ReadByAgent bool `json:"read_by_agent"`
@@ -18344,15 +19343,18 @@ type MailMessage struct {
 // MailMessageFolder The folder slug the message lives in (MC-5).
 type MailMessageFolder string
 
-// MailMessagePage One page of mail message envelopes (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Truncation is explicit — the page never silently drops rows (mirrors pkg/email/transport.go::SearchResult's explicit-truncation contract).
+// MailMessagePage One page of mail message envelopes (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Paging is cursor-based and explicit (ADR-20261001 "Paging and search" row; mail-live-access-landing-order register row 4 — W0 is the single publisher): next_cursor is an opaque string binding the pair/config generation, folder version, query and number delivered in this browse/search sequence; has_more states whether a next page exists; view_limit_reached marks the 200-rows-per-folder-per-view hard ceiling, beyond which the user searches — no next browse cursor is issued at the ceiling. The page never silently drops rows. Legacy numeric paging (truncated / next_before_uid / the before_uid query parameter) is superseded by the cursor fields and is retained only until the panel's consumer migration lands (landing-order Wave C); it is then removed in one atomic contract step.
 type MailMessagePage struct {
+	// HasMore Whether more messages exist beyond this page in this sequence. Optional on the wire until the cursor-issuing producer lands; the legacy truncated flag remains authoritative for pre-cursor consumers until the migration removes it.
+	HasMore *bool `json:"has_more,omitempty"`
+
 	// Messages The envelopes of this page, newest first.
 	Messages []struct {
 		// Cc Cc addresses (D26 — recipient lists on every mail surface).
 		Cc []string `json:"cc"`
 
-		// Date Message date (RFC 3339).
-		Date time.Time `json:"date"`
+		// Date Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+		Date *time.Time `json:"date"`
 
 		// Folder The folder slug the message was listed from (MC-5).
 		Folder MailMessagePageMessagesFolder `json:"folder"`
@@ -18363,6 +19365,9 @@ type MailMessagePage struct {
 		// FromName Display name of the sender when present, else null.
 		FromName *string `json:"from_name"`
 
+		// HasAttachments Paperclip indicator (F7, #1174 display half; register row 8) — producers serialize it always once the MIME classifier lands; absent on results predating it means not-yet-computed, and false (once present) is confirmed absence, never an omitted or uncomputed value. Derived from MIME structure/part headers in the bounded list fetch — never by downloading message or attachment bodies. Actual named/attachment parts count; inline CID resources alone and the dedicated Omnipus draft-body marker do not, but a genuine user message.md does. If metadata cannot be classified the read fails visibly rather than fabricating false. The indicator is inside the allowed header-cache field set; attachment bytes and lists are not.
+		HasAttachments *bool `json:"has_attachments,omitempty"`
+
 		// IsDraft Whether the message carries the \Draft flag (MC-14).
 		IsDraft bool `json:"is_draft"`
 
@@ -18371,6 +19376,9 @@ type MailMessagePage struct {
 
 		// MessageId The Message-ID header value, or null when the inbound mail carries none (some mail does). Mid-style refs cannot address such a message.
 		MessageId *string `json:"message_id"`
+
+		// MessageRef Gateway-issued opaque message reference for this message (mail-live-access-landing-order register row 8; ADR correction I-03) — bound to the authorized pair, folder and configuration generation, carrying its folder epoch. Issued with the result that names the message and consumed unchanged by every follow-up operation (attachment preview, save, reply context, seen) — never a model-synthesized identity, never dependent on the optional Message-ID, and validated against the live folder epoch on the same lease that serves the follow-up. A mismatched epoch, pair or generation is the typed 409 stale-reference refusal, before any fetch or mutation. Optional on the wire until the issuing gateway work lands (the is_knowledge_base precedent); producers emit it always once landed.
+		MessageRef *string `json:"message_ref,omitempty"`
 
 		// ReadByAgent Whether the message's flag list carries the $OmnipusAgentRead keyword (D38, FR-039). Derived from the fetched flag list on every fetch — never stored by Omnipus (D6). When the mail server rejects custom keywords the value is false and nothing errors (MC-36).
 		ReadByAgent bool `json:"read_by_agent"`
@@ -18391,23 +19399,56 @@ type MailMessagePage struct {
 		Uidvalidity int64 `json:"uidvalidity"`
 	} `json:"messages"`
 
-	// NextBeforeUid The before_uid cursor for the next page when truncated is true; null when this page is the last one.
+	// Metadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+	Metadata *struct {
+		// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+		LastValidatedAt *time.Time `json:"last_validated_at"`
+
+		// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+		NoticeCode *MailMessagePageMetadataNoticeCode `json:"notice_code"`
+
+		// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+		PublicationRevision *string `json:"publication_revision"`
+
+		// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+		RefreshNeeded bool `json:"refresh_needed"`
+
+		// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+		Source MailMessagePageMetadataSource `json:"source"`
+
+		// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+		Stale bool `json:"stale"`
+	} `json:"metadata,omitempty"`
+
+	// NextBeforeUid Legacy numeric cursor — superseded by next_cursor; retained only until the consumer migration lands, then removed.
 	NextBeforeUid *int64 `json:"next_before_uid"`
 
-	// Truncated Whether more messages exist beyond this page.
+	// NextCursor Opaque cursor for the next page when has_more is true and the view limit is not reached; null on the last page or at the 200-row ceiling. Binds the pair/config generation, folder version (UIDVALIDITY), the browse/search query and the number of rows already delivered in this sequence. Presenting a stale or mismatched cursor returns the typed 409 stale-cursor result — the client resets the view once, never spins or replays. Optional on the wire until the cursor-issuing producer lands (the is_knowledge_base precedent); producers emit it always once landed.
+	NextCursor *string `json:"next_cursor,omitempty"`
+
+	// Truncated Legacy explicit-truncation flag (email-mail-view-spec §2.3) — superseded by has_more; retained only until the consumer migration lands, then removed.
 	Truncated bool `json:"truncated"`
+
+	// ViewLimitReached True when this page delivered up to the 200-rows-per-folder-per-view hard ceiling (ADR P1.1 "Display pagination") — no next browse cursor is issued; the panel offers the reachable folder-scoped search instead ("Search to find older messages"). Older loaded pages remain the active view's working set and are released on view exit; they never enlarge the reusable newest-50 cache. Optional on the wire until the producer lands.
+	ViewLimitReached *bool `json:"view_limit_reached,omitempty"`
 }
 
 // MailMessagePageMessagesFolder The folder slug the message was listed from (MC-5).
 type MailMessagePageMessagesFolder string
+
+// MailMessagePageMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailMessagePageMetadataNoticeCode string
+
+// MailMessagePageMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailMessagePageMetadataSource string
 
 // MailMessageSummary Envelope row for one mail message as shown in a Mail panel list result (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). All fields are always serialized; nullable fields are the ones the mail server itself may leave unset (round-1 MIN-003 — types and nullability explicit). Fetches behind this row never change flags (BODY.PEEK / EXAMINE — round-2 MAJ-003).
 type MailMessageSummary struct {
 	// Cc Cc addresses (D26 — recipient lists on every mail surface).
 	Cc []string `json:"cc"`
 
-	// Date Message date (RFC 3339).
-	Date time.Time `json:"date"`
+	// Date Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+	Date *time.Time `json:"date"`
 
 	// Folder The folder slug the message was listed from (MC-5).
 	Folder MailMessageSummaryFolder `json:"folder"`
@@ -18418,6 +19459,9 @@ type MailMessageSummary struct {
 	// FromName Display name of the sender when present, else null.
 	FromName *string `json:"from_name"`
 
+	// HasAttachments Paperclip indicator (F7, #1174 display half; register row 8) — producers serialize it always once the MIME classifier lands; absent on results predating it means not-yet-computed, and false (once present) is confirmed absence, never an omitted or uncomputed value. Derived from MIME structure/part headers in the bounded list fetch — never by downloading message or attachment bodies. Actual named/attachment parts count; inline CID resources alone and the dedicated Omnipus draft-body marker do not, but a genuine user message.md does. If metadata cannot be classified the read fails visibly rather than fabricating false. The indicator is inside the allowed header-cache field set; attachment bytes and lists are not.
+	HasAttachments *bool `json:"has_attachments,omitempty"`
+
 	// IsDraft Whether the message carries the \Draft flag (MC-14).
 	IsDraft bool `json:"is_draft"`
 
@@ -18426,6 +19470,9 @@ type MailMessageSummary struct {
 
 	// MessageId The Message-ID header value, or null when the inbound mail carries none (some mail does). Mid-style refs cannot address such a message.
 	MessageId *string `json:"message_id"`
+
+	// MessageRef Gateway-issued opaque message reference for this message (mail-live-access-landing-order register row 8; ADR correction I-03) — bound to the authorized pair, folder and configuration generation, carrying its folder epoch. Issued with the result that names the message and consumed unchanged by every follow-up operation (attachment preview, save, reply context, seen) — never a model-synthesized identity, never dependent on the optional Message-ID, and validated against the live folder epoch on the same lease that serves the follow-up. A mismatched epoch, pair or generation is the typed 409 stale-reference refusal, before any fetch or mutation. Optional on the wire until the issuing gateway work lands (the is_knowledge_base precedent); producers emit it always once landed.
+	MessageRef *string `json:"message_ref,omitempty"`
 
 	// ReadByAgent Whether the message's flag list carries the $OmnipusAgentRead keyword (D38, FR-039). Derived from the fetched flag list on every fetch — never stored by Omnipus (D6). When the mail server rejects custom keywords the value is false and nothing errors (MC-36).
 	ReadByAgent bool `json:"read_by_agent"`
@@ -18448,6 +19495,63 @@ type MailMessageSummary struct {
 
 // MailMessageSummaryFolder The folder slug the message was listed from (MC-5).
 type MailMessageSummaryFolder string
+
+// MailReadMetadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+type MailReadMetadata struct {
+	// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+	LastValidatedAt *time.Time `json:"last_validated_at"`
+
+	// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+	NoticeCode *MailReadMetadataNoticeCode `json:"notice_code"`
+
+	// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+	PublicationRevision *string `json:"publication_revision"`
+
+	// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+	RefreshNeeded bool `json:"refresh_needed"`
+
+	// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+	Source MailReadMetadataSource `json:"source"`
+
+	// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+	Stale bool `json:"stale"`
+}
+
+// MailReadMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailReadMetadataNoticeCode string
+
+// MailReadMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailReadMetadataSource string
+
+// MailReplyContextRequest Request for one message's reply/quote context (ADR-20261001 "Reply / Reply all context (F5)" row; w3 spec §2.4 — W0 is the single publisher). Session-authenticated message subresource; the source pair/folder/ref is independently authorized. Assembles current-compose state only — never a server draft, never a body cache, never a send.
+type MailReplyContextRequest struct {
+	// Mode reply = sender/Reply-To only (Cc/Bcc start empty). reply_all = To = eligible primary (Reply-To if present, else From); Cc = original To + original Cc minus the mailbox's own address and the primary, deduplicated. The original Bcc is never copied into a reply.
+	Mode MailReplyContextRequestMode `json:"mode"`
+}
+
+// MailReplyContextRequestMode reply = sender/Reply-To only (Cc/Bcc start empty). reply_all = To = eligible primary (Reply-To if present, else From); Cc = original To + original Cc minus the mailbox's own address and the primary, deduplicated. The original Bcc is never copied into a reply.
+type MailReplyContextRequestMode string
+
+// MailReplyContextResponse Reply/quote context for the compose draft (ADR-20261001 "Reply / Reply all context (F5)" row; w3 spec §2.4 — W0 is the single publisher). Produced by the ONE shared recipient rule (BuildReplyRecipients) called by both the gateway and the agent reply adapter — the SPA implements no second recipient algorithm. Prefills user-requested compose state only: not a server draft, not a send. A delayed/stale context response for a different message or mailbox is discarded by the consumer; it never overwrites compose input.
+type MailReplyContextResponse struct {
+	// Bcc Always empty — Bcc is never copied into an incoming reply.
+	Bcc []string `json:"bcc"`
+
+	// BodyMarkdown Editable quoted original as a safe text/Markdown projection with escaped attribution (sender/date, or "No date" per F6) — the original text's Markdown/image/embed syntax is escaped so the quote cannot load remote images or workspace embeds inside Compose. Never raw active HTML; never the original's attachments.
+	BodyMarkdown string `json:"body_markdown"`
+
+	// Cc Cc — empty for plain reply; original To + original Cc minus the mailbox's own address and the primary, deduplicated, for reply_all. Never contains the original Bcc.
+	Cc []string `json:"cc"`
+
+	// InReplyTo The original message's Message-ID for threading (RFC 5322 In-Reply-To), or null when the inbound mail carries none.
+	InReplyTo *string `json:"in_reply_to"`
+
+	// Subject Subject for the compose draft — the original subject with the Re: prefix applied exactly once (no duplicate Re:, no signature duplication).
+	Subject string `json:"subject"`
+
+	// To Primary recipients — the parsed Reply-To when present, otherwise From. Editable compose state: an invalid/missing eligible recipient is an actionable error or an editable empty set, never a silent replacement or a send to self.
+	To []string `json:"to"`
+}
 
 // MailSendRequest Human manual send from the Mail panel compose (D9, POST /workspaces/{id}/mail/{agentId}/messages). Body is Markdown; the backend renders sanitized HTML + plain text (multipart/alternative, MC-3), appends the mailbox signature, sends over SMTP and APPENDs the Sent copy (D7, D18 — always, no provider detection). Audit event + dedicated mailMutationLimiter rate limit (MC-20). The ≤ 50-recipient total cap (D29/R2-6, MC-27) and the attachment caps (≤ 10 files, ≤ 25 MiB total — MC-32) are enforced before any SMTP connection.
 type MailSendRequest struct {
@@ -18512,6 +19616,18 @@ type MailSignaturePreviewTokenResponse struct {
 	Token string `json:"token"`
 }
 
+// MailStaleReferenceError Typed 409 body for a stale Mail cursor or reference (mail-live-access-landing-order register row 4 — W0 is the single publisher; ADR-20261001 "Human Retry and upstream limits" row: "Use a typed 409 stale-cursor/reference result to request one view reset; never spin/reset/replay indefinitely"). code=stale_cursor: a paging/search cursor no longer matches the folder epoch (UIDVALIDITY), configuration generation or browse/search sequence it was issued in — the client restarts the list view once. code=stale_reference: a message reference's embedded folder epoch, pair or configuration binding no longer matches the live folder (correction I-03) — the client re-reads the list; the gateway refused the fetch/mutation BEFORE any server work. Never a best-effort result against whatever the folder now holds. Shares the error/code convention with ErrorResponse and MailUnavailableError.
+type MailStaleReferenceError struct {
+	// Code Machine-readable discriminator. stale_cursor = the paging/search cursor is stale or mismatched — reset the view once. stale_reference = the message reference failed its epoch/pair/generation validation on the lease that would have served it — refresh the list. A client branches on it without string matching on the message.
+	Code MailStaleReferenceErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+}
+
+// MailStaleReferenceErrorCode Machine-readable discriminator. stale_cursor = the paging/search cursor is stale or mismatched — reset the view once. stale_reference = the message reference failed its epoch/pair/generation validation on the lease that would have served it — refresh the list. A client branches on it without string matching on the message.
+type MailStaleReferenceErrorCode string
+
 // MailSummaryList Watcher-driven badge summary for every mailbox in a workspace (GET /workspaces/{id}/mail/summary) — one MailboxNewMailSummary per (agent, workspace) mailbox pair. Served from saved watcher state; never dials IMAP.
 type MailSummaryList struct {
 	// Items One entry per mailbox in the workspace.
@@ -18555,6 +19671,9 @@ type MailUnavailableError struct {
 
 	// NextAttemptAt Present when code=backoff.
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+
+	// Reason Safe refusal reason (mail-live-access-landing-order register row 7 — W0 is the single publisher; ADR-20261001 "Human Retry and upstream limits" row). pool_busy = the global eight-socket ceiling stayed exhausted past the bounded acquisition wait (distinct from an account-slot refusal — w1 spec §4.6). account_busy = the per-account two-slot work gate (the existing busy code's queue-timeout case). server_connection_limit = the server itself refused further connections and the response structurally established that limit — recognized only from the structural response, never promoted from unknown response text; the refused session is retired and the effective per-mailbox capacity for that server is reduced in-process. backoff = the watcher backoff gate. Present where applicable; absent = no more specific reason than code carries. Retry remains explicit and bounded: a human retry bypasses only backoff, never the semaphore, socket cap, TLS validation or mutation safeguards.
+	Reason *MailUnavailableErrorReason `json:"reason,omitempty"`
 }
 
 // MailUnavailableErrorCode Machine-readable discriminator. backoff = the automatic poll hit the watcher's backoff window; busy = the request queued past the per-mailbox concurrency cap beyond the request deadline (MIN-003). A client branches on it without string matching on the message.
@@ -18562,6 +19681,9 @@ type MailUnavailableErrorCode string
 
 // MailUnavailableErrorLastErrorClass Present when code=backoff — the watcher's saved upstream class (same closed enum as the 502 body's code field, MC-8).
 type MailUnavailableErrorLastErrorClass string
+
+// MailUnavailableErrorReason Safe refusal reason (mail-live-access-landing-order register row 7 — W0 is the single publisher; ADR-20261001 "Human Retry and upstream limits" row). pool_busy = the global eight-socket ceiling stayed exhausted past the bounded acquisition wait (distinct from an account-slot refusal — w1 spec §4.6). account_busy = the per-account two-slot work gate (the existing busy code's queue-timeout case). server_connection_limit = the server itself refused further connections and the response structurally established that limit — recognized only from the structural response, never promoted from unknown response text; the refused session is retired and the effective per-mailbox capacity for that server is reduced in-process. backoff = the watcher backoff gate. Present where applicable; absent = no more specific reason than code carries. Retry remains explicit and bounded: a human retry bypasses only backoff, never the semaphore, socket cap, TLS validation or mutation safeguards.
+type MailUnavailableErrorReason string
 
 // Mailbox One (agent, workspace) email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox belongs to exactly one (agent, workspace) pair — an agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes), and several agents may each have mailboxes in the same workspace. The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
 type Mailbox struct {
@@ -18600,6 +19722,12 @@ type Mailbox struct {
 
 	// WorkspaceId ID of the workspace the mailbox surfaces in. Always present: a mailbox is addressed by its (agent, workspace) pair, so the server serializes this from the authoritative pair key — never from mutable state.
 	WorkspaceId string `json:"workspace_id"`
+}
+
+// MailboxCleanupRequest Request of the separately authorized Retry-cleanup operation (ADR-20261001 "Removal with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the single publisher). Keyed by the opaque cleanup_intent returned with a removed_cleanup_pending outcome; deliberately carries nothing else — the intent is the only address, so the retry keeps working after the mailbox's config row is gone.
+type MailboxCleanupRequest struct {
+	// CleanupIntent Opaque cleanup intent from MailboxRemovalResult.cleanup_intent — server-issued, never synthesized. Unknown, expired or already completed intents are refused with 404, not silently treated as success.
+	CleanupIntent string `json:"cleanup_intent"`
 }
 
 // MailboxConfigureRequest Request body to configure one (agent, workspace) mailbox account (M11). The target agent and workspace are both path parameters (PUT /agents/{id}/mailboxes/{workspaceId}) — an agent can hold a different mailbox in each workspace it belongs to. The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
@@ -18703,6 +19831,21 @@ type MailboxNewMailSummary struct {
 
 // MailboxNewMailSummaryWatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
 type MailboxNewMailSummaryWatcherState string
+
+// MailboxRemovalResult Truthful outcome of a mailbox removal with cleanup (ADR-20261001 "Removal with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the single publisher). Distinguishes a fully removed pair from one whose cleanup did not fully complete, instead of an unconditional success=true over best-effort failures. Marking the pair disabled and preventing new acquisitions always happen FIRST; cleanup_pending never serves residual files. cleanup_intent keys the separately authorized Retry-cleanup operation and keeps working after the config row is gone; it carries no plaintext copy of anything cleaned.
+type MailboxRemovalResult struct {
+	// CleanupCode Safe, closed-class cleanup failure code — present exactly when outcome is removed_cleanup_pending, null otherwise. No raw upstream error text, no paths, no credentials. A logged unlink failure is never reported as a successful purge.
+	CleanupCode *string `json:"cleanup_code"`
+
+	// CleanupIntent Opaque retry key for the separately authorized Retry-cleanup operation, present exactly when outcome is removed_cleanup_pending — null when removed. Survives the config row's deletion so the retry path still works afterwards.
+	CleanupIntent *string `json:"cleanup_intent"`
+
+	// Outcome removed = the pair is gone and every cleanup step succeeded. removed_cleanup_pending = the pair is disabled, removed from config and acquires nothing, but at least one cleanup step (cache purge, credential deletion, reload) failed and is retried via Retry-cleanup.
+	Outcome MailboxRemovalResultOutcome `json:"outcome"`
+}
+
+// MailboxRemovalResultOutcome removed = the pair is gone and every cleanup step succeeded. removed_cleanup_pending = the pair is disabled, removed from config and acquires nothing, but at least one cleanup step (cache purge, credential deletion, reload) failed and is retried via Retry-cleanup.
+type MailboxRemovalResultOutcome string
 
 // MaxToolIterationAgentChange One agent whose own tool-iteration limit is (or would be) lowered to a new global limit (issue #904, tool-iteration-limit spec D11). Used by the lowering preview, the 409 drift body and the PUT /performance response.
 type MaxToolIterationAgentChange struct {
@@ -27122,21 +28265,51 @@ type DeleteWorkspaceParams struct {
 
 // ListMailFoldersParams defines parameters for ListMailFolders.
 type ListMailFoldersParams struct {
-	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. Retry never bypasses capacity, security checks or mutation safeguards, and an automatic refresh never sets it (ADR-20261001 failure table).
 	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+
+	// Mode Cache-first versus live read (ADR-20261001 "Cached read versus genuine refresh" row; register rows 2/6). Omitted or live = today's live read. cache_first = serve the labelled cached mapping/counts immediately without dialing; a cache hit consumes no A8 work slot and opens no socket. A cache-first response is metadata-labelled (MailFolderList.metadata) and is never evidence of a live success; on one eligible stale/dirty event the panel makes at most one separate mode=live request, which either returns validated data or a visible error — it can never return the same stale page as a successful refresh. A cache miss falls through once to live under the normal budget. Requests without valid panel presence may execute live request-scoped work but cannot start detached panel refreshes or retain sockets.
+	Mode *ListMailFoldersParamsMode `form:"mode,omitempty" json:"mode,omitempty"`
+
+	// RefreshMapping Force the folder-mapping validation on this read (ADR-20261001 cached-read row: "For the rail, add refresh_mapping Boolean"). false/absent = a normal live count refresh reuses a valid mapping. true = this read also validates the mapping — the panel-open with a missing/>24-hour mapping case, the manual Refresh click, and the one permitted rediscovery after a missing-folder failure or observed folder-version change set it explicitly. It is never turned on by the 5-minute count refresh.
+	RefreshMapping *bool `form:"refresh_mapping,omitempty" json:"refresh_mapping,omitempty"`
+
+	// ObserverId Opaque per-panel observer ID (mail-live-access-landing-order register row 6; ADR-20261001 "Mail panel presence" row) from the mail_panel_observer WebSocket frame — the read opts into panel semantics when the ID is bound to this authenticated connection/workspace: the read may retain pooled sockets while that observer remains open, and its cache reads ride the panel's retention. Absent or unknown observer = conservative request-scoped work; REST can never claim another socket/user's observer. Never grants authorization by itself — the pair scope is checked independently.
+	ObserverId *string `form:"observer_id,omitempty" json:"observer_id,omitempty"`
 }
+
+// ListMailFoldersParamsMode defines parameters for ListMailFolders.
+type ListMailFoldersParamsMode string
 
 // ListMailMessagesParams defines parameters for ListMailMessages.
 type ListMailMessagesParams struct {
-	// Limit Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400.
+	// Limit Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400. These 20/100 bounds are the pre-ADR-20261001 state and stay the operative bounds until the consumer-timed W0 amendment raises list paging to the ADR's 25-row page and 200-row view limits (register row 4; lands in the same step as the cursor switch in w3's consumer work) — the search parameter's "same 25-row page" statement on this operation describes that amended state, not this one.
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// BeforeUid Cursor — list envelopes with uid lower than this value (from MailMessagePage.next_before_uid of the previous page).
 	BeforeUid *int `form:"before_uid,omitempty" json:"before_uid,omitempty"`
 
-	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. Retry never bypasses capacity, security checks or mutation safeguards, and an automatic refresh never sets it (ADR-20261001 failure table).
 	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+
+	// Mode Cache-first versus live read (ADR-20261001 "Cached read versus genuine refresh" row; register rows 2/6). Omitted or live = today's live read. cache_first = serve the labelled cached newest page immediately without dialing; a cache hit consumes no A8 work slot and opens no socket, and the response's MailMessagePage.metadata states its source and age. A cache-first response is never evidence of a live success; on one eligible stale/dirty event the panel makes at most one separate mode=live request. Search sequences and pages beyond the cached newest window always run live.
+	Mode *ListMailMessagesParamsMode `form:"mode,omitempty" json:"mode,omitempty"`
+
+	// RefreshMapping Force the folder-mapping validation on this read (register rows 2/6; the list rides the same flag so a folder switch with its list can validate the mapping in one event). false/absent = a normal live refresh reuses a valid mapping.
+	RefreshMapping *bool `form:"refresh_mapping,omitempty" json:"refresh_mapping,omitempty"`
+
+	// ObserverId Opaque per-panel observer ID (register row 6; ADR-20261001 "Mail panel presence" row) — the read opts into panel semantics when the ID is bound to this authenticated connection/workspace. Absent or unknown observer = conservative request-scoped work.
+	ObserverId *string `form:"observer_id,omitempty" json:"observer_id,omitempty"`
+
+	// Search Folder-scoped server-side search query (ADR-20261001 "Paging and search" row; register row 4). Starts a bounded search sequence under the same 25-row page and 200-row view limits, matched server-side — no local index, no full-text/offline search, and never a whole-mailbox fetch. Matching fields and bounds are founder-settled (decision Q-D answered 2026-10-02, option A): subject plus sender/recipient substring matching, server-side header search, the same 25/200 bounds; the mail-live-access W2/W3 specs fix the exact search semantics within that decision. Presenting search and cursor together is rejected 400.
+	Search *string `form:"search,omitempty" json:"search,omitempty"`
+
+	// Cursor Opaque continuation cursor from MailMessagePage.next_cursor (register row 4) — continues the browse or search sequence it was issued in. A stale or mismatched cursor (folder epoch changed, configuration generation changed, sequence mismatch) is refused with the typed 409 stale-cursor result — the client resets the view once. Supersedes before_uid, which is retained only until the panel consumer migration lands.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
+
+// ListMailMessagesParamsMode defines parameters for ListMailMessages.
+type ListMailMessagesParamsMode string
 
 // ListMailMessagesParamsFolder defines parameters for ListMailMessages.
 type ListMailMessagesParamsFolder string
@@ -27158,6 +28331,12 @@ type GetMailAttachmentParams struct {
 
 // GetMailAttachmentParamsFolder defines parameters for GetMailAttachment.
 type GetMailAttachmentParamsFolder string
+
+// SaveMailAttachmentToLibraryParamsFolder defines parameters for SaveMailAttachmentToLibrary.
+type SaveMailAttachmentToLibraryParamsFolder string
+
+// GetMailReplyContextParamsFolder defines parameters for GetMailReplyContext.
+type GetMailReplyContextParamsFolder string
 
 // MarkMailMessageSeenParamsFolder defines parameters for MarkMailMessageSeen.
 type MarkMailMessageSeenParamsFolder string
@@ -27264,11 +28443,17 @@ type UploadLibraryFilesMultipartRequestBody UploadLibraryFilesMultipartBody
 // CreateVaultJSONRequestBody defines body for CreateVault for application/json ContentType.
 type CreateVaultJSONRequestBody = CreateVaultRequest
 
+// MintMailAttachmentPreviewJSONRequestBody defines body for MintMailAttachmentPreview for application/json ContentType.
+type MintMailAttachmentPreviewJSONRequestBody = MailAttachmentPreviewRequest
+
 // MintMailHtmlPreviewTokenJSONRequestBody defines body for MintMailHtmlPreviewToken for application/json ContentType.
 type MintMailHtmlPreviewTokenJSONRequestBody = MailHtmlPreviewTokenRequest
 
 // MintMailSignaturePreviewTokenJSONRequestBody defines body for MintMailSignaturePreviewToken for application/json ContentType.
 type MintMailSignaturePreviewTokenJSONRequestBody = MailSignaturePreviewTokenRequest
+
+// RetryMailboxCleanupJSONRequestBody defines body for RetryMailboxCleanup for application/json ContentType.
+type RetryMailboxCleanupJSONRequestBody = MailboxCleanupRequest
 
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
@@ -27401,6 +28586,12 @@ type UpdateMailDraftJSONRequestBody = MailDraftUpdateRequest
 
 // SendMailDraftJSONRequestBody defines body for SendMailDraft for application/json ContentType.
 type SendMailDraftJSONRequestBody = MailDraftSendRequest
+
+// SaveMailAttachmentToLibraryJSONRequestBody defines body for SaveMailAttachmentToLibrary for application/json ContentType.
+type SaveMailAttachmentToLibraryJSONRequestBody = MailAttachmentSaveRequest
+
+// GetMailReplyContextJSONRequestBody defines body for GetMailReplyContext for application/json ContentType.
+type GetMailReplyContextJSONRequestBody = MailReplyContextRequest
 
 // SendMailMessageJSONRequestBody defines body for SendMailMessage for application/json ContentType.
 type SendMailMessageJSONRequestBody = MailSendRequest

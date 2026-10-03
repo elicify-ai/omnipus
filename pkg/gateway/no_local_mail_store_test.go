@@ -103,15 +103,17 @@ func TestNoLocalMailStore(t *testing.T) {
 	require.Equal(t, 200, rec.Code, "summary: %s", rec.Body.String())
 
 	// The one expected local write: the watcher state file (metadata only).
-	cycleClient, err := email.NewClient(email.Account{
-		IMAPHost: "127.0.0.1",
-		IMAPPort: imapPort,
-		SMTPHost: "127.0.0.1",
-		SMTPPort: smtpPort,
-		Username: "mailbox@test.local",
-		Password: "s3cret",
-	})
-	require.NoError(t, err)
+	// Since the w5-integration wave the watcher's transport is built the way
+	// production builds it (rest_mailbox.go::buildMailboxes — wiring site 3):
+	// through THE shared pool under the pair's identity scope. The panel
+	// reads above already wired the process-wide session manager, so a bare
+	// email.NewClient here is the typed wiring error by design (FR-W1-2) —
+	// the construction site was unwired, and the fix is production-parity
+	// wiring, not a looser oracle. The pool's credential resolver reads the
+	// process runtime holder, so the env also replays production's boot step
+	// (gateway.go::loadConfigAndProvider) first.
+	bootTestMailRuntime(t, env)
+	cycleClient := mailWatcherTransportForPair(t, env, mailRedAgent, mailRedWS)
 	w, err := email.NewWatcher(email.WatcherConfig{
 		AgentID:     mailRedAgent,
 		WorkspaceID: mailRedWS,

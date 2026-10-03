@@ -65,6 +65,10 @@ func (s *stallAppendSession) Append(_ string, r imap.LiteralReader, _ *imap.Appe
 // plaintext, matching every other in-package fixture).
 func startStallAppendIMAP(t *testing.T) *Client {
 	t.Helper()
+	// Source-less client by design; declare the legacy-dial world (order-
+	// independence fixture) so the append timeout is measured on the dial path
+	// regardless of test order.
+	pinLegacyDialWorld(t)
 	mem := imapmemserver.New()
 	user := imapmemserver.NewUser(stallAppendUser, stallAppendPass)
 	// dialIMAP always SELECTs INBOX after login (transport.go::dialIMAP) —

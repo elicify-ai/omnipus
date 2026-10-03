@@ -795,6 +795,41 @@ type LoopStatusFrame struct {
 	Type  string `json:"type"`
 }
 
+// MailPanelObserverAckFrame — Server → client: the observer is bound to this authenticated socket/session and the authorized workspace (ADR-20261001 "Mail panel presence" row). Until this ack arrives the panel keeps conservative request-scoped behaviour. Connection-scoped; no session_id, no replay, no persistence — presence dies with the connection.
+type MailPanelObserverAckFrame struct {
+	// The accepted action this ack confirms.
+	Action string `json:"action"`
+	// The bound observer's opaque ID (echo).
+	ObserverId string `json:"observer_id"`
+	Type       string `json:"type"`
+	// The workspace the observer is now bound to (echo).
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// MailPanelObserverErrorFrame — Server → client: the presence request was refused with a safe, closed-class reason (ADR-20261001 "Mail panel presence" row). The panel falls back to conservative request-scoped connections — it never retries the open in a loop and never treats the refusal as authorization. Connection-scoped; no session_id.
+type MailPanelObserverErrorFrame struct {
+	// Closed-class refusal reason. unauthorized_workspace = this authenticated connection is not authorized for that workspace — never a hint about what WOULD be authorized. malformed_frame = the frame failed validation.
+	Code string `json:"code"`
+	// Human-readable message, safe to display; no raw error text.
+	Error string `json:"error"`
+	// The refused observer's opaque ID (echo).
+	ObserverId string `json:"observer_id"`
+	Type       string `json:"type"`
+	// The refused workspace (echo).
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// MailPanelObserverFrame — Client → server Mail panel presence open/close (ADR-20261001 "Mail panel presence" row; mail-live-access-landing-order register row 5 — W0 is the single publisher, w5-integration implements the gateway handlers). Opaque per-panel observer IDs: multiple tabs carry distinct observers, and each panel instance mints a fresh one. Connection-scoped, not session-scoped — no session_id, like LibraryChangedFrame. The server binds the observer to THIS authenticated connection and the currently authorized workspace; REST requests can never claim ownership using another socket/user's ID. Explicit close, socket disconnect and logout revoke exactly that connection's observers — independent watcher/tool work is never interrupted. Until presence is acknowledged the panel conservatively assumes request-scoped connections. No new data-refresh heartbeat or cache-push frame exists and none may be added here: the watcher stays the only closed-panel notice surface (founder decision; ADR P1.1).
+type MailPanelObserverFrame struct {
+	// open = this panel instance is open (its observer may retain pooled panel sockets while it stays open). close = it closed — that observer's idle panel sockets close immediately and its in-flight work is cancelled; active sockets close when the last dependent request completes.
+	Action string `json:"action"`
+	// Opaque per-panel observer identifier — minted fresh per panel instance by the client, meaningless to anything but presence binding. Never reused across tabs, never an authorization credential.
+	ObserverId string `json:"observer_id"`
+	Type       string `json:"type"`
+	// Workspace whose Mail panel is open — must be one this authenticated connection is authorized for; the server refuses otherwise with mail_panel_observer_error.
+	WorkspaceId string `json:"workspace_id"`
+}
+
 // MarshalErrorResult — Sentinel for tool results that failed json.Marshal.
 type MarshalErrorResult struct {
 	MarshalError string `json:"_marshal_error"`
@@ -1459,4 +1494,7 @@ const (
 	WsFrameTypeCatchUpComplete          WsFrameType = "catch_up_complete"
 	WsFrameTypeUserMessage              WsFrameType = "user_message"
 	WsFrameTypeAgentCreated             WsFrameType = "agent_created"
+	WsFrameTypeMailPanelObserver        WsFrameType = "mail_panel_observer"
+	WsFrameTypeMailPanelObserverAck     WsFrameType = "mail_panel_observer_ack"
+	WsFrameTypeMailPanelObserverError   WsFrameType = "mail_panel_observer_error"
 )

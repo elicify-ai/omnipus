@@ -77,6 +77,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -617,6 +618,19 @@ func (p *libraryPreviewRoutes) handleServeLibraryPreview(w http.ResponseWriter, 
 		return
 	}
 
+	// The saved mail-derived HTML profile (w4 spec §5.4, founder Q5=A): an
+	// HTML document a preview of this workspace serves renders with scripts
+	// OFF unless the marker store marks the file ordinary or this one file's
+	// checkbox allowed scripts — the per-file default the founder decided,
+	// enforced at the one place the served bytes meet the served policy. The
+	// ordinary §10.3 policy was already set by setLibraryPreviewSecurityHeaders;
+	// this overrides it per file, before any byte is written.
+	if libraryExtIsHTMLDocument(libraryExtOf(rel)) &&
+		(strings.HasPrefix(rel, knowledge.MarkerDirName+"/") ||
+			p.api.libraryPreviewMailRestricted(grant.WorkspaceID, rel)) {
+		w.Header().Set(headerContentSecurityPolicy, libraryIsolationPolicyMailRestricted())
+	}
+
 	f, fi, openErr := openWithinPreviewScope(p.api.homePath, grant, rel)
 	if openErr != nil {
 		if !errors.Is(openErr, os.ErrNotExist) {
@@ -696,6 +710,39 @@ func libraryPreviewBundleAssetExt(ext string) bool {
 		return true
 	}
 	return false
+}
+
+// libraryExtIsHTMLDocument reports whether ext names an HTML document — the
+// file class the §5.4 saved-HTML profile exists for. Everything else keeps
+// the ordinary policy whatever the marker says: §5.4's founder Q-E ruling
+// makes a saved non-HTML mail file an ordinary workspace file.
+func libraryExtIsHTMLDocument(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".html", ".htm", ".xhtml":
+		return true
+	}
+	return false
+}
+
+// libraryPreviewMailRestricted answers the §5.4 profile question for one
+// workspace-relative path: TRUE (scripts off) when the marker marks the file
+// mail-derived and its per-file checkbox has not allowed scripts — and, the
+// fail-safe direction, when the marker cannot be read at all (corrupt index,
+// unresolvable workspace data dir): a preview this route cannot establish
+// provenance for never renders scripts-capable. An ordinary file (a clean
+// read, no mail-derived entry) keeps today's ordinary profile unchanged.
+func (a *restAPI) libraryPreviewMailRestricted(workspaceID, rel string) bool {
+	store := a.mailMarkerStore(workspaceID)
+	if store == nil {
+		return true
+	}
+	allowed, mailDerived, err := store.ScriptsAllowed(rel)
+	if err != nil {
+		logger.WarnCF("rest", "library preview: mail-derived marker unreadable; serving the scripts-off profile",
+			map[string]any{"workspace_id": workspaceID, "path": rel, "error": err.Error()})
+		return true
+	}
+	return mailDerived && !allowed
 }
 
 // libraryPreviewRendersInline reports whether the file a preview URL names
