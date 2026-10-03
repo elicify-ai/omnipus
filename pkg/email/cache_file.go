@@ -17,15 +17,18 @@ package email
 // transport, atomic ciphertext-only replacement, reject-before-allocate, and
 // never salvage.
 //
-// The first write is gated by the product-owned staging-exclusion evaluation
-// (§3.8; cache_gate.go): a write happens only where the cache directory is
-// provably excluded from data-directory version-control staging, checked
-// in-process with git check-ignore-equivalent semantics — never by shelling
-// out to git on this security-critical path (Hard Constraint #2). Where the
-// exclusion is not provable the store refuses and the mailbox runs live-only
-// with the visible cache_unavailable notice; that refusal is the product's
-// own enforced safety outcome (check-and-refuse), never a machine-setup
-// excuse.
+// The first write is gated by the PUBLISHED exclusion-gate decision (§3.8
+// gate paragraph; §4.2 IMP-1 row; register row 18): the store consumes an
+// injected GateDecision — allowed only where BOTH halves (the data-directory
+// staging exclusion and the product backup/archive skip) provably hold in
+// the running build, as attested by the decision's publisher — and NEVER
+// re-evaluates either half itself (one evaluator — the publisher's, in
+// cache_gate.go; one enforcer — this write path). A missing, stale or
+// not-allowed decision leaves the disk cache disabled on that install: the
+// mailbox runs live-only with the visible cache_unavailable notice, and
+// nothing is written to disk. That refusal is the product's own enforced
+// safety outcome (check-and-refuse, fail closed on absence), never a
+// machine-setup excuse.
 
 import (
 	"bytes"
@@ -151,11 +154,31 @@ var pairIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // FolderSnapshotStore loads, saves and deletes the sealed per-pair folder
 // snapshot under <baseDir>/mail-cache/<opaque-pair-id>/folders.enc (§3.8).
 // Keys are SUPPLIED: the store never touches the credential store (§4.1).
+// The exclusion gate is ENFORCED here but never EVALUATED here: Save
+// consumes the published GateDecision injected via WithGateDecision — with
+// no decision injected the store refuses every write (fail closed), so a
+// store built without the publisher's decision is a live-only store by
+// construction.
 type FolderSnapshotStore struct {
 	baseDir    string
 	keys       func(Scope) ([]byte, error)
 	purpose    string
 	currentRev func(Scope) Revision
+	// decision is the published gate decision; nil means NONE was published
+	// — every Save refuses (§3.8 gate paragraph: fail closed on absence).
+	decision *GateDecision
+}
+
+// StoreOption adjusts a FolderSnapshotStore at construction.
+type StoreOption func(*FolderSnapshotStore)
+
+// WithGateDecision injects the gate decision PUBLISHED by the integration
+// wave (register row 18: w5-integration publishes; this store enforces).
+// Allowed must be true only where both halves of the unified condition
+// provably hold; when false, NoticeCode carries the safe notice (nil means
+// the Phase-1 default, cache_unavailable).
+func WithGateDecision(d GateDecision) StoreOption {
+	return func(s *FolderSnapshotStore) { s.decision = &d }
 }
 
 // NewFolderSnapshotStore builds a store rooted at baseDir (the resolved data
@@ -163,9 +186,15 @@ type FolderSnapshotStore struct {
 // the purpose-separated derived key per scope (ErrStoreLocked yields
 // cache-unavailable, R-3.7-8); purpose is the derivation's namespaced info
 // string (R-3.7-3) and doubles as the envelope's AAD purpose tag; currentRev
-// is the current publication revision (register row 10).
-func NewFolderSnapshotStore(baseDir string, keys func(Scope) ([]byte, error), purpose string, currentRev func(Scope) Revision) *FolderSnapshotStore {
-	return &FolderSnapshotStore{baseDir: baseDir, keys: keys, purpose: purpose, currentRev: currentRev}
+// is the current publication revision (register row 10). opts may inject the
+// published gate decision (WithGateDecision); without it the store refuses
+// every write — the honest disabled state until the decision is published.
+func NewFolderSnapshotStore(baseDir string, keys func(Scope) ([]byte, error), purpose string, currentRev func(Scope) Revision, opts ...StoreOption) *FolderSnapshotStore {
+	s := &FolderSnapshotStore{baseDir: baseDir, keys: keys, purpose: purpose, currentRev: currentRev}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *FolderSnapshotStore) snapshotPath(pairID string) (string, error) {
@@ -188,12 +217,11 @@ func (s *FolderSnapshotStore) removeStaleTarget(scope Scope) {
 
 // Save seals snap and atomically replaces the pair's snapshot. Refusals, in
 // order: unsupported schema version; payload over the 64 KiB budget; a
-// superseded revision; an unusable key; the staging-exclusion gate (§3.8 —
-// evaluated BEFORE any filesystem effect, so a fresh refusal leaves nothing
-// behind, not even the directory; a refusal that flips after earlier writes
-// also removes the stale target, like the payload-invalid refusals — except
-// the E-3 tracked refusal, which leaves tracked state exactly as found). A
-// refusal never truncates, never writes a plaintext fallback, and never
+// superseded revision; an unusable key; the published exclusion-gate
+// decision (§3.8 — consulted BEFORE any filesystem effect, so a refusal
+// leaves nothing behind, not even the directory; fail closed when no
+// decision was published or when the published decision is not allowed).
+// A refusal never truncates, never writes a plaintext fallback, and never
 // leaves a torn file (R-3.7-5).
 //
 // A payload-INVALID snapshot (unsupported schema version, over-budget
@@ -202,7 +230,11 @@ func (s *FolderSnapshotStore) removeStaleTarget(scope Scope) {
 // open takes the clean live-rebuild path instead of serving state an invalid
 // writer cannot replace. A revision-stale refusal is different: it happens
 // AFTER payload validation and leaves the previous complete snapshot standing
-// (§3.10 — the superseded read publishes nothing, including deletions).
+// (§3.10 — the superseded read publishes nothing, including deletions). A
+// gate refusal removes nothing: the store cannot distinguish a tracked cache
+// path (E-3 — tracked state must be left exactly as found) from an merely
+// not-provable one, so cleanup on a decision flip belongs to the removal
+// cascade, which holds the publisher's flavour detail.
 func (s *FolderSnapshotStore) Save(scope Scope, snap Snapshot, captured Revision, derivedKey []byte) error {
 	if snap.SchemaVersion != snapshotSchemaVersion {
 		s.removeStaleTarget(scope)
@@ -230,18 +262,24 @@ func (s *FolderSnapshotStore) Save(scope Scope, snap Snapshot, captured Revision
 	if len(key) != folderCacheKeyBytes {
 		return fmt.Errorf("%w: derived key must be %d bytes, got %d", ErrCacheUnavailable, folderCacheKeyBytes, len(key))
 	}
-	if err := ensureStagingExclusion(s.baseDir); err != nil {
-		// A gate refusal can arrive AFTER files exist (a repository created
-		// under the data root flips a previously-passing gate): the
-		// ciphertext already on disk must not keep sitting unexcluded inside
-		// it — same stale-target removal the payload-invalid refusals
-		// perform (the F12 finding). The E-3 tracked refusal is the one
-		// exception: a tracked file is already captured regardless, and a
-		// refused write must leave tracked state exactly as found.
-		if !errors.Is(err, ErrCachePathTracked) {
-			s.removeStaleTarget(scope)
+	// The published gate decision is consulted BEFORE any filesystem effect,
+	// so a refusal leaves nothing behind — not even the directory (§3.8
+	// gate paragraph). Fail closed on absence: until the publisher injects
+	// the decision, this store is a live-only store by construction — never
+	// a silent "no decision, write anyway" (round-2 IMP-1; register row 18).
+	// A not-allowed decision refuses without removing anything: the store
+	// cannot distinguish a tracked cache path (E-3 — leave tracked state
+	// exactly as found) from a merely not-provable one, so stale-target
+	// cleanup on a decision flip belongs to the removal cascade.
+	if s.decision == nil {
+		return fmt.Errorf("%w: no published exclusion-gate decision (register row 18) — the disk cache stays disabled and the mailbox runs live-only with the cache_unavailable notice (§3.8)", ErrCacheUnavailable)
+	}
+	if !s.decision.Allowed {
+		notice := "cache_unavailable"
+		if s.decision.NoticeCode != nil {
+			notice = *s.decision.NoticeCode
 		}
-		return fmt.Errorf("%w: %w", ErrCacheUnavailable, err)
+		return fmt.Errorf("%w: the published gate decision does not allow the write (notice_code %s) — the mailbox runs live-only (§3.8)", ErrCacheUnavailable, notice)
 	}
 	envelope, err := sealSnapshot(payload, s.purpose, snap, scope, key)
 	if err != nil {

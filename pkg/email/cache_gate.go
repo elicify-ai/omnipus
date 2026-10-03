@@ -1,18 +1,27 @@
 package email
 
-// W2 product-owned staging-exclusion evaluation (spec §3.8 rules E-1/E-3;
-// founder ruling Q-A 2026-10-02; landing-order register row 18's unified
-// condition).
+// W2 staging-exclusion evaluation — the gate decision's PUBLISHER side
+// (spec §3.8 rules E-1/E-3; founder ruling Q-A 2026-10-02; landing-order
+// register row 18's unified condition and round-2 IMP-1's split).
 //
 // The product guarantees, by its own means and on every install, that its
 // Mail cache directory is never captured by data-directory version-control
-// staging. This file implements the check side of check-and-refuse: an
-// in-process evaluation of the data directory's ACTUAL version-control state
-// with git check-ignore-EQUIVALENT semantics. The product never shells out
-// to git on this security-critical path (Hard Constraint #2) and never
-// writes into, repairs or "establishes" the operator's ignore state — where
-// exclusion cannot be proven, the caller refuses and the mailbox runs
-// live-only with the visible cache_unavailable notice.
+// staging OR by the application's own backups. Register row 18 settles the
+// ownership: ONE evaluator — the gate decision's publisher (w5-integration),
+// which runs EvaluateStagingExclusion for the staging half and attests the
+// backup half it owns (the running build's backup/archive skip) — and ONE
+// enforcer — the write path (cache_file.go::FolderSnapshotStore.Save), which
+// consumes the published GateDecision and NEVER re-evaluates either half.
+// This file therefore implements the evaluation the publisher runs, NOT a
+// check the write path performs: nothing here is consulted by Save, which
+// refuses unless a published, allowed decision has been injected (fail
+// closed on absence).
+//
+// The product never shells out to git on this security-critical path (Hard
+// Constraint #2) and never writes into, repairs or "establishes" the
+// operator's ignore state — where exclusion cannot be proven, the published
+// decision is not allowed and the mailbox runs live-only with the visible
+// cache_unavailable notice.
 //
 // Semantics implemented (check-ignore equivalence for the constructs a data
 // directory can contain):
@@ -60,22 +69,48 @@ import (
 const cacheDirName = "mail-cache"
 
 // ErrCachePathTracked marks the E-3 refusal flavour: the cache path is
-// already tracked by version control. The caller distinguishes it because a
-// tracked file is ALREADY captured — a refused write must leave tracked
-// state exactly as found (no stale-target removal), while the other refusal
-// flavours mean an existing ciphertext sits unexcluded and must go.
+// already tracked by version control. The PUBLISHER distinguishes it when
+// composing the gate decision: a tracked path is ALREADY captured, so it is
+// published as not-allowed with this flavour (E-3 — ignore rules do not
+// untrack tracked files), while the other flavours mean exclusion is merely
+// not provable. Both refuse at the write path; the distinction keeps the
+// decision's diagnostics truthful and tells the removal cascade to leave
+// tracked operator state exactly as found.
 var ErrCachePathTracked = errors.New("a mail cache path is already tracked by version control")
 
-// ensureStagingExclusion returns nil only where the cache directory is
-// provably excluded from data-directory version-control staging. The cache
-// write path calls this BEFORE any filesystem effect, so a refusal leaves
-// nothing behind (not even the directory). The data root is resolved once
-// and used consistently: git evaluates RESOLVED paths, so the repository
-// walk and the cache-directory comparison must both run on the same
-// resolved shape (a symlinked data-root segment otherwise compares a
-// resolved repo root against a logical cache path and misreads an enclosing
-// repository as "outside").
-func ensureStagingExclusion(dataRoot string) error {
+// GateDecision is the published exclusion-gate decision (register row 18;
+// W2 spec §3.8 gate paragraph and §4.2 IMP-1 row): the shape w5-integration
+// publishes and FolderSnapshotStore consumes at the first write. The store
+// never constructs one and never re-evaluates either half — a missing,
+// stale or not-allowed decision leaves the disk cache disabled and the
+// mailbox live-only with the visible notice (fail closed on absence).
+type GateDecision struct {
+	// Allowed is true only where BOTH halves of the unified condition
+	// provably hold in the running build: the E-1 staging exclusion of the
+	// data directory (EvaluateStagingExclusion) AND the E-2 product-owned
+	// backup/archive skip of the cache directory (the backup walker's own
+	// mail-cache skip, attested by its owner — the publisher).
+	Allowed bool
+	// NoticeCode is the safe notice to surface when Allowed is false — the
+	// Phase-1 value is "cache_unavailable" (the landed
+	// MailReadMetadata schema's notice_code). Nil when Allowed is true.
+	NoticeCode *string
+}
+
+// EvaluateStagingExclusion is the E-1 staging-half evaluation the gate
+// decision's PUBLISHER runs (register row 18: one evaluator — the
+// publisher's; one enforcer — the write path, which consumes only a
+// published GateDecision). It returns nil only where the cache directory is
+// provably excluded from data-directory version-control staging with git
+// check-ignore-equivalent semantics; any error means "not provable" — the
+// publisher must then publish a not-allowed decision. It is never consulted
+// by the write path itself. The data root is resolved once and used
+// consistently: git evaluates RESOLVED paths, so the repository walk and the
+// cache-directory comparison must both run on the same resolved shape (a
+// symlinked data-root segment otherwise compares a resolved repo root
+// against a logical cache path and misreads an enclosing repository as
+// "outside").
+func EvaluateStagingExclusion(dataRoot string) error {
 	resolved, rerr := filepath.EvalSymlinks(dataRoot)
 	if rerr != nil {
 		return fmt.Errorf("staging exclusion not provable: %w", rerr)
