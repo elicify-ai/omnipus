@@ -154,7 +154,7 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 		return
 	}
 	if nextState == session.LifecycleStopped {
-		al.landSteeredStopReport(sessionID, generation, outcome)
+		al.landSteeredStopReport(ctx, sessionID, generation, outcome)
 		return
 	}
 	// Genuine terminal failure: the one outcome/publication commit, then
@@ -172,21 +172,21 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	}
 }
 
-// landSteeredStopReport is the stop path's durable half: one Mutate that
-// lands LifecycleStopped with the lasting note, spending a current-generation
-// fence. It publishes nothing upward — the D6 stopped-child notice is the
-// parent's signal, and it is a separate deliverable.
+// landSteeredStopReport is the never-ran stop path's durable half: one
+// Mutate that lands LifecycleStopped with the lasting note, spending a
+// current-generation fence. It publishes no legacy upward event.
 //
 // Once the stopped state is DURABLE, the landing appends the D6 historical
 // landed-stop projection to the control ledger for the exact control that
-// ordered the stop (recorded at acceptance in StopEffect). The landed
-// history — not the queued intent, not the final applied receipt — is what
-// the W1 direct-parent notice publisher discovers. The final "applied"
-// receipt cannot precede that notice's durability, so this landing never
-// writes one. A history-append failure is visible and recoverable: the
-// durable stop note plus the ledger intent are exactly what boot
-// reconciliation retries from.
-func (al *AgentLoop) landSteeredStopReport(sessionID string, generation int, outcome steer.Outcome) {
+// ordered the stop (recorded at acceptance in StopEffect) and — only after
+// both are durable — publishes the D6 direct-parent notices from that landed
+// history (stopped_notice.go::deliverLandedStopNotices), the same publisher
+// the cancelled turn's completion uses. A history-append failure leaves the
+// notice unwritten for now (the durable stop note plus the ledger intent are
+// what boot reconciliation retries from); a notice append failure leaves the
+// landed history pending and retryable, visibly logged, and never gates the
+// landing that already committed.
+func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string, generation int, outcome steer.Outcome) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return
@@ -234,6 +234,17 @@ func (al *AgentLoop) landSteeredStopReport(sessionID string, generation int, out
 		// child's session-owned goal — no goal step belongs in a stop path.
 		if landed != nil {
 			al.recordLandedStopLedger(sessionID, *landed)
+		}
+		// D6: only after the landing AND its ledger history are durable may
+		// the parent learn — the notice is composed from the landed history,
+		// never from the record's note. A publication failure here is visible
+		// and stays pending for the boot replay; it never un-lands the stop.
+		if fresh, loadErr := lifecycle.Load(sessionID); loadErr != nil || fresh == nil {
+			logger.ErrorCF("agent", "steer: stop landing: landed-stop notice not published (record reload failed; boot replay retries)",
+				map[string]any{"session_id": sessionID, "generation": generation, "error": errString(loadErr)})
+		} else if _, pubErr := al.deliverLandedStopNotices(ctx, fresh); pubErr != nil {
+			logger.ErrorCF("agent", "steer: stop landing: direct-parent notice not delivered — the landed history stays pending for boot retry",
+				map[string]any{"session_id": sessionID, "generation": generation, "error": pubErr.Error()})
 		}
 	case errors.Is(mutateErr, errTerminalReportAlreadyStopped),
 		errors.Is(mutateErr, errTerminalReportFenceSuperseded),

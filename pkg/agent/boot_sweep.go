@@ -217,10 +217,13 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
 		return
 	}
-	// Stopped-child notices are retried from the landed note. A stored
+	// Stopped-child notices retry from the control ledger's LANDED history
+	// (stopped_notice.go::recoverStoppedChildNotice) — including after a
+	// same-generation RESUME cleared the active note (founder Q2=A). A stored
 	// final still takes the completion-repair path below; this returns
-	// false for that case. Same-generation resume retry after the note
-	// is cleared needs W2's control ledger and is not handled here.
+	// false for that case, and when the record has no landed history to
+	// replay. A stop accepted but not yet landed publishes nothing and is
+	// reported pending — finishing the fence at boot is W3b's reconciliation.
 	if r.recoverStoppedChildNotice(ctx, rec, notice) {
 		return
 	}

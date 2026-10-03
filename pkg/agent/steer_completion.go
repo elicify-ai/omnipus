@@ -110,14 +110,18 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 
 // deliverSteeredCompletion is D2 CRIT-001's boundary wired through the
 // finishing window: the COMMIT (terminal state + protected outbox tuple in
-// one mutation) runs first as the window's prepare half; the PUBLISH
-// (parent inbox append + frames/wake + delivery-progress journal) runs as
-// the transition half, only for a winning commit. A stopped disposition
-// first persists its stop note and appends the D6 direct-parent
-// stopped-child notice in this same prepare half — before the landing —
-// so an append failure leaves the fence standing for boot to retry. A stop
-// that had already landed (the losing completion T11 pins) publishes
-// nothing; a non-terminal lifecycle notice keeps its direct delivery.
+// one mutation — for a stop disposition, the stopped LANDING) runs first as
+// the window's prepare half; the PUBLISH runs as the transition half, only
+// for a winning commit. A stopped disposition publishes NOTHING in the
+// prepare half — no note rewrite, no parent inbox append, no wake: a
+// lifecycle write fault after the fence must not leak a parent effect. The
+// D6 direct-parent stopped-child notice is published by the transition half
+// AFTER the landing, composed from the control ledger's landed history
+// (stopped_notice.go::deliverLandedStopNotices); a notice append failure
+// there leaves the landed history pending and retryable and never un-lands
+// the stop. A stop that had already landed (the losing completion T11 pins)
+// publishes nothing; a non-terminal lifecycle notice keeps its direct
+// delivery.
 func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, nextState session.LifecycleState, answer, failureReason string) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
@@ -126,21 +130,10 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	var commitRes steeredCommitResult
 	finalWoke := false
 	prepare := func() error {
-		// A stop is not a final hand-back. Persist the note, then the
-		// direct-parent notice, and only then let the transition land.
-		// An append failure returns here so the fence stays and boot can
-		// retry. W2's control ledger is what keeps that retry derivable
-		// after a same-generation resume clears the note. The landing
-		// itself is this prepare's second half: the commit below.
-		if nextState == session.LifecycleStopped {
-			noted, noteErr := al.ensureCurrentStopNote(rec, outcome)
-			if noteErr != nil {
-				return noteErr
-			}
-			if err := al.deliverStoppedChildNotice(ctx, noted, false); err != nil {
-				return err
-			}
-		}
+		// D2 CRIT-001: the COMMIT is the one publication boundary. A stop
+		// publishes nothing here — the landing below is the commit, and the
+		// notice publisher runs only in the transition half, from the landed
+		// history, after it.
 		var err error
 		commitRes, err = al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, answer, failureReason)
 		return err
@@ -155,13 +148,17 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 			noticeErr := al.deliverSteeredNotice(ctx, rec, outcome, answer, failureReason)
 			return false, noticeErr
 		case steeredCommitStopped:
-			// A stop THIS mutation landed keeps its legacy interrupted/
-			// timeout upward event until the D6 stopped-child notice
-			// replaces it — the parent's only signal today. A stop that had
-			// already landed (this completion is the loser T11 pins)
-			// publishes nothing at all.
-			if commitRes.landedStop && isTerminalOutcome(outcome) {
-				return false, al.deliverSteeredNotice(ctx, rec, outcome, answer, failureReason)
+			// A stop THIS mutation landed publishes ONLY the D6 historical
+			// direct-parent notice, composed from each landed transition's
+			// own tuple — never the legacy interrupted/timeout
+			// <child>:<gen>:final beside it (a stopped child is not a final
+			// hand-back; done/failed keep the committed outbox). A stop that
+			// had already landed (this completion is the loser T11 pins)
+			// publishes nothing at all. A notice append failure is returned
+			// visibly — the landing is already durable and stays.
+			if commitRes.landedStop {
+				_, pubErr := al.deliverLandedStopNotices(ctx, rec)
+				return false, pubErr
 			}
 			return false, nil
 		default:
