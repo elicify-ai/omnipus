@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -164,7 +165,7 @@ func TestBootEpochStore_CorruptFileRefusedNotReset(t *testing.T) {
 	if err == nil {
 		t.Fatal("Mint over a corrupt boot_epoch.json must fail visibly, got nil error")
 	}
-	if !bytes.Contains([]byte(err.Error()), []byte("boot_epoch.json")) {
+	if !strings.Contains(err.Error(), "boot_epoch.json") {
 		t.Fatalf("corrupt-file error must name boot_epoch.json, got: %v", err)
 	}
 	after, readErr := os.ReadFile(filepath.Join(dir, "boot_epoch.json"))
