@@ -135,7 +135,7 @@ async function completeOnboarding(page: Page, creds: Credentials): Promise<void>
   });
 }
 
-async function completeLoginForm(page: Page, creds: Credentials): Promise<void> {
+export async function completeLoginForm(page: Page, creds: Credentials): Promise<void> {
   // Use the exact IDs from src/routes/-login-local.tsx (#login-username, #login-password)
   await expect(page.locator('#login-username')).toBeVisible({ timeout: 10_000 });
 

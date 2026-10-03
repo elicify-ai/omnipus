@@ -564,6 +564,10 @@ type DoneStats struct {
 
 // ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
 type ErrorFrame struct {
+	// The initiating ordinary first message's client-supplied ID.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+	// Ordinary ID-bearing first-send outcome. Requires client_message_id. not_saved proves no user entry was written; delivery_unknown means bytes may have reached disk but durable delivery cannot be confirmed. answer_not_started means the entry is durably saved but turn admission failed, and requires its confirmed session_id. General errors and workspace-setup kickoffs omit these first-send fields.
+	FirstMessageError *string `json:"first_message_error,omitempty"`
 	// Human-readable error description.
 	Message string        `json:"message"`
 	Payload *ErrorPayload `json:"payload,omitempty"`
@@ -1045,13 +1049,19 @@ type SessionSnapshotFrame struct {
 	Type      string `json:"type"`
 }
 
-// SessionStartedFrame — Server → client new session minted. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
+// SessionStartedFrame — Server → client. Acknowledges a session-less message. For an ordinary first user message, emitted only after its transcript entry is durably saved. The SPA stores session_id as activeSessionId. A recovered acknowledgement names an already-saved first message found in this gateway process's retry cache: no new entry or turn is created, and the client must attach without a cursor. Recovery is in-memory only and does not survive a gateway restart.
 type SessionStartedFrame struct {
+	// The agent that will handle this session.
 	AgentId *string `json:"agent_id,omitempty"`
-	// #823 review finding 7. The gateway process that minted this session.
+	// #823 review finding 7. The gateway process that minted this session, stored alongside the seeded cursor so a later attach_session can detect a restart the same way it would for any other session — see AttachSessionFrame.boot_id.
 	BootId *string `json:"boot_id,omitempty"`
-	// #823 catch-up redesign. The sequence number the newly minted session's hub starts from. Keep in sync by hand with contracts/components/schemas/SessionStartedFrame.yaml.
-	Seq       *int64 `json:"seq,omitempty"`
+	// The initiating ordinary first message's client-supplied ID.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+	// True only for an already-saved first message found in the process-local retry cache. No new entry or turn is admitted. The client must attach without a cursor; seq and boot_id are absent on this acknowledgement. Absent or false denotes a fresh acknowledgement.
+	Recovered *bool `json:"recovered,omitempty"`
+	// #823 catch-up redesign. The sequence number the newly minted session's per-session hub starts from (its first published frame). Lets the SPA seed the session's cursor at mint time instead of waiting for the first sequenced frame after it.
+	Seq *int64 `json:"seq,omitempty"`
+	// The newly minted or recovered session ID.
 	SessionId string `json:"session_id"`
 	Type      string `json:"type"`
 }

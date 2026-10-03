@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
@@ -164,7 +165,11 @@ export function BrowserToolBlock({
       useUiStore.getState().addToast({ message: 'No active session to watch.', variant: 'error' })
       return
     }
-    useUiStore.getState().openBrowserPanel(activeSessionId, activeAgentId)
+    // CRIT-001: "Watch live" REPLACES whatever panel is open (SP-7), so the
+    // outgoing panel's leave gate (Library unsaved edits) runs first.
+    leaveGateThen(useUiStore.getState().activePanel?.id ?? null, () => {
+      useUiStore.getState().openPanel('browser', { sessionId: activeSessionId, agentId: activeAgentId })
+    })
   }
 
   return (
@@ -201,6 +206,7 @@ export function BrowserToolBlock({
           variant="link"
           onClick={handleWatchLive}
           aria-label="Watch live"
+          data-panel-trigger="browser"
           title="Watch this agent's browser live"
           className="rounded-none shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)]"
         >

@@ -138,6 +138,8 @@ export interface SessionStartedFrame {
   type: "session_started";
   session_id: string;
   agent_id?: string;
+  client_message_id?: string;
+  recovered?: boolean;
   seq?: number;
   boot_id?: string;
 }
@@ -210,6 +212,8 @@ export interface ErrorFrame {
   type: "error";
   session_id?: string;
   message: string;
+  client_message_id?: string;
+  first_message_error?: "not_saved" | "delivery_unknown" | "answer_not_started";
   payload?: {
     llm_error: LLMError;
   };

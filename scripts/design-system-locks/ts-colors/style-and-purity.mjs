@@ -745,6 +745,24 @@ export function dynamicImportProvenNotOrigin(modulePath, argument, origin) {
   return true
 }
 
+// RED/QA contract tests load modules through a top-level const path so a
+// missing production module can produce a useful BLOCKED message. That is
+// still a statically exact module specifier: treating every such identifier
+// as an arbitrary dynamic import poisons the cross-module immutability proof
+// for unrelated exported palettes. Accept only a lexical const initialized
+// directly from one string literal; every computed or shadowed shape remains
+// unresolved and therefore fail-closed.
+export function constDynamicImportSpecifier(argument) {
+  argument = unwrap(argument)
+  if (ts.isStringLiteralLike(argument)) return argument.text
+  if (!ts.isIdentifier(argument)) return null
+  const declaration = absenceLexicalBinding(argument)
+  if (!declaration || !ts.isVariableDeclaration(declaration)
+    || !(declaration.parent.flags & ts.NodeFlags.Const) || !declaration.initializer) return null
+  const initializer = unwrap(declaration.initializer)
+  return ts.isStringLiteralLike(initializer) ? initializer.text : null
+}
+
 // Exported objects can be mutated through a different importer. Check all
 // supplied modules; namespace/re-export/dynamic access stays unresolved rather
 // than guessing which exported object it might expose.
@@ -780,9 +798,12 @@ export function knownClassExportUsesSafe(declaration, ctx) {
         || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
         const argument = node.arguments[0]
         if (!argument) dynamic = true
-        else if (ts.isStringLiteralLike(argument)) {
-          if (governedModulePath(modulePath, argument.text, ctx.modules) === origin) dynamic = true
-        } else if (!dynamicImportProvenNotOrigin(modulePath, argument, origin)) dynamic = true
+        else {
+          const specifier = constDynamicImportSpecifier(argument)
+          if (specifier !== null) {
+            if (governedModulePath(modulePath, specifier, ctx.modules) === origin) dynamic = true
+          } else if (!dynamicImportProvenNotOrigin(modulePath, argument, origin)) dynamic = true
+        }
       }
       if (!dynamic) ts.forEachChild(node, visit)
     }

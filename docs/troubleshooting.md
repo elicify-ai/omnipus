@@ -117,6 +117,10 @@ The `model` value reaches the provider exactly as written; on OpenRouter, IDs ca
 
 `api_key_ref` names an entry in the encrypted credential store. Set it without touching files with `omnipus credentials set openrouter_api_key sk-or-v1-...`, or use **Settings → Security → Credential Vault** in the web app.
 
+## Saving a search integration fails with "could not read the current configuration"
+
+Saving a default search provider can require another read of the current configuration to check the automatic DuckDuckGo fallback. If that read fails, the request returns HTTP 500 with this message before saving any key or configuration changes. Restore readable, valid configuration, then retry the save.
+
 ## Saving a secret fails with "credential store locked"
 
 The encrypted credential store needs a master key. The gateway looks for one in this order:
@@ -157,7 +161,7 @@ After the upgrade there is deliberately no fallback that reads an old entry: it 
 
 ## The page shows "Something went wrong loading this page"
 
-A page could not load or render. This can happen when an open tab tries to load an old web-app file after an update. Press **Reload page** to try again. If the message keeps returning, open your browser's developer console and copy the error when reporting the problem. Look for `[router] route load/render failed:` or `[app] Uncaught render error:`.
+A page, panel, or the onboarding wizard could not load or render — for example when a tab still references JavaScript files from an earlier deployment. This is not a sign-in failure and not a reason to restart setup. Press **Reload page** to fetch the current files and try again. If the message keeps returning, open your browser's developer console and copy the error when reporting the problem. Look for `[router] route load/render failed:` or `[app] Uncaught render error:`.
 
 ## The web app looks outdated after a source build
 

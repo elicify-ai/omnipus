@@ -304,6 +304,13 @@ export function registerChatClearPendingAutoApprove(fn: () => void): void {
   _chatClearPendingAutoApprove = fn
 }
 
+let _chatAbandonPendingFirstSend: (() => void) | null = null
+
+/** Same cycle-break wiring: /new releases the ordinary pending bucket synchronously. */
+export function registerChatAbandonPendingFirstSend(fn: () => void): void {
+  _chatAbandonPendingFirstSend = fn
+}
+
 /**
  * The clear point called by startNewSession, enterWorkspaceChat, and (on its
  * two state-changing branches only) attachToSession — see the doc comment
@@ -563,6 +570,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   startNewSession: (agentId, agentType) => {
+    _chatAbandonPendingFirstSend?.()
     clearPendingAutoApproveOnSessionChange(); set((state) => {
       // Precedence rule 3 — `agentId`/`agentType` are a hint here too, for
       // uniformity across every session-derived writer. A `/new` keeps the

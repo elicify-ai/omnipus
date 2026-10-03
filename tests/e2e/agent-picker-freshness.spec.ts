@@ -95,9 +95,9 @@ test.describe("agent picker freshness after a raw-REST agent creation (row 55 bu
     await expect(
       menuitem,
       `"${probeAgentName}" should be visible in the agent picker within 5s of creation ` +
-        "without a page reload; if this times out, the ['agents'] react-query cache " +
-        "populated by the pre-creation navigation is stale and nothing invalidated it " +
-        "(see this file's header comment for the root cause).",
+        "without a page reload after the fixture's separate workspace membership PUT; " +
+        "if the agents response already contains it, check the cached active workspace's " +
+        "core_team membership — refreshing ['agents'] alone does not refresh that team.",
     ).toBeVisible({ timeout: 5_000 });
   });
 

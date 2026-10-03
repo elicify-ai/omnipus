@@ -196,18 +196,24 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	// added two comment lines above delegationDepthCeiling, shifting both
 	// call sites in this file down by +1; still config.workspace.State's
 	// unrelated Workspace field, not agent-config.)
-	// (Re-pointed 2026-09-29: gocyclo-budget extractions in
-	// rest_workspaces.go/workspace.go shifted these lines; still
-	// config.workspace.State's unrelated field, not agent-config.)
+	// (Re-pointed 2026-09-28 after email commit c37d0531d inserted nine lines
+	// into rest_workspaces.go: the same reviewed statements moved from
+	// 974/1265/1333/1591 to 983/1274/1342/1600.)
+	// (Re-pointed again 2026-09-29: gocyclo-budget extractions in
+	// rest_workspaces.go/workspace.go shifted these lines further; still
+	// config.workspace.State's unrelated field, not agent-config. Both
+	// re-pointings landed together in the email-mail-candidate merge —
+	// values below are the actual post-merge line numbers, re-derived by
+	// reading the merged file, not either side's stale value.)
 	"pkg/gateway/rest_workspace_delegation.go:139":             true,
 	"pkg/gateway/rest_workspace_delegation.go:212":             true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:32":      true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:37":      true,
 	"pkg/gateway/rest_workspaces.go:390":                       true,
-	"pkg/gateway/rest_workspaces.go:974":                       true,
-	"pkg/gateway/rest_workspaces.go:1275":                      true,
-	"pkg/gateway/rest_workspaces.go:1343":                      true,
-	"pkg/gateway/rest_workspaces.go:1601":                      true,
+	"pkg/gateway/rest_workspaces.go:983":                       true,
+	"pkg/gateway/rest_workspaces.go:1284":                      true,
+	"pkg/gateway/rest_workspaces.go:1352":                      true,
+	"pkg/gateway/rest_workspaces.go:1610":                      true,
 	"pkg/sysagent/tools/workspace.go:102":                      true,
 	"pkg/sysagent/tools/workspace.go:103":                      true,
 	"pkg/sysagent/tools/workspace.go:104":                      true,

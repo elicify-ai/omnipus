@@ -381,7 +381,7 @@ func executeReload(
 	// restored atomically if the reload fails. bundle and ChannelManager are
 	// mutated here in executeReload itself; the rest are mutated in
 	// restartServices (CronService, TaskTrigger, MediaStore).
-	// TaskDrain and MailboxDrain are also recreated by restartServices but are
+	// TaskDrain and MailWatch are also recreated by restartServices but are
 	// NOT part of this atomic rollback snapshot.
 	snap := snapshotServices(runningServices)
 
@@ -642,6 +642,15 @@ func handleConfigReload(
 	defer reloadCancel()
 
 	reloadErr := al.ReloadProviderAndConfig(reloadCtx, newProvider, newCfg)
+	if reloadErr == nil && runningServices != nil && runningServices.restAPIRef != nil {
+		// Invalidate held checks before releasing the same config-write lock
+		// admission takes. A later service-restart failure does not undo the swap.
+		for _, def := range config.SearchProviderCatalogue {
+			if def.Keyed {
+				runningServices.restAPIRef.searchChecks.bumpGeneration(def.ID)
+			}
+		}
+	}
 	// The swap is done (or failed): config writers may proceed.
 	unlockWrites()
 	if reloadErr != nil {
@@ -872,19 +881,20 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 		fmt.Println("  ✓ Queued-task drain restarted (TaskDrainService)")
 	}
 
-	// Restart the M11 mailbox drain (unhandled mail → Board tasks). The previous
-	// instance was Stop()'d in stopAndCleanupServices(isReload). The provider reads
-	// live config + the credential store on each tick, so a mailbox added/removed
-	// before this reload is reflected immediately.
+	// Restart the new-mail watcher (D20/#631 — replaces the deleted mailbox
+	// drainer). The previous instance was Stop()'d in stopAndCleanupServices.
+	// The provider reads live config + the credential store on each cycle, so
+	// a mailbox added/removed before this reload is reflected immediately.
 	if tStore := agent.GetTaskStore(rs.al); tStore != nil {
 		credStore := rs.runningServices.credStore
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
 			return buildMailboxes(rs.al.GetConfig(), credStore)
 		})
-		drainer := email.NewDrainer(tStore, provider, 0)
-		rs.runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
-		rs.runningServices.MailboxDrain.Start()
-		fmt.Println("  ✓ Mailbox drain restarted (MailboxDrainService)")
+		// Same shared A8 budget instance as boot (keyed by the state dir):
+		// reload swaps the watcher set, never the gate.
+		rs.runningServices.MailWatch = heartbeat.NewMailWatchService(email.NewMailboxWatcherSet(provider, rs.homePath, email.SharedMailBudget(rs.homePath)), 0)
+		rs.runningServices.MailWatch.Start()
+		fmt.Println("  ✓ New-mail watcher restarted (MailWatchService)")
 	}
 	return nil, false
 }

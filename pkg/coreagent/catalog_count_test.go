@@ -134,7 +134,16 @@ import (
 // left as the campaign wrote it and the post-merge delta is carried here.
 // ADR-090 adds get_agent and get_agent_tools management readback (107 -> 109)
 // and environment_setup (109 -> 110, ES-FR-01).
-const catalogSizeToday = 110
+//
+// Bumped 110 -> 111 adding "create_email_draft"
+// (email-mail-view-spec §2.7 point 6, FR-013): the Drafts-only compose tool —
+// it writes a Drafts copy and cannot send — registered alongside the five
+// existing email tools so the catalog↔ceiling parity test
+// (TestCatalog_MatchesGlobalCeilingEntryForEntry) stays one-for-one with the
+// new shipped defaults.go entry. POST-MERGE addition, same rule as grep and
+// the knowledge_list pair above. Policy wiring rides the ADR-090 inventory
+// grant (allow for every role) and the D19 configure-time fill.
+const catalogSizeToday = 111
 
 // currentKnowledgeToolNames is every knowledge_* tool presently in the
 // catalog: ADR-068 D15.3's original six (the replacement for ADR-067's
@@ -338,14 +347,14 @@ func TestCatalog_MergeArithmetic(t *testing.T) {
 	const (
 		releaseV011BaselineSize = 95
 		newKnowledgeToolCount   = 6
-		// postMergeAdditions: three so far — "grep" (ADR-081 D11, FR-009),
+		// postMergeAdditions started with "grep" (ADR-081 D11, FR-009),
 		// then knowledge_list and knowledge_base_create (KB-1/KB-2,
 		// defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
 		// 2026-09-08) — all added to allStaticToolNames ahead of (grep) or
 		// alongside (the two knowledge names) their own implementation.
 		// Bump this alongside catalogSizeToday, in the same commit,
 		// whenever a tool is added post-merge.
-		postMergeAdditions = 9 // +3 goal-flow tools; +2 ADR-090 management readback tools; +1 environment_setup (ES-FR-01)
+		postMergeAdditions = 10 // +3 goal-flow; +2 ADR-090 readback; +1 environment_setup; +1 create_email_draft (email-mail-view spec §2.7 point 6)
 	)
 	// Checked against the FROZEN adr068OriginalSixKnowledgeToolNames, not
 	// currentKnowledgeToolNames — this arithmetic is a fact about what the

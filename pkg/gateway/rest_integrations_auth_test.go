@@ -137,7 +137,7 @@ func putIntegration(api *restAPI, user *config.UserConfig, id, body, reauthToken
 	}
 	req = req.WithContext(context.WithValue(req.Context(), UserContextKey{}, user))
 	w := httptest.NewRecorder()
-	api.HandleIntegrationProviders(w, req)
+	api.configSnapshotMiddleware(http.HandlerFunc(api.HandleIntegrationProviders)).ServeHTTP(w, req)
 	return w
 }
 

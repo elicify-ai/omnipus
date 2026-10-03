@@ -293,6 +293,8 @@ func (a *restAPI) HandleIntegrationProviders(w http.ResponseWriter, r *http.Requ
 		a.handleIntegrationProvidersList(w, r)
 	case http.MethodPut:
 		a.handleIntegrationProviderUpdate(w, r)
+	case http.MethodPost:
+		a.requireAdminAuthz(a.handleSearchConnectionCheck)(w, r)
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

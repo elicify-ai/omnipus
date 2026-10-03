@@ -33,6 +33,8 @@ import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, Suba
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 import { handleCatchUpFrame } from './catchup-frames'
 import { handleProviderFrame } from './provider-frames'
+import { handleFirstSendFrame } from './first-send-frames'
+import { findFirstSendMessage } from '../first-send'
 
 
 
@@ -53,7 +55,7 @@ type TokenFrameType = Extract<Parameters<ChatStore['handleFrame']>[0], { type: '
 // deliveryStatus.
 function applyMessageStatusFrame(bucket: SessionChatState, frame: MessageStatusFrame): Partial<SessionChatState> {
   return produce(bucket, (draft) => {
-    const message = draft.messagesById[frame.client_message_id]
+    const message = draft.messagesById[frame.client_message_id] ?? findFirstSendMessage(draft, frame.client_message_id)
     if (!message || message.role !== 'user') return
     message.deliveryStatus = frame.state === 'failed' ? 'failed' : frame.state
     message.status = frame.state === 'failed' ? 'error' : 'done'
@@ -748,12 +750,16 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         return
       }
 
+      if (handleFirstSendFrame({ frame, set, get, withBucket, runtime })) {
+        syncForeground()
+        return
+      }
       if (handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear })) {
         syncForeground()
         return
       }
 
-      if (handleCatchUpFrame({ frame, targetSid, get, withBucket })) {
+      if (handleCatchUpFrame({ frame, targetSid, set, get, withBucket })) {
         syncForeground()
         return
       }
@@ -840,16 +846,9 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             break
           }
 
-          // Plain sendMessage ack, OR a kickoff ack while the user is still
-          // on the workspace that triggered it — foreground exactly as
-          // before (byte-for-byte unchanged from the pre-fix logic).
-          //
-          // Register in session store and create the bucket.
-          //
-          // Only adopt the server's agent while the selection is still the one
-          // this mint was sent under. If the user switched the picker while the
-          // ack was in flight, their newer explicit choice wins — a stale echo
-          // must not silently reassign the agent out from under them.
+          // Ordinary first sends are resolved by handleFirstSendFrame above.
+          // Kickoff and legacy acknowledgements retain their existing path.
+          // A newer explicit agent-picker choice wins over this stale echo.
           const currentAgentId = useSessionStore.getState().activeAgentId
           const userReselected =
             runtime.agentIdAtLastMintSend !== null && currentAgentId !== runtime.agentIdAtLastMintSend

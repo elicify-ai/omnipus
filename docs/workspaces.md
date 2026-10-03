@@ -27,10 +27,11 @@ Open a workspace from the sidebar and it lands on Chat. The top bar carries the 
 | Chat | Talking with the agents on this workspace's team | [Chatting](using-omnipus-ui.md) |
 | Tasks | Tasks as a board, a list, or a graph of dependencies | [tasks](tasks.md) |
 | Calendar | Scheduled and repeating work by date | [calendar](calendar.md) |
-| Library | The files this workspace holds | [library](library.md) |
+| Library | Opens the workspace's files beside Chat, rather than navigating to a separate page | [library](library.md) |
+| Mail | Opens configured agent mailboxes beside Chat, rather than navigating to a separate page | [mail](mail.md) |
 | Team | The agents on this workspace, and who may delegate to whom | [agents](agents.md) |
 
-Settings is not a tab. Click the workspace's name in the top bar to rename the workspace, edit its description, write its instructions, and archive or delete it.
+Library and Mail are panel controls in the top bar; Chat, Tasks, Calendar, and Team open pages. On a narrow screen, the entries move into a workspace switcher. For panel resizing and full-screen view, see [panels beside chat](using-omnipus-ui.md#panels-beside-chat). Settings is not a tab. Click the workspace's name in the top bar to rename the workspace, edit its description, write its instructions, and archive or delete it.
 
 The Tasks tab shows three views of the same work, switched with the selector at the top of the screen. Board lays tasks out as cards by status. List is a table. Graph draws each task as a node and each dependency as a line between them, which is where a [plan](plans.md) is easiest to see whole.
 
@@ -47,6 +48,7 @@ Delegation is one agent handing work to another: passing a research question to 
 
 1. Open the workspace's **Team** tab. Each agent on the team appears as a node in a picture.
 2. To grow the team, click **Add agent** and pick from your agents. Membership saves on its own; the indicator in the header shows when it has saved.
+   If you added the agent in another tab or window, the agent picker and the `@` menu in a chat pick up the change when you return to that chat's tab. You do not need to reload the page.
 3. To trust one agent to delegate to another, drag from the small gold dot on the first agent's node onto the second node. A line appears between them. That line is the trust.
 4. Click the line to tune it with the settings in the table below.
 5. To take trust away, delete the line. Removing an agent from the team removes every line touching it.
@@ -86,4 +88,5 @@ The same two agents can be trusted together in one workspace and not in another,
 - [calendar](calendar.md) — scheduled and repeating work inside a workspace.
 - [agents](agents.md) — who the built-in agents are, and how to add your own.
 - [library](library.md) — the files a workspace holds.
+- [mail](mail.md) — the agent mailbox associated with this workspace.
 - [memory](memory.md) — what a team remembers, per workspace.

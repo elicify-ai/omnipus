@@ -13,10 +13,23 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { useConnectionStore } from '@/store/connection'
 import { useChatStore } from '@/store/chat'
+import type { FirstSendStatus } from '@/store/chat/types'
 import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
 
-export type UserDeliveryState = 'queued' | 'received' | 'working' | 'failed'
+export type UserDeliveryState = 'queued' | 'sending' | 'received' | 'working' | 'failed'
+
+const FIRST_SEND_COPY: Record<FirstSendStatus, { label: string; action?: 'Retry' | 'Generate again' }> = {
+  sending: { label: 'Sending…' },
+  unconfirmed: { label: 'Delivery not confirmed', action: 'Retry' },
+  retrying: { label: 'Checking delivery…' },
+  checking_chat: { label: 'Checking chat…' },
+  check_failed: { label: 'Could not check this chat', action: 'Retry' },
+  not_saved: { label: 'Could not save message', action: 'Retry' },
+  saved: { label: 'Saved' },
+  answer_not_started: { label: 'Message saved, but no answer started', action: 'Generate again' },
+  unfinished: { label: "Couldn't finish", action: 'Generate again' },
+}
 export type AssistantConnectionState = 'paused' | 'unfinished'
 export type ChatConnectionState = 'offline' | 'unreachable' | 'back'
 
@@ -93,11 +106,13 @@ function StatusActionButton({
   tooltip,
   onClick,
   testId,
+  disabled,
   children,
 }: {
   label: string
   tooltip: string
   onClick?: () => void
+  disabled?: boolean
   /**
    * Optional stable hook for e2e specs. The failed-send retry keeps the
    * pre-#823 id `user-message-retry` so `tests/e2e/open-in-chat.spec.ts`'s
@@ -115,6 +130,7 @@ function StatusActionButton({
         variant="ghost"
         size="sm"
         onClick={onClick}
+        disabled={disabled}
         data-testid={testId}
         aria-label={label}
         aria-describedby={open ? tooltipId : undefined}
@@ -143,12 +159,41 @@ export function UserMessageDeliveryStatus({
   agentName,
   latest = false,
   onRetry,
+  firstSendStatus,
+  onGenerateAgain,
 }: {
   state: UserDeliveryState
   agentName: string
   latest?: boolean
   onRetry?: () => void
+  firstSendStatus?: FirstSendStatus
+  onGenerateAgain?: () => void
 }) {
+  const connected = useConnectionStore((s) => s.isConnected)
+  const busy = useChatStore((s) => s.isStreaming || s.isReplaying)
+  if (firstSendStatus && !(firstSendStatus === 'saved' && (state === 'working' || state === 'failed'))) {
+    const copy = FIRST_SEND_COPY[firstSendStatus]
+    return (
+      <div role="status" aria-live="polite" data-testid="user-message-delivery-status" className="flex min-h-8 items-center justify-end text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
+        {copy.action ? (
+          <StatusActionButton
+            label={copy.action}
+            tooltip={copy.action === 'Retry'
+              ? connected ? 'Retry the original message or check its saved chat. Recovery across a gateway restart can create a second chat.' : 'Reconnect before checking this message.'
+              : 'Start a new answer in this saved chat. This may repeat work or tool actions.'}
+            disabled={!connected || busy}
+            testId={copy.action === 'Retry' ? 'user-message-retry' : undefined}
+            onClick={copy.action === 'Retry' ? onRetry : onGenerateAgain}
+          >
+            <ArrowClockwise size={14} aria-hidden="true" />
+            <span>{copy.label}</span>
+            <span aria-hidden="true">{' · '}</span>
+            <span>{copy.action}</span>
+          </StatusActionButton>
+        ) : <span>{copy.label}</span>}
+      </div>
+    )
+  }
   if (state === 'failed') {
     return (
       // Review finding 15 (contrast): fading was designed for the passive

@@ -267,13 +267,9 @@ func (t *reloadOutcomeTracker) lastFailed() bool {
 // credential-derived text, so it is never carried further.
 var errRegistryRebuildFailed = errors.New("the agent registry reload ran but its rebuild failed")
 
-// reloadAgentsAndConfirm triggers a registry reload, waits for it and
-// confirms it APPLIED: on top of triggerReloadAndWait's own failures (the
-// reload could not start, or did not finish in time) it fails when the
-// reload that served the request finished with a failed rebuild — which
-// triggerReloadAndWait alone reports as success, because the pending flag it
-// polls is cleared on a failed rebuild too. Used by PUT /performance (#904);
-// the other triggerReloadAndWait callers keep its original behaviour.
+// reloadAgentsAndConfirm triggers a registry reload and confirms it applied.
+// The shared wait now also checks the outcome tracker; the additional check
+// retains this helper's recorded-outcome contract. Used by PUT /performance (#904).
 func (a *restAPI) reloadAgentsAndConfirm() error {
 	if err := a.triggerReloadAndWait(); err != nil {
 		return err

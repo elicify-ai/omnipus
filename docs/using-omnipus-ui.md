@@ -13,7 +13,7 @@ flowchart LR
   SignIn[Sign-in screen] -->|opens| Workspace[Your default workspace]
   Bar[Sidebar] -->|lists| Workspaces[All your workspaces]
   Bar -->|links to| Screens[Agents, Connectors, Skills and Tools, Library]
-  Workspace -->|tabs| Tabs[Chat, Tasks, Calendar, Library, Team]
+  Workspace -->|tabs and panels| Tabs[Chat, Tasks, Calendar, Library, Mail, Team]
   Workspace -->|chat tab shows| Chat[Replies, tool calls, activity]
 ```
 
@@ -47,17 +47,18 @@ The magnifier at the top of the sidebar searches all your conversations.
 
 ## A workspace and its tabs
 
-A [workspace](workspaces.md) is where one effort lives: conversations, task board, files, team. Switch workspaces from the sidebar; each opens on the same five tabs.
+A [workspace](workspaces.md) is where one effort lives: conversations, task board, files, team. Switch workspaces from the sidebar. The workspace bar has four page tabs and two controls that open panels alongside Chat:
 
-| Tab | What it is for |
+| Entry | What it is for |
 |---|---|
 | Chat | Talking to the workspace's agents; their work and replies appear here. |
 | Tasks | The workspace's work as a [board, list, or graph](tasks.md), including its [plans](plans.md). |
 | Calendar | [Scheduled and recurring work](calendar.md), shown by when it fires. |
-| Library | The workspace's files and notes; the tab opens the docked [Library](library.md) panel. |
+| Library | The workspace's files and notes; opens the [Library](library.md) panel beside Chat on wider screens. |
+| Mail | The workspace agents' configured mailboxes; opens the [Mail](mail.md) panel beside Chat on wider screens. |
 | Team | Who is on this workspace's team and which [agent](agents.md) may delegate to which. |
 
-Workspace settings are not a tab: select the workspace's name at the left of the tab bar. On a narrow screen the tabs collapse into one switcher menu that carries the same entries.
+Workspace settings are not an entry: select the workspace's name at the left of the bar. On a narrow screen these entries move into one switcher menu.
 
 ## The chat area
 
@@ -73,6 +74,43 @@ While a turn is running, the message box stays yours:
 | **Stop** or **Escape** | Asks the agent to halt. The button shows a stopping state, then the turn ends as cancelled. |
 | Activity pill | Below the message box: shows running background work. Select it to open the Activity panel with running and finished items, including any that failed. |
 
+### If the first message loses its connection
+
+Your first message is kept in the open tab while Omnipus checks delivery. If loading a saved chat's history fails, the message list may temporarily show **Could not load messages.** instead; select that screen's **Retry** to reload the history. Reconnecting does not resend the message automatically. **Retry** is available only while connected; delivery Retry uses the original message and delivery ID, not the current agent, model, attachment or Auto-approve choices.
+
+| Message status | What it means and what you can do |
+|---|---|
+| **Sending…** | Waiting for confirmation that the first message was saved. |
+| **Delivery not confirmed · Retry** | Omnipus cannot yet confirm whether the message was saved. This can follow a lost connection or acknowledgement, an uncertain save, or an older gateway's acknowledgement that does not identify your message. Select **Retry** while connected; reconnect first if needed. |
+| **Checking delivery…** | Your explicit Retry is in progress. Another Retry is not available at the same time. |
+| **Saved** | The server confirmed that this message was saved using its delivery ID, directly or through the saved chat's history. A chat-created acknowledgement alone does not confirm a save. The answer may still be starting or running. |
+| **Checking chat…** | Omnipus knows the chat ID and is loading its history to check whether the first message was saved and whether an answer exists or is still running. |
+| **Could not check this chat · Retry** | Checking delivery or loading the saved chat failed. This does not establish whether an unconfirmed message was saved. Your message is kept in the open tab; **Retry** uses the original delivery request until a save is confirmed, even if a chat ID is known. After a confirmed save, it checks the saved chat again. |
+| **Could not save message · Retry** | Omnipus reported that it could not save the message. You can retry delivery. |
+| **Message saved, but no answer started · Generate again** | The message was saved, but no answer began. **Generate again** deliberately starts a new answer in the saved chat. |
+| **Couldn't finish · Generate again** | Checking the recovered chat finished with your message still unanswered and no answer running. You can deliberately generate a new answer. |
+
+An older gateway's acknowledgement can still open the chat and apply its agent and Auto-approve settings without showing **Saved**. Messages buffered while that chat was being created resume after the current turn ends.
+
+An unconfirmed message does not offer **Generate again**. That action is separate from delivery Retry: it sends a new request and may repeat work or tool actions. The saved chat's current Auto-approve setting applies, not a restored setting from the original send.
+
+When the current first message has no known chat ID, `/new` shows **“Delivery not confirmed. Copy your message before starting a new chat.”** before clearing its local message and recovery request. Choose **Keep this chat** to retain it, or **Start a new chat** to clear it. Copy advice matters: the old bubble will no longer be visible in the new chat. If a chat ID is already known, `/new` starts a new chat without this warning and clears the delivery-recovery request.
+
+**Limits:** recovery before a chat ID is known lives only in the open tab; a full browser reload can lose it. The gateway remembers delivery IDs only for its current process, and only for a limited number of recent first messages: up to 256 per account and 10,000 in total. When those limits are reached, the oldest are forgotten first, so a Retry of a very old unconfirmed first message can create a second chat and answer twice, exactly as after a restart. If it crashes after saving the message but before acknowledging it, Retry after that restart can likewise create a second chat and answer twice. Reusing a delivery ID for a different message is refused with a conflict error instead of being treated as the same message. Delivery Retry is not a guarantee of exactly-once answers or tool actions. After a gateway upgrade, reload any browser tab that was already open: an older tab does not understand the new delivery messages, so starting a new chat there can appear to hang until the page is reloaded.
+
+## Panels beside chat
+
+[Library](library.md), [Browser](browser.md), and [Mail](mail.md) use the same panel controls. From a workspace, select **Library** or **Mail** in the workspace bar to toggle that panel. The chat's **Open library** button opens Library; **Open browser** opens the agent's live Browser panel when a browser session is available. Only one panel sits beside Chat at a time. Choosing another replaces it; if the outgoing panel has protected unsaved changes, you are asked before it leaves.
+
+| Control | What it does |
+|---|---|
+| Panel heading and **Close** (X) | Shows which panel is open; X closes it and returns focus to Chat. On a narrow screen, the panel replaces the chat area and also has **Back** at the top to return to Chat. |
+| Divider between Chat and the panel | Drag it to change the panel's width. You can focus the divider and press the left or right arrow key; **Home** and **End** jump to its narrowest and widest sizes. Double-click it to reset the width. |
+| **Expand** icon | Opens the current panel in a separate full-screen browser tab, or focuses its existing tab. If pop-ups are blocked, the docked panel stays put and shows **Pop-up blocked — allow pop-ups to expand.** |
+| **Back to chat** in the full-screen tab | Closes an app-opened tab when the browser permits it, returning the panel beside Chat. If that tab cannot close itself, the button goes back to workspace Chat with the panel open. |
+
+Library and Mail ask before an app-initiated close, panel switch, expansion, or full-screen return when their editors have protected unsaved changes; cancel the prompt to stay. In Mail, that covers changed drafts and Compose messages with a nonempty body, **not** a new Compose message with only recipients or subject filled in. The Browser panel has no equivalent text-edit warning. See the [Mail guide](mail.md#work-with-drafts) for Save and draft-sending steps.
+
 ## Where settings and account live
 
 App-wide settings live behind **Settings** in the account menu, on tabs from providers and models to security, data, and chat behavior; [settings](settings.md) walks each one. Your **Profile** (preferences, password, and what agents should know about you) and **Usage** (token history) are separate entries in the same menu. Settings for one workspace live in that workspace, under its name.
@@ -83,7 +121,7 @@ App-wide settings live behind **Settings** in the account menu, on tabs from pro
 - Sending mid-turn steers the running turn; it does not queue a message for afterwards. To let the agent finish first, wait for the reply before sending.
 - Stop is a request, not a switch: the agent halts where it is, and work already finished stays finished.
 - The activity pill disappears when everything has ended successfully. A failed background item keeps it visible, so failures do not vanish silently.
-- The **Library** tab does not open a page; it opens the Library panel over your chat and returns you to the Chat tab.
+- The **Library** and **Mail** entries open panels beside Chat on wider screens, rather than separate workspace pages; on narrower screens a panel takes over the chat area.
 - For readability, some routine tool activity is hidden from the conversation by default. **Settings**, then **Chat**, then **Verbose chat** reveals every call.
 - If a turn ends in an error after text has started streaming, the failure message replaces that text in the same reply. The message is visible even with **Verbose chat** off; **Verbose chat** shows technical details when available. A turn you stop still keeps its partial reply.
 - An agent saying what it plans to do is not a finished answer. If it reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice. The notice remains in the saved conversation when you reopen it. An admin can raise **Max tool calls per turn** under **Settings → Performance**; an agent's own lower limit is on its profile's **Advanced** tab.
@@ -96,4 +134,6 @@ App-wide settings live behind **Settings** in the account menu, on tabs from pro
 - [agents](agents.md) — the roster, the default agent, building your own.
 - [tasks](tasks.md) — the board, list, and graph views, and plans.
 - [tools](tools.md) — what agents can do, and the permissions that gate them.
+- [mail](mail.md) — read, compose, and manage drafts in the Mail panel.
+- [browser](browser.md) — watch or drive an agent's live browser in its panel.
 - [settings](settings.md) — every settings tab in detail.

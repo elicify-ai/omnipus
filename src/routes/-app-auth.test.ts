@@ -55,14 +55,14 @@ vi.mock('@/lib/authLogout', () => ({
 async function getBeforeLoad(): Promise<() => Promise<void>> {
   const appMod = await import('./_app')
   const routeOptions = (appMod.Route as unknown) as {
-    options?: { beforeLoad?: () => Promise<void> }
-    beforeLoad?: () => Promise<void>
+    options?: { beforeLoad?: (context: { location: { href: string } }) => Promise<void> }
+    beforeLoad?: (context: { location: { href: string } }) => Promise<void>
   }
   const beforeLoad = routeOptions.beforeLoad ?? routeOptions.options?.beforeLoad
   if (typeof beforeLoad !== 'function') {
     throw new Error('[BLOCKED] beforeLoad not found on Route — seam moved, update this test')
   }
-  return beforeLoad
+  return () => beforeLoad({ location: { href: '/workspaces/ws-9/chat?panel=calendar' } })
 }
 
 describe('_app.tsx beforeLoad — auth-check branch (D2)', () => {

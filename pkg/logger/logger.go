@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -53,17 +54,21 @@ func init() {
 	once.Do(func() {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
-		consoleWriter := zerolog.ConsoleWriter{
-			Out:        os.Stdout,
-			TimeFormat: "15:04:05",
-
-			// Custom formatter to handle multiline strings and JSON objects
-			FormatFieldValue: formatFieldValue,
-		}
+		consoleWriter := newConsoleWriter(os.Stdout)
 
 		logger = zerolog.New(consoleWriter).With().Timestamp().Caller().Logger()
 		fileLogger = zerolog.Logger{}
 	})
+}
+
+func newConsoleWriter(out io.Writer) zerolog.ConsoleWriter {
+	return zerolog.ConsoleWriter{
+		Out:        out,
+		TimeFormat: "15:04:05",
+
+		// Custom formatter to handle multiline strings and JSON objects
+		FormatFieldValue: formatFieldValue,
+	}
 }
 
 func formatFieldValue(i any) string {
@@ -83,7 +88,13 @@ func formatFieldValue(i any) string {
 	}
 
 	if strings.Contains(s, "\n") {
-		return fmt.Sprintf("\n%s", s)
+		// Only valid JSON objects and arrays may retain multiline formatting.
+		// Delimiters alone would let ordinary text masquerade as JSON.
+		if ((strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) ||
+			(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]"))) && json.Valid([]byte(s)) {
+			return fmt.Sprintf("\n%s", s)
+		}
+		return fmt.Sprintf("%q", s)
 	}
 
 	if strings.Contains(s, " ") {

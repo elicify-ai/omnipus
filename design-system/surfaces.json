@@ -852,6 +852,40 @@
       }
     },
     {
+      "id": "_app/workspaces.$workspaceId.mail",
+      "kind": "route",
+      "source": "src/routes/_app/workspaces.$workspaceId.mail.tsx",
+      "symbol": "Route",
+      "lane": 6,
+      "entry": {
+        "type": "route",
+        "path": "/workspaces/:workspaceId/mail"
+      },
+      "verification": [
+        {
+          "checkId": "surface:app-workspaces-workspaceid-mail:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/app-workspaces-workspaceid-mail.test.tsx",
+          "test": "_app/workspaces.$workspaceId.mail surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-workspaces-workspaceid-mail:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/workspaces.$workspaceId.mail surface browser contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-workspaces-workspaceid-mail:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/workspaces.$workspaceId.mail surface reflow contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
       "id": "_app/workspaces.$workspaceId.media",
       "kind": "route",
       "source": "src/routes/_app/workspaces.$workspaceId.media.tsx",
@@ -985,6 +1019,74 @@
       "entry": {
         "type": "route",
         "path": "/workspaces"
+      }
+    },
+    {
+      "id": "_fullscreen",
+      "kind": "route",
+      "source": "src/routes/_fullscreen.tsx",
+      "symbol": "Route",
+      "lane": 8,
+      "verification": [
+        {
+          "checkId": "surface:fullscreen:unit",
+          "file": "tests/design-system/surfaces/fullscreen.test.tsx",
+          "test": "_fullscreen surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:fullscreen:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:fullscreen:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/"
+      }
+    },
+    {
+      "id": "_fullscreen.panel.$panelId",
+      "kind": "route",
+      "source": "src/routes/_fullscreen.panel.$panelId.tsx",
+      "symbol": "Route",
+      "lane": 8,
+      "verification": [
+        {
+          "checkId": "surface:fullscreen-panel:unit",
+          "file": "src/components/panel-shell/panelExpandRoutes.test.tsx",
+          "test": "SP-38 shell-owned full-screen routes",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:fullscreen-panel:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen.panel.$panelId surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:fullscreen-panel:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen.panel.$panelId surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/panel/:panelId"
       }
     },
     {
@@ -5850,6 +5952,142 @@
       }
     },
     {
+      "id": "src/components/workspaces/mail/MailComposeDialog.tsx#MailComposeDialog",
+      "kind": "modal",
+      "source": "src/components/workspaces/mail/MailComposeDialog.tsx",
+      "symbol": "MailComposeDialog",
+      "lane": 6,
+      "entry": {
+        "type": "activation",
+        "path": "src/components/workspaces/mail/MailComposeDialog.tsx#MailComposeDialog"
+      },
+      "verification": [
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-mailcomposedialog:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailcomposedialog-tsx-mailcomposedialog.test.tsx",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#MailComposeDialog surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-mailcomposedialog:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailcomposedialog-tsx-mailcomposedialog.test.tsx",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#MailComposeDialog surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-mailcomposedialog:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#MailComposeDialog surface browser contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "src/components/workspaces/mail/MailComposeDialog.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/workspaces/mail/MailComposeDialog.tsx",
+      "symbol": "overlay:1",
+      "lane": 6,
+      "entry": {
+        "type": "activation",
+        "path": "src/components/workspaces/mail/MailComposeDialog.tsx#overlay:1"
+      },
+      "verification": [
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-dialog-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailcomposedialog-tsx-dialog-1.test.tsx",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#overlay:1 surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-dialog-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailcomposedialog-tsx-dialog-1.test.tsx",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-dialog-1:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#overlay:1 surface browser contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "src/components/workspaces/mail/MailFolderRail.tsx#dynamic-tabs",
+      "kind": "tab",
+      "source": "src/components/workspaces/mail/MailFolderRail.tsx",
+      "symbol": "dynamic-tabs",
+      "lane": 6,
+      "entry": {
+        "type": "activation",
+        "path": "src/components/workspaces/mail/MailFolderRail.tsx#dynamic-tabs"
+      },
+      "verification": [
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailfolderrail-tsx-dynamic-tabs:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailfolderrail-tsx-dynamic-tabs.test.tsx",
+          "test": "src/components/workspaces/mail/MailFolderRail.tsx#dynamic-tabs surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailfolderrail-tsx-dynamic-tabs:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailfolderrail-tsx-dynamic-tabs.test.tsx",
+          "test": "src/components/workspaces/mail/MailFolderRail.tsx#dynamic-tabs surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailfolderrail-tsx-dynamic-tabs:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/workspaces/mail/MailFolderRail.tsx#dynamic-tabs surface browser contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/workspaces/mail/MailMarkdownEditor.tsx",
+      "symbol": "overlay:1",
+      "lane": 6,
+      "entry": {
+        "type": "activation",
+        "path": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1"
+      },
+      "verification": [
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1.test.tsx",
+          "test": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1 surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1.test.tsx",
+          "test": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1 surface browser contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
       "id": "workspace-tab:board",
       "kind": "tab",
       "source": "src/components/workspaces/WorkspaceTabBar.tsx",
@@ -6328,6 +6566,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/ChatModeBadge.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ChatScreen.tsx",
       "lane": 3
     },
@@ -6341,6 +6583,10 @@
     },
     {
       "source": "src/components/chat/ConnectionStatus.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/DelegationEventLine.tsx",
       "lane": 3
     },
     {
@@ -6420,6 +6666,10 @@
       "lane": 5
     },
     {
+      "source": "src/components/chat/composer/AutoApprovePicker.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/composer/ModelPicker.tsx",
       "lane": 3
     },
@@ -6465,6 +6715,10 @@
     },
     {
       "source": "src/components/chat/tools/BrowserTool.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/DraftLink.tsx",
       "lane": 3
     },
     {
@@ -6528,6 +6782,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/useChatDelegationEvents.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/useSelectSession.ts",
       "lane": 3
     },
@@ -6542,6 +6800,10 @@
     {
       "source": "src/components/layout/CrossWorkspaceApprovalBanner.tsx",
       "lane": 8
+    },
+    {
+      "source": "src/components/layout/GodModeIndicators.tsx",
+      "lane": 7
     },
     {
       "source": "src/components/layout/NotificationPanel.tsx",
@@ -6720,11 +6982,11 @@
       "lane": 4
     },
     {
-      "source": "src/components/library/preview/LibraryPdfPreview.tsx",
+      "source": "src/components/library/preview/LibraryPdfPreview.loadEffect.ts",
       "lane": 4
     },
     {
-      "source": "src/components/library/preview/LibraryPdfPreview.loadEffect.ts",
+      "source": "src/components/library/preview/LibraryPdfPreview.tsx",
       "lane": 4
     },
     {
@@ -6902,6 +7164,98 @@
     {
       "source": "src/components/library/useLibraryCrossTabRefresh.ts",
       "lane": 4
+    },
+    {
+      "source": "src/components/panel-shell/ListPreviewLayout.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/PanelTabPresenceBridge.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/SidePanelShell.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/BrowserPanelPlaceholder.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/DemoWorkspace.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/demoPanelRegistry.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/fixtureApi.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/fixtures.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/standins.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/leaveGate.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelEscape.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelFocus.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelShellStore.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelTabSwitch.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelWidth.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelWidthMemory.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/registry.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/types.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/usePanelDeepLink.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/usePanelShell.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/usePanelUrlHistory.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/useSwipeToClose.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/workspaceSwitch.ts",
+      "lane": 8
     },
     {
       "source": "src/components/providers/AuthMethodControl.tsx",
@@ -7108,6 +7462,10 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/useSearchConnectionChecks.ts",
+      "lane": 6
+    },
+    {
       "source": "src/components/settings/useStepUp.tsx",
       "lane": 6
     },
@@ -7117,6 +7475,10 @@
     },
     {
       "source": "src/components/shared/CriteriaBreakdown.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/shared/ErrorBoundary.tsx",
       "lane": 7
     },
     {
@@ -7356,6 +7718,70 @@
       "lane": 1
     },
     {
+      "source": "src/components/workspaces/mail/MailAttachmentsEditor.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailComposeDialog.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailFolderRail.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailHtmlFrame.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailMarkdownEditor.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailMessageList.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailPanel.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailPreviewPane.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailRecipientInput.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailRecipientRow.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailSignaturePreview.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mail-format.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailDeepLink.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailPanelDefinition.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailPanelIntent.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailUnsavedGuard.ts",
+      "lane": 6
+    },
+    {
       "source": "src/components/workspaces/taskFormFields.ts",
       "lane": 1
     },
@@ -7392,7 +7818,15 @@
       "lane": 7
     },
     {
+      "source": "src/routes/-authenticatedBeforeLoad.ts",
+      "lane": 7
+    },
+    {
       "source": "src/routes/-login-local.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/routes/-loginReturn.ts",
       "lane": 7
     },
     {
@@ -7402,6 +7836,14 @@
     {
       "source": "src/routes/_app.tsx",
       "lane": 7
+    },
+    {
+      "source": "src/routes/_fullscreen.panel.$panelId.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/routes/_fullscreen.tsx",
+      "lane": 8
     },
     {
       "source": "src/routes/_app/admin.chat.tsx",
@@ -7492,6 +7934,10 @@
       "lane": 1
     },
     {
+      "source": "src/routes/_app/workspaces.$workspaceId.mail.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/routes/_app/workspaces.$workspaceId.media.tsx",
       "lane": 4
     },
@@ -7526,26 +7972,6 @@
     {
       "source": "src/routes/onboarding.tsx",
       "lane": 1
-    },
-    {
-      "source": "src/components/chat/ChatModeBadge.tsx",
-      "lane": 3
-    },
-    {
-      "source": "src/components/chat/composer/AutoApprovePicker.tsx",
-      "lane": 3
-    },
-    {
-      "source": "src/components/layout/GodModeIndicators.tsx",
-      "lane": 7
-    },
-    {
-      "source": "src/components/chat/DelegationEventLine.tsx",
-      "lane": 3
-    },
-    {
-      "source": "src/components/chat/useChatDelegationEvents.ts",
-      "lane": 3
     }
   ]
 }

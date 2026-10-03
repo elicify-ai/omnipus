@@ -1,0 +1,15 @@
+title: MailSummaryList
+description: >
+  Watcher-driven badge summary for every mailbox in a workspace (GET
+  /workspaces/{id}/mail/summary) — one MailboxNewMailSummary per (agent,
+  workspace) mailbox pair. Served from saved watcher state; never dials IMAP.
+type: object
+additionalProperties: false
+required:
+  - items
+properties:
+  items:
+    type: array
+    description: One entry per mailbox in the workspace.
+    items:
+      $ref: ./MailboxNewMailSummary.yaml

@@ -74,6 +74,9 @@ jobs:
         shell: bash
         run: |
           npm ci
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            export NODE_OPTIONS="--max-old-space-size=4096"
+          fi
           npm run build
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
