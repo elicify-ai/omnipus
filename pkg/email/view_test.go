@@ -88,6 +88,13 @@ func startViewIMAP(t *testing.T, folderOf ...string) (*Client, [][]byte) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
+	// FR-W1-2 wiring gate: once the package's refusal test wires the
+	// process-wide shared manager, a source-less transport call is the typed
+	// ErrSessionSourceMissing refusal before any dial. Inject the pool
+	// harness's session source so every client this constructor returns rides
+	// the lease path production uses; the folder/message assertions below are
+	// unchanged — the same memserver answers the lease and the legacy dial.
+	cl.SetSessionSource(newSessionsForAddr(t, ln.Addr().String(), newPoolTestClock()))
 	return cl, raws
 }
 
@@ -205,6 +212,11 @@ func startViewIMAPRaw(t *testing.T, msgs []viewMsg, caps imap.CapSet) *Client {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
+	// Same FR-W1-2 wiring gate as startViewIMAP: the caller-supplied capability
+	// set (UIDPLUS on/off) lives on the memserver's greeting, so the lease path
+	// sees exactly the capabilities the legacy dial saw — DeleteDraft's branch
+	// selection below is a server property, not a dialer one.
+	cl.SetSessionSource(newSessionsForAddr(t, ln.Addr().String(), newPoolTestClock()))
 	return cl
 }
 func TestView_ParseMailRef(t *testing.T) {
@@ -397,8 +409,17 @@ func TestDeleteDraft_UIDExpunge(t *testing.T) {
 		t.Fatalf("draft survived UID EXPUNGE: %d messages", len(after))
 	}
 	// A filtered page alone cannot prove UID EXPUNGE ran: check the raw
-	// mailbox, where an unexpunged \Deleted draft would still count.
-	server, _, dialErr := cl.dialIMAP(context.Background())
+	// mailbox, where an unexpunged \Deleted draft would still count. The
+	// witness must not ride the wired client: a client with an injected
+	// session source refuses its own dialIMAP (ErrLegacyDialReached — no raw
+	// dial may bypass the pool, FR-W1-2). The inspection connection is
+	// deliberately a separate source-less client: an out-of-band observer
+	// that sees raw server state, never the pool's filtered view.
+	insp, inspErr := NewClient(cl.acct)
+	if inspErr != nil {
+		t.Fatalf("inspection client: %v", inspErr)
+	}
+	server, _, dialErr := insp.dialIMAP(context.Background())
 	if dialErr != nil {
 		t.Fatalf("dial to check UID expunge: %v", dialErr)
 	}
@@ -430,7 +451,14 @@ func TestDeleteDraft_DeferredWithoutUIDPLUS(t *testing.T) {
 	}
 	// The server still holds the flagged copy; this proves the empty page is
 	// filtering \Deleted, not an unsafe plain EXPUNGE of unrelated messages.
-	server, _, dialErr := cl.dialIMAP(context.Background())
+	// Same FR-W1-2 rule as TestDeleteDraft_UIDExpunge's witness: the wired
+	// client's dialIMAP is the typed ErrLegacyDialReached refusal, so the
+	// out-of-band observer is a separate source-less client.
+	insp, inspErr := NewClient(cl.acct)
+	if inspErr != nil {
+		t.Fatalf("inspection client: %v", inspErr)
+	}
+	server, _, dialErr := insp.dialIMAP(context.Background())
 	if dialErr != nil {
 		t.Fatalf("dial to verify deferred copy: %v", dialErr)
 	}
