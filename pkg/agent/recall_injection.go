@@ -282,16 +282,20 @@ func removeInjectedRecallBlock(ts *turnState, messages []providers.Message, rese
 	return out
 }
 
-// recordAssembledRecallSpan tracks the verbatim block inserted after the pinned
-// instructions. Request-only notes may later shift it; checkpoints locate its
-// actual identity rather than trusting this original offset.
-func recordAssembledRecallSpan(ts *turnState, span *RecallSpan, history []providers.Message) {
+// recordAssembledRecallSpan tracks the block inserted after the pinned
+// instructions. keptLen is how many span messages sanitizeHistoryIndexed
+// actually left in the slice — the same count spliceRecallSpan records — so
+// a later tool-result site removes that block instead of the raw span and
+// does not double-inject it. A keptLen of zero records nothing: there is no
+// block to remove. Request-only notes may later shift the block; checkpoints
+// locate its identity rather than trusting this original offset.
+func recordAssembledRecallSpan(ts *turnState, span *RecallSpan, history []providers.Message, keptLen int) {
 	if ts == nil {
 		return
 	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	if span == nil || len(span.Msgs) == 0 {
+	if span == nil || keptLen <= 0 {
 		ts.injectedRecallSpan, ts.injectedRecallAt, ts.injectedRecallLen = nil, 0, 0
 		return
 	}
@@ -300,5 +304,5 @@ func recordAssembledRecallSpan(ts *turnState, span *RecallSpan, history []provid
 	if len(history) > 0 && history[0].Role == "user" {
 		ts.injectedRecallAt++
 	}
-	ts.injectedRecallLen = len(span.Msgs)
+	ts.injectedRecallLen = keptLen
 }

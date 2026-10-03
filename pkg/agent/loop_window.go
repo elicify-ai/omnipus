@@ -89,20 +89,26 @@ func (al *AgentLoop) assembleMessages(
 		breadcrumb += "\n\nReminder (task run): when the work is verified, report completion by calling goal_claim (status \"met\", with your one-line evidence) — not by writing a status yourself."
 	}
 	span := al.activeRecallSpan(ts.sessionKey)
-	recordAssembledRecallSpan(ts, span, history)
-	// Build only the pinned instructions/current user here. The archive-backed
-	// sequence is inserted verbatim, not passed through the legacy sanitizer.
+	// Same drop-only pass spliceRecallSpan uses. BuildMessages is called with
+	// nil history below, so it never sees the span; sanitizing here is what
+	// keeps a mid-group freeze from reaching the pre-send validator. The live
+	// window stays verbatim: re-filtering it would drop an in-flight group
+	// whose results are not all in the slice yet.
+	keptSpan, _ := sanitizeHistoryIndexed(span.Messages())
+	recordAssembledRecallSpan(ts, span, history, len(keptSpan))
+	// Build only the pinned instructions and the current user here. The live
+	// window is inserted verbatim; only the recalled span is sanitized.
 	base := ts.agent.ContextBuilder.BuildMessages(nil, userMsg, media,
 		ts.opts.WorkspaceID, ts.channel, ts.chatID, ts.opts.SenderID,
 		ts.opts.SenderDisplayName, breadcrumb, nil, skillNames...)
-	out := make([]providers.Message, 0, len(base)+len(history)+len(span.Messages()))
+	out := make([]providers.Message, 0, len(base)+len(history)+len(keptSpan))
 	out = append(out, base[0])
 	// Keep the original leading user/anchor ahead of injected archived context.
 	if len(history) > 0 && history[0].Role == "user" {
 		out = append(out, history[0])
 		history = history[1:]
 	}
-	out = append(out, span.Messages()...)
+	out = append(out, keptSpan...)
 	out = append(out, history...)
 	out = append(out, base[1:]...)
 	return out
