@@ -83,13 +83,15 @@ function retryQs(opts: { retry?: boolean }): string {
  * opts the read into panel-presence semantics (retained pooled sockets while
  * that observer is open); `refresh_mapping` forces a folder-mapping
  * revalidation (manual Refresh only — never an automatic request).
+ *
+ * Derived from the generated contract (the four parameters exist on BOTH
+ * listMailMessages and listMailFolders query params) — never hand-written
+ * (constraint #8; same derivation as MailMessagePageParams above).
  */
-export interface MailReadOptions {
-  retry?: boolean
-  mode?: 'cache_first' | 'live'
-  observer_id?: string
-  refresh_mapping?: boolean
-}
+export type MailReadOptions = Pick<
+  NonNullable<operations['listMailMessages']['parameters']['query']>,
+  'retry' | 'mode' | 'observer_id' | 'refresh_mapping'
+>
 
 /** Serialize the shared read options; `retry=true` first so it stays the
  * leading parameter the existing callers and tests pin. */
