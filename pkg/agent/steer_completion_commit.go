@@ -73,9 +73,13 @@ type steeredCommitResult struct {
 	// notice replaces it; an already-landed stop publishes nothing (the
 	// losing completion T11 pins).
 	landedStop bool
-	commit     *session.FinalDeliveryCommit
-	message    generated.SessionMessage
-	messageID  string
+	// landed is the D6 landed-stop history payload captured from the record
+	// AS PERSISTED when landedStop is true — nil when the landing synthesized
+	// its note (no control-ledger acceptance behind it, no history to write).
+	landed    *session.LandedStop
+	commit    *session.FinalDeliveryCommit
+	message   generated.SessionMessage
+	messageID string
 }
 
 // errCompleteNoPublishableOutcome refuses a terminal commit whose outcome
@@ -158,7 +162,11 @@ func (al *AgentLoop) commitSteeredCompletion(
 				// land it.
 				res.kind = steeredCommitStopped
 				res.landedStop = true
-				return landSteeredStopLocked(cur, outcome)
+				if err := landSteeredStopLocked(cur, outcome); err != nil {
+					return err
+				}
+				res.landed = landedStopFromRecord(cur)
+				return nil
 			}
 			// A terminal/notice disposition racing a fresh fence: refuse. The
 			// stop path owns the landing — its never-ran finalizer or the
@@ -180,7 +188,11 @@ func (al *AgentLoop) commitSteeredCompletion(
 			// a lifetime-budget expiry. Same landing, synthesized note.
 			res.kind = steeredCommitStopped
 			res.landedStop = true
-			return landSteeredStopLocked(cur, outcome)
+			if err := landSteeredStopLocked(cur, outcome); err != nil {
+				return err
+			}
+			res.landed = landedStopFromRecord(cur)
+			return nil
 		}
 		if nextState == session.LifecycleRunning {
 			// Non-terminal lifecycle notice: nothing to commit, the notice is
@@ -229,6 +241,13 @@ func (al *AgentLoop) commitSteeredCompletion(
 			return res, nil
 		}
 		return res, fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, mutateErr)
+	}
+	// The stopped state is DURABLE — record the D6 landed-stop history for
+	// the control that ordered it (nil when the landing synthesized its note:
+	// no acceptance, no history). Never earlier: a bare intent is not a
+	// landed stop, and the final applied receipt waits for the D6 notice.
+	if res.landedStop && res.landed != nil {
+		al.recordLandedStopLedger(rec.SessionID, *res.landed)
 	}
 	return res, nil
 }

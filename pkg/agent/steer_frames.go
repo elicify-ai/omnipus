@@ -333,15 +333,16 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		//
 		// ControlReceipt replaces the former steering_receipt
 		// (sub-agent-control-plane ADR D4/MIN-001/MIN-003). The per-session
-		// control ledger that assigns a true monotonic Seq and tracks a
-		// control's own AcceptedAt moment ahead of delivery is NOT built in
-		// this PR (ControlReceipt.yaml's own "Train-3 scope note") — Seq is
-		// stamped as a documented stand-in, the child's own generation,
-		// exactly the pattern pkg/session/lifecycle_edge.go::StopNote.Seq
-		// already uses for the same not-yet-a-real-ledger reason. AcceptedAt
-		// reuses the delivered moment: this call site tracks no separate
-		// acceptance instant ahead of the ledger. Verb/State are constants
-		// here because this call site only ever reports a delivered steer.
+		// control ledger now exists for the STOP verb
+		// (pkg/session/lifecycle_control_ledger_writer.go::AcceptStopControl:
+		// real monotonic per-child Seq, control_id, acceptance instant, and
+		// the landed-stop history the stopped-child notice reads). The STEER
+		// delivery path below is not on the ledger yet — until the steering
+		// queue moves onto it, Seq here is still the documented stand-in,
+		// the child's own generation, and AcceptedAt reuses the delivered
+		// moment (this call site tracks no separate acceptance instant).
+		// Verb/State are constants here because this call site only ever
+		// reports a delivered steer.
 		appliedAt := receipt.appliedAt.UTC().Format(time.RFC3339)
 		frame.ControlReceipt = &struct {
 			AcceptedAt         string   `json:"accepted_at"`

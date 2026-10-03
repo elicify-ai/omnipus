@@ -176,6 +176,16 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 // lands LifecycleStopped with the lasting note, spending a current-generation
 // fence. It publishes nothing upward — the D6 stopped-child notice is the
 // parent's signal, and it is a separate deliverable.
+//
+// Once the stopped state is DURABLE, the landing appends the D6 historical
+// landed-stop projection to the control ledger for the exact control that
+// ordered the stop (recorded at acceptance in StopEffect). The landed
+// history — not the queued intent, not the final applied receipt — is what
+// the W1 direct-parent notice publisher discovers. The final "applied"
+// receipt cannot precede that notice's durability, so this landing never
+// writes one. A history-append failure is visible and recoverable: the
+// durable stop note plus the ledger intent are exactly what boot
+// reconciliation retries from.
 func (al *AgentLoop) landSteeredStopReport(sessionID string, generation int, outcome steer.Outcome) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
@@ -190,6 +200,7 @@ func (al *AgentLoop) landSteeredStopReport(sessionID string, generation int, out
 	// this landing must not clobber the resumed record. (Full execution-
 	// identity targeting is the D2 round-4 R4-MAJ-001 seam — a later unit.)
 	fencedAtEntry := rec.Stop != nil && rec.Stop.Generation == generation
+	var landed *session.LandedStop
 	mutateErr := lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return errTerminalReportVanished
@@ -206,12 +217,24 @@ func (al *AgentLoop) landSteeredStopReport(sessionID string, generation int, out
 		if fencedAtEntry && (cur.Stop == nil || cur.Stop.Generation != cur.Generation) {
 			return errTerminalReportFenceSuperseded
 		}
-		return landSteeredStopLocked(cur, outcome)
+		if err := landSteeredStopLocked(cur, outcome); err != nil {
+			return err
+		}
+		// Capture from the record AS PERSISTED: the note carries the
+		// original stop instant, the effect names the control. A landing
+		// without effect metadata (a fence-less stop disposition that
+		// synthesized its note) has no control-ledger acceptance behind it
+		// and writes no history.
+		landed = landedStopFromRecord(cur)
+		return nil
 	})
 	switch {
 	case mutateErr == nil:
 		// The stop landed. MAJ-003: this write ends the TURN, never the
 		// child's session-owned goal — no goal step belongs in a stop path.
+		if landed != nil {
+			al.recordLandedStopLedger(sessionID, *landed)
+		}
 	case errors.Is(mutateErr, errTerminalReportAlreadyStopped),
 		errors.Is(mutateErr, errTerminalReportFenceSuperseded),
 		errors.Is(mutateErr, errTerminalReportStaleGeneration),
@@ -223,6 +246,49 @@ func (al *AgentLoop) landSteeredStopReport(sessionID string, generation int, out
 	default:
 		logger.WarnCF("agent", "steer: terminal report: persist stopped state failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": mutateErr.Error()})
+	}
+}
+
+// landedStopFromRecord builds the D6 landed-stop history payload from a
+// record that just landed stopped: the retained note's who/why/when (the
+// ORIGINAL stop instant — never a time.Now reconstruction), the acceptance's
+// control id and target from StopEffect, and the original direct parent.
+// nil when the landing carries no control-ledger acceptance (a synthesized
+// fence-less note) — that stop has no accepted control to attach history to.
+func landedStopFromRecord(cur *session.LifecycleRecord) *session.LandedStop {
+	if cur == nil || cur.StopNote == nil || cur.StopEffect == nil {
+		return nil
+	}
+	return &session.LandedStop{
+		Seq:             int64(cur.StopNote.Seq),
+		ControlID:       cur.StopEffect.ControlID,
+		ParentSessionID: cur.SteeringSessionID(),
+		Generation:      cur.Generation,
+		Cause:           cur.StopNote.Cause,
+		Actor:           cur.StopNote.By,
+		At:              cur.StopNote.At,
+	}
+}
+
+// recordLandedStopLedger appends the landed-stop history line after a
+// durable landing. A failure stays visible: the stop itself is already
+// durable, and the stop note plus the ledger intent are exactly what boot
+// reconciliation retries from — the append is idempotent by seq, so the
+// retry verifies the tuple instead of duplicating history.
+func (al *AgentLoop) recordLandedStopLedger(sessionID string, landed session.LandedStop) {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	if err := lifecycle.RecordLandedStop(sessionID, landed); err != nil {
+		logger.WarnCF("agent", "steer: stop landing: landed-stop history not recorded (recoverable from the durable stop note and ledger intent)",
+			map[string]any{
+				"session_id": sessionID,
+				"seq":        landed.Seq,
+				"control_id": landed.ControlID,
+				"generation": landed.Generation,
+				"error":      err.Error(),
+			})
 	}
 }
 
@@ -376,6 +442,12 @@ func (c *SteerCanceller) cascade(
 			case outcome == stopStamped || outcome == stopAlreadyStamped:
 				stamped[id] = generation
 				report.Reached = append(report.Reached, id)
+			case outcome == stopAlreadyLanded:
+				// D2 stop table / MIN-007: the child is already landed
+				// stopped — "already stopped", nothing written, nothing to
+				// fire. Not Reached (no live effect belongs to this repeat),
+				// not Unreachable (nothing failed), not SkippedTerminal
+				// (stopped is not terminal — D2 keeps it resumable).
 			}
 		}
 	}
@@ -491,6 +563,9 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 			// acknowledges or retires it" (D2). persistLocked would reject the
 			// carried tuple anyway — its generation no longer matches.
 			rec.FinalDelivery = nil
+			// The prior generation's stop targeting metadata never rides
+			// into the minted one (same rule as the outbox tuple above).
+			rec.StopEffect = nil
 			generation = rec.Generation
 			revived = true
 			return nil
@@ -505,9 +580,35 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 		if !rec.Stopped() {
 			return nil
 		}
+		// D2 CRIT-001 clears the note and the stop-effect metadata — for a
+		// LANDED stopped record those two fields are the last reconstructable
+		// landed-history tuple (original at/seq/control_id). If that history
+		// is not yet on the control ledger — the landing half's append failed
+		// or raced — it is persisted HERE, in this same mutation and lock
+		// hold, before the clear; and the resume is refused VISIBLY if the
+		// ledger refuses the append. Destroying the tuple without recording
+		// its history is a loss, never a success. The refusal is retryable:
+		// re-issuing the resume retries the idempotent append.
+		//
+		// The landed-state guard matters: an IN-FLIGHT fence shape (running
+		// or queued record carrying a current fence) has not landed — its
+		// stop has no history, and writing one would fabricate a landed stop
+		// from a bare intent.
+		if rec.State == session.LifecycleStopped {
+			if landed := landedStopFromRecord(rec); landed != nil {
+				if err := c.Lifecycle.RecordLandedStopLocked(sessionID, *landed); err != nil {
+					return fmt.Errorf("steer: resume: landed-stop history for %q seq %d (control %q) is not yet recorded and could not be written: %w — the resume is refused so the durable stop note and stop effect keep the tuple recoverable",
+						sessionID, landed.Seq, landed.ControlID, err)
+				}
+			}
+		}
 		rec.State = session.LifecycleQueued
 		rec.Stop = nil
 		rec.StopNote = nil
+		// D2 CRIT-001: the RESUME clears the stop-effect metadata atomically
+		// with the note and the fence — the superseded stop's targeting must
+		// not bind the replacement this resume admits.
+		rec.StopEffect = nil
 		rec.NeedsInput = nil
 		rec.FailedReason = ""
 		revived = true
@@ -551,6 +652,13 @@ type stopStampOutcome uint8
 const (
 	stopStamped stopStampOutcome = iota + 1
 	stopAlreadyStamped
+	// stopAlreadyLanded is the explicit D2 stop-table / MIN-007 idempotent
+	// shape: the record has already LANDED LifecycleStopped (fence spent,
+	// note retained). The repeat stop answers "already stopped": no ledger
+	// line, no sequence, the retained note untouched, no new fence, and —
+	// unlike stopAlreadyStamped — no live effect either (the stop it would
+	// carry out already happened).
+	stopAlreadyLanded
 )
 
 var errCascadeTerminal = errors.New("steer: cancel subtree: terminal record")
@@ -568,40 +676,63 @@ func (c *SteerCanceller) cascadeLock(sessionID string) *sync.Mutex {
 	return m
 }
 
+// stampStop is the stop path's acceptance: D4's ledger-first control
+// acceptance (lifecycle_control_ledger_writer.go::AcceptStopControl)
+// followed, in the SAME lock hold, by the D2 fence+note stamp. The control
+// ledger line is durable BEFORE the fence exists, so a crash between the
+// two leaves a queued intent for boot reconciliation — never a stop
+// pretending it was accepted after the fact. StopNote.Seq is the REAL
+// per-child control-ledger sequence (no longer the generation stand-in),
+// and the note's identity rides the record's StopEffect so the landing half
+// can write the landed-stop history for the exact control that ordered it.
+//
+// The D2/MIN-007 idempotent shapes answer without touching the ledger: a
+// live current-generation fence is stopAlreadyStamped (the pending effect
+// still fires, as before), an already-LANDED stopped record is
+// stopAlreadyLanded ("already stopped" — nothing written, nothing fired),
+// and a terminal record is errCascadeTerminal as before.
 func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Principal, cause session.StopCause) (int, stopStampOutcome, error) {
-	var generation int
-	var outcome stopStampOutcome
-	err := c.Lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
-		if rec == nil {
-			return session.ErrLifecycleNotFound
-		}
-		if rec.Terminal() {
-			return errCascadeTerminal
-		}
-		generation = rec.Generation
-		if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
-			outcome = stopAlreadyStamped
-			return errStopAlreadyStamped
-		}
+	outcome, _, generation, err := c.Lifecycle.AcceptStopControl(sessionID, session.StopControlIntent{
+		Cause:      cause,
+		Actor:      session.StopActorFromPrincipal(by),
+		AcceptedAt: at,
+	}, func(rec *session.LifecycleRecord, grant session.ControlGrant, target session.StopEffectTarget) error {
 		rec.Stop = &session.Stop{At: at, Generation: rec.Generation, By: by}
-		// D2: the stop action stamps the in-flight fence AND the lasting
-		// stop_note in the SAME mutation. Landing (steer_completion.go::
-		// deliverSteeredCompletion, this file's reportSteeredSessionTerminalUpward)
-		// later clears rec.Stop but retains this note untouched.
+		// D2: the stop action stamps the in-flight fence, the lasting
+		// stop_note (its Seq is the control-ledger sequence, NOT the
+		// generation) and the stop_effect metadata in the SAME mutation.
+		// Landing (steer_completion.go::deliverSteeredCompletion, this
+		// file's reportSteeredSessionTerminalUpward) later clears rec.Stop
+		// but retains the note and the effect untouched.
 		rec.StopNote = &session.StopNote{
 			At: at, By: session.StopActorFromPrincipal(by),
-			Seq: uint64(rec.Generation), Cause: cause,
+			Seq: uint64(grant.Seq), Cause: cause,
 		}
-		outcome = stopStamped
+		rec.StopEffect = &session.StopEffect{ControlID: grant.ControlID, Target: target}
 		return nil
 	})
-	if errors.Is(err, errStopAlreadyStamped) {
-		return generation, outcome, nil
+	switch outcome {
+	case session.StopAcceptMissing:
+		return 0, 0, session.ErrLifecycleNotFound
+	case session.StopAcceptTerminal:
+		return generation, 0, errCascadeTerminal
+	case session.StopAcceptAlreadyStamped:
+		return generation, stopAlreadyStamped, nil
+	case session.StopAcceptAlreadyLanded:
+		return generation, stopAlreadyLanded, nil
+	case session.StopAcceptGranted:
+		if err != nil {
+			// The acceptance intent is durable but the fence is not (D4's
+			// queued-intent crash state, returned visibly). The cascade
+			// reports the node unreachable; boot reconciliation finishes
+			// the intent.
+			return generation, 0, err
+		}
+		return generation, stopStamped, nil
+	default:
+		return generation, 0, err
 	}
-	return generation, outcome, err
 }
-
-var errStopAlreadyStamped = errors.New("steer: cancel subtree: current generation already stamped")
 
 func (c *SteerCanceller) cancelStamped(ctx context.Context, stamped map[string]int, report *steer.CancelReport, cancelTurn GenerationCancelFunc) {
 	if cancelTurn == nil {
