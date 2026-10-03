@@ -4,10 +4,12 @@
 
 // ADR-20260928 sub-agent control plane (asset cd20cf8b), D4/D6.
 //
-// The per-session control ledger is append-only JSONL beside the lifecycle
-// journal. This file is the historical landed-stop reader. It does not
-// allocate seq and it does not append: a bare ledger intent is not a landed
-// stop, and the seq allocator waits for the stopseq RED pack.
+// The per-session control ledger is append-only JSONL under the lifecycle
+// dir's dedicated "controls" subdirectory (a flat sidecar would collide
+// with the flat *.jsonl session scanners — see the writer file's header).
+// This file is the historical landed-stop reader and the shared on-disk
+// line shape. It does not allocate seq and it does not append: the write
+// half is lifecycle_control_ledger_writer.go.
 //
 // not-wire-format: internal storage only. The SPA receipt remains the
 // generated ControlReceipt field. No new gateway byte is defined here.
@@ -40,7 +42,11 @@ type StoppedTransition struct {
 }
 
 // landedStopRecord is the on-disk projection attached to a control line
-// only once the stop has landed. Absent on a bare intent.
+// only once the stop has landed. Absent on a bare intent. Its presence —
+// NOT the line's receipt state — is what makes a line a committed
+// landed-transition event: the final "applied" receipt cannot precede the
+// D6 direct-parent notice's durability, so a landed stop stays state
+// "queued" until a later unit writes the applied receipt.
 type landedStopRecord struct {
 	ParentSessionID string    `json:"parent_session_id"`
 	Generation      int       `json:"generation"`
@@ -49,7 +55,9 @@ type landedStopRecord struct {
 	At              time.Time `json:"at"`
 }
 
-// controlLedgerLine is one append-only control-ledger record.
+// controlLedgerLine is one append-only control-ledger record. The
+// Generation/Cause/Actor/StopEffect fields are the stop verb's acceptance
+// content (the write half fills them); Reason stays the D4 receipt reason.
 type controlLedgerLine struct {
 	Seq        int64             `json:"seq"`
 	ControlID  string            `json:"control_id"`
@@ -57,17 +65,40 @@ type controlLedgerLine struct {
 	State      string            `json:"state"`
 	Reason     string            `json:"reason,omitempty"`
 	AcceptedAt time.Time         `json:"accepted_at"`
+	Generation int               `json:"generation,omitempty"`
+	Cause      StopCause         `json:"cause,omitempty"`
+	Actor      string            `json:"actor,omitempty"`
+	StopEffect *StopEffect       `json:"stop_effect,omitempty"`
 	LandedStop *landedStopRecord `json:"landed_stop,omitempty"`
 }
 
 func (s *LifecycleStore) controlLedgerPath(sessionID string) string {
-	return filepath.Join(s.dir, sessionID+".control.jsonl")
+	// Dedicated subdirectory, NOT a flat sidecar: the lifecycle dir's flat
+	// *.jsonl scanners (scanSessionIDs, SteerBootRecovery.sessionIDs) skip
+	// directories, so "controls/" never phantom-registers as a session id —
+	// while a flat "<session>.control.jsonl" would. No scanner is patched to
+	// hide the sidecar; the directory IS the non-collision.
+	return filepath.Join(s.dir, "controls", sessionID+".jsonl")
 }
 
-// ListStoppedTransitions returns landed stops for the child session, in
-// ledger order. A missing ledger is an empty result. A queued or otherwise
-// unlanded line is not a result. A newline-terminated line that does not
-// parse is a visible error. Only an unterminated torn tail is skipped.
+// ListStoppedTransitions returns the child's committed landed-transition
+// events, in ledger order. A line is a landed transition when its
+// landed_stop projection is present — REGARDLESS of the line's receipt
+// state: the final "applied" receipt waits for the D6 direct-parent notice's
+// durability, so requiring it here would hide every landed stop whose
+// notice has not been published yet, and a bare queued intent (no
+// projection) is still not a landed stop. A control's landed history
+// survives a same-generation RESUME (the ledger is append-only; the resume
+// clears the record's active note, never history), and a control landed
+// before its parent notice keeps returning until the notice unit finalizes
+// it — the reader reports history, never the final receipt.
+//
+// One transition is returned per control sequence: a later line refining
+// the same control's receipt state (a future applied receipt) never
+// duplicates it — the first landed occurrence carries the history.
+//
+// A missing ledger is an empty result. A newline-terminated line that does
+// not parse is a visible error. Only an unterminated torn tail is skipped.
 func (s *LifecycleStore) ListStoppedTransitions(sessionID string) ([]StoppedTransition, error) {
 	if err := validateLifecycleSessionID(sessionID); err != nil {
 		return nil, err
@@ -89,10 +120,11 @@ func (s *LifecycleStore) listStoppedTransitionsLocked(sessionID string) ([]Stopp
 	return stoppedTransitionsFromLedger(sessionID, raw)
 }
 
-// stoppedTransitionsFromLedger keeps a final incomplete line only when the
-// file does not end in a newline (a crash mid-append). A newline-terminated
-// line that does not parse is returned as an error, including the last one.
-func stoppedTransitionsFromLedger(sessionID string, raw []byte) ([]StoppedTransition, error) {
+// parseControlLedger parses the whole ledger, shared by the reader and the
+// write half's scans. It keeps a final incomplete line only when the file
+// does not end in a newline (a crash mid-append). A newline-terminated line
+// that does not parse is returned as an error, including the last one.
+func parseControlLedger(sessionID string, raw []byte) ([]controlLedgerLine, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
@@ -101,8 +133,7 @@ func stoppedTransitionsFromLedger(sessionID string, raw []byte) ([]StoppedTransi
 	if !tornTail && len(parts) > 0 && len(parts[len(parts)-1]) == 0 {
 		parts = parts[:len(parts)-1]
 	}
-	var out []StoppedTransition
-	var lastSeq uint64
+	out := make([]controlLedgerLine, 0, len(parts))
 	for i, part := range parts {
 		line := bytes.TrimSpace(part)
 		if len(line) == 0 {
@@ -115,13 +146,34 @@ func stoppedTransitionsFromLedger(sessionID string, raw []byte) ([]StoppedTransi
 			}
 			return nil, fmt.Errorf("session: control ledger: session %q line %d: %w", sessionID, i+1, err)
 		}
-		if rec.LandedStop == nil || rec.State != "applied" {
+		out = append(out, rec)
+	}
+	return out, nil
+}
+
+// stoppedTransitionsFromLedger projects the parsed ledger onto landed
+// transitions: one per control sequence, strictly advancing, in ledger
+// order.
+func stoppedTransitionsFromLedger(sessionID string, raw []byte) ([]StoppedTransition, error) {
+	lines, err := parseControlLedger(sessionID, raw)
+	if err != nil {
+		return nil, err
+	}
+	var out []StoppedTransition
+	var lastSeq uint64
+	returnedSeq := make(map[uint64]struct{})
+	for i, rec := range lines {
+		if rec.LandedStop == nil {
 			continue
 		}
 		tr, err := landedTransition(sessionID, rec)
 		if err != nil {
 			return nil, fmt.Errorf("session: control ledger: session %q line %d: %w", sessionID, i+1, err)
 		}
+		if _, seen := returnedSeq[tr.StopSeq]; seen {
+			continue
+		}
+		returnedSeq[tr.StopSeq] = struct{}{}
 		if lastSeq != 0 && tr.StopSeq <= lastSeq {
 			return nil, fmt.Errorf("session: control ledger: session %q stop seq %d does not advance %d", sessionID, tr.StopSeq, lastSeq)
 		}
