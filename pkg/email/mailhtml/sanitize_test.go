@@ -66,16 +66,26 @@ func normalize(t *testing.T, s string) string {
 // P1 — non-conforming url() values' declarations dropped, conforming kept.
 func TestStyleURLPolicyDropsNonConformingKeepsConforming(t *testing.T) {
 	cases := []struct {
-		url   string
-		keep  bool
-		note  string
+		url  string
+		keep bool
+		note string
 	}{
 		{`url('http://evil/x')`, false, "plain http"},
 		{`url(//evil/x)`, false, "protocol-relative"},
 		{`url(/rel)`, false, "relative"},
 		{`url(data:image/svg+xml;base64,PHN2Zy8+)`, false, "svg data URI (artefact §3 row 8: sanitizer-only gate)"},
 		{`url(data:text/html;base64,PHNjcmlwdD4=)`, false, "html data URI"},
-		{`url('https://good/img.png')`, true, "https absolute"},
+		// security F3 (commit 690e40cbb): pin-then-rewrite runs BEFORE
+		// sanitisation, so a remote URL still raw at check time is by
+		// definition unpinned (LoadRemote off, or past the pin cap) and its
+		// declaration drops — never served verbatim (a served artifact that
+		// phones home on re-host). The pre-F3 "https absolute → keep" row
+		// pinned the removed admit; the fix commit's NOTE for qa-lead
+		// declares the flip.
+		{`url('https://good/img.png')`, false, "raw https absolute (security F3: unpinned remote drops)"},
+		// The conforming remote shape is the post-rewrite token-scoped
+		// path — the same shape mailImageSrcRe admits for <img>.
+		{`url('/mail-preview/img/tok/0')`, true, "token-scoped post-rewrite path"},
 		{`url(data:image/png;base64,iVBORw0KGgo=)`, true, "raster data URI"},
 	}
 	for _, tc := range cases {
