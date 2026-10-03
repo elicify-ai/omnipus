@@ -68,6 +68,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -77,6 +78,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -437,4 +439,77 @@ func TestArchiveWriteError_ContinuationFlush_RefusedAppendMustNotDestroyPendingT
 			"was refused by the filesystem and must not appear from a failed append")
 	require.Equal(t, "user", archive[0].Role, "earlier setup data must survive untouched")
 	require.Equal(t, userText, archive[0].Content)
+}
+
+// Site 4 of the fire-and-forget seam, scoped to the false-success signal
+// only: pkg/agent/loop.go::writeTurnCancelledRestartForActiveTurns writes
+// the FR-048 turn_canceled_restart marker through the same swallowing
+// wrapper and then branches on Save — which returns nil unconditionally —
+// so the InfoCF success log "FR-048: turn_canceled_restart written on
+// graceful shutdown" fires even when the append was refused. The repo's
+// reporting rule (root CLAUDE.md, "Reporting Results (MANDATORY)") forbids
+// reporting unverified success.
+//
+// Deliberately NOT asserted here: what the shutdown path should DO about a
+// failed marker write (retry, block, return surface). No existing authority
+// defines that disposition (grep over docs/ finds no spec for
+// turn_canceled_restart); that shape is returned to the dispatcher as a
+// missing question, not invented by this test.
+func TestArchiveWriteError_ShutdownMarker_RefusedAppendMustNotLogSuccess(t *testing.T) {
+	readLog := captureLogFile(t, logger.INFO)
+	h := newArchiveErrHarness(t, "arch-err-shutdown")
+	userText := "user turn still active at graceful shutdown"
+
+	h.persistUserInput(t, userText)
+	ts := newArchiveErrTurnState(h.agent, h.key, userText)
+	h.al.registerActiveTurn(ts)
+
+	restore := h.refuseArchiveAppends(t)
+	defer restore()
+
+	h.al.writeTurnCancelledRestartForActiveTurns()
+
+	logs := readLog()
+	require.NotContains(t, logs, "turn_canceled_restart written",
+		"the FR-048 success log must not fire when the marker append was refused — "+
+			"a success line for an unverified write is the misleading-success signature")
+
+	// The refusal genuinely prevented the targeted write: the restored
+	// archive holds the earlier user line and no marker line.
+	restore()
+	archive, readErr := h.store.ReadArchive(context.Background(), h.key)
+	require.NoError(t, readErr, "archive must be readable again after the file is restored")
+	require.Len(t, archive, 1,
+		"archive must hold exactly the earlier user line: the marker append was "+
+			"refused and must not appear from a failed write")
+	require.Equal(t, "user", archive[0].Role, "earlier setup data must survive untouched")
+}
+
+// Positive control for the shutdown marker: with a healthy archive the same
+// function writes the marker and logs the success — proving the log capture
+// and the harness reach the real branch, so the refusal test's silence is
+// the instrument working, not a blind spot.
+func TestArchiveWriteError_ShutdownMarker_PositiveControl_HealthyArchiveWritesMarkerAndLogsSuccess(t *testing.T) {
+	readLog := captureLogFile(t, logger.INFO)
+	h := newArchiveErrHarness(t, "arch-err-shutdown-ctl")
+	userText := "control: user turn still active at graceful shutdown"
+
+	h.persistUserInput(t, userText)
+	ts := newArchiveErrTurnState(h.agent, h.key, userText)
+	h.al.registerActiveTurn(ts)
+
+	h.al.writeTurnCancelledRestartForActiveTurns()
+
+	require.Contains(t, readLog(), "turn_canceled_restart written",
+		"healthy archive: the FR-048 success log must fire — proves the capture "+
+			"sees this exact log line at all")
+
+	archive, readErr := h.store.ReadArchive(context.Background(), h.key)
+	require.NoError(t, readErr, "healthy archive must stay readable")
+	require.Len(t, archive, 2, "healthy archive must hold exactly user + marker lines")
+	require.Equal(t, "user", archive[0].Role)
+	require.Equal(t, "system", archive[1].Role)
+	require.Equal(t, fmt.Sprintf(
+		`{"type":"turn_canceled_restart","session_key":%q,"reason":"graceful_shutdown"}`, h.key,
+	), archive[1].Content, "marker line must carry the exact FR-048 content contract")
 }
