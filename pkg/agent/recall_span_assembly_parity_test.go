@@ -118,6 +118,13 @@ func recallParityAssemble(t *testing.T, h *cwR1Harness, ts *turnState, userMsg s
 // TestAssembleMessages_PoisonedRecallSpanPassesWindowGroups is RED on the
 // unfixed from-scratch path: assembleMessages appends the span raw, so
 // validateWindowGroups still reports an incomplete tool-result group.
+//
+// On the fixed path this fixture is shortened. sanitizeHistoryIndexed drops
+// the assistant whose three tool_call ids have no results and keeps the two
+// user messages (context.go second pass; the same rule spliceRecallSpan
+// uses). recordAssembledRecallSpan must store that kept length, 2, not the
+// raw span length, 3. The valid-span control cannot tell those apart: there
+// the sanitizer drops nothing, so both numbers are the span's own length.
 func TestAssembleMessages_PoisonedRecallSpanPassesWindowGroups(t *testing.T) {
 	h := cwR1New(t, 80_000)
 	const liveUser = "live window is already a finished prose turn"
@@ -150,6 +157,30 @@ func TestAssembleMessages_PoisonedRecallSpanPassesWindowGroups(t *testing.T) {
 		"the dangling rewritten calls are dropped, not left for a loosened validator to ignore")
 	require.Equal(t, []string{}, recallParityResultIDs(assembled),
 		"a dangling assistant contributes no partial tool results")
+
+	// Kept payload: the two user messages, in order, at the leading-user
+	// offset (pinned system, then the live user, then the span). The
+	// unanswered assistant is not among them. Raw span length is 3.
+	const poisonedRecallKeptLen = 2
+	const poisonedRecallRawLen = 3
+	kept := []providers.Message{
+		{Role: "user", Content: recallParityMarker},
+		{Role: "user", Content: "recalled in-flight user"},
+	}
+	require.Equal(t, poisonedRecallRawLen, len(dangling),
+		"fixture raw span length stays 3 (marker, recalled user, unanswered assistant) so kept and raw differ")
+	require.Len(t, assembled, 2+poisonedRecallKeptLen+2,
+		"pinned system, leading live user, kept span, remaining live assistant, current user")
+	require.Equal(t, kept, assembled[2:2+poisonedRecallKeptLen],
+		"kept span is the marker and the recalled user; the unanswered assistant is not in the slice")
+	require.Equal(t, 0, recallParityCountContent(assembled, "mid-group tool calls"),
+		"the unanswered assistant text is removed, not blanked and left in the slice")
+
+	ts.mu.RLock()
+	gotLen := ts.injectedRecallLen
+	ts.mu.RUnlock()
+	require.Equal(t, poisonedRecallKeptLen, gotLen,
+		"recorded length must be the kept span (2: marker + recalled user), not the raw span length 3; recording the raw length removes the wrong block at the tool-result site")
 }
 
 // TestNextTurnAfterMidGroupRecallConversationReachesProvider drives the real
