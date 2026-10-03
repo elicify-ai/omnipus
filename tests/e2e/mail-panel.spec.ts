@@ -570,8 +570,19 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
       await page.getByRole('button', { name: new RegExp(`^${subject}`) }).click()
       const detail = await detailResponse
       console.log('F5 deleted detail:', JSON.stringify({ oldUid: original.uid, url: detail.url(), status: detail.status() }))
-      await expect(page.getByTestId('mail-reading-zone')).toContainText('This draft was changed or deleted elsewhere. The list has been refreshed.')
-      await expect(page.getByTestId('mail-reading-zone')).not.toContainText('404:')
+      // Superseded oracle, re-derived (W3 panel spec §11 S-11 + §8.8's re-pin
+      // list, correction F-4; landed in a3a678b34, 2026-10-02): the drafts-era
+      // string "This draft was changed or deleted elsewhere. The list has been
+      // refreshed." was replaced by the generalized message-changed surface
+      // "This message changed or was deleted. Refresh the list." + a Refresh
+      // list button; a stale row click can never render as a successful open.
+      // The new surface never claims a refresh happened, and the list updates
+      // only when the human clicks Refresh list (FR-W3-2 — manual refresh).
+      const readingZone = page.getByTestId('mail-reading-zone')
+      await expect(readingZone).toContainText('This message changed or was deleted. Refresh the list.')
+      await expect(readingZone).not.toContainText('404:')
+      await expect(readingZone).not.toContainText(/has been refreshed/i)
+      await readingZone.getByRole('button', { name: 'Refresh list' }).click()
       await expect(page.getByRole('button', { name: new RegExp(`^${subject}`) })).toHaveCount(0)
     } finally {
       await page.context().close()
