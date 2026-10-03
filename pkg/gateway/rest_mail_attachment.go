@@ -478,9 +478,11 @@ func (p *mailAttachmentRoutes) serveBytes(w http.ResponseWriter, r *http.Request
 	} else if ctype == "" {
 		ctype = "application/octet-stream"
 	}
+	// FR-008c: the disposition is written by the shared helper in
+	// inline_serving.go — this package's one permitted Content-Disposition
+	// writer — never by the route itself.
+	applyMailPreviewInlineByteHeaders(w, ctype)
 	h := w.Header()
-	h.Set("Content-Type", ctype)
-	h.Set("Content-Disposition", "inline")
 	h.Set("Content-Length", strconv.Itoa(len(part.Data)))
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {
