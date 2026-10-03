@@ -43,6 +43,13 @@ jobs:
           echo "mem: $(sysctl -n hw.memsize)"
           go version; go env GOMAXPROCS GOARCH
 
+      - name: Prepare SPA embed stub
+        # MISSING IN PROBE RUN 1 — that is why pkg/gateway failed [setup failed]
+        # with "pattern all:spa: no matching files found" in 6s. My omission.
+        run: |
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep || exit 1
+          test -d pkg/gateway/spa/assets || { echo "::error::SPA stub failed" >&2; exit 1; }
+
       - name: pkg/agent ALONE, serial, verbose, generous timeout
         run: |
           set +e
