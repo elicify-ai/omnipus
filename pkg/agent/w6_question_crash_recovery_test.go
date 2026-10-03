@@ -18,11 +18,15 @@ package agent
 // non-root), so the sidecar commits while the lifecycle persist fails.
 //
 // Oracles are derived from the ADR, not from this tree's behaviour:
-//   - D1.5: a split reservation must retain answer_pending_delivery (or
-//     another recoverable state), report the incomplete step visibly, never
-//     falsely mark the question applied, and stay recoverable without a
-//     fresh answer; a fresh explicit retry (the respond path is the only
-//     explicit resume action in this tree) finishes delivery once.
+//   - D1.5: a split reservation must retain exactly answer_pending_delivery —
+//     the one recoverable reservation state the ADR specifies ("retain
+//     answer_pending_delivery"; T2 "the original exact owner text and
+//     intent"; open carries no reserved answer and cannot block a changed
+//     answer) — report the incomplete step visibly, never falsely mark the
+//     question applied, never accept a different answer over the reservation,
+//     and stay recoverable without a fresh answer; a fresh explicit retry of
+//     the SAME answer (the respond path is the only explicit resume action in
+//     this tree) finishes delivery once.
 //   - D1.7: the sidecar keeps the exact original deadline across Stop.
 //   - MAJ-002: a failed answer recording must be refused visibly before any
 //     dispatch or question consumption side effect beyond the reservation.
@@ -51,6 +55,9 @@ const (
 	w6cParkCorrelation = "w6-crash-park-phantom"
 	w6cAnswer          = "yes, deliver the reserved answer"
 	w6cPhantomAnswer   = "phantom answer to a never-parked question"
+	// w6cDifferentAnswer is cut 1's refused second answer: a different text
+	// for the same reserved question must conflict, never overwrite.
+	w6cDifferentAnswer = "no, use the production key instead"
 	// w6cPermDenied is the EACCES text darwin and linux both produce when
 	// the euid opens an owned 0400 file O_RDWR|O_CREATE|O_APPEND. The
 	// instrument checks require it so a random failure cannot pass for the
@@ -119,14 +126,34 @@ func w6cRestoreWrite(t *testing.T, path string) {
 	}
 }
 
+// w6cAssertSameReservation fails unless got is the very reservation want
+// holds. D1.5's "first committed reservation wins" makes the reserved
+// identity {status, answer text, correlation, authority, asker, generation,
+// original deadline} the thing a refused second answer must leave byte-for-
+// byte unchanged; deadline compares by instant, not zone.
+func w6cAssertSameReservation(t *testing.T, got, want *session.PendingQuestion) {
+	t.Helper()
+	if got.Status != want.Status || got.AnswerText != want.AnswerText ||
+		got.CorrelationID != want.CorrelationID || got.Authority != want.Authority ||
+		got.AskerSessionID != want.AskerSessionID || got.AskerGeneration != want.AskerGeneration ||
+		!got.OriginalDeadline.Equal(want.OriginalDeadline) {
+		t.Fatalf("reservation identity changed: got status=%q answer=%q corr=%q authority=%q asker=%q gen=%d deadline=%s, want status=%q answer=%q corr=%q authority=%q asker=%q gen=%d deadline=%s",
+			got.Status, got.AnswerText, got.CorrelationID, got.Authority, got.AskerSessionID, got.AskerGeneration, got.OriginalDeadline.Format(time.RFC3339Nano),
+			want.Status, want.AnswerText, want.CorrelationID, want.Authority, want.AskerSessionID, want.AskerGeneration, want.OriginalDeadline.Format(time.RFC3339Nano))
+	}
+}
+
 // TestW6CrashLifecyclePersistFails_AnswerStaysPendingDelivery_NotApplied is
 // cut 1: the child is a stopped self_ok asker. With the sidecar writable and
 // the child's lifecycle JSONL unwritable, respond reserves the answer
 // (sidecar) and records it in the transcript, then the lifecycle persist at
 // finish fails. ADR D1.5: the tool must report the incomplete step visibly,
-// the sidecar must NOT read applied, the answer text must stay recoverable
-// unchanged, and after repair a fresh explicit respond must deliver the SAME
-// answer exactly once and only then mark the question applied.
+// the sidecar must hold exactly answer_pending_delivery with the original
+// instruction unconditionally, and after repair a DIFFERENT answer through
+// the same respond path must be refused as a conflict — not by a write
+// failure — leaving the reservation untouched, while a fresh explicit respond
+// with the SAME answer delivers it exactly once and only then marks the
+// question applied.
 func TestW6CrashLifecyclePersistFails_AnswerStaysPendingDelivery_NotApplied(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -165,12 +192,17 @@ func TestW6CrashLifecyclePersistFails_AnswerStaysPendingDelivery_NotApplied(t *t
 		t.Fatalf("one respond must not dispatch the child more than once: %v", resumes.calls)
 	}
 
+	// ADR D1.5/T2 name exactly one recoverable reservation state:
+	// answer_pending_delivery ("retain answer_pending_delivery"; T2 "the
+	// original exact owner text and intent"). open carries no reserved-answer
+	// identity — it cannot block a changed answer — so resetting to open is
+	// not recovery, and applied is false completion. Neither is acceptable.
 	q := w6cMustQuestion(t, freshLC, child.SessionID)
-	if q.Status == session.QuestionStatusApplied || !q.Answerable() {
-		t.Fatalf("sidecar must stay recoverable (answer_pending_delivery or open), never falsely applied, when the lifecycle persist failed (ADR D1.5): status=%q answer_text=%q", q.Status, q.AnswerText)
+	if q.Status != session.QuestionStatusAnswerPendingDelivery {
+		t.Fatalf("sidecar must hold exactly answer_pending_delivery when the lifecycle persist failed (ADR D1.5 'retain answer_pending_delivery'; open has no reserved answer, applied is false completion): status=%q answer_text=%q", q.Status, q.AnswerText)
 	}
-	if q.Status == session.QuestionStatusAnswerPendingDelivery && q.AnswerText != instruction {
-		t.Fatalf("pending answer must keep the exact reserved text (ADR D1.5): got %q want %q", q.AnswerText, instruction)
+	if q.AnswerText != instruction {
+		t.Fatalf("the reservation must keep the exact original committed instruction unconditionally (ADR T2 'original exact owner text and intent'): got %q want %q", q.AnswerText, instruction)
 	}
 	if !q.OriginalDeadline.Equal(deadline) {
 		t.Fatalf("failed respond must not rewrite the original deadline: got %s want %s", q.OriginalDeadline.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
@@ -182,10 +214,41 @@ func TestW6CrashLifecyclePersistFails_AnswerStaysPendingDelivery_NotApplied(t *t
 	if afterChild.State != session.LifecycleStopped || afterChild.Generation != generation {
 		t.Fatalf("child must remain stopped at the same generation while the lifecycle persist fails (state from the real record, not the dispatch recorder): state=%s generation=%d want_generation=%d", afterChild.State, afterChild.Generation, generation)
 	}
+	dispatchesAfterFault := len(resumes.calls)
 
-	// Repair, then the explicit retry: the same production respond action,
-	// same correlation, same text — this tree's explicit resume seam.
+	// Repair BEFORE the negative control: a later permission error must not
+	// masquerade as the conflict refusal this leg demands.
 	w6cRestoreWrite(t, lifecycleFile)
+
+	// Negative control (D1.5 "without permitting another question/message use";
+	// Once: "a second use or concurrent direct/relay answer is refused";
+	// "first committed reservation wins"): a DIFFERENT answer for the same
+	// question through the same production respond path must be refused as a
+	// conflict — visibly, and not by the injected write failure.
+	differentInstruction := w6SelfOKDelivery(corr, w6cDifferentAnswer)
+	conflict := delegate.Execute(parentCtx, w6RespondArgs(child.SessionID, corr, w6cDifferentAnswer))
+	if !conflict.IsError {
+		t.Fatalf("a different answer over a reserved question must be refused (ADR D1.5): error=false text=%q", conflict.ForLLM)
+	}
+	if !strings.Contains(conflict.ForLLM, "already has a different pending answer") {
+		t.Fatalf("the refusal must be the conflict refusal for the reserved answer, not a generic failure (ADR D1.5 'first committed reservation wins'): text=%q", conflict.ForLLM)
+	}
+	if strings.Contains(conflict.ForLLM, w6cPermDenied) {
+		t.Fatalf("the lifecycle file is repaired, so a permission error here is not the conflict refusal (ADR D1.5): text=%q", conflict.ForLLM)
+	}
+	if got := w6CountTranscript(t, al.GetSessionStore(), child.SessionID, instruction); got != 1 {
+		t.Fatalf("the refused second answer must not touch the reserved transcript copy: copies=%d", got)
+	}
+	if got := w6CountTranscript(t, al.GetSessionStore(), child.SessionID, differentInstruction); got != 0 {
+		t.Fatalf("the refused second answer must never be recorded in the transcript: copies=%d", got)
+	}
+	if len(resumes.calls) != dispatchesAfterFault {
+		t.Fatalf("the refused second answer must not dispatch the child: before=%d after=%d (%v)", dispatchesAfterFault, len(resumes.calls), resumes.calls)
+	}
+	w6cAssertSameReservation(t, w6cMustQuestion(t, freshLC, child.SessionID), q)
+
+	// Then the explicit retry of the SAME answer: the same production respond
+	// action, same correlation, same text — this tree's explicit resume seam.
 	second := delegate.Execute(parentCtx, w6RespondArgs(child.SessionID, corr, w6cAnswer))
 	if second.IsError {
 		t.Fatalf("explicit retry after repair must complete the reserved delivery (ADR D1.5 'previously reserved delivery is recoverable without inventing a fresh answer'): error=%v text=%q sidecar=%q", second.IsError, second.ForLLM, w6cMustQuestion(t, freshLC, child.SessionID).Status)
@@ -193,8 +256,11 @@ func TestW6CrashLifecyclePersistFails_AnswerStaysPendingDelivery_NotApplied(t *t
 	if got := w6CountTranscript(t, al.GetSessionStore(), child.SessionID, instruction); got != 1 {
 		t.Fatalf("retry must deliver the SAME answer exactly once, never a second copy (ADR D1.5/T2 once): copies=%d", got)
 	}
-	if fq := w6cMustQuestion(t, freshLC, child.SessionID); fq.Status != session.QuestionStatusApplied {
-		t.Fatalf("retry must mark the question applied only after delivery (ADR D1.5 'finish applied only after the asker has received the answer'): status=%q", fq.Status)
+	if got := w6CountTranscript(t, al.GetSessionStore(), child.SessionID, differentInstruction); got != 0 {
+		t.Fatalf("the refused answer must still be absent after the retry: copies=%d", got)
+	}
+	if fq := w6cMustQuestion(t, freshLC, child.SessionID); fq.Status != session.QuestionStatusApplied || fq.AnswerText != instruction {
+		t.Fatalf("retry must mark the question applied only after delivery, keeping the delivered answer identity (ADR D1.5 'finish applied only after the asker has received the answer'): status=%q answer_text=%q", fq.Status, fq.AnswerText)
 	}
 	afterRetry := w6MustLoad(t, freshLC, child.SessionID)
 	if afterRetry.State == session.LifecycleStopped || afterRetry.Generation != generation {
