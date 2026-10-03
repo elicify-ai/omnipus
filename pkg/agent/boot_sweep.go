@@ -161,6 +161,20 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 			notice("refused:"+id, fmt.Sprintf("session %s refused at boot: unknown classification %q", id, class))
 		}
 	}
+
+	// D8.1 pass two: retry publication of every pending committed final,
+	// across ALL generations, even when the session's current tail is a newer
+	// working G+1 (D2/D8.5/D8.9). Delivery-only — the pass never stops a
+	// session, starts a turn, or writes a LifecycleRecord; the automatic boot
+	// stop of an uncommitted current run (D8.3 stopped(restart)) is the
+	// separate pass one this follows. A scan-level consistency error (an
+	// orphan envelope fails the whole store's scan, D2) is surfaced through
+	// the operator notice and never blocks the gateway from starting — the
+	// same posture the sweep itself follows for per-record damage; per-item
+	// failures are noticed inside the pass and stay retryable.
+	if err := r.runFinalDeliveryPass(ctx); err != nil {
+		notice("final-delivery-scan", fmt.Sprintf("committed-final delivery pass failed: %v", err))
+	}
 	return nil
 }
 
@@ -228,27 +242,50 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	finalID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
 	final, hasFinal := findBootMessage(messages, finalID)
 	finalHandled := false
+	// D2: the record's own tail commit is the only publication authority for
+	// the tail generation. A committed final always sits on a terminal record
+	// line, so a non-terminal tail never carries one — an inbox final on a
+	// non-terminal record is the phantom case D8.5 refuses.
+	committedForTail := rec.FinalDelivery != nil && rec.FinalDelivery.Generation == rec.Generation
 	if !rec.Terminal() && hasFinal {
-		r.deliverIfUnconsumed(ctx, rec, final, notice)
-		finalHandled = true
+		// D2/D8.5: an inbox final alone is never a lifecycle winner.
+		// finishFromFinal refuses the promotion (commit-based reconciliation);
+		// the inconsistent record is reported visibly and the id is not
+		// consumed — neither re-delivered from inbox presence nor promoted.
+		// The record's own boot consequence below (today the legacy
+		// interrupted landing; D8.3's stopped(restart) is W3b's) proceeds.
 		if err := r.finishFromFinal(rec, final); err != nil {
 			notice("repair-record:"+id, fmt.Sprintf("session %s terminal-record repair failed: %v", id, err))
 			return
 		}
-		rec, _ = r.Lifecycle.Load(id)
-	} else if rec.Terminal() && !hasFinal {
-		message, outcome, buildErr := r.terminalMessage(rec)
-		if buildErr != nil {
-			notice("repair-message:"+id, fmt.Sprintf("session %s terminal-inbox repair failed: %v", id, buildErr))
-			return
-		}
-		r.deliver(ctx, rec, outcome, message, notice)
+		notice("phantom-final:"+id, fmt.Sprintf("session %s has inbox final %s without a matching committed lifecycle/outbox outcome — not promoted, not re-woken (D8.5)", id, finalID))
 		finalHandled = true
-		messages = append(messages, message)
+	} else if rec.Terminal() && !hasFinal {
+		if committedForTail {
+			// The committed payload is the only publishable bytes for this
+			// generation (D2: the published bytes are the committed exact
+			// upward message) — the delivery pass below publishes it; a
+			// transcript rebuild here could only diverge from the commit.
+			finalHandled = true
+		} else {
+			message, outcome, buildErr := r.terminalMessage(rec)
+			if buildErr != nil {
+				notice("repair-message:"+id, fmt.Sprintf("session %s terminal-inbox repair failed: %v", id, buildErr))
+				return
+			}
+			r.deliver(ctx, rec, outcome, message, notice)
+			finalHandled = true
+			messages = append(messages, message)
+		}
 	}
 
 	if !rec.Terminal() && rec.State != session.LifecycleNeedsInput {
 		for _, message := range messages {
+			if envelope, envErr := decodeBootMessage(message); finalHandled && envErr == nil && envelope.MessageID == finalID {
+				// The refused phantom id (or the commit-owned id) is not
+				// re-woken from inbox presence (D2: do not consume the id).
+				continue
+			}
 			r.deliverIfUnconsumed(ctx, rec, message, notice)
 		}
 		message, buildErr := interruptedBootMessage(rec)
@@ -277,6 +314,14 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	for _, message := range messages {
 		if envelope, envErr := decodeBootMessage(message); finalHandled && envErr == nil && envelope.MessageID == finalID {
 			continue
+		}
+		if committedForTail && rec.FinalDelivery != nil {
+			if envelope, envErr := decodeBootMessage(message); envErr == nil && envelope.MessageID == rec.FinalDelivery.MessageID {
+				// The tail commit's final is the delivery pass's replay: its
+				// re-wake must record commit-joined delivery facts, so this
+				// legacy re-nudge never double-wakes it (D8.1 pass two).
+				continue
+			}
 		}
 		r.deliverIfUnconsumed(ctx, rec, message, notice)
 	}
@@ -395,34 +440,32 @@ func (r *SteerBootRecovery) deliver(ctx context.Context, rec *session.LifecycleR
 	}
 }
 
+// finishFromFinal is ADR-20260928 D2/D8.5's refusal seam: an inbox final
+// alone is NEVER a lifecycle winner. Promotion requires the matching
+// lifecycle/outbox commit, and a committed final always sits on a terminal
+// record line (the commit boundary writes terminal state AND the tuple in
+// one mutation) — so a non-terminal tail can never present a matching
+// commit, and the only legal repair of a committed-but-unpublished final is
+// PUBLICATION through the delivery pass (boot_final_delivery.go), never a
+// record rewrite from inbox presence. The inconsistent record is reported
+// visibly by the caller and the id is not consumed; the record's own boot
+// consequence proceeds. Pinned by TestBoot984_FinishFromFinal_
+// InboxFinalAloneCannotPromoteOrEndGoal (goal_followup_984_test.go).
 func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, message generated.SessionMessage) error {
-	envelope, err := decodeBootMessage(message)
-	if err != nil {
+	if _, err := decodeBootMessage(message); err != nil {
 		return err
 	}
-	err = r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
-		if current.Terminal() {
-			return nil
-		}
-		switch envelope.Kind {
-		case "handback":
-			if envelope.Mode != "final" {
-				return fmt.Errorf("message %s is a non-terminal handback", envelope.MessageID)
-			}
-			current.State = session.LifecycleCompleted
-		case "error":
-			if !envelope.Fatal {
-				return fmt.Errorf("message %s is a non-fatal error", envelope.MessageID)
-			}
-			current.State = session.LifecycleFailed
-			current.FailedReason = failedReasonFromBootText(envelope.Text)
-		default:
-			return fmt.Errorf("message %s kind %q is not terminal", envelope.MessageID, envelope.Kind)
-		}
-		current.NeedsInput = nil
-		return nil
-	})
-	return err
+	// Refusal is unconditional. Promotion would require the matching
+	// committed outbox tuple on the record itself, and a committed final
+	// always sits on a terminal record line (the commit boundary writes
+	// terminal state AND the tuple in one mutation) — so a non-terminal
+	// tail can never present a matching commit, and a terminal one needs no
+	// rewrite. The only legal repair of a committed-but-unpublished final
+	// is PUBLICATION through the delivery pass
+	// (boot_final_delivery.go::runFinalDeliveryPass), never a record
+	// rewrite from inbox presence. The caller reports the inconsistent
+	// record visibly and the id is not consumed.
+	return nil
 }
 
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
@@ -604,13 +647,9 @@ func bootOutcome(envelope bootSessionMessageEnvelope) steer.Outcome {
 	}
 }
 
-func failedReasonFromBootText(text string) string {
-	prefix, _, ok := strings.Cut(strings.TrimSpace(text), ":")
-	if ok && prefix != "" {
-		return prefix
-	}
-	return "failed"
-}
+// failedReasonFromBootText is retired with the inbox-first repair it served
+// (ADR-20260928 D2/D8.5): finishFromFinal no longer derives a failed reason
+// from stored boot text, so no reader of that mapping remains.
 
 // runBootSweep is the boot-time crash-recovery pass (FR-118/G-13/INV-9). It is
 // the sole caller of the sweep logic at boot, invoked from Start right after

@@ -1,0 +1,290 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+// boot_final_delivery.go is ADR-20260928 (sub-agent control plane, frozen
+// asset cd20cf8b) D8.1's boot pass two: the DELIVERY-ONLY retry of every
+// pending committed final, across ALL generations, even when the session's
+// current tail is a newer working G+1 (D2 "Discovery after a
+// newer-generation RESUME", D8.5/D8.9, T11's W3a slice).
+//
+// The pass publishes ONLY committed outbox tuples (the protected
+// FinalDeliveryCommit one outcome/publication commit wrote — see
+// steer_completion_commit.go::commitSteeredCompletion). It never mints a
+// final, never promotes a lifecycle record from an inbox final, never
+// writes a LifecycleRecord behind a newer generation, and never touches a
+// record's state, generation or execution identity: the only writer it
+// uses is the delivery-only LifecycleStore.UpdateFinalDelivery, and the
+// only discovery read is LifecycleStore.ListPendingFinalDeliveries. The
+// automatic boot stop of an uncommitted current run (D8.1 pass one /
+// D8.3 stopped(restart)) is a separate pass — W3b's — that must stay
+// independent of this one so QA can snapshot G+1 across ONLY delivery.
+package agent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
+)
+
+// maxFinalDeliveryCASAttempts bounds the UpdateFinalDelivery CAS retry: a
+// conflicting concurrent publisher is retried from fresh joined state
+// (progress merges are monotonic, so nothing is lost), twice, then the
+// failure is surfaced — never an abandoned silent write.
+const maxFinalDeliveryCASAttempts = 2
+
+// runFinalDeliveryPass retries publication of every pending committed final
+// (D8.1 pass two). Run calls it after its per-record reconciliation, in D8
+// order; it is also the production-used seam a delivery-only before/after
+// snapshot calls directly, because it is the whole delivery half of boot —
+// nothing here stops a session, starts a turn, or writes an identity.
+//
+// A scan-level consistency error (an orphan or corrupt delivery envelope
+// fails ListPendingFinalDeliveries for the whole store, D2) is returned to
+// the caller; per-item failures are surfaced through the operator notice
+// and leave the item pending and retryable — never silently dropped, never
+// acknowledged.
+func (r *SteerBootRecovery) runFinalDeliveryPass(ctx context.Context) error {
+	if r == nil || r.Lifecycle == nil {
+		return errors.New("agent: steer boot final delivery: lifecycle store must be configured")
+	}
+	noticed := make(map[string]bool)
+	notice := func(key, message string) {
+		if noticed[key] {
+			return
+		}
+		noticed[key] = true
+		if r.OperatorNotice != nil {
+			r.OperatorNotice(message)
+		}
+	}
+	pending, err := r.Lifecycle.ListPendingFinalDeliveries()
+	if err != nil {
+		return fmt.Errorf("agent: steer boot final delivery: scan pending committed finals: %w", err)
+	}
+	for _, item := range pending {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !item.Pending() {
+			// Retired, or its durable facts already show it delivered — the
+			// replay identity is the duplicate guard; nothing to retry.
+			continue
+		}
+		r.deliverPendingFinal(ctx, item, notice)
+	}
+	return nil
+}
+
+// deliverPendingFinal delivers ONE committed final to its committed direct
+// parent and records the durable delivery facts. Every refusal is visible
+// and leaves the item pending/retryable; nothing is ever acknowledged or
+// marked persisted on an attempt that did not durably happen (D2).
+func (r *SteerBootRecovery) deliverPendingFinal(ctx context.Context, item session.PendingFinalDelivery, notice func(key, message string)) {
+	commit := item.Commit
+	replayID := commit.ReplayID(item.SessionID)
+	if commit.MessageID != replayID {
+		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+			"session %s generation %d commit %q carries message_id %q, want the deterministic replay id %q — visible inconsistency, publication refused (D2)",
+			item.SessionID, item.Generation, commit.CommitID, commit.MessageID, replayID))
+		return
+	}
+	if commit.ParentSessionID == "" {
+		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+			"session %s generation %d commit %q carries no parent_session_id — visible inconsistency, publication refused (D2)",
+			item.SessionID, item.Generation, commit.CommitID))
+		return
+	}
+	if len(commit.Payload) == 0 {
+		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+			"session %s generation %d commit %q is pending but carries no payload bytes — visible inconsistency, publication refused (D2)",
+			item.SessionID, item.Generation, commit.CommitID))
+		return
+	}
+	var message generated.SessionMessage
+	if err := message.UnmarshalJSON(commit.Payload); err != nil {
+		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+			"session %s generation %d commit %q payload does not decode: %v — publication refused, the commit stays pending (D2)",
+			item.SessionID, item.Generation, commit.CommitID, err))
+		return
+	}
+
+	sighting, err := r.inboxFinalSighting(commit.ParentSessionID, replayID, commit.Payload)
+	if err != nil {
+		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+			"session %s committed final %s could not be reconciled against parent %s inbox: %v — retry next boot (D2)",
+			item.SessionID, replayID, commit.ParentSessionID, err))
+		return
+	}
+	// A same-id inbox entry with different bytes is a visible consistency
+	// error: never an acknowledgment, never an append, never a suppression (D2).
+	if sighting.appended && sighting.bytesDiverge {
+		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+			"session %s committed final %s collides with a parent %s inbox entry of the same id and different bytes — visible consistency error, publication refused (D2)",
+			item.SessionID, replayID, commit.ParentSessionID))
+		return
+	}
+	if sighting.acked {
+		// A genuinely acknowledged matching id means this committed result
+		// was already consumed: record the receipt, never send a second
+		// final, never re-wake (D2).
+		r.recordFinalDeliveryFacts(item, session.FinalDeliveryProgress{AckObserved: true}, notice)
+		return
+	}
+	if !sighting.appended {
+		event := steer.UpwardEvent{
+			ChildSessionID: item.SessionID,
+			Generation:     item.Generation,
+			Outcome:        steer.Outcome(commit.Outcome),
+			Message:        message,
+		}
+		delivery, deliverErr := r.deliverCommittedFinal(ctx, event, item, notice)
+		if deliverErr != nil {
+			// The append/wake did not durably happen: record NOTHING — the
+			// commit stays pending and retryable, visibly errored (D2).
+			notice("final-delivery:"+replayID, fmt.Sprintf(
+				"session %s committed final %s not delivered to parent %s: %v — the outbox entry stays pending for retry (D2)",
+				item.SessionID, replayID, commit.ParentSessionID, deliverErr))
+			return
+		}
+		r.reportAndRecordDelivery(ctx, event, item, delivery, notice)
+		return
+	}
+	// Already appended (same id, same bytes) but unacknowledged: retry the
+	// downstream effects — the wake — without a second append. Deliver's own
+	// append dedups the id (message_id is unique per owner key).
+	event := steer.UpwardEvent{
+		ChildSessionID: item.SessionID,
+		Generation:     item.Generation,
+		Outcome:        steer.Outcome(commit.Outcome),
+		Message:        message,
+	}
+	delivery, deliverErr := r.deliverCommittedFinal(ctx, event, item, notice)
+	if deliverErr != nil {
+		notice("final-delivery:"+replayID, fmt.Sprintf(
+			"session %s committed final %s wake retry to parent %s failed: %v — facts unchanged, the outbox entry stays pending (D2)",
+			item.SessionID, replayID, commit.ParentSessionID, deliverErr))
+		return
+	}
+	r.reportAndRecordDelivery(ctx, event, item, delivery, notice)
+}
+
+// deliverCommittedFinal runs the one Deliver call, guarding the unwired
+// deliverer visibly (a boot without a deliverer can still record nothing —
+// it must not claim delivery).
+func (r *SteerBootRecovery) deliverCommittedFinal(ctx context.Context, event steer.UpwardEvent, item session.PendingFinalDelivery, notice func(key, message string)) (steer.Delivery, error) {
+	if r.Deliverer == nil {
+		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+			"session %s committed final %s not delivered: upward deliverer is not configured — the outbox entry stays pending (D2)",
+			item.SessionID, item.Commit.MessageID))
+		return steer.Delivery{}, errors.New("agent: steer boot final delivery: upward deliverer is not configured")
+	}
+	return r.Deliverer.Deliver(ctx, event)
+}
+
+// reportAndRecordDelivery reports a stored-not-woken delivery with the same
+// last-resort posture every other Deliver call site uses (boot IS the
+// last-resort re-nudge), records the ack receipt when the dedup short-circuit
+// already consumed the id, and records the durable delivery facts.
+func (r *SteerBootRecovery) reportAndRecordDelivery(ctx context.Context, event steer.UpwardEvent, item session.PendingFinalDelivery, delivery steer.Delivery, notice func(key, message string)) {
+	reportUndeliveredWake("steer: boot final delivery", event, item.Commit.ParentSessionID, item.Generation, delivery)
+	woke := deliveryWokeRecipient(delivery.Outcome)
+	facts := session.FinalDeliveryProgress{InboxAppended: true, WakeRecorded: woke}
+	if !woke {
+		sighting, err := r.inboxFinalSighting(item.Commit.ParentSessionID, item.Commit.MessageID, item.Commit.Payload)
+		if err != nil {
+			notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+				"session %s committed final %s acknowledgement could not be inspected: %v — recorded facts stay at the observed wake only (D2)",
+				item.SessionID, item.Commit.MessageID, err))
+		} else if sighting.acked {
+			facts.AckObserved = true
+		}
+	}
+	r.recordFinalDeliveryFacts(item, facts, notice)
+}
+
+// inboxFinalSighting reports how the committed final's replay id exists in
+// the direct parent's durable inbox: appended (a message entry with that
+// id), bytesDiverge (the stored entry's bytes differ from the committed
+// payload), and acked (an ack entry consumed the id). Built on
+// MessageInboxStore.Entries' documented whole-file read — no new pkg/session
+// surface — so an acknowledged entry (invisible to Drain) is still seen.
+func (r *SteerBootRecovery) inboxFinalSighting(ownerKey, messageID string, payload []byte) (sighting struct {
+	appended     bool
+	bytesDiverge bool
+	acked        bool
+}, err error) {
+	if ownerKey == "" {
+		return sighting, errors.New("agent: steer boot final delivery: empty parent inbox owner key")
+	}
+	entries, err := r.Inbox.Entries(ownerKey)
+	if err != nil {
+		return sighting, fmt.Errorf("agent: steer boot final delivery: read parent %s inbox: %w", ownerKey, err)
+	}
+	for _, entry := range entries {
+		switch entry.Kind {
+		case session.InboxEntryMessage:
+			if entry.Message == nil {
+				continue
+			}
+			envelope, envErr := decodeBootMessage(*entry.Message)
+			if envErr != nil || envelope.MessageID != messageID {
+				continue
+			}
+			sighting.appended = true
+			raw, rawErr := entry.Message.MarshalJSON()
+			if rawErr != nil || string(raw) != string(payload) {
+				sighting.bytesDiverge = true
+			}
+		case session.InboxEntryAck:
+			if slices.Contains(entry.AckedIDs, messageID) {
+				sighting.acked = true
+			}
+		}
+	}
+	return sighting, nil
+}
+
+// recordFinalDeliveryFacts records durable delivery facts through the one
+// legal post-terminal writer (LifecycleStore.UpdateFinalDelivery — delivery
+// envelopes only, never a LifecycleRecord behind a newer generation). The
+// revision CAS conflict is retried from fresh joined state; every failure is
+// surfaced through the operator notice and leaves the item retryable.
+func (r *SteerBootRecovery) recordFinalDeliveryFacts(item session.PendingFinalDelivery, facts session.FinalDeliveryProgress, notice func(key, message string)) {
+	for attempt := 0; attempt < maxFinalDeliveryCASAttempts; attempt++ {
+		state, revision, retired, err := r.Lifecycle.FinalDeliveryState(item.SessionID, item.Generation, item.Commit.CommitID)
+		if err != nil {
+			notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+				"session %s committed final %s delivery facts could not be read: %v — retry next boot (D2)",
+				item.SessionID, item.Commit.MessageID, err))
+			return
+		}
+		if retired {
+			// Retirement completes the summary; nothing to record.
+			return
+		}
+		merged := state.Merge(facts)
+		if merged.Equal(state) {
+			return
+		}
+		err = r.Lifecycle.UpdateFinalDelivery(item.SessionID, item.Generation, item.Commit.CommitID, revision, session.FinalDeliveryCommand{Advance: &merged})
+		if errors.Is(err, session.ErrFinalDeliveryRevisionConflict) {
+			continue
+		}
+		if err != nil {
+			notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+				"session %s committed final %s delivery facts could not be recorded: %v — the facts stay unrecorded and retryable, never assumed (D2)",
+				item.SessionID, item.Commit.MessageID, err))
+			return
+		}
+		return
+	}
+	notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+		"session %s committed final %s delivery facts hit a persistent revision conflict — retry next boot (D2)",
+		item.SessionID, item.Commit.MessageID))
+}
