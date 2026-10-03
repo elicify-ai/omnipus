@@ -1907,6 +1907,24 @@ func (e ConfigurationPersistenceStatus) Valid() bool {
 	}
 }
 
+// Defines values for ContextWindowNoticeKind.
+const (
+	ContextWindowNoticeKindMidTurn       ContextWindowNoticeKind = "mid_turn"
+	ContextWindowNoticeKindProviderRetry ContextWindowNoticeKind = "provider_retry"
+)
+
+// Valid indicates whether the value is a known member of the ContextWindowNoticeKind enum.
+func (e ContextWindowNoticeKind) Valid() bool {
+	switch e {
+	case ContextWindowNoticeKindMidTurn:
+		return true
+	case ContextWindowNoticeKindProviderRetry:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ContextWindowSource.
 const (
 	ContextWindowSourceCatalog  ContextWindowSource = "catalog"
@@ -5216,6 +5234,24 @@ func (e MessageCancelMethod) Valid() bool {
 	}
 }
 
+// Defines values for MessageContextWindowNoticeKind.
+const (
+	MessageContextWindowNoticeKindMidTurn       MessageContextWindowNoticeKind = "mid_turn"
+	MessageContextWindowNoticeKindProviderRetry MessageContextWindowNoticeKind = "provider_retry"
+)
+
+// Valid indicates whether the value is a known member of the MessageContextWindowNoticeKind enum.
+func (e MessageContextWindowNoticeKind) Valid() bool {
+	switch e {
+	case MessageContextWindowNoticeKindMidTurn:
+		return true
+	case MessageContextWindowNoticeKindProviderRetry:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageGoalOutcomeEnding.
 const (
 	MessageGoalOutcomeEndingMet             MessageGoalOutcomeEnding = "met"
@@ -5584,18 +5620,21 @@ func (e MessageTruncationReason) Valid() bool {
 
 // Defines values for MessageType.
 const (
-	MessageTypeCompaction   MessageType = "compaction"
-	MessageTypeJudgeVerdict MessageType = "judge_verdict"
-	MessageTypeMessage      MessageType = "message"
-	MessageTypeSystem       MessageType = "system"
-	MessageTypeToolCall     MessageType = "tool_call"
-	MessageTypeTurnCanceled MessageType = "turn_canceled"
+	MessageTypeCompaction          MessageType = "compaction"
+	MessageTypeContextWindowNotice MessageType = "context_window_notice"
+	MessageTypeJudgeVerdict        MessageType = "judge_verdict"
+	MessageTypeMessage             MessageType = "message"
+	MessageTypeSystem              MessageType = "system"
+	MessageTypeToolCall            MessageType = "tool_call"
+	MessageTypeTurnCanceled        MessageType = "turn_canceled"
 )
 
 // Valid indicates whether the value is a known member of the MessageType enum.
 func (e MessageType) Valid() bool {
 	switch e {
 	case MessageTypeCompaction:
+		return true
+	case MessageTypeContextWindowNotice:
 		return true
 	case MessageTypeJudgeVerdict:
 		return true
@@ -8810,6 +8849,24 @@ func (e SessionDetailMessagesCancelMethod) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesContextWindowNoticeKind.
+const (
+	SessionDetailMessagesContextWindowNoticeKindMidTurn       SessionDetailMessagesContextWindowNoticeKind = "mid_turn"
+	SessionDetailMessagesContextWindowNoticeKindProviderRetry SessionDetailMessagesContextWindowNoticeKind = "provider_retry"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesContextWindowNoticeKind enum.
+func (e SessionDetailMessagesContextWindowNoticeKind) Valid() bool {
+	switch e {
+	case SessionDetailMessagesContextWindowNoticeKindMidTurn:
+		return true
+	case SessionDetailMessagesContextWindowNoticeKindProviderRetry:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesGoalOutcomeEnding.
 const (
 	SessionDetailMessagesGoalOutcomeEndingMet             SessionDetailMessagesGoalOutcomeEnding = "met"
@@ -9178,18 +9235,21 @@ func (e SessionDetailMessagesTruncationReason) Valid() bool {
 
 // Defines values for SessionDetailMessagesType.
 const (
-	SessionDetailMessagesTypeCompaction   SessionDetailMessagesType = "compaction"
-	SessionDetailMessagesTypeJudgeVerdict SessionDetailMessagesType = "judge_verdict"
-	SessionDetailMessagesTypeMessage      SessionDetailMessagesType = "message"
-	SessionDetailMessagesTypeSystem       SessionDetailMessagesType = "system"
-	SessionDetailMessagesTypeToolCall     SessionDetailMessagesType = "tool_call"
-	SessionDetailMessagesTypeTurnCanceled SessionDetailMessagesType = "turn_canceled"
+	SessionDetailMessagesTypeCompaction          SessionDetailMessagesType = "compaction"
+	SessionDetailMessagesTypeContextWindowNotice SessionDetailMessagesType = "context_window_notice"
+	SessionDetailMessagesTypeJudgeVerdict        SessionDetailMessagesType = "judge_verdict"
+	SessionDetailMessagesTypeMessage             SessionDetailMessagesType = "message"
+	SessionDetailMessagesTypeSystem              SessionDetailMessagesType = "system"
+	SessionDetailMessagesTypeToolCall            SessionDetailMessagesType = "tool_call"
+	SessionDetailMessagesTypeTurnCanceled        SessionDetailMessagesType = "turn_canceled"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesType enum.
 func (e SessionDetailMessagesType) Valid() bool {
 	switch e {
 	case SessionDetailMessagesTypeCompaction:
+		return true
+	case SessionDetailMessagesTypeContextWindowNotice:
 		return true
 	case SessionDetailMessagesTypeJudgeVerdict:
 		return true
@@ -14718,9 +14778,6 @@ type ContextModelOverride struct {
 
 // ContextSettings Global context-budget controls (ADR-066 D9), as returned by GET /api/v1/settings/context and echoed by PUT. User-facing location is Settings → Models. Every successful PUT triggers a registry reload so the next turn uses the new values without a restart. Readable and writable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
 type ContextSettings struct {
-	// AbsoluteTriggerChars Absolute tool-result share trigger (chars) for the mid-turn window check (D6); the token share is this ÷ 2.5. Default 400,000.
-	AbsoluteTriggerChars int `json:"absolute_trigger_chars"`
-
 	// BuiltinFailureCap Per-result cap (chars) for a failed, denied or skipped tool result — builtin or MCP (D4 "builtin-failure" surface). Default 10,000; ceiling 150,000.
 	BuiltinFailureCap int `json:"builtin_failure_cap"`
 
@@ -14738,18 +14795,32 @@ type ContextSettings struct {
 
 	// ModelOverrides Per-(provider, model) context-window overrides (D2 rung 2). Empty array when none.
 	ModelOverrides []ContextModelOverride `json:"model_overrides"`
+
+	// ToolResultShareFraction Finite fraction of the resolved model window W used for the tool-result share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5. S = max(1, floor(f × W)); this is a fraction of W, not the total-request budget B. Settings → Models displays it as a percentage (default 50%); the wire carries the dimensionless fraction, so 12.5% is 0.125.
+	ToolResultShareFraction float64 `json:"tool_result_share_fraction"`
 }
 
-// ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
+// ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the valid interval): any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
 type ContextSettingsUpdate struct {
-	AbsoluteTriggerChars *int                    `json:"absolute_trigger_chars,omitempty"`
 	BuiltinFailureCap    *int                    `json:"builtin_failure_cap,omitempty"`
 	BuiltinSuccessCap    *int                    `json:"builtin_success_cap,omitempty"`
 	DefaultContextWindow *int                    `json:"default_context_window,omitempty"`
 	IngestBoundBytes     *int                    `json:"ingest_bound_bytes,omitempty"`
 	McpResultCap         *int                    `json:"mcp_result_cap,omitempty"`
 	ModelOverrides       *[]ContextModelOverride `json:"model_overrides,omitempty"`
+
+	// ToolResultShareFraction Finite fraction of the resolved model window W: 0 < f ≤ 1; numeric 1 is valid. Omitted means unchanged, not reset to the fresh default 0.5. The wire carries a fraction, not a percentage (12.5% is 0.125).
+	ToolResultShareFraction *float64 `json:"tool_result_share_fraction,omitempty"`
 }
+
+// ContextWindowNotice Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
+type ContextWindowNotice struct {
+	Kind    ContextWindowNoticeKind `json:"kind"`
+	Message string                  `json:"message"`
+}
+
+// ContextWindowNoticeKind defines model for ContextWindowNotice.Kind.
+type ContextWindowNoticeKind string
 
 // ContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 type ContextWindowSource string
@@ -18960,6 +19031,12 @@ type Message struct {
 	// Content Raw markdown/text content of the message.
 	Content *string `json:"content,omitempty"`
 
+	// ContextWindowNotice Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
+	ContextWindowNotice *struct {
+		Kind    MessageContextWindowNoticeKind `json:"kind"`
+		Message string                         `json:"message"`
+	} `json:"context_window_notice,omitempty"`
+
 	// Cost USD cost for this entry. Absent when zero.
 	Cost *float64 `json:"cost,omitempty"`
 
@@ -19187,10 +19264,10 @@ type Message struct {
 	// TruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
 	TruncationReason *MessageTruncationReason `json:"truncation_reason,omitempty"`
 
-	// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
+	// TurnId Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
 	TurnId *string `json:"turn_id,omitempty"`
 
-	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
 	Type *MessageType `json:"type,omitempty"`
 
 	// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
@@ -19269,6 +19346,9 @@ type MessageAttachmentsType string
 // MessageCancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
 type MessageCancelMethod string
 
+// MessageContextWindowNoticeKind defines model for Message.ContextWindowNotice.Kind.
+type MessageContextWindowNoticeKind string
+
 // MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type MessageGoalOutcomeEnding string
 
@@ -19314,7 +19394,7 @@ type MessageToolCallsStatus string
 // MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
 type MessageTruncationReason string
 
-// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
 type MessageType string
 
 // MessageVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
@@ -22460,6 +22540,12 @@ type SessionDetail struct {
 		// Content Raw markdown/text content of the message.
 		Content *string `json:"content,omitempty"`
 
+		// ContextWindowNotice Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
+		ContextWindowNotice *struct {
+			Kind    SessionDetailMessagesContextWindowNoticeKind `json:"kind"`
+			Message string                                       `json:"message"`
+		} `json:"context_window_notice,omitempty"`
+
 		// Cost USD cost for this entry. Absent when zero.
 		Cost *float64 `json:"cost,omitempty"`
 
@@ -22687,10 +22773,10 @@ type SessionDetail struct {
 		// TruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
 		TruncationReason *SessionDetailMessagesTruncationReason `json:"truncation_reason,omitempty"`
 
-		// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
+		// TurnId Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
 		TurnId *string `json:"turn_id,omitempty"`
 
-		// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+		// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
 		Type *SessionDetailMessagesType `json:"type,omitempty"`
 
 		// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
@@ -22878,6 +22964,9 @@ type SessionDetailMessagesAttachmentsType string
 // SessionDetailMessagesCancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
 type SessionDetailMessagesCancelMethod string
 
+// SessionDetailMessagesContextWindowNoticeKind defines model for SessionDetail.Messages.ContextWindowNotice.Kind.
+type SessionDetailMessagesContextWindowNoticeKind string
+
 // SessionDetailMessagesGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type SessionDetailMessagesGoalOutcomeEnding string
 
@@ -22923,7 +23012,7 @@ type SessionDetailMessagesToolCallsStatus string
 // SessionDetailMessagesTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
 type SessionDetailMessagesTruncationReason string
 
-// SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+// SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
 type SessionDetailMessagesType string
 
 // SessionDetailMessagesVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.

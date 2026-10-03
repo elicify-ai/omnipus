@@ -241,9 +241,15 @@ func TestInternalSessions_AsyncForUserDoesNotPublishTopLevel(t *testing.T) {
 			WithText("task completed")
 		al, msgBus, agent := newAsyncChildPublicationTestLoop(t, provider, false)
 		probe := registerAsyncChildPublicationProbe(t, al)
+		sessionStore := al.GetAgentStore(agent.ID)
+		require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
+		taskSession, err := sessionStore.NewSession(session.SessionTypeTask, "system", agent.ID)
+		require.NoError(t, err)
+		require.NotNil(t, taskSession)
+		require.NotEmpty(t, taskSession.ID)
 
 		result, err := al.processTaskDirect(
-			context.Background(), agent.ID, "run the async probe", "task-session", "task:783",
+			context.Background(), agent.ID, "run the async probe", "task-session", taskSession.ID,
 		)
 		require.NoError(t, err)
 		assert.Equal(t, "task completed", result)
@@ -258,9 +264,15 @@ func TestInternalSessions_AsyncForUserDoesNotPublishTopLevel(t *testing.T) {
 			WithText("verifier completed")
 		al, msgBus, agent := newAsyncChildPublicationTestLoop(t, provider, false)
 		probe := registerAsyncChildPublicationProbe(t, al)
+		sessionStore := al.GetAgentStore(agent.ID)
+		require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
+		verifierSession, err := sessionStore.NewVerifierSession(agent.ID)
+		require.NoError(t, err)
+		require.NotNil(t, verifierSession)
+		require.NotEmpty(t, verifierSession.ID)
 
 		result, _, _, err := al.dispatchVerifierTurn(
-			context.Background(), agent, "run the async probe", "verifier-session", "task:783-verifier",
+			context.Background(), agent, "run the async probe", "verifier-session", verifierSession.ID,
 		)
 		require.NoError(t, err)
 		assert.Equal(t, "verifier completed", result)

@@ -6,8 +6,8 @@ package gateway
 
 // Context-budget settings endpoint (ADR-066 D9, FR-036 / US-11).
 //
-// GET  /api/v1/settings/context — read the per-surface caps, the absolute
-//                                 trigger, the ingest bound, the global
+// GET  /api/v1/settings/context — read the per-surface caps, the relative
+//                                 result share, the ingest bound, the global
 //                                 default window and the per-(provider,
 //                                 model) window overrides.
 // PUT  /api/v1/settings/context — partial update of the same.
@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 
@@ -45,6 +46,33 @@ const contextCapCeiling = 150_000
 // ingest_bound_bytes: it must stay strictly below 0.8 × the archive line
 // size (D10).
 const contextIngestBoundCeiling = 8_388_608
+
+const contextShareFractionError = "tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1"
+
+// decodeContextSettingsUpdate enforces the contract even when the optional
+// general inbound validator is disabled. Presence is inspected separately
+// because a generated *float64 alone cannot distinguish null from omission.
+func decodeContextSettingsUpdate(raw []byte) (gen.ContextSettingsUpdate, bool, error) {
+	var req gen.ContextSettingsUpdate
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return req, false, fmt.Errorf("invalid JSON object: %s", contextShareFractionError)
+	}
+	if v, present := fields["tool_result_share_fraction"]; present {
+		var f float64
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) || json.Unmarshal(v, &f) != nil ||
+			math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 || f > 1 {
+			return req, false, fmt.Errorf("%s", contextShareFractionError)
+		}
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		return req, false, fmt.Errorf("invalid context settings: %w", err)
+	}
+	clears := bytes.Equal(bytes.TrimSpace(fields["default_context_window"]), []byte("null"))
+	return req, clears, nil
+}
 
 // HandleContextSettings dispatches GET and PUT /api/v1/settings/context.
 func (a *restAPI) HandleContextSettings(w http.ResponseWriter, r *http.Request) {
@@ -71,12 +99,12 @@ func contextSettingsWire(cs config.ContextSettings) gen.ContextSettings {
 		})
 	}
 	out := gen.ContextSettings{
-		McpResultCap:         cs.McpResultCap,
-		BuiltinSuccessCap:    cs.BuiltinSuccessCap,
-		BuiltinFailureCap:    cs.BuiltinFailureCap,
-		AbsoluteTriggerChars: cs.AbsoluteTriggerChars,
-		IngestBoundBytes:     cs.IngestBoundBytes,
-		ModelOverrides:       overrides,
+		McpResultCap:            cs.McpResultCap,
+		BuiltinSuccessCap:       cs.BuiltinSuccessCap,
+		BuiltinFailureCap:       cs.BuiltinFailureCap,
+		ToolResultShareFraction: cs.ToolResultShareFraction,
+		IngestBoundBytes:        cs.IngestBoundBytes,
+		ModelOverrides:          overrides,
 	}
 	if cs.DefaultContextWindow != nil {
 		v := *cs.DefaultContextWindow
@@ -117,8 +145,11 @@ func validateContextSettingsUpdate(req *gen.ContextSettingsUpdate) string {
 			return fmt.Sprintf("%s must be ≤ %d", c.name, contextCapCeiling)
 		}
 	}
-	if req.AbsoluteTriggerChars != nil && *req.AbsoluteTriggerChars < 1 {
-		return "absolute_trigger_chars must be ≥ 1"
+	if req.ToolResultShareFraction != nil {
+		f := *req.ToolResultShareFraction
+		if math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 || f > 1 {
+			return contextShareFractionError
+		}
 	}
 	if req.IngestBoundBytes != nil {
 		if *req.IngestBoundBytes < 1 {
@@ -153,7 +184,7 @@ func pruneDeadOverrides(cfg *config.Config, rows []config.ContextModelOverride) 
 	kept := make([]config.ContextModelOverride, 0, len(rows))
 	for _, o := range rows {
 		if !agent.WindowProviderKnown(cfg, o.Provider) {
-			slog.Info("rest: PUT /settings/context: pruned a model override for an unknown provider",
+			logsafeInfo("rest: PUT /settings/context: pruned a model override for an unknown provider",
 				"provider", o.Provider, "model", o.Model)
 			continue
 		}
@@ -177,25 +208,21 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 	// generated struct collapses both to a nil *int. Same raw-body-peek
 	// pattern updateAgent uses for sandbox_profile / delegation_policy; the
 	// body is restored so decodeAndValidate below still sees it.
-	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if readErr != nil {
-		jsonErr(w, http.StatusBadRequest, "could not read request body")
+	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, (1<<20)+1))
+	if readErr != nil || len(rawBody) > 1<<20 {
+		jsonErr(w, http.StatusBadRequest, "could not read request body within 1 MiB")
 		return
 	}
-	r.Body = io.NopCloser(bytes.NewReader(rawBody))
-	clearsDefaultWindow := false
-	var peek map[string]json.RawMessage
-	if json.Unmarshal(rawBody, &peek) == nil {
-		if v, present := peek["default_context_window"]; present &&
-			string(bytes.TrimSpace(v)) == "null" {
-			clearsDefaultWindow = true
+	req, clearsDefaultWindow, decodeErr := decodeContextSettingsUpdate(rawBody)
+	if decodeErr != nil {
+		jsonErr(w, http.StatusBadRequest, decodeErr.Error())
+		return
+	}
+	if cfg.Gateway.ValidateInbound {
+		r.Body = io.NopCloser(bytes.NewReader(rawBody))
+		if !decodeAndValidate(w, r, "ContextSettingsUpdate", &req, true) {
+			return
 		}
-	}
-
-	var req gen.ContextSettingsUpdate
-	validateEnabled := cfg.Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "ContextSettingsUpdate", &req, validateEnabled) {
-		return
 	}
 
 	if msg := validateContextSettingsUpdate(&req); msg != "" {
@@ -214,8 +241,8 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 	if req.BuiltinFailureCap != nil {
 		next.BuiltinFailureCap = *req.BuiltinFailureCap
 	}
-	if req.AbsoluteTriggerChars != nil {
-		next.AbsoluteTriggerChars = *req.AbsoluteTriggerChars
+	if req.ToolResultShareFraction != nil {
+		next.ToolResultShareFraction = *req.ToolResultShareFraction
 	}
 	if req.IngestBoundBytes != nil {
 		next.IngestBoundBytes = *req.IngestBoundBytes
@@ -247,7 +274,7 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 		ctxSection["mcp_result_cap"] = next.McpResultCap
 		ctxSection["builtin_success_cap"] = next.BuiltinSuccessCap
 		ctxSection["builtin_failure_cap"] = next.BuiltinFailureCap
-		ctxSection["absolute_trigger_chars"] = next.AbsoluteTriggerChars
+		ctxSection["tool_result_share_fraction"] = next.ToolResultShareFraction
 		ctxSection["ingest_bound_bytes"] = next.IngestBoundBytes
 		if next.DefaultContextWindow != nil {
 			ctxSection["default_context_window"] = *next.DefaultContextWindow

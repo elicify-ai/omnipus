@@ -1766,21 +1766,18 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
                       ? 'interrupted'
                       : 'error'
-                    // ADR-051: when the typed payload is present, prefer the
-                    // translated code→display copy as the bubble content —
-                    // but only when the bubble has NO partial content yet
-                    // (msg.content is empty). A bubble that already streamed
-                    // narration text keeps that text as its content and just
-                    // gets the typed error fields stamped on for the
-                    // "Technical details" disclosure. Pre-ADR-051 fallback
-                    // (`frame.message`, sanitized — D5 fix Site 3) is
-                    // preserved when no typed payload.
+                    // Founder decision #1081 RC2 / Q4: a terminal error must
+                    // always be visible, narration or not. Replace existing
+                    // content with translated catalogue copy (typed payload)
+                    // or sanitized frame.message (legacy fallback, D5 Site 3).
+                    // This overturns ADR-051's partial-content preservation
+                    // for 'error' only; FR-21 still preserves 'interrupted'.
                     const fallbackContent = llmError
                       ? translatedMessage
                       : safeMessage
                     msg.content = (resolvedStatus === 'interrupted')
                       ? msg.content
-                      : (msg.content || (fallbackContent ?? ''))
+                      : (fallbackContent ?? '')
                     msg.isStreaming = false
                     msg.status = resolvedStatus
                     msg.pendingTextBoundary = false

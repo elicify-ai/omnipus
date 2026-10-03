@@ -67,7 +67,6 @@ var LLMErrorCodes = []string{
 	"turn_canceled",
 	"turn_timed_out",
 	"delegated_task_limit",
-	"context_unrecoverable",
 	"context_window_unknown",
 	"unknown",
 }
@@ -97,7 +96,6 @@ var LLMErrorUserMessages = map[string]string{
 	"turn_canceled":          "This turn was stopped before it finished.",
 	"turn_timed_out":         "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details.",
 	"delegated_task_limit":   "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed.",
-	"context_unrecoverable":  "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details.",
 	"context_window_unknown": "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
 	"unknown":                "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
@@ -127,7 +125,6 @@ var LLMErrorUserAttributions = map[string]LLMErrorAttribution{
 	"turn_canceled":          LLMErrorAttributionUser,
 	"turn_timed_out":         LLMErrorAttributionProvider,
 	"delegated_task_limit":   LLMErrorAttributionConfig,
-	"context_unrecoverable":  LLMErrorAttributionProduct,
 	"context_window_unknown": LLMErrorAttributionConfig,
 	"unknown":                LLMErrorAttributionUnknown,
 }

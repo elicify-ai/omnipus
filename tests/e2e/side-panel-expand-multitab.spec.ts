@@ -11,6 +11,7 @@
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { newAdminApiContext } from './fixtures/admin-api'
+import { softSkip } from './fixtures/skip-tracking'
 
 async function createWorkspace(): Promise<string> {
   const ctx = await newAdminApiContext()
@@ -67,6 +68,9 @@ test('W5 — a second Library toggle focuses the existing tab and does not open 
 })
 
 test('W7 — a manually opened Library tab is not duplicated; the switch affordance shows', async ({ page, context }) => {
+  // Temporary quarantine: the current CI run failed before passing on retry.
+  // https://github.com/elicify-ai/omnipus/issues/1180 — expires 2026-10-10.
+  softSkip(test, 'W7 current CI failure on first attempt: https://github.com/elicify-ai/omnipus/issues/1180; expires 2026-10-10')
   await page.goto(`/#/workspaces/${workspaceId}/chat`)
   const manual = await context.newPage()
   await manual.goto(`/#/library?workspace=${workspaceId}`)

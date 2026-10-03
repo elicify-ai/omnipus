@@ -42,10 +42,10 @@ type ContextSettings struct {
 	// Config-internal: not served by /settings/context.
 	WarnThreshold int `json:"warn_threshold"`
 
-	// AbsoluteTriggerChars is the absolute tool-result share trigger (chars)
-	// for the mid-turn window check (D6); the token share is this ÷ 2.5.
-	// Default 400,000.
-	AbsoluteTriggerChars int `json:"absolute_trigger_chars"`
+	// ToolResultShareFraction bounds the combined tool-result share as a
+	// fraction of the resolved model window W, not the request budget B.
+	// Finite 0 < f <= 1; the fresh default is 0.5.
+	ToolResultShareFraction float64 `json:"tool_result_share_fraction"`
 
 	// IngestBoundBytes is the maximum bytes read from any network or
 	// subprocess source at ingest (D10). Must stay strictly below
@@ -76,12 +76,12 @@ type ContextModelOverride struct {
 // a config.json that omits the `context` section, or any field within it,
 // inherits these because loadConfig unmarshals over DefaultConfig().
 const (
-	DefaultMcpResultCap         = 62_500
-	DefaultBuiltinSuccessCap    = 64_000
-	DefaultBuiltinFailureCap    = 10_000
-	DefaultContextWarnThreshold = 25_000
-	DefaultAbsoluteTriggerChars = 400_000
-	DefaultIngestBoundBytes     = 8_000_000
+	DefaultMcpResultCap            = 62_500
+	DefaultBuiltinSuccessCap       = 64_000
+	DefaultBuiltinFailureCap       = 10_000
+	DefaultContextWarnThreshold    = 25_000
+	DefaultToolResultShareFraction = 0.5
+	DefaultIngestBoundBytes        = 8_000_000
 )
 
 // DefaultContextSettings returns the seeded ContextSettings for a fresh
@@ -89,13 +89,13 @@ const (
 // empty, non-nil slice.
 func DefaultContextSettings() ContextSettings {
 	return ContextSettings{
-		McpResultCap:         DefaultMcpResultCap,
-		BuiltinSuccessCap:    DefaultBuiltinSuccessCap,
-		BuiltinFailureCap:    DefaultBuiltinFailureCap,
-		WarnThreshold:        DefaultContextWarnThreshold,
-		AbsoluteTriggerChars: DefaultAbsoluteTriggerChars,
-		IngestBoundBytes:     DefaultIngestBoundBytes,
-		DefaultContextWindow: nil,
-		ModelOverrides:       []ContextModelOverride{},
+		McpResultCap:            DefaultMcpResultCap,
+		BuiltinSuccessCap:       DefaultBuiltinSuccessCap,
+		BuiltinFailureCap:       DefaultBuiltinFailureCap,
+		WarnThreshold:           DefaultContextWarnThreshold,
+		ToolResultShareFraction: DefaultToolResultShareFraction,
+		IngestBoundBytes:        DefaultIngestBoundBytes,
+		DefaultContextWindow:    nil,
+		ModelOverrides:          []ContextModelOverride{},
 	}
 }

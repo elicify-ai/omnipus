@@ -25,6 +25,7 @@
 package agent
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,12 +41,18 @@ import (
 // VerifierCapture per turnID in the package-level registry
 // (verifier_budget.go/tool_result_admit.go), and two tests sharing one
 // turnID would silently see each other's captured entries.
+//
+// The store MUST implement session.ContextWindowStore — see
+// tool_result_admit_test.go::newChokePointTurn's doc comment for why
+// session.NewSessionManager silently fails every admission here.
 func newInjectionTestTurn(t *testing.T) (*AgentLoop, *turnState, session.SessionStore) {
 	t.Helper()
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	t.Cleanup(cleanup)
 	cfg.Context = config.DefaultContextSettings()
-	store := session.NewSessionManager(t.TempDir())
+	store, err := session.NewUnifiedStore(filepath.Join(t.TempDir(), "sessions"))
+	require.NoError(t, err, "newInjectionTestTurn: NewUnifiedStore")
+	t.Cleanup(func() { _ = store.Close() })
 	agent := &AgentInstance{
 		ID:            "injection-agent",
 		Name:          "Injection",

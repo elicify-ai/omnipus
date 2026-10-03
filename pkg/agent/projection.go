@@ -25,8 +25,9 @@ import (
 // number (1 + the role:user lines before the result's line — including
 // evicted ones, which the window slice cannot see).
 type projectionContext struct {
-	policy  resultCapPolicy
-	archive []memory.ArchivedMessage
+	policy      resultCapPolicy
+	archive     []memory.ArchivedMessage
+	sourceRunes map[memory.ProjectionKey]int
 }
 
 // projectMessages applies set to msgs. lineOf maps a window index to its
@@ -52,43 +53,11 @@ func projectMessages(
 	set memory.ProjectionSet,
 	pc projectionContext,
 ) []providers.Message {
-	out := append([]providers.Message(nil), msgs...)
-	if len(set) == 0 {
-		return out
-	}
-	for i, m := range msgs {
-		if m.Role != "tool" || m.ToolCallID == "" {
-			continue
-		}
-		line := lineOf(i)
-		if line < 0 {
-			continue
-		}
-		state, ok := set[memory.ProjectionKey{ToolCallID: m.ToolCallID, ArchiveLine: line}]
-		if !ok {
-			continue
-		}
-		tool, parallelN := owningToolCall(msgs, i, m.ToolCallID)
-		switch state {
-		case memory.ProjectionCapped, memory.ProjectionCappedFailure:
-			capChars := pc.policy.effectiveCap(
-				toolResultSurfaceFor(tool, state == memory.ProjectionCappedFailure), parallelN)
-			out[i].Content, _ = projectToolResult(m.Content, capChars, func(full string) string {
-				return capMarkOrEmpty(tool, m.ToolCallID, line, full, turnNumberForArchiveLine(pc.archive, line))
-			})
-		case memory.ProjectionEmptied:
-			// Size from the archive line (the full result), not from the
-			// handed-in copy — same source the live pass uses
-			// (empty_in_place.go's markSourceContent), same bytes.
-			mark, err := buildRecallMark("emptied", tool, m.ToolCallID, line, markSourceContent(m, line, pc.archive), turnNumberForArchiveLine(pc.archive, line))
-			if err != nil {
-				// buildRecallMark already reported the marshal failure. An
-				// empty content is still "emptied" — the window must not
-				// keep the bytes the state says are gone.
-				mark = ""
-			}
-			out[i].Content = mark
-		}
+	out, err := projectMessagesChecked(msgs, lineOf, set, pc)
+	if err != nil {
+		// The unchecked pure API requires valid archive identities. Runtime
+		// assembly/checkpoint callers use the checked API and return its error.
+		panic(err)
 	}
 	return out
 }
@@ -112,6 +81,7 @@ func owningToolCall(msgs []providers.Message, i int, toolCallID string) (string,
 			}
 			return name, len(msgs[j].ToolCalls)
 		}
+		return "", 1 // A reused id never belongs to an earlier assistant step.
 	}
 	return "", 1
 }

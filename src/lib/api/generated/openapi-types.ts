@@ -1062,12 +1062,12 @@ export interface paths {
         };
         /**
          * Get the global context-budget settings (ADR-066 D9)
-         * @description Returns the per-surface tool-result caps, the absolute trigger, the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+         * @description Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 < f ≤ 1, default 0.5), the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
          */
         get: operations["getContextSettings"];
         /**
          * Update the global context-budget settings (ADR-066 D9)
-         * @description Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 naming the field and the limit on: any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+         * @description Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
          */
         put: operations["updateContextSettings"];
         post?: never;
@@ -4518,11 +4518,11 @@ export interface components {
              */
             client_message_id?: string;
             /**
-             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
              * @example message
              * @enum {string}
              */
-            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict";
+            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict" | "context_window_notice";
             /**
              * @description Author role. Absent on compaction entries.
              * @example assistant
@@ -4588,7 +4588,7 @@ export interface components {
              */
             truncation_reason?: "cancelled" | "max_output_tokens";
             /**
-             * @description Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
+             * @description Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
              * @example turn-T3
              */
             turn_id?: string;
@@ -4621,6 +4621,7 @@ export interface components {
              */
             model?: string;
             verdict?: components["schemas"]["JudgeVerdict"];
+            context_window_notice?: components["schemas"]["ContextWindowNotice"];
             /**
              * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
              * @example browser_handover_notice
@@ -10625,6 +10626,15 @@ export interface components {
             max_bytes: number;
         };
         /**
+         * ContextWindowNotice
+         * @description Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
+         */
+        ContextWindowNotice: {
+            /** @enum {string} */
+            kind: "provider_retry" | "mid_turn";
+            message: string;
+        };
+        /**
          * ContextWindowSource
          * @description Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
          * @enum {string}
@@ -10672,10 +10682,11 @@ export interface components {
              */
             builtin_failure_cap: number;
             /**
-             * @description Absolute tool-result share trigger (chars) for the mid-turn window check (D6); the token share is this ÷ 2.5. Default 400,000.
-             * @example 400000
+             * Format: double
+             * @description Finite fraction of the resolved model window W used for the tool-result share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5. S = max(1, floor(f × W)); this is a fraction of W, not the total-request budget B. Settings → Models displays it as a percentage (default 50%); the wire carries the dimensionless fraction, so 12.5% is 0.125.
+             * @example 0.5
              */
-            absolute_trigger_chars: number;
+            tool_result_share_fraction: number;
             /**
              * @description Maximum bytes read from any network or subprocess source at ingest (D10). Must be strictly below 8,388,608 (0.8 × the archive line size). Default 8,000,000.
              * @example 8000000
@@ -10691,7 +10702,7 @@ export interface components {
         };
         /**
          * ContextSettingsUpdate
-         * @description Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
+         * @description Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the valid interval): any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
          */
         ContextSettingsUpdate: {
             /** @example 62500 */
@@ -10700,8 +10711,12 @@ export interface components {
             builtin_success_cap?: number;
             /** @example 10000 */
             builtin_failure_cap?: number;
-            /** @example 400000 */
-            absolute_trigger_chars?: number;
+            /**
+             * Format: double
+             * @description Finite fraction of the resolved model window W: 0 < f ≤ 1; numeric 1 is valid. Omitted means unchanged, not reset to the fresh default 0.5. The wire carries a fraction, not a percentage (12.5% is 0.125).
+             * @example 0.5
+             */
+            tool_result_share_fraction?: number;
             /** @example 8000000 */
             ingest_bound_bytes?: number;
             /** @example 128000 */
@@ -25745,6 +25760,7 @@ export type CatalogModel = components["schemas"]["CatalogModel"];
 export type CatalogProtocol = components["schemas"]["CatalogProtocol"];
 export type CatalogProviderRegion = components["schemas"]["CatalogProviderRegion"];
 export type CatalogResizeLimits = components["schemas"]["CatalogResizeLimits"];
+export type ContextWindowNotice = components["schemas"]["ContextWindowNotice"];
 export type ContextWindowSource = components["schemas"]["ContextWindowSource"];
 export type ContextModelOverride = components["schemas"]["ContextModelOverride"];
 export type ContextSettings = components["schemas"]["ContextSettings"];

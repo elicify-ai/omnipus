@@ -59,7 +59,35 @@ On a fresh install the gateway boots into **limited mode**: it serves the web ap
 
 Finish onboarding to fix it. Open `http://localhost:5000` — on a fresh install every screen leads to the wizard (your name, a password, then a provider and its API key). Without a browser, `omnipus onboard` prompts for provider, key, model, and account.
 
+## A chat turn stops before a finished answer
+
+If a turn fails after text starts streaming, chat shows a failure message in place of the unfinished reply, even with **Verbose chat** off. Enable **Settings → Chat → Verbose chat** before retrying to inspect tool activity and any available technical details. A turn you stop yourself still keeps its partial reply.
+
+If the agent reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice that remains when you reopen the conversation. Conflicting tool names produce the standard “This turn didn’t finish, and we can’t tell why” failure notice rather than silence.
+
+## A task is refused before work starts
+
+Errors saying the assigned agent's store was not found, or that a task session could not be created, mean Omnipus could not create the task's conversation. A queued dispatch or manual start refuses to hand work to either a native agent or an external command-line agent in that case. It does not consume an execution attempt or add a run-history entry.
+
+Read the returned error and the gateway log. A conversation-creation error keeps the underlying storage cause, such as a path that is not a directory or cannot be written. Resolve that cause, or restore the assigned agent's conversation store, before retrying. Do not create a replacement conversation by hand.
+
+A queued dispatch tries to save **Failed** and verifies the saved status. A new manual start through the web app or `run_task` instead tries to restore the task's previous status. If task storage itself cannot save that change, **In Progress** is not proof that work started; check the error and run history. See [tasks](tasks.md#if-the-task-conversation-cannot-be-created).
+
+This is a pre-start refusal, not a failure after tools or an external command have already acted. It does not imply that a later execution failure undoes those actions.
+
 ## The provider rejects your model requests
+
+**"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then removes the oldest eligible whole piece — a complete old step (assistant calls plus all their matching results), or an older assistant reply that made no tool calls, whichever comes first in the conversation; if nothing can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.
+
+This is an internal retry notice, not a data-loss event: relief changes the model's view, not the admitted archive text. It keeps the original user message and media, instructions, call/result structure and unconsumed steering. If those required parts still do not fit, Omnipus returns the last real provider rejection when no further reduction is possible or the retry limit is reached. It does not stop merely because a local size estimate says the immutable remainder is too large.
+
+A storage or projection error is different. If Omnipus cannot save the window change, it stops with that genuine error instead of sending a request that disagrees with the saved state. See [memory](memory.md#how-long-conversations-stay-in-view) for what can leave the live window and what an aborted turn rolls back.
+
+Turn on **Settings → Chat → Verbose chat** to see this notice and other internal-retry details; it does not appear in normal chat. Live chat, reopened history, and conversation replay all use the same Verbose chat setting to show or hide it.
+
+### "This endpoint did not report a context length for this model"
+
+A local or self-hosted model's endpoint did not report how much it can read at once, and no operator override exists. Omnipus refuses to run on a guessed window rather than risk silent overflow. Set the context length explicitly at **Settings → Models → Model overrides → Context length**, then retry.
 
 ### 404 "No endpoints found that support tool use"
 

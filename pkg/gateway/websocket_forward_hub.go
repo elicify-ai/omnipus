@@ -64,6 +64,8 @@ func (h *WSHandler) hubSyncTap(evt agent.Event) {
 		h.hubJudgeVerdict(evt)
 	case agent.EventKindLoopStatusChanged:
 		h.hubLoopStatusChanged(evt)
+	case agent.EventKindLLMRetry:
+		h.hubContextWindowNotice(evt)
 	case agent.EventKindProviderRetry:
 		h.hubProviderRetry(evt)
 	case agent.EventKindProviderFallback:

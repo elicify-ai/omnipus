@@ -204,14 +204,6 @@ const (
 	// producers must never include child output or file contents.
 	CodeDelegatedTaskLimit LLMErrorCode = "delegated_task_limit"
 
-	// CodeContextUnrecoverable (ADR-066 D6/D7, FR-032, FR-034): the mid-turn
-	// window guard fired — after emptying every eligible tool result a
-	// trigger condition still held, so no further provider call is made.
-	// Attribution `product` (our bug, never the user's). Reachable only via
-	// an injected fault; the guard itself lands with T066-13, this constant
-	// and its attribution/copy land here so the contract round-trip closes.
-	CodeContextUnrecoverable LLMErrorCode = "context_unrecoverable"
-
 	// CodeModelUnassigned (ADR-068 FR-014/FR-015, MAJ-008): the agent has no
 	// model to send the request to — it pins no primary model and
 	// `agents.defaults.default_model` names none either, or the model it
@@ -832,8 +824,7 @@ func TranslateLLMError(pe *ProviderError, message string) LLMError {
 //     agent with a home) but the folder could not be opened.
 //
 //   - ErrTurnCanceled / context.Canceled → CodeTurnCanceled;
-//     ErrTurnTimedOut / context.DeadlineExceeded → CodeTurnTimedOut;
-//     ErrContextUnrecoverable → CodeContextUnrecoverable (ADR-066 D7). The
+//     ErrTurnTimedOut / context.DeadlineExceeded → CodeTurnTimedOut. The
 //     typed exits in runTurn wrap both the sentinel and the raw cause, so
 //     either match routes here.
 //
@@ -1007,9 +998,6 @@ var (
 	ErrTurnCanceled = errors.New("turn canceled")
 	// ErrTurnTimedOut: the turn deadline expired while waiting on the provider.
 	ErrTurnTimedOut = errors.New("turn timed out")
-	// ErrContextUnrecoverable: the mid-turn window guard fired (T066-13
-	// raises it); no further provider call is made.
-	ErrContextUnrecoverable = errors.New("context unrecoverable after emptying every eligible tool result")
 )
 
 // typedExitCode reports the ADR-066 D7 exit code carried by err's chain, if
@@ -1021,8 +1009,6 @@ func typedExitCode(err error) (LLMErrorCode, bool) {
 	switch {
 	case err == nil:
 		return "", false
-	case errors.Is(err, ErrContextUnrecoverable):
-		return CodeContextUnrecoverable, true
 	case errors.Is(err, ErrTurnCanceled), errors.Is(err, context.Canceled):
 		return CodeTurnCanceled, true
 	case errors.Is(err, ErrTurnTimedOut), errors.Is(err, context.DeadlineExceeded):
@@ -1051,8 +1037,7 @@ func typedExitError(code LLMErrorCode, cause error) LLMError {
 // operator can safely retry without changing inputs. Everything else —
 // capability, content, size, auth, and setup failures — fails identically on
 // retry and is reported as not retryable. A timed-out turn is retryable (the
-// provider may answer next time); a cancelled one is not (the user stopped
-// it); an unrecoverable context is not (retrying re-runs the same overflow).
+// provider may answer next time); a cancelled one is not (the user stopped it).
 func isRetryable(code LLMErrorCode) bool {
 	switch code {
 	case CodeRateLimited, CodeNetwork, CodeProviderStalled, CodeTurnTimedOut:

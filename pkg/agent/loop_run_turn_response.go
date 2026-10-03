@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -22,7 +23,6 @@ type agentLoopRunTurnResponseCallLLMWithRetries struct {
 	rr                           *agentLoopRunTurnResponse
 	maxRetries                   int
 	compactionAttemptedOnTimeout bool
-	contextCompressionFailed     bool
 	tryPDFTextFallback           func() bool
 	synthesizeImageRejection     func(pe *ProviderError, rejectionErr error) bool
 	isTimeoutError               bool
@@ -45,14 +45,18 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 	cr := &agentLoopRunTurnResponseCallLLMWithRetries{rr: rr}
 
 	cr.rr.rq.ri.rf.callLLM = func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
-		return cr.rr.rq.ri.rf.rt.callProvider(messagesForCall, toolDefsForCall)
+		cr.rr.rq.ri.rf.callMessages = messagesForCall
+		cr.rr.rq.ri.rf.providerToolDefs = toolDefsForCall
+		if err := cr.rr.rq.checkpointRequest(true); err != nil {
+			return nil, err
+		}
+		return cr.rr.rq.ri.rf.rt.callProvider(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
 	}
 
 	cr.rr.rq.ri.rf.response = nil
 	cr.rr.rq.ri.rf.err = nil
 	cr.maxRetries = 2
 	cr.compactionAttemptedOnTimeout = false
-	cr.contextCompressionFailed = false // C3: tracks that compression was tried but returned ok=false
 
 	// tryPDFTextFallback is the provider-agnostic safety net for native-PDF
 	// rejections. pdfCapableModel cannot perfectly track OpenRouter's
@@ -449,6 +453,10 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 				//  3. ok=false, NothingToTrim=false — TruncateHistory was attempted
 				//     but the window genuinely did not shrink — abandon the retry.
 				compression, ok := cr.rr.rq.ri.rf.rt.al.windowTrim(cr.rr.rq.ri.rf.rt.ts.agent, cr.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID, cr.rr.rq.ri.rf.rt.ts.sessionKey)
+				if compression.Err != nil {
+					cr.rr.rq.ri.rf.err = compression.Err
+					return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+				}
 				if ok {
 					cr.rr.rq.ri.rf.rt.al.emitEvent(
 						EventKindContextCompress,
@@ -578,92 +586,51 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 	return agentLoopRunTurnResponseCallLLMWithRetriesNext
 }
 
-// retryContextOverflow compacts and retries a context-overflow failure.
+// retryContextOverflow forces deterministic relief against the exact rejected
+// request, even when estimates fit. No progress means no unchanged resend.
 func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryContextOverflow(retry int) agentLoopRunTurnResponseCallLLMWithRetriesFlow {
-	if cr.isContextError && retry < cr.maxRetries && !cr.rr.rq.ri.rf.rt.ts.opts.NoHistory {
-		// C3: if a previous compression attempt returned ok=false and we're
-		// still getting context errors, retrying with identical data won't help.
-		// Break to surface the error rather than burning the remaining budget.
-		if cr.contextCompressionFailed {
-			logger.WarnCF("agent", "Context overflow persists after failed compression; aborting retry",
-				map[string]any{"agent_id": cr.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": cr.rr.rq.ri.rf.rt.iteration, "retry": retry})
+	rq := cr.rr.rq
+	rt := rq.ri.rf.rt
+	if !cr.isContextError {
+		return agentLoopRunTurnResponseCallLLMWithRetriesNext
+	}
+	if retry >= cr.maxRetries || rt.ts.opts.NoHistory {
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
+	before := rq.ri.rf.callMessages
+	candidate, progress, reliefErr := rt.al.checkpointWindow(rt.turnCtx, rt.ts, before, rq.ri.rf.providerToolDefs, true)
+	if reliefErr != nil {
+		rq.ri.rf.err = errors.Join(rq.ri.rf.err, reliefErr)
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
+	if !progress {
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
+	rq.ri.messages = retainLiveWindow(rq.ri.messages, candidate)
+	rq.ri.rf.callMessages = candidate
+	retryPayload := LLMRetryPayload{
+		Attempt: retry + 1, MaxRetries: cr.maxRetries,
+		Reason: "context_limit", Error: rq.ri.rf.err.Error(),
+	}
+	overflowAudience := rt.al.audienceFor(rt.turnCtx, steer.BoundaryRetryNotice, rt.ts.transcriptSessionID)
+	if retry == 0 && !constants.IsInternalChannel(rt.ts.channel) && overflowAudience == steer.AudienceUser {
+		frame, noticeErr := rt.ts.recordContextWindowNotice(generated.ContextWindowNotice{
+			Kind:    generated.ContextWindowNoticeKindProviderRetry,
+			Message: "Context window exceeded. Compressing history and retrying...",
+		})
+		if noticeErr != nil && !errors.Is(noticeErr, ErrContextWindowNoticeDisabled) {
+			rq.ri.rf.err = errors.Join(rq.ri.rf.err, noticeErr)
 			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 		}
-		cr.rr.rq.ri.rf.rt.al.emitEvent(
-			EventKindLLMRetry,
-			cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-			LLMRetryPayload{
-				Attempt:    retry + 1,
-				MaxRetries: cr.maxRetries,
-				Reason:     "context_limit",
-				Error:      cr.rr.rq.ri.rf.err.Error(),
-			},
-		)
-		logger.WarnCF(
-			"agent",
-			"Context window error detected, attempting compression",
-			map[string]any{
-				"error": cr.rr.rq.ri.rf.err.Error(),
-				"retry": retry,
-			},
-		)
-
-		// ADR-091 boundary 5 (FR-B-001): a steered
-		// session's retry notice is never the user's audience.
-		// audienceFor also calls steer.BoundaryObserver.Observe before this
-		// decision is acted on (FR-B-014).
-		overflowAudience := cr.rr.rq.ri.rf.rt.al.audienceFor(cr.rr.rq.ri.rf.rt.turnCtx, steer.BoundaryRetryNotice, cr.rr.rq.ri.rf.rt.ts.transcriptSessionID)
-		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) && overflowAudience == steer.AudienceUser {
-			if notifyErr := cr.rr.rq.ri.rf.rt.al.bus.PublishOutbound(cr.rr.rq.ri.rf.rt.turnCtx, bus.OutboundMessage{
-				Channel: cr.rr.rq.ri.rf.rt.ts.channel,
-				ChatID:  cr.rr.rq.ri.rf.rt.ts.chatID,
-				Content: "Context window exceeded. Compressing history and retrying...",
-			}); notifyErr != nil {
-				logger.WarnCF("agent", "Failed to notify user of context compression",
-					map[string]any{"channel": cr.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
-			}
-		}
-
-		// force: the PROVIDER rejected this request with a context
-		// error, so our own estimate said it fit and was wrong.
-		// Honouring the "already fits" guard here would make the
-		// retry byte-identical to the call that just failed.
-		if compression, ok := cr.rr.rq.ri.rf.rt.al.windowTrimForce(cr.rr.rq.ri.rf.rt.ts.agent, cr.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID, cr.rr.rq.ri.rf.rt.ts.sessionKey, true); ok {
-			cr.rr.rq.ri.rf.rt.al.emitEvent(
-				EventKindContextCompress,
-				cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.context.compress"),
-				ContextCompressPayload{
-					Reason:            ContextCompressReasonRetry,
-					DroppedMessages:   compression.DroppedMessages,
-					RemainingMessages: compression.RemainingMessages,
-				},
-			)
-		} else {
-			// C3: windowTrim returned ok=false (nothing to trim). Mark the
-			// flag so the NEXT retry attempt will break rather than burning more
-			// budget on identical data. We still allow this single retry through
-			// because the provider might succeed without context reduction.
-			cr.contextCompressionFailed = true
-			logger.WarnCF("agent", "Window trim failed during context overflow recovery; will not retry further",
-				map[string]any{"agent_id": cr.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": cr.rr.rq.ri.rf.rt.iteration})
-		}
-
-		// Site-4: post-context-overflow-trim assembly.
-		newHistory := cr.rr.rq.ri.rf.rt.ts.agent.Sessions.GetHistory(cr.rr.rq.ri.rf.rt.ts.sessionKey)
-		cr.rr.rq.ri.messages = cr.rr.rq.ri.rf.rt.al.assembleMessages(cr.rr.rq.ri.rf.rt.turnCtx, cr.rr.rq.ri.rf.rt.ts, newHistory, "", nil, activeSkillNames(cr.rr.rq.ri.rf.rt.ts.agent, cr.rr.rq.ri.rf.rt.ts.opts))
-		cr.rr.continuationChain = nil
-		if cr.rr.rq.ri.rf.rt.ts.continuationUnresolved() {
-			// ADR-087 D6.7: same rebuild-restoration as Site-3 above.
-			cr.rr.continuationChain = continuationChainMessages(cr.rr.rq.ri.rf.rt.ts.continuationAccumulated())
-			cr.rr.rq.ri.messages = append(cr.rr.rq.ri.messages, cr.rr.continuationChain...)
-		}
-		cr.rr.rq.ri.rf.callMessages = cr.rr.rq.ri.messages
-		if cr.rr.rq.ri.gracefulTerminal {
-			cr.rr.rq.ri.rf.callMessages = append(append([]providers.Message(nil), cr.rr.rq.ri.messages...), cr.rr.rq.ri.rf.rt.ts.interruptHintMessage())
-		}
-		return agentLoopRunTurnResponseCallLLMWithRetriesContinue
+		retryPayload.ContextWindowNotice = frame
 	}
-	return agentLoopRunTurnResponseCallLLMWithRetriesNext
+	rt.al.emitEvent(EventKindLLMRetry, rt.ts.eventMeta("runTurn", "turn.llm.retry"), retryPayload)
+	rt.al.emitEvent(EventKindContextCompress, rt.ts.eventMeta("runTurn", "turn.context.compress"), ContextCompressPayload{
+		Reason:            ContextCompressReasonRetry,
+		DroppedMessages:   max(0, len(stripContextReliefNotice(before))-len(stripContextReliefNotice(candidate))),
+		RemainingMessages: len(stripContextReliefNotice(candidate)),
+	})
+	return agentLoopRunTurnResponseCallLLMWithRetriesContinue
 }
 
 // handleProviderResponse handles terminal provider errors and records a successful provider response.
@@ -894,7 +861,7 @@ func (rt *agentLoopRunTurn) spawnReasoningPublish(reasoningContent, channel, cha
 }
 
 // recordToolCalls normalizes and records tool calls before execution begins.
-func (rr *agentLoopRunTurnResponse) recordToolCalls() {
+func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 	rr.rq.ri.rf.rt.al.flushContinuationAccumulator(rr.rq.ri.rf.rt.ts, &rr.continuationChain)
 	if isTruncatedFinishReason(rr.rq.ri.rf.response.FinishReason) {
 		rr.rq.ri.rf.rt.ts.markContinuationPending()
@@ -978,10 +945,10 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() {
 			ThoughtSignature: thoughtSignature,
 		})
 	}
-	rr.rq.ri.messages = append(rr.rq.ri.messages, assistantMsg)
-	if !rr.rq.ri.rf.rt.ts.opts.NoHistory {
-		rr.rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rr.rq.ri.rf.rt.ts.sessionKey, assistantMsg)
+	if err := rr.rq.ri.rf.rt.ts.appendWindowMessage(assistantMsg); err != nil {
+		return err
 	}
+	rr.rq.ri.messages = append(rr.rq.ri.messages, assistantMsg)
 
 	// Bug #416 fix: persist the narration text the LLM emitted alongside
 	// this round's tool calls. Without this, only the FINAL iteration's text
@@ -1005,4 +972,5 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() {
 	}
 
 	rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseTools)
+	return nil
 }

@@ -106,7 +106,7 @@ func TestContextSettings_GetReturnsSeededDefaults(t *testing.T) {
 	assert.Equal(t, config.DefaultMcpResultCap, resp.McpResultCap)
 	assert.Equal(t, config.DefaultBuiltinSuccessCap, resp.BuiltinSuccessCap)
 	assert.Equal(t, config.DefaultBuiltinFailureCap, resp.BuiltinFailureCap)
-	assert.Equal(t, config.DefaultAbsoluteTriggerChars, resp.AbsoluteTriggerChars)
+	assert.Equal(t, config.DefaultToolResultShareFraction, resp.ToolResultShareFraction)
 	assert.Equal(t, config.DefaultIngestBoundBytes, resp.IngestBoundBytes)
 	assert.Nil(t, resp.DefaultContextWindow, "default_context_window is unset on a fresh install")
 	assert.Empty(t, resp.ModelOverrides)
@@ -217,7 +217,7 @@ func TestContextSettings_PutRejectsOutOfRange(t *testing.T) {
 		{"cap over ceiling", `{"mcp_result_cap":150001}`, "mcp_result_cap"},
 		{"cap under one", `{"builtin_success_cap":0}`, "builtin_success_cap"},
 		{"failure cap under one", `{"builtin_failure_cap":-1}`, "builtin_failure_cap"},
-		{"trigger under one", `{"absolute_trigger_chars":0}`, "absolute_trigger_chars"},
+		{"share fraction at zero", `{"tool_result_share_fraction":0}`, "tool_result_share_fraction"},
 		{"ingest bound at ceiling", `{"ingest_bound_bytes":8388608}`, "ingest_bound_bytes"},
 		{"ingest bound under one", `{"ingest_bound_bytes":0}`, "ingest_bound_bytes"},
 		{"override window under one", `{"model_overrides":[{"provider":"ollama","model":"m","context_window":0}]}`, "model_overrides[0].context_window"},
