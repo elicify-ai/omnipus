@@ -10,12 +10,25 @@ package gateway
 // gateway.validate_inbound is off), per D9/seam ruling §3.2 — every failure
 // is VISIBLE as an error frame, never silent:
 //   - the connection is authenticated (non-empty user principal);
+//   - the frame names the session THIS connection is bound to: the target's
+//     session_id must equal wc.boundHub.id (read under WSHandler.mu) —
+//     wh.chatID is the transport's random webchat UUID, never a session id,
+//     so it is never compared against;
+//   - the target belongs to the signed-in owner: the persisted session meta's
+//     Owner must equal wc.userID — a missing record, an unreadable store and
+//     an EMPTY owner ("unowned" never means "anyone may redirect") all refuse
+//     fail-closed;
 //   - the target session positively resolves to a helper (SteeredBy edge);
 //     anything else — including an unreadable record — is refused with
 //     helper-targeting guidance and nothing is issued (fail-closed);
 //   - the instruction is nonblank after the authoritative Unicode-aware
 //     trim (schema pattern '\S' is only an ASCII approximation), and within
 //     the 16384-UTF-8-byte ceiling (exactly 16384 accepted, over refused).
+//
+// Raw store errors are logged server-side only; error frames carry fixed
+// sentences, never a wrapped filesystem path. The binding is re-validated
+// after the store loads so an unbind (or rebind) between authorization and
+// the redirect call cannot slip a redirect through (TOCTOU).
 
 import (
 	"encoding/json"
@@ -108,6 +121,65 @@ func (wh *wsHandlerReadLoop) handleRedirectFrame(data []byte) wsHandlerReadLoopF
 		return wsHandlerReadLoopContinue
 	}
 
+	// Conversation scope (D9: chat commands are conversation-scoped, #955):
+	// the frame's session_id must name the session hub THIS connection is
+	// bound to. wh.chatID is the transport's random webchat UUID, never a
+	// session id (websocket.go::ServeHTTP) — the binding, read under
+	// WSHandler.mu, is the authority. Re-checked below, after the store
+	// loads, to close the bind/unbind race between authorization and the
+	// redirect call.
+	if !wh.h.connBoundToSession(wh.wc, f.SessionId) {
+		wh.wc.inboundDropped.Add(1)
+		slog.Warn("ws: redirect frame targets an unbound session — refused",
+			"chat_id", wh.chatID, "session_id", f.SessionId)
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "redirect works only in the helper session's own chat — open this helper session's chat and retry there; nothing was changed",
+		})
+		return wsHandlerReadLoopContinue
+	}
+
+	// Signed-in-owner gate (D9: authorized for the signed-in owner): the
+	// target's persisted session meta must name exactly this connection's
+	// authenticated principal. Missing meta, an unreadable store and an
+	// EMPTY owner all refuse fail-closed — an "unowned" session never means
+	// "anyone may redirect". Raw store errors are logged server-side only:
+	// the error frame carries a fixed sentence, never a wrapped filesystem
+	// path.
+	sessionStore := wh.h.agentLoop.GetSessionStore()
+	if sessionStore == nil {
+		wh.wc.inboundDropped.Add(1)
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "redirect could not verify the target session's ownership — nothing was changed",
+		})
+		return wsHandlerReadLoopContinue
+	}
+	meta, metaErr := sessionStore.GetMeta(f.SessionId)
+	switch {
+	case metaErr != nil:
+		wh.wc.inboundDropped.Add(1)
+		slog.Warn("ws: redirect target ownership could not be verified — refused (fail-closed)",
+			"chat_id", wh.chatID, "session_id", f.SessionId, "error", metaErr.Error())
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "redirect could not verify the target session's ownership — nothing was changed",
+		})
+		return wsHandlerReadLoopContinue
+	case meta == nil || meta.Owner != wh.wc.userID:
+		// meta.Owner == "" (unowned) also lands here: it never equals the
+		// authenticated principal, and an unowned session is redirectable by
+		// nobody.
+		wh.wc.inboundDropped.Add(1)
+		slog.Warn("ws: redirect target is not owned by the signed-in user — refused",
+			"chat_id", wh.chatID, "session_id", f.SessionId)
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "redirect works only for the helper session's owner — the signed-in user does not own this session; nothing was changed",
+		})
+		return wsHandlerReadLoopContinue
+	}
+
 	// Helper target, fail-closed (seam ruling §3.2): only a positively
 	// verified SteeredBy edge lets a redirect through; a root chat, a
 	// missing record, or an unreadable store all refuse with guidance and
@@ -135,12 +207,28 @@ func (wh *wsHandlerReadLoop) handleRedirectFrame(data []byte) wsHandlerReadLoopF
 		})
 		return wsHandlerReadLoopContinue
 	default:
+		// The raw error can carry a filesystem path — server log only; the
+		// frame gets a fixed sentence.
 		wh.wc.inboundDropped.Add(1)
 		slog.Warn("ws: redirect target could not be verified — refused (fail-closed)",
 			"chat_id", wh.chatID, "session_id", f.SessionId, "error", loadErr.Error())
 		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "redirect could not verify the target session: " + loadErr.Error() + " — nothing was changed",
+			Message: "redirect could not verify the target session — nothing was changed",
+		})
+		return wsHandlerReadLoopContinue
+	}
+
+	// TOCTOU close: the binding must still hold once both stores agree — an
+	// unbind (or a rebind to a different session) between the checks above
+	// and the primitive call refuses instead of redirecting.
+	if !wh.h.connBoundToSession(wh.wc, f.SessionId) {
+		wh.wc.inboundDropped.Add(1)
+		slog.Warn("ws: redirect frame binding lost before dispatch — refused",
+			"chat_id", wh.chatID, "session_id", f.SessionId)
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "redirect works only in the helper session's own chat — open this helper session's chat and retry there; nothing was changed",
 		})
 		return wsHandlerReadLoopContinue
 	}
