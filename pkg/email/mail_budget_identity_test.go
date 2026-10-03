@@ -36,6 +36,12 @@ type identityReadRig struct {
 
 func newIdentityReadRig(t *testing.T) *identityReadRig {
 	t.Helper()
+	// The rig's clients (a, b) are deliberately source-less: the dial counter
+	// below measures real per-call dials. Declare the legacy-dial world so the
+	// count stays a dial count under any test order (order-independence
+	// fixture) — after any other test wired the process-wide manager, a
+	// nil-source read would be the FR-W1-2 refusal and dial nothing.
+	pinLegacyDialWorld(t)
 	// The fixture seed order specifies the oracle: Sent contains Subject 1,
 	// INBOX contains Subject 2. Both clients share endpoint+login but resolve
 	// their logical Sent role differently, exactly US-6/AS-1's wrong-data case.

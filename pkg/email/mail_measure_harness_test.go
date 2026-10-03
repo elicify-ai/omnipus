@@ -211,10 +211,19 @@ func mailMeasureSeedMessages(n int) [][]byte {
 func mailMeasurePoolClient(t *testing.T, base *Client, pair string, capture *mailMeasurePoolCapture) (*Client, func()) {
 	t.Helper()
 	stateDir := filepath.Join(t.TempDir(), "poolstate")
+	prevWired := sessionManagerWired()
 	sessions := SharedMailSessions(stateDir, SessionsConfig{
 		Credentials: func(string) (string, string, error) { return testIMAPUser, testIMAPPass, nil },
 		Instrument:  capture.record,
 	})
+	// SharedMailSessions marks the process manager-wired as a side effect, but
+	// this pooled client carries its own source — the gate is never consulted
+	// on it — while the arms' baseline ops on the source-less base client need
+	// the legacy-dial world to stay declared (startMemIMAP pins it). Restore
+	// the pinned state immediately and again at cleanup: the second iteration
+	// of the series arm must not find the wired world its own iteration set.
+	sharedSessionsWired.Store(prevWired)
+	t.Cleanup(func() { sharedSessionsWired.Store(prevWired) })
 	cl, err := NewClient(Account{
 		IMAPHost: base.acct.IMAPHost,
 		IMAPPort: base.acct.IMAPPort,

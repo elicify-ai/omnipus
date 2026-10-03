@@ -33,6 +33,12 @@ import (
 // behavior, not this test's.
 func TestClient_MissingSourceFailsVisibly(t *testing.T) {
 	stub := newStubIMAPServer(t)
+	// Declare this test's world explicitly: the manager is wired. SharedMailSessions
+	// below also sets the process-wide flag, but the pin is what makes the world a
+	// declared fixture rather than a side effect — the previous state is restored at
+	// cleanup, so this test no longer rewrites the world every later test runs in
+	// (order-independence fixture, session_wiring_fixture_test.go).
+	pinSessionManagerWired(t, true)
 	sessions := SharedMailSessions(t.TempDir(), SessionsConfig{
 		IdleSweepInterval: testSweepInterval,
 		Credentials:       func(string) (string, string, error) { return testIMAPUser, testIMAPPass, nil },

@@ -121,6 +121,13 @@ func (s *discoveryInstr) releaseStalls() {
 // harness startViewIMAPRaw (pkg/email/view_test.go).
 func startDiscoveryIMAP(t *testing.T, inbox bool, folders []string, caps imap.CapSet, stall []string) (*Client, string, *discoveryInstr) {
 	t.Helper()
+	// Discovery clients are source-less: Resolve rides withMailSession, which
+	// consults the process-wide FR-W1-2 gate for nil-source clients. Declare
+	// the legacy-dial world here so the discovery ladder is exercised under
+	// any test order (order-independence fixture) — after any other test
+	// wired a shared manager, a nil-source Resolve would be the
+	// ErrSessionSourceMissing refusal instead of the probed flow.
+	pinLegacyDialWorld(t)
 
 	mem := imapmemserver.New()
 	user := imapmemserver.NewUser(testIMAPUser, testIMAPPass)
@@ -553,6 +560,9 @@ func (s *specialUseSession) List(w *imapserver.ListWriter, ref string, patterns 
 // shape as startDiscoveryIMAP.
 func startSpecialUseIMAP(t *testing.T, attrs map[string][]imap.MailboxAttr, caps imap.CapSet) (*Client, *discoveryInstr) {
 	t.Helper()
+	// Same source-less discovery client as startDiscoveryIMAP: declare the
+	// legacy-dial world under any test order (order-independence fixture).
+	pinLegacyDialWorld(t)
 
 	mem := imapmemserver.New()
 	user := imapmemserver.NewUser(testIMAPUser, testIMAPPass)

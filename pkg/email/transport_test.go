@@ -506,6 +506,11 @@ func TestNewClient_CustomPortsPreserved(t *testing.T) {
 // always fail fast — useful for guard-branch tests.
 func newTestClient(t *testing.T) *Client {
 	t.Helper()
+	// Source-less client, dial-path semantics: declare the legacy-dial world so
+	// these tests verify a real dial failure — not the FR-W1-2 wiring refusal
+	// the process-wide gate would substitute after any earlier test wires a
+	// manager (order-independence fixture).
+	pinLegacyDialWorld(t)
 	cl, err := NewClient(Account{
 		IMAPHost: "127.0.0.1",
 		IMAPPort: 19993, // no server listening here
