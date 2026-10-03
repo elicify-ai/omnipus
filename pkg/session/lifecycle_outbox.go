@@ -22,6 +22,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,6 +63,11 @@ var (
 	// terminal record: a visible consistency error that can never authorize
 	// publication or retirement.
 	ErrFinalDeliveryOrphanEnvelope = errors.New("session: lifecycle: final delivery: orphan or mismatching delivery envelope")
+	// ErrFinalDeliveryProgressRegression — an advance snapshot sets a fact
+	// to false after the journal recorded it true. The snapshot is a full
+	// claim, not a delta: FinalDeliveryProgress has no presence flags, so
+	// false is not "omitted".
+	ErrFinalDeliveryProgressRegression = errors.New("session: lifecycle: final delivery: progress regression refused")
 )
 
 // FinalDeliveryCommit is the protected, immutable terminal/outbox tuple one
@@ -126,6 +132,15 @@ func (p FinalDeliveryProgress) Merge(n FinalDeliveryProgress) FinalDeliveryProgr
 // Equal reports whether two progress snapshots record the same facts.
 func (p FinalDeliveryProgress) Equal(n FinalDeliveryProgress) bool {
 	return p == n
+}
+
+// Regresses reports whether next turns any fact already recorded on p back
+// to false. A false field is an explicit claim, not an omitted delta.
+func (p FinalDeliveryProgress) Regresses(next FinalDeliveryProgress) bool {
+	return (p.InboxAppended && !next.InboxAppended) ||
+		(p.FramesPersisted && !next.FramesPersisted) ||
+		(p.WakeRecorded && !next.WakeRecorded) ||
+		(p.AckObserved && !next.AckObserved)
 }
 
 // Delivered reports whether the durable facts show this final fully
@@ -353,12 +368,23 @@ func (s *LifecycleStore) UpdateFinalDelivery(sessionID string, generation int, c
 		merged = merged.Merge(*cmd.Advance)
 	}
 	if state.retired {
-		// Retirement completes the delivery summary: no further facts, and a
-		// repeat retire is an idempotent no-op.
+		// Retirement completes the delivery summary. A repeat retire does
+		// not append a second marker; if a crash left the payload bytes
+		// after the marker, this retry finishes compaction instead of
+		// reporting success while those bytes remain.
 		if cmd.Retire && merged.Equal(state.progress) {
-			return nil
+			return s.compactRetiredPayloadLocked(sessionID, generation, commitID)
 		}
 		return fmt.Errorf("%w: session %q generation %d commit %q", ErrFinalDeliveryRetired, sessionID, generation, commitID)
+	}
+	if cmd.Advance != nil && state.progress.Regresses(*cmd.Advance) {
+		// Stale CAS stays a revision conflict. A matching revision with an
+		// explicit true->false fact is a regression and must not append.
+		if expectedRevision != state.revision {
+			return fmt.Errorf("%w: session %q generation %d commit %q expected revision %d, journal at %d",
+				ErrFinalDeliveryRevisionConflict, sessionID, generation, commitID, expectedRevision, state.revision)
+		}
+		return fmt.Errorf("%w: session %q generation %d commit %q", ErrFinalDeliveryProgressRegression, sessionID, generation, commitID)
 	}
 	if cmd.Retire && !merged.Delivered() {
 		return fmt.Errorf("%w: session %q generation %d commit %q progress %+v", ErrFinalDeliveryRetireNotEarned, sessionID, generation, commitID, merged)
@@ -386,7 +412,15 @@ func (s *LifecycleStore) UpdateFinalDelivery(sessionID string, generation int, c
 		identity.Payload = nil
 		env.Protected = &identity
 	}
-	return s.appendJournalEnvelope(sessionID, env)
+	if err := s.appendJournalEnvelope(sessionID, env); err != nil {
+		return err
+	}
+	if !cmd.Retire {
+		return nil
+	}
+	// Marker first. Compaction failure stays visible: the marker is
+	// already durable, the payload bytes are harmless until a retry.
+	return s.compactRetiredPayloadLocked(sessionID, generation, commitID)
 }
 
 // FinalDeliveryState reads one committed final's joined delivery state —
@@ -503,4 +537,101 @@ func (s *LifecycleStore) readJournal(sessionID string) ([]lifecycleJournalLine, 
 // happens under the same per-session lock every other writer uses.
 func (s *LifecycleStore) appendJournalEnvelope(sessionID string, env *finalDeliveryUpdateEnvelope) error {
 	return fileutil.AppendJSONL(s.path(sessionID), env)
+}
+
+// compactRetiredPayloadLocked removes one retired final's payload bytes and
+// its redundant pre-retirement delivery envelopes from the session journal.
+// The caller MUST hold Lock(sessionID). It refuses to rewrite when the
+// durable retirement marker is absent. A no-op (bytes already gone) returns
+// nil without writing. A write failure is returned; the previous journal,
+// marker included, stays in place for a retry.
+func (s *LifecycleStore) compactRetiredPayloadLocked(sessionID string, generation int, commitID string) error {
+	path := s.path(sessionID)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("session: lifecycle: final delivery: read journal for compaction %q: %w", sessionID, err)
+	}
+	lines := splitJournalLines(raw)
+	if !journalHasRetirementMarker(lines, generation, commitID) {
+		return fmt.Errorf("session: lifecycle: final delivery: compaction refused for session %q generation %d commit %q: retirement marker is not in the journal", sessionID, generation, commitID)
+	}
+	var buf bytes.Buffer
+	changed := false
+	for _, line := range lines {
+		next, drop, lineChanged, lineErr := compactRetiredFinalLine(line, generation, commitID)
+		if lineErr != nil {
+			return fmt.Errorf("session: lifecycle: final delivery: compact session %q generation %d commit %q: %w", sessionID, generation, commitID, lineErr)
+		}
+		if drop {
+			changed = true
+			continue
+		}
+		if lineChanged {
+			changed = true
+		}
+		buf.Write(next)
+		buf.WriteByte('\n')
+	}
+	if !changed {
+		return nil
+	}
+	if err := fileutil.WriteFileAtomic(path, buf.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("session: lifecycle: final delivery: atomic compaction for session %q generation %d commit %q: %w", sessionID, generation, commitID, err)
+	}
+	return nil
+}
+
+func splitJournalLines(raw []byte) [][]byte {
+	if len(raw) == 0 {
+		return nil
+	}
+	parts := bytes.Split(raw, []byte("\n"))
+	out := make([][]byte, 0, len(parts))
+	for _, part := range parts {
+		if len(bytes.TrimSpace(part)) == 0 {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func journalHasRetirementMarker(lines [][]byte, generation int, commitID string) bool {
+	for _, line := range lines {
+		decoded := decodeJournalLine(bytes.TrimSpace(line))
+		if decoded == nil || decoded.envelope == nil {
+			continue
+		}
+		env := decoded.envelope
+		if env.PayloadRetired && env.Generation == generation && env.CommitID == commitID {
+			return true
+		}
+	}
+	return false
+}
+
+// compactRetiredFinalLine strips this final's payload from its commit record
+// and drops a pre-retirement delivery envelope for the same commit. Every
+// other line, including the retirement marker and other generations, is kept.
+func compactRetiredFinalLine(line []byte, generation int, commitID string) (next []byte, drop bool, changed bool, err error) {
+	trimmed := bytes.TrimSpace(line)
+	decoded := decodeJournalLine(trimmed)
+	if decoded == nil {
+		return trimmed, false, false, nil
+	}
+	if rec := decoded.record; rec != nil && rec.FinalDelivery != nil {
+		fd := rec.FinalDelivery
+		if fd.Generation == generation && fd.CommitID == commitID && len(fd.Payload) > 0 {
+			fd.Payload = nil
+			encoded, mErr := json.Marshal(rec)
+			if mErr != nil {
+				return nil, false, false, mErr
+			}
+			return encoded, false, true, nil
+		}
+	}
+	if env := decoded.envelope; env != nil && env.Generation == generation && env.CommitID == commitID && !env.PayloadRetired {
+		return nil, true, true, nil
+	}
+	return trimmed, false, false, nil
 }
