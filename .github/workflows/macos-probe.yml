@@ -1,0 +1,85 @@
+name: macOS agent probe (scratch, not for merge)
+
+# MEASUREMENT ONLY. Answers one question for #1184: is macOS/ARM slow at
+# pkg/agent because the PLATFORM is slow, or because the cross-platform job runs
+# all 127 packages concurrently on a 3-core runner while pkg/agent gets ~1/3 of
+# the machine?
+#
+# Linux runs its agent shard ALONE (`go test -p 1`) and finishes in 390s.
+# macOS runs `./...` with default -p (= 3 here), so pkg/agent competes.
+#
+# This job runs the same packages SERIALLY, alone, with -v so per-test
+# durations are captured. Randomised trigger: nothing else in the repo runs it.
+
+on:
+  push:
+    branches:
+      - probe-macos-agent-*
+    paths:
+      - .github/workflows/macos-probe.yml
+      - .probe-trigger
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: macOS agent timing probe
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Machine facts
+        run: |
+          echo "cpus: $(sysctl -n hw.ncpu)"
+          echo "physicalcpu: $(sysctl -n hw.physicalcpu)"
+          echo "mem: $(sysctl -n hw.memsize)"
+          go version; go env GOMAXPROCS GOARCH
+
+      - name: pkg/agent ALONE, serial, verbose, generous timeout
+        run: |
+          set +e
+          start=$(date +%s)
+          go test -v -tags goolm,stdjson -count=1 -p 1 -timeout 40m ./pkg/agent/ > /tmp/agent-alone.log 2>&1
+          code=$?
+          end=$(date +%s)
+          echo "=== pkg/agent ALONE: exit=$code wall=$((end-start))s ==="
+          grep -aE "^(--- )?(PASS|FAIL|ok|FAIL)" /tmp/agent-alone.log | tail -5
+          tail -3 /tmp/agent-alone.log
+
+      - name: pkg/gateway ALONE, serial, generous timeout
+        run: |
+          set +e
+          start=$(date +%s)
+          go test -tags goolm,stdjson -count=1 -p 1 -timeout 40m ./pkg/gateway/ > /tmp/gateway-alone.log 2>&1
+          code=$?
+          end=$(date +%s)
+          echo "=== pkg/gateway ALONE: exit=$code wall=$((end-start))s ==="
+          tail -3 /tmp/gateway-alone.log
+
+      - name: Per-test duration profile (top 40 slowest)
+        if: always()
+        run: |
+          echo "=== top 40 slowest tests in pkg/agent (alone) ==="
+          grep -aE "^--- (PASS|FAIL): " /tmp/agent-alone.log \
+            | sed -E 's/^--- (PASS|FAIL): ([^ ]+) \(([0-9.]+)s\)/\3 \1 \2/' \
+            | sort -rn | head -40
+          echo
+          echo "=== total tests: $(grep -acE '^--- (PASS|FAIL): ' /tmp/agent-alone.log) ==="
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-agent-probe
+          path: |
+            /tmp/agent-alone.log
+            /tmp/gateway-alone.log
+          retention-days: 7
