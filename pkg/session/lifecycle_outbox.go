@@ -415,6 +415,42 @@ func (s *LifecycleStore) FinalDeliveryState(sessionID string, generation int, co
 	return state.progress, state.revision, state.retired, nil
 }
 
+// CommittedFinalDelivery reads one committed final's protected tuple joined
+// with its latest delivery state — the provenance read a restricted
+// committed-outbox publisher runs under the session's lifecycle lock BEFORE
+// anything is published: identity, protected payload hash and exact payload
+// bytes come back from the journal itself, never from a caller's copy. The
+// lock is held only for this read; the caller must not keep it across any
+// downstream append or wake. Unknown identities return
+// ErrFinalDeliveryUnknownCommit; a retired final's payload bytes read nil
+// (the durable retirement marker replaced them).
+func (s *LifecycleStore) CommittedFinalDelivery(sessionID string, generation int, commitID string) (commit FinalDeliveryCommit, progress FinalDeliveryProgress, revision int64, retired bool, err error) {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return FinalDeliveryCommit{}, FinalDeliveryProgress{}, 0, false, err
+	}
+	mu := s.Lock(sessionID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	lines, err := s.readJournal(sessionID)
+	if err != nil {
+		return FinalDeliveryCommit{}, FinalDeliveryProgress{}, 0, false, err
+	}
+	joined, err := joinFinalDelivery(sessionID, lines)
+	if err != nil {
+		return FinalDeliveryCommit{}, FinalDeliveryProgress{}, 0, false, err
+	}
+	state, found := joined[finalDeliveryKey{generation: generation, commitID: commitID}]
+	if !found {
+		return FinalDeliveryCommit{}, FinalDeliveryProgress{}, 0, false, fmt.Errorf("%w: session %q generation %d commit %q", ErrFinalDeliveryUnknownCommit, sessionID, generation, commitID)
+	}
+	commit = state.commit
+	if state.retired {
+		commit.Payload = nil
+	}
+	return commit, state.progress, state.revision, state.retired, nil
+}
+
 // ListPendingFinalDeliveries scans every session's journal — every
 // generation, not just each tail (D2 round-4 R4-MAJ-002) — and returns
 // every committed final joined with its latest delivery state. Explicit

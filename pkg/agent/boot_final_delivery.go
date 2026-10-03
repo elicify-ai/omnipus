@@ -23,6 +23,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"slices"
@@ -106,6 +107,24 @@ func (r *SteerBootRecovery) deliverPendingFinal(ctx context.Context, item sessio
 			item.SessionID, item.Generation, commit.CommitID))
 		return
 	}
+	// Payload integrity BEFORE anything else touches the bytes (D2:
+	// payload_hash identifies the exact stored upward envelope). A commit
+	// whose stored payload no longer hashes to its protected payload_hash is
+	// a visible consistency error that refuses publication before any
+	// deliverer call, inbox lookup or append — the commit stays pending, and
+	// no payload is ever rewritten or hash back-filled to force a match.
+	if commit.PayloadHash == "" {
+		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+			"session %s committed final %s (generation %d commit %q) is pending but carries no protected payload_hash — visible inconsistency, publication refused (D2)",
+			item.SessionID, replayID, item.Generation, commit.CommitID))
+		return
+	}
+	if computed := fmt.Sprintf("%x", sha256.Sum256(commit.Payload)); computed != commit.PayloadHash {
+		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+			"session %s committed final %s (generation %d commit %q) payload hash %s does not match the protected payload_hash %s — visible consistency error, publication refused before any deliverer call or inbox append; the commit stays pending (D2)",
+			item.SessionID, replayID, item.Generation, commit.CommitID, computed, commit.PayloadHash))
+		return
+	}
 	var message generated.SessionMessage
 	if err := message.UnmarshalJSON(commit.Payload); err != nil {
 		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
@@ -130,6 +149,21 @@ func (r *SteerBootRecovery) deliverPendingFinal(ctx context.Context, item sessio
 		return
 	}
 	if sighting.acked {
+		if !sighting.appended {
+			// A STRAY acknowledgement: an ack entry consumed an id the
+			// parent's inbox never held (MessageInboxStore.AckDetailed
+			// durably records unknown-id acks and reports them Unknown).
+			// D2: a genuinely acknowledged matching id consumes the commit
+			// only when the id was really delivered — an ack with no
+			// matching appended message is a visible inconsistency that
+			// consumes nothing: no ack_observed fact is minted, nothing is
+			// published or suppressed silently, and the outbox entry stays
+			// pending/retryable behind this refusal.
+			notice("final-delivery:"+item.SessionID, fmt.Sprintf(
+				"session %s committed final %s carries a stray acknowledgement in parent %s inbox with no matching appended message — visible inconsistency, the commit stays pending/retryable and is never consumed by it (D2)",
+				item.SessionID, replayID, commit.ParentSessionID))
+			return
+		}
 		// A genuinely acknowledged matching id means this committed result
 		// was already consumed: record the receipt, never send a second
 		// final, never re-wake (D2).
@@ -174,15 +208,35 @@ func (r *SteerBootRecovery) deliverPendingFinal(ctx context.Context, item sessio
 	r.reportAndRecordDelivery(ctx, event, item, delivery, notice)
 }
 
-// deliverCommittedFinal runs the one Deliver call, guarding the unwired
-// deliverer visibly (a boot without a deliverer can still record nothing —
-// it must not claim delivery).
+// deliverCommittedFinal delivers ONE committed final through the deliverer,
+// guarding the unwired deliverer visibly (a boot without a deliverer can
+// still record nothing — it must not claim delivery). When the deliverer
+// provides the RESTRICTED committed-outbox path (the production
+// SteerUpwardDeliverer does), the publish is authorized by the store-verified
+// protected commit — the exact payload hash, message id, parent and outcome
+// must match — so a historical generation publishes through the real
+// deliverer even when an explicit RESUME has moved the tail to G+1. The
+// public Deliver call stays for a deliverer without the restricted path
+// (the boot suite's recording seam) and keeps its generation guard for every
+// ordinary uncommitted event; a guessed Generation or arbitrary inbox id can
+// never bypass either way.
 func (r *SteerBootRecovery) deliverCommittedFinal(ctx context.Context, event steer.UpwardEvent, item session.PendingFinalDelivery, notice func(key, message string)) (steer.Delivery, error) {
 	if r.Deliverer == nil {
 		notice("final-delivery:"+item.SessionID, fmt.Sprintf(
 			"session %s committed final %s not delivered: upward deliverer is not configured — the outbox entry stays pending (D2)",
 			item.SessionID, item.Commit.MessageID))
 		return steer.Delivery{}, errors.New("agent: steer boot final delivery: upward deliverer is not configured")
+	}
+	if publisher, ok := r.Deliverer.(committedOutboxPublisher); ok {
+		return publisher.deliverCommittedOutboxFinal(ctx, steerCommittedFinalRef{
+			SessionID:       item.SessionID,
+			Generation:      item.Generation,
+			CommitID:        item.Commit.CommitID,
+			MessageID:       item.Commit.MessageID,
+			ParentSessionID: item.Commit.ParentSessionID,
+			Outcome:         item.Commit.Outcome,
+			PayloadHash:     item.Commit.PayloadHash,
+		})
 	}
 	return r.Deliverer.Deliver(ctx, event)
 }
