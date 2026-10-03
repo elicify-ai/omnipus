@@ -44,14 +44,33 @@ test.describe('terminal outcome agrees across real surfaces', () => {
     test(`iteration cap after narration: ${disconnected ? 'terminal while disconnected' : 'live'}, reattach and reload render exactly once with Verbose off`, async ({ page, consoleErrors }, info) => {
       const mock = await startTerminalOutcomeProvider();
       let gw: GatewayProcess | undefined;
-      const logPath = info.outputPath('terminal-gateway.jsonl');
-      fs.mkdirSync(path.dirname(logPath), { recursive: true });
       const traffic = recordTerminalTraffic(page);
       try {
         gw = await GatewayProcess.start({
           apiBase: mock.url, model: E2E_MODEL, adminUsername: 'terminal-acceptance',
-          env: { OMNIPUS_LOG_FILE: logPath },
         });
+        // The real diagnostic file is the gateway's own boot log: gateway boot
+        // wires file logging directly (gateway_boot.go::bootLoggingAndDataModel
+        // → logger.EnableFileLogging($OMNIPUS_HOME/logs/gateway.log)); no
+        // production code reads OMNIPUS_LOG_FILE (only pkg/logger's
+        // ConfigureFromEnv, which the gateway never calls), so the previous
+        // env-var-pointed terminal-gateway.jsonl never existed and the first
+        // poll died on ENOENT before any outcome assertion (Release run
+        // 37115376423). Read the sink the product actually writes.
+        const logPath = path.join(gw.homeDir, 'logs', 'gateway.log');
+        expect(fs.existsSync(logPath),
+          'instrument: the real gateway boot log must exist at $OMNIPUS_HOME/logs/gateway.log before any outcome row is polled').toBe(true);
+        // Instrument positive control, not an outcome oracle: the file sink is
+        // zerolog JSONL (logger.EnableFileLogging → zerolog.New(logFile); the
+        // slog bridge forwards record.Message into it), and gateway boot's
+        // startServices() opens with an unconditional slog.Info whose message
+        // is fixed above. Requiring that KNOWN real row to parse proves the
+        // instrument reads real JSONL diagnostics before any outcome filtering
+        // — an empty or non-JSONL file fails loudly here instead of silently
+        // filtering to zero rows at the turn_end poll below.
+        expect(terminalLogRows(logPath).some((row) =>
+          row.message === 'gateway: inbound schemas pre-compiled successfully'),
+          'instrument: known real boot diagnostic row parses from the JSONL file sink before outcome filtering').toBe(true);
         // All API-fixture calls precede UI login: one token slot per user.
         const { agent, session } = await createTerminalSession(gw);
         await page.goto(gw.baseURL);
