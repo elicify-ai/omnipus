@@ -118,10 +118,18 @@ func purgePairMailState(homePath, agentID, workspaceID string, deleteIdentity bo
 		pending = append(pending, mailCleanupFailedWatcher)
 	}
 
-	// Identity state is deleted ONLY by the removal cascade (MC-24); its own
-	// failure leaves an orphan the boot reconciler removes — it is opaque,
-	// non-sensitive and serves nothing, so it does not pend the outcome.
-	if deleteIdentity && identErr == nil {
+	// Identity state is deleted ONLY by the removal cascade (MC-24) — and
+	// only once the purge itself has nothing pending. While a target is
+	// still pending, the record STAYS: it is what names the pair's cache
+	// subtree, so a retry can find and purge the REAL subtree; deleting it
+	// early would make the retry mint a FRESH identity and purge a subtree
+	// that never existed while the removed pair's state lived on under a
+	// false success (B-18/MC-8 truthfulness). The boot reconciler still
+	// backstops a record left by an interrupted cascade (a pending intent
+	// dies with the process by design). The delete's own failure leaves an
+	// orphan the boot reconciler removes — it is opaque, non-sensitive and
+	// serves nothing, so it does not pend the outcome.
+	if deleteIdentity && identErr == nil && len(pending) == 0 {
 		if err := config.DeleteMailPairIdentity(homePath, agentID, workspaceID); err != nil {
 			slog.Warn("mail cleanup: identity record delete deferred to boot reconciliation")
 		}
