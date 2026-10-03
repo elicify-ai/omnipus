@@ -29,6 +29,20 @@ package email
 // writeCacheFileFn is the package-local write indirection grill M-5 ordered
 // (the pkg/credentials writeFileAtomicFn precedent) so the crash-consistency
 // test can park a write without production test hooks.
+//
+// ROUND-2 IMP-1 CORRECTION (2026-10-03, qa-lead). The self-evaluating gate
+// was withdrawn (register row 18's settlement, round-2 IMP-1: ONE evaluator
+// — the publisher's, w5-integration's EvaluateStagingExclusion; ONE enforcer
+// — the write path, which consumes the published GateDecision and never
+// re-evaluates; w2 spec §3.8 E-1 cell and §4.1 Save row). That changed the
+// ARRANGEMENT of this pack, not its subjects: a store built without a
+// published decision refuses every write (fail closed on absence, §3.8 gate
+// paragraph), so a store exercising an envelope property is built WITH the
+// published ALLOWED decision (§4.2 gate-decision row; §7.1 gate rows:
+// allowed=true → the write proceeds). Every assertion below is unchanged in
+// kind and strength; the ABSENT-decision and NOT-ALLOWED-decision refusal
+// rows are the gate pack's subjects (mail_cache_gate_test.go), per §7.1's
+// three-injection split.
 
 import (
 	"bytes"
@@ -73,9 +87,19 @@ func revisionAlways(n uint64) func(Scope) Revision {
 // lives under the resolved data root; the temp dir stands in for it — the
 // path shape base/mail-cache/<pair>/folders.enc is asserted in
 // TestCacheFile_RoundTripPreservesAllFields).
+//
+// The store carries the PUBLISHED, ALLOWED gate decision (round-2 IMP-1;
+// w2 spec §4.2 gate-decision row, §7.1 gate rows): under the settled design
+// the write path consumes the decision the publisher published and never
+// evaluates the exclusion itself, and a decision-less store refuses every
+// write (fail closed on absence, §3.8 gate paragraph). An envelope property
+// is a property of a cache-writing store — one whose publisher has published
+// allowed=true — so that is the arrangement under test here; the absent and
+// not-allowed refusal rows are the gate pack's (mail_cache_gate_test.go).
 func newTestStore(t *testing.T, base string, keys func(Scope) ([]byte, error), purpose string, rev uint64) *FolderSnapshotStore {
 	t.Helper()
-	return NewFolderSnapshotStore(base, keys, purpose, revisionAlways(rev))
+	return NewFolderSnapshotStore(base, keys, purpose, revisionAlways(rev),
+		WithGateDecision(GateDecision{Allowed: true})) // §4.2: allowed=true → the write path proceeds (§7.1)
 }
 
 func testSnapshot() Snapshot {
@@ -580,7 +604,12 @@ func TestCacheFile_SaveRefusesUnderStaleRevision(t *testing.T) {
 	}
 
 	current := revisionAlways(2) // the mutation + its refresh advanced the revision
-	stale := NewFolderSnapshotStore(base, testKey(0xAA), testPurposeFolder, current)
+	// Same settled arrangement as newTestStore: the stale-revision refusal is
+	// a property of a cache-writing store, so this store also carries the
+	// published allowed decision (§4.2; the revision check precedes the gate
+	// in Save's refusal order either way).
+	stale := NewFolderSnapshotStore(base, testKey(0xAA), testPurposeFolder, current,
+		WithGateDecision(GateDecision{Allowed: true}))
 	snap2 := snap1
 	snap2.Roles.Sent.Name = "INBOX.Sent"
 	if err := stale.Save(scope, snap2, Revision(1), bytes.Repeat([]byte{0xAA}, 32)); !errors.Is(err, ErrStalePublication) {
