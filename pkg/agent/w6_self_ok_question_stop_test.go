@@ -14,12 +14,13 @@ package agent
 // respond path, and resumes only the child — even when the parent is also
 // stopped.
 //
-// Oracles are the ADR, not the current stop writer. The deadline check
-// reads the fresh lifecycle tail (Load, then its JSON), not an older
-// history line and not a made-up question type.
+// The behavioral oracle is the authorized respond after a fresh store
+// open: the exact answer is delivered once and only the child resumes.
+// The original deadline lives in a separate question record (D1.7), not
+// in the stopped lifecycle tail. No reader for that record exists yet;
+// TestW6QuestionDeadline_SeparateRecordRead_CompileBlocked names that gap.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -80,7 +81,6 @@ func TestW6SelfOKQuestion_SurvivesStop_RespondResumesChildWhileParentStaysStoppe
 	freshLC, freshInbox := w6ReopenMessagingStores(t, al)
 	stoppedChild := w6MustLoad(t, freshLC, child.SessionID)
 	stoppedParent := w6MustLoad(t, freshLC, parent.SessionID)
-	questionKept := w6StoppedRecordKeepsQuestion(t, stoppedChild, corr, deadline)
 
 	delegate, resumes := w6ParentRespondTool(t, al, freshLC, freshInbox)
 	parentCtx := tools.WithTranscriptSessionID(context.Background(), parent.SessionID)
@@ -92,12 +92,12 @@ func TestW6SelfOKQuestion_SurvivesStop_RespondResumesChildWhileParentStaysStoppe
 	resumedOnce := w6ChildResumedOnce(first, resumes, child.SessionID, generation, delivered, afterChild, afterParent, stoppedParent.Generation)
 
 	if stoppedChild.State != session.LifecycleStopped || stoppedParent.State != session.LifecycleStopped ||
-		stoppedChild.Generation != generation || !questionKept || !resumedOnce {
-		t.Fatalf("self_ok question lost across Stop, or the authorized respond did not resume only the child (ADR D1.7): "+
-			"child_state=%s parent_state=%s child_generation=%d want_generation=%d question_kept=%v "+
+		stoppedChild.Generation != generation || !resumedOnce {
+		t.Fatalf("authorized self_ok respond did not deliver %q once and resume only the child after a fresh store open (ADR D1.7): "+
+			"child_state=%s parent_state=%s child_generation=%d want_generation=%d "+
 			"needs_input=%v respond_error=%v respond=%q deliveries=%d dispatches=%v "+
-			"after_child=%s after_parent=%s want_deadline=%s",
-			stoppedChild.State, stoppedParent.State, stoppedChild.Generation, generation, questionKept,
+			"after_child=%s after_parent=%s parked_deadline=%s",
+			w6SelfOKAnswer, stoppedChild.State, stoppedParent.State, stoppedChild.Generation, generation,
 			stoppedChild.NeedsInput, first.IsError, first.ForLLM, delivered, resumes.calls,
 			afterChild.State, afterParent.State, deadline.Format(time.RFC3339Nano))
 	}
@@ -173,26 +173,6 @@ func w6MustLoad(t *testing.T, lc *session.LifecycleStore, sessionID string) *ses
 	return rec
 }
 
-// w6StoppedRecordKeepsQuestion reports whether a fresh load of a stopped
-// child still carries the original correlation and TTL instant. The check
-// uses the loaded tail only, so an older needs_input history line cannot
-// pass it. D1.7 keeps that payload even though NeedsInput is cleared.
-func w6StoppedRecordKeepsQuestion(t *testing.T, rec *session.LifecycleRecord, corr string, deadline time.Time) bool {
-	t.Helper()
-	if rec == nil || rec.State != session.LifecycleStopped {
-		return false
-	}
-	raw, err := json.Marshal(rec)
-	if err != nil {
-		t.Fatalf("marshal stopped record: %v", err)
-	}
-	encodedDeadline, err := json.Marshal(deadline)
-	if err != nil {
-		t.Fatalf("marshal original deadline: %v", err)
-	}
-	return bytes.Contains(raw, []byte(corr)) && bytes.Contains(raw, encodedDeadline)
-}
-
 func w6ParentRespondTool(t *testing.T, al *AgentLoop, lc *session.LifecycleStore, inbox *session.MessageInboxStore) (*tools.DelegateTool, *w6ResumeRecorder) {
 	t.Helper()
 	tool := tools.NewDelegateTool("", 0, 0)
@@ -238,7 +218,14 @@ func w6ChildResumedOnce(result *tools.ToolResult, resumes *w6ResumeRecorder, chi
 		return false
 	}
 	call := resumes.calls[0]
-	return call.sessionID == childID && call.generation == generation &&
-		child.State == session.LifecycleRunning && child.Generation == generation &&
-		parent.State == session.LifecycleStopped && parent.Generation == parentGeneration
+	// The recorder only proves Dispatch was asked. It does not run admission,
+	// so a correct explicit resume may be queued (D2) rather than running.
+	// Stopped is not a resume. The parent must stay stopped.
+	if call.sessionID != childID || call.generation != generation {
+		return false
+	}
+	if child.State == session.LifecycleStopped || child.Generation != generation {
+		return false
+	}
+	return parent.State == session.LifecycleStopped && parent.Generation == parentGeneration
 }
