@@ -3,7 +3,6 @@ description: >
   Routing configuration for a single communication channel.
   Controls which agent handles inbound messages arriving on this channel.
 type: object
-required: []
 additionalProperties: false
 properties:
   default_agent_id:

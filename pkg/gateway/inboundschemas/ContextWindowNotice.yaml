@@ -1,0 +1,21 @@
+title: ContextWindowNotice
+description: >
+  Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by
+  ContextWindowNoticeFrame.notice and Message.context_window_notice;
+  rendered only when Verbose chat is enabled. Not a model-history message
+  or the transient model-only context notice.
+type: object
+required:
+  - kind
+  - message
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - provider_retry
+      - mid_turn
+  message:
+    type: string
+    minLength: 1
+    maxLength: 2048

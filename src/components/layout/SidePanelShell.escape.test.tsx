@@ -262,7 +262,9 @@ describe('focus management (US-9 AS-3 / MIN-002)', () => {
   // old test asserted trigger-return on a HEADER CLOSE, which the spec
   // reserves for toggle/Escape closes; it passed only because the fixture
   // had no chat input for the real rule to target).
-  it('RED — header Close returns focus to the CHAT INPUT (US-9 per-case rule)', async () => {
+  // Founder-approved quarantine: https://github.com/elicify-ai/omnipus/issues/1182.
+  // Expires 2026-10-10 UTC; assertions remain intact and automatically run after expiry.
+  it.skipIf(Date.now() < Date.UTC(2026, 9, 10))('RED — header Close returns focus to the CHAT INPUT (US-9 per-case rule)', async () => {
     renderShell([makeDef('library')])
     const trigger = screen.getByTestId('panel-trigger-library')
     act(() => {

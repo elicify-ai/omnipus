@@ -155,6 +155,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, _ string, sub agent.EventSubscrip
 			agent.EventKindSubagentMessage, agent.EventKindSubagentState,
 			agent.EventKindToolExecStart, agent.EventKindToolExecEnd,
 			agent.EventKindError, agent.EventKindGoalStatusChanged, agent.EventKindGoalOutcome,
+			agent.EventKindLLMRetry,
 			agent.EventKindJudgeVerdict, agent.EventKindLoopStatusChanged, agent.EventKindToolResultProjection:
 			// #823 catch-up redesign (BE-DESIGN.md §1.2): these kinds are
 			// now translated and delivered EXACTLY ONCE per event by the
@@ -178,7 +179,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, _ string, sub agent.EventSubscrip
 			// intent reads plainly at the call site.
 		case agent.EventKindTurnStart, agent.EventKindTurnEnd,
 			agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
-			agent.EventKindLLMRetry, agent.EventKindContextCompress,
+			agent.EventKindContextCompress,
 			agent.EventKindToolExecSkipped, agent.EventKindSteeringInjected, agent.EventKindFollowUpQueued,
 			agent.EventKindInterruptReceived, agent.EventKindSubTurnResultDelivered, agent.EventKindSubTurnOrphan,
 			agent.EventKindTurnTimeout, agent.EventKindEmptyResponseRetry, agent.EventKindCompactionRetry,

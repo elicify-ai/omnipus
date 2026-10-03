@@ -294,48 +294,8 @@ func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) err
 // directories (SC-001), matching AppendTranscriptStrict's contract exactly
 // — "a name, not a second behavior" per FR-002's own text.
 func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry) error {
-	if err := validateSessionID(sessionID); err != nil {
-		return err
-	}
-	if entry.Timestamp.IsZero() {
-		entry.Timestamp = time.Now().UTC()
-	}
-
-	h := us.lockSession(sessionID)
-	defer h.Unlock()
-
-	// Existence check FIRST — see this method's doc comment above. No
-	// filesystem write of any kind happens before this succeeds.
-	meta, err := us.readMetaLocked(sessionID)
-	if err != nil {
-		return fmt.Errorf("unified_store: append transcript: session %q does not exist: %w", sessionID, err)
-	}
-
-	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
-	if err := fileutil.AppendJSONL(transcriptPath, entry); err != nil {
-		return fmt.Errorf("unified_store: append transcript: %w", err)
-	}
-
-	// Update stats and UpdatedAt — targeted stats-group write only (FR-084);
-	// a transcript append never touches meta.json/loop.json. See
-	// accumulateEntryStats (entry_stats.go) for the full token-accounting
-	// convention shared with PartitionStore.AppendMessage and
-	// UnifiedStore.AppendTranscriptStrict.
-	accumulateEntryStats(&meta.Stats, entry)
-	meta.UpdatedAt = entry.Timestamp
-	// ADR-057 U6 W24 (FR-061/FR-062): the per-token counter write is
-	// throttled — this mutates ONLY the cached entry (never touching
-	// stats.json on disk) and marks the session dirty for the periodic
-	// flusher (or the next forced-flush point) to persist. The transcript
-	// line itself already landed durably above via fileutil.AppendJSONL
-	// (FR-062: the append stays immediate and unthrottled); only the
-	// counters are deferred. Before this throttle, this call site invoked
-	// u5WriteStatsLocked directly — a full marshal + WithFlock + fsync +
-	// rename + directory fsync on EVERY streamed line (US-13's governing
-	// complaint). u6MarkStatsDirtyLocked can never fail (it is pure
-	// in-memory bookkeeping), so there is no error to log here.
-	us.u6MarkStatsDirtyLocked(sessionID, meta)
-	return nil
+	_, err := us.appendTranscript(sessionID, entry, false, "append transcript")
+	return err
 }
 
 // validTruncationReasons enumerates the only accepted values for the reason
@@ -581,183 +541,6 @@ func (us *UnifiedStore) UpdateToolCallStatusAndResult(
 	return n > 0, err
 }
 
-// ToolCallProjectionUpdate is one transcript-side projection change (ADR-066
-// D5, FR-022): the tool call identified by ToolCallID gets ContentState and
-// Result replaced wholesale. Result nil CLEARS the field (unlike
-// UpdateToolCallStatusAndResult's "nil leaves it alone"), because this type
-// is also the shape UpdateToolCallProjections hands back for the PREVIOUS
-// state — and a failed call's previous Result is legitimately nil (its
-// reason lives in Error). Round-tripping the previous values through the
-// same method is how an aborted turn puts the transcript back (turn.go's
-// restoreSession).
-type ToolCallProjectionUpdate struct {
-	ToolCallID   ToolCallID
-	ContentState string
-	Result       map[string]any
-}
-
-// UpdateToolCallProjections applies every update to the LAST transcript entry
-// carrying each update's ToolCallID, in one read-modify-rewrite of
-// transcript.jsonl (the D5 emptying pass empties several results at once;
-// one rewrite per result would be quadratic in the transcript). It returns,
-// for every update that found its record, the record's PREVIOUS
-// ContentState and Result so the caller can revert on abort. Updates whose
-// id matches no record are silently skipped (same found=false semantics as
-// UpdateToolCallStatus — see its doc comment for the race window that makes
-// that a no-op rather than an error). Returns a non-nil error only on I/O
-// failure.
-func (us *UnifiedStore) UpdateToolCallProjections(
-	sessionID string,
-	updates []ToolCallProjectionUpdate,
-) (previous []ToolCallProjectionUpdate, err error) {
-	if len(updates) == 0 {
-		return nil, nil
-	}
-	// The mutators run sequentially under the session lock inside
-	// rewriteTranscriptToolCalls, so appending to previous needs no guard.
-	mutators := make(map[ToolCallID]func(*ToolCall), len(updates))
-	for _, u := range updates {
-		if u.ToolCallID == "" {
-			continue
-		}
-		mutators[u.ToolCallID] = func(tc *ToolCall) {
-			previous = append(previous, ToolCallProjectionUpdate{
-				ToolCallID:   tc.ID,
-				ContentState: tc.ContentState,
-				Result:       tc.Result,
-			})
-			tc.ContentState = u.ContentState
-			tc.Result = u.Result
-		}
-	}
-	if _, err := us.rewriteTranscriptToolCalls(sessionID, mutators, "update tool call projection"); err != nil {
-		return nil, err
-	}
-	return previous, nil
-}
-
-// rewriteTranscriptToolCalls is the shared read-modify-rewrite behind
-// UpdateToolCallStatusAndResult and UpdateToolCallProjections: for every
-// tool_call id in mutators it finds the LAST transcript entry carrying that
-// id, applies the mutator to that ToolCall in place, and rewrites the file
-// once. Returns how many mutators found their record. what names the caller
-// in log/error text.
-func (us *UnifiedStore) rewriteTranscriptToolCalls(
-	sessionID string,
-	mutators map[ToolCallID]func(*ToolCall),
-	what string,
-) (applied int, err error) {
-	if validationErr := validateSessionID(sessionID); validationErr != nil {
-		return 0, validationErr
-	}
-	if len(mutators) == 0 {
-		return 0, nil
-	}
-
-	h := us.lockSession(sessionID)
-	defer h.Unlock()
-
-	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
-	data, err := os.ReadFile(transcriptPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// No transcript at all — nothing to update; treat as no-op.
-			return 0, nil
-		}
-		return 0, fmt.Errorf("unified_store: %s: read transcript: %w", what, err)
-	}
-
-	// Split into non-empty lines and parse.
-	rawLines := bytes.Split(data, []byte{'\n'})
-	entries := make([]json.RawMessage, 0, len(rawLines))
-	for _, line := range rawLines {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		entries = append(entries, json.RawMessage(line))
-	}
-
-	if len(entries) == 0 {
-		return 0, nil
-	}
-
-	// Walk backward: the LAST entry carrying an id owns it. Each id is
-	// claimed once; an earlier duplicate of the same id is left alone.
-	targets := make(map[int][]ToolCallID)
-	pending := make(map[ToolCallID]struct{}, len(mutators))
-	for id := range mutators {
-		pending[id] = struct{}{}
-	}
-	for i := len(entries) - 1; i >= 0 && len(pending) > 0; i-- {
-		var e TranscriptEntry
-		if jsonErr := json.Unmarshal(entries[i], &e); jsonErr != nil {
-			// Skip malformed lines.
-			slog.Warn(
-				"unified_store: "+what+": skipping malformed line",
-				"session_id",
-				sessionID,
-				"index",
-				i,
-				"error",
-				jsonErr,
-			)
-			continue
-		}
-		for _, tc := range e.ToolCalls {
-			if _, want := pending[tc.ID]; want {
-				targets[i] = append(targets[i], tc.ID)
-				delete(pending, tc.ID)
-			}
-		}
-	}
-
-	if len(targets) == 0 {
-		// No matching tool-call entry found — no-op, not an error (see doc comment).
-		return 0, nil
-	}
-
-	// Unmarshal each target entry, update its matching ToolCalls in place, re-marshal.
-	for idx, ids := range targets {
-		var target TranscriptEntry
-		if jsonErr := json.Unmarshal(entries[idx], &target); jsonErr != nil {
-			return 0, fmt.Errorf("unified_store: %s: unmarshal target entry: %w", what, jsonErr)
-		}
-		for _, id := range ids {
-			for ti := range target.ToolCalls {
-				if target.ToolCalls[ti].ID == id {
-					mutators[id](&target.ToolCalls[ti])
-					applied++
-				}
-			}
-		}
-		rewritten, jsonErr := json.Marshal(target)
-		if jsonErr != nil {
-			return 0, fmt.Errorf("unified_store: %s: marshal updated entry: %w", what, jsonErr)
-		}
-		entries[idx] = json.RawMessage(rewritten)
-	}
-
-	// Rebuild the file contents: one JSON object per line, WITH a trailing
-	// newline after the LAST line too — see MarkLastEntryTruncated's doc
-	// comment above for why omitting it silently corrupts and drops BOTH
-	// this rewrite's last entry AND whatever AppendTranscript writes next
-	// (the confirmed root cause of the Wave 3 fix-5b/5d data-loss bug: this
-	// function's own rewrite, immediately followed by AsyncNotifier's
-	// delivery of the delegate's result via AppendTranscript, corrupted and
-	// dropped both).
-	var buf bytes.Buffer
-	for _, line := range entries {
-		buf.Write(line)
-		buf.WriteByte('\n')
-	}
-
-	if writeErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); writeErr != nil {
-		return 0, fmt.Errorf("unified_store: %s: write transcript: %w", what, writeErr)
-	}
-	return applied, nil
-}
-
 // ReadTranscript returns all entries from {session-id}/transcript.jsonl.
 func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, error) {
 	if err := validateSessionID(sessionID); err != nil {
@@ -779,8 +562,14 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 		}
 		var entry TranscriptEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
+			if isContextWindowNoticeLine(line) {
+				return nil, fmt.Errorf("unified_store: read transcript: invalid context_window_notice: %w", err)
+			}
 			slog.Warn("unified_store: skipping malformed transcript line", "session_id", sessionID, "error", err)
 			continue
+		}
+		if err := validateContextWindowNotice(sessionID, entry); err != nil {
+			return nil, fmt.Errorf("unified_store: read transcript: %w", err)
 		}
 		entries = append(entries, entry)
 	}

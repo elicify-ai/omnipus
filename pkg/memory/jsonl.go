@@ -65,6 +65,7 @@ type sessionMeta struct {
 	UpdatedAt  time.Time         `json:"updated_at"`
 	Projection []projectionEntry `json:"projection,omitempty"`
 	Hydrated   bool              `json:"hydrated,omitempty"`
+	AnchorLine *int              `json:"anchor_archive_line,omitempty"`
 }
 
 // JSONLStore implements Store using append-only JSONL files.
@@ -257,6 +258,12 @@ func (s *JSONLStore) addMsg(sessionKey string, msg providers.Message) error {
 	l.Lock()
 	defer l.Unlock()
 
+	return s.addMsgLocked(sessionKey, msg)
+}
+
+// addMsgLocked appends and updates metadata while the caller holds the existing
+// session shard. Checked context admission uses the same append path and lock.
+func (s *JSONLStore) addMsgLocked(sessionKey string, msg providers.Message) error {
 	// Wrap the message with a write timestamp before marshaling (FR-017).
 	archived := ArchivedMessage{
 		Message: msg,
@@ -322,19 +329,14 @@ func (s *JSONLStore) GetHistory(
 		return nil, err
 	}
 
-	// Pass meta.Skip so readMessages skips those lines without
-	// unmarshaling them — avoids wasted CPU on truncated messages.
-	archived, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
+	// Decode from line zero so the anchor and suffix retain decoded archive
+	// identities, including after a recovered malformed line.
+	archived, err := readMessages(s.jsonlPath(sessionKey), 0)
 	if err != nil {
 		return nil, err
 	}
 
-	// Strip the TS wrapper — GetHistory callers are unchanged and receive
-	// plain providers.Message values (FR-017: TS is internal to the archive).
-	msgs := make([]providers.Message, len(archived))
-	for i, a := range archived {
-		msgs[i] = a.Message
-	}
+	msgs, _ := WindowHistory(WindowSnapshot{State: windowState(meta), Archive: archived})
 	return msgs, nil
 }
 
@@ -421,8 +423,11 @@ func (s *JSONLStore) ScanArchive(
 }
 
 func (s *JSONLStore) TruncateHistory(
-	_ context.Context, sessionKey string, keepLast int,
+	ctx context.Context, sessionKey string, keepLast int,
 ) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
@@ -432,16 +437,16 @@ func (s *JSONLStore) TruncateHistory(
 		return err
 	}
 
-	// Always reconcile meta.Count with the actual line count on disk.
-	// A crash between the JSONL append and the meta update in addMsg
-	// leaves meta.Count stale (e.g. file has 101 lines but meta says
-	// 100). Counting lines is cheap — no unmarshal, just a scan — and
-	// TruncateHistory is not a hot path, so always re-count.
-	n, countErr := countLines(s.jsonlPath(sessionKey))
-	if countErr != nil {
-		return countErr
+	// Cursor and projection addresses count decoded archive records, exactly
+	// like ReadArchive. Malformed physical lines do not shift these identities.
+	archive, err := readMessages(s.jsonlPath(sessionKey), 0)
+	if err != nil {
+		return err
 	}
-	meta.Count = n
+	meta.Count = len(archive)
+	if meta.Skip < 0 || meta.Skip > meta.Count {
+		return errors.New("memory: invalid context window cursor")
+	}
 
 	if keepLast <= 0 {
 		meta.Skip = meta.Count
@@ -453,10 +458,20 @@ func (s *JSONLStore) TruncateHistory(
 	}
 	// FR-019 / US-6.AC9: entries for evicted lines have no window view left
 	// to project — prune everything below the new Skip.
-	meta.Projection = projectionToEntries(
-		pruneProjectionBelow(projectionFromEntries(meta.Projection), meta.Skip))
+	kept := make([]projectionEntry, 0, len(meta.Projection))
+	for _, entry := range meta.Projection {
+		if entry.ArchiveLine >= meta.Skip {
+			kept = append(kept, entry)
+		}
+	}
+	meta.Projection = kept // Preserve exact source limits and transcript mappings.
 	meta.UpdatedAt = time.Now()
-
+	if err := validateWindowMetadata(windowState(meta), archive); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return s.writeMeta(sessionKey, meta)
 }
 
@@ -640,10 +655,7 @@ func (s *JSONLStore) GetProjection(_ context.Context, sessionKey string) (Projec
 	if err != nil {
 		return ProjectionMeta{}, err
 	}
-	return ProjectionMeta{
-		Entries:  projectionFromEntries(meta.Projection),
-		Hydrated: meta.Hydrated,
-	}, nil
+	return projectionMeta(meta), nil
 }
 
 // SetProjectionState records state for one (tool_call_id, archive_line)
@@ -663,9 +675,12 @@ func (s *JSONLStore) SetProjectionState(
 	if err != nil {
 		return err
 	}
-	set := projectionFromEntries(meta.Projection)
-	set[pk] = state
-	meta.Projection = projectionToEntries(set)
+	pm := projectionMeta(meta)
+	pm.Entries[pk] = state
+	if state == ProjectionEmptied {
+		pm.SourceRunes[pk] = 0
+	}
+	meta.Projection = entriesWithLimits(pm)
 	meta.UpdatedAt = time.Now()
 	return s.writeMeta(sessionKey, meta)
 }
@@ -696,7 +711,13 @@ func projectionEntriesEqual(a, b []projectionEntry) bool {
 		return false
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		if a[i].ToolCallID != b[i].ToolCallID || a[i].ArchiveLine != b[i].ArchiveLine || a[i].State != b[i].State {
+			return false
+		}
+		if (a[i].SourceRunes == nil) != (b[i].SourceRunes == nil) {
+			return false
+		}
+		if a[i].SourceRunes != nil && *a[i].SourceRunes != *b[i].SourceRunes {
 			return false
 		}
 	}

@@ -158,7 +158,8 @@ func (al *AgentLoop) decideRecallInjection(
 		if cfg := al.GetConfig(); cfg != nil {
 			cs = cfg.Context
 		}
-		absShare = absoluteShareTokens(cs)
+		window, _, _ := ts.agent.windowSnapshot()
+		absShare = toolResultShareLimit(cs, window)
 		windowShareTokens = toolResultShareTokens(tail) + resultTokens
 		spanShareTokens = toolResultShareTokens(span.Msgs)
 
@@ -281,32 +282,23 @@ func removeInjectedRecallBlock(ts *turnState, messages []providers.Message, rese
 	return out
 }
 
-// recordAssembledRecallSpan is called by assembleMessages after every
-// from-scratch assembly: BuildMessages has included the active span (if
-// any) once, right after the system message, sanitised together with
-// history. Recording it here is what makes the tool-result site skip a
-// span that is already present (FR-043) and lets a same-turn replacement
-// find the block to remove. history must be the exact slice BuildMessages
-// received (post-projection) so the survivor count matches its pass.
+// recordAssembledRecallSpan tracks the verbatim block inserted after the pinned
+// instructions. Request-only notes may later shift it; checkpoints locate its
+// actual identity rather than trusting this original offset.
 func recordAssembledRecallSpan(ts *turnState, span *RecallSpan, history []providers.Message) {
 	if ts == nil {
 		return
 	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
 	if span == nil || len(span.Msgs) == 0 {
 		ts.injectedRecallSpan, ts.injectedRecallAt, ts.injectedRecallLen = nil, 0, 0
 		return
 	}
-	combined := make([]providers.Message, 0, len(span.Msgs)+len(history))
-	combined = append(combined, span.Msgs...)
-	combined = append(combined, history...)
-	_, kept := sanitizeHistoryIndexed(combined)
-	n := 0
-	for _, idx := range kept {
-		if idx < len(span.Msgs) {
-			n++
-		}
-	}
 	ts.injectedRecallSpan = span
-	ts.injectedRecallAt = 1 // BuildMessages: [0] is the single system message
-	ts.injectedRecallLen = n
+	ts.injectedRecallAt = 1
+	if len(history) > 0 && history[0].Role == "user" {
+		ts.injectedRecallAt++
+	}
+	ts.injectedRecallLen = len(span.Msgs)
 }

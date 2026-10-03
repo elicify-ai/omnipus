@@ -61,7 +61,7 @@ import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
+import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread, shouldRenderContextWindowNoticeInThread } from '@/lib/toolVisibility'
 import {
   delegationEventsAtEnd,
   liveSnapshotIds,
@@ -3203,7 +3203,15 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         deliveryStatus: 'queued',
       }))
   }, [activeSessionId, messages, outboundQueue, pendingDrainQueue])
-  const displayMessages = useMemo(() => [...messages, ...queuedMessages], [messages, queuedMessages])
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  // One presentation gate for live, REST and replay, before either list renders.
+  // Hidden diagnostics remain in the bucket, with no empty virtualized row.
+  const displayMessages = useMemo(
+    () => [...messages, ...queuedMessages].filter((message) =>
+      shouldRenderContextWindowNoticeInThread(message.type, verboseChatEnabled),
+    ),
+    [messages, queuedMessages, verboseChatEnabled],
+  )
   const lastAssistantMessageId = useChatStore((s) => s.lastAssistantMessageId)
   const lastAssistantMessage = useChatStore((s) =>
     lastAssistantMessageId === null

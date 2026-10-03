@@ -94,6 +94,24 @@ func (inboundSchemaLoader) Load(rawURL string) (any, error) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("inboundSchemaLoader: unmarshal %s: %w", path, err)
 	}
+
+	// ContextSettings and ContextSettingsUpdate use the OpenAPI-3.0.3-dialect
+	// boolean exclusiveMinimum/exclusiveMaximum form (paired with
+	// minimum/maximum) for tool_result_share_fraction — `redocly lint`
+	// requires this exact form and rejects both a numeric exclusiveMinimum
+	// and a $schema key on the component schema file itself, so neither can
+	// be fixed in the YAML. Tag just these two files as draft-04 here, in
+	// memory, after loading — never in the committed schema files. Every
+	// other embedded schema keeps the compiler's own default (2020-12, set
+	// in initInboundValidator), where `const` and the rest of the modern
+	// vocabulary work. See ADR-013 §7.
+	switch strings.TrimSuffix(path, ".yaml") {
+	case "ContextSettings", "ContextSettingsUpdate":
+		if m, ok := doc.(map[string]any); ok {
+			m["$schema"] = "http://json-schema.org/draft-04/schema"
+		}
+	}
+
 	return doc, nil
 }
 
@@ -102,6 +120,14 @@ func (inboundSchemaLoader) Load(rawURL string) (any, error) {
 func initInboundValidator() *jsonschema.Compiler {
 	inboundValidatorState.once.Do(func() {
 		c := jsonschema.NewCompiler()
+		// These embedded schemas are the OpenAPI 3.0.3 component schemas
+		// (contracts/components/schemas/, synced by scripts/gen-contracts.sh
+		// step 5), which `redocly lint` enforces as OpenAPI 3.0.3 dialect.
+		// Pin the default draft explicitly (2020-12) rather than relying on
+		// the library's own default, so every schema here gets `const` and
+		// the rest of the modern vocabulary — see ADR-013 §7 for the full
+		// history and why a single global draft can't satisfy every file.
+		c.DefaultDraft(jsonschema.Draft2020)
 		c.UseLoader(jsonschema.SchemeURLLoader{
 			"file": inboundSchemaLoader{},
 		})

@@ -33,6 +33,7 @@ export type WsFrameType =
   | "replay_provider_fallback"
   | "rate_limit"
   | "provider_retry"
+  | "context_window_notice"
   | "provider_fallback"
   | "media"
   | "agent_switched"
@@ -191,7 +192,7 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "delegated_task_limit" | "context_unrecoverable" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "delegated_task_limit" | "context_window_unknown" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
@@ -204,7 +205,7 @@ export interface LLMError {
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "delegated_task_limit" | "context_unrecoverable" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "delegated_task_limit" | "context_window_unknown" | "unknown";
   message: string;
   retryable: boolean;
   provider_message?: boolean;
@@ -446,6 +447,22 @@ export interface ProviderRetryFrame {
   attempt: number;
   max_attempts: number;
   error_code: string;
+  seq?: number;
+}
+
+export interface ContextWindowNoticeFrameNotice {
+  kind: "provider_retry" | "mid_turn";
+  message: string;
+}
+
+export interface ContextWindowNoticeFrame {
+  type: "context_window_notice";
+  session_id: string;
+  turn_id: string;
+  agent_id: string;
+  entry_id: string;
+  timestamp: string;
+  notice: ContextWindowNoticeFrameNotice;
   seq?: number;
 }
 
@@ -1171,6 +1188,7 @@ export type WsFrame =
   | ToolResultProjectionFrame
   | RateLimitFrame
   | ProviderRetryFrame
+  | ContextWindowNoticeFrame
   | ProviderFallbackFrame
   | ProviderFallbackNote
   | LibraryChangedFrame
@@ -1276,6 +1294,7 @@ export type ServerFrame =
   | ToolResultProjectionFrame
   | RateLimitFrame
   | ProviderRetryFrame
+  | ContextWindowNoticeFrame
   | ProviderFallbackFrame
   | ProviderFallbackNote
   | LibraryChangedFrame
