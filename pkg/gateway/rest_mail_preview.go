@@ -527,6 +527,8 @@ func (p *mailPreviewRoutes) fetchAndSanitizeMessageHTML(w http.ResponseWriter, r
 	v, handled := mailBudgetWrap(p.api, w, r, g.AgentID, g.WorkspaceID, client, "open",
 		map[string]any{"folder": g.Folder, "ref": g.Ref}, func(c context.Context) (*email.MailView, error) {
 			return client.ReadView(c, g.Folder, g.Ref)
+		}, func(*email.MailView) *int {
+			return mailInstrumentRows(1) // one message read
 		})
 	if handled {
 		return "", false
@@ -575,6 +577,8 @@ func (p *mailPreviewRoutes) servePart(w http.ResponseWriter, r *http.Request, to
 	v, handled := mailBudgetWrap(p.api, w, r, g.AgentID, g.WorkspaceID, client, "open",
 		map[string]any{"folder": g.Folder, "ref": g.Ref, "part": idx}, func(c context.Context) (*email.MailView, error) {
 			return client.ReadView(c, g.Folder, g.Ref)
+		}, func(*email.MailView) *int {
+			return mailInstrumentRows(1) // one message read
 		})
 	if handled {
 		return

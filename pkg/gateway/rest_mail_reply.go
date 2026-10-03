@@ -41,7 +41,7 @@ func (a *restAPI) handleMailReplyContext(w http.ResponseWriter, r *http.Request,
 	mv, handled := mailBudgetWrap(a, w, r, agentID, workspaceID, client, "getMailReplyContext",
 		map[string]any{"folder": folder, "ref": ref, "mode": string(req.Mode)}, func(c context.Context) (*email.MailView, error) {
 			return client.ReadView(c, folder, ref)
-		})
+		}, nil)
 	if handled {
 		return
 	}

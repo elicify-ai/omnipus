@@ -27,32 +27,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/email"
 )
 
-// mailInstrumentUnknown marks an instrument member the emitting seam cannot
-// truthfully supply. It is an explicit unknown, never a value that reads as a
-// measurement: a count of -1 is impossible as a measurement, while 0 on a
-// dialing boundary is indistinguishable from a cache hit's true 0 (the exact
-// fabricated-zero case the proof-wave audit called out). The pool sub-fields
-// carry it until W1 lands the context-carrying Instrument variant (R-3).
-const mailInstrumentUnknown = -1
-
-// mailInstrumentNoDial reports whether err is a typed PRE-dial refusal: the
-// budget or the pool refused the operation before any server connection was
-// attempted, so the record may state socket_count=0 as a true value. Errors
-// that can follow a dial (upstream failures, superseded publications) are
-// deliberately absent — after those, the socket count is unknown.
-func mailInstrumentNoDial(err error) bool {
-	if err == nil {
-		return false
-	}
-	var bf *email.MailBackoffError
-	if errors.As(err, &bf) {
-		return true
-	}
-	return errors.Is(err, email.ErrMailBusy) ||
-		errors.Is(err, email.ErrPoolBusy) ||
-		errors.Is(err, email.ErrPoolSkipped)
-}
-
 // mailInstrumentOperationOf maps the gateway's internal budget operation
 // names onto w6-proof §6.1's frozen operation enum. An operation with NO
 // frozen member maps to "": no record is emitted rather than a mislabeled
@@ -88,19 +62,75 @@ func mailInstrumentOperationOf(op string) string {
 	}
 }
 
+// mailInstrumentUnknown marks an instrument member the emitting seam cannot
+// truthfully supply. It is an explicit unknown, never a value that reads as a
+// measurement: a count of -1 is impossible as a measurement, while 0 on a
+// dialing boundary is indistinguishable from a cache hit's true 0 (the exact
+// fabricated-zero case the proof-wave audit called out). The pool sub-fields
+// carry it until W1 lands the context-carrying Instrument variant (R-3).
+const mailInstrumentUnknown = -1
+
+// mailInstrumentRows returns the optional rows member's value for handlers
+// that hold a real row/message count.
+func mailInstrumentRows(n int) *int {
+	return &n
+}
+
+// mailInstrumentNoDial reports whether err is a typed PRE-dial refusal: the
+// budget or the pool refused the operation before any server connection was
+// attempted, so the record may state socket_count=0 as a true value. Errors
+// that can follow a dial (upstream failures, superseded publications) are
+// deliberately absent — after those, the socket count is unknown.
+func mailInstrumentNoDial(err error) bool {
+	if err == nil {
+		return false
+	}
+	var bf *email.MailBackoffError
+	if errors.As(err, &bf) {
+		return true
+	}
+	return errors.Is(err, email.ErrMailBusy) ||
+		errors.Is(err, email.ErrPoolBusy) ||
+		errors.Is(err, email.ErrPoolSkipped)
+}
+
 // emitMailOperationTiming emits the one w6 §6.1 record for a completed
-// gateway Mail operation — success AND failure alike — with the measured
-// duration and the safe outcome class.
-//
-// duration_ms is > 0 on every completed operation (w6 §6.1 MC-P1): the
-// elapsed time is rounded UP to the record's millisecond resolution, so
-// sub-millisecond work reports 1 — "under 1 ms" — instead of the fabricated
-// 0 the truncating Milliseconds() read produced (a zero reads as a
-// measurement, and the summary boundary is sub-millisecond in the common
-// case). A boundary that never captured its start time has NO measured
-// duration: the record is skipped loudly rather than completed with an
-// invented number.
+// gateway Mail operation with no rows member (boundaries where a row count is
+// not meaningful). Boundaries that hold a real count call
+// emitMailOperationTimingRows instead.
 func (a *restAPI) emitMailOperationTiming(op, agentID, workspaceID string, started time.Time, err error, source string, hit bool) {
+	a.emitMailOperationTimingRows(op, agentID, workspaceID, started, err, source, hit, nil)
+}
+
+// emitMailOperationTimingRows emits the one w6 §6.1 record for a completed
+// gateway Mail operation — success AND failure alike — with the measured
+// duration, the safe outcome class, and rows when the caller holds a real
+// count (nil otherwise: an absent optional member, never an invented one).
+//
+// Truthfulness rules enforced here (the proof-wave audit's four findings):
+//
+//   - duration_ms is > 0 on every completed operation (MC-P1): the elapsed
+//     time is rounded UP to the record's millisecond resolution, so
+//     sub-millisecond work reports 1 — "under 1 ms" — instead of the
+//     fabricated 0 the truncating Milliseconds() read produced.
+//   - acquire_wait_ms/socket_count carry what THIS seam can truthfully
+//     state. W1's Instrument callback has no per-operation context
+//     (mail_runtime.go's Instrument paragraph), so the real acquisition wait
+//     and socket count of a dialing operation cannot be joined onto its
+//     record; they are the explicit mailInstrumentUnknown sentinel, never a
+//     zero that reads as a measurement. Where no dial is PROVABLE (a
+//     source-none boundary runs zero mail commands; a cache hit never
+//     dialed; a typed pre-dial refusal connected to nothing), socket_count
+//     is the true 0. The real per-operation values become writable when W1
+//     lands the context-carrying Instrument variant (R-3); wiring today's
+//     context-free callback would instead mis-attribute samples under
+//     concurrency and double-emit joiner records.
+//   - rows/revision/shared_flight stay absent (their omitempty encodings)
+//     unless a true value exists: revision is captured by no boundary yet
+//     (the revision counter's consumer seam is unlanded) and the joiner
+//     marker needs W1's context-carrying seam, so neither can be populated
+//     from here without fabricating.
+func (a *restAPI) emitMailOperationTimingRows(op, agentID, workspaceID string, started time.Time, err error, source string, hit bool, rows *int) {
 	member := mailInstrumentOperationOf(op)
 	if member == "" {
 		return
@@ -125,32 +155,19 @@ func (a *restAPI) emitMailOperationTiming(op, agentID, workspaceID string, start
 		durationMs = 1
 	}
 	sample := MailOperationSample{
-		Operation:  member,
-		PairRef:    a.mailRuntimeFor().mailPairRef(agentID, workspaceID),
-		Source:     source,
-		Hit:        hit,
-		DurationMs: durationMs,
-		// The pool sub-fields are unknown at this seam: W1's Instrument
-		// callback has no per-operation context (mail_runtime.go's
-		// Instrument paragraph), so the real acquisition wait and socket
-		// count of a dialing operation cannot be joined onto ITS record —
-		// and a context-free "latest sample" window would mis-attribute
-		// under concurrency. They are carried as the explicit unknown
-		// sentinel, never as a zero that reads as a measurement. The join
-		// becomes writable when W1 lands the context-carrying Instrument
-		// variant (R-3); wiring today's context-free callback would instead
-		// mis-attribute samples under concurrency and double-emit the
-		// budget's joiner records.
+		Operation:     member,
+		PairRef:       a.mailRuntimeFor().mailPairRef(agentID, workspaceID),
+		Source:        source,
+		Hit:           hit,
+		DurationMs:    durationMs,
 		AcquireWaitMs: mailInstrumentUnknown,
 		SocketCount:   mailInstrumentUnknown,
 		Outcome:       "ok",
+		Rows:          rows,
 	}
 	if source == "none" || hit || mailInstrumentNoDial(err) {
-		// Provably no server connection: a source-none boundary runs zero
-		// mail commands, a cache hit never dialed (the frozen rule's own
-		// "0 for cache hits"), and a typed pre-dial refusal was refused
-		// before any connection was attempted. Zero sockets is the TRUE
-		// value here, not a placeholder.
+		// Provably no server connection was made or attempted (see the
+		// comment above): zero sockets is the TRUE value here.
 		sample.SocketCount = 0
 	}
 	if err != nil {
@@ -214,8 +231,10 @@ func emitMailOperation(sample MailOperationSample) {
 	}
 	// Dedicated structured-log mirror (w6 §6.1's emission rules; the key is
 	// w5's choice, recorded here: "mail.operation"). Every field is already
-	// a closed safe value — see the file comment.
-	slog.Info("mail.operation",
+	// a closed safe value — see the file comment. The optional members are
+	// mirrored only when a true value exists: an absent member stays absent
+	// instead of degrading to a placeholder.
+	attrs := []any{
 		"operation", sample.Operation,
 		"pair_ref", sample.PairRef,
 		"source", sample.Source,
@@ -224,5 +243,15 @@ func emitMailOperation(sample MailOperationSample) {
 		"acquire_wait_ms", sample.AcquireWaitMs,
 		"socket_count", sample.SocketCount,
 		"outcome", sample.Outcome,
-	)
+	}
+	if sample.Rows != nil {
+		attrs = append(attrs, "rows", *sample.Rows)
+	}
+	if sample.Revision != "" {
+		attrs = append(attrs, "revision", sample.Revision)
+	}
+	if sample.SharedFlight != nil {
+		attrs = append(attrs, "shared_flight", *sample.SharedFlight)
+	}
+	slog.Info("mail.operation", attrs...)
 }

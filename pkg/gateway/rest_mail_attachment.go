@@ -321,7 +321,7 @@ func (p *mailAttachmentRoutes) handleMint(w http.ResponseWriter, r *http.Request
 	meta, handled := mailBudgetWrap(p.api, w, r, req.AgentId, req.WorkspaceId, client, "mintMailAttachmentPreviewMeta",
 		map[string]any{"folder": folder, "ref": req.MessageRef}, func(c context.Context) (*email.MessageMeta, error) {
 			return client.ReadMessageMeta(c, folder, req.MessageRef)
-		})
+		}, nil) // a metadata read has no row count
 	if handled {
 		return
 	}

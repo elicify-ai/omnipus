@@ -55,6 +55,8 @@ func (a *restAPI) handleMailFolders(w http.ResponseWriter, r *http.Request, work
 	stats, handled := mailBudgetWrap(a, w, r, agentID, workspaceID, client, "listMailFolders",
 		map[string]any{"scope": "folders"}, func(c context.Context) ([]email.FolderStat, error) {
 			return client.FolderCounts(c)
+		}, func(stats []email.FolderStat) *int {
+			return mailInstrumentRows(len(stats))
 		})
 	if handled {
 		return
@@ -140,6 +142,8 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 		map[string]any{"folder": folder, "limit": limit, "before_uid": beforeUID}, func(c context.Context) (pageResult, error) {
 			rows, uv, truncated, err := client.ReadFolderPage(c, folder, limit, beforeUID)
 			return pageResult{rows: rows, uv: uv, truncated: truncated}, err
+		}, func(pr pageResult) *int {
+			return mailInstrumentRows(len(pr.rows))
 		})
 	if handled {
 		return
@@ -236,6 +240,8 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 	mv, handled := mailBudgetWrap(a, w, r, agentID, workspaceID, client, "getMailMessage",
 		map[string]any{"folder": folder, "ref": ref}, func(c context.Context) (*email.MailView, error) {
 			return client.ReadView(c, folder, ref)
+		}, func(*email.MailView) *int {
+			return mailInstrumentRows(1) // one message read
 		})
 	if handled {
 		return
@@ -348,8 +354,9 @@ func (a *restAPI) handleMailSeen(w http.ResponseWriter, r *http.Request, workspa
 	// w5 US-7.6/MC-18: the confirmed own mutation emits its record — and the
 	// same event advances the pair's persisted publication-revision counter
 	// when a consumer is wired for it (the counter store is w5's; see the
-	// wave report for the consumer-seam status).
-	a.emitMailOperationTiming("seen", agentID, workspaceID, started, nil, "live", false)
+	// wave report for the consumer-seam status). rows=1: exactly one message
+	// was resolved and marked.
+	a.emitMailOperationTimingRows("seen", agentID, workspaceID, started, nil, "live", false, mailInstrumentRows(1))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -399,7 +406,7 @@ func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, w
 	mv, handled := mailBudgetWrap(a, w, r, agentID, workspaceID, client, "getMailAttachment",
 		map[string]any{"folder": folder, "ref": ref, "idx": idx}, func(c context.Context) (*email.MailView, error) {
 			return client.ReadView(c, folder, ref)
-		})
+		}, nil) // the operation's product is one part, not a row count
 	if handled {
 		return
 	}
