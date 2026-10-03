@@ -32,6 +32,7 @@ package gateway
 //   - M14: retry intent consumed on take — a failed retry loses the intent.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -136,10 +137,10 @@ func TestMailboxRemoval_FullPurgeReportsRemoved(t *testing.T) {
 	if outcome != "removed" {
 		t.Fatalf("B-17 control: a clean removal must report removed, got %q (intent=%q code=%q)", outcome, intent, code)
 	}
-	if _, err := os.Stat(f.cacheDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(f.cacheDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("B-17: the cache subtree must be gone after a removed outcome (stat err=%v)", err)
 	}
-	if _, err := os.Stat(f.watch); !os.IsNotExist(err) {
+	if _, err := os.Stat(f.watch); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("B-17/MC-23: the watcher state file must be gone after a removed outcome (stat err=%v)", err)
 	}
 	// MC-24: identity state is deleted ONLY by the removal cascade. Read the
@@ -183,10 +184,10 @@ func TestMailboxDisable_EpochAdvancesBeforePurge(t *testing.T) {
 	if genAfter == genBefore {
 		t.Fatal("US-5.7/MC-10: the pair's generation must change so old-generation work is rejected, not silently accepted")
 	}
-	if _, err := os.Stat(f.cacheDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(f.cacheDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("US-5.1: the disable cascade purges the disposable cache (stat err=%v)", err)
 	}
-	if _, err := os.Stat(f.watch); !os.IsNotExist(err) {
+	if _, err := os.Stat(f.watch); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("US-5.1/MC-23: the disable cascade purges the watcher state (stat err=%v)", err)
 	}
 }
@@ -256,7 +257,7 @@ func TestMailboxRemoval_RetryAfterConfigRowGoneCompletesTruthfully(t *testing.T)
 	if _, err := os.Stat(f.cacheDir); err == nil {
 		t.Fatalf("B-18/MC-8: the retry reports the cleanup complete while the removed pair's cache subtree still exists at %s — the purge did not complete", f.cacheDir)
 	}
-	if _, err := os.Stat(f.watch); !os.IsNotExist(err) {
+	if _, err := os.Stat(f.watch); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("B-18/MC-23: the watcher state file must be gone after the retry (stat err=%v)", err)
 	}
 }

@@ -80,9 +80,9 @@ func CSSValueURLsAllowed(value string) bool {
 
 // ExtractCSSImageURLs returns every eligible https url() body in the raw
 // HTML (style attributes and <style> blocks alike), first-seen order,
-// deduplicated, capped at max — the CSS half of the mint-time pin list
+// deduplicated, capped at limit — the CSS half of the mint-time pin list
 // (MC-41's model: the proxy fetches ONLY recorded URLs, by index).
-func ExtractCSSImageURLs(raw string, max int) []string {
+func ExtractCSSImageURLs(raw string, limit int) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, m := range cssURLRe.FindAllStringSubmatch(raw, -1) {
@@ -94,7 +94,7 @@ func ExtractCSSImageURLs(raw string, max int) []string {
 			u = m[3]
 		}
 		u = strings.TrimSpace(u)
-		if !strings.HasPrefix(strings.ToLower(u), "https://") || seen[u] || len(out) >= max {
+		if !strings.HasPrefix(strings.ToLower(u), "https://") || seen[u] || len(out) >= limit {
 			continue
 		}
 		seen[u] = true

@@ -12,6 +12,7 @@ package mailattachment_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +54,7 @@ func TestMarkerWrittenOnlyOnHTMLSave(t *testing.T) {
 	if _, err := viewer.ViewerBytes(context.Background(), "inbox", "uid:1:1", 1); err != nil {
 		t.Fatalf("ViewerBytes: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(w.dir, "mail")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(w.dir, "mail")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Open produced workspace content %v — Open writes nothing (US-1)", err)
 	}
 
@@ -152,8 +153,8 @@ func TestMarkerMoveAndCopySemantics(t *testing.T) {
 	}
 
 	copyPath := "mail/user@ex.com/" + time.Now().UTC().Format("2006-01") + "/copied.html"
-	if err := store.Copy(newPath, copyPath); err != nil {
-		t.Fatalf("Copy: %v", err)
+	if cerr := store.Copy(newPath, copyPath); cerr != nil {
+		t.Fatalf("Copy: %v", cerr)
 	}
 	allowedC, derivedC, err := store.ScriptsAllowed(copyPath)
 	if err != nil || derivedC != true || allowedC != false {

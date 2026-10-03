@@ -53,8 +53,8 @@ func TestPool_PoisonOnTimeout_Cancel_Bye_Protocol(t *testing.T) {
 			stub.setMode(tc.mode)
 			out := make(chan error, 1)
 			go func() {
-				_, err := runIMAP(ctx, "poison read", func() ([]string, error) { return stubFetchRows(t, lease) })
-				out <- err
+				_, gerr := runIMAP(ctx, "poison read", func() ([]string, error) { return stubFetchRows(t, lease) })
+				out <- gerr
 			}()
 			waitFor(t, 2*time.Second, "poisoning FETCH reached peer", func() bool { return countStr(stub.logEntries(), "FETCH") == 2 })
 			if tc.cancel {

@@ -302,7 +302,7 @@ func TestSaveNumberedCollisionIncludingCaseFolded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("fixture create %q: %v", name, err)
 		}
-		if _, err := f.Write([]byte("pre-existing " + name)); err != nil {
+		if _, err := f.WriteString("pre-existing " + name); err != nil {
 			t.Fatalf("fixture write: %v", err)
 		}
 		if err := f.Close(); err != nil {

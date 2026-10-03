@@ -324,11 +324,13 @@ func (a *restAPI) renameNoteInCollection(
 	if !res.NoOp {
 		if marker := a.mailMarkerStore(workspaceID); marker != nil {
 			for _, mv := range res.Moves {
-				fromRel := path.Join(note.collRel, mv.From)
-				toRel := path.Join(note.collRel, mv.To)
-				if err := marker.MovePrefix(fromRel, toRel); err != nil {
+				// Workspace-relative re-key paths — distinct names from the
+				// function's collection-relative parameters above.
+				fromWS := path.Join(note.collRel, mv.From)
+				toWS := path.Join(note.collRel, mv.To)
+				if err := marker.MovePrefix(fromWS, toWS); err != nil {
 					logger.WarnCF("rest", "library: knowledge rename landed but a mail-derived marker re-key failed",
-						map[string]any{"workspace_id": workspaceID, "from": fromRel, "to": toRel, "error": err.Error()})
+						map[string]any{"workspace_id": workspaceID, "from": fromWS, "to": toWS, "error": err.Error()})
 				}
 			}
 		}

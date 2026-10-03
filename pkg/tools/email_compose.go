@@ -514,7 +514,7 @@ func parseReplyRecipients(toolName string, args map[string]any, orig *email.Mess
 		OwnAddress: ownAddress,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%s: %v", toolName, err)
+		return nil, fmt.Errorf("%s: %w", toolName, err)
 	}
 	bccAddrs, badBcc := email.ParseRecipientList(bccEntries)
 	if len(badBcc) > 0 {

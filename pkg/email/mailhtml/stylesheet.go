@@ -102,12 +102,15 @@ func simpleSelectorPartAllowed(part string) bool {
 		return false
 	}
 	c := part[0]
-	if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_') {
+	isIdentStart := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_'
+	if !isIdentStart {
 		return false
 	}
 	for i := 1; i < len(part); i++ {
 		c := part[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+		isIdentChar := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+			c >= '0' && c <= '9' || c == '-' || c == '_'
+		if !isIdentChar {
 			return false
 		}
 	}

@@ -25,6 +25,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mailboxStatusErr runs MailboxStatus and returns only its error: the
+// wiring tests here assert the typed failure, never the counters (which
+// cannot be produced when the session source is missing — the very defect
+// under test).
+func mailboxStatusErr(ctx context.Context, c *Client) error {
+	unseen, uidNext, uidValidity, err := c.MailboxStatus(ctx)
+	_ = unseen
+	_ = uidNext
+	_ = uidValidity
+	return err
+}
+
 // TestClient_MissingSourceFailsVisibly asserts MC-W1-26/B-W1-34: a source-
 // less client in a process where the shared manager exists fails immediately
 // with the typed missing-wiring error — naming the missing injection — and
@@ -57,7 +69,7 @@ func TestClient_MissingSourceFailsVisibly(t *testing.T) {
 	// unreachable, not silent.
 	probe := swapCountingDial(t)
 
-	_, _, _, err = client.MailboxStatus(testCtx(t, 3*time.Second))
+	err = mailboxStatusErr(testCtx(t, 3*time.Second), client)
 	require.ErrorIs(t, err, ErrSessionSourceMissing, "typed wiring error, not a silent uncounted dial")
 	require.Contains(t, err.Error(), "SetSessionSource", "FR-W1-2: the error names the missing wiring")
 

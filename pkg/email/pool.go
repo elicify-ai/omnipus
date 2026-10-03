@@ -864,7 +864,7 @@ func (s *MailSessions) finishAcquire(ctx context.Context, sess *poolSession, rep
 	if err := s.selectLeaseFolder(ctx, &lease, sess.client, req.Folder); err == nil {
 		return lease, nil
 	} else if isNonexistentFolder(err) {
-		lease.SelectError = fmt.Errorf("email pool: select %q: %w (server: %v)", req.Folder, ErrFolderAbsent, err)
+		lease.SelectError = fmt.Errorf("email pool: select %q: %w (server: %w)", req.Folder, ErrFolderAbsent, err)
 		return lease, nil
 	} else if replaceable && isConnectionClassError(err) {
 		// Dead idle socket: one in-bounds replacement (FR-W1-12). The
@@ -880,7 +880,7 @@ func (s *MailSessions) finishAcquire(ctx context.Context, sess *poolSession, rep
 		lease.sess = sess2
 		if err2 := s.selectLeaseFolder(ctx, &lease, sess2.client, req.Folder); err2 != nil {
 			if isNonexistentFolder(err2) {
-				lease.SelectError = fmt.Errorf("email pool: select %q: %w (server: %v)", req.Folder, ErrFolderAbsent, err2)
+				lease.SelectError = fmt.Errorf("email pool: select %q: %w (server: %w)", req.Folder, ErrFolderAbsent, err2)
 				return lease, nil
 			}
 			s.retireSession(sess2)
@@ -1111,10 +1111,8 @@ func (s *MailSessions) SetPanelDirtySink(sink func(pair, folder string)) {
 	}
 	s.dirtyPending = map[string]string{}
 	s.dirtyMu.Unlock()
-	if sink != nil {
-		for _, p := range pending {
-			sink(p[0], p[1])
-		}
+	for _, p := range pending {
+		sink(p[0], p[1])
 	}
 }
 

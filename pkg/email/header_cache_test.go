@@ -44,10 +44,10 @@ type fakeClock struct{ now time.Time }
 
 func (c *fakeClock) Now() time.Time { return c.now }
 
-// Advance moves the clock by min minutes and sec seconds — the discrete
+// Advance moves the clock by mins minutes and secs seconds — the discrete
 // boundary stepper for the 5-minute freshness and 30-minute retention edges.
-func (c *fakeClock) Advance(min, sec int) {
-	c.now = c.now.Add(time.Duration(min)*time.Minute + time.Duration(sec)*time.Second)
+func (c *fakeClock) Advance(mins, secs int) {
+	c.now = c.now.Add(time.Duration(mins)*time.Minute + time.Duration(secs)*time.Second)
 }
 
 func makeRows(count, uidStart int, epoch uint32) []MailRow {

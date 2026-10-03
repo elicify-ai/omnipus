@@ -22,15 +22,15 @@ func replyFixture() ReplyInput {
 		From:    `A <a@sender.example>`,
 		ReplyTo: `R <r@sender.example>`,
 		To: []string{
-			`Self <self@me.example>`,           // the mailbox's own address
-			`Xavier X <x@other.example>`,       // X
-			`Duplicate R <r@SENDER.example>`,   // case-variant duplicate of R
+			`Self <self@me.example>`,         // the mailbox's own address
+			`Xavier X <x@other.example>`,     // X
+			`Duplicate R <r@SENDER.example>`, // case-variant duplicate of R
 		},
 		Cc: []string{
-			`Yara Y <y@other.example>`,         // Y
-			`X@Other.example`,                  // mixed-case duplicate of X
-			`self@ME.example`,                  // case-variant duplicate of self
-			`"Display R" <r@sender.example>`,   // display-name duplicate of R
+			`Yara Y <y@other.example>`,       // Y
+			`X@Other.example`,                // mixed-case duplicate of X
+			`self@ME.example`,                // case-variant duplicate of self
+			`"Display R" <r@sender.example>`, // display-name duplicate of R
 		},
 		Mode:       ReplyModeReplyAll,
 		OwnAddress: `self@me.example`,

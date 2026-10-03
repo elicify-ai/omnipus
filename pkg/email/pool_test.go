@@ -67,7 +67,7 @@ func TestPool_CeilingsHoldUnderConcurrentDemand(t *testing.T) {
 				admitted = append(admitted, poolAcquireAsync(sessions, testCtx(t, 30*time.Second),
 					idFor(i).leaseRequest(fmt.Sprintf("F%d", i), false, false)))
 			}
-			var leases []Lease
+			leases := make([]Lease, 0, len(admitted))
 			for _, ch := range admitted {
 				got := expectResult(t, ch, 3*time.Second, "below/at-cap acquisition")
 				require.NoError(t, got.err)

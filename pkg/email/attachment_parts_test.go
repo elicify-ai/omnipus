@@ -313,7 +313,7 @@ func wrappedB64(b []byte) string {
 }
 
 func TestCapAuthorityOnDecodedBytes(t *testing.T) {
-	exact := bytes.Repeat([]byte("A"), 25<<20)     // 25 MiB exactly: within the cap
+	exact := bytes.Repeat([]byte("A"), 25<<20)    // 25 MiB exactly: within the cap
 	over := bytes.Repeat([]byte("A"), (25<<20)+1) // 25 MiB + 1: refused
 	msgExact := redMultipart("cap-exact",
 		redPart("text/plain", `attachment; filename="exact.txt"`, "", "base64", wrappedB64(exact)),
@@ -344,7 +344,8 @@ func TestCapAuthorityOnDecodedBytes(t *testing.T) {
 		t.Fatalf("decoded length = %d, want exactly 25 MiB", len(part.Data))
 	}
 
-	if _, err := cl.ReadAttachmentPart(context.Background(), FolderInbox, refOver, 0); !errors.Is(err, ErrMailPartTooLarge) {
+	_, err = cl.ReadAttachmentPart(context.Background(), FolderInbox, refOver, 0)
+	if !errors.Is(err, ErrMailPartTooLarge) {
 		t.Fatalf("25 MiB + 1 must refuse with the typed over-cap error, got %v (§5.2: actual decoded bytes are the cap authority — never reported metadata)", err)
 	}
 
@@ -375,7 +376,8 @@ func TestStaleReferenceRefusedBeforeAnyPartFetch(t *testing.T) {
 
 	var goodRead, staleRead int64
 	redDialCounting(t, &goodRead)
-	if _, err := cl.ReadAttachmentPart(context.Background(), FolderInbox, goodRef, 0); err != nil {
+	_, err = cl.ReadAttachmentPart(context.Background(), FolderInbox, goodRef, 0)
+	if err != nil {
 		t.Fatalf("good ref must fetch: %v", err)
 	}
 	redDialCounting(t, &staleRead)

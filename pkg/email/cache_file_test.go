@@ -153,7 +153,7 @@ func TestCacheFile_RoundTripPreservesAllFields(t *testing.T) {
 	scope := Scope{PairID: "pair-1", Generation: "gen-1"}
 	snap := testSnapshot()
 
-	if err := store.Save(scope, snap, Revision(1), []byte(bytes.Repeat([]byte{0xAA}, 32))); err != nil {
+	if err := store.Save(scope, snap, Revision(1), bytes.Repeat([]byte{0xAA}, 32)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -223,11 +223,11 @@ func TestCacheFile_ForeignPairRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read pair B's file: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(base, "mail-cache", "pair-A"), 0o700); err != nil {
-		t.Fatalf("mkdir pair A: %v", err)
+	if mkdirErr := os.MkdirAll(filepath.Join(base, "mail-cache", "pair-A"), 0o700); mkdirErr != nil {
+		t.Fatalf("mkdir pair A: %v", mkdirErr)
 	}
-	if err := os.WriteFile(snapshotPath(base, "pair-A"), raw, 0o600); err != nil {
-		t.Fatalf("copy pair B's file onto pair A's path: %v", err)
+	if writeErr := os.WriteFile(snapshotPath(base, "pair-A"), raw, 0o600); writeErr != nil {
+		t.Fatalf("copy pair B's file onto pair A's path: %v", writeErr)
 	}
 
 	got, found, err := store.Load(Scope{PairID: "pair-A", Generation: "gen-1"})
@@ -344,8 +344,8 @@ func TestCacheFile_FreshNoncePerWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read first ciphertext: %v", err)
 	}
-	if err := store.Save(scope, snap, Revision(1), bytes.Repeat([]byte{0xAA}, 32)); err != nil {
-		t.Fatalf("second Save: %v", err)
+	if saveErr := store.Save(scope, snap, Revision(1), bytes.Repeat([]byte{0xAA}, 32)); saveErr != nil {
+		t.Fatalf("second Save: %v", saveErr)
 	}
 	second, err := os.ReadFile(snapshotPath(base, "pair-1"))
 	if err != nil {
@@ -692,11 +692,11 @@ func TestCacheFile_ForeignPairAADRefusesAtAuthentication(t *testing.T) {
 	}
 
 	path := snapshotPath(base, readerScope.PairID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("mkdir cache dir: %v", err)
+	if mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700); mkdirErr != nil {
+		t.Fatalf("mkdir cache dir: %v", mkdirErr)
 	}
-	if err := os.WriteFile(path, envelope, 0o600); err != nil {
-		t.Fatalf("write envelope: %v", err)
+	if writeErr := os.WriteFile(path, envelope, 0o600); writeErr != nil {
+		t.Fatalf("write envelope: %v", writeErr)
 	}
 
 	store := newTestStore(t, base, testKey(0xAA), testPurposeFolder, 1)
@@ -735,11 +735,11 @@ func TestCacheFile_ForeignGenerationAADRefusesAtAuthentication(t *testing.T) {
 	}
 
 	path := snapshotPath(base, readerScope.PairID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("mkdir cache dir: %v", err)
+	if mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700); mkdirErr != nil {
+		t.Fatalf("mkdir cache dir: %v", mkdirErr)
 	}
-	if err := os.WriteFile(path, envelope, 0o600); err != nil {
-		t.Fatalf("write envelope: %v", err)
+	if writeErr := os.WriteFile(path, envelope, 0o600); writeErr != nil {
+		t.Fatalf("write envelope: %v", writeErr)
 	}
 
 	store := newTestStore(t, base, testKey(0xAA), testPurposeFolder, 1)
@@ -789,8 +789,8 @@ func TestCacheFile_TransportHeaderTamperRefusesAtAuthentication(t *testing.T) {
 
 	tampered := append([]byte(nil), good...)
 	tampered[envelopeTransportOffset] ^= 0x01 // same length, different marker: a foreign-transport header
-	if err := os.WriteFile(snapshotPath(base, "pair-1"), tampered, 0o600); err != nil {
-		t.Fatalf("write tampered envelope: %v", err)
+	if writeErr := os.WriteFile(snapshotPath(base, "pair-1"), tampered, 0o600); writeErr != nil {
+		t.Fatalf("write tampered envelope: %v", writeErr)
 	}
 
 	got, found, err := store.Load(scope)
@@ -835,8 +835,8 @@ func TestCacheFile_SealedWithoutAADRefusesNoFallback(t *testing.T) {
 		t.Fatalf("gcm: %v", err)
 	}
 	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		t.Fatalf("rand: %v", err)
+	if _, randErr := rand.Read(nonce); randErr != nil {
+		t.Fatalf("rand: %v", randErr)
 	}
 	ct := gcm.Seal(nil, nonce, payload, nil) // NO AAD — the fallback shape itself
 
@@ -856,8 +856,8 @@ func TestCacheFile_SealedWithoutAADRefusesNoFallback(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("mkdir cache dir: %v", err)
 	}
-	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
-		t.Fatalf("write envelope: %v", err)
+	if writeErr := os.WriteFile(path, out.Bytes(), 0o600); writeErr != nil {
+		t.Fatalf("write envelope: %v", writeErr)
 	}
 
 	store := newTestStore(t, base, testKey(0xAA), testPurposeFolder, 1)

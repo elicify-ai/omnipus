@@ -524,7 +524,7 @@ func (a *restAPI) reconcileOrphanMailState() {
 				continue
 			}
 			p := filepath.Join(watchDir, e.Name())
-			if err := removePrivateFile(p); err != nil {
+			if rmErr := removePrivateFile(p); rmErr != nil {
 				if _, cerr := a.mailCleanupIntentsOf().create(&mailCleanupIntent{WatchFile: p}); cerr != nil {
 					slog.Warn("mail reconciliation: orphan watcher state pending, intent could not be created", "code", mailCleanupFailedWatcher)
 				}
@@ -541,7 +541,7 @@ func (a *restAPI) reconcileOrphanMailState() {
 			if !e.IsDir() || livePairIDs[e.Name()] {
 				continue
 			}
-			if err := removeMailCacheSubtree(homePath, e.Name()); err != nil {
+			if rmErr := removeMailCacheSubtree(homePath, e.Name()); rmErr != nil {
 				if _, cerr := a.mailCleanupIntentsOf().create(&mailCleanupIntent{PairID: e.Name()}); cerr != nil {
 					slog.Warn("mail reconciliation: orphan cache subtree pending, intent could not be created", "code", mailCleanupFailedCache)
 				}

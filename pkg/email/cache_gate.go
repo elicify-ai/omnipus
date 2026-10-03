@@ -116,13 +116,13 @@ func EvaluateStagingExclusion(dataRoot string) error {
 		return fmt.Errorf("staging exclusion not provable: %w", rerr)
 	}
 	repo, err := findGitRepo(resolved)
-	if err != nil {
-		return fmt.Errorf("staging exclusion not provable: %w", err)
-	}
-	if repo == nil {
+	if errors.Is(err, errNoGitRepo) {
 		// No version-control staging in the data directory: nothing to be
 		// captured by; the staging half holds trivially (§3.8 E-1).
 		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("staging exclusion not provable: %w", err)
 	}
 	cacheDir := filepath.Join(resolved, cacheDirName)
 	rel, err := filepath.Rel(repo.root, cacheDir)
@@ -157,22 +157,19 @@ type gitRepo struct {
 	gitDir string
 }
 
+// errNoGitRepo reports that no version-control root encloses the start
+// directory — the state where the staging-exclusion half holds trivially
+// (§3.8 E-1), not a failure.
+var errNoGitRepo = errors.New("no version-control repository above the data directory")
+
 // findGitRepo walks up from start looking for a ".git" directory or a ".git"
-// file (worktree/submodule pointer, "gitdir: <path>"). nil with no error
-// means no repository encloses start. The walk runs over the RESOLVED path:
-// git itself works on resolved paths, and a symlinked data-root segment
-// whose target sits inside a repository must find that repository — per-
-// component stats over the logical path saw only logical ancestors and
-// missed an enclosing repo behind a symlink (the F11 finding). A resolution
-// failure is "not provable": the gate refuses rather than guess.
-// findGitRepo walks up from start looking for a ".git" directory or a ".git"
-// file (worktree/submodule pointer, "gitdir: <path>"). nil with no error
-// means no repository encloses start. The walk runs over the RESOLVED path:
-// git itself works on resolved paths, and a symlinked data-root segment
-// whose target sits inside a repository must find that repository — per-
-// component stats over the logical path saw only logical ancestors and
-// missed an enclosing repo behind a symlink (the F11 finding). A resolution
-// failure is "not provable": the gate refuses rather than guess.
+// file (worktree/submodule pointer, "gitdir: <path>"). errNoGitRepo means no
+// repository encloses start. The walk runs over the RESOLVED path: git
+// itself works on resolved paths, and a symlinked data-root segment whose
+// target sits inside a repository must find that repository — per-component
+// stats over the logical path saw only logical ancestors and missed an
+// enclosing repo behind a symlink (the F11 finding). A resolution failure is
+// "not provable": the gate refuses rather than guess.
 func findGitRepo(start string) (*gitRepo, error) {
 	dir, err := filepath.Abs(start)
 	if err != nil {
@@ -210,7 +207,7 @@ func findGitRepo(start string) (*gitRepo, error) {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return nil, nil
+			return nil, errNoGitRepo
 		}
 		dir = parent
 	}
@@ -405,9 +402,7 @@ func parseIgnoreLine(line string) (ignoreRule, bool) {
 		}
 	}
 	rule.anchored = strings.Contains(line, "/")
-	if strings.HasPrefix(line, "/") {
-		line = strings.TrimPrefix(line, "/")
-	}
+	line = strings.TrimPrefix(line, "/")
 	if line == "" {
 		return rule, false
 	}

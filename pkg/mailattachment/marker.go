@@ -22,6 +22,7 @@ package mailattachment
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,7 +65,7 @@ type markerIndex struct {
 func (s *MarkerStore) load() (*markerIndex, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return &markerIndex{Entries: map[string]markerEntry{}}, nil
 		}
 		return nil, err

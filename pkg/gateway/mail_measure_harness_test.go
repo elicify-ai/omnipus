@@ -434,7 +434,9 @@ func mailMeasureRefusedEndpoint(t *testing.T) (string, int, func() int, func()) 
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := ln.Addr().(*net.TCPAddr).Port
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	require.True(t, ok, "listener address is *net.TCPAddr, got %T", ln.Addr())
+	port := addr.Port
 	require.NoError(t, ln.Close())
 	return "127.0.0.1", port, func() int { return 0 }, func() {}
 }
@@ -493,7 +495,9 @@ func mailMeasureCountingEndpoint(t *testing.T, handler func(net.Conn)) (string, 
 			go handler(conn)
 		}
 	}()
-	port := ln.Addr().(*net.TCPAddr).Port
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	require.True(t, ok, "listener address is *net.TCPAddr, got %T", ln.Addr())
+	port := addr.Port
 	stop := func() {
 		_ = ln.Close()
 		<-done
@@ -529,7 +533,7 @@ func mailMeasureWriteGatewayReceipt(t *testing.T, outDir, sha string, arms []str
 			"rec_acquire_wait_ms", "rec_socket_count", "rec_outcome", "rec_rows_present",
 			"rec_revision_present", "rec_shared_flight_present", "flag_zero_duration",
 			"flag_live_zero_socket", "notes"}
-		var rows [][]string
+		rows := make([][]string, 0, len(audit))
 		for _, r := range audit {
 			rows = append(rows, []string{
 				r.Boundary, r.Member, r.Staged, strconv.Itoa(r.HTTPStatus), strconv.Itoa(r.Records),
@@ -543,7 +547,7 @@ func mailMeasureWriteGatewayReceipt(t *testing.T, outDir, sha string, arms []str
 	}
 	if len(failure) > 0 {
 		header := []string{"class", "attempt_ms", "retry_ms", "status", "retry_status", "attempt_accepts", "valid", "invalid_reason"}
-		var rows [][]string
+		rows := make([][]string, 0, len(failure))
 		for _, s := range failure {
 			rows = append(rows, []string{
 				s.Class, strconv.FormatInt(s.AttemptMs, 10), strconv.FormatInt(s.RetryMs, 10),

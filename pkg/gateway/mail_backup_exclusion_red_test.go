@@ -52,11 +52,11 @@ func plantBackupFixtures(t *testing.T, root string) []string {
 	t.Helper()
 	files := map[string]string{
 		// Current + temp + retired cache state (US-4.2 covers all three).
-		filepath.Join("mail-cache", "pairid-current", "folders.enc"):        backupMarkerCache,
-		filepath.Join("mail-cache", "pairid-current", "folders.enc.tmp"):    backupMarkerCache,
-		filepath.Join("mail-cache", "pairid-retired-0001", "folders.enc"):   backupMarkerCache,
+		filepath.Join("mail-cache", "pairid-current", "folders.enc"):      backupMarkerCache,
+		filepath.Join("mail-cache", "pairid-current", "folders.enc.tmp"):  backupMarkerCache,
+		filepath.Join("mail-cache", "pairid-retired-0001", "folders.enc"): backupMarkerCache,
 		// Watcher state: current and retired (founder Q-B=A).
-		filepath.Join("email-watch", "agent-ws.json"):     backupMarkerWatch,
+		filepath.Join("email-watch", "agent-ws.json"):      backupMarkerWatch,
 		filepath.Join("email-watch", "retired-agent.json"): backupMarkerWatch,
 		// Repository metadata that could carry the cache's history (MC-7).
 		filepath.Join(".git", "objects", "ab", "cdef0123"): backupMarkerHistory,
@@ -144,10 +144,10 @@ func TestRestore_NeverRematerializesProtectedNamespaces(t *testing.T) {
 	// from before the exclusion existed, or written by something else.
 	src := t.TempDir()
 	hostile := map[string]string{
-		filepath.Join("mail-cache", "pairid-old", "folders.enc"):      backupMarkerCache,
-		filepath.Join("email-watch", "old-agent-ws.json"):             backupMarkerWatch,
-		filepath.Join(".git", "objects", "cd", "beef4567"):            backupMarkerHistory,
-		backupControlFile:                                             `{"agents":[]}`,
+		filepath.Join("mail-cache", "pairid-old", "folders.enc"): backupMarkerCache,
+		filepath.Join("email-watch", "old-agent-ws.json"):        backupMarkerWatch,
+		filepath.Join(".git", "objects", "cd", "beef4567"):       backupMarkerHistory,
+		backupControlFile: `{"agents":[]}`,
 	}
 	for rel, content := range hostile {
 		abs := filepath.Join(src, rel)
@@ -201,8 +201,8 @@ func createTarGzRaw(srcDir, destPath string) error {
 			return err
 		}
 		hdr.Name = filepath.ToSlash(rel)
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
+		if hdrErr := tw.WriteHeader(hdr); hdrErr != nil {
+			return hdrErr
 		}
 		if !info.Mode().IsRegular() {
 			return nil

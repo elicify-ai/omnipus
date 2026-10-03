@@ -117,8 +117,16 @@ func TestMailPanelPresence_SocketDeathRevokesViaTeardown(t *testing.T) {
 	wsURL := "ws" + server.URL[len("http"):]
 
 	dialAndOpen := func(observerID string) *websocket.Conn {
-		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-		require.NoError(t, err)
+		// Gorilla hands the HTTP upgrade response to the caller: its body must
+		// be closed on both the error and the success path (bodyclose).
+		conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			require.NoError(t, err)
+		}
+		resp.Body.Close()
 		// Dev-bypass harness (newTestWSHandlerForModelName): the legacy
 		// auth-frame handshake authenticates programmatic clients.
 		require.NoError(t, conn.WriteJSON(map[string]string{"type": "auth", "token": "test"}))

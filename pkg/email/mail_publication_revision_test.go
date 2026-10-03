@@ -74,7 +74,13 @@ type mailRevisionPublication struct {
 func (p *mailRevisionPublication) publish(value any) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.state = value.(mailRevisionValue)
+	v, ok := value.(mailRevisionValue)
+	if !ok {
+		// Same loud failure an unchecked assertion would produce, with a
+		// message that names the actual type.
+		panic(fmt.Sprintf("publish: value is %T, want mailRevisionValue", value))
+	}
+	p.state = v
 	p.writes++
 }
 

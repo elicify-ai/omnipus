@@ -434,7 +434,8 @@ func (t *DownloadEmailAttachmentTool) Execute(ctx context.Context, args map[stri
 	if t.service == nil {
 		return ErrorResult(fmt.Sprintf("%s: the shared transfer service is not wired for this agent; saving is unavailable", toolName))
 	}
-	if _, err := attachmentToolTransports(ctx, t.tps, toolName); err != nil {
+	_, err = attachmentToolTransports(ctx, t.tps, toolName)
+	if err != nil {
 		return ErrorResult(err.Error())
 	}
 	// The save runs through the SHARED service — same cap, naming, audit

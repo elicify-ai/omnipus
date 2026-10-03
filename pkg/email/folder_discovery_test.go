@@ -102,6 +102,19 @@ func (s *discoveryInstr) counts() (status map[string]int, list, creates, subscri
 	return out, s.listCalls, s.creates, s.subscribes
 }
 
+// statusCounts returns a copy of the per-mailbox STATUS probe counters, for
+// the tests that read only probing behaviour (counts() bundles the other
+// three counters for its own call sites).
+func (s *discoveryInstr) statusCounts() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]int, len(s.statusOf))
+	for k, v := range s.statusOf {
+		out[k] = v
+	}
+	return out
+}
+
 func (s *discoveryInstr) releaseStalls() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -229,7 +242,7 @@ func TestDiscovery_FallbackOrderedProbeStopsAtFirstSuccess(t *testing.T) {
 		t.Fatalf("sent UIDVALIDITY must be a real probed value (R-3.2-1), got %+v", m.Sent.UIDValidity)
 	}
 
-	status, _, _, _ := instr.counts()
+	status := instr.statusCounts()
 	if status["Sent"] != 1 {
 		t.Errorf("candidate %q probed %d times, want exactly 1 (fixed order, first entry)", "Sent", status["Sent"])
 	}
@@ -317,7 +330,7 @@ func TestDiscovery_ConfirmedAbsenceIsEmptyWithExplanation(t *testing.T) {
 
 	// The absence verdict must have come from actually probing the fixed
 	// candidate list — every sent candidate was probed exactly once.
-	status, _, _, _ := instr.counts()
+	status := instr.statusCounts()
 	for _, cand := range []string{"Sent", "Sent Items", "Sent Messages", "[Gmail]/Sent Mail"} {
 		if status[cand] != 1 {
 			t.Errorf("candidate %q probed %d times, want 1 — absence requires EVERY candidate to return structural not-found", cand, status[cand])
@@ -356,7 +369,7 @@ func TestDiscovery_ProbeTimeoutIsUnknownNotAbsent(t *testing.T) {
 	}
 	// The stalled probe was attempted exactly once — no retry loop (R-3.2-3:
 	// bounded, coalesced; ADR: no hidden chain of retries).
-	status, _, _, _ := instr.counts()
+	status := instr.statusCounts()
 	if status["Sent"] > 1 {
 		t.Errorf("stalled candidate probed %d times — discovery must not retry within one operation", status["Sent"])
 	}
@@ -580,7 +593,7 @@ func startSpecialUseIMAP(t *testing.T, attrs map[string][]imap.MailboxAttr, caps
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	var entries []imap.ListData
+	entries := make([]imap.ListData, 0, len(names))
 	for _, name := range names {
 		entries = append(entries, imap.ListData{Mailbox: name, Delim: '/', Attrs: attrs[name]})
 	}
@@ -673,7 +686,7 @@ func TestDiscovery_AmbiguousSpecialUseAsks(t *testing.T) {
 
 	// R-3.5-2: beyond the enumeration, the server is not touched for that
 	// role — the ambiguity surfaced from the listing, no probe happened.
-	status, _, _, _ := instr.counts()
+	status := instr.statusCounts()
 	if status["Sent"] != 0 || status["Sent Items"] != 0 {
 		t.Fatalf("ambiguous role probed the server (Sent=%d, Sent Items=%d) — ambiguity must surface from the enumeration alone (R-3.5-2)", status["Sent"], status["Sent Items"])
 	}
@@ -715,7 +728,7 @@ func TestDiscovery_SpecialUseResolvesBeforeFallback(t *testing.T) {
 		t.Fatalf("sent UIDVALIDITY must be a real probed value (R-3.2-1), got %+v", m.Sent.UIDValidity)
 	}
 
-	status, _, _, _ := instr.counts()
+	status := instr.statusCounts()
 	if status["Archivio-Inviata"] != 1 {
 		t.Fatalf("tagged folder probed %d times, want exactly 1", status["Archivio-Inviata"])
 	}

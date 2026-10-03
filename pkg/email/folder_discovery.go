@@ -150,7 +150,7 @@ func (d *Discovery) Resolve(ctx context.Context, scope Scope, overrides Override
 			Inbox: RoleResolution{
 				Name:         "INBOX",
 				Source:       MappingSourceNone,
-				UIDValidity:  inboxEpoch,
+				UIDValidity:  inboxEpoch.ptr(),
 				Availability: AvailabilityPresent,
 			},
 		}
@@ -199,7 +199,7 @@ func resolveRole(ctx context.Context, client *imapclient.Client, override string
 		epoch, err := statusUIDValidity(ctx, client, override)
 		switch {
 		case err == nil:
-			return RoleResolution{Name: override, Source: MappingSourceOverride, UIDValidity: epoch, Availability: AvailabilityPresent}
+			return RoleResolution{Name: override, Source: MappingSourceOverride, UIDValidity: epoch.ptr(), Availability: AvailabilityPresent}
 		case isNonexistentFolder(err):
 			// The stored name no longer exists on the server: an actionable
 			// settings warning — the override is never silently swapped for
@@ -225,7 +225,7 @@ func resolveRole(ctx context.Context, client *imapclient.Client, override string
 		case 1:
 			epoch, err := statusUIDValidity(ctx, client, matches[0])
 			if err == nil {
-				return RoleResolution{Name: matches[0], Source: MappingSourceSpecialUse, UIDValidity: epoch, Availability: AvailabilityPresent}
+				return RoleResolution{Name: matches[0], Source: MappingSourceSpecialUse, UIDValidity: epoch.ptr(), Availability: AvailabilityPresent}
 			}
 			if !isNonexistentFolder(err) {
 				return RoleResolution{Source: MappingSourceNone, Availability: AvailabilityUnknown, Reason: ClassifyMailError(err)}
@@ -252,7 +252,7 @@ func resolveRole(ctx context.Context, client *imapclient.Client, override string
 		epoch, err := statusUIDValidity(ctx, client, cand)
 		switch {
 		case err == nil:
-			return RoleResolution{Name: cand, Source: MappingSourceFallback, UIDValidity: epoch, Availability: AvailabilityPresent}
+			return RoleResolution{Name: cand, Source: MappingSourceFallback, UIDValidity: epoch.ptr(), Availability: AvailabilityPresent}
 		case isNonexistentFolder(err):
 			// Structural not-found on this candidate: keep sweeping.
 		default:
@@ -306,22 +306,38 @@ func enumerateFolders(ctx context.Context, client *imapclient.Client, withAttrs 
 	return out, nil
 }
 
+// mailboxEpoch is one folder's probed UIDVALIDITY: Present=false models the
+// "folder answered but reports no usable epoch" state — unknown epoch is
+// nullable domain state, never a fabricated 0 (CX-4).
+type mailboxEpoch struct {
+	Present bool
+	Value   uint32
+}
+
+// ptr renders the epoch as the nullable *uint32 the mapping snapshot carries.
+func (e mailboxEpoch) ptr() *uint32 {
+	if !e.Present {
+		return nil
+	}
+	v := e.Value
+	return &v
+}
+
 // statusUIDValidity probes one folder with STATUS (the same structural
 // existence check the count path interprets) and returns its UIDVALIDITY.
-// A present folder that reports no usable epoch yields nil — an unknown
-// epoch is nullable state, never a fabricated 0 (CX-4).
-func statusUIDValidity(ctx context.Context, client *imapclient.Client, name string) (*uint32, error) {
+// A present folder that reports no usable epoch yields Present=false — an
+// unknown epoch is nullable state, never a fabricated 0 (CX-4).
+func statusUIDValidity(ctx context.Context, client *imapclient.Client, name string) (mailboxEpoch, error) {
 	status, err := runIMAP(ctx, "status probe", func() (*imap.StatusData, error) {
 		return client.Status(name, &imap.StatusOptions{UIDValidity: true}).Wait()
 	})
 	if err != nil {
-		return nil, err
+		return mailboxEpoch{}, err
 	}
 	if status == nil || status.UIDValidity == 0 {
-		return nil, nil
+		return mailboxEpoch{}, nil
 	}
-	v := status.UIDValidity
-	return &v, nil
+	return mailboxEpoch{Present: true, Value: status.UIDValidity}, nil
 }
 
 // hasAttr reports whether the listing entry carries the role attribute.

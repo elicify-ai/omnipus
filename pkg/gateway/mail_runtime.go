@@ -167,7 +167,8 @@ func (rt *gatewayMailRuntime) resolveCredentials(pairKey string) (username, pass
 	store := rt.credStore.Load()
 	if store == nil {
 		s := credentials.NewStore(filepath.Join(rt.homePath, "credentials.json"))
-		if err := credentials.Unlock(s); err != nil {
+		err = credentials.Unlock(s)
+		if err != nil {
 			return "", "", fmt.Errorf("%w: credential store locked", errMailCredentialsResolver)
 		}
 		store = s

@@ -17,7 +17,7 @@ func TestEffectiveDatePrecedence(t *testing.T) {
 	if got, ok := EffectiveDate(date, internal); !ok || !got.Equal(date) {
 		t.Fatalf("valid Date must win over the internal date (US-6.AC-3): got (%v,%v)", got, ok)
 	}
-	for _, header := range []time.Time{time.Time{}} { // the zero time IS the missing/unparsable representation
+	for _, header := range []time.Time{{}} { // the zero time IS the missing/unparsable representation
 		got, ok := EffectiveDate(header, internal)
 		if !ok || !got.Equal(internal.UTC()) {
 			t.Fatalf("header %v must fall back to the internal date (US-6.AC-1): got (%v,%v)", header, got, ok)

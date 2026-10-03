@@ -569,9 +569,9 @@ func (c *Client) ReadView(ctx context.Context, slug, ref string) (*MailView, err
 	// addressed folder; without an injected session source the legacy
 	// per-call dial keeps the identical command sequence.
 	err = c.withMailSession(ctx, name, false, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
-		uidvalidity, _, err := c.selectFolder(ctx, client, name)
-		if err != nil {
-			return err
+		uidvalidity, _, selErr := c.selectFolder(ctx, client, name)
+		if selErr != nil {
+			return selErr
 		}
 		if r.kind == "uid" {
 			// W2 §3.16 R-3.16-1/2: the ref's embedded epoch is compared to the
@@ -585,9 +585,9 @@ func (c *Client) ReadView(ctx context.Context, slug, ref string) (*MailView, err
 
 		uid := r.uid
 		if r.kind == "mid" {
-			uid, err = c.searchMessageID(ctx, client, r.messageID)
-			if err != nil {
-				return err
+			uid, selErr = c.searchMessageID(ctx, client, r.messageID)
+			if selErr != nil {
+				return selErr
 			}
 			if uid == 0 {
 				return fmt.Errorf("email transport: %w: no message %s in %s", ErrMessageNotFound, ref, slug)
